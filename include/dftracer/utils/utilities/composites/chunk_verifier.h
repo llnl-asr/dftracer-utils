@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_CHUNK_VERIFIER_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_CHUNK_VERIFIER_H
 
+#include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 
@@ -99,7 +100,7 @@ class ChunkVerifierUtility
     using InputHashFn =
         std::function<std::uint64_t(const std::vector<MetadataType>&)>;
     using EventCollectorFn =
-        std::function<std::vector<EventType>(const ChunkType&, TaskContext&)>;
+        std::function<std::vector<EventType>(TaskContext&, const ChunkType&)>;
     using EventHashFn =
         std::function<std::uint64_t(const std::vector<EventType>&)>;
 
@@ -139,20 +140,26 @@ class ChunkVerifierUtility
         TaskContext& ctx = this->context();
 
         // Step 3: Collect events from all chunks in parallel
-        std::vector<typename TaskResult<std::vector<EventType>>::Future>
-            futures;
+        std::vector<TaskFuture> futures;
         futures.reserve(input.chunks.size());
 
         for (const auto& chunk : input.chunks) {
-            auto task_result = ctx.emit<ChunkType, std::vector<EventType>>(
-                event_collector_, Input{chunk});
-            futures.push_back(std::move(task_result.future()));
+            // Create task from event collector - captures ctx from outer scope
+            auto task = make_task([collector = event_collector_, &ctx](
+                                      ChunkType c) -> std::vector<EventType> {
+                return collector(ctx, c);
+            });
+
+            // Submit task with input
+            auto future = ctx.submit_task(task, std::any{chunk});
+            futures.push_back(future);
         }
 
         // Step 4: Gather all events
         std::vector<EventType> output_events;
         for (auto& future : futures) {
-            auto events = future.get();
+            std::any result_any = future.get();
+            auto events = std::any_cast<std::vector<EventType>>(result_any);
             output_events.insert(output_events.end(), events.begin(),
                                  events.end());
         }

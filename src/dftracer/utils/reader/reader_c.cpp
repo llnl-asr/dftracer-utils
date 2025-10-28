@@ -1,6 +1,8 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/reader/reader.h>
 #include <dftracer/utils/reader/reader_factory.h>
+#include <dftracer/utils/reader/stream.h>
+#include <dftracer/utils/reader/stream_type.h>
 
 #include <cstring>
 
@@ -20,8 +22,8 @@ static int validate_handle(dft_reader_handle_t reader) {
 dft_reader_handle_t dft_reader_create(const char *gz_path, const char *idx_path,
                                       size_t index_ckpt_size) {
     if (!gz_path || !idx_path) {
-        DFTRACER_UTILS_LOG_ERROR("Both gz_path and idx_path cannot be null",
-                                 "");
+        DFTRACER_UTILS_LOG_ERROR("%s",
+                                 "Both gz_path and idx_path cannot be null");
         return nullptr;
     }
 
@@ -40,11 +42,11 @@ dft_reader_handle_t dft_reader_create(const char *gz_path, const char *idx_path,
 dft_reader_handle_t dft_reader_create_with_indexer(
     dft_indexer_handle_t indexer) {
     if (!indexer) {
-        DFTRACER_UTILS_LOG_ERROR("Indexer cannot be null", "");
+        DFTRACER_UTILS_LOG_ERROR("%s", "Indexer cannot be null");
         return nullptr;
     }
 
-    DFTRACER_UTILS_LOG_DEBUG("Creating DFT reader with provided indexer", "");
+    DFTRACER_UTILS_LOG_DEBUG("%s", "Creating DFT reader with provided indexer");
 
     try {
         // Indexer handle is now a shared_ptr<Indexer>*
@@ -161,6 +163,35 @@ int dft_reader_read_lines(dft_reader_handle_t reader, size_t start_line,
 void dft_reader_reset(dft_reader_handle_t reader) {
     if (reader) {
         (*cast_reader(reader))->reset();
+    }
+}
+
+dft_reader_stream_t dft_reader_stream(dft_reader_handle_t reader,
+                                      const dft_stream_config_t *config) {
+    if (validate_handle(reader)) {
+        DFTRACER_UTILS_LOG_ERROR("%s", "Invalid reader handle");
+        return nullptr;
+    }
+
+    if (!config) {
+        DFTRACER_UTILS_LOG_ERROR("%s", "Invalid config pointer");
+        return nullptr;
+    }
+
+    try {
+        // Convert C config to C++ config
+        StreamConfig cpp_config = StreamConfig::from_c(*config);
+
+        // Create stream
+        auto stream = (*cast_reader(reader))->stream(cpp_config);
+
+        // Transfer ownership to C API - allocate shared_ptr on heap for C
+        // handle
+        return static_cast<dft_reader_stream_t>(
+            new std::shared_ptr<ReaderStream>(std::move(stream)));
+    } catch (const std::exception &e) {
+        DFTRACER_UTILS_LOG_ERROR("Failed to create stream: %s", e.what());
+        return nullptr;
     }
 }
 

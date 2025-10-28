@@ -84,7 +84,6 @@ cmake.args = [
   "-DDFTRACER_UTILS_BUILD_SHARED=ON",
   "-DDFTRACER_UTILS_BUILD_STATIC=OFF",
   "-DDFTRACER_UTILS_BUILD_BINARIES=ON",
-  "-DDCMAKE_CXX_FLAGS='-fsanitize=address -g'",
 ]
 
 [tool.cibuildwheel]

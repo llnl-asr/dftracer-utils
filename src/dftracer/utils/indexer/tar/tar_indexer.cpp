@@ -52,8 +52,8 @@ TarIndexer::~TarIndexer() {
         DFTRACER_UTILS_LOG_ERROR("Error during TarIndexer destruction: %s",
                                  e.what());
     } catch (...) {
-        DFTRACER_UTILS_LOG_ERROR("Unknown error during TarIndexer destruction",
-                                 "");
+        DFTRACER_UTILS_LOG_ERROR("%s",
+                                 "Unknown error during TarIndexer destruction");
     }
 }
 
@@ -393,7 +393,7 @@ static bool build_tar_index(const SqliteDatabase &db, int archive_id,
     if (!parser.parse_headers(accumulated_data.data(), accumulated_data.size(),
                               0, tar_entries)) {
         DFTRACER_UTILS_LOG_DEBUG(
-            "Failed to parse TAR headers from accumulated data", "");
+            "%s", "Failed to parse TAR headers from accumulated data");
         // Continue anyway - might be a malformed TAR or not actually TAR.GZ
     }
 

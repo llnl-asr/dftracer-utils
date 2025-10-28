@@ -188,12 +188,20 @@ class IndexedFileLineIterator {
             }
         }
 
-        StreamType stream_type = (config_.range_type() == RangeType::LINE_RANGE)
-                                     ? StreamType::LINE
-                                     : StreamType::LINE_BYTES;
+        StreamConfig stream_config;
+        if (config_.range_type() == RangeType::LINE_RANGE) {
+            stream_config.stream_type(StreamType::LINE)
+                .range_type(RangeType::LINE_RANGE)
+                .from(config_.start())
+                .to(config_.end());
+        } else {
+            stream_config.stream_type(StreamType::LINE_BYTES)
+                .range_type(RangeType::BYTE_RANGE)
+                .from(config_.start())
+                .to(config_.end());
+        }
 
-        stream_ = config_.reader()->stream(stream_type, config_.range_type(),
-                                           config_.start(), config_.end());
+        stream_ = config_.reader()->stream(stream_config);
         if (!stream_) {
             throw std::runtime_error("Failed to create stream");
         }

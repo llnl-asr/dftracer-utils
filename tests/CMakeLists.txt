@@ -25,56 +25,102 @@ link_zlib(testing_utilities STATIC)
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(TEST_CPP_SOURCES
-    test_reader.cpp
-    test_basic_factory.cpp
-    test_reader_formats.cpp
-    # test_reader_tar_comprehensive.cpp
+    # Pipeline tests
     test_pipeline.cpp
-    test_reader_robustness.cpp)
+    # Reader tests
+    reader/test_reader.cpp
+    reader/test_reader_stream.cpp
+    reader/test_reader_line_byte_stream.cpp
+    reader/test_reader_multi_lines_byte_stream.cpp
+    reader/test_basic_factory.cpp
+    reader/test_reader_formats.cpp
+    reader/test_reader_robustness.cpp
+    # reader/test_reader_tar_comprehensive.cpp
+    )
 
 foreach(test_file ${TEST_CPP_SOURCES})
+  # Extract path and filename
   string(REPLACE ".cpp" "" bin_exec ${test_file})
-  string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/" "" bin_exec
-                 ${bin_exec})
+  string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/" "" bin_exec ${bin_exec})
 
-  add_executable(${bin_exec} ${test_file})
-  target_link_libraries(${bin_exec} PRIVATE doctest::doctest testing_utilities)
-  target_set_warnings(${bin_exec})
+  # Create valid target name (replace / with _)
+  string(REPLACE "/" "_" target_name ${bin_exec})
+
+  add_executable(${target_name} ${test_file})
+  target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(${target_name} PRIVATE doctest::doctest testing_utilities)
+  target_set_warnings(${target_name})
+
+  # Set output directory to preserve folder structure in binaries
+  get_filename_component(bin_dir ${bin_exec} DIRECTORY)
+  get_filename_component(bin_name ${bin_exec} NAME)
+
+  if(bin_dir)
+    set_target_properties(${target_name} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${bin_dir}")
+  endif()
+
+  set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${bin_name})
 
   # Apply coverage flags if enabled
   if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(${bin_exec} PRIVATE --coverage -fprofile-arcs
+    target_compile_options(${target_name} PRIVATE --coverage -fprofile-arcs
                                                -ftest-coverage)
-    target_link_libraries(${bin_exec} PRIVATE --coverage)
+    target_link_libraries(${target_name} PRIVATE --coverage)
   endif()
 
-  add_test(NAME ${bin_exec} COMMAND ${bin_exec})
+  add_test(NAME ${bin_exec} COMMAND ${target_name})
 endforeach()
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Test Reader C API
 # +++++++++++++++++++++++++++++++++++++++++
 
-set(TEST_C_SOURCES test_reader.c)
+set(TEST_C_SOURCES
+    reader/test_reader.c
+    reader/test_reader_stream.c
+    # reader/test_reader_formats_c.c  # TODO: Add when ready
+    )
 
 foreach (test_file ${TEST_C_SOURCES})
+  # Extract path and filename
   string(REPLACE ".c" "" bin_exec ${test_file})
-  string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/" "" bin_exec
-                 ${bin_exec})
+  string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/" "" bin_exec ${bin_exec})
   set(bin_exec "${bin_exec}_c")
 
-  add_executable(${bin_exec} ${test_file})
-  target_link_libraries(${bin_exec} PRIVATE unity_lib testing_utilities)
+  # Create valid target name (replace / with _)
+  string(REPLACE "/" "_" target_name ${bin_exec})
+
+  add_executable(${target_name} ${test_file})
+  target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(${target_name} PRIVATE unity_lib testing_utilities)
+
+  # Set output directory to preserve folder structure in binaries
+  get_filename_component(bin_dir ${bin_exec} DIRECTORY)
+  get_filename_component(bin_name ${bin_exec} NAME)
+
+  if(bin_dir)
+    set_target_properties(${target_name} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${bin_dir}")
+  endif()
+
+  set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${bin_name})
 
   # Apply coverage flags if enabled
   if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(${bin_exec} PRIVATE --coverage -fprofile-arcs
+    target_compile_options(${target_name} PRIVATE --coverage -fprofile-arcs
                                                  -ftest-coverage)
-    target_link_libraries(${bin_exec} PRIVATE --coverage)
+    target_link_libraries(${target_name} PRIVATE --coverage)
   endif()
 
-  add_test(NAME ${bin_exec} COMMAND ${bin_exec})
+  add_test(NAME ${bin_exec} COMMAND ${target_name})
 endforeach()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Utilities Tests
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_subdirectory(utilities)
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Python Tests (SKBUILD only)

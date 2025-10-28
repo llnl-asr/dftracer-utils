@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_INDEX_BUILDER_H
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/indexer/indexer_factory.h>
 #include <dftracer/utils/utilities/composites/composite_types.h>

@@ -31,13 +31,13 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential cmake lcov zlib1g-dev libsqlite3-dev pkg-config
+        sudo apt-get install -y build-essential cmake lcov zlib1g-dev libsqlite3-dev pkg-config ninja-build
     
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
         brew update
-        for f in cmake lcov zlib sqlite pkg-config; do
+        for f in cmake lcov zlib sqlite pkg-config ninja; do
           if brew list --versions "$f" >/dev/null; then
             echo "$f already installed"
           else

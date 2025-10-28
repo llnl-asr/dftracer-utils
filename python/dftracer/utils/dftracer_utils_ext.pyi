@@ -1,6 +1,6 @@
 """Type stubs for dftracer_utils_ext module."""
 
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Union
 
 # ========== INDEXER ==========
 
@@ -161,32 +161,66 @@ class Reader:
 # ========== JSON ==========
 
 class JSON:
-    """Lazy JSON object that parses on demand using yyjson."""
-    
+    """Lazy JSON object that parses on demand using yyjson.
+
+    This implementation provides lazy nested navigation for memory efficiency:
+    - Nested objects/arrays return JSON wrappers (lazy, no conversion)
+    - Primitives (str, int, float, bool, None) are converted immediately
+
+    Example:
+        json_obj = JSON('{"args": {"hhash": "abc"}, "pid": 42}')
+        args = json_obj["args"]  # Returns JSON wrapper (lazy, ~48 bytes)
+        hhash = args["hhash"]     # Returns str (converted)
+        pid = json_obj["pid"]     # Returns int (converted)
+    """
+
     def __init__(self, json_str: str) -> None:
-        """Create a JSON object from a JSON string."""
+        """Create a JSON object from a JSON string.
+
+        The JSON string is stored but not parsed until first access.
+        """
         ...
-    
+
     def __contains__(self, key: str) -> bool:
         """Check if key exists in JSON object."""
         ...
-    
-    def __getitem__(self, key: str) -> Any:
-        """Get value by key, raises KeyError if not found."""
+
+    def __getitem__(self, key: str) -> Union[str, int, float, bool, None, "JSON"]:
+        """Get value by key, raises KeyError if not found.
+
+        Returns:
+            - JSON wrapper for nested objects/arrays (lazy evaluation)
+            - Primitive Python types for values (str, int, float, bool, None)
+
+        Example:
+            obj["nested_object"]  # Returns JSON (lazy wrapper)
+            obj["string_field"]    # Returns str
+            obj["number_field"]    # Returns int or float
+        """
         ...
-    
-    def get(self, key: str, default: Any = None) -> Any:
-        """Get value by key with optional default."""
+
+    def get(self, key: str, default: Any = None) -> Union[str, int, float, bool, None, "JSON", Any]:
+        """Get value by key with optional default.
+
+        Returns:
+            - JSON wrapper for nested objects/arrays (lazy evaluation)
+            - Primitive Python types for values
+            - default if key not found
+        """
         ...
-    
+
     def keys(self) -> List[str]:
-        """Get all keys from JSON object."""
+        """Get all keys from JSON object (only for object types)."""
         ...
-    
+
     def __str__(self) -> str:
-        """Return the original JSON string."""
+        """Return the JSON string representation.
+
+        For top-level objects: returns original JSON string
+        For subtrees: serializes the subtree to JSON
+        """
         ...
-    
+
     def __repr__(self) -> str:
         """Return string representation of the object."""
         ...

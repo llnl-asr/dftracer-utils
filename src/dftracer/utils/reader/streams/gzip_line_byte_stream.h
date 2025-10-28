@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/reader/streams/gzip_stream.h>
 
 #include <cstddef>
@@ -14,12 +15,25 @@ class GzipLineByteStream : public GzipStream {
    private:
     static constexpr std::size_t SEARCH_BUFFER_SIZE = 2048;
     static constexpr std::size_t LINE_SEARCH_LOOKBACK = 512;
+    static constexpr std::size_t DEFAULT_BUFFER_SIZE = 64 * 1024;  // 64KB
 
     std::vector<char> partial_line_buffer_;
     std::size_t actual_start_bytes_;
+    std::size_t bytes_returned_;  // Track how many bytes we've returned to user
+
+    // Buffer for zero-copy reads
+    std::vector<char> buffer_;
+    std::size_t valid_bytes_;
+    std::size_t buffer_pos_;  // Current position in buffer for copy-based reads
 
    public:
-    GzipLineByteStream() : GzipStream(), actual_start_bytes_(0) {
+    GzipLineByteStream(std::size_t buffer_size = DEFAULT_BUFFER_SIZE)
+        : GzipStream(),
+          actual_start_bytes_(0),
+          bytes_returned_(0),
+          buffer_(buffer_size > 0 ? buffer_size : DEFAULT_BUFFER_SIZE, 0),
+          valid_bytes_(0),
+          buffer_pos_(0) {
         partial_line_buffer_.reserve(1 * 1024 * 1024);
     }
 
@@ -78,12 +92,50 @@ class GzipLineByteStream : public GzipStream {
         return actual_start;
     }
 
-    std::size_t read(char *buffer, std::size_t buffer_size) override {
-// Prefetch buffer for writing
+    std::size_t read(char *output_buffer,
+                     std::size_t output_buffer_size) override {
 #ifdef __GNUC__
-        __builtin_prefetch(buffer, 1, 3);
+        __builtin_prefetch(output_buffer, 1, 3);
 #endif
 
+        // Check if we have unconsumed data from previous read
+        if (buffer_pos_ < valid_bytes_) {
+            std::size_t remaining = valid_bytes_ - buffer_pos_;
+            std::size_t copy_size = std::min(remaining, output_buffer_size);
+            std::memcpy(output_buffer, buffer_.data() + buffer_pos_, copy_size);
+            buffer_pos_ += copy_size;
+
+            DFTRACER_UTILS_LOG_DEBUG(
+                "Copied %zu bytes from existing buffer (pos %zu/%zu)",
+                copy_size, buffer_pos_, valid_bytes_);
+
+            return copy_size;
+        }
+
+        // Buffer exhausted, get new chunk via zero-copy read
+        auto span = read();
+        if (span.empty()) {
+            return 0;
+        }
+
+        // Update our tracking of the buffer state
+        valid_bytes_ = span.size();
+        buffer_pos_ = 0;
+
+        std::size_t copy_size = std::min(valid_bytes_, output_buffer_size);
+        std::memcpy(output_buffer, span.data(), copy_size);
+        buffer_pos_ = copy_size;
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Got new chunk via zero-copy, copied %zu bytes (total in buffer: "
+            "%zu)",
+            copy_size, valid_bytes_);
+
+        return copy_size;
+    }
+
+   private:
+    std::size_t read_line_aligned_data() {
         if (!decompression_initialized_) {
             throw ReaderError(ReaderError::INITIALIZATION_ERROR,
                               "Streaming session not properly initialized");
@@ -98,32 +150,33 @@ class GzipLineByteStream : public GzipStream {
             return 0;
         }
 
-        // Copy partial line buffer directly to output buffer (if exists)
+        // Copy partial line buffer to internal buffer (if exists)
         std::size_t partial_size = partial_line_buffer_.size();
-        std::size_t available_buffer_space = buffer_size;
+        std::size_t available_buffer_space = buffer_.size();
 
         if (partial_size > 0) {
-            if (partial_size > buffer_size) {
+            if (partial_size > buffer_.size()) {
                 throw ReaderError(
                     ReaderError::READ_ERROR,
                     "Partial line buffer exceeds available buffer space");
             }
-            std::memcpy(buffer, partial_line_buffer_.data(), partial_size);
+            std::memcpy(buffer_.data(), partial_line_buffer_.data(),
+                        partial_size);
             available_buffer_space -= partial_size;
         }
 
-        // Read data directly into output buffer - initially try to stay within
-        // target bounds
+        // Read data directly into internal buffer - stay strictly within target
+        // bounds
         std::size_t max_bytes_to_read = target_end_bytes_ - current_position_;
         std::size_t bytes_to_read =
             std::min(max_bytes_to_read, available_buffer_space);
 
         std::size_t bytes_read = 0;
         if (bytes_to_read > 0) {
-            bool status = inflater_.read(
-                file_handle_,
-                reinterpret_cast<unsigned char *>(buffer + partial_size),
-                bytes_to_read, bytes_read);
+            bool status = inflater_.read(file_handle_,
+                                         reinterpret_cast<unsigned char *>(
+                                             buffer_.data() + partial_size),
+                                         bytes_to_read, bytes_read);
 
             if (!status || bytes_read == 0) {
                 is_finished_ = true;
@@ -135,17 +188,19 @@ class GzipLineByteStream : public GzipStream {
 
         DFTRACER_UTILS_LOG_DEBUG(
             "Read %zu bytes from compressed stream, partial_buffer_size=%zu, "
-            "current_position=%zu, target_end=%zu, total_data_size=%zu",
+            "current_position=%zu, target_end=%zu, total_data_size=%zu, "
+            "bytes_returned=%zu",
             bytes_read, partial_size, current_position_, target_end_bytes_,
-            total_data_size);
-
-        std::size_t adjusted_size =
-            apply_range_and_boundary_limits(buffer, total_data_size);
+            total_data_size, bytes_returned_);
 
         current_position_ += bytes_read;
 
+        // Apply boundary limits - only return complete lines within our chunk
+        std::size_t adjusted_size =
+            apply_range_and_boundary_limits(buffer_.data(), total_data_size);
+
         // Update partial buffer with any incomplete line data
-        update_partial_buffer(buffer, adjusted_size, total_data_size);
+        update_partial_buffer(buffer_.data(), adjusted_size, total_data_size);
 
         if (adjusted_size == 0) {
             DFTRACER_UTILS_LOG_DEBUG(
@@ -155,17 +210,43 @@ class GzipLineByteStream : public GzipStream {
             return 0;
         }
 
+        bytes_returned_ += adjusted_size;
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Returning %zu bytes, total bytes_returned=%zu", adjusted_size,
+            bytes_returned_);
+
         return adjusted_size;
+    }
+
+    // Zero-copy read - returns span to internal buffer
+    dftracer::utils::span_view<const char> read() override {
+        if (is_finished_) {
+            return {};
+        }
+
+        // Read line-aligned data into buffer_
+        valid_bytes_ = read_line_aligned_data();
+
+        if (valid_bytes_ == 0) {
+            return {};
+        }
+
+        // Return span view to the data in buffer_
+        return dftracer::utils::span_view<const char>(buffer_.data(),
+                                                      valid_bytes_);
     }
 
     void reset() override {
         GzipStream::reset();
         partial_line_buffer_.clear();
         partial_line_buffer_.shrink_to_fit();
+        valid_bytes_ = 0;
+        buffer_pos_ = 0;
         actual_start_bytes_ = 0;
+        bytes_returned_ = 0;
     }
 
-   private:
     void update_partial_buffer(const char *buffer, std::size_t adjusted_size,
                                std::size_t total_data_size) {
         if (adjusted_size < total_data_size) {
@@ -206,39 +287,62 @@ class GzipLineByteStream : public GzipStream {
 
     std::size_t apply_range_and_boundary_limits(char *buffer,
                                                 std::size_t total_data_size) {
-        std::size_t adjusted_size;
+        // Strictly enforce that we only return complete lines that fall within
+        // the file range [actual_start_bytes_, target_end_bytes_).
+        //
+        // IMPORTANT: current_position_ tracks where we've READ to in the file.
+        // The buffer contains data ending at current_position_.
+        // We must ensure all returned data ends before target_end_bytes_.
 
-        if (current_position_ < actual_start_bytes_) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Invalid state: current_position_ %zu < "
-                "actual_start_bytes_ %zu",
-                current_position_, actual_start_bytes_);
-            throw ReaderError(ReaderError::READ_ERROR,
-                              "Invalid internal position state detected");
+        // Check if we've already passed the boundary
+        if (current_position_ > target_end_bytes_) {
+            // We've read past the boundary, need to truncate
+            // The buffer spans from (current_position_ - total_data_size) to
+            // current_position_ We can only use the part before
+            // target_end_bytes_
+
+            // Note: partial_line_buffer_ is from a previous read position,
+            // current read spans [current_position_ - (total_data_size -
+            // partial_size), current_position_)
+
+            std::size_t partial_size = partial_line_buffer_.size();
+            std::size_t new_data_size = total_data_size - partial_size;
+            std::size_t new_data_start = current_position_ - new_data_size;
+
+            if (new_data_start >= target_end_bytes_) {
+                // All new data is beyond the boundary
+                is_finished_ = true;
+                return 0;
+            }
+
+            // Only use data up to the boundary
+            std::size_t usable_new_data = target_end_bytes_ - new_data_start;
+            std::size_t limited_size =
+                partial_size + usable_new_data;  // Include partial buffer
+
+            // Find last complete line within the limit
+            std::size_t adjusted_size =
+                adjust_to_boundary(buffer, limited_size);
+
+            // If no complete line found but we're at EOF, return what we have
+            bool at_file_end = target_end_bytes_ >= max_file_bytes_;
+            if (adjusted_size == 0 && limited_size > 0 &&
+                (is_finished_ || at_file_end)) {
+                return limited_size;
+            }
+
+            return adjusted_size;
         }
 
-        // Calculate how much data we've already returned from this chunk
-        std::size_t bytes_already_returned =
-            current_position_ - actual_start_bytes_;
+        // We haven't exceeded the boundary yet
+        // Return all complete lines in the buffer
+        std::size_t adjusted_size = adjust_to_boundary(buffer, total_data_size);
 
-        // The maximum data this chunk should return is limited by the original
-        // chunk boundary We stop at target_end_bytes_ to prevent overlaps with
-        // the next chunk
-        std::size_t max_position_allowed = target_end_bytes_;
-        std::size_t max_allowed_return = 0;
-
-        if (actual_start_bytes_ < max_position_allowed) {
-            std::size_t total_range_for_chunk =
-                max_position_allowed - actual_start_bytes_;
-            max_allowed_return =
-                (bytes_already_returned < total_range_for_chunk)
-                    ? (total_range_for_chunk - bytes_already_returned)
-                    : 0;
+        // Check if we're at the end of our assigned range
+        if (current_position_ >= target_end_bytes_) {
+            is_finished_ = true;
         }
 
-        std::size_t limited_data_size =
-            std::min(total_data_size, max_allowed_return);
-        adjusted_size = adjust_to_boundary(buffer, limited_data_size);
         return adjusted_size;
     }
 };

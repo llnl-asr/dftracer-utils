@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_READER_STREAMS_TAR_LINE_BYTE_STREAM_H
 
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/reader/streams/gzip_line_byte_stream.h>
 #include <dftracer/utils/reader/streams/tar_stream.h>
 
@@ -176,6 +177,12 @@ class TarLineByteStream : public TarStream {
             total_bytes_written, current_position_, target_end_bytes_);
 
         return total_bytes_written;
+    }
+
+    // Zero-copy read - stub for now
+    dftracer::utils::span_view<const char> read() override {
+        // TODO: Implement zero-copy read for TarLineByteStream
+        return {};
     }
 
     void reset() override {

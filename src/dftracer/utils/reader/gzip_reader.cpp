@@ -3,6 +3,7 @@
 #include <dftracer/utils/indexer/indexer_factory.h>
 #include <dftracer/utils/reader/error.h>
 #include <dftracer/utils/reader/gzip_reader.h>
+#include <dftracer/utils/reader/stream_config.h>
 #include <dftracer/utils/reader/streams/gzip_byte_stream.h>
 #include <dftracer/utils/reader/streams/gzip_line_byte_stream.h>
 #include <dftracer/utils/reader/streams/line_stream.h>
@@ -153,15 +154,18 @@ std::size_t GzipReader::read(std::size_t start_bytes, std::size_t end_bytes,
     // Check if we can reuse cached stream
     if (!stream_cache_.can_continue(StreamType::BYTES, gz_path, start_bytes,
                                     end_bytes)) {
-        DFTRACER_UTILS_LOG_DEBUG("GzipReader::read - creating new byte stream",
-                                 "");
-        auto new_stream = stream(StreamType::BYTES, RangeType::BYTE_RANGE,
-                                 start_bytes, end_bytes);
+        DFTRACER_UTILS_LOG_DEBUG("%s",
+                                 "GzipReader::read - creating new byte stream");
+        auto new_stream = stream(StreamConfig()
+                                     .stream_type(StreamType::BYTES)
+                                     .range_type(RangeType::BYTE_RANGE)
+                                     .from(start_bytes)
+                                     .to(end_bytes));
         stream_cache_.update(std::move(new_stream), StreamType::BYTES, gz_path,
                              start_bytes, end_bytes);
     } else {
         DFTRACER_UTILS_LOG_DEBUG(
-            "GzipReader::read - reusing cached byte stream", "");
+            "%s", "GzipReader::read - reusing cached byte stream");
     }
 
     std::size_t result = stream_cache_.get()->read(buffer, buffer_size);
@@ -188,8 +192,11 @@ std::size_t GzipReader::read_line_bytes(std::size_t start_bytes,
     // Check if we can reuse cached stream
     if (!stream_cache_.can_continue(StreamType::MULTI_LINES_BYTES, gz_path,
                                     start_bytes, end_bytes)) {
-        auto new_stream = stream(StreamType::MULTI_LINES_BYTES,
-                                 RangeType::BYTE_RANGE, start_bytes, end_bytes);
+        auto new_stream = stream(StreamConfig()
+                                     .stream_type(StreamType::MULTI_LINES_BYTES)
+                                     .range_type(RangeType::BYTE_RANGE)
+                                     .from(start_bytes)
+                                     .to(end_bytes));
         stream_cache_.update(std::move(new_stream),
                              StreamType::MULTI_LINES_BYTES, gz_path,
                              start_bytes, end_bytes);
@@ -224,8 +231,11 @@ std::string GzipReader::read_lines(std::size_t start_line,
     // Check if we can reuse cached stream
     if (!stream_cache_.can_continue(StreamType::MULTI_LINES, gz_path,
                                     start_line, end_line)) {
-        auto new_stream = stream(StreamType::MULTI_LINES, RangeType::LINE_RANGE,
-                                 start_line, end_line);
+        auto new_stream = stream(StreamConfig()
+                                     .stream_type(StreamType::MULTI_LINES)
+                                     .range_type(RangeType::LINE_RANGE)
+                                     .from(start_line)
+                                     .to(end_line));
         stream_cache_.update(std::move(new_stream), StreamType::MULTI_LINES,
                              gz_path, start_line, end_line);
     }
@@ -270,8 +280,11 @@ void GzipReader::read_lines_with_processor(std::size_t start_line,
     processor.begin(start_line, end_line);
 
     // Create a LineStream that returns one line at a time
-    auto line_stream =
-        stream(StreamType::LINE, RangeType::LINE_RANGE, start_line, end_line);
+    auto line_stream = stream(StreamConfig()
+                                  .stream_type(StreamType::LINE)
+                                  .range_type(RangeType::LINE_RANGE)
+                                  .from(start_line)
+                                  .to(end_line));
 
     std::vector<char> buffer(default_buffer_size);
 
@@ -311,8 +324,11 @@ void GzipReader::read_line_bytes_with_processor(std::size_t start_bytes,
 
     processor.begin(start_bytes, end_bytes);
 
-    auto lines_stream = stream(StreamType::LINE_BYTES, RangeType::BYTE_RANGE,
-                               start_bytes, end_bytes);
+    auto lines_stream = stream(StreamConfig()
+                                   .stream_type(StreamType::LINE_BYTES)
+                                   .range_type(RangeType::BYTE_RANGE)
+                                   .from(start_bytes)
+                                   .to(end_bytes));
 
     std::vector<char> buffer(default_buffer_size);
 
@@ -330,11 +346,15 @@ bool GzipReader::is_valid() const { return is_open && indexer.get(); }
 
 std::string GzipReader::get_format_name() const { return "GZIP"; }
 
-std::unique_ptr<ReaderStream> GzipReader::stream(StreamType stream_type,
-                                                 RangeType range_type,
-                                                 std::size_t start,
-                                                 std::size_t end) {
+std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
     check_reader_state(is_open, indexer.get());
+
+    // Extract config parameters
+    StreamType stream_type = config.stream;
+    RangeType range_type = config.range;
+    std::size_t start = config.start;
+    std::size_t end = config.end;
+    std::size_t buffer_size = config.buffer_size;
 
     // Convert line range to byte range if needed
     std::size_t start_bytes = start;
@@ -416,13 +436,14 @@ std::unique_ptr<ReaderStream> GzipReader::stream(StreamType stream_type,
     // Create appropriate stream type
     switch (stream_type) {
         case StreamType::BYTES: {
-            auto byte_stream = std::make_unique<GzipByteStream>();
+            auto byte_stream = std::make_unique<GzipByteStream>(buffer_size);
             byte_stream->initialize(gz_path, start_bytes, end_bytes, *indexer);
             return byte_stream;
         }
         case StreamType::LINE_BYTES: {
             // Single line-aligned bytes at a time
-            auto line_byte_stream = std::make_unique<GzipLineByteStream>();
+            auto line_byte_stream =
+                std::make_unique<GzipLineByteStream>(buffer_size);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
 
@@ -437,14 +458,16 @@ std::unique_ptr<ReaderStream> GzipReader::stream(StreamType stream_type,
         }
         case StreamType::MULTI_LINES_BYTES: {
             // Multiple line-aligned bytes per read
-            auto line_byte_stream = std::make_unique<GzipLineByteStream>();
+            auto line_byte_stream =
+                std::make_unique<GzipLineByteStream>(buffer_size);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
             return line_byte_stream;
         }
         case StreamType::LINE: {
             // Single parsed line per read
-            auto line_byte_stream = std::make_unique<GzipLineByteStream>();
+            auto line_byte_stream =
+                std::make_unique<GzipLineByteStream>(buffer_size);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
 
@@ -458,7 +481,8 @@ std::unique_ptr<ReaderStream> GzipReader::stream(StreamType stream_type,
         }
         case StreamType::MULTI_LINES: {
             // Multiple parsed lines per read
-            auto line_byte_stream = std::make_unique<GzipLineByteStream>();
+            auto line_byte_stream =
+                std::make_unique<GzipLineByteStream>(buffer_size);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
 

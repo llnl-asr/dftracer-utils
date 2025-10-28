@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_READER_STREAMS_TAR_BYTE_STREAM_H
 
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/reader/streams/gzip_byte_stream.h>
 #include <dftracer/utils/reader/streams/tar_stream.h>
 
@@ -17,9 +18,11 @@ class TarByteStream : public TarStream {
    private:
     TarIndexer *tar_indexer_ptr_;
     std::unique_ptr<GzipByteStream> current_file_stream_;
+    std::size_t buffer_size_;
 
    public:
-    TarByteStream() : TarStream(), tar_indexer_ptr_(nullptr) {}
+    explicit TarByteStream(std::size_t buffer_size = 0)
+        : TarStream(), tar_indexer_ptr_(nullptr), buffer_size_(buffer_size) {}
 
     void initialize(const std::string &tar_gz_path, std::size_t start_bytes,
                     std::size_t end_bytes,
@@ -137,6 +140,12 @@ class TarByteStream : public TarStream {
         return total_bytes_read;
     }
 
+    // Zero-copy read - stub for now
+    dftracer::utils::span_view<const char> read() override {
+        // TODO: Implement zero-copy read for TarByteStream
+        return {};
+    }
+
     void reset() override {
         TarStream::reset();
         current_file_stream_.reset();
@@ -187,7 +196,7 @@ class TarByteStream : public TarStream {
             logical_start, logical_end);
 
         // Create and initialize the underlying byte stream
-        current_file_stream_ = std::make_unique<GzipByteStream>();
+        current_file_stream_ = std::make_unique<GzipByteStream>(buffer_size_);
         current_file_stream_->initialize(
             current_gz_path_, static_cast<std::size_t>(actual_start),
             static_cast<std::size_t>(actual_end), *tar_indexer_ptr_);

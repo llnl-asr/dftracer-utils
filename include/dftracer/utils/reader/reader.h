@@ -3,7 +3,7 @@
 
 #include <dftracer/utils/reader/line_processor.h>
 #include <dftracer/utils/reader/stream.h>
-#include <dftracer/utils/reader/stream_type.h>
+#include <dftracer/utils/reader/stream_config.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -40,19 +40,14 @@ int dft_reader_read_lines_with_processor(dft_reader_handle_t reader,
 void dft_reader_reset(dft_reader_handle_t reader);
 
 /**
- * Create a stream for incremental reading.
+ * Create a stream for incremental reading with configuration.
  *
  * @param reader Reader handle
- * @param stream_type Type of stream (bytes, line_bytes, lines)
- * @param range_type How to interpret start/end (bytes or lines)
- * @param start Start of range (byte offset or line number)
- * @param end End of range (byte offset or line number)
+ * @param config Stream configuration (type, range, buffer size)
  * @return Stream handle, or NULL on error
  */
 dft_reader_stream_t dft_reader_stream(dft_reader_handle_t reader,
-                                      dft_stream_type_t stream_type,
-                                      dft_range_type_t range_type, size_t start,
-                                      size_t end);
+                                      const dft_stream_config_t *config);
 
 #ifdef __cplusplus
 }  // extern "C"
@@ -125,18 +120,27 @@ class Reader {
      * - MULTI_LINES + BYTE_RANGE: Multiple parsed lines per read in byte range
      * - MULTI_LINES + LINE_RANGE: Multiple parsed lines per read in line range
      *
-     * @param stream_type Type of stream (BYTES, LINE_BYTES, MULTI_LINES_BYTES,
-     * LINE, MULTI_LINES)
-     * @param range_type How to interpret start/end (BYTE_RANGE or LINE_RANGE)
-     * @param start Start of range (byte offset or line number based on
-     * range_type)
-     * @param end End of range (byte offset or line number based on range_type)
+     * Example:
+     * @code
+     * auto stream = reader->stream(
+     *     StreamConfig()
+     *         .lines(1, 1000000)
+     *         .huge_buffer()  // 512MB
+     * );
+     *
+     * // Zero-copy reading
+     * while (!stream->done()) {
+     *     auto chunk = stream->read();  // span_view - zero copy
+     *     if (chunk.empty()) break;
+     *     process(chunk);
+     * }
+     * @endcode
+     *
+     * @param config Stream configuration (use StreamConfig fluent API)
      * @return Unique pointer to stream, or nullptr on error
      */
-    virtual std::unique_ptr<ReaderStream> stream(StreamType stream_type,
-                                                 RangeType range_type,
-                                                 std::size_t start,
-                                                 std::size_t end) = 0;
+    virtual std::unique_ptr<ReaderStream> stream(
+        const StreamConfig &config) = 0;
 
     // State management
     virtual void reset() = 0;

@@ -10,6 +10,10 @@
 
 namespace dftracer::utils::utilities::text {
 
+// Import line types for convenience
+using io::lines::Line;
+using io::lines::Lines;
+
 /**
  * @brief Utility that splits text into individual lines.
  *
@@ -59,16 +63,17 @@ class LineSplitterUtility
             return Lines{};
         }
 
-        std::vector<Line> result;
+        // Build string storage first
+        std::vector<std::string> string_storage;
         std::istringstream stream(input.content);
         std::string line_content;
-        std::size_t line_number = 1;
 
         while (std::getline(stream, line_content)) {
-            result.emplace_back(line_content, line_number++);
+            string_storage.push_back(std::move(line_content));
         }
 
-        return Lines{std::move(result)};
+        // Use the Lines constructor that takes ownership and creates views
+        return Lines{std::move(string_storage)};
     }
 };
 

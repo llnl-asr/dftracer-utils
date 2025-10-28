@@ -2,6 +2,8 @@
 #define DFTRACER_UTILS_READER_STREAM_H
 
 #ifdef __cplusplus
+#include <dftracer/utils/core/common/span.h>
+
 #include <cstddef>
 
 namespace dftracer::utils {
@@ -24,10 +26,33 @@ namespace dftracer::utils {
  */
 class ReaderStream {
    public:
+    /**
+     * @brief Virtual destructor.
+     */
     virtual ~ReaderStream() = default;
 
     /**
-     * @brief Read next chunk of data into buffer.
+     * @brief Read next chunk as zero-copy view.
+     *
+     * Returns view into internal buffer
+     *
+     * LIFETIME: The returned span is invalidated by:
+     *   - Next call to read() or read(buffer, size)
+     *   - Calling reset() or destructor
+     *
+     * USAGE:
+     *   while (!stream->done()) {
+     *     auto chunk = stream->read();
+     *     if (chunk.empty()) break;
+     *     process(chunk);  // Process before next read()
+     *   }
+     *
+     * @return View to next chunk (empty span if done)
+     */
+    virtual span_view<const char> read() = 0;
+
+    /**
+     * @brief Read next chunk of data into buffer (copy).
      *
      * Reads incrementally from the stream. Each call returns the next
      * available chunk up to buffer_size bytes.

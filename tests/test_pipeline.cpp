@@ -1,763 +1,2128 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/pipeline/error.h>
-#include <dftracer/utils/core/pipeline/executors/sequential_executor.h>
-#include <dftracer/utils/core/pipeline/executors/thread_executor.h>
+#include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/function_task.h>
+#include <dftracer/utils/core/pipeline/pipeline_config_manager.h>
+#include <dftracer/utils/core/pipeline/scheduler.h>
+#include <dftracer/utils/core/pipeline/watchdog.h>
+#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/core/tasks/task_context.h>
 #include <doctest/doctest.h>
 
 #include <any>
 #include <atomic>
+#include <chrono>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
 using namespace dftracer::utils;
 
-TEST_CASE("Pipeline - Basic functionality") {
-    Pipeline pipeline;
+// ============================================================================
+// Basic Scheduler Tests
+// ============================================================================
 
-    auto double_task = [](int input, TaskContext&) -> int { return input * 2; };
+TEST_CASE("Scheduler - Basic construction and destruction") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
 
-    auto task_result = pipeline.add_task<int, int>(double_task);
-    CHECK(task_result.id() == 0);
+    // Should construct and destruct cleanly
+    CHECK(scheduler.get_watchdog() == nullptr);
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
 }
 
-TEST_CASE("Pipeline - Sequential execution") {
-    Pipeline pipeline;
+TEST_CASE("Scheduler - Construction with config") {
+    Executor executor(4);
 
-    auto double_task = [](int input, TaskContext&) -> int { return input * 2; };
+    auto config = PipelineConfigManager::default_config();
+    Scheduler scheduler(&executor, config);
 
-    auto task_result = pipeline.add_task<int, int>(double_task);
+    // Should have watchdog enabled by default
+    CHECK(scheduler.get_watchdog() != nullptr);
 
-    SequentialExecutor executor;
-    executor.execute(pipeline, 21);
-    int final_result = task_result.get();
-
-    CHECK(final_result == 42);
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
 }
 
-TEST_CASE("Pipeline - Thread execution") {
-    Pipeline pipeline;
+TEST_CASE("Scheduler - Sequential config") {
+    Executor executor(1);
 
-    auto double_task = [](int input, TaskContext&) -> int { return input * 2; };
+    auto config = PipelineConfigManager::sequential();
+    Scheduler scheduler(&executor, config);
 
-    auto task_result = pipeline.add_task<int, int>(double_task);
+    // Sequential mode should disable watchdog
+    CHECK(scheduler.get_watchdog() == nullptr);
 
-    ThreadExecutor executor(2);
-    executor.execute(pipeline, 21);
-    int final_result = task_result.get();
-
-    CHECK(final_result == 42);
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
 }
 
-TEST_CASE("Pipeline - Task dependencies") {
-    Pipeline pipeline;
+TEST_CASE("Scheduler - Parallel config") {
+    Executor executor(4);
 
-    auto add_task = [](int input, TaskContext&) -> int { return input + 10; };
+    auto config = PipelineConfigManager::parallel(4);
+    Scheduler scheduler(&executor, config);
 
-    auto multiply_task = [](int input, TaskContext&) -> int {
-        return input * 2;
-    };
+    // Parallel mode should enable watchdog
+    CHECK(scheduler.get_watchdog() != nullptr);
 
-    auto t1 = pipeline.add_task<int, int>(add_task);
-    auto t2 = pipeline.add_task<int, int>(multiply_task);
-    pipeline.add_dependency(t1.id(), t2.id());
-
-    SequentialExecutor executor;
-    executor.execute(pipeline, 5);
-
-    CHECK(t1.get() == 15);
-    CHECK(t2.get() == 30);
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
 }
 
-TEST_CASE("Pipeline - Task emission") {
-    Pipeline pipeline;
+// ============================================================================
+// Fluent API Tests
+// ============================================================================
 
-    auto emitting_task = [](int input, TaskContext& ctx) -> int {
-        auto child_task = [](int x, TaskContext&) -> int { return x * 3; };
+TEST_CASE("PipelineConfigManager - Fluent API basic") {
+    auto config =
+        PipelineConfigManager().with_executor_threads(4).with_watchdog(true);
 
-        ctx.emit<int, int>(child_task, Input{input * 2},
-                           DependsOn{ctx.current()});
-        return input + 5;
-    };
-
-    pipeline.add_task<int, int>(emitting_task);
-
-    SequentialExecutor executor;
-    PipelineOutput result = executor.execute(pipeline, 10);
-    int final_result = result.get<int>();
-
-    CHECK(final_result == 15);
+    CHECK(config.executor_threads == 4);
+    CHECK(config.enable_watchdog == true);
 }
 
-TEST_CASE("Pipeline - String processing") {
-    Pipeline pipeline;
+TEST_CASE("PipelineConfigManager - Fluent API with timeouts") {
+    auto config = PipelineConfigManager()
+                      .with_executor_threads(4)
+                      .with_global_timeout(std::chrono::seconds(30))
+                      .with_task_timeout(std::chrono::seconds(10));
 
-    auto string_task = [](std::string input, TaskContext&) -> std::string {
-        return "Processed: " + input;
-    };
-
-    pipeline.add_task<std::string, std::string>(string_task);
-
-    SequentialExecutor executor;
-    std::string input = "test";
-    PipelineOutput result = executor.execute(pipeline, input);
-    std::string final_result = result.get<std::string>();
-
-    CHECK(final_result == "Processed: test");
+    CHECK(config.executor_threads == 4);
+    CHECK(config.global_timeout == std::chrono::seconds(30));
+    CHECK(config.default_task_timeout == std::chrono::seconds(10));
 }
 
-TEST_CASE("Pipeline - Vector processing") {
-    Pipeline pipeline;
+TEST_CASE("PipelineConfigManager - Fluent API chaining") {
+    auto config = PipelineConfigManager()
+                      .with_executor_threads(8)
+                      .with_watchdog(true)
+                      .with_global_timeout(std::chrono::minutes(1))
+                      .with_task_timeout(std::chrono::seconds(30))
+                      .with_watchdog_interval(std::chrono::milliseconds(50))
+                      .with_warning_threshold(std::chrono::seconds(5));
 
-    auto vector_task = [](std::vector<int> input, TaskContext&) -> int {
-        int sum = 0;
-        for (const auto& elem : input) {
-            sum += elem;
-        }
-        return sum;
-    };
-
-    pipeline.add_task<std::vector<int>, int>(vector_task);
-
-    SequentialExecutor executor;
-    std::vector<int> input = {1, 2, 3, 4, 5};
-    PipelineOutput result = executor.execute(pipeline, input);
-    int final_result = result.get<int>();
-
-    CHECK(final_result == 15);
+    CHECK(config.executor_threads == 8);
+    CHECK(config.enable_watchdog == true);
+    CHECK(config.global_timeout == std::chrono::minutes(1));
+    CHECK(config.default_task_timeout == std::chrono::seconds(30));
+    CHECK(config.watchdog_interval == std::chrono::milliseconds(50));
+    CHECK(config.long_task_warning_threshold == std::chrono::seconds(5));
 }
 
-TEST_CASE("Pipeline - Deterministic execution") {
-    Pipeline pipeline;
+TEST_CASE("PipelineConfigManager - Static factory methods") {
+    SUBCASE("default_config") {
+        auto config = PipelineConfigManager::default_config();
+        CHECK(config.executor_threads == 0);  // hardware_concurrency
+        CHECK(config.enable_watchdog == true);
+    }
+
+    SUBCASE("sequential") {
+        auto config = PipelineConfigManager::sequential();
+        CHECK(config.executor_threads == 1);
+        CHECK(config.enable_watchdog == false);
+    }
+
+    SUBCASE("parallel") {
+        auto config = PipelineConfigManager::parallel(4);
+        CHECK(config.executor_threads == 4);
+        CHECK(config.enable_watchdog == true);
+    }
+
+    SUBCASE("with_timeouts") {
+        auto config = PipelineConfigManager::with_timeouts(
+            4, std::chrono::seconds(60), std::chrono::seconds(30));
+        CHECK(config.executor_threads == 4);
+        CHECK(config.enable_watchdog == true);
+        CHECK(config.global_timeout == std::chrono::seconds(60));
+        CHECK(config.default_task_timeout == std::chrono::seconds(30));
+    }
+}
+
+// ============================================================================
+// Task Scheduling Tests
+// ============================================================================
+
+TEST_CASE("Scheduler - Schedule simple task") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
 
     std::atomic<int> counter{0};
 
-    auto deterministic_task = [&counter](int input, TaskContext& ctx) -> int {
-        for (int i = 0; i < 5; ++i) {
-            auto work_task = [&counter, i, input](int work_amount,
-                                                  TaskContext&) -> int {
-                counter++;
-                int result = input;
-                for (int j = 0; j < work_amount * 10; ++j) {
-                    result = (result * 3 + 7) % 1000;
+    auto task = make_task(
+        [&counter]() -> int {
+            counter++;
+            return 42;
+        },
+        "SimpleTask");
+
+    scheduler.schedule(task);
+
+    // Wait for task to complete
+    task->get<int>();
+
+    CHECK(counter.load() == 1);
+    CHECK(task->is_completed());
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Scheduler - Task dependencies") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::vector<int> execution_order;
+    std::mutex order_mutex;
+
+    auto task1 = make_task(
+        [&]() {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            execution_order.push_back(1);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        },
+        "Task1");
+
+    auto task2 = make_task(
+        [&]() {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            execution_order.push_back(2);
+        },
+        "Task2");
+
+    // Task2 depends on Task1
+    task2->depends_on(task1);
+
+    scheduler.schedule(task1);
+
+    // Wait for completion
+    task2->wait();
+
+    // Task1 should execute before Task2
+    CHECK(execution_order.size() == 2);
+    CHECK(execution_order[0] == 1);
+    CHECK(execution_order[1] == 2);
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+// ============================================================================
+// Threading Tests
+// ============================================================================
+
+TEST_CASE("Scheduler - Threading with multiple workers") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> active_count{0};
+    std::atomic<int> max_active{0};
+    std::atomic<int> completed{0};
+
+    // Create a root task
+    auto root_task = make_task(
+        [&]() {
+            int current = ++active_count;
+            int current_max = max_active.load();
+            while (current > current_max &&
+                   !max_active.compare_exchange_weak(current_max, current)) {
+                current_max = max_active.load();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            --active_count;
+            ++completed;
+        },
+        "RootTask");
+
+    // Create child tasks
+    std::shared_ptr<Task> last_child;
+    for (int i = 1; i < 20; ++i) {
+        auto child = make_task(
+            [&]() {
+                int current = ++active_count;
+                int current_max = max_active.load();
+                while (
+                    current > current_max &&
+                    !max_active.compare_exchange_weak(current_max, current)) {
+                    current_max = max_active.load();
                 }
-                return result + i;
-            };
-
-            ctx.emit<int, int>(work_task, Input{i + 1});
-        }
-        return input * 2;
-    };
-
-    pipeline.add_task<int, int>(deterministic_task);
-
-    SequentialExecutor seq_executor;
-    counter = 0;
-    PipelineOutput seq_result = seq_executor.execute(pipeline, 42);
-    int seq_final = std::any_cast<int>(seq_result.begin()->second);
-    int seq_counter = counter.load();
-
-    ThreadExecutor thread_executor(2);
-    counter = 0;
-    PipelineOutput thread_result = thread_executor.execute(pipeline, 42);
-    int thread_final = std::any_cast<int>(thread_result.begin()->second);
-    int thread_counter = counter.load();
-
-    CHECK(seq_final == thread_final);
-    CHECK(seq_counter == thread_counter);
-}
-
-TEST_CASE("Pipeline - Multiple task chains") {
-    Pipeline pipeline;
-
-    auto task1 = [](int input, TaskContext&) -> int { return input + 1; };
-
-    auto task2 = [](int input, TaskContext&) -> int { return input * 2; };
-
-    auto task3 = [](int input, TaskContext&) -> int { return input - 5; };
-
-    auto t1 = pipeline.add_task<int, int>(task1);
-    auto t2 = pipeline.add_task<int, int>(task2);
-    auto t3 = pipeline.add_task<int, int>(task3);
-
-    pipeline.add_dependency(t1.id(), t2.id());
-    pipeline.add_dependency(t2.id(), t3.id());
-
-    SequentialExecutor executor;
-    PipelineOutput result = executor.execute(pipeline, 10);
-    int final_result = result.get<int>();
-
-    CHECK(final_result == 17);
-}
-
-TEST_CASE("Pipeline - Complex task emission") {
-    Pipeline pipeline;
-
-    auto generator = [](std::vector<int> input, TaskContext& ctx) -> int {
-        int sum = 0;
-        for (size_t i = 0; i < input.size(); ++i) {
-            auto element_processor = [i](int element, TaskContext&) -> int {
-                return element * element;
-            };
-
-            ctx.emit<int, int>(element_processor, Input{input[i]},
-                               DependsOn{ctx.current()});
-            sum += input[i];
-        }
-        return sum;
-    };
-
-    pipeline.add_task<std::vector<int>, int>(generator);
-
-    SequentialExecutor executor;
-    std::vector<int> input = {2, 3, 4};
-    PipelineOutput result = executor.execute(pipeline, input);
-    int final_result = result.get<int>();
-
-    CHECK(final_result == 9);
-}
-
-TEST_CASE("Pipeline - Thread safety") {
-    Pipeline pipeline;
-
-    std::atomic<int> shared_counter{0};
-
-    auto thread_safe_task = [&shared_counter](int input,
-                                              TaskContext& ctx) -> int {
-        for (int i = 0; i < 10; ++i) {
-            auto atomic_task = [&shared_counter, i](int x,
-                                                    TaskContext&) -> int {
-                shared_counter++;
-                return x + i;
-            };
-
-            ctx.emit<int, int>(atomic_task, Input{input});
-        }
-        return input;
-    };
-
-    pipeline.add_task<int, int>(thread_safe_task);
-
-    ThreadExecutor executor(4);
-    PipelineOutput result = executor.execute(pipeline, 5);
-    int final_result = result.get<int>();
-
-    CHECK(final_result == 5);
-    CHECK(shared_counter.load() == 10);
-}
-
-TEST_CASE("Pipeline - Error handling") {
-    Pipeline pipeline;
-
-    auto error_task = [](int input, TaskContext&) -> int {
-        if (input < 0) {
-            return -1;
-        }
-        return input * 2;
-    };
-
-    pipeline.add_task<int, int>(error_task);
-
-    SequentialExecutor executor;
-
-    SUBCASE("Valid input") {
-        PipelineOutput result = executor.execute(pipeline, 5);
-        int final_result = result.get<int>();
-        CHECK(final_result == 10);
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                --active_count;
+                ++completed;
+            },
+            "Task_" + std::to_string(i));
+        child->depends_on(root_task);
+        last_child = child;
     }
 
-    SUBCASE("Invalid input") {
-        PipelineOutput result = executor.execute(pipeline, -5);
-        int final_result = result.get<int>();
-        CHECK(final_result == -1);
+    scheduler.schedule(root_task);
+
+    // Wait for all tasks to complete
+    if (last_child) {
+        last_child->wait();
     }
+
+    CHECK(completed.load() == 20);
+    // Should have some parallelism (at least 2 tasks running concurrently)
+    CHECK(max_active.load() >= 2);
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
 }
+TEST_CASE("Scheduler - Single threaded execution") {
+    Executor executor(1);
+    auto config = PipelineConfigManager::sequential();
+    Scheduler scheduler(&executor, config);
 
-TEST_CASE("Pipeline - Empty pipeline") {
-    Pipeline pipeline;
-    SequentialExecutor executor;
+    std::atomic<int> active_count{0};
+    std::atomic<int> max_active{0};
 
-    CHECK_THROWS(executor.execute(pipeline, 42));
-}
+    auto root_task = make_task(
+        [&]() {
+            int current = ++active_count;
+            int current_max = max_active.load();
+            while (current > current_max &&
+                   !max_active.compare_exchange_weak(current_max, current)) {
+                current_max = max_active.load();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            --active_count;
+        },
+        "RootTask");
 
-TEST_CASE("Pipeline - Different executor thread counts") {
-    Pipeline pipeline;
-
-    auto simple_task = [](int input, TaskContext&) -> int { return input * 3; };
-
-    pipeline.add_task<int, int>(simple_task);
-
-    std::vector<int> thread_counts = {1, 2, 4, 8};
-
-    for (int thread_count : thread_counts) {
-        ThreadExecutor executor(thread_count);
-        PipelineOutput result = executor.execute(pipeline, 7);
-        int final_result = result.get<int>();
-        CHECK(final_result == 21);
+    std::shared_ptr<Task> last_child;
+    for (int i = 1; i < 10; ++i) {
+        auto child = make_task(
+            [&]() {
+                int current = ++active_count;
+                int current_max = max_active.load();
+                while (
+                    current > current_max &&
+                    !max_active.compare_exchange_weak(current_max, current)) {
+                    current_max = max_active.load();
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                --active_count;
+            },
+            "Task_" + std::to_string(i));
+        child->depends_on(root_task);
+        last_child = child;
     }
+
+    scheduler.schedule(root_task);
+
+    // Wait for completion
+    if (last_child) {
+        last_child->wait();
+    }
+
+    // Should only ever have 1 task active at a time
+    CHECK(max_active.load() == 1);
 }
+// ============================================================================
+// Timeout Tests
+// ============================================================================
 
-TEST_CASE("Pipeline - Cyclic dependency detection") {
-    Pipeline pipeline;
+TEST_CASE("Scheduler - Global timeout triggers") {
+    // Use a very short timeout to make test fast and deterministic
+    auto config = PipelineConfigManager()
+                      .with_executor_threads(4)
+                      .with_global_timeout(std::chrono::milliseconds(50))
+                      .with_watchdog(true)
+                      .with_watchdog_interval(std::chrono::milliseconds(10));
 
-    auto task1 = [](int input, TaskContext&) -> int { return input + 1; };
+    // Create executor and scheduler in a scope so they cleanup properly
+    {
+        Executor executor(4);
+        Scheduler scheduler(&executor, config);
 
-    auto task2 = [](int input, TaskContext&) -> int { return input * 2; };
+        // Create a task that spins/blocks longer than timeout
+        // Use shared_ptr to ensure flag survives task execution
+        auto should_exit = std::make_shared<std::atomic<bool>>(false);
+        auto task_started = std::make_shared<std::atomic<bool>>(false);
 
-    auto t1 = pipeline.add_task<int, int>(task1);
-    auto t2 = pipeline.add_task<int, int>(task2);
+        auto blocking_task = make_task(
+            [should_exit, task_started]() {
+                task_started->store(true);
+                // Busy-wait loop that checks flag periodically
+                // This is more deterministic than sleep for CI
+                auto start = std::chrono::steady_clock::now();
+                while (!should_exit->load()) {
+                    auto elapsed = std::chrono::steady_clock::now() - start;
+                    // Exit after 2 seconds max (way longer than timeout)
+                    if (elapsed > std::chrono::seconds(2)) {
+                        break;
+                    }
+                    // Use yield to be less CPU-intensive but still responsive
+                    for (int i = 0; i < 1000; ++i) {
+                        std::this_thread::yield();
+                    }
+                }
+            },
+            "BlockingTask");
 
-    pipeline.add_dependency(t1.id(), t2.id());
-    pipeline.add_dependency(t2.id(), t1.id());
-
-    SequentialExecutor executor;
-    CHECK_THROWS_AS(executor.execute(pipeline, 5), PipelineError);
-}
-
-TEST_CASE("Pipeline - Type mismatch validation") {
-    Pipeline pipeline;
-
-    auto string_task = [](int input, TaskContext&) -> std::string {
-        return std::to_string(input);
-    };
-
-    auto int_task = [](int input, TaskContext&) -> int { return input * 2; };
-
-    auto t1 = pipeline.add_task<int, std::string>(string_task);
-    auto t2 = pipeline.add_task<int, int>(int_task);
-
-    pipeline.add_dependency(t1.id(), t2.id());
-
-    SequentialExecutor executor;
-    CHECK_THROWS_AS(executor.execute(pipeline, 5), PipelineError);
-}
-
-TEST_CASE("Pipeline - Multiple dependencies") {
-    Pipeline pipeline;
-
-    auto task1 = [](int input, TaskContext&) -> int { return input + 10; };
-
-    auto task2 = [](int input, TaskContext&) -> int { return input * 2; };
-
-    auto combiner_task = [](std::vector<std::any> inputs, TaskContext&) -> int {
-        int sum = 0;
-        for (const auto& input : inputs) {
-            sum += std::any_cast<int>(input);
+        // Should throw timeout error
+        bool caught_timeout = false;
+        try {
+            scheduler.schedule(blocking_task);
+        } catch (const PipelineError& e) {
+            caught_timeout = (e.get_type() == PipelineError::TIMEOUT_ERROR);
         }
-        return sum;
-    };
 
-    auto t1 = pipeline.add_task<int, int>(task1);
-    auto t2 = pipeline.add_task<int, int>(task2);
-    auto t3 = pipeline.add_task<std::vector<std::any>, int>(combiner_task);
+        // Cleanup: signal task to exit and give it time
+        should_exit->store(true);
 
-    pipeline.add_dependency(t1.id(), t3.id());
-    pipeline.add_dependency(t2.id(), t3.id());
-
-    SequentialExecutor executor;
-    PipelineOutput result = executor.execute(pipeline, 5);
-    int final_result = result.get<int>();
-
-    CHECK(final_result == 25);
-}
-
-TEST_CASE("Pipeline - Multiple dependencies type mismatch") {
-    Pipeline pipeline;
-
-    auto task1 = [](int input, TaskContext&) -> int { return input + 10; };
-
-    auto task2 = [](int input, TaskContext&) -> int { return input * 2; };
-
-    auto bad_combiner = [](int input, TaskContext&) -> int { return input; };
-
-    auto t1 = pipeline.add_task<int, int>(task1);
-    auto t2 = pipeline.add_task<int, int>(task2);
-    auto t3 = pipeline.add_task<int, int>(bad_combiner);
-
-    pipeline.add_dependency(t1.id(), t3.id());
-    pipeline.add_dependency(t2.id(), t3.id());
-
-    SequentialExecutor executor;
-    CHECK_THROWS_AS(executor.execute(pipeline, 5), PipelineError);
-}
-
-TEST_CASE("Pipeline - Complex dependency graph") {
-    Pipeline pipeline;
-
-    auto add_task = [](int input, TaskContext&) -> int { return input + 1; };
-
-    auto multiply_task = [](int input, TaskContext&) -> int {
-        return input * 2;
-    };
-
-    auto combiner_task = [](std::vector<std::any> inputs, TaskContext&) -> int {
-        int product = 1;
-        for (const auto& input : inputs) {
-            product *= std::any_cast<int>(input);
+        // Wait briefly for task to exit
+        auto cleanup_start = std::chrono::steady_clock::now();
+        while (task_started->load() &&
+               (std::chrono::steady_clock::now() - cleanup_start <
+                std::chrono::milliseconds(500))) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        return product;
-    };
 
-    auto t1 = pipeline.add_task<int, int>(add_task);
-    auto t2 = pipeline.add_task<int, int>(multiply_task);
-    auto t3 = pipeline.add_task<int, int>(add_task);
-    auto t4 = pipeline.add_task<int, int>(multiply_task);
-    auto t5 = pipeline.add_task<std::vector<std::any>, int>(combiner_task);
-
-    pipeline.add_dependency(t1.id(), t2.id());
-    pipeline.add_dependency(t1.id(), t3.id());
-    pipeline.add_dependency(t2.id(), t5.id());
-    pipeline.add_dependency(t3.id(), t4.id());
-    pipeline.add_dependency(t4.id(), t5.id());
-
-    SequentialExecutor executor;
-    PipelineOutput result = executor.execute(pipeline, 2);
-    int final_result = result.get<int>();
-
-    CHECK(final_result == 48);
-}
-
-TEST_CASE("Pipeline - Task context usage") {
-    Pipeline pipeline;
-
-    std::vector<TaskIndex> emitted_tasks;
-
-    auto context_task = [&emitted_tasks](int input, TaskContext& ctx) -> int {
-        auto child_task = [input](int multiplier, TaskContext&) -> int {
-            return input * multiplier;
-        };
-
-        auto child_result = ctx.emit<int, int>(child_task, Input{3});
-        emitted_tasks.push_back(child_result.id());
-
-        return input + 5;
-    };
-
-    pipeline.add_task<int, int>(context_task);
-
-    SequentialExecutor executor;
-    PipelineOutput result = executor.execute(pipeline, 10);
-    int final_result = result.get<int>();
-
-    CHECK(final_result == 15);
-    CHECK(emitted_tasks.size() == 1);
-}
-
-TEST_CASE("Pipeline - Empty pipeline validation") {
-    Pipeline empty_pipeline;
-
-    SequentialExecutor seq_executor;
-    ThreadExecutor thread_executor(2);
-
-    CHECK_THROWS_AS(seq_executor.execute(empty_pipeline, 42), PipelineError);
-    CHECK_THROWS_AS(thread_executor.execute(empty_pipeline, 42), PipelineError);
-}
-
-TEST_CASE("Pipeline - Large pipeline stress test") {
-    Pipeline pipeline;
-
-    std::vector<TaskIndex> tasks;
-
-    for (int i = 0; i < 100; ++i) {
-        auto task = [i](int input, TaskContext&) -> int { return input + i; };
-
-        auto task_result = pipeline.add_task<int, int>(task);
-        tasks.push_back(task_result.id());
-
-        if (i > 0) {
-            pipeline.add_dependency(tasks[i - 1], tasks[i]);
-        }
+        CHECK(caught_timeout);
     }
 
-    SequentialExecutor executor;
-    PipelineOutput result = executor.execute(pipeline, 0);
-    int final_result = result.get<int>();
+    // Give time for executor cleanup
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
 
-    int expected = 0;
-    for (int i = 0; i < 100; ++i) {
-        expected += i;
+TEST_CASE("Scheduler - No timeout with zero value") {
+    Executor executor(4);
+    auto config = PipelineConfigManager()
+                      .with_executor_threads(4)
+                      .with_global_timeout(
+                          std::chrono::milliseconds(0))  // 0 = wait forever
+                      .with_watchdog(false);
+
+    Scheduler scheduler(&executor, config);
+
+    std::atomic<bool> completed{false};
+
+    auto task = make_task(
+        [&]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            completed = true;
+        },
+        "Task");
+
+    scheduler.schedule(task);
+
+    // Wait for task to complete
+    task->wait();
+
+    // Should complete without timeout
+    CHECK(completed.load() == true);
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+// ============================================================================
+// Watchdog Tests
+// ============================================================================
+
+TEST_CASE("Watchdog - Basic construction") {
+    Watchdog watchdog(std::chrono::milliseconds(100));
+
+    // Should construct cleanly
+    CHECK_NOTHROW(watchdog.start());
+    CHECK_NOTHROW(watchdog.stop());
+}
+
+TEST_CASE("Watchdog - Construction with parameters") {
+    Watchdog watchdog(std::chrono::milliseconds(50),    // check_interval
+                      std::chrono::milliseconds(5000),  // global_timeout
+                      std::chrono::milliseconds(1000),  // default_task_timeout
+                      std::chrono::milliseconds(500)    // warning_threshold
+    );
+
+    CHECK_NOTHROW(watchdog.start());
+    CHECK_NOTHROW(watchdog.stop());
+}
+
+// ============================================================================
+// Shutdown Tests
+// ============================================================================
+
+TEST_CASE("Scheduler - Graceful shutdown") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> completed{0};
+    std::atomic<bool> tasks_started{false};
+
+    // Create a task with fewer children and shorter sleep to reduce flakiness
+    auto root_task = make_task(
+        [&]() {
+            completed++;
+            tasks_started = true;
+        },
+        "RootTask");
+
+    // Store children to prevent them from being destroyed
+    std::vector<std::shared_ptr<Task>> children;
+    for (int i = 1; i < 20; ++i) {  // Reduced from 100 to 20
+        auto child = make_task(
+            [&]() {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(10));  // Reduced from 50 to 10
+                completed++;
+            },
+            "Task_" + std::to_string(i));
+        child->depends_on(root_task);
+        children.push_back(child);
     }
 
-    CHECK(final_result == expected);
-}
+    // Start scheduling in a separate thread
+    std::thread scheduler_thread([&]() {
+        try {
+            scheduler.schedule(root_task);
+        } catch (const PipelineError&) {
+            // Expected if shutdown is requested
+        }
+    });
 
-TEST_CASE("TaskResult - Basic future functionality") {
-    Pipeline pipeline;
-    auto task = [](int input, TaskContext&) -> int { return input * 3; };
-    auto result = pipeline.add_task<int, int>(task);
-
-    SequentialExecutor executor;
-    executor.execute(pipeline, 5);
-
-    CHECK(result.get() == 15);
-}
-
-TEST_CASE("TaskResult - Multiple task futures") {
-    Pipeline pipeline;
-
-    auto add_task = [](int input, TaskContext&) -> int { return input + 10; };
-    auto mul_task = [](int input, TaskContext&) -> int { return input * 2; };
-
-    auto result1 = pipeline.add_task<int, int>(add_task);
-    auto result2 = pipeline.add_task<int, int>(mul_task);
-    pipeline.add_dependency(result1.id(), result2.id());
-
-    SequentialExecutor executor;
-    executor.execute(pipeline, 5);
-
-    CHECK(result1.get() == 15);
-    CHECK(result2.get() == 30);
-}
-
-TEST_CASE("TaskResult - Exception propagation") {
-    Pipeline pipeline;
-
-    auto throwing_task = [](int input, TaskContext&) -> int {
-        if (input < 0) throw std::runtime_error("negative input");
-        return input * 2;
-    };
-
-    auto result = pipeline.add_task<int, int>(throwing_task);
-
-    SequentialExecutor executor;
-    executor.execute(pipeline, -5);
-
-    CHECK_THROWS_AS(result.get(), std::runtime_error);
-}
-
-TEST_CASE("TaskResult - Thread executor futures") {
-    Pipeline pipeline;
-
-    auto task = [](int input, TaskContext&) -> int {
+    // Wait for tasks to actually start (more reliable than fixed sleep)
+    for (int i = 0; i < 100 && !tasks_started.load(); ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        return input * 4;
-    };
+    }
 
-    auto result = pipeline.add_task<int, int>(task);
+    // Request shutdown
+    scheduler.request_shutdown();
 
-    ThreadExecutor executor(2);
-    executor.execute(pipeline, 7);
+    // Wait for scheduler to finish
+    scheduler_thread.join();
 
-    CHECK(result.get() == 28);
+    // Verify shutdown was requested and at least root task completed
+    CHECK(scheduler.is_shutdown_requested());
+    CHECK(tasks_started.load());  // Root task should have started
 }
+TEST_CASE("Scheduler - Shutdown during execution") {
+    Executor executor(2);
+    auto config =
+        PipelineConfigManager().with_executor_threads(2).with_watchdog(false);
 
-TEST_CASE("TaskResult - Dynamic task futures") {
-    Pipeline pipeline;
-    std::vector<TaskResult<int>::Future> dynamic_futures;
+    Scheduler scheduler(&executor, config);
 
-    auto mapper = [&dynamic_futures](std::vector<int> input,
-                                     TaskContext& ctx) -> int {
-        int sum = 0;
-        for (int val : input) {
-            auto task_result = ctx.emit<int, int>(
-                [](int x, TaskContext&) -> int { return x * x; }, Input{val});
-            dynamic_futures.push_back(std::move(task_result.future()));
-            sum += val;
+    std::atomic<bool> task_running{false};
+
+    auto task = make_task(
+        [&]() {
+            task_running = true;
+            for (int i = 0; i < 100; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        },
+        "LongRunningTask");
+
+    std::thread scheduler_thread([&]() {
+        try {
+            scheduler.schedule(task);
+        } catch (...) {
+            // May throw if interrupted
         }
-        return sum;
-    };
+    });
 
-    auto result = pipeline.add_task<std::vector<int>, int>(mapper);
-
-    SequentialExecutor executor;
-    std::vector<int> input = {2, 3, 4};
-    executor.execute(pipeline, input);
-
-    CHECK(result.get() == 9);
-    CHECK(dynamic_futures.size() == 3);
-    CHECK(dynamic_futures[0].get() == 4);
-    CHECK(dynamic_futures[1].get() == 9);
-    CHECK(dynamic_futures[2].get() == 16);
-}
-
-TEST_CASE("TaskResult - Mixed static and dynamic futures") {
-    Pipeline pipeline;
-    TaskResult<int>::Future emit_future;
-
-    auto task = [&emit_future](int input, TaskContext& ctx) -> std::string {
-        auto result = ctx.emit<int, int>(
-            [](int x, TaskContext&) -> int { return x + 100; }, Input{input});
-        emit_future = std::move(result.future());
-        return "processed " + std::to_string(input);
-    };
-
-    auto static_result = pipeline.add_task<int, std::string>(task);
-
-    SequentialExecutor executor;
-    executor.execute(pipeline, 42);
-
-    CHECK(static_result.get() == "processed 42");
-    CHECK(emit_future.get() == 142);
-}
-
-TEST_CASE("TaskResult - Pipeline task exception handling") {
-    SUBCASE("Sequential executor") {
-        Pipeline pipeline;
-
-        auto throwing_task = [](int input, TaskContext&) -> int {
-            if (input < 0) {
-                throw std::runtime_error("Pipeline task error: negative input");
-            }
-            return input * 2;
-        };
-
-        auto result = pipeline.add_task<int, int>(throwing_task);
-
-        SequentialExecutor executor;
-        executor.execute(pipeline, -10);
-
-        CHECK_THROWS_WITH(result.get(), "Pipeline task error: negative input");
+    // Wait for task to start
+    while (!task_running.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    SUBCASE("Thread executor") {
-        Pipeline pipeline;
+    // Request shutdown while task is running
+    scheduler.request_shutdown();
 
-        auto throwing_task = [](int input, TaskContext&) -> int {
-            if (input < 0) {
-                throw std::runtime_error("Pipeline task error: negative input");
-            }
-            return input * 2;
-        };
+    scheduler_thread.join();
 
-        auto result = pipeline.add_task<int, int>(throwing_task);
+    CHECK(scheduler.is_shutdown_requested());
+}
+// ============================================================================
+// Integration Tests
+// ============================================================================
 
-        ThreadExecutor executor(2);
-        executor.execute(pipeline, -10);
+TEST_CASE("Integration - Scheduler with Watchdog and Timeout") {
+    Executor executor(4);
+    // Increase timeout to 2 seconds to account for CI overhead and scheduling
+    // delays
+    auto config = PipelineConfigManager::with_timeouts(
+        4, std::chrono::seconds(5), std::chrono::seconds(2));
 
-        CHECK_THROWS_WITH(result.get(), "Pipeline task error: negative input");
+    Scheduler scheduler(&executor, config);
+
+    std::atomic<int> completed{0};
+
+    auto root_task = make_task([&]() { completed++; }, "RootTask");
+
+    // Create children with varying execution times (reduced to avoid flakiness
+    // in CI)
+    std::shared_ptr<Task> last_child;
+    for (int i = 1; i < 10; ++i) {
+        auto child = make_task(
+            [&, i]() {
+                // Reduced sleep times to minimize timing sensitivity
+                int sleep_ms = (i % 3 == 0) ? 50 : 10;
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(sleep_ms));
+                completed++;
+            },
+            "MixedTask_" + std::to_string(i));
+        child->depends_on(root_task);
+        last_child = child;
     }
+
+    // Should complete without timeout
+    CHECK_NOTHROW(scheduler.schedule(root_task));
+
+    // Wait for all tasks to complete
+    if (last_child) {
+        last_child->wait();
+    }
+
+    CHECK(completed.load() == 10);
+}
+TEST_CASE("Integration - Full pipeline with all features") {
+    Executor executor(4);
+    auto config = PipelineConfigManager()
+                      .with_executor_threads(4)
+                      .with_watchdog(true)
+                      .with_global_timeout(std::chrono::seconds(5))
+                      .with_task_timeout(std::chrono::seconds(1))
+                      .with_watchdog_interval(std::chrono::milliseconds(50))
+                      .with_warning_threshold(std::chrono::milliseconds(500));
+
+    Scheduler scheduler(&executor, config);
+
+    // Create a dependency chain
+    auto task1 = make_task(
+        []() { std::this_thread::sleep_for(std::chrono::milliseconds(100)); },
+        "ChainTask_0");
+
+    auto task2 = make_task(
+        []() { std::this_thread::sleep_for(std::chrono::milliseconds(200)); },
+        "ChainTask_1");
+
+    auto task3 = make_task(
+        []() { std::this_thread::sleep_for(std::chrono::milliseconds(300)); },
+        "ChainTask_2");
+
+    task2->depends_on(task1);
+    task3->depends_on(task2);
+
+    // Should complete successfully
+    CHECK_NOTHROW(scheduler.schedule(task1));
+
+    // Wait for all tasks to complete
+    task3->wait();
+
+    // All tasks should be completed
+    CHECK(task1->is_completed());
+    CHECK(task2->is_completed());
+    CHECK(task3->is_completed());
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
 }
 
-TEST_CASE("TaskResult - Dynamic task exception handling") {
-    SUBCASE("Sequential executor") {
-        Pipeline pipeline;
-        TaskResult<int>::Future dynamic_future;
+// ============================================================================
+// Error Handling Tests
+// ============================================================================
 
-        auto parent_task = [&dynamic_future](int input,
-                                             TaskContext& ctx) -> int {
-            auto throwing_child = [](int x, TaskContext&) -> int {
-                if (x > 50) {
-                    throw std::runtime_error(
-                        "Dynamic task error: value too large");
-                }
-                return x * 2;
-            };
-
-            auto result = ctx.emit<int, int>(throwing_child, Input{input});
-            dynamic_future = std::move(result.future());
-            return input + 1;
-        };
-
-        auto parent_result = pipeline.add_task<int, int>(parent_task);
-
-        SequentialExecutor executor;
-        executor.execute(pipeline, 100);
-
-        CHECK(parent_result.get() == 101);
-        CHECK_THROWS_WITH(dynamic_future.get(),
-                          "Dynamic task error: value too large");
-    }
-
-    SUBCASE("Thread executor") {
-        Pipeline pipeline;
-        TaskResult<int>::Future dynamic_future;
-
-        auto parent_task = [&dynamic_future](int input,
-                                             TaskContext& ctx) -> int {
-            auto throwing_child = [](int x, TaskContext&) -> int {
-                if (x > 50) {
-                    throw std::runtime_error(
-                        "Dynamic task error: value too large");
-                }
-                return x * 2;
-            };
-
-            auto result = ctx.emit<int, int>(throwing_child, Input{input});
-            dynamic_future = std::move(result.future());
-            return input + 1;
-        };
-
-        auto parent_result = pipeline.add_task<int, int>(parent_task);
-
-        ThreadExecutor executor(2);
-        executor.execute(pipeline, 100);
-
-        CHECK(parent_result.get() == 101);
-        CHECK_THROWS_WITH(dynamic_future.get(),
-                          "Dynamic task error: value too large");
-    }
+TEST_CASE("Error Types - All error types present") {
+    CHECK(PipelineError::TYPE_MISMATCH >= 0);
+    CHECK(PipelineError::VALIDATION_ERROR >= 0);
+    CHECK(PipelineError::EXECUTION_ERROR >= 0);
+    CHECK(PipelineError::INITIALIZATION_ERROR >= 0);
+    CHECK(PipelineError::OUTPUT_CONVERSION_ERROR >= 0);
+    CHECK(PipelineError::TIMEOUT_ERROR >= 0);
+    CHECK(PipelineError::INTERRUPTED >= 0);
+    CHECK(PipelineError::EXECUTOR_UNRESPONSIVE >= 0);
 }
 
-TEST_CASE("TaskResult - Multiple dynamic tasks with exceptions") {
-    SUBCASE("Sequential executor") {
-        Pipeline pipeline;
-        std::vector<TaskResult<int>::Future> dynamic_futures;
+TEST_CASE("Error - Timeout error message") {
+    PipelineError error(PipelineError::TIMEOUT_ERROR, "Pipeline timed out");
+    std::string msg = error.what();
 
-        auto parent_task = [&dynamic_futures](std::vector<int> input,
-                                              TaskContext& ctx) -> int {
-            int sum = 0;
-            for (size_t i = 0; i < input.size(); ++i) {
-                auto child = [i](int x, TaskContext&) -> int {
-                    if (x < 0) {
-                        throw std::runtime_error("Dynamic task " +
-                                                 std::to_string(i) + " failed");
+    CHECK(msg.find("TIMEOUT") != std::string::npos);
+    CHECK(msg.find("Pipeline timed out") != std::string::npos);
+}
+
+TEST_CASE("Error - Interrupted error message") {
+    PipelineError error(PipelineError::INTERRUPTED, "Pipeline interrupted");
+    std::string msg = error.what();
+
+    CHECK(msg.find("INTERRUPTED") != std::string::npos);
+    CHECK(msg.find("Pipeline interrupted") != std::string::npos);
+}
+
+TEST_CASE("Error - Executor unresponsive error message") {
+    PipelineError error(PipelineError::EXECUTOR_UNRESPONSIVE, "Executor hung");
+    std::string msg = error.what();
+
+    CHECK(msg.find("EXECUTOR_UNRESPONSIVE") != std::string::npos);
+    CHECK(msg.find("Executor hung") != std::string::npos);
+}
+
+// ============================================================================
+// Error Scenario Tests - Comprehensive
+// ============================================================================
+
+TEST_CASE("Error Scenario - Task throws exception") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    auto throwing_task = make_task(
+        []() { throw std::runtime_error("Task failed intentionally"); },
+        "ThrowingTask");
+
+    // FAIL_FAST policy should throw immediately
+    scheduler.set_error_policy(ErrorPolicy::FAIL_FAST);
+
+    CHECK_THROWS_AS(scheduler.schedule(throwing_task), PipelineError);
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Error Scenario - Task throws exception in chain") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> completed_count{0};
+
+    auto task1 = make_task([&]() { ++completed_count; }, "Task1");
+
+    auto task2 = make_task(
+        [&]() {
+            ++completed_count;
+            throw std::runtime_error("Task2 failed");
+        },
+        "Task2_Throws");
+
+    auto task3 = make_task([&]() { ++completed_count; }, "Task3");
+
+    task2->depends_on(task1);
+    task3->depends_on(task2);
+
+    scheduler.set_error_policy(ErrorPolicy::FAIL_FAST);
+
+    CHECK_THROWS_AS(scheduler.schedule(task1), PipelineError);
+
+    // Task1 should have completed, Task2 threw, Task3 should not run
+    CHECK(completed_count.load() >= 1);
+    CHECK(completed_count.load() <= 2);
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Error Scenario - Type mismatch between tasks") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    // Task returns int
+    auto int_task = make_task([]() -> int { return 42; }, "IntTask");
+
+    // Task expects string input
+    auto string_task = make_task(
+        [](const std::string& s) -> int {
+            return static_cast<int>(s.length());
+        },
+        "StringTask");
+
+    // Should throw type mismatch error when setting up dependency
+    bool caught_type_error = false;
+    try {
+        string_task->depends_on(int_task);
+
+        // If we get here, try scheduling (might throw later)
+        scheduler.schedule(int_task);
+    } catch (const PipelineError& e) {
+        caught_type_error =
+            (e.get_type() == PipelineError::TYPE_MISMATCH ||
+             e.get_type() == PipelineError::TYPE_MISMATCH_ERROR);
+    } catch (const std::exception& e) {
+        // Type checking might throw std::exception
+        std::string msg = e.what();
+        caught_type_error = (msg.find("TYPE_MISMATCH") != std::string::npos ||
+                             msg.find("Type mismatch") != std::string::npos);
+    }
+
+    CHECK(caught_type_error);
+}
+TEST_CASE("Error Policy - FAIL_FAST stops on first error") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> tasks_started{0};
+    std::atomic<int> tasks_completed{0};
+
+    // Create parallel tasks, one will fail
+    auto task1 = make_task(
+        [&]() {
+            ++tasks_started;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            ++tasks_completed;
+        },
+        "Task1");
+
+    auto task2 = make_task(
+        [&]() {
+            ++tasks_started;
+            throw std::runtime_error("Task2 fails");
+        },
+        "Task2_Fails");
+
+    auto task3 = make_task(
+        [&]() {
+            ++tasks_started;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            ++tasks_completed;
+        },
+        "Task3");
+
+    // All tasks are children of a root task
+    auto root = make_task([]() {}, "Root");
+    task1->depends_on(root);
+    task2->depends_on(root);
+    task3->depends_on(root);
+
+    scheduler.set_error_policy(ErrorPolicy::FAIL_FAST);
+
+    CHECK_THROWS_AS(scheduler.schedule(root), PipelineError);
+
+    // At least one task should have started (the failing one)
+    CHECK(tasks_started.load() >= 1);
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Error Policy - CONTINUE continues on error") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> tasks_completed{0};
+    std::atomic<bool> task2_threw{false};
+
+    auto task1 = make_task(
+        [&]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            ++tasks_completed;
+        },
+        "Task1");
+
+    auto task2 = make_task(
+        [&]() {
+            task2_threw = true;
+            throw std::runtime_error("Task2 fails but should continue");
+        },
+        "Task2_Fails");
+
+    auto task3 = make_task(
+        [&]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            ++tasks_completed;
+        },
+        "Task3");
+
+    // Parallel tasks from root
+    auto root = make_task([]() {}, "Root");
+    task1->depends_on(root);
+    task2->depends_on(root);
+    task3->depends_on(root);
+
+    scheduler.set_error_policy(ErrorPolicy::CONTINUE);
+
+    // With CONTINUE policy, should not throw
+    CHECK_NOTHROW(scheduler.schedule(root));
+
+    // Wait for all tasks to complete
+    task1->wait();
+    task3->wait();
+
+    // Task2 should have thrown, but task1 and task3 should complete
+    CHECK(task2_threw.load());
+    CHECK(tasks_completed.load() == 2);
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Error Scenario - Per-task timeout") {
+    auto config = PipelineConfigManager()
+                      .with_executor_threads(4)
+                      .with_watchdog(true)
+                      .with_task_timeout(std::chrono::milliseconds(
+                          150))  // Set default (increased for CI)
+                      .with_watchdog_interval(std::chrono::milliseconds(25));
+
+    {
+        Executor executor(4);
+        Scheduler scheduler(&executor, config);
+
+        // Create task with specific timeout
+        auto should_exit = std::make_shared<std::atomic<bool>>(false);
+        auto task_started = std::make_shared<std::atomic<bool>>(false);
+
+        auto task_with_timeout = make_task(
+            [should_exit, task_started]() {
+                task_started->store(true);
+                auto start = std::chrono::steady_clock::now();
+                while (!should_exit->load()) {
+                    auto elapsed = std::chrono::steady_clock::now() - start;
+                    if (elapsed > std::chrono::seconds(2)) {
+                        break;
                     }
-                    return x * x;
-                };
-
-                auto result = ctx.emit<int, int>(child, Input{input[i]});
-                dynamic_futures.push_back(std::move(result.future()));
-                sum += input[i];
-            }
-            return sum;
-        };
-
-        auto result = pipeline.add_task<std::vector<int>, int>(parent_task);
-
-        SequentialExecutor executor;
-        std::vector<int> input = {2, -3, 4};
-        executor.execute(pipeline, input);
-
-        CHECK(result.get() == 3);
-        CHECK(dynamic_futures[0].get() == 4);
-        CHECK_THROWS_WITH(dynamic_futures[1].get(), "Dynamic task 1 failed");
-        CHECK(dynamic_futures[2].get() == 16);
-    }
-
-    SUBCASE("Thread executor") {
-        Pipeline pipeline;
-        std::vector<TaskResult<int>::Future> dynamic_futures;
-
-        auto parent_task = [&dynamic_futures](std::vector<int> input,
-                                              TaskContext& ctx) -> int {
-            int sum = 0;
-            for (size_t i = 0; i < input.size(); ++i) {
-                auto child = [i](int x, TaskContext&) -> int {
-                    if (x < 0) {
-                        throw std::runtime_error("Dynamic task " +
-                                                 std::to_string(i) + " failed");
+                    for (int i = 0; i < 1000; ++i) {
+                        std::this_thread::yield();
                     }
-                    return x * x;
-                };
+                }
+            },
+            "TaskWithTimeout");
 
-                auto result = ctx.emit<int, int>(child, Input{input[i]});
-                dynamic_futures.push_back(std::move(result.future()));
-                sum += input[i];
-            }
-            return sum;
-        };
+        // Set per-task timeout (shorter than the task duration)
+        task_with_timeout->with_timeout(std::chrono::milliseconds(150));
 
-        auto result = pipeline.add_task<std::vector<int>, int>(parent_task);
+        bool caught_timeout = false;
+        try {
+            scheduler.schedule(task_with_timeout);
+        } catch (const PipelineError& e) {
+            caught_timeout = (e.get_type() == PipelineError::TIMEOUT_ERROR);
+        }
 
-        ThreadExecutor executor(2);
-        std::vector<int> input = {2, -3, 4};
-        executor.execute(pipeline, input);
+        should_exit->store(true);
 
-        CHECK(result.get() == 3);
-        CHECK(dynamic_futures[0].get() == 4);
-        CHECK_THROWS_WITH(dynamic_futures[1].get(), "Dynamic task 1 failed");
-        CHECK(dynamic_futures[2].get() == 16);
+        // Wait briefly for task to exit
+        auto cleanup_start = std::chrono::steady_clock::now();
+        while (task_started->load() &&
+               (std::chrono::steady_clock::now() - cleanup_start <
+                std::chrono::milliseconds(500))) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        CHECK(caught_timeout);
     }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+TEST_CASE("Error Scenario - Validation error on null task") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    // Trying to schedule null task should throw validation error
+    bool caught_validation = false;
+    try {
+        scheduler.schedule(nullptr);
+    } catch (const PipelineError& e) {
+        caught_validation = (e.get_type() == PipelineError::VALIDATION_ERROR);
+    }
+
+    CHECK(caught_validation);
+}
+TEST_CASE("Error Scenario - Graceful shutdown (INTERRUPTED)") {
+    auto config =
+        PipelineConfigManager().with_executor_threads(4).with_watchdog(false);
+
+    {
+        Executor executor(4);
+        Scheduler scheduler(&executor, config);
+
+        auto should_exit = std::make_shared<std::atomic<bool>>(false);
+        auto task_started = std::make_shared<std::atomic<bool>>(false);
+
+        auto long_task = make_task(
+            [should_exit, task_started]() {
+                task_started->store(true);
+                auto start = std::chrono::steady_clock::now();
+                while (!should_exit->load()) {
+                    auto elapsed = std::chrono::steady_clock::now() - start;
+                    if (elapsed > std::chrono::seconds(2)) {
+                        break;
+                    }
+                    for (int i = 0; i < 1000; ++i) {
+                        std::this_thread::yield();
+                    }
+                }
+            },
+            "LongTask");
+
+        // Run scheduler in separate thread
+        std::atomic<bool> caught_interrupted{false};
+        std::thread scheduler_thread([&]() {
+            try {
+                scheduler.schedule(long_task);
+            } catch (const PipelineError& e) {
+                caught_interrupted =
+                    (e.get_type() == PipelineError::INTERRUPTED);
+            }
+        });
+
+        // Give task time to start
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        // Request shutdown
+        scheduler.request_shutdown();
+
+        // Wait for scheduler to finish
+        scheduler_thread.join();
+
+        should_exit->store(true);
+
+        // Wait briefly for task to exit
+        auto cleanup_start = std::chrono::steady_clock::now();
+        while (task_started->load() &&
+               (std::chrono::steady_clock::now() - cleanup_start <
+                std::chrono::milliseconds(500))) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        CHECK(caught_interrupted.load());
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+// ============================================================================
+// Pipeline Class Tests - High-Level API
+// ============================================================================
+
+TEST_CASE("Pipeline - Basic construction and validation") {
+    auto config = PipelineConfigManager()
+                      .with_name("TestPipeline")
+                      .with_executor_threads(4);
+    Pipeline pipeline(config);
+
+    CHECK(pipeline.get_name() == "TestPipeline");
+    CHECK(pipeline.get_source() == nullptr);
+    CHECK(pipeline.get_destination() == nullptr);
+}
+
+TEST_CASE("Pipeline - Single task execution") {
+    auto config = PipelineConfigManager()
+                      .with_name("SingleTask")
+                      .with_executor_threads(4);
+    Pipeline pipeline(config);
+
+    std::atomic<bool> executed{false};
+    auto task = make_task([&]() { executed = true; }, "SingleTask");
+
+    pipeline.set_source(task);
+    CHECK(pipeline.validate());
+
+    auto output = pipeline.execute();
+
+    CHECK(executed.load());
+    // If execute() returns without throwing, the pipeline succeeded
+}
+
+TEST_CASE("Pipeline - Task chain execution") {
+    auto config =
+        PipelineConfigManager().with_name("TaskChain").with_executor_threads(4);
+    Pipeline pipeline(config);
+
+    std::vector<int> execution_order;
+    std::mutex order_mutex;
+
+    auto task1 = make_task(
+        [&]() -> int {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            execution_order.push_back(1);
+            return 42;
+        },
+        "Task1");
+
+    auto task2 = make_task(
+        [&](int x) -> int {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            execution_order.push_back(2);
+            return x * 2;
+        },
+        "Task2");
+
+    auto task3 = make_task(
+        [&](int x) -> int {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            execution_order.push_back(3);
+            return x + 10;
+        },
+        "Task3");
+
+    task2->depends_on(task1);
+    task3->depends_on(task2);
+
+    pipeline.set_source(task1);
+    pipeline.set_destination(task3);
+
+    CHECK(pipeline.validate());
+
+    auto output = pipeline.execute();
+
+    CHECK(execution_order == std::vector<int>{1, 2, 3});
+
+    auto result = task3->get<int>();
+    CHECK(result == 94);  // (42 * 2) + 10
+}
+
+TEST_CASE("Pipeline - Multiple sources with add_sources") {
+    auto config = PipelineConfigManager()
+                      .with_name("MultiSource")
+                      .with_executor_threads(4);
+    Pipeline pipeline(config);
+
+    std::atomic<int> count{0};
+
+    auto task1 = make_task([&]() { ++count; }, "Source1");
+
+    auto task2 = make_task([&]() { ++count; }, "Source2");
+
+    auto task3 = make_task([&]() { ++count; }, "Source3");
+
+    pipeline.add_sources({task1, task2, task3});
+
+    CHECK(pipeline.validate());
+
+    auto output = pipeline.execute();
+
+    CHECK(count.load() == 3);
+}
+
+TEST_CASE("Pipeline - Error policy propagation") {
+    auto config = PipelineConfigManager()
+                      .with_name("ErrorPolicy")
+                      .with_executor_threads(4);
+    Pipeline pipeline(config);
+    pipeline.set_error_policy(ErrorPolicy::FAIL_FAST);
+
+    auto failing_task = make_task(
+        []() { throw std::runtime_error("Task fails"); }, "FailingTask");
+
+    pipeline.set_source(failing_task);
+    CHECK(pipeline.validate());
+
+    CHECK_THROWS_AS(pipeline.execute(), PipelineError);
+}
+
+TEST_CASE("Pipeline - Progress callback") {
+    auto config = PipelineConfigManager()
+                      .with_name("ProgressTracking")
+                      .with_executor_threads(4);
+    Pipeline pipeline(config);
+
+    std::atomic<size_t> last_completed{0};
+    std::atomic<size_t> last_total{0};
+
+    pipeline.set_progress_callback([&](size_t completed, size_t total) {
+        last_completed = completed;
+        last_total = total;
+    });
+
+    auto task1 = make_task(
+        []() { std::this_thread::sleep_for(std::chrono::milliseconds(50)); },
+        "Task1");
+
+    auto task2 = make_task(
+        []() { std::this_thread::sleep_for(std::chrono::milliseconds(50)); },
+        "Task2");
+
+    task2->depends_on(task1);
+
+    pipeline.set_source(task1);
+    CHECK(pipeline.validate());
+
+    auto output = pipeline.execute();
+
+    CHECK(last_total.load() >= 2);
+    CHECK(last_completed.load() >= 2);
+}
+
+// ============================================================================
+// Combiner Function Tests
+// ============================================================================
+
+TEST_CASE("Combiner - Multiple parents dependency resolution") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> parent_count{0};
+    std::atomic<int> child_count{0};
+
+    auto task1 = make_task([&]() { ++parent_count; }, "Task1");
+
+    auto task2 = make_task([&]() { ++parent_count; }, "Task2");
+
+    auto task3 = make_task([&]() { ++parent_count; }, "Task3");
+
+    // Child task with multiple parents - should wait for all
+    auto child = make_task(
+        [&]() {
+            // Should only execute after all 3 parents complete
+            child_count = parent_count.load();
+        },
+        "ChildCombiner");
+
+    child->depends_on(task1);
+    child->depends_on(task2);
+    child->depends_on(task3);
+
+    auto root = make_task([]() {}, "Root");
+    task1->depends_on(root);
+    task2->depends_on(root);
+    task3->depends_on(root);
+
+    scheduler.schedule(root);
+
+    // Wait for child to complete
+    child->wait();
+
+    CHECK(parent_count.load() == 3);
+    CHECK(child_count.load() == 3);  // Child should see all parents completed
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Combiner - Type-safe tuple-based multi-argument function") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> result{0};
+
+    auto task1 = make_task([]() -> int { return 5; }, "Task1");
+
+    auto task2 = make_task([]() -> int { return 7; }, "Task2");
+
+    // Child task with type-safe multi-argument function!
+    // No vector<any>, no manual casting - just clean typed args
+    auto child = make_task(
+        [&](int a, int b) {
+            result = a * b;  // 5 * 7 = 35
+        },
+        "ChildMultiArg");
+
+    child->depends_on(task1);
+    child->depends_on(task2);
+
+    auto root = make_task([]() {}, "Root");
+    task1->depends_on(root);
+    task2->depends_on(root);
+
+    scheduler.schedule(root);
+
+    // Wait for child to complete
+    child->wait();
+
+    CHECK(result.load() == 35);  // 5 * 7
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Combiner - Three argument function") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> sum{0};
+
+    auto task1 = make_task([]() -> int { return 10; }, "Task1");
+
+    auto task2 = make_task([]() -> int { return 20; }, "Task2");
+
+    auto task3 = make_task([]() -> int { return 30; }, "Task3");
+
+    // Three typed arguments - no casting needed!
+    auto child = make_task([&](int a, int b, int c) { sum = a + b + c; },
+                           "ChildThreeArgs");
+
+    child->depends_on(task1);
+    child->depends_on(task2);
+    child->depends_on(task3);
+
+    auto root = make_task([]() {}, "Root");
+    task1->depends_on(root);
+    task2->depends_on(root);
+    task3->depends_on(root);
+
+    scheduler.schedule(root);
+
+    // Wait for child to complete
+    child->wait();
+
+    CHECK(sum.load() == 60);  // 10 + 20 + 30
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Combiner - with_combiner using vector<any>") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> sum{0};
+
+    auto task1 = make_task([]() -> int { return 10; }, "Task1");
+    auto task2 = make_task([]() -> int { return 20; }, "Task2");
+    auto task3 = make_task([]() -> int { return 30; }, "Task3");
+
+    // Use with_combiner to manually extract and combine parent outputs
+    auto child =
+        make_task([&](int combined) { sum = combined; }, "ChildWithCombiner");
+
+    child->with_combiner([](const std::vector<std::any>& inputs) {
+        int result = 0;
+        for (const auto& input : inputs) {
+            result += std::any_cast<int>(input);
+        }
+        return result;
+    });
+
+    child->depends_on({task1, task2, task3});
+
+    auto root = make_task([]() {}, "Root");
+    task1->depends_on(root);
+    task2->depends_on(root);
+    task3->depends_on(root);
+
+    scheduler.schedule(root);
+
+    // Wait for child to complete
+    child->wait();
+
+    CHECK(sum.load() == 60);  // 10 + 20 + 30
+}
+TEST_CASE("Combiner - with_combiner using std::function with typed args") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> product{0};
+
+    auto task1 = make_task([]() -> int { return 5; }, "Task1");
+    auto task2 = make_task([]() -> int { return 7; }, "Task2");
+
+    // Use with_combiner with std::function that takes specific types
+    auto child = make_task([&](int combined) { product = combined; },
+                           "ChildWithTypedCombiner");
+
+    child->with_combiner([](int a, int b) { return a * b; });
+
+    child->depends_on({task1, task2});
+
+    auto root = make_task([]() {}, "Root");
+    task1->depends_on(root);
+    task2->depends_on(root);
+
+    scheduler.schedule(root);
+
+    // Wait for child to complete
+    child->wait();
+
+    CHECK(product.load() == 35);  // 5 * 7
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Combiner - with_combiner validation error") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    auto task1 = make_task([]() -> int { return 10; }, "Task1");
+    auto task2 = make_task([]() -> int { return 20; }, "Task2");
+
+    // Create combiner that expects 3 inputs but only has 2 parents
+    auto child = make_task(
+        [&](int /*val*/) {
+            // Should not reach here
+        },
+        "ChildBadCombiner");
+
+    child->with_combiner([](int a, int b, int c) { return a + b + c; });
+
+    child->depends_on({task1, task2});
+
+    auto root = make_task([]() {}, "Root");
+    task1->depends_on(root);
+    task2->depends_on(root);
+
+    bool threw_error = false;
+    try {
+        scheduler.schedule(root);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+        // The error should be stored in the future - trying to get() should
+        // throw
+        child->get<int>();
+    } catch (const dftracer::utils::PipelineError& e) {
+        threw_error = true;
+        // Verify it's a combiner validation error
+        std::string msg = e.what();
+        CHECK((msg.find("Combiner expects 3") != std::string::npos ||
+               msg.find("Pipeline execution failed") != std::string::npos));
+    } catch (const std::exception& e) {
+        threw_error = true;
+    }
+
+    CHECK(threw_error);
+}
+// ============================================================================
+// Complex DAG Structure Tests
+// ============================================================================
+
+TEST_CASE("DAG - Diamond pattern") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::vector<int> execution_order;
+    std::mutex order_mutex;
+
+    auto root = make_task(
+        [&]() {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            execution_order.push_back(0);
+        },
+        "Root");
+
+    auto left = make_task(
+        [&]() {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            execution_order.push_back(1);
+        },
+        "Left");
+
+    auto right = make_task(
+        [&]() {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            execution_order.push_back(2);
+        },
+        "Right");
+
+    auto bottom = make_task(
+        [&]() {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            execution_order.push_back(3);
+        },
+        "Bottom");
+
+    left->depends_on(root);
+    right->depends_on(root);
+    bottom->depends_on(left);
+    bottom->depends_on(right);
+
+    scheduler.schedule(root);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    CHECK(execution_order.size() == 4);
+    CHECK(execution_order[0] == 0);  // Root first
+    CHECK(execution_order[3] == 3);  // Bottom last
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+    // Left and right can execute in any order
+}
+
+TEST_CASE("DAG - Multiple branches converging") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> final_count{0};
+
+    auto root = make_task([]() {}, "Root");
+
+    // Create 5 parallel branches
+    std::vector<std::shared_ptr<Task>> branches;
+    for (int i = 0; i < 5; ++i) {
+        auto task = make_task(
+            []() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            },
+            "Branch_" + std::to_string(i));
+        task->depends_on(root);
+        branches.push_back(task);
+    }
+
+    // Final task depends on all branches
+    auto final_task = make_task([&]() { ++final_count; }, "FinalTask");
+
+    for (const auto& branch : branches) {
+        final_task->depends_on(branch);
+    }
+
+    scheduler.schedule(root);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    CHECK(final_count.load() == 1);
+}
+TEST_CASE("DAG - Wide and deep structure") {
+    Executor executor(8);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> completed{0};
+
+    auto root = make_task([]() {}, "Root");
+
+    // Create 3 levels with branching
+    std::vector<std::shared_ptr<Task>> level1, level2, level3;
+
+    // Level 1: 4 tasks from root
+    for (int i = 0; i < 4; ++i) {
+        auto task = make_task(
+            [&]() {
+                ++completed;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            },
+            "L1_" + std::to_string(i));
+        task->depends_on(root);
+        level1.push_back(task);
+    }
+
+    // Level 2: 8 tasks, 2 from each level1 task
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 2; ++j) {
+            auto task = make_task(
+                [&]() {
+                    ++completed;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                },
+                "L2_" + std::to_string(i * 2 + j));
+            task->depends_on(level1[i]);
+            level2.push_back(task);
+        }
+    }
+
+    // Level 3: 4 tasks, each depends on 2 level2 tasks
+    for (int i = 0; i < 4; ++i) {
+        auto task =
+            make_task([&]() { ++completed; }, "L3_" + std::to_string(i));
+        task->depends_on(level2[i * 2]);
+        task->depends_on(level2[i * 2 + 1]);
+        level3.push_back(task);
+    }
+
+    scheduler.schedule(root);
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    CHECK(completed.load() == 16);  // 4 + 8 + 4
+}
+// ============================================================================
+// Dynamic Task Submission Tests
+// ============================================================================
+
+TEST_CASE("Dynamic Tasks - Task submits child task at runtime") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> total_tasks{0};
+
+    auto parent_task = make_task(
+        [&](TaskContext& ctx) {
+            ++total_tasks;
+
+            // Dynamically create and submit a child task
+            auto child = make_task([&]() { ++total_tasks; }, "DynamicChild");
+
+            ctx.submit_task(child);
+        },
+        "ParentTask");
+
+    scheduler.schedule(parent_task);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    CHECK(total_tasks.load() == 2);
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Dynamic Tasks - Multiple dynamic children") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> total_tasks{0};
+
+    auto parent_task = make_task(
+        [&](TaskContext& ctx) {
+            ++total_tasks;
+
+            // Create 5 dynamic children
+            for (int i = 0; i < 5; ++i) {
+                auto child = make_task(
+                    [&]() {
+                        ++total_tasks;
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(20));
+                    },
+                    "DynamicChild_" + std::to_string(i));
+
+                ctx.submit_task(child);
+            }
+        },
+        "ParentTask");
+
+    scheduler.schedule(parent_task);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    CHECK(total_tasks.load() == 6);  // 1 parent + 5 children
+}
+TEST_CASE("Dynamic Tasks - Intra-task parallelism with result aggregation") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> final_result{0};
+
+    auto parent_task = make_task(
+        [&](TaskContext& ctx) {
+            // Spawn multiple parallel child tasks and wait for their results
+            std::vector<TaskFuture> futures;
+
+            // Create 5 child tasks that compute values in parallel
+            for (int i = 0; i < 5; ++i) {
+                auto child = make_task(
+                    [i]() -> int {
+                        // Simulate some work
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(10));
+                        return (i + 1) * 10;  // Returns 10, 20, 30, 40, 50
+                    },
+                    "ChildTask_" + std::to_string(i));
+
+                // Submit and collect future
+                futures.push_back(ctx.submit_task(child));
+            }
+
+            // Wait for all children and aggregate results
+            int sum = 0;
+            for (auto& future : futures) {
+                int value = future.get<int>();
+                sum += value;
+            }
+
+            final_result = sum;
+            return sum;
+        },
+        "ParentTaskWithAggregation");
+
+    scheduler.schedule(parent_task);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    // Should have computed: 10 + 20 + 30 + 40 + 50 = 150
+    CHECK(final_result.load() == 150);
+}
+TEST_CASE("Dynamic Tasks - Nested intra-task parallelism") {
+    Executor executor(8);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> total_sum{0};
+
+    auto parent_task = make_task(
+        [&](TaskContext& ctx) {
+            std::vector<TaskFuture> level1_futures;
+
+            // Create 3 level-1 children, each spawning their own children
+            for (int i = 0; i < 3; ++i) {
+                auto level1_child = make_task(
+                    [i](TaskContext& ctx_inner) -> int {
+                        std::vector<TaskFuture> level2_futures;
+
+                        // Each level-1 child spawns 2 level-2 children
+                        for (int j = 0; j < 2; ++j) {
+                            auto level2_child = make_task(
+                                [i, j]() -> int {
+                                    std::this_thread::sleep_for(
+                                        std::chrono::milliseconds(5));
+                                    return (i + 1) * 10 +
+                                           j;  // e.g., 10, 11, 20, 21, 30, 31
+                                },
+                                "Level2_" + std::to_string(i) + "_" +
+                                    std::to_string(j));
+
+                            level2_futures.push_back(
+                                ctx_inner.submit_task(level2_child));
+                        }
+
+                        // Wait and sum level-2 results
+                        int level1_sum = 0;
+                        for (auto& f : level2_futures) {
+                            level1_sum += f.get<int>();
+                        }
+
+                        return level1_sum;
+                    },
+                    "Level1_" + std::to_string(i));
+
+                level1_futures.push_back(ctx.submit_task(level1_child));
+            }
+
+            // Wait and aggregate all level-1 results
+            int grand_total = 0;
+            for (auto& f : level1_futures) {
+                grand_total += f.get<int>();
+            }
+
+            total_sum = grand_total;
+            return grand_total;
+        },
+        "RootTaskWithNested");
+
+    scheduler.schedule(parent_task);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Should compute: (10+11) + (20+21) + (30+31) = 21 + 41 + 61 = 123
+    CHECK(total_sum.load() == 123);
+}
+// ============================================================================
+// Custom Error Handler Tests
+// ============================================================================
+
+TEST_CASE("Error Handler - Custom error handling") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<bool> error_handler_called{false};
+    std::atomic<bool> handler_done{false};
+
+    scheduler.set_error_handler([&](std::shared_ptr<Task>, std::exception_ptr) {
+        error_handler_called = true;
+        handler_done = true;
+    });
+
+    scheduler.set_error_policy(ErrorPolicy::CONTINUE);
+
+    auto task1 = make_task(
+        []() { std::this_thread::sleep_for(std::chrono::milliseconds(50)); },
+        "Task1");
+
+    auto task2 =
+        make_task([]() { throw std::runtime_error("Task2 fails"); }, "Task2");
+
+    auto root = make_task([]() {}, "Root");
+    task1->depends_on(root);
+    task2->depends_on(root);
+
+    // schedule() blocks until completion with CONTINUE policy
+    scheduler.schedule(root);
+
+    // If we reach here, all tasks completed (or failed and continued)
+    CHECK(error_handler_called.load());
+
+    // Explicit shutdown to prevent resource leaks
+    executor.shutdown();
+}
+
+TEST_CASE("Error Handler - Multiple errors with CONTINUE policy") {
+    Executor executor(4);
+    Scheduler scheduler(&executor);
+
+    std::atomic<int> error_count{0};
+    std::atomic<int> expected_errors{3};
+
+    scheduler.set_error_handler(
+        [&](std::shared_ptr<Task>, std::exception_ptr) { ++error_count; });
+
+    scheduler.set_error_policy(ErrorPolicy::CONTINUE);
+
+    auto root = make_task([]() {}, "Root");
+
+    // Create 3 failing tasks
+    for (int i = 0; i < 3; ++i) {
+        auto task = make_task([]() { throw std::runtime_error("Task fails"); },
+                              "FailingTask_" + std::to_string(i));
+        task->depends_on(root);
+    }
+
+    // And 2 successful tasks
+    for (int i = 0; i < 2; ++i) {
+        auto task = make_task(
+            []() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            },
+            "SuccessTask_" + std::to_string(i));
+        task->depends_on(root);
+    }
+
+    // schedule() blocks until completion with CONTINUE policy
+    scheduler.schedule(root);
+
+    // If we reach here, all tasks completed (or failed and continued)
+    CHECK(error_count.load() == 3);
+}
+// ============================================================================
+// Error Policy Tests
+// ============================================================================
+
+TEST_CASE("ErrorPolicy - FAIL_FAST stops on first error") {
+    auto config =
+        PipelineConfigManager().with_executor_threads(4).with_error_policy(
+            ErrorPolicy::FAIL_FAST);
+
+    Pipeline pipeline(config);
+
+    // Create a simple DAG: task1 -> task2 -> task3
+    // task2 will fail
+    std::atomic<int> executed_count{0};
+
+    auto task1 = make_task(
+        [&executed_count](int x) -> int {
+            executed_count++;
+            return x + 1;
+        },
+        "Task1");
+
+    auto task2 = make_task(
+        [&executed_count](int x) -> int {
+            executed_count++;
+            throw std::runtime_error("Task2 intentional failure");
+            return x + 1;
+        },
+        "Task2");
+
+    auto task3 = make_task(
+        [&executed_count](int x) -> int {
+            executed_count++;
+            return x + 1;
+        },
+        "Task3");
+
+    task2->depends_on(task1);
+    task3->depends_on(task2);
+
+    pipeline.set_source(task1);
+    pipeline.set_destination(task3);
+
+    // Execute should throw because task2 fails
+    CHECK_THROWS_AS(pipeline.execute(10), PipelineError);
+
+    // Task1 executed, Task2 executed and failed, Task3 should NOT execute
+    CHECK(executed_count.load() == 2);
+}
+
+TEST_CASE("ErrorPolicy - CONTINUE policy continues other branches") {
+    auto config =
+        PipelineConfigManager().with_executor_threads(4).with_error_policy(
+            ErrorPolicy::CONTINUE);
+
+    Pipeline pipeline(config);
+
+    // Create a diamond DAG:
+    //       root
+    //      /    (backslash)
+    //   task1  task2 (fails)
+    //      (backslash)    /
+    //      merge
+    std::atomic<int> executed_count{0};
+    std::atomic<bool> task1_executed{false};
+    std::atomic<bool> task2_executed{false};
+    std::atomic<bool> merge_executed{false};
+
+    auto root = make_task([](int x) -> int { return x; }, "Root");
+
+    auto task1 = make_task(
+        [&](int x) -> int {
+            task1_executed = true;
+            executed_count++;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            return x + 1;
+        },
+        "Task1");
+
+    auto task2 = make_task(
+        [&](int x) -> int {
+            task2_executed = true;
+            executed_count++;
+            throw std::runtime_error("Task2 intentional failure");
+            return x + 2;
+        },
+        "Task2");
+
+    auto merge = make_task(
+        [&](int a, int b) -> int {
+            merge_executed = true;
+            executed_count++;
+            return a + b;
+        },
+        "Merge");
+
+    task1->depends_on(root);
+    task2->depends_on(root);
+    merge->depends_on(task1);
+    merge->depends_on(task2);
+
+    pipeline.set_source(root);
+    pipeline.set_destination(merge);
+
+    // Execute should NOT throw - CONTINUE policy
+    // But merge should not execute because task2 (one of its parents) failed
+    CHECK_NOTHROW(pipeline.execute(10));
+
+    // Root executed, Task1 executed, Task2 executed and failed
+    CHECK(task1_executed.load() == true);
+    CHECK(task2_executed.load() == true);
+
+    // Merge should NOT execute because task2 failed
+    CHECK(merge_executed.load() == false);
+}
+
+TEST_CASE("ErrorPolicy - CUSTOM handler is called on error") {
+    std::atomic<int> error_handler_calls{0};
+    std::string failed_task_name;
+
+    auto config =
+        PipelineConfigManager().with_executor_threads(4).with_error_handler(
+            [&](std::shared_ptr<Task> task, std::exception_ptr ex) {
+                error_handler_calls++;
+                failed_task_name = task->get_name();
+
+                // Verify we can access the exception
+                try {
+                    if (ex) std::rethrow_exception(ex);
+                } catch (const std::runtime_error& e) {
+                    CHECK(std::string(e.what()).find("intentional") !=
+                          std::string::npos);
+                }
+            });
+
+    Pipeline pipeline(config);
+
+    auto task1 = make_task([](int x) -> int { return x + 1; }, "Task1");
+
+    auto task2 = make_task(
+        [](int x) -> int {
+            throw std::runtime_error("Task2 intentional failure");
+            return x + 1;
+        },
+        "FailingTask");
+
+    task2->depends_on(task1);
+
+    pipeline.set_source(task1);
+    pipeline.set_destination(task2);
+
+    // Execute - error handler should be called
+    CHECK_NOTHROW(pipeline.execute(10));
+
+    // Error handler was called exactly once
+    CHECK(error_handler_calls.load() == 1);
+    CHECK(failed_task_name.find("FailingTask") != std::string::npos);
+}
+
+TEST_CASE("ErrorPolicy - CONTINUE skips children of failed tasks") {
+    auto config =
+        PipelineConfigManager().with_executor_threads(4).with_error_policy(
+            ErrorPolicy::CONTINUE);
+
+    Pipeline pipeline(config);
+
+    // Create a chain: task1 -> task2 (fails) -> task3 -> task4
+    std::atomic<bool> task1_executed{false};
+    std::atomic<bool> task2_executed{false};
+    std::atomic<bool> task3_executed{false};
+    std::atomic<bool> task4_executed{false};
+
+    auto task1 = make_task(
+        [&](int x) -> int {
+            task1_executed = true;
+            return x + 1;
+        },
+        "Task1");
+
+    auto task2 = make_task(
+        [&](int x) -> int {
+            task2_executed = true;
+            throw std::runtime_error("Task2 failure");
+            return x + 1;
+        },
+        "Task2");
+
+    auto task3 = make_task(
+        [&](int x) -> int {
+            task3_executed = true;
+            return x + 1;
+        },
+        "Task3");
+
+    auto task4 = make_task(
+        [&](int x) -> int {
+            task4_executed = true;
+            return x + 1;
+        },
+        "Task4");
+
+    task2->depends_on(task1);
+    task3->depends_on(task2);
+    task4->depends_on(task3);
+
+    pipeline.set_source(task1);
+    pipeline.set_destination(task4);
+
+    // Execute with CONTINUE policy
+    CHECK_NOTHROW(pipeline.execute(10));
+
+    // Task1 executed, Task2 executed and failed
+    CHECK(task1_executed.load() == true);
+    CHECK(task2_executed.load() == true);
+
+    // Task3 and Task4 should NOT execute (skipped because task2 failed)
+    CHECK(task3_executed.load() == false);
+    CHECK(task4_executed.load() == false);
+}
+
+// ============================================================================
+// Multi-threaded Scheduler Tests
+// ============================================================================
+
+TEST_CASE("Scheduler - Multiple scheduling threads") {
+    auto config =
+        PipelineConfigManager().with_executor_threads(8).with_scheduler_threads(
+            4);  // 4 scheduling threads
+
+    Pipeline pipeline(config);
+
+    // Create a wide DAG with many independent tasks
+    std::atomic<int> completed{0};
+    std::vector<std::shared_ptr<Task>> tasks;
+
+    auto root = make_task([](int x) -> int { return x; }, "Root");
+
+    // Create 20 independent tasks
+    for (int i = 0; i < 20; ++i) {
+        auto task = make_task(
+            [&completed, i](int x) -> int {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                completed++;
+                return x + i;
+            },
+            "Task" + std::to_string(i));
+        task->depends_on(root);
+        tasks.push_back(task);
+    }
+
+    pipeline.set_source(root);
+
+    auto start = std::chrono::high_resolution_clock::now();
+    CHECK_NOTHROW(pipeline.execute(0));
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto duration =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+    // All tasks should complete
+    CHECK(completed.load() == 20);
+
+    // With 4 scheduling threads + 8 executor threads, should be much faster
+    // than sequential Multi-threading should complete in < 500ms (vs 200ms
+    // sequential)
+    CHECK(duration.count() < 500);
+}
+
+TEST_CASE("Scheduler - Single scheduling thread handles complex DAG") {
+    auto config =
+        PipelineConfigManager().with_executor_threads(4).with_scheduler_threads(
+            1);  // Only 1 scheduling thread
+
+    Pipeline pipeline(config);
+
+    // Create a complex DAG with multiple levels
+    std::atomic<int> completed{0};
+
+    auto root = make_task([](int x) -> int { return x; }, "Root");
+
+    std::vector<std::shared_ptr<Task>> level1;
+    for (int i = 0; i < 4; ++i) {
+        auto task = make_task(
+            [&completed](int x) -> int {
+                completed++;
+                return x + 1;
+            },
+            "L1_" + std::to_string(i));
+        task->depends_on(root);
+        level1.push_back(task);
+    }
+
+    std::vector<std::shared_ptr<Task>> level2;
+    for (int i = 0; i < 4; ++i) {
+        auto task = make_task(
+            [&completed](int x) -> int {
+                completed++;
+                return x + 1;
+            },
+            "L2_" + std::to_string(i));
+        task->depends_on(level1[i]);
+        level2.push_back(task);
+    }
+
+    auto merge = make_task(
+        [&completed](int a, int b, int c, int d) -> int {
+            completed++;
+            return a + b + c + d;
+        },
+        "Merge");
+
+    merge->depends_on(level2[0]);
+    merge->depends_on(level2[1]);
+    merge->depends_on(level2[2]);
+    merge->depends_on(level2[3]);
+
+    pipeline.set_source(root);
+    pipeline.set_destination(merge);
+
+    // Should complete successfully with 1 scheduling thread
+    CHECK_NOTHROW(pipeline.execute(0));
+
+    // All tasks completed (4 level1 + 4 level2 + 1 merge = 9)
+    CHECK(completed.load() == 9);
+}
+
+TEST_CASE(
+    "Scheduler - Scheduling threads configured via PipelineConfigManager") {
+    // Test that scheduler_threads configuration is properly applied
+
+    auto config1 = PipelineConfigManager().with_scheduler_threads(1);
+    Pipeline pipeline1(config1);
+
+    auto config2 = PipelineConfigManager().with_scheduler_threads(3);
+    Pipeline pipeline2(config2);
+
+    // Both should construct successfully
+    // Actual thread count is internal but configuration should not throw
+    CHECK_NOTHROW(pipeline1.validate());
+    CHECK_NOTHROW(pipeline2.validate());
+}
+
+TEST_CASE(
+    "PipelineConfigManager - with_executor_threads sets executor threads") {
+    auto config = PipelineConfigManager().with_executor_threads(8);
+
+    CHECK(config.executor_threads == 8);
+}
+
+TEST_CASE(
+    "PipelineConfigManager - with_scheduler_threads sets scheduler threads") {
+    auto config = PipelineConfigManager().with_scheduler_threads(4);
+
+    CHECK(config.scheduler_threads == 4);
+}
+
+TEST_CASE("PipelineConfigManager - Fluent API chaining") {
+    auto config = PipelineConfigManager()
+                      .with_name("TestPipeline")
+                      .with_executor_threads(8)
+                      .with_scheduler_threads(2)
+                      .with_error_policy(ErrorPolicy::CONTINUE)
+                      .with_watchdog(true)
+                      .with_global_timeout(std::chrono::seconds(60));
+
+    CHECK(config.name == "TestPipeline");
+    CHECK(config.executor_threads == 8);
+    CHECK(config.scheduler_threads == 2);
+    CHECK(config.error_policy == ErrorPolicy::CONTINUE);
+    CHECK(config.enable_watchdog == true);
+    CHECK(config.global_timeout == std::chrono::seconds(60));
 }

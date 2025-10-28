@@ -7,127 +7,102 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace dftracer::utils::utilities::io::lines::sources {
 
-/**
- * @brief Zero-copy iterator for reading lines within byte boundaries from plain
- * text files.
- *
- * This iterator seeks to a byte offset and reads lines one at a time within
- * the specified byte range using a single buffer for zero-copy performance.
- *
- * Usage:
- * @code
- * PlainFileBytesIterator it("data.txt", 1000, 5000);  // Bytes 1000-5000
- * while (it.has_next()) {
- *     Line line = it.next();  // Zero-copy string_view
- *     // Use line.content immediately
- * }
- * @endcode
- */
 class PlainFileBytesIterator {
    private:
-    std::ifstream file_stream_;
-    std::size_t end_byte_;
-    std::size_t current_byte_;
-    std::size_t current_line_num_;
-    std::string line_buffer_;  // Single buffer for current line
-    bool exhausted_;
+    mutable std::ifstream file_;    // mutable for const methods
+    std::size_t start_;
+    std::size_t end_;
+    std::size_t current_line_ = 0;  // Line number of the last returned line
+    mutable std::vector<char> line_buffer_;
+    mutable bool has_line_ =
+        false;                     // true if line_buffer_ contains a valid line
+    mutable bool eof_ = false;
+    mutable std::size_t pos_ = 0;  // absolute byte position
+    mutable bool prefetched_ =
+        false;  // true if we already prefetched the next line
 
-   public:
-    /**
-     * @brief Construct iterator for plain text file.
-     *
-     * Seeks to the start byte and aligns to line boundaries.
-     *
-     * @param file_path Path to the plain text file
-     * @param start_byte Starting byte offset (0-based, inclusive)
-     * @param end_byte Ending byte offset (0-based, exclusive)
-     */
-    PlainFileBytesIterator(std::string file_path, std::size_t start_byte,
-                           std::size_t end_byte)
-        : end_byte_(end_byte),
-          current_byte_(start_byte),
-          current_line_num_(1),
-          exhausted_(false) {
-        if (start_byte >= end_byte) {
-            throw std::invalid_argument("Invalid byte range");
+    void align_to_next_line() {
+        // start_ may land mid-line; skip until \n
+        file_.seekg(static_cast<std::streamoff>(start_));
+        pos_ = start_;
+        if (start_ == 0) return;
+
+        char c;
+        while (pos_ < end_ && file_.get(c)) {
+            pos_++;
+            if (c == '\n') break;
         }
+    }
 
-        file_stream_.open(file_path, std::ios::binary);
-        if (!file_stream_.is_open()) {
-            exhausted_ = true;
+    void prefetch() const {
+        if (eof_ || pos_ >= end_) {
+            has_line_ = false;
+            eof_ = true;
+            prefetched_ = true;  // Important: mark as prefetched even when EOF
             return;
         }
 
-        // Seek to start_byte
-        file_stream_.seekg(start_byte);
-        current_byte_ = start_byte;
+        line_buffer_.clear();
+        char c;
+        bool found_char = false;
 
-        // If we're not at the beginning, skip to next newline to align to line
-        // boundary
-        if (start_byte > 0) {
-            std::string discard;
-            std::getline(file_stream_, discard);
-            current_byte_ = file_stream_.tellg();
-            if (current_byte_ == static_cast<std::size_t>(-1)) {
-                exhausted_ = true;
-                return;
-            }
+        while (pos_ < end_ && file_.get(c)) {
+            pos_++;
+            found_char = true;
+            if (c == '\n') break;
+            line_buffer_.push_back(c);
         }
+
+        // Check if we actually read anything
+        if (!found_char || (line_buffer_.empty() && pos_ >= end_)) {
+            has_line_ = false;
+            eof_ = true;
+        } else {
+            has_line_ = true;
+        }
+        prefetched_ = true;  // Always mark as prefetched
     }
 
-    /**
-     * @brief Check if more lines are available.
-     */
+   public:
+    PlainFileBytesIterator(const std::string& path, std::size_t start,
+                           std::size_t end)
+        : start_(start), end_(end) {
+        if (start >= end)
+            throw std::invalid_argument("Invalid byte range: start >= end");
+
+        file_.open(path, std::ios::binary);
+        if (!file_.is_open())
+            throw std::runtime_error("Cannot open file: " + path);
+
+        align_to_next_line();
+        // Don't prefetch in constructor - let has_next() do it
+    }
+
     bool has_next() const {
-        return !exhausted_ && current_byte_ < end_byte_ && !file_stream_.eof();
+        if (eof_) return false;
+        if (!prefetched_) prefetch();
+        return has_line_;
     }
 
-    /**
-     * @brief Get the next line (zero-copy).
-     *
-     * @return Line object with string_view content (valid until next call)
-     * @throws std::runtime_error if no more lines available
-     */
     Line next() {
-        if (!has_next()) {
-            throw std::runtime_error("No more lines available");
-        }
+        if (!has_next()) throw std::runtime_error("No more lines available");
 
-        // Read one line into buffer
-        std::getline(file_stream_, line_buffer_);
-
-        Line result(std::string_view(line_buffer_), current_line_num_);
-
-        // Update position
-        std::size_t line_length = line_buffer_.length() + 1;  // +1 for newline
-        current_byte_ += line_length;
-        current_line_num_++;
-
-        if (file_stream_.eof() || current_byte_ >= end_byte_) {
-            exhausted_ = true;
-        }
-
-        return result;
+        current_line_++;
+        prefetched_ = false;  // Next call to has_next() will prefetch
+        // Return Line with current buffer content
+        // The view is only valid until the next call to has_next() or next()
+        return Line(std::string_view(line_buffer_.data(), line_buffer_.size()),
+                    current_line_);
     }
 
-    /**
-     * @brief Get the current line number.
-     */
-    std::size_t current_position() const { return current_line_num_; }
+    std::size_t current_position() const noexcept { return current_line_; }
 
     using Iterator = LineIterator<PlainFileBytesIterator>;
-
-    /**
-     * @brief Get an iterator to the beginning.
-     */
     Iterator begin() { return Iterator(this, false); }
-
-    /**
-     * @brief Get an iterator to the end.
-     */
     Iterator end() { return Iterator(nullptr, true); }
 };
 

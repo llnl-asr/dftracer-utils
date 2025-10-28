@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_H
 
+#include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/indexer/indexer_factory.h>
@@ -70,6 +71,17 @@ struct MetadataCollectorUtilityOutput {
     double size_per_line = 0;
     bool success = false;
 
+    // Extended information for dftracer_info
+    bool has_index = false;
+    bool index_valid = false;
+    std::uint64_t compressed_size = 0;
+    std::uint64_t uncompressed_size = 0;
+    std::uint64_t num_lines = 0;
+    std::uint64_t checkpoint_size = 0;
+    std::size_t num_checkpoints = 0;
+    ArchiveFormat format = ArchiveFormat::UNKNOWN;
+    std::string error_message;
+
     MetadataCollectorUtilityOutput() = default;
 
     bool operator==(const MetadataCollectorUtilityOutput& other) const {
@@ -77,7 +89,15 @@ struct MetadataCollectorUtilityOutput {
                size_mb == other.size_mb && start_line == other.start_line &&
                end_line == other.end_line &&
                valid_events == other.valid_events &&
-               size_per_line == other.size_per_line && success == other.success;
+               size_per_line == other.size_per_line &&
+               success == other.success && has_index == other.has_index &&
+               index_valid == other.index_valid &&
+               compressed_size == other.compressed_size &&
+               uncompressed_size == other.uncompressed_size &&
+               num_lines == other.num_lines &&
+               checkpoint_size == other.checkpoint_size &&
+               num_checkpoints == other.num_checkpoints &&
+               format == other.format;
     }
 };
 
@@ -87,10 +107,13 @@ struct MetadataCollectorUtilityOutput {
  *
  * Supports both plain (.pfw) and compressed (.pfw.gz) files.
  * For compressed files, builds/uses an index for efficient access.
+ *
+ * Tagged with Parallelizable - safe for parallel batch processing.
  */
 class MetadataCollectorUtility
     : public utilities::Utility<MetadataCollectorUtilityInput,
-                                MetadataCollectorUtilityOutput> {
+                                MetadataCollectorUtilityOutput,
+                                utilities::tags::Parallelizable> {
    public:
     MetadataCollectorUtility() = default;
 

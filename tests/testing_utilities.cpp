@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <zlib.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -339,6 +340,66 @@ std::string TestEnvironment::create_test_tar_gzip_file_impl() {
 
 std::string TestEnvironment::get_index_path(const std::string& gz_file) {
     return gz_file + ".idx";
+}
+
+std::string TestEnvironment::create_dft_test_file(int num_events) {
+    static std::size_t file_counter = 0;
+    std::string file_path =
+        test_dir + "/dft_trace_" + std::to_string(file_counter++) + ".trace";
+
+    std::ofstream ofs(file_path);
+    if (!ofs.is_open()) {
+        return "";
+    }
+
+    // Create DFTracer JSON events
+    // Random name selection for variety
+    const char* io_names[] = {"pread", "pwrite", "read", "write",
+                              "fread", "fwrite", "open", "close"};
+    const int num_names = sizeof(io_names) / sizeof(io_names[0]);
+
+    for (int i = 1; i <= num_events; ++i) {
+        // Use microseconds as uint64_t
+        uint64_t timestamp_us =
+            1000000000ULL +
+            static_cast<uint64_t>(
+                i * 100000);  // Start at 1 second, increment by 0.1 seconds
+        int size = 1024 * i;
+        const char* op_name = io_names[i % num_names];  // Cycle through names
+
+        ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
+            << (2000 + i) << R"(,"name":")" << op_name << R"(")"
+            << R"(,"cat":"IO")"  // Category
+            << R"(,"ph":"C")"    // Phase (complete event)
+            << R"(,"ts":)" << timestamp_us << R"(,"dur":)"
+            << (100 + i * 10)    // Duration in microseconds
+            << R"(,"args":{"ret":)" << size << R"(,"file":"test_)" << i
+            << R"(.dat"})"       // args with ret and file
+            << R"(})" << "\n";
+    }
+    ofs.close();
+
+    return file_path;
+}
+
+std::string TestEnvironment::create_dft_test_gzip_file(int num_events) {
+    // First create a plain DFTracer trace file
+    std::string plain_file = create_dft_test_file(num_events);
+    if (plain_file.empty()) {
+        return "";
+    }
+
+    // Compress to gzip
+    std::string gz_file = plain_file + ".gz";
+    if (!compress_file_to_gzip(plain_file, gz_file)) {
+        fs::remove(plain_file);
+        return "";
+    }
+
+    // Remove the plain file after compression
+    fs::remove(plain_file);
+
+    return gz_file;
 }
 }  // namespace dft_utils_test
 

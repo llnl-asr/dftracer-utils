@@ -1,7 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_IO_STREAMING_FILE_WRITER_H
 #define DFTRACER_UTILS_UTILITIES_IO_STREAMING_FILE_WRITER_H
 
+#include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/io/chunk_iterator.h>
+#include <dftracer/utils/utilities/io/streaming.h>
 #include <dftracer/utils/utilities/io/types/types.h>
 
 #include <fstream>
@@ -43,7 +45,8 @@ namespace dftracer::utils::utilities::io {
  * std::cout << "Wrote " << writer.total_bytes() << " bytes\n";
  * @endcode
  */
-class StreamingFileWriterUtility : public utilities::Utility<RawData, void> {
+class StreamingFileWriterUtility
+    : public dftracer::utils::utilities::Utility<RawData, StreamWriteResult> {
    private:
     std::ofstream file_;
     std::size_t total_bytes_ = 0;
@@ -100,14 +103,16 @@ class StreamingFileWriterUtility : public utilities::Utility<RawData, void> {
      * @brief Write a single chunk immediately.
      *
      * @param chunk Data chunk to write
+     * @return StreamWriteResult with current write status
      */
-    void process(const RawData& chunk) {
+    StreamWriteResult process(const RawData& chunk) override {
         if (closed_) {
             throw std::runtime_error("Cannot write to closed file");
         }
 
         if (chunk.empty()) {
-            return;
+            return StreamWriteResult::success_result(path_, total_bytes_,
+                                                     total_chunks_);
         }
 
         file_.write(reinterpret_cast<const char*>(chunk.data.data()),
@@ -120,6 +125,9 @@ class StreamingFileWriterUtility : public utilities::Utility<RawData, void> {
 
         total_bytes_ += chunk.size();
         total_chunks_++;
+
+        return StreamWriteResult::success_result(path_, total_bytes_,
+                                                 total_chunks_);
     }
 
     /**

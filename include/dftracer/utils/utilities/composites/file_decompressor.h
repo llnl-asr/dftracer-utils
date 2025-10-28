@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
-#include <dftracer/utils/utilities/compression/gzip/streaming_decompressor.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_decompressor.h>
 #include <dftracer/utils/utilities/io/streaming_file_reader.h>
 #include <dftracer/utils/utilities/io/streaming_file_writer.h>
 
@@ -20,6 +20,9 @@ struct FileDecompressionUtilityInput {
     std::string
         output_path;  // Output decompressed file path (empty = auto-generate)
     std::size_t chunk_size;  // Chunk size for streaming (bytes)
+    // Decompression format (AUTO detects automatically)
+    compression::zlib::DecompressionFormat format =
+        compression::zlib::DecompressionFormat::AUTO;
 
     /**
      * @brief Create input with auto-generated output path.
@@ -38,7 +41,11 @@ struct FileDecompressionUtilityInput {
             output += ".decompressed";
         }
 
-        return FileDecompressionUtilityInput{input_path, output, chunk_size};
+        return FileDecompressionUtilityInput{
+            input_path, output, chunk_size,
+            compression::zlib::DecompressionFormat::AUTO  // Default to AUTO
+                                                          // detection
+        };
     }
 
     /**
@@ -54,6 +61,15 @@ struct FileDecompressionUtilityInput {
      */
     FileDecompressionUtilityInput& with_chunk_size(std::size_t size) {
         chunk_size = size;
+        return *this;
+    }
+
+    /**
+     * @brief Fluent builder: Set decompression format.
+     */
+    FileDecompressionUtilityInput& with_format(
+        compression::zlib::DecompressionFormat fmt) {
+        format = fmt;
         return *this;
     }
 };
@@ -202,22 +218,23 @@ class FileDecompressorUtility
             // Get compressed file size
             result.compressed_size = fs::file_size(input.input_path);
 
-            // Step 1: Create streaming reader with chunk size
+            // Step 1: Create streaming reader
             io::StreamingFileReaderUtility reader;
 
-            // Step 2: Create streaming decompressor
-            compression::gzip::StreamingDecompressorUtility decompressor;
+            // Step 2: Create streaming decompressor with specified format
+            compression::zlib::StreamingDecompressorUtility decompressor(
+                input.format);
 
             // Step 3: Create streaming writer
             io::StreamingFileWriterUtility writer(input.output_path);
 
-            // Step 4: Read compressed file as chunks (chunk size in input)
+            // Step 4: Read compressed file as chunks
             io::StreamReadInput read_input{input.input_path, input.chunk_size};
             io::ChunkRange chunks = reader.process(read_input);
 
             // Step 5: Decompress chunks and write
             for (const auto& chunk : chunks) {
-                // Treat chunk as compressed data
+                // Convert chunk to CompressedData
                 io::CompressedData compressed_chunk{chunk.data};
 
                 // Decompress chunk (may produce multiple output chunks)
@@ -230,7 +247,7 @@ class FileDecompressorUtility
                 }
             }
 
-            // Step 6: Close writer (flushes any remaining data)
+            // Step 6: Close writer
             writer.close();
 
             // Get final decompressed size

@@ -56,6 +56,7 @@ class GzipStream : public dftracer::utils::StreamBase {
 
     bool done() const override { return is_finished_; }
 
+    span_view<const char> read() override = 0;
     std::size_t read(char *buffer, std::size_t buffer_size) override = 0;
 
     void reset() override {

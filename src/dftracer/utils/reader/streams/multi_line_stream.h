@@ -2,8 +2,10 @@
 #define DFTRACER_UTILS_READER_STREAMS_MULTI_LINE_STREAM_H
 
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/reader/stream.h>
 
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -21,17 +23,18 @@ namespace dftracer::utils {
 class MultiLineStream : public ReaderStream {
    private:
     std::unique_ptr<ReaderStream> underlying_stream_;
-    std::vector<char> read_buffer_;
+    span_view<const char> current_span_;  // Current span from underlying stream
     std::string line_accumulator_;
+    std::string output_buffer_;
     bool is_finished_;
     std::size_t current_line_;
     std::size_t start_line_;
     std::size_t end_line_;
     std::size_t initial_line_;
     std::size_t lines_output_;
-    std::size_t buffer_pos_;
-    std::size_t buffer_size_;
-    static constexpr std::size_t DEFAULT_READ_BUFFER_SIZE = 1 * 1024 * 1024;
+    std::size_t span_pos_;
+    std::size_t
+        output_buf_pos_;  // Position in output_buffer_ for buffer-based reads
 
    public:
     explicit MultiLineStream(std::unique_ptr<ReaderStream> underlying_stream,
@@ -39,51 +42,103 @@ class MultiLineStream : public ReaderStream {
                              std::size_t end_line = 0,
                              std::size_t initial_line = 1)
         : underlying_stream_(std::move(underlying_stream)),
-          read_buffer_(DEFAULT_READ_BUFFER_SIZE),
+          current_span_(),
           is_finished_(false),
           current_line_(initial_line),
           start_line_(start_line),
           end_line_(end_line),
           initial_line_(initial_line),
           lines_output_(0),
-          buffer_pos_(0),
-          buffer_size_(0) {
+          span_pos_(0),
+          output_buf_pos_(0) {
         line_accumulator_.reserve(1024);
+        output_buffer_.reserve(10 * 1024 *
+                               1024);  // 10MB to handle large line ranges
     }
 
     ~MultiLineStream() override { reset(); }
 
+    span_view<const char> read() override {
+        if (!underlying_stream_) {
+            return {};
+        }
+
+        if (is_finished_) {
+            return {};
+        }
+
+        output_buffer_.clear();
+        const std::size_t max_lines = calculate_max_lines();
+
+        // Read and accumulate multiple lines into output_buffer_
+        while (!reached_end_of_range() && !reached_max_lines(max_lines)) {
+            if (!refill_if_needed()) {
+                break;
+            }
+
+            if (!process_lines(max_lines)) {
+                break;
+            }
+        }
+
+        // Handle final line at EOF
+        handle_final_line(max_lines);
+
+        // Update finish state
+        update_finish_state();
+
+        if (output_buffer_.empty()) {
+            return {};
+        }
+
+        return span_view<const char>(output_buffer_.data(),
+                                     output_buffer_.size());
+    }
+
     std::size_t read(char* buffer, std::size_t buffer_size) override {
-        if (!underlying_stream_ || is_finished_) {
+        if (!underlying_stream_) {
             return 0;
         }
 
-        const std::size_t max_lines = calculate_max_lines();
-        std::size_t bytes_written = 0;
-
-        // Main processing loop: read and output lines until done or buffer full
-        while (should_continue_reading(max_lines) &&
-               bytes_written < buffer_size) {
-            if (!refill_buffer_if_needed()) {
-                break;
-            }
-
-            if (!process_buffer_lines(buffer, buffer_size, bytes_written,
-                                      max_lines)) {
-                break;
-            }
+        // Check if we have unconsumed data from previous read
+        if (output_buf_pos_ < output_buffer_.size()) {
+            std::size_t remaining = output_buffer_.size() - output_buf_pos_;
+            std::size_t copy_size = std::min(remaining, buffer_size);
+            std::memcpy(buffer, output_buffer_.data() + output_buf_pos_,
+                        copy_size);
+            output_buf_pos_ += copy_size;
+            return copy_size;
         }
 
-        // Handle any final line at EOF
-        handle_final_line(buffer, buffer_size, bytes_written, max_lines);
+        // Buffer exhausted
+        if (is_finished_) {
+            return 0;
+        }
 
-        // Update finished state
-        update_finish_state(max_lines);
+        // Get new chunk via zero-copy read
+        auto span = read();
+        if (span.empty()) {
+            return 0;
+        }
 
-        return bytes_written;
+        // Reset position for new buffer
+        output_buf_pos_ = 0;
+
+        // Copy from span to user buffer
+        std::size_t copy_size = std::min(span.size(), buffer_size);
+        std::memcpy(buffer, span.data(), copy_size);
+        output_buf_pos_ = copy_size;
+
+        return copy_size;
     }
 
     bool done() const override {
+        // Check if we have buffered data that hasn't been consumed yet
+        if (output_buf_pos_ < output_buffer_.size()) {
+            return false;  // Still have data to return
+        }
+
+        // We're done when: underlying stream is done and no accumulated data
         return is_finished_ ||
                (underlying_stream_ && underlying_stream_->done() &&
                 line_accumulator_.empty());
@@ -94,11 +149,13 @@ class MultiLineStream : public ReaderStream {
             underlying_stream_->reset();
         }
         line_accumulator_.clear();
+        output_buffer_.clear();
+        current_span_ = span_view<const char>();
         is_finished_ = false;
         current_line_ = initial_line_;
         lines_output_ = 0;
-        buffer_pos_ = 0;
-        buffer_size_ = 0;
+        span_pos_ = 0;
+        output_buf_pos_ = 0;
     }
 
    private:
@@ -130,31 +187,30 @@ class MultiLineStream : public ReaderStream {
                (end_line_ == 0 || current_line_ <= end_line_);
     }
 
-    // ========================================================================
-    // Buffer Management
-    // ========================================================================
-
-    bool refill_buffer_if_needed() {
-        if (buffer_pos_ < buffer_size_) {
+    bool refill_if_needed() {
+        if (span_pos_ < current_span_.size()) {
             return true;
         }
 
-        buffer_size_ =
-            underlying_stream_->read(read_buffer_.data(), read_buffer_.size());
-        buffer_pos_ = 0;
-        return buffer_size_ > 0;
+        if (underlying_stream_->done()) {
+            return false;
+        }
+
+        current_span_ = underlying_stream_->read();
+        span_pos_ = 0;
+        return !current_span_.empty();
     }
 
     const char* find_next_newline() const {
         return static_cast<const char*>(
-            std::memchr(read_buffer_.data() + buffer_pos_, '\n',
-                        buffer_size_ - buffer_pos_));
+            std::memchr(current_span_.data() + span_pos_, '\n',
+                        current_span_.size() - span_pos_));
     }
 
-    void accumulate_remaining_buffer() {
-        line_accumulator_.append(read_buffer_.data() + buffer_pos_,
-                                 buffer_size_ - buffer_pos_);
-        buffer_pos_ = buffer_size_;
+    void accumulate_remaining() {
+        line_accumulator_.append(current_span_.data() + span_pos_,
+                                 current_span_.size() - span_pos_);
+        span_pos_ = current_span_.size();
     }
 
     // ========================================================================
@@ -162,37 +218,43 @@ class MultiLineStream : public ReaderStream {
     // ========================================================================
 
     /**
-     * @brief Process all complete lines in the current buffer.
+     * @brief Process lines from current span and append to output_buffer_.
      *
-     * Scans for newlines, outputs lines in range, and skips filtered lines.
-     *
-     * @return false if finished or buffer full, true to continue reading
+     * @return false if finished or reached limits, true to continue reading
      */
-    bool process_buffer_lines(char* buffer, std::size_t buffer_size,
-                              std::size_t& bytes_written,
-                              std::size_t max_lines) {
-        while (buffer_pos_ < buffer_size_) {
+    bool process_lines(std::size_t max_lines) {
+        while (span_pos_ < current_span_.size()) {
             const char* newline_ptr = find_next_newline();
 
             if (!newline_ptr) {
                 // No complete line, accumulate and read more data
-                accumulate_remaining_buffer();
+                accumulate_remaining();
                 break;
             }
 
-            std::size_t newline_pos = newline_ptr - read_buffer_.data();
-            std::size_t line_len = newline_pos - buffer_pos_;
+            std::size_t newline_pos = newline_ptr - current_span_.data();
+            std::size_t line_len = newline_pos - span_pos_;
 
             // Determine if this line should be output
             bool in_range = is_line_in_output_range();
             bool can_output = lines_output_ < max_lines;
 
             if (in_range && can_output) {
-                if (!try_output_line(buffer, buffer_size, bytes_written,
-                                     line_len)) {
-                    // Buffer full, return and continue next call
-                    return false;
+                // Output line to output_buffer_
+                if (!line_accumulator_.empty()) {
+                    // Complete accumulated line
+                    line_accumulator_.append(current_span_.data() + span_pos_,
+                                             line_len);
+                    output_buffer_.append(line_accumulator_);
+                    output_buffer_.push_back('\n');
+                    line_accumulator_.clear();
+                } else {
+                    // Direct append from span
+                    output_buffer_.append(current_span_.data() + span_pos_,
+                                          line_len);
+                    output_buffer_.push_back('\n');
                 }
+                lines_output_++;
             } else if (reached_end_of_range()) {
                 // Past end of range, stop processing
                 is_finished_ = true;
@@ -204,89 +266,34 @@ class MultiLineStream : public ReaderStream {
 
             // Advance to next line
             current_line_++;
-            buffer_pos_ = newline_pos + 1;
+            span_pos_ = newline_pos + 1;
 
-            // Check if we've output enough lines
+            // Check if we've output enough lines total
             if (reached_max_lines(max_lines)) {
-                is_finished_ = true;
-                return false;
+                // Stop accumulating more lines
+                return true;
             }
         }
 
         return true;
     }
 
-    /**
-     * @brief Attempt to output a line to the buffer.
-     *
-     * Fast path: Direct copy from read_buffer_ when no accumulated data.
-     * Slow path: Complete accumulated line first, then copy.
-     *
-     * @return true if line was output, false if buffer is full
-     */
-    bool try_output_line(char* buffer, std::size_t buffer_size,
-                         std::size_t& bytes_written, std::size_t line_len) {
-        // Fast path: direct copy when no accumulated data
-        if (line_accumulator_.empty()) {
-            if (bytes_written + line_len + 1 > buffer_size) {
-                // Buffer full - save for next call
-                line_accumulator_.append(read_buffer_.data() + buffer_pos_,
-                                         line_len);
-                return false;
-            }
-
-            // Direct copy: read_buffer_ → output buffer
-            std::memcpy(buffer + bytes_written,
-                        read_buffer_.data() + buffer_pos_, line_len);
-            bytes_written += line_len;
-            buffer[bytes_written++] = '\n';
-            lines_output_++;
-            return true;
-        }
-
-        // Slow path: complete and output accumulated line
-        line_accumulator_.append(read_buffer_.data() + buffer_pos_, line_len);
-        std::size_t total_len = line_accumulator_.size();
-
-        if (bytes_written + total_len + 1 > buffer_size) {
-            // Buffer full - keep accumulated for next call
-            return false;
-        }
-
-        // Output complete accumulated line
-        std::memcpy(buffer + bytes_written, line_accumulator_.c_str(),
-                    total_len);
-        bytes_written += total_len;
-        buffer[bytes_written++] = '\n';
-        lines_output_++;
-        line_accumulator_.clear();
-        return true;
-    }
-
-    // ========================================================================
-    // EOF and State Management
-    // ========================================================================
-
-    void handle_final_line(char* buffer, std::size_t buffer_size,
-                           std::size_t& bytes_written, std::size_t max_lines) {
-        // Only handle final line if all conditions are met
+    void handle_final_line(std::size_t max_lines) {
         if (!underlying_stream_->done() || line_accumulator_.empty() ||
             !is_line_in_output_range() || reached_max_lines(max_lines)) {
             return;
         }
 
-        std::size_t len = line_accumulator_.size();
-        if (bytes_written + len <= buffer_size) {
-            std::memcpy(buffer + bytes_written, line_accumulator_.c_str(), len);
-            bytes_written += len;
-            line_accumulator_.clear();
-            lines_output_++;
-        }
+        output_buffer_.append(line_accumulator_);
+        line_accumulator_.clear();
+        lines_output_++;
     }
 
-    void update_finish_state(std::size_t max_lines) {
-        if (underlying_stream_->done() || reached_end_of_range() ||
-            reached_max_lines(max_lines)) {
+    void update_finish_state() {
+        // Only finish if underlying stream is done, not just because we hit
+        // max_lines The max_lines limit is enforced by not outputting more
+        // lines, but we can still have buffered data to return to the caller
+        if (underlying_stream_->done() || reached_end_of_range()) {
             is_finished_ = true;
         }
     }

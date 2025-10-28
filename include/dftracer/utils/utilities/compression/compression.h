@@ -6,7 +6,7 @@
  * @brief Top-level header for all compression component utilities.
  *
  * This header provides access to all compression utilities:
- * - gzip: Gzip compression and decompression
+ * - zlib: ZLIB compression and decompression
  *
  * Usage:
  * @code
@@ -15,12 +15,12 @@
  * // Use specific compression type
  * using namespace dftracer::utils::utilities::compression;
  *
- * auto compressor = std::make_shared<gzip::Compressor>();
- * gzip::RawData input("Hello, World!");
- * gzip::CompressedData output = compressor->process(input);
+ * auto compressor = std::make_shared<zlib::Compressor>();
+ * io::RawData input("Hello, World!");
+ * zlib::CompressedData output = compressor->process(input);
  * @endcode
  */
 
-#include <dftracer/utils/utilities/compression/gzip/gzip.h>
+#include <dftracer/utils/utilities/compression/zlib/zlib.h>
 
 #endif  // DFTRACER_UTILS_UTILITIES_COMPRESSION_H

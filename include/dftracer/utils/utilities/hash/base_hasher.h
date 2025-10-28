@@ -42,16 +42,32 @@ class BaseHasherUtility : public utilities::Utility<std::string, Hash> {
     virtual void update(std::string_view data) = 0;
 
     /**
+     * @brief Update the hash with a C-string (overload for string literals).
+     *
+     * This ensures string literals are hashed as strings, not as pointer
+     * addresses.
+     *
+     * @param str C-string to hash
+     */
+    void update(const char* str) { update(std::string_view(str)); }
+
+    /**
      * @brief Update the hash with binary data from a POD type (overload).
      *
      * This allows hashing of structs, integers, and other trivial types
      * by treating them as raw bytes.
      *
-     * @tparam T Type to hash (must be trivially copyable)
+     * Note: This explicitly excludes pointer types to avoid accidentally
+     * hashing string literals as pointers instead of as strings.
+     *
+     * @tparam T Type to hash (must be trivially copyable and not a pointer)
      * @param value Value to hash
      */
     template <typename T>
-    typename std::enable_if<std::is_trivially_copyable<T>::value, void>::type
+    typename std::enable_if<
+        std::is_trivially_copyable<T>::value &&
+            !std::is_pointer<typename std::decay<T>::type>::value,
+        void>::type
     update(const T& value) {
         update(
             std::string_view(reinterpret_cast<const char*>(&value), sizeof(T)));
@@ -75,21 +91,40 @@ class BaseHasherUtility : public utilities::Utility<std::string, Hash> {
      */
     Hash process(const std::string& input) override {
         update(input);
-        return current_hash_;
+        return get_hash();
+    }
+
+    /**
+     * @brief Process the hash with a C-string (calls update internally).
+     *
+     * @param input C-string to hash
+     * @return Current hash (updated after processing this value)
+     */
+    Hash process(const char* input) {
+        update(input);
+        return get_hash();
     }
 
     /**
      * @brief Process binary data from a POD type (overload).
      *
-     * @tparam T Type to hash (must be trivially copyable)
+     * Note: Excludes pointer types to avoid hashing string literals as
+     * pointers.
+     *
+     * @tparam T Type to hash (must be trivially copyable and not a pointer)
      * @param value Value to hash
      * @return Current hash (updated after processing this value)
      */
     template <typename T>
-    typename std::enable_if<std::is_trivially_copyable<T>::value, Hash>::type
+    typename std::enable_if<
+        std::is_trivially_copyable<T>::value &&
+            !std::is_pointer<typename std::decay<T>::type>::value &&
+            !std::is_same<typename std::decay<T>::type, char*>::value &&
+            !std::is_same<typename std::decay<T>::type, const char*>::value,
+        Hash>::type
     process(const T& value) {
         update(value);
-        return current_hash_;
+        return get_hash();
     }
 
     /**
@@ -105,7 +140,7 @@ class BaseHasherUtility : public utilities::Utility<std::string, Hash> {
     Hash process(const Args&... args) {
         // Fold expression to call update on each argument
         (update(args), ...);
-        return current_hash_;
+        return get_hash();
     }
 };
 

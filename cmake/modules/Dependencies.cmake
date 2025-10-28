@@ -228,6 +228,18 @@ function(need_ghc_filesystem)
   endif()
 endfunction()
 
+function(need_nonstd_span)
+  if(NOT nonstd_span_ADDED)
+    cpmaddpackage(
+      NAME
+      nonstd_span
+      GITHUB_REPOSITORY
+      nonstd-lite/span-lite
+      VERSION
+      0.11.0)
+  endif()
+endfunction()
+
 function(need_yyjson)
   if(NOT yyjson_ADDED)
     cpmaddpackage(

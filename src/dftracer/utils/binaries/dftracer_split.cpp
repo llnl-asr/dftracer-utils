@@ -1,36 +1,16 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/pipeline/executors/executor_factory.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/task_tag.h>
-#include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/core/pipeline/pipeline_config_manager.h>
+#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/core/utilities/utility_adapter.h>
 #include <dftracer/utils/indexer/indexer.h>
-#include <dftracer/utils/reader/line_processor.h>
-#include <dftracer/utils/reader/reader.h>
-#include <dftracer/utils/reader/reader_factory.h>
 #include <dftracer/utils/utilities/composites/composites.h>
 #include <dftracer/utils/utilities/io/types/types.h>
-#include <xxhash.h>
-#include <yyjson.h>
-#include <zlib.h>
 
-#include <algorithm>
 #include <argparse/argparse.hpp>
-#include <atomic>
 #include <chrono>
-#include <cmath>
-#include <cstdio>
-#include <cstring>
-#include <ctime>
-#include <fstream>
-#include <functional>
-#include <map>
-#include <mutex>
-#include <set>
-#include <sstream>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using EventId = utilities::composites::dft::EventId;
@@ -46,8 +26,8 @@ int main(int argc, char** argv) {
     argparse::ArgumentParser program("dftracer_split",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(
-        "Split DFTracer traces into equal-sized chunks using pipeline "
-        "processing");
+        "Split DFTracer traces into equal-sized chunks using explicit pipeline "
+        "with maximum parallelism");
 
     program.add_argument("-n", "--app-name")
         .help("Application name for output files")
@@ -84,13 +64,19 @@ int main(int argc, char** argv) {
         .default_value(
             static_cast<std::size_t>(Indexer::DEFAULT_CHECKPOINT_SIZE));
 
-    program.add_argument("--threads")
+    program.add_argument("--executor-threads")
         .help(
-            "Number of threads for parallel processing (default: number of CPU "
-            "cores)")
+            "Number of executor threads for parallel processing (default: "
+            "number "
+            "of CPU cores)")
         .scan<'d', std::size_t>()
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
+
+    program.add_argument("--scheduler-threads")
+        .help("Number of scheduler threads (default: 1, typically not changed)")
+        .scan<'d', std::size_t>()
+        .default_value(static_cast<std::size_t>(1));
 
     program.add_argument("--index-dir")
         .help("Directory to store index files (default: system temp directory)")
@@ -108,6 +94,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Parse arguments
     std::string app_name = program.get<std::string>("--app-name");
     std::string log_dir = program.get<std::string>("--directory");
     std::string output_dir = program.get<std::string>("--output");
@@ -116,9 +103,13 @@ int main(int argc, char** argv) {
     bool compress = program.get<bool>("--compress");
     bool verify = program.get<bool>("--verify");
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
-    std::size_t num_threads = program.get<std::size_t>("--threads");
+    std::size_t executor_threads =
+        program.get<std::size_t>("--executor-threads");
+    std::size_t scheduler_threads =
+        program.get<std::size_t>("--scheduler-threads");
     std::string index_dir = program.get<std::string>("--index-dir");
 
+    // Setup temp index directory
     std::string temp_index_dir;
     if (index_dir.empty()) {
         temp_index_dir = fs::temp_directory_path() /
@@ -133,6 +124,8 @@ int main(int argc, char** argv) {
     output_dir = fs::absolute(output_dir).string();
 
     std::printf("==========================================\n");
+    std::printf("DFTracer Split (Explicit Pipeline)\n");
+    std::printf("==========================================\n");
     std::printf("Arguments:\n");
     std::printf("  App name: %s\n", app_name.c_str());
     std::printf("  Override: %s\n", force ? "true" : "false");
@@ -140,22 +133,43 @@ int main(int argc, char** argv) {
     std::printf("  Data dir: %s\n", log_dir.c_str());
     std::printf("  Output dir: %s\n", output_dir.c_str());
     std::printf("  Chunk size: %d MB\n", chunk_size_mb);
-    std::printf("  Threads: %zu\n", num_threads);
-    std::printf("==========================================\n");
+    std::printf("  Executor threads: %zu\n", executor_threads);
+    std::printf("  Scheduler threads: %zu\n", scheduler_threads);
+    std::printf("==========================================\n\n");
 
     if (!fs::exists(output_dir)) {
         fs::create_directories(output_dir);
     }
 
-    auto executor = dftracer::utils::ExecutorFactory::create(num_threads);
+    // Create pipeline with configuration
+    auto pipeline_config = PipelineConfigManager()
+                               .with_name("DFTracer Split")
+                               .with_executor_threads(executor_threads)
+                               .with_scheduler_threads(scheduler_threads);
+
+    Pipeline pipeline(pipeline_config);
+
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Phase 0: Build indexes sequentially (avoid SQLite write conflicts)
-    DFTRACER_UTILS_LOG_INFO("%s", "Phase 0: Building indexes...");
+    // ========================================================================
+    // Task 1: Build Indexes
+    // ========================================================================
+    DFTRACER_UTILS_LOG_INFO("%s", "Task 1: Building indexes...");
 
+    // Task 1.1: Input - Directory input for file discovery
+    auto index_dir_input =
+        utilities::composites::DirectoryProcessInput::from_directory(log_dir)
+            .with_extensions({".pfw", ".pfw.gz"});
+
+    // Task 1.2: Output - Index build results
+    using IndexBuildOutput = utilities::composites::BatchFileProcessOutput<
+        utilities::composites::dft::IndexBuildUtilityOutput>;
+
+    // Task 1.3: Utility definition - DirectoryFileProcessorUtility with
+    // IndexBuilder
     auto index_builder_processor = [checkpoint_size, force, &index_dir](
-                                       const std::string& file_path,
-                                       TaskContext& /*ctx*/)
+                                       TaskContext& /*ctx*/,
+                                       const std::string& file_path)
         -> utilities::composites::dft::IndexBuildUtilityOutput {
         std::string idx_path = utilities::composites::dft::determine_index_path(
             file_path, index_dir);
@@ -165,8 +179,7 @@ int main(int argc, char** argv) {
                 .with_checkpoint_size(checkpoint_size)
                 .with_force_rebuild(force)
                 .with_index(idx_path);
-        utilities::composites::dft::IndexBuilderUtility builder;
-        return builder.process(input);
+        return utilities::composites::dft::IndexBuilderUtility{}.process(input);
     };
 
     auto index_workflow =
@@ -174,36 +187,24 @@ int main(int argc, char** argv) {
             utilities::composites::dft::IndexBuildUtilityOutput>>(
             index_builder_processor);
 
-    auto index_dir_input =
-        utilities::composites::DirectoryProcessInput::from_directory(log_dir)
-            .with_extensions({".pfw", ".pfw.gz"});
+    // Task 1.4: Task definition - Convert utility to task
+    auto task1_build_indexes = utilities::use(index_workflow).as_task();
+    task1_build_indexes->with_name("BuildIndexes");
 
-    Pipeline index_pipeline("Index Building");
-    auto index_task = utilities::use(index_workflow).emit_on(index_pipeline);
+    // ========================================================================
+    // Task 2: Collect Metadata
+    // ========================================================================
+    DFTRACER_UTILS_LOG_INFO("%s", "Task 2: Collecting metadata...");
 
-    // Use 1 thread for index building to avoid SQLite conflicts
-    PipelineOutput index_output =
-        executor->execute(index_pipeline, index_dir_input);
-    auto index_result =
-        index_output.get<utilities::composites::BatchFileProcessOutput<
-            utilities::composites::dft::IndexBuildUtilityOutput>>(
-            index_task.id());
+    // Task 2.1: Output - Metadata collection results
+    using MetadataCollectOutput = utilities::composites::BatchFileProcessOutput<
+        utilities::composites::dft::MetadataCollectorUtilityOutput>;
 
-    std::size_t indexes_built = 0;
-    for (const auto& result : index_result.results) {
-        if (result.success && result.was_built) {
-            indexes_built++;
-        }
-    }
-
-    DFTRACER_UTILS_LOG_INFO("Built %zu new indexes", indexes_built);
-
-    // Phase 1: Collect metadata in parallel using DirectoryFileProcessor
-    DFTRACER_UTILS_LOG_INFO("%s", "Phase 1: Collecting file metadata...");
-
+    // Task 2.3: Utility definition - DirectoryFileProcessorUtility with
+    // MetadataCollector
     auto metadata_processor = [checkpoint_size, force, &index_dir](
-                                  const std::string& file_path,
-                                  TaskContext& /*ctx*/)
+                                  TaskContext& /*ctx*/,
+                                  const std::string& file_path)
         -> utilities::composites::dft::MetadataCollectorUtilityOutput {
         std::string idx_path = utilities::composites::dft::determine_index_path(
             file_path, index_dir);
@@ -218,166 +219,145 @@ int main(int argc, char** argv) {
             input);
     };
 
-    auto workflow =
+    auto metadata_workflow =
         std::make_shared<utilities::composites::DirectoryFileProcessorUtility<
             utilities::composites::dft::MetadataCollectorUtilityOutput>>(
             metadata_processor);
 
-    auto dir_input =
-        utilities::composites::DirectoryProcessInput::from_directory(log_dir)
+    // Task 2.4: Task definition - Convert utility to task
+    auto task2_collect_metadata = utilities::use(metadata_workflow).as_task();
+    task2_collect_metadata->with_name("CollectMetadata");
+
+    // Task 2 also needs the same directory input as Task 1, use combiner
+    // Combiner transforms Task 1's output (IndexBuildOutput) to Task 2's input
+    // (DirectoryProcessInput)
+    task2_collect_metadata->with_combiner([&log_dir](const IndexBuildOutput&) {
+        // Return fresh directory input for metadata collection
+        return utilities::composites::DirectoryProcessInput::from_directory(
+                   log_dir)
             .with_extensions({".pfw", ".pfw.gz"});
+    });
 
-    Pipeline metadata_pipeline("Metadata Collection");
-    auto task = utilities::use(workflow).emit_on(metadata_pipeline);
+    // ========================================================================
+    // Task 3: Create Chunk Mappings
+    // ========================================================================
+    DFTRACER_UTILS_LOG_INFO("%s", "Task 3: Creating chunk mappings...");
 
-    PipelineOutput output = executor->execute(metadata_pipeline, dir_input);
-    auto batch_result =
-        output.get<utilities::composites::BatchFileProcessOutput<
-            utilities::composites::dft::MetadataCollectorUtilityOutput>>(
-            task.id());
+    // Task 3.1: Input - Metadata from Task 2
+    using ChunkMappingInput = MetadataCollectOutput;
 
-    if (batch_result.results.empty()) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "No .pfw or .pfw.gz files found in directory: %s", log_dir.c_str());
-        return 1;
-    }
+    // Task 3.2: Output - Chunk manifests
+    using ChunkMappingOutput =
+        std::vector<utilities::composites::dft::DFTracerChunkManifest>;
 
-    DFTRACER_UTILS_LOG_INFO("Found %zu files to process",
-                            batch_result.results.size());
-    std::vector<utilities::composites::dft::MetadataCollectorUtilityOutput>
-        all_metadata = std::move(batch_result.results);
+    // Task 3.3: Utility definition - Transform metadata to chunk manifests
+    auto create_chunk_mappings_func =
+        [chunk_size_mb](
+            const ChunkMappingInput& batch_result) -> ChunkMappingOutput {
+        DFTRACER_UTILS_LOG_INFO("Creating chunk mappings from %zu files...",
+                                batch_result.results.size());
 
-    std::size_t successful_files = 0;
-    double total_size_mb = 0;
-    for (const auto& meta : all_metadata) {
-        if (meta.success) {
-            successful_files++;
-            total_size_mb += meta.size_mb;
+        utilities::composites::dft::ChunkManifestMapperUtility mapper;
+        auto mapper_input =
+            utilities::composites::dft::ChunkManifestMapperUtilityInput::
+                from_metadata(batch_result.results)
+                    .with_target_size(static_cast<double>(chunk_size_mb));
+
+        auto manifests = mapper.process(mapper_input);
+
+        DFTRACER_UTILS_LOG_INFO("Created %zu chunks", manifests.size());
+        return manifests;
+    };
+
+    // Task 3.4: Task definition
+    auto task3_create_mappings =
+        make_task(create_chunk_mappings_func, "CreateChunkMappings");
+
+    // ========================================================================
+    // Task 4: Prepare Chunk Extraction Inputs
+    // ========================================================================
+    DFTRACER_UTILS_LOG_INFO("%s", "Task 4: Preparing extraction inputs...");
+
+    // Task 4.1: Input - Chunk manifests from Task 3
+    using PrepareExtractInput = ChunkMappingOutput;
+
+    // Task 4.2: Output - Vector of extraction inputs
+    using PrepareExtractOutput =
+        std::vector<utilities::composites::dft::ChunkExtractorUtilityInput>;
+
+    // Task 4.3: Utility definition - Transform manifests to extraction inputs
+    auto prepare_extract_inputs_func =
+        [&app_name, &output_dir, compress](
+            const PrepareExtractInput& manifests) -> PrepareExtractOutput {
+        DFTRACER_UTILS_LOG_INFO("Preparing %zu extraction inputs...",
+                                manifests.size());
+
+        PrepareExtractOutput chunk_inputs;
+        chunk_inputs.reserve(manifests.size());
+
+        for (int i = 0; i < static_cast<int>(manifests.size()); ++i) {
+            auto input =
+                utilities::composites::dft::ChunkExtractorUtilityInput::
+                    from_manifest(i + 1, manifests[i])
+                        .with_output_dir(output_dir)
+                        .with_app_name(app_name)
+                        .with_compression(compress);
+            chunk_inputs.push_back(input);
         }
-    }
 
-    DFTRACER_UTILS_LOG_INFO(
-        "Collected metadata from %zu/%zu files, total size: %.2f MB",
-        successful_files, all_metadata.size(), total_size_mb);
+        return chunk_inputs;
+    };
 
-    if (successful_files == 0) {
-        DFTRACER_UTILS_LOG_ERROR("%s", "No files were successfully processed");
-        return 1;
-    }
+    // Task 4.4: Task definition
+    auto task4_prepare_inputs =
+        make_task(prepare_extract_inputs_func, "PrepareExtractInputs");
 
-    // Phase 2: Create chunk mappings using DFTracerChunkManifestMapper workflow
-    DFTRACER_UTILS_LOG_INFO("%s", "Phase 2: Creating chunk mappings...");
+    // ========================================================================
+    // Task 5: Extract Chunks (INTRA-TASK PARALLELISM via BatchProcessorUtility)
+    // ========================================================================
+    DFTRACER_UTILS_LOG_INFO("%s", "Task 5: Extracting chunks...");
 
-    utilities::composites::dft::ChunkManifestMapperUtility mapper;
-    auto mapper_input =
-        utilities::composites::dft::ChunkManifestMapperUtilityInput::
-            from_metadata(all_metadata)
-                .with_target_size(static_cast<double>(chunk_size_mb));
+    // Task 5.1: Output - Extraction results
+    using ExtractChunksOutput =
+        std::vector<utilities::composites::dft::ChunkExtractorUtilityOutput>;
 
-    std::vector<utilities::composites::dft::DFTracerChunkManifest> manifests =
-        mapper.process(mapper_input);
-
-    DFTRACER_UTILS_LOG_INFO("Created %zu chunks with line tracking:",
-                            manifests.size());
-
-#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
-    for (std::size_t i = 0; i < manifests.size(); ++i) {
-        DFTRACER_UTILS_LOG_DEBUG(
-            "  Chunk %zu: %.2f MB, %zu lines across %zu files", i + 1,
-            manifests[i].total_size_mb, manifests[i].total_lines(),
-            manifests[i].specs.size());
-        for (const auto& spec : manifests[i].specs) {
-            if (spec.has_line_info()) {
-                DFTRACER_UTILS_LOG_DEBUG(
-                    "    %s: lines %zu-%zu (bytes %zu-%zu)",
-                    fs::path(spec.file_path).filename().c_str(),
-                    spec.start_line, spec.end_line, spec.start_byte,
-                    spec.end_byte);
-            }
-        }
-    }
-#endif
-
-    // Create ChunkExtractorUtilityInput with DFTracerChunkManifest (includes
-    // line tracking)
-    std::vector<utilities::composites::dft::ChunkExtractorUtilityInput>
-        chunk_inputs;
-    for (int i = 0; i < static_cast<int>(manifests.size()); ++i) {
-        auto input = utilities::composites::dft::ChunkExtractorUtilityInput::
-                         from_manifest(i + 1, manifests[i])
-                             .with_output_dir(output_dir)
-                             .with_app_name(app_name)
-                             .with_compression(compress);
-        chunk_inputs.push_back(input);
-    }
-
-    if (chunk_inputs.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("%s", "No chunks created");
-        return 1;
-    }
-
-    // Phase 3: Extract chunks in parallel using DFTracerChunkExtractor workflow
-    DFTRACER_UTILS_LOG_INFO("%s", "Phase 3: Extracting chunks...");
-
-    // Use BatchProcessor with comparator to automatically sort results by
-    // chunk_index
+    // Task 5.3: Utility definition - BatchProcessorUtility with ChunkExtractor
     auto extractor_workflow =
         std::make_shared<utilities::composites::dft::ChunkExtractorUtility>();
+
     auto chunk_extractor =
         std::make_shared<utilities::composites::BatchProcessorUtility<
             utilities::composites::dft::ChunkExtractorUtilityInput,
             utilities::composites::dft::ChunkExtractorUtilityOutput>>(
             extractor_workflow);
 
+    // Sort results by chunk_index
     chunk_extractor->with_comparator(
         [](const utilities::composites::dft::ChunkExtractorUtilityOutput& a,
            const utilities::composites::dft::ChunkExtractorUtilityOutput& b) {
             return a.chunk_index < b.chunk_index;
         });
 
-    Pipeline extract_pipeline("Chunk Extraction");
-    auto extract_task =
-        utilities::use(chunk_extractor).emit_on(extract_pipeline);
+    // Task 5.4: Task definition - Convert utility to task
+    auto task5_extract_chunks = utilities::use(chunk_extractor).as_task();
+    task5_extract_chunks->with_name("ExtractChunks");
 
-    PipelineOutput extract_output =
-        executor->execute(extract_pipeline, chunk_inputs);
-    std::vector<utilities::composites::dft::ChunkExtractorUtilityOutput>
-        results = extract_output.get<std::vector<
-            utilities::composites::dft::ChunkExtractorUtilityOutput>>(
-            extract_task.id());
-
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> duration = end_time - start_time;
-
-    std::size_t successful_chunks = 0;
-    std::size_t total_events = 0;
-
-    for (const auto& result : results) {
-        if (result.success) {
-            successful_chunks++;
-            total_events += result.events;
-        } else {
-            DFTRACER_UTILS_LOG_ERROR("Failed to create chunk %d",
-                                     result.chunk_index);
-        }
-    }
-
-    std::printf("\n");
-    std::printf("Split completed in %.2f seconds\n", duration.count() / 1000.0);
-    std::printf("  Input: %zu files, %.2f MB\n", successful_files,
-                total_size_mb);
-    std::printf("  Output: %zu/%zu chunks, %zu events\n", successful_chunks,
-                results.size(), total_events);
+    // ========================================================================
+    // Task 6: Verify Output Chunks (optional)
+    // ========================================================================
+    std::shared_ptr<Task> final_task = task5_extract_chunks;
+    std::shared_ptr<Task> task6_verify_chunks = nullptr;
 
     if (verify) {
-        auto verify_start = std::chrono::high_resolution_clock::now();
-        std::printf("  Validating output chunks match input...\n");
+        DFTRACER_UTILS_LOG_INFO("%s", "Task 6: Configuring verification...");
 
+        // Task 6.1: Create event hasher
         auto hasher =
             std::make_shared<utilities::composites::dft::EventHasher>();
 
+        // Task 6.2: Input hasher - hash events from metadata
         auto input_hasher =
-            [&hasher](
+            [hasher](
                 const std::vector<
                     utilities::composites::dft::MetadataCollectorUtilityOutput>&
                     metadata) {
@@ -396,69 +376,133 @@ int main(int argc, char** argv) {
                 return hasher->process(hash_input);
             };
 
-        // Event collector: use event IDs from extraction results
+        // Task 6.3: Event collector - extract event IDs from chunk results
         auto event_collector =
-            [](const utilities::composites::dft::ChunkExtractorUtilityOutput&
-                   result,
-               TaskContext&) {
-                return result.event_ids;  // Just return the pre-collected IDs
+            [](TaskContext&,
+               const utilities::composites::dft::ChunkExtractorUtilityOutput&
+                   result) {
+                return result.event_ids;  // Return pre-collected event IDs
             };
 
-        // Event hasher: hash collected events
-        auto event_hasher = [&hasher](const std::vector<EventId>& events) {
+        // Task 6.4: Event hasher - hash collected events
+        auto event_hasher = [hasher](const std::vector<EventId>& events) {
             auto hash_input =
                 utilities::composites::dft::EventHashInput::from_events(events);
             return hasher->process(hash_input);
         };
 
+        // Task 6.5: Create chunk verifier utility
         auto verifier =
             std::make_shared<utilities::composites::ChunkVerifierUtility<
                 utilities::composites::dft::ChunkExtractorUtilityOutput,
                 utilities::composites::dft::MetadataCollectorUtilityOutput,
                 EventId>>(input_hasher, event_collector, event_hasher);
 
-        auto verify_input =
-            utilities::composites::ChunkVerificationUtilityInput<
-                utilities::composites::dft::ChunkExtractorUtilityOutput,
-                utilities::composites::dft::MetadataCollectorUtilityOutput>::
-                from_chunks(results)
-                    .with_metadata(all_metadata);
+        // Task 6.6: Task definition - Use utility adapter pattern
+        task6_verify_chunks = utilities::use(verifier).as_task();
+        task6_verify_chunks->with_name("VerifyChunks");
 
-        Pipeline verify_pipeline("Chunk Verification");
-        auto verify_task = utilities::use(verifier).emit_on(verify_pipeline);
+        // INTER-TASK dependencies: Task 6 needs Task 5 (chunks) and Task 2
+        // (metadata)
 
-        PipelineOutput verify_output =
-            executor->execute(verify_pipeline, verify_input);
-        auto verify_result =
-            verify_output
-                .get<utilities::composites::ChunkVerificationUtilityOutput>(
-                    verify_task.id());
+        // Task 6.7: Combiner to merge chunks and metadata into verification
+        // input
+        task6_verify_chunks->with_combiner([](const ExtractChunksOutput& chunks,
+                                              const MetadataCollectOutput&
+                                                  metadata) {
+            return utilities::composites::ChunkVerificationUtilityInput<
+                       utilities::composites::dft::ChunkExtractorUtilityOutput,
+                       utilities::composites::dft::
+                           MetadataCollectorUtilityOutput>::from_chunks(chunks)
+                .with_metadata(metadata.results);
+        });
 
-        auto verify_end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> verify_duration =
-            verify_end - verify_start;
+        final_task = task6_verify_chunks;
+    }
 
-        if (verify_result.passed) {
-            std::printf(
-                "  \u2713 Verification: PASSED - all events present in output "
-                "(%.2f seconds)\n",
-                verify_duration.count() / 1000.0);
-            std::printf("    Input hash:  %016llx, Output hash: %016llx\n",
-                        (unsigned long long)verify_result.input_hash,
-                        (unsigned long long)verify_result.output_hash);
+    // ========================================================================
+    // Execute Pipeline
+    // ========================================================================
+
+    // Define dependencies
+    task2_collect_metadata->depends_on(task1_build_indexes);
+    task3_create_mappings->depends_on(task2_collect_metadata);
+    task4_prepare_inputs->depends_on(task3_create_mappings);
+    task5_extract_chunks->depends_on(task4_prepare_inputs);
+    if (verify && task6_verify_chunks) {
+        task6_verify_chunks->depends_on(task5_extract_chunks);
+        task6_verify_chunks->depends_on(task2_collect_metadata);
+    }
+
+    // Set up pipeline
+    pipeline.set_source(task1_build_indexes);
+    pipeline.set_destination(final_task);
+
+    // Execute pipeline with initial input
+    pipeline.execute(index_dir_input);
+
+    // Get final results
+    auto extraction_results = task5_extract_chunks->get<ExtractChunksOutput>();
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration = end_time - start_time;
+
+    // ========================================================================
+    // Print Results
+    // ========================================================================
+
+    std::size_t successful_chunks = 0;
+    std::size_t total_events = 0;
+
+    for (const auto& result : extraction_results) {
+        if (result.success) {
+            successful_chunks++;
+            total_events += result.events;
         } else {
-            std::printf(
-                "  \u2717 Verification: FAILED - event mismatch detected (%.2f "
-                "seconds)\n",
-                verify_duration.count() / 1000.0);
-            DFTRACER_UTILS_LOG_ERROR(
-                "Hash mismatch: input=%016llx output=%016llx",
-                (unsigned long long)verify_result.input_hash,
-                (unsigned long long)verify_result.output_hash);
+            DFTRACER_UTILS_LOG_ERROR("Failed to create chunk %d",
+                                     result.chunk_index);
         }
     }
 
-    std::printf("All chunks processed in %.2f ms\n", duration.count());
+    auto metadata_results =
+        task2_collect_metadata->get<MetadataCollectOutput>();
+    std::size_t successful_files = 0;
+    double total_size_mb = 0;
+    for (const auto& meta : metadata_results.results) {
+        if (meta.success) {
+            successful_files++;
+            total_size_mb += meta.size_mb;
+        }
+    }
+
+    std::printf("\n");
+    std::printf("==========================================\n");
+    std::printf("Split Results\n");
+    std::printf("==========================================\n");
+    std::printf("  Execution time: %.2f seconds\n", duration.count() / 1000.0);
+    std::printf("  Input: %zu files, %.2f MB\n", successful_files,
+                total_size_mb);
+    std::printf("  Output: %zu/%zu chunks, %zu events\n", successful_chunks,
+                extraction_results.size(), total_events);
+
+    // Optional verification phase (Task 6)
+    if (verify) {
+        auto verify_result =
+            task6_verify_chunks
+                ->get<utilities::composites::ChunkVerificationUtilityOutput>();
+        if (verify_result.input_hash == verify_result.output_hash) {
+            std::printf(
+                "  \u2713 Verification: PASSED - all events present in "
+                "output\n");
+        } else {
+            std::printf(
+                "  \u2717 Verification: FAILED - event mismatch detected\n");
+        }
+        std::printf("    Input hash:  0x%016llx\n", verify_result.input_hash);
+        std::printf("    Output hash: 0x%016llx\n", verify_result.output_hash);
+    }
+
+    std::printf("==========================================\n");
 
     // Cleanup temporary index directory if created
     if (!temp_index_dir.empty() && fs::exists(temp_index_dir)) {
@@ -467,5 +511,5 @@ int main(int argc, char** argv) {
         fs::remove_all(temp_index_dir);
     }
 
-    return successful_chunks == results.size() ? 0 : 1;
+    return successful_chunks == extraction_results.size() ? 0 : 1;
 }

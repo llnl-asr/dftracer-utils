@@ -3,9 +3,8 @@
 
 #include <dftracer/utils/core/common/type_name.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
+#include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/tasks/task_context.h>
-#include <dftracer/utils/core/tasks/task_result.h>
-#include <dftracer/utils/core/tasks/task_tag.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/behaviors/default_behaviors.h>
 #include <dftracer/utils/core/utilities/tags/monitored.h>
@@ -21,24 +20,43 @@
 namespace dftracer::utils::utilities {
 
 /**
- * @brief Adapter that bridges Utility to Pipeline/Task system.
+ * @brief Adapter that wraps Utility as a Task with behavior support.
  *
- * This adapter provides a fluent interface for integrating utilities with
- * pipelines or emitting them as dynamic tasks.
+ * This adapter provides a fluent interface for converting utilities into tasks
+ * with optional behaviors. The primary operation is as_task() which returns a
+ * std::shared_ptr<Task> that can be used with the standard Task API.
+ *
+ * Design Philosophy:
+ * - Utilities are just specialized functions that can be wrapped as tasks
+ * - Behaviors are EXPLICIT and opt-in via with_behavior()
+ * - The Task API handles dependencies, scheduling, and execution
+ * - No coupling to Pipeline - work directly with Scheduler
  *
  * Usage:
  * @code
- * // Simple emission to pipeline
- * use(utility).emit_on(pipeline);
+ * // Basic: Convert utility to task
+ * auto task = use(utility).as_task();
+ * scheduler.schedule(task, input);
  *
- * // With dependency
- * use(utility).depends_on(parent_id).emit_on(pipeline);
+ * // With dependency (using Task API)
+ * auto task = use(utility).as_task();
+ * task->depends_on(parent_task);
+ * scheduler.schedule(root_task, initial_input);
  *
- * // Dynamic emission with explicit input
- * use(utility).with_input(data).emit_on(ctx);
+ * // With explicit behavior
+ * auto task = use(utility)
+ *     .with_behavior(std::make_shared<TimingBehavior<I, O>>())
+ *     .as_task();
  *
- * // Batch processing
- * use(utility).emit_on(pipeline, input_vector);
+ * // Implicit conversion to Task
+ * std::shared_ptr<Task> task = use(utility);  // Calls as_task() implicitly
+ *
+ * // Dynamic submission from within a task
+ * auto outer_task = make_task([&](TaskContext& ctx) {
+ *     auto inner = use(utility).as_task();
+ *     auto future = ctx.submit_task(inner, data);
+ *     return future.get();
+ * });
  * @endcode
  */
 template <typename I, typename O, typename... Tags>
@@ -46,8 +64,6 @@ class UtilityAdapter {
    private:
     std::shared_ptr<Utility<I, O, Tags...>> utility_;
     behaviors::BehaviorChain<I, O> behavior_chain_;
-    std::optional<TaskIndex> dependency_;
-    std::optional<I> explicit_input_;
 
     /**
      * @brief Build behavior chain from utility's tags.
@@ -141,161 +157,79 @@ class UtilityAdapter {
     }
 
     /**
-     * @brief Set task dependency.
-     *
-     * The emitted task will depend on the specified task ID.
-     *
-     * @param task_id Task ID that this utility's task should depend on
-     * @return Reference to this adapter for chaining
+     * @brief Check if utility needs TaskContext at compile time.
      */
-    UtilityAdapter& depends_on(TaskIndex task_id) {
-        dependency_ = task_id;
-        return *this;
-    }
-
-    /**
-     * @brief Set explicit input value.
-     *
-     * Used when emitting to TaskContext with a specific input value,
-     * rather than depending on pipeline input.
-     *
-     * @param input Input value for the utility
-     * @return Reference to this adapter for chaining
-     */
-    UtilityAdapter& with_input(const I& input) {
-        explicit_input_ = input;
-        return *this;
-    }
-
-    /**
-     * @brief Emit utility as task on pipeline (terminal operation).
-     *
-     * Adds the utility as a task to the pipeline with behaviors applied.
-     * The utility will receive its input from the pipeline execution.
-     *
-     * @param pipeline Pipeline to add the task to
-     * @return TaskResult with future and task ID
-     */
-    TaskResult<O> emit_on(Pipeline& pipeline) {
+    static constexpr bool needs_context() {
         using UtilityType = Utility<I, O, Tags...>;
         using ConcreteType =
             typename std::remove_reference<decltype(*utility_)>::type;
 
-        TaskIndex dep = dependency_.value_or(-1);
+        return UtilityType::template has_tag<tags::NeedsContext>() ||
+               detail::has_process_with_context_v<ConcreteType, I, O>;
+    }
+
+    /**
+     * @brief Convert utility to a Task (primary operation).
+     *
+     * Creates a std::shared_ptr<Task> that wraps the utility with any behaviors
+     * that have been added. The returned task can be used with the standard
+     * Task API (depends_on, with_name, etc.) and scheduled via Scheduler.
+     *
+     * The task automatically detects if the utility needs TaskContext and
+     * creates the appropriate function signature.
+     *
+     * @return Shared pointer to Task wrapping this utility
+     *
+     * @example
+     * @code
+     * auto task = use(utility).as_task();
+     * task->with_name("MyUtility");
+     * task->depends_on(parent_task);
+     * scheduler.schedule(root, input);
+     * auto result = task->get<OutputType>();
+     * @endcode
+     */
+    std::shared_ptr<Task> as_task() {
+        using UtilityType = Utility<I, O, Tags...>;
+        using ConcreteType =
+            typename std::remove_reference<decltype(*utility_)>::type;
 
         // Create executor with utility and behavior chain
         auto executor =
             std::make_shared<behaviors::UtilityExecutor<I, O, Tags...>>(
                 utility_, behavior_chain_);
 
-        // Detect if utility needs context
+        // Get utility name for task naming
+        std::string task_name = utility_->get_name();
+        if (task_name.empty()) {
+            task_name = "Utility";
+        }
+
+        // Create task based on whether utility needs context
         if constexpr (UtilityType::template has_tag<tags::NeedsContext>() ||
                       detail::has_process_with_context_v<ConcreteType, I, O>) {
-            return pipeline.add_task<I, O>(
-                [executor](I input, TaskContext& ctx) -> O {
-                    return executor->execute_with_context(input, ctx);
+            return make_task(
+                [executor](TaskContext& ctx, I input) -> O {
+                    return executor->execute_with_context(ctx, input);
                 },
-                dep);
+                task_name);
         } else {
-            return pipeline.add_task<I, O>(
-                [executor](I input, [[maybe_unused]] TaskContext& ctx) -> O {
-                    return executor->execute(input);
-                },
-                dep);
+            return make_task(
+                [executor](I input) -> O { return executor->execute(input); },
+                task_name);
         }
     }
 
     /**
-     * @brief Emit utility as dynamic task on context (terminal operation).
+     * @brief Implicit conversion to Task for convenience.
      *
-     * Emits the utility as a dynamic task from within another task with
-     * behaviors applied. Requires explicit input to be set via with_input().
-     *
-     * @param ctx TaskContext for dynamic emission
-     * @return TaskResult with future and task ID
-     * @throws std::runtime_error if with_input() was not called
+     * Allows using UtilityAdapter directly where a std::shared_ptr<Task> is
+     * expected:
+     * @code
+     * std::shared_ptr<Task> task = use(utility);  // Implicit conversion
+     * @endcode
      */
-    TaskResult<O> emit_on(TaskContext& ctx) {
-        if (!explicit_input_) {
-            throw std::runtime_error(
-                "with_input() must be called before emit_on(TaskContext&)");
-        }
-
-        using UtilityType = Utility<I, O, Tags...>;
-        using ConcreteType =
-            typename std::remove_reference<decltype(*utility_)>::type;
-
-        Input<I> input_wrapper = Input<I>::ref(explicit_input_.value());
-
-        // Create executor with utility and behavior chain
-        auto executor =
-            std::make_shared<behaviors::UtilityExecutor<I, O, Tags...>>(
-                utility_, behavior_chain_);
-
-        if constexpr (UtilityType::template has_tag<tags::NeedsContext>() ||
-                      detail::has_process_with_context_v<ConcreteType, I, O>) {
-            return ctx.emit<I, O>(
-                [executor](I in, TaskContext& task_ctx) -> O {
-                    return executor->execute_with_context(in, task_ctx);
-                },
-                input_wrapper);
-        } else {
-            return ctx.emit<I, O>(
-                [executor](I in, TaskContext& task_ctx) -> O {
-                    return executor->execute(in);
-                },
-                input_wrapper);
-        }
-    }
-
-    /**
-     * @brief Emit utility as batch tasks on pipeline (terminal operation).
-     *
-     * Creates independent tasks for each input, allowing parallel execution.
-     *
-     * @param pipeline Pipeline to add tasks to
-     * @param inputs Vector of input values
-     * @return Vector of TaskResults for all tasks
-     */
-    std::vector<TaskResult<O>> emit_on(Pipeline& pipeline,
-                                       const std::vector<I>& inputs) {
-        std::vector<TaskResult<O>> results;
-        results.reserve(inputs.size());
-
-        for (const auto& input : inputs) {
-            // Create new adapter for each input (don't reuse state)
-            UtilityAdapter adapter(utility_);
-            if (dependency_) {
-                adapter.depends_on(dependency_.value());
-            }
-            results.push_back(adapter.emit_on(pipeline));
-        }
-
-        return results;
-    }
-
-    /**
-     * @brief Emit utility as batch dynamic tasks (terminal operation).
-     *
-     * Creates independent dynamic tasks for each input.
-     *
-     * @param ctx TaskContext for dynamic emission
-     * @param inputs Vector of input values
-     * @return Vector of TaskResults for all tasks
-     */
-    std::vector<TaskResult<O>> emit_on(TaskContext& ctx,
-                                       const std::vector<I>& inputs) {
-        std::vector<TaskResult<O>> results;
-        results.reserve(inputs.size());
-
-        for (const auto& input : inputs) {
-            UtilityAdapter adapter(utility_);
-            adapter.with_input(input);
-            results.push_back(adapter.emit_on(ctx));
-        }
-
-        return results;
-    }
+    operator std::shared_ptr<Task>() { return as_task(); }
 };
 
 // Helper to expand tuple tags into parameter pack
@@ -318,22 +252,36 @@ struct UseHelper<I, O, std::tuple<Tags...>> {
  * @brief Factory function to create a UtilityAdapter with natural syntax.
  *
  * This function provides convenient template argument deduction and enables
- * fluent, natural-language-like syntax:
+ * fluent, natural-language-like syntax for wrapping utilities as tasks:
  *
  * @code
  * auto utility = std::make_shared<MyUtility>();
- * use(utility).depends_on(id).emit_on(pipeline);
- * use(utility).with_input(data).emit_on(ctx);
+ *
+ * // Basic usage: Convert to task
+ * auto task = use(utility).as_task();
+ * scheduler.schedule(task, input);
+ *
+ * // With behaviors (explicit)
+ * auto task = use(utility)
+ *     .with_behavior(std::make_shared<MonitoringBehavior<I, O>>())
+ *     .as_task();
+ *
+ * // Implicit conversion
+ * std::shared_ptr<Task> task = use(utility);
+ *
+ * // Use with Task API
+ * auto parent = make_task([]() { return 42; });
+ * auto child = use(utility).as_task();
+ * child->depends_on(parent);
  * @endcode
  *
- * The name "use" was chosen to read naturally in chains, like
- * instructions: "use this utility, depends on that task, emit on pipeline"
+ * The name "use" was chosen to read naturally: "use this utility as a task".
  *
  * This function automatically handles derived utility classes by deducing
  * the base Utility type from the Input, Output, and TagsTuple members.
  *
  * @param utility Shared pointer to utility (can be derived class)
- * @return UtilityAdapter ready for configuration
+ * @return UtilityAdapter ready for conversion to Task via as_task()
  */
 template <typename DerivedUtility>
 auto use(std::shared_ptr<DerivedUtility> utility) {

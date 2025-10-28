@@ -110,9 +110,7 @@ void TarReader::set_buffer_size(std::size_t size) {
 }
 
 std::unique_ptr<ReaderStream> TarReader::stream(
-    [[maybe_unused]] StreamType stream_type,
-    [[maybe_unused]] RangeType range_type, [[maybe_unused]] std::size_t start,
-    [[maybe_unused]] std::size_t end) {
+    [[maybe_unused]] const StreamConfig &config) {
     // TODO: Implement TAR stream creation
     throw std::runtime_error("TarReader::stream() not yet implemented");
 }

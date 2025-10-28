@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
-#include <dftracer/utils/utilities/compression/gzip/streaming_compressor.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_compressor.h>
 #include <dftracer/utils/utilities/io/streaming_file_reader.h>
 #include <dftracer/utils/utilities/io/streaming_file_writer.h>
 
@@ -20,6 +20,8 @@ struct FileCompressionUtilityInput {
     std::string output_path;  // Output .gz file path (empty = auto-generate)
     int compression_level;  // Compression level (0-9, or Z_DEFAULT_COMPRESSION)
     std::size_t chunk_size;  // Chunk size for streaming (bytes)
+    compression::zlib::CompressionFormat format =
+        compression::zlib::CompressionFormat::AUTO;
 
     /**
      * @brief Create input with auto-generated output path.
@@ -31,7 +33,9 @@ struct FileCompressionUtilityInput {
         return FileCompressionUtilityInput{
             input_path,
             input_path + ".gz",  // Auto-generate output path
-            compression_level, chunk_size};
+            compression_level, chunk_size,
+            compression::zlib::CompressionFormat::GZIP  // Default to GZIP
+        };
     }
 
     /**
@@ -55,6 +59,15 @@ struct FileCompressionUtilityInput {
      */
     FileCompressionUtilityInput& with_chunk_size(std::size_t size) {
         chunk_size = size;
+        return *this;
+    }
+
+    /**
+     * @brief Set compression format.
+     */
+    FileCompressionUtilityInput& with_format(
+        compression::zlib::CompressionFormat fmt) {
+        format = fmt;
         return *this;
     }
 };
@@ -118,13 +131,13 @@ struct FileCompressionUtilityOutput {
  * auto results = batch_compressor->process(files);
  * @endcode
  */
-class FileCompressor
+class FileCompressorUtility
     : public utilities::Utility<FileCompressionUtilityInput,
                                 FileCompressionUtilityOutput,
                                 utilities::tags::Parallelizable> {
    public:
-    FileCompressor() = default;
-    ~FileCompressor() override = default;
+    FileCompressorUtility() = default;
+    ~FileCompressorUtility() override = default;
 
     /**
      * @brief Compress a file using streaming gzip compression.
@@ -154,32 +167,37 @@ class FileCompressor
             // Get original file size
             result.original_size = fs::file_size(input.input_path);
 
-            // Step 1: Create streaming reader with chunk size
+            // Step 1: Create streaming reader
             auto reader = std::make_shared<io::StreamingFileReaderUtility>();
 
-            // Step 2: Create streaming compressor
-            auto compressor = std::make_shared<
-                compression::gzip::StreamingCompressorUtility>();
-            compressor->set_compression_level(input.compression_level);
+            // Step 2: Create manual streaming compressor with specified format
+            compression::zlib::ManualStreamingCompressorUtility compressor(
+                input.compression_level, input.format);
 
             // Step 3: Create streaming writer
             io::StreamingFileWriterUtility writer(input.output_path);
 
-            // Step 4: Read file as chunks (chunk size in input)
+            // Step 4: Read and compress chunks
             io::StreamReadInput read_input{input.input_path, input.chunk_size};
             io::ChunkRange chunks = reader->process(read_input);
 
-            // Step 5: Compress chunks lazily and write
-            compression::gzip::CompressedChunkRange compressed_chunks =
-                compressor->process(chunks);
+            for (const auto& chunk : chunks) {
+                auto compressed_chunks =
+                    compressor.process(io::RawData{chunk.data});
+                for (const auto& compressed : compressed_chunks) {
+                    io::RawData raw_chunk{compressed.data};
+                    writer.process(raw_chunk);
+                }
+            }
 
-            for (const auto& compressed_chunk : compressed_chunks) {
-                // Convert CompressedData to RawData for writing
-                io::RawData raw_chunk{compressed_chunk.data};
+            // Step 5: Finalize compression and write remaining data
+            auto final_chunks = compressor.finalize();
+            for (const auto& compressed : final_chunks) {
+                io::RawData raw_chunk{compressed.data};
                 writer.process(raw_chunk);
             }
 
-            // Step 6: Close writer (flushes any remaining data)
+            // Step 6: Close writer
             writer.close();
 
             // Get final compressed size

@@ -21,12 +21,20 @@ namespace dftracer::utils::utilities::composites::dft {
  */
 struct EventCollectorFromMetadataCollectorUtilityInput {
     std::vector<MetadataCollectorUtilityOutput> metadata;
+    bool trim_commas{
+        false};  // Set to true for JSON array format (with trailing commas)
 
     static EventCollectorFromMetadataCollectorUtilityInput from_metadata(
         std::vector<MetadataCollectorUtilityOutput> meta) {
         EventCollectorFromMetadataCollectorUtilityInput input;
         input.metadata = std::move(meta);
         return input;
+    }
+
+    EventCollectorFromMetadataCollectorUtilityInput& with_trim_commas(
+        bool trim) {
+        trim_commas = trim;
+        return *this;
     }
 };
 

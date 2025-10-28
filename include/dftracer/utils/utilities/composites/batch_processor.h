@@ -1,9 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_BATCH_PROCESSOR_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_BATCH_PROCESSOR_H
 
+#include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/tasks/task_context.h>
-#include <dftracer/utils/core/tasks/task_result.h>
-#include <dftracer/utils/core/tasks/task_tag.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/core/utilities/utility_traits.h>
@@ -28,7 +27,7 @@ class BatchProcessorUtility
                                 utilities::tags::NeedsContext> {
    public:
     using ItemProcessorFn =
-        std::function<ItemOutput(const ItemInput&, TaskContext&)>;
+        std::function<ItemOutput(TaskContext&, const ItemInput&)>;
     using ComparatorFn =
         std::function<bool(const ItemOutput&, const ItemOutput&)>;
 
@@ -70,8 +69,8 @@ class BatchProcessorUtility
             "parameters.");
 
         // Create processor function from utility
-        processor_ = [utility](const ItemInput& input,
-                               TaskContext&) -> ItemOutput {
+        processor_ = [utility](TaskContext&,
+                               const ItemInput& input) -> ItemOutput {
             return utility->process(input);
         };
     }
@@ -103,14 +102,20 @@ class BatchProcessorUtility
         // Get TaskContext for parallel execution
         TaskContext& ctx = this->context();
 
-        // Emit parallel tasks for each item
-        std::vector<typename TaskResult<ItemOutput>::Future> futures;
+        // Submit parallel tasks for each item
+        std::vector<std::shared_future<std::any>> futures;
         futures.reserve(items.size());
 
         for (const auto& item : items) {
-            auto task_result =
-                ctx.emit<ItemInput, ItemOutput>(processor_, Input{item});
-            futures.push_back(std::move(task_result.future()));
+            // Create task from processor - captures ctx from outer scope
+            auto task = make_task(
+                [proc = processor_, &ctx](ItemInput in) -> ItemOutput {
+                    return proc(ctx, in);
+                });
+
+            // Submit task with input
+            auto future = ctx.submit_task(task, std::any{item});
+            futures.push_back(future);
         }
 
         // Wait for all tasks to complete
@@ -118,7 +123,8 @@ class BatchProcessorUtility
         results.reserve(futures.size());
 
         for (auto& future : futures) {
-            results.push_back(future.get());
+            std::any result_any = future.get();
+            results.push_back(std::any_cast<ItemOutput>(result_any));
         }
 
         // Sort if comparator provided

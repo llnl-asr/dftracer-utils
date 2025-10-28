@@ -9,11 +9,15 @@ namespace dftracer::utils {
 class PipelineError : public std::runtime_error {
    public:
     enum Type {
+        TYPE_MISMATCH,
         TYPE_MISMATCH_ERROR,
         VALIDATION_ERROR,
         EXECUTION_ERROR,
         INITIALIZATION_ERROR,
         OUTPUT_CONVERSION_ERROR,
+        TIMEOUT_ERROR,          // Pipeline or task timeout
+        INTERRUPTED,            // Graceful shutdown requested
+        EXECUTOR_UNRESPONSIVE,  // Executor hung/crashed
         UNKNOWN_ERROR,
     };
 

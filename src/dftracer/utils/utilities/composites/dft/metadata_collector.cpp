@@ -50,43 +50,91 @@ MetadataCollectorUtilityOutput MetadataCollectorUtility::process_compressed(
     meta.file_path = input.file_path;
     meta.idx_path = input.idx_path;
 
-    auto indexer =
-        IndexerFactory::create(input.file_path, input.idx_path,
-                               input.checkpoint_size, input.force_rebuild);
+    try {
+        // Detect format
+        meta.format = IndexerFactory::detect_format(input.file_path);
+        meta.compressed_size = fs::file_size(input.file_path);
 
-    std::size_t total_lines = indexer->get_num_lines();
-    if (total_lines == 0) {
-        DFTRACER_UTILS_LOG_DEBUG("File %s has no lines",
-                                 input.file_path.c_str());
-        return meta;
+        // Check if index exists
+        meta.has_index = fs::exists(input.idx_path);
+
+        // Create or load indexer
+        std::shared_ptr<Indexer> indexer;
+        if (!meta.has_index || input.force_rebuild) {
+            if (input.force_rebuild && meta.has_index) {
+                DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
+                                         input.idx_path.c_str());
+                fs::remove(input.idx_path);
+            }
+            DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",
+                                     input.file_path.c_str());
+            indexer = IndexerFactory::create(input.file_path, input.idx_path,
+                                             input.checkpoint_size, true);
+            indexer->build();
+            meta.has_index = true;
+        } else {
+            indexer = IndexerFactory::create(input.file_path, input.idx_path,
+                                             input.checkpoint_size, false);
+            if (indexer->need_rebuild()) {
+                DFTRACER_UTILS_LOG_DEBUG("Index needs rebuild: %s",
+                                         input.idx_path.c_str());
+                meta.index_valid = false;
+                fs::remove(input.idx_path);
+                indexer =
+                    IndexerFactory::create(input.file_path, input.idx_path,
+                                           input.checkpoint_size, true);
+                indexer->build();
+            }
+        }
+
+        meta.index_valid = true;
+
+        // Get metadata from indexer
+        std::size_t total_lines = indexer->get_num_lines();
+        meta.num_lines = total_lines;
+        meta.uncompressed_size = indexer->get_max_bytes();
+        meta.checkpoint_size = indexer->get_checkpoint_size();
+        meta.num_checkpoints = indexer->get_checkpoints().size();
+
+        if (total_lines == 0) {
+            DFTRACER_UTILS_LOG_DEBUG("File %s has no lines",
+                                     input.file_path.c_str());
+            meta.success = true;
+            return meta;
+        }
+
+        std::size_t file_size_bytes = fs::file_size(input.file_path);
+        double size_mb =
+            static_cast<double>(file_size_bytes) / (1024.0 * 1024.0);
+
+        // Estimate: First line is '[', last line is ']', rest are events
+        // This is a good approximation for Chrome trace format
+        std::size_t estimated_valid_events =
+            (total_lines > 2) ? (total_lines - 2) : 0;
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Estimated %zu valid events from %zu lines for %s (no file read)",
+            estimated_valid_events, total_lines, input.file_path.c_str());
+
+        meta.size_mb = size_mb;
+        meta.start_line = 1;
+        meta.end_line = total_lines;
+        meta.valid_events = estimated_valid_events;
+        meta.size_per_line =
+            (estimated_valid_events > 0)
+                ? size_mb / static_cast<double>(estimated_valid_events)
+                : 0;
+        meta.success = true;
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "File %s: %.2f MB, %zu valid events from %zu lines, %.8f MB/event",
+            input.file_path.c_str(), meta.size_mb, meta.valid_events,
+            total_lines, meta.size_per_line);
+
+    } catch (const std::exception& e) {
+        meta.error_message = e.what();
+        meta.success = false;
     }
-
-    std::size_t file_size_bytes = fs::file_size(input.file_path);
-    double size_mb = static_cast<double>(file_size_bytes) / (1024.0 * 1024.0);
-
-    // Estimate: First line is '[', last line is ']', rest are events
-    // This is a good approximation for Chrome trace format
-    std::size_t estimated_valid_events =
-        (total_lines > 2) ? (total_lines - 2) : 0;
-
-    DFTRACER_UTILS_LOG_DEBUG(
-        "Estimated %zu valid events from %zu lines for %s (no file read)",
-        estimated_valid_events, total_lines, input.file_path.c_str());
-
-    meta.size_mb = size_mb;
-    meta.start_line = 1;
-    meta.end_line = total_lines;
-    meta.valid_events = estimated_valid_events;
-    meta.size_per_line =
-        (estimated_valid_events > 0)
-            ? size_mb / static_cast<double>(estimated_valid_events)
-            : 0;
-    meta.success = true;
-
-    DFTRACER_UTILS_LOG_DEBUG(
-        "File %s: %.2f MB, %zu valid events from %zu lines, %.8f MB/event",
-        input.file_path.c_str(), meta.size_mb, meta.valid_events, total_lines,
-        meta.size_per_line);
 
     return meta;
 }
@@ -97,40 +145,57 @@ MetadataCollectorUtilityOutput MetadataCollectorUtility::process_plain(
     meta.file_path = input.file_path;
     meta.idx_path = "";
 
-    // For plain files, we need to read sequentially since we can't seek
-    // But we can still validate JSON in parallel by batching lines
-    auto line_range = StreamingLineReader::read_plain(input.file_path);
+    try {
+        // Plain file metadata
+        meta.format = ArchiveFormat::UNKNOWN;  // Plain text file
+        meta.has_index = false;
+        meta.index_valid = false;
+        std::size_t file_size = fs::file_size(input.file_path);
+        meta.uncompressed_size = file_size;
+        meta.compressed_size = file_size;  // No compression for plain files
 
-    std::size_t total_lines = 0;
-    std::size_t total_bytes = 0;
-    std::size_t valid_events = 0;
+        // For plain files, we need to read sequentially since we can't seek
+        // But we can still validate JSON in parallel by batching lines
+        auto line_range = StreamingLineReader::read_plain(input.file_path);
 
-    while (line_range.has_next()) {
-        Line line = line_range.next();
-        total_lines++;
-        const char* trimmed;
-        std::size_t trimmed_length;
-        if (json_trim_and_validate(line.content.data(), line.content.length(),
-                                   trimmed, trimmed_length) &&
-            trimmed_length > 8) {
-            total_bytes += line.content.length();
-            valid_events++;
+        std::size_t total_lines = 0;
+        std::size_t total_bytes = 0;
+        std::size_t valid_events = 0;
+
+        while (line_range.has_next()) {
+            Line line = line_range.next();
+            total_lines++;
+            const char* trimmed;
+            std::size_t trimmed_length;
+            if (json_trim_and_validate(line.content.data(),
+                                       line.content.length(), trimmed,
+                                       trimmed_length) &&
+                trimmed_length > 8) {
+                total_bytes += line.content.length();
+                valid_events++;
+            }
         }
+
+        meta.num_lines = total_lines;
+        meta.size_mb = static_cast<double>(total_bytes) / (1024.0 * 1024.0);
+        meta.start_line = 1;
+        meta.end_line = total_lines;
+        meta.valid_events = valid_events;
+        meta.size_per_line =
+            (valid_events > 0)
+                ? meta.size_mb / static_cast<double>(valid_events)
+                : 0;
+        meta.success = true;
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "File %s: %.2f MB, %zu valid events from %zu lines, %.8f MB/event",
+            input.file_path.c_str(), meta.size_mb, valid_events, total_lines,
+            meta.size_per_line);
+
+    } catch (const std::exception& e) {
+        meta.error_message = e.what();
+        meta.success = false;
     }
-
-    meta.size_mb = static_cast<double>(total_bytes) / (1024.0 * 1024.0);
-    meta.start_line = 1;
-    meta.end_line = total_lines;
-    meta.valid_events = valid_events;
-    meta.size_per_line = (valid_events > 0)
-                             ? meta.size_mb / static_cast<double>(valid_events)
-                             : 0;
-    meta.success = true;
-
-    DFTRACER_UTILS_LOG_DEBUG(
-        "File %s: %.2f MB, %zu valid events from %zu lines, %.8f MB/event",
-        input.file_path.c_str(), meta.size_mb, valid_events, total_lines,
-        meta.size_per_line);
 
     return meta;
 }

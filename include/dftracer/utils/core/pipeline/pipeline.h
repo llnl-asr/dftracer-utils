@@ -3,161 +3,183 @@
 
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/pipeline/error.h>
-#include <dftracer/utils/core/pipeline/executors/executor_context.h>
-#include <dftracer/utils/core/tasks/tasks.h>
+#include <dftracer/utils/core/pipeline/pipeline_config_manager.h>
+#include <dftracer/utils/core/pipeline/pipeline_output.h>
+#include <dftracer/utils/core/pipeline/scheduler.h>
 
 #include <any>
-#include <atomic>
-#include <chrono>
-#include <future>
 #include <memory>
-#include <queue>
 #include <string>
-#include <thread>
-#include <typeindex>
-#include <unordered_map>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 namespace dftracer::utils {
-class Pipeline {
-   protected:
-    std::vector<std::unique_ptr<Task>> nodes_;
-    std::vector<std::vector<TaskIndex>> dependencies_;
-    std::vector<std::vector<TaskIndex>> dependents_;
 
-    std::unordered_map<TaskIndex, std::function<void(const std::any&)>>
-        promise_fulfillers_;
-    std::unordered_map<TaskIndex, std::function<void(std::exception_ptr)>>
-        promise_exception_fulfillers_;
+class Task;
+class Executor;
+
+/**
+ * Pipeline - DAG container and orchestrator
+ *
+ * Features:
+ * - Holds source and destination tasks
+ * - Validates DAG before execution (reachability, types, cycles)
+ * - Delegates execution to scheduler/executor
+ * - Automatically creates NoOpTask for multiple sources
+ */
+class Pipeline {
+   private:
+    std::shared_ptr<Task> source_;       // Single source (may be NoOpTask)
+    std::shared_ptr<Task> destination_;  // Can be nullptr
+
+    std::vector<std::shared_ptr<Task>> all_tasks_;  // All reachable tasks
+
+    std::unique_ptr<Executor> executor_;
+    std::unique_ptr<Scheduler> scheduler_;
 
     std::string name_;
+    bool validated_{false};
+
+    size_t executor_threads_;
+    ErrorPolicy error_policy_{ErrorPolicy::FAIL_FAST};
+    ErrorHandler error_handler_{nullptr};
 
    public:
-    Pipeline() = default;
-    explicit Pipeline(std::string name) : name_(std::move(name)) {}
-    virtual ~Pipeline() = default;
+    /**
+     * Constructor with configuration manager
+     * @param config Pipeline configuration (includes name, threads, etc.)
+     */
+    explicit Pipeline(const PipelineConfigManager& config =
+                          PipelineConfigManager::default_config());
 
+    ~Pipeline();
+
+    // Prevent copying
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
+
+    // Allow moving
     Pipeline(Pipeline&&) = default;
     Pipeline& operator=(Pipeline&&) = default;
 
-    void add_dependency(TaskIndex from, TaskIndex to);
+    /**
+     * Set source task
+     */
+    void set_source(std::shared_ptr<Task> source);
 
-    template <typename I, typename O>
-    TaskResult<O> add_task(std::function<O(I, TaskContext&)> func,
-                           TaskIndex depends_on = -1) {
-        auto task = make_task<I, O>(std::move(func));
-        TaskIndex task_id = add_task(std::move(task), depends_on);
+    /**
+     * Set destination task (optional - if nullptr, all terminal tasks are
+     * destinations)
+     */
+    void set_destination(std::shared_ptr<Task> destination);
 
-        auto promise = std::make_shared<std::promise<O>>();
-        auto future = promise->get_future();
+    /**
+     * Add multiple source tasks (auto-creates NoOpTask as parent)
+     */
+    void add_sources(std::initializer_list<std::shared_ptr<Task>> sources);
 
-        promise_fulfillers_[task_id] = [promise](const std::any& result) {
-            try {
-                auto& typed_result = std::any_cast<const O&>(result);
-                promise->set_value(typed_result);
-            } catch (const std::future_error& e) {
-            } catch (const std::bad_any_cast& e) {
-                promise->set_exception(
-                    std::make_exception_ptr(std::runtime_error(
-                        "Type mismatch in promise fulfillment: " +
-                        std::string(e.what()))));
-            }
-        };
+    /**
+     * Validate pipeline before execution
+     * - Check reachability from source to destination
+     * - Check type compatibility
+     * - Check for cycles
+     */
+    bool validate();
 
-        promise_exception_fulfillers_[task_id] =
-            [promise](std::exception_ptr exception) {
-                try {
-                    promise->set_exception(exception);
-                } catch (const std::future_error& e) {
-                }
-            };
+    /**
+     * Execute the pipeline
+     * @param input Initial input for source task (defaults to empty)
+     * @return Output from terminal tasks
+     */
+    PipelineOutput execute(const std::any& input = std::any{});
 
-        return TaskResult<O>{task_id, std::move(future)};
+    /**
+     * Execute the pipeline with typed input
+     * @tparam T Input type
+     * @param input Initial input for source task
+     * @return Output from terminal tasks
+     */
+    template <typename T, typename = std::enable_if_t<
+                              !std::is_same_v<std::decay_t<T>, std::any>>>
+    PipelineOutput execute(T&& input) {
+        return execute(std::any{std::forward<T>(input)});
     }
 
-    void chain(Pipeline&& other);
+    /**
+     * Set error handling policy
+     */
+    void set_error_policy(ErrorPolicy policy);
 
-    std::size_t size() const { return nodes_.size(); }
-    bool empty() const { return nodes_.empty(); }
+    /**
+     * Set progress callback
+     */
+    void set_progress_callback(
+        std::function<void(size_t completed, size_t total)> callback);
 
-    void set_name(std::string name) { name_ = std::move(name); }
+    /**
+     * Get pipeline name
+     */
     const std::string& get_name() const { return name_; }
 
-    inline const std::vector<std::unique_ptr<Task>>& get_nodes() const {
-        return nodes_;
-    }
-    inline const std::vector<std::vector<TaskIndex>>& get_dependencies() const {
-        return dependencies_;
-    }
-    inline const std::vector<std::vector<TaskIndex>>& get_dependents() const {
-        return dependents_;
-    }
-    inline Task* get_task(TaskIndex index) const {
-        if (index < 0) return nullptr;
-        return index < static_cast<TaskIndex>(nodes_.size())
-                   ? nodes_[index].get()
-                   : nullptr;
-    }
-    inline const std::vector<TaskIndex>& get_task_dependencies(
-        TaskIndex index) const {
-        return dependencies_[index];
-    }
-    inline const std::vector<TaskIndex>& get_task_dependents(
-        TaskIndex index) const {
-        return dependents_[index];
+    /**
+     * Get source task
+     */
+    std::shared_ptr<Task> get_source() const { return source_; }
+
+    /**
+     * Get destination task
+     */
+    std::shared_ptr<Task> get_destination() const { return destination_; }
+
+    /**
+     * Get all tasks in the pipeline
+     */
+    const std::vector<std::shared_ptr<Task>>& get_all_tasks() const {
+        return all_tasks_;
     }
 
-    bool validate_types() const;
-    bool has_cycles() const;
-    std::vector<TaskIndex> topological_sort() const;
+   private:
+    /**
+     * Validate reachability from source to destination (if set)
+     */
+    bool validate_reachability();
 
-    void fulfill_promise(TaskIndex task_id, const std::any& result) const {
-        auto it = promise_fulfillers_.find(task_id);
-        if (it != promise_fulfillers_.end()) {
-            it->second(result);
-        }
-    }
+    /**
+     * Validate type compatibility across all edges
+     */
+    bool validate_types();
 
-    void fulfill_promise_exception(TaskIndex task_id,
-                                   std::exception_ptr exception) const {
-        auto it = promise_exception_fulfillers_.find(task_id);
-        if (it != promise_exception_fulfillers_.end()) {
-            it->second(exception);
-        }
-    }
+    /**
+     * Check for cycles in the DAG
+     */
+    bool has_cycles();
 
-    template <typename O>
-    void register_dynamic_promise(TaskIndex task_id,
-                                  std::shared_ptr<std::promise<O>> promise) {
-        promise_fulfillers_[task_id] = [promise](const std::any& result) {
-            try {
-                auto& typed_result = std::any_cast<const O&>(result);
-                promise->set_value(typed_result);
-            } catch (const std::future_error& e) {
-            } catch (const std::bad_any_cast& e) {
-                promise->set_exception(
-                    std::make_exception_ptr(std::runtime_error(
-                        "Type mismatch in dynamic promise fulfillment: " +
-                        std::string(e.what()))));
-            }
-        };
+    /**
+     * Collect all reachable tasks from source
+     */
+    void collect_all_tasks();
 
-        promise_exception_fulfillers_[task_id] =
-            [promise](std::exception_ptr exception) {
-                try {
-                    promise->set_exception(exception);
-                } catch (const std::future_error& e) {
-                }
-            };
-    }
+    /**
+     * DFS helper for collecting tasks
+     */
+    void collect_tasks_dfs(std::shared_ptr<Task> task,
+                           std::unordered_set<TaskIndex>& visited);
 
-   protected:
-    TaskIndex add_task(std::unique_ptr<Task> task, TaskIndex depends_on = -1);
+    /**
+     * DFS helper for cycle detection
+     */
+    bool has_cycles_dfs(std::shared_ptr<Task> task,
+                        std::unordered_set<TaskIndex>& visited,
+                        std::unordered_set<TaskIndex>& rec_stack);
+
+    /**
+     * DFS helper for reachability check
+     */
+    bool is_reachable_dfs(std::shared_ptr<Task> current,
+                          std::shared_ptr<Task> target,
+                          std::unordered_set<TaskIndex>& visited);
 };
+
 }  // namespace dftracer::utils
 
 #endif  // DFTRACER_UTILS_CORE_PIPELINE_PIPELINE_H

@@ -98,15 +98,26 @@ struct LineReadInput {
  */
 struct Lines {
     std::vector<Line> lines;
+    std::vector<std::string> storage;  // Owns string data for zero-copy views
 
     Lines() = default;
 
     explicit Lines(std::vector<Line> ls) : lines(std::move(ls)) {}
 
     explicit Lines(const std::vector<std::string>& strings) {
-        lines.reserve(strings.size());
+        storage = strings;
+        lines.reserve(storage.size());
         std::size_t line_num = 1;
-        for (const auto& str : strings) {
+        for (const auto& str : storage) {
+            lines.emplace_back(str, line_num++);
+        }
+    }
+
+    explicit Lines(std::vector<std::string>&& strings) {
+        storage = std::move(strings);
+        lines.reserve(storage.size());
+        std::size_t line_num = 1;
+        for (const auto& str : storage) {
             lines.emplace_back(str, line_num++);
         }
     }

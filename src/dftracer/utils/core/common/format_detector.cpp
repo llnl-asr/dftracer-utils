@@ -96,7 +96,7 @@ bool FormatDetector::has_tar_header_after_gzip(FILE* file) {
         if (bytes_read == 0) {
             if (ferror(file)) {
                 DFTRACER_UTILS_LOG_DEBUG(
-                    "Error reading file during TAR detection", "");
+                    "%s", "Error reading file during TAR detection");
             }
             break;
         }

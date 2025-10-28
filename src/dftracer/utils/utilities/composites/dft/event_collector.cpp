@@ -17,15 +17,23 @@ namespace dftracer::utils::utilities::composites::dft {
 class EventIdCollector : public LineProcessor {
    public:
     std::vector<EventId>& events;
+    bool trim_commas;
 
-    explicit EventIdCollector(std::vector<EventId>& event_list)
-        : events(event_list) {}
+    explicit EventIdCollector(std::vector<EventId>& event_list,
+                              bool should_trim_commas = false)
+        : events(event_list), trim_commas(should_trim_commas) {}
 
     bool process(const char* data, std::size_t length) override {
         const char* trimmed;
         std::size_t trimmed_length;
-        if (!json_trim_and_validate(data, length, trimmed, trimmed_length) ||
-            trimmed_length <= 8) {
+
+        // Use comma-trimming variant if requested (for JSON array format)
+        bool valid = trim_commas ? json_trim_and_validate_with_comma(
+                                       data, length, trimmed, trimmed_length)
+                                 : json_trim_and_validate(data, length, trimmed,
+                                                          trimmed_length);
+
+        if (!valid || trimmed_length <= 8) {
             return true;
         }
 
@@ -74,7 +82,8 @@ EventCollectorUtilityOutput EventCollectorFromMetadataUtility::process(
             continue;
         }
 
-        EventIdCollector collector(events);
+        std::size_t events_before = events.size();
+        EventIdCollector collector(events, input.trim_commas);
 
         if (!file.idx_path.empty()) {
             // Indexed/compressed file
@@ -104,6 +113,13 @@ EventCollectorUtilityOutput EventCollectorFromMetadataUtility::process(
                 collector.process(line.c_str(), line.length());
             }
         }
+
+#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
+        std::size_t events_collected = events.size() - events_before;
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Collected %zu events from file %s (expected %zu)",
+            events_collected, file.file_path.c_str(), file.valid_events);
+#endif
     }
 
     // Sort events for consistent hashing

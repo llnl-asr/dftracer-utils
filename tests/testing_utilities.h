@@ -143,6 +143,10 @@ class TestEnvironment {
     std::string get_index_path(const std::string& gz_file);
     Format get_format() const { return format_; }
 
+    // DFTracer-specific test file creation
+    std::string create_dft_test_file(int num_events = 100);
+    std::string create_dft_test_gzip_file(int num_events = 100);
+
    private:
     std::size_t num_lines;
     std::string test_dir;

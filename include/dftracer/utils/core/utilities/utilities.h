@@ -34,6 +34,7 @@
 // Core utility components
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
+#include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/core/utilities/utility_traits.h>
 
 // All utility tags

@@ -45,6 +45,10 @@ option(DFTRACER_UTILS_BUILD_SHARED "Build shared library" ON)
 option(DFTRACER_UTILS_BUILD_STATIC "Build static library" ON)
 option(DFTRACER_UTILS_BUILD_BINARIES "Build command-line binaries" ON)
 option(DFTRACER_UTILS_BUILD_PYTHON "Build Python bindings" OFF)
+option(DFTRACER_UTILS_ENABLE_PCH "Enable precompiled headers" ON)
+option(DFTRACER_UTILS_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(DFTRACER_UTILS_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(DFTRACER_UTILS_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 
 if(DFTRACER_UTILS_TESTS)
   message(STATUS "Building tests")
@@ -66,6 +70,9 @@ if(DFTRACER_UTILS_TESTS)
   set(DFTRACER_UTILS_BUILD_BINARIES
       ON
       CACHE BOOL "" FORCE)
+  # set(DFTRACER_UTILS_ENABLE_ASAN ON CACHE BOOL "" FORCE)
+  # set(DFTRACER_UTILS_ENABLE_UBSAN ON CACHE BOOL "" FORCE)
+  # set(DFTRACER_UTILS_ENABLE_TSAN ON CACHE BOOL "" FORCE)
 endif()
 
 # Validation: Ensure at least one library type is enabled
@@ -99,6 +106,11 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Dependencies.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Utils.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Rpath.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PythonHelpers.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Sanitizer.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PrecompiledHeader.cmake)
+
+configure_sanitizers()
+print_sanitizer_status()
 
 if(SKBUILD)
   set(CMAKE_INSTALL_LIBDIR

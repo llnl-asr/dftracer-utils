@@ -1,9 +1,20 @@
 #ifndef DFTRACER_UTILS_CORE_UTILITIES_UTILITY_H
 #define DFTRACER_UTILS_CORE_UTILITIES_UTILITY_H
 
+#include <dftracer/utils/core/common/type_name.h>
+
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <type_traits>
+#include <typeindex>
+
+#ifdef __GNUG__
+#include <cxxabi.h>
+
+#include <cstdlib>
+#endif
 
 namespace dftracer::utils {
 // Forward declaration
@@ -63,6 +74,8 @@ class Utility {
    private:
     std::tuple<Tags...> tags_;
     TaskContext* ctx_ = nullptr;  // Optional context reference
+    std::string name_;            // User-provided name (or empty)
+    std::string type_signature_;  // Auto-generated type representation
 
     // Friend declaration: only UtilityExecutor can set context
     friend class behaviors::UtilityExecutor<I, O, Tags...>;
@@ -75,7 +88,7 @@ class Utility {
     /**
      * @brief Default constructor using default tag values.
      */
-    Utility() = default;
+    Utility() : name_(), type_signature_(generate_type_signature()) {}
 
     /**
      * @brief Constructor with explicit tag initialization.
@@ -87,7 +100,9 @@ class Utility {
               typename = std::enable_if_t<(sizeof...(Tags) > 0) &&
                                           std::is_void_v<Dummy>>>
     explicit Utility(Tags... tags)
-        : tags_(std::make_tuple(std::move(tags)...)) {}
+        : tags_(std::make_tuple(std::move(tags)...)),
+          name_(),
+          type_signature_(generate_type_signature()) {}
 
     virtual ~Utility() = default;
 
@@ -216,6 +231,79 @@ class Utility {
     template <typename Tag>
     void set_tag(Tag tag) {
         std::get<Tag>(tags_) = std::move(tag);
+    }
+
+    /**
+     * @brief Get utility name formatted as: "NAME Utility[I->O]" or just
+     * "Utility[I->O]"
+     */
+    std::string get_name() const {
+        if (name_.empty()) {
+            return type_signature_;
+        } else {
+            return name_ + " " + type_signature_;
+        }
+    }
+
+    /**
+     * @brief Get raw user-provided name (empty if not provided)
+     */
+    const std::string& get_user_name() const { return name_; }
+
+    /**
+     * @brief Get type signature (always available)
+     */
+    const std::string& get_type_signature() const { return type_signature_; }
+
+    /**
+     * @brief Set utility name
+     */
+    void set_name(std::string name) { name_ = std::move(name); }
+
+   private:
+    /**
+     * @brief Generate type signature from input/output types
+     */
+    std::string generate_type_signature() const {
+        std::ostringstream oss;
+
+        // Get input type name
+        std::string input_name;
+        if (typeid(I) == typeid(void)) {
+            input_name = "void";
+        } else {
+            // Demangle the type name and extract class name
+            std::string full_input = demangle_type_name(typeid(I));
+            input_name = extract_class_name(full_input);
+        }
+
+        // Get output type name
+        std::string output_name;
+        if (typeid(O) == typeid(void)) {
+            output_name = "void";
+        } else {
+            std::string full_output = demangle_type_name(typeid(O));
+            output_name = extract_class_name(full_output);
+        }
+
+        oss << "Utility[" << input_name << "->" << output_name << "]";
+
+        return oss.str();
+    }
+
+    /**
+     * @brief Helper to demangle a type_index name
+     */
+    static std::string demangle_type_name(const std::type_info& type) {
+#ifdef __GNUG__
+        int status = -1;
+        std::unique_ptr<char, void (*)(void*)> res{
+            abi::__cxa_demangle(type.name(), nullptr, nullptr, &status),
+            std::free};
+        return (status == 0) ? res.get() : type.name();
+#else
+        return type.name();
+#endif
     }
 };
 

@@ -81,7 +81,7 @@ class GzipCheckpointer {
         std::memset(&zs, 0, sizeof(zs));
 
         if (deflateInit(&zs, Z_BEST_COMPRESSION) != Z_OK) {
-            DFTRACER_UTILS_LOG_DEBUG("Failed to initialize zlib", "");
+            DFTRACER_UTILS_LOG_DEBUG("%s", "Failed to initialize zlib");
             return false;
         }
 
@@ -121,7 +121,7 @@ class GzipCheckpointer {
         std::memset(&zs, 0, sizeof(zs));
 
         if (inflateInit(&zs) != Z_OK) {
-            DFTRACER_UTILS_LOG_DEBUG("Failed to initialize zlib", "");
+            DFTRACER_UTILS_LOG_DEBUG("%s", "Failed to initialize zlib");
             return false;
         }
 

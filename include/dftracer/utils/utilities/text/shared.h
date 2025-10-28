@@ -12,6 +12,20 @@
 namespace dftracer::utils::utilities::text {
 
 /**
+ * @brief Represents raw text content.
+ */
+struct Text {
+    std::string content;
+
+    Text() = default;
+    explicit Text(std::string str) : content(std::move(str)) {}
+    explicit Text(const char* str) : content(str) {}
+
+    bool empty() const { return content.empty(); }
+    std::size_t size() const { return content.size(); }
+};
+
+/**
  * @brief A line with a predicate function for filtering.
  */
 struct FilterableLine {

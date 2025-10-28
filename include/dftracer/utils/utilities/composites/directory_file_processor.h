@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DIRECTORY_FILE_PROCESSOR_H
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/composite_types.h>
@@ -29,7 +30,7 @@ namespace dftracer::utils::utilities::composites {
  *
  * Usage:
  * @code
- * auto processor = [](const std::string& path, TaskContext& ctx) {
+ * auto processor = [](TaskContext& ctx, const std::string& path) {
  *     // Process file and return result
  *     return MyFileOutput{...};
  * };
@@ -45,7 +46,7 @@ class DirectoryFileProcessorUtility
                                 utilities::tags::NeedsContext> {
    public:
     using FileProcessorFn =
-        std::function<FileOutput(const std::string&, TaskContext&)>;
+        std::function<FileOutput(TaskContext&, const std::string&)>;
 
    private:
     FileProcessorFn processor_;
@@ -92,20 +93,27 @@ class DirectoryFileProcessorUtility
         // Step 3: Get TaskContext for parallel execution
         TaskContext& ctx = this->context();
 
-        // Step 4: Emit parallel tasks for each file
-        std::vector<typename TaskResult<FileOutput>::Future> futures;
+        // Step 4: Submit parallel tasks for each file
+        std::vector<std::shared_future<std::any>> futures;
         futures.reserve(files.size());
 
         for (const auto& file_path : files) {
-            auto task_result = ctx.emit<std::string, FileOutput>(
-                processor_, ::dftracer::utils::Input{file_path});
-            futures.push_back(std::move(task_result.future()));
+            // Create task from processor - captures ctx from outer scope
+            auto task = make_task(
+                [proc = processor_, &ctx](std::string path) -> FileOutput {
+                    return proc(ctx, path);
+                });
+
+            // Submit task with input
+            auto future = ctx.submit_task(task, std::any{file_path});
+            futures.push_back(future);
         }
 
         // Step 5: Wait for all tasks to complete (synchronization point)
         output.results.reserve(files.size());
         for (auto& future : futures) {
-            output.results.push_back(future.get());
+            std::any result_any = future.get();
+            output.results.push_back(std::any_cast<FileOutput>(result_any));
         }
 
         // Step 6: Finalize aggregated statistics

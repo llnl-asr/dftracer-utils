@@ -75,10 +75,7 @@ class TarReader : public Reader {
                                         std::size_t end_bytes,
                                         LineProcessor &processor) override;
 
-    std::unique_ptr<ReaderStream> stream(StreamType stream_type,
-                                         RangeType range_type,
-                                         std::size_t start,
-                                         std::size_t end) override;
+    std::unique_ptr<ReaderStream> stream(const StreamConfig &config) override;
 
     void reset() override;
     bool is_valid() const override;

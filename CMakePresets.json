@@ -19,8 +19,7 @@
         "DFTRACER_UTILS_BUILD_STATIC": "ON",
         "DFTRACER_UTILS_BUILD_BINARIES": "ON",
         "DFTRACER_UTILS_BUILD_PYTHON": "OFF",
-        "DFTRACER_UTILS_DEBUG": "OFF",
-        "DFTRACER_UTILS_TESTS": "OFF"
+        "DFTRACER_UTILS_DEBUG": "OFF"
       }
     },
     {

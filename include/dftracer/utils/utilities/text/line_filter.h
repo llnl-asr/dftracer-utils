@@ -10,6 +10,10 @@
 
 namespace dftracer::utils::utilities::text {
 
+// Import line types for convenience
+using io::lines::Line;
+using io::lines::Lines;
+
 /**
  * @brief Utility that filters lines based on a predicate function.
  *
@@ -60,7 +64,7 @@ class LineFilterUtility
     : public utilities::Utility<FilterableLine, std::optional<Line>> {
    public:
     LineFilterUtility() = default;
-    ~LineFilter() override = default;
+    ~LineFilterUtility() override = default;
 
     /**
      * @brief Filter a line based on predicate.
@@ -87,7 +91,7 @@ class LineFilterUtility
  *
  * This is a batch version that processes all lines at once.
  */
-class MultiLinesFilterUItility
+class MultiLinesFilterUtility
     : public utilities::Utility<Lines, Lines, utilities::tags::Parallelizable> {
    private:
     std::function<bool(const Line&)> predicate_;

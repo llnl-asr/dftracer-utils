@@ -6,167 +6,104 @@
 #include <dftracer/utils/utilities/io/lines/line_types.h>
 
 #include <fstream>
-#include <memory>
 #include <stdexcept>
 #include <string>
 
 namespace dftracer::utils::utilities::io::lines::sources {
 
 /**
- * @brief Lazy line-by-line iterator over plain text files.
+ * @brief Lazy, single‑buffer line‑by‑line iterator over plain text files.
  *
- * This iterator reads uncompressed text files directly using std::ifstream.
- * It provides streaming access without loading the entire file into memory.
- * Suitable for large text files, CSV files, log files, etc.
+ * Reads directly from std::ifstream without loading the whole file.
+ * Uses a single string buffer; the string_view returned by next()
+ * remains valid until the next call to next().
  *
  * Usage:
  * @code
  * PlainFileLineIterator it("data.txt");
  * while (it.has_next()) {
  *     Line line = it.next();
- *     // Process line...
+ *     process(line.content);
  * }
  * @endcode
  */
 class PlainFileLineIterator {
    private:
     std::string file_path_;
-    std::shared_ptr<std::ifstream> stream_;
-    std::size_t current_line_;
-    std::string next_line_;
-    bool has_next_line_;
-    bool exhausted_;
+    mutable std::ifstream stream_;
+    std::size_t end_line_ = 0;         // 0 = no limit
+    std::size_t current_line_ = 0;     // last returned line number
+    mutable std::string line_buffer_;
+    mutable bool exhausted_ = false;
+    mutable bool prefetched_ = false;  // true if we already read a line ahead
+    mutable bool has_line_ = false;    // valid line in buffer
 
    public:
-    /**
-     * @brief Construct iterator from file path.
-     *
-     * @param file_path Path to the plain text file
-     * @throws std::runtime_error if file cannot be opened
-     */
     explicit PlainFileLineIterator(std::string file_path)
-        : file_path_(std::move(file_path)),
-          stream_(std::make_shared<std::ifstream>(file_path_)),
-          current_line_(0),
-          has_next_line_(false),
-          exhausted_(false) {
-        if (!stream_->is_open()) {
-            throw std::runtime_error("Cannot open file: " + file_path_);
-        }
-        if (!fs::exists(file_path_)) {
-            throw std::runtime_error("File does not exist: " + file_path_);
-        }
-
-        // Pre-read the first line
-        advance();
+        : file_path_(std::move(file_path)), stream_(file_path_) {
+        validate_file();
     }
 
-    /**
-     * @brief Construct iterator from file path with line range.
-     *
-     * @param file_path Path to the plain text file
-     * @param start_line Starting line number (1-based, inclusive)
-     * @param end_line Ending line number (1-based, inclusive)
-     * @throws std::runtime_error if file cannot be opened
-     */
     PlainFileLineIterator(std::string file_path, std::size_t start_line,
                           std::size_t end_line)
         : file_path_(std::move(file_path)),
-          stream_(std::make_shared<std::ifstream>(file_path_)),
-          current_line_(0),
-          has_next_line_(false),
-          exhausted_(false) {
-        if (!stream_->is_open()) {
-            throw std::runtime_error("Cannot open file: " + file_path_);
-        }
-        if (!fs::exists(file_path_)) {
-            throw std::runtime_error("File does not exist: " + file_path_);
-        }
-        if (start_line < 1 || end_line < start_line) {
+          stream_(file_path_),
+          end_line_(end_line) {
+        validate_file();
+
+        if (start_line < 1 || end_line < start_line)
             throw std::invalid_argument("Invalid line range");
-        }
 
-        // Skip to start_line
+        // Skip to start_line (inclusive)
         std::string dummy;
-        for (std::size_t i = 1; i < start_line && std::getline(*stream_, dummy);
+        for (std::size_t i = 1; i < start_line && std::getline(stream_, dummy);
              ++i) {
-            current_line_++;
+            current_line_ = i;
         }
-
-        // Pre-read the first line in range
-        advance();
-
-        // Store end_line for range checking
-        end_line_ = end_line;
     }
 
-    /**
-     * @brief Check if more lines are available.
-     */
-    bool has_next() const { return has_next_line_ && !exhausted_; }
+    bool has_next() const {
+        if (exhausted_) return false;
+        if (!prefetched_) prefetch();
+        return has_line_;
+    }
 
-    /**
-     * @brief Get the next line.
-     *
-     * @return Line object with content and line number
-     * @throws std::runtime_error if no more lines available
-     */
     Line next() {
-        if (!has_next()) {
-            throw std::runtime_error("No more lines available");
-        }
+        if (!has_next()) throw std::runtime_error("No more lines available");
 
-        Line result(next_line_, current_line_);
-        advance();
-        return result;
+        current_line_++;
+        prefetched_ = false;  // next call will read the next line
+        return Line(std::string_view(line_buffer_), current_line_);
     }
 
-    /**
-     * @brief Get the current line position (1-based).
-     */
     std::size_t current_position() const { return current_line_; }
 
-    /**
-     * @brief Get the file path.
-     */
     const std::string& get_file_path() const { return file_path_; }
 
     using Iterator = LineIterator<PlainFileLineIterator>;
-
-    /**
-     * @brief Get an iterator to the beginning.
-     */
     Iterator begin() { return Iterator(this, false); }
-
-    /**
-     * @brief Get an iterator to the end.
-     */
     Iterator end() { return Iterator(nullptr, true); }
 
    private:
-    std::size_t end_line_ = 0;  // 0 means no limit
+    void validate_file() {
+        if (!stream_.is_open())
+            throw std::runtime_error("Cannot open file: " + file_path_);
+        if (!fs::exists(file_path_))
+            throw std::runtime_error("File does not exist: " + file_path_);
+    }
 
-    /**
-     * @brief Advance to the next line.
-     */
-    void advance() {
-        if (exhausted_) {
-            has_next_line_ = false;
-            return;
-        }
-
-        // Check if we've reached the end_line limit
+    void prefetch() const {
         if (end_line_ > 0 && current_line_ >= end_line_) {
-            has_next_line_ = false;
+            has_line_ = false;
             exhausted_ = true;
             return;
         }
 
-        if (std::getline(*stream_, next_line_)) {
-            current_line_++;
-            has_next_line_ = true;
+        if (std::getline(stream_, line_buffer_)) {
+            has_line_ = true;
+            prefetched_ = true;
         } else {
-            has_next_line_ = false;
+            has_line_ = false;
             exhausted_ = true;
         }
     }

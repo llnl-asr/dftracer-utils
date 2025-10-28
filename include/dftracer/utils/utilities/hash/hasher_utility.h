@@ -42,7 +42,7 @@ class HasherUtility : public BaseHasherUtility {
     explicit HasherUtility(HashAlgorithm algo = HashAlgorithm::XXH3_64)
         : algorithm_(algo) {
         create_impl();
-        reset();
+        // impl constructors already initialize their state
     }
 
     ~HasherUtility() override = default;
@@ -63,13 +63,24 @@ class HasherUtility : public BaseHasherUtility {
     HashAlgorithm get_algorithm() const { return algorithm_; }
 
     void reset() override {
+        if (!impl_) {
+            throw std::runtime_error("impl_ is null in reset()!");
+        }
         impl_->reset();
-        current_hash_ = Hash{0};
+        current_hash_ = impl_->get_hash();
     }
+
+    Hash get_hash() const override { return impl_->get_hash(); }
 
     void update(std::string_view data) override {
         impl_->update(data);
         current_hash_ = impl_->get_hash();
+    }
+
+    // Override process to delegate properly
+    Hash process(const std::string& input) override {
+        update(input);
+        return get_hash();
     }
 
    private:

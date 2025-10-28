@@ -73,7 +73,7 @@ class UtilityExecutor {
      * @return Output result
      * @throws Any exception from utility or behaviors
      */
-    O execute_with_context(const I& input, TaskContext& ctx) {
+    O execute_with_context(TaskContext& ctx, const I& input) {
         return behavior_chain_.process(input, [this, &ctx](const I& inp) {
             utility_->set_context(ctx);
 

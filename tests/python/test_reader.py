@@ -204,7 +204,8 @@ class TestReader:
                         assert "id" in json_obj
                         assert "metadata" in json_obj
                         if "events" in json_obj:
-                            assert isinstance(json_obj["events"], list)
+                            events = json_obj["events"]
+                            assert type(events).__name__ == "JSON"
     
     def test_reader_edge_cases(self):
         """Test reader edge cases"""

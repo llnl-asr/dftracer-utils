@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_READER_STREAMS_LINE_STREAM_H
 
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/reader/stream.h>
 
 #include <cstring>
@@ -22,7 +23,7 @@ namespace dftracer::utils {
 class LineStream : public ReaderStream {
    private:
     std::unique_ptr<ReaderStream> underlying_stream_;
-    std::vector<char> read_buffer_;
+    span_view<const char> current_span_;  // Current span from underlying stream
     std::string line_accumulator_;
     std::string current_line_;
     bool is_finished_;
@@ -32,16 +33,14 @@ class LineStream : public ReaderStream {
     std::size_t end_line_;
     std::size_t initial_line_;
     std::size_t output_position_;
-    std::size_t buffer_pos_;
-    std::size_t buffer_size_;
-    static constexpr std::size_t DEFAULT_READ_BUFFER_SIZE = 1 * 1024 * 1024;
+    std::size_t span_pos_;  // Position within current span
 
    public:
     explicit LineStream(std::unique_ptr<ReaderStream> underlying_stream,
                         std::size_t start_line = 0, std::size_t end_line = 0,
                         std::size_t initial_line = 1)
         : underlying_stream_(std::move(underlying_stream)),
-          read_buffer_(DEFAULT_READ_BUFFER_SIZE),
+          current_span_(),
           is_finished_(false),
           has_pending_line_(false),
           current_line_number_(initial_line),
@@ -49,13 +48,32 @@ class LineStream : public ReaderStream {
           end_line_(end_line),
           initial_line_(initial_line),
           output_position_(0),
-          buffer_pos_(0),
-          buffer_size_(0) {
+          span_pos_(0) {
         line_accumulator_.reserve(1024);
         current_line_.reserve(1024);
     }
 
     ~LineStream() override { reset(); }
+
+    // Zero-copy read - returns view to current_line_
+    span_view<const char> read() override {
+        if (!underlying_stream_) {
+            return {};
+        }
+
+        if (is_finished_) {
+            return {};
+        }
+
+        // Parse next line into current_line_
+        if (!parse_next_line()) {
+            return {};
+        }
+
+        // Return span view to current_line_
+        return span_view<const char>(current_line_.data(),
+                                     current_line_.size());
+    }
 
     std::size_t read(char* buffer, std::size_t buffer_size) override {
         if (!underlying_stream_) {
@@ -94,12 +112,12 @@ class LineStream : public ReaderStream {
         }
         line_accumulator_.clear();
         current_line_.clear();
+        current_span_ = span_view<const char>();
         is_finished_ = false;
         has_pending_line_ = false;
         current_line_number_ = initial_line_;
         output_position_ = 0;
-        buffer_pos_ = 0;
-        buffer_size_ = 0;
+        span_pos_ = 0;
     }
 
    private:
@@ -127,8 +145,8 @@ class LineStream : public ReaderStream {
     // Buffer Management
     // ========================================================================
 
-    bool refill_buffer_if_needed() {
-        if (buffer_pos_ < buffer_size_) {
+    bool refill_span_if_needed() {
+        if (span_pos_ < current_span_.size()) {
             return true;
         }
 
@@ -136,22 +154,22 @@ class LineStream : public ReaderStream {
             return false;
         }
 
-        buffer_size_ =
-            underlying_stream_->read(read_buffer_.data(), read_buffer_.size());
-        buffer_pos_ = 0;
-        return buffer_size_ > 0;
+        // Get new span from underlying stream (zero-copy)
+        current_span_ = underlying_stream_->read();
+        span_pos_ = 0;
+        return !current_span_.empty();
     }
 
     const char* find_next_newline() const {
         return static_cast<const char*>(
-            std::memchr(read_buffer_.data() + buffer_pos_, '\n',
-                        buffer_size_ - buffer_pos_));
+            std::memchr(current_span_.data() + span_pos_, '\n',
+                        current_span_.size() - span_pos_));
     }
 
-    void accumulate_remaining_buffer() {
-        line_accumulator_.append(read_buffer_.data() + buffer_pos_,
-                                 buffer_size_ - buffer_pos_);
-        buffer_pos_ = buffer_size_;
+    void accumulate_remaining_span() {
+        line_accumulator_.append(current_span_.data() + span_pos_,
+                                 current_span_.size() - span_pos_);
+        span_pos_ = current_span_.size();
     }
 
     // ========================================================================
@@ -183,7 +201,7 @@ class LineStream : public ReaderStream {
                 return 0;
             }
 
-            if (!refill_buffer_if_needed()) {
+            if (!refill_span_if_needed()) {
                 return 0;
             }
 
@@ -193,8 +211,8 @@ class LineStream : public ReaderStream {
                 return 0;
             }
 
-            std::size_t newline_pos = newline_ptr - read_buffer_.data();
-            std::size_t line_length = newline_pos - buffer_pos_ + 1;
+            std::size_t newline_pos = newline_ptr - current_span_.data();
+            std::size_t line_length = newline_pos - span_pos_ + 1;
 
             // Line must fit in output buffer for fast path
             if (line_length > buffer_size) {
@@ -211,15 +229,16 @@ class LineStream : public ReaderStream {
             current_line_number_++;
 
             if (should_output) {
-                // Direct copy: read_buffer_ → output buffer
-                std::memcpy(buffer, read_buffer_.data() + buffer_pos_,
+                // Direct copy: span → output buffer (zero-copy from underlying
+                // stream!)
+                std::memcpy(buffer, current_span_.data() + span_pos_,
                             line_length);
-                buffer_pos_ = newline_pos + 1;
+                span_pos_ = newline_pos + 1;
                 return line_length;
             }
 
             // Line filtered out, skip and continue to next
-            buffer_pos_ = newline_pos + 1;
+            span_pos_ = newline_pos + 1;
         }
     }
 
@@ -228,20 +247,19 @@ class LineStream : public ReaderStream {
     // ========================================================================
 
     void finalize_line_with_accumulator(std::size_t line_length) {
-        line_accumulator_.append(read_buffer_.data() + buffer_pos_,
-                                 line_length);
+        line_accumulator_.append(current_span_.data() + span_pos_, line_length);
         line_accumulator_.push_back('\n');
         current_line_ = std::move(line_accumulator_);
         line_accumulator_.clear();
     }
 
     void finalize_line_direct(std::size_t line_length) {
-        current_line_.assign(read_buffer_.data() + buffer_pos_, line_length);
+        current_line_.assign(current_span_.data() + span_pos_, line_length);
         current_line_.push_back('\n');
     }
 
     bool process_complete_line(std::size_t newline_pos) {
-        std::size_t line_length = newline_pos - buffer_pos_;
+        std::size_t line_length = newline_pos - span_pos_;
 
         // Build complete line with or without accumulated data
         if (!line_accumulator_.empty()) {
@@ -250,7 +268,7 @@ class LineStream : public ReaderStream {
             finalize_line_direct(line_length);
         }
 
-        buffer_pos_ = newline_pos + 1;
+        span_pos_ = newline_pos + 1;
 
         bool should_output = should_output_current_line();
 
@@ -279,20 +297,20 @@ class LineStream : public ReaderStream {
         }
 
         while (true) {
-            if (!refill_buffer_if_needed()) {
+            if (!refill_span_if_needed()) {
                 break;
             }
 
-            // Process all complete lines in current buffer
-            while (buffer_pos_ < buffer_size_) {
+            // Process all complete lines in current span
+            while (span_pos_ < current_span_.size()) {
                 const char* newline_ptr = find_next_newline();
 
                 if (!newline_ptr) {
-                    accumulate_remaining_buffer();
+                    accumulate_remaining_span();
                     break;
                 }
 
-                std::size_t newline_pos = newline_ptr - read_buffer_.data();
+                std::size_t newline_pos = newline_ptr - current_span_.data();
 
                 if (process_complete_line(newline_pos)) {
                     return true;

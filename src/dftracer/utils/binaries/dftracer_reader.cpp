@@ -6,6 +6,9 @@
 #include <dftracer/utils/indexer/indexer_factory.h>
 #include <dftracer/utils/reader/reader.h>
 #include <dftracer/utils/reader/reader_factory.h>
+#include <dftracer/utils/reader/stream.h>
+#include <dftracer/utils/reader/stream_config.h>
+#include <dftracer/utils/reader/stream_type.h>
 #include <dftracer/utils/utilities/composites/composites.h>
 
 #include <algorithm>
@@ -188,15 +191,30 @@ int main(int argc, char **argv) {
 
             DFTRACER_UTILS_LOG_DEBUG("Reading lines from %zu to %zu",
                                      start_line, end_line);
-            reader->set_buffer_size(read_buffer_size);
-            auto lines = reader->read_lines(start_line, end_line);
-            fwrite(lines.data(), 1, lines.size(), stdout);
+
+            auto stream =
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::MULTI_LINES)
+                                   .range_type(RangeType::LINE_RANGE)
+                                   .from(start_line)
+                                   .to(end_line)
+                                   .buffer(read_buffer_size));
+
 #if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED
-            std::size_t line_count = static_cast<std::size_t>(
-                std::count(lines.begin(), lines.end(), '\n'));
+            std::size_t line_count = 0;
+#endif
+
+            while (!stream->done()) {
+                auto chunk = stream->read();
+                if (chunk.empty()) break;
+                std::fwrite(chunk.data(), 1, chunk.size(), stdout);
+#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED
+                line_count += std::count(chunk.begin(), chunk.end(), '\n');
+#endif
+            }
+
             DFTRACER_UTILS_LOG_DEBUG("Successfully read %zu lines from range",
                                      line_count);
-#endif
         } else {
             std::size_t start_bytes_ =
                 (start == -1) ? 0 : static_cast<std::size_t>(start);
@@ -212,28 +230,29 @@ int main(int argc, char **argv) {
                                      "Performing byte range read operation");
             DFTRACER_UTILS_LOG_DEBUG("Using read buffer size: %zu bytes",
                                      read_buffer_size);
-            auto buffer = std::make_unique<char[]>(read_buffer_size);
-            std::size_t bytes_written;
+
+            StreamType stream_type = (read_mode == "bytes")
+                                         ? StreamType::BYTES
+                                         : StreamType::MULTI_LINES_BYTES;
+
+            auto stream = reader->stream(StreamConfig()
+                                             .stream_type(stream_type)
+                                             .range_type(RangeType::BYTE_RANGE)
+                                             .from(start_bytes_)
+                                             .to(end_bytes_)
+                                             .buffer(read_buffer_size));
+
 #if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
             std::size_t total_bytes = 0;
 #endif
 
-            {
-                while (start_bytes_ < end_bytes_ &&
-                       (bytes_written =
-                            read_mode == "bytes"
-                                ? reader->read(start_bytes_, end_bytes_,
-                                               buffer.get(), read_buffer_size)
-                                : reader->read_line_bytes(
-                                      start_bytes_, end_bytes_, buffer.get(),
-                                      read_buffer_size)) > 0) {
-                    std::fwrite(buffer.get(), 1, bytes_written, stdout);
-                    // std::printf("size: %zu\n", bytes_written);
-                    start_bytes_ += bytes_written;  // Advance for next read
+            while (!stream->done()) {
+                auto chunk = stream->read();
+                if (chunk.empty()) break;
+                std::fwrite(chunk.data(), 1, chunk.size(), stdout);
 #if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
-                    total_bytes += bytes_written;
+                total_bytes += chunk.size();
 #endif
-                }
             }
 
             DFTRACER_UTILS_LOG_DEBUG("Successfully read %zu bytes from range",

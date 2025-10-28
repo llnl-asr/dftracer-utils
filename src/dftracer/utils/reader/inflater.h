@@ -63,7 +63,7 @@ class ReaderInflater : public Inflater {
         reset();
         if (!initialize_stream(-15)) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Failed to initialize inflater in raw mode", "");
+                "%s", "Failed to initialize inflater in raw mode");
             return false;
         }
 
@@ -75,12 +75,12 @@ class ReaderInflater : public Inflater {
                                       checkpoint.dict_compressed.size(), window,
                                       &window_size)) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Failed to decompress checkpoint dictionary", "");
+                "%s", "Failed to decompress checkpoint dictionary");
             return false;
         }
 
         if (!set_dictionary(window, window_size)) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to set dictionary", "");
+            DFTRACER_UTILS_LOG_ERROR("%s", "Failed to set dictionary");
             return false;
         }
 
@@ -89,7 +89,7 @@ class ReaderInflater : public Inflater {
             int ch = fgetc(file);
             if (ch == EOF) {
                 DFTRACER_UTILS_LOG_ERROR(
-                    "Failed to read byte at checkpoint position", "");
+                    "%s", "Failed to read byte at checkpoint position");
                 return false;
             }
 
@@ -99,7 +99,7 @@ class ReaderInflater : public Inflater {
                 checkpoint.bits, prime_value, ch);
 
             if (!prime(checkpoint.bits, prime_value)) {
-                DFTRACER_UTILS_LOG_ERROR("inflatePrime failed", "");
+                DFTRACER_UTILS_LOG_ERROR("%s", "inflatePrime failed");
                 return false;
             }
         }
@@ -107,12 +107,12 @@ class ReaderInflater : public Inflater {
         // Prime with initial input
         if (!read_input(file)) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Failed to read initial input after checkpoint restoration",
-                "");
+                "%s",
+                "Failed to read initial input after checkpoint restoration");
             return false;
         }
 
-        DFTRACER_UTILS_LOG_DEBUG("Checkpoint restoration successful", "");
+        DFTRACER_UTILS_LOG_DEBUG("%s", "Checkpoint restoration successful");
         return true;
     }
 

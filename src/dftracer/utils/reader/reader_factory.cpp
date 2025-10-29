@@ -1,5 +1,5 @@
-#include <dftracer/utils/common/format_detector.h>
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/format_detector.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/gzip_indexer.h>
 #include <dftracer/utils/indexer/tar_indexer.h>
 #include <dftracer/utils/reader/gzip_reader.h>
@@ -10,7 +10,7 @@
 
 namespace dftracer::utils {
 
-std::unique_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
+std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
                                               const std::string &idx_path,
                                               std::size_t index_ckpt_size) {
     ArchiveFormat format = FormatDetector::detect(archive_path);
@@ -21,11 +21,11 @@ std::unique_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
 
     switch (format) {
         case ArchiveFormat::GZIP:
-            return std::make_unique<GzipReader>(archive_path, idx_path,
+            return std::make_shared<GzipReader>(archive_path, idx_path,
                                                 index_ckpt_size);
 
         case ArchiveFormat::TAR_GZ:
-            return std::make_unique<TarReader>(archive_path, idx_path,
+            return std::make_shared<TarReader>(archive_path, idx_path,
                                                index_ckpt_size);
 
         default:
@@ -34,16 +34,18 @@ std::unique_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
     }
 }
 
-std::unique_ptr<Reader> ReaderFactory::create(Indexer *indexer) {
+std::shared_ptr<Reader> ReaderFactory::create(
+    std::shared_ptr<Indexer> indexer) {
     if (!indexer) {
         throw std::invalid_argument("Indexer cannot be null");
     }
 
     if (indexer->get_format_type() == ArchiveFormat::TAR_GZ) {
-        return std::make_unique<TarReader>(static_cast<TarIndexer *>(indexer));
+        return std::make_shared<TarReader>(
+            std::static_pointer_cast<TarIndexer>(indexer));
     }
 
-    return std::make_unique<GzipReader>(indexer);
+    return std::make_shared<GzipReader>(indexer);
 }
 
 bool ReaderFactory::is_format_supported(ArchiveFormat format) {

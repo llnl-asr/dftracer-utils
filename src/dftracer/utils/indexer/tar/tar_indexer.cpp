@@ -1,4 +1,5 @@
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/common/gzip_inflater.h>
 #include <dftracer/utils/indexer/error.h>
 #include <dftracer/utils/indexer/helpers.h>
@@ -6,7 +7,6 @@
 #include <dftracer/utils/indexer/tar/queries/queries.h>
 #include <dftracer/utils/indexer/tar/tar_indexer.h>
 #include <dftracer/utils/indexer/tar/tar_parser.h>
-#include <dftracer/utils/utils/filesystem.h>
 
 #include <chrono>
 #include <fstream>
@@ -331,7 +331,7 @@ std::vector<TarIndexer::TarFileInfo> TarIndexer::find_files_in_range(
 
 // Include the helper functions from the impl file
 static void init_tar_schema(const SqliteDatabase &db) {
-    DFTRACER_UTILS_LOG_DEBUG("Initializing TAR indexer schema", "");
+    DFTRACER_UTILS_LOG_DEBUG("%s", "Initializing TAR indexer schema");
     int rc = sqlite3_exec(db.get(), SQL_SCHEMA, NULL, NULL, NULL);
     if (rc != SQLITE_OK) {
         throw IndexerError(IndexerError::Type::DATABASE_ERROR,

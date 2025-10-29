@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_INDEXER_COMMON_GZIP_CHECKPOINTER_H
 #define DFTRACER_UTILS_INDEXER_COMMON_GZIP_CHECKPOINTER_H
 
-#include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/indexer/common/gzip_inflater.h>
 #include <zlib.h>
 

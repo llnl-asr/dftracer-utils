@@ -17,19 +17,34 @@ need_yyjson()
 # ##############################################################################
 
 # -----------------------------------------
-# Utils Base library
+# Core library sources
 # -----------------------------------------
 
-set(DFTRACER_UTILS_SOURCES
+set(DFTRACER_UTILS_CORE_SOURCES
     # Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/constants.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/format_detector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/constants.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/format_detector.cpp
+    # Utilities
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utils/timer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utils/string.cpp
+    # Pipeline
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/pipeline.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executors/executor_type.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executors/executor_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executors/sequential_executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executors/thread_executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executors/scheduler/thread_scheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executors/scheduler/thread_task_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executors/scheduler/sequential_scheduler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executors/executor_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/tasks/task_context.cpp
     # Indexer
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/indexer_c.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/checkpoint_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/error.cpp
-    # Indexer
+    # Indexer factory
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/indexer_factory.cpp
     # GZIP indexer
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/delete_file_record.cpp
@@ -64,141 +79,559 @@ set(DFTRACER_UTILS_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/gzip_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/tar_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/reader_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/error.cpp
-    # Utilities
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utils/timer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utils/string.cpp
-    # Pipeline
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/error.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/pipeline.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/executors/executor_type.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/executors/executor_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/executors/sequential_executor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/executors/thread_executor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/executors/scheduler/thread_scheduler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/executors/scheduler/thread_task_queue.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/executors/scheduler/sequential_scheduler.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/executors/executor_context.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/pipeline/tasks/task_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/error.cpp)
+
+# -----------------------------------------
+# Utilities library sources
+# -----------------------------------------
+
+set(DFTRACER_UTILS_UTILITIES_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/metadata_collector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/chunk_extractor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/chunk_manifest_mapper.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_id_extractor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_collector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_hasher.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/utils.cpp
 )
 
-# +++++++++++++++++++++++++++++++++++++++++
-# Static library
-# +++++++++++++++++++++++++++++++++++++++++
+# Determine which dependencies to require based on what was found vs built with
+# CPM
+set(PKG_CONFIG_REQUIRES "")
+set(PKG_CONFIG_LIBS_PRIVATE "")
 
-add_library(dftracer_utils STATIC ${DFTRACER_UTILS_SOURCES})
-add_library(dftracer_utils::static ALIAS dftracer_utils)
+# Add Threads (always required)
+set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lpthread")
 
-set_target_properties(dftracer_utils PROPERTIES OUTPUT_NAME dftracer_utils)
-target_link_libraries(
-  dftracer_utils
-  PRIVATE Threads::Threads yyjson::yyjson_static xxHash::xxhash_static
-  PUBLIC ghc_filesystem cpp-logger)
-add_stdfs_if_needed(dftracer_utils)
-
-# Link SQLite3, zlib, and Arrow with appropriate variants for static library
-link_sqlite3(dftracer_utils STATIC)
-link_zlib(dftracer_utils STATIC)
-# link_arrow(dftracer_utils STATIC)
-
-target_include_directories(
-  dftracer_utils
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-         $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>)
-target_set_warnings(dftracer_utils)
-
-# Apply coverage flags if enabled
-if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(dftracer_utils PRIVATE --coverage -fprofile-arcs
-                                                -ftest-coverage)
-  target_link_libraries(dftracer_utils PRIVATE --coverage)
+# Only add sqlite3 to pkg-config requirements if it was found on system
+if(SQLite3_FOUND AND NOT SQLite3_CPM)
+  set(PKG_CONFIG_REQUIRES "${PKG_CONFIG_REQUIRES} sqlite3")
+  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lsqlite3")
+else()
+  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lsqlite3")
 endif()
 
-# +++++++++++++++++++++++++++++++++++++++++
-# Shared Library
-# +++++++++++++++++++++++++++++++++++++++++
-
-add_library(dftracer_utils_shared SHARED ${DFTRACER_UTILS_SOURCES})
-add_library(dftracer_utils::shared ALIAS dftracer_utils_shared)
-
-set_target_properties(
-  dftracer_utils_shared
-  PROPERTIES OUTPUT_NAME dftracer_utils
-             EXPORT_NAME shared
-             VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR})
-target_link_libraries(
-  dftracer_utils_shared
-  PRIVATE 
-  PUBLIC ghc_filesystem cpp-logger Threads::Threads yyjson::yyjson xxHash::xxhash)
-add_stdfs_if_needed(dftracer_utils_shared)
-
-# Link SQLite3, zlib, and Arrow with appropriate variants for shared library
-link_sqlite3(dftracer_utils_shared SHARED)
-link_zlib(dftracer_utils_shared SHARED)
-# link_arrow(dftracer_utils_shared SHARED)
-
-target_include_directories(
-  dftracer_utils_shared
-  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-         $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>)
-target_set_warnings(dftracer_utils_shared)
-
-# Apply coverage flags if enabled
-if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(dftracer_utils_shared
-                         PRIVATE --coverage -fprofile-arcs -ftest-coverage)
-  target_link_libraries(dftracer_utils_shared PRIVATE --coverage)
+# Only add zlib to pkg-config requirements if it was found on system
+if(ZLIB_FOUND AND NOT ZLIB_CPM)
+  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lz")
+else()
+  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -ldftracer_zlib")
 endif()
+
+# Only add cpp-logger to pkg-config requirements if it was found on system
+if(cpp-logger_FOUND AND NOT cpplogger_CPM)
+  set(PKG_CONFIG_REQUIRES "${PKG_CONFIG_REQUIRES} cpp-logger")
+  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lcpp-logger")
+else()
+  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lcpp-logger")
+endif()
+
+# Add other dependencies built with CPM
+set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lyyjson -lxxhash")
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Core Library
+# +++++++++++++++++++++++++++++++++++++++++
+
+# Prepare link libraries for core
+set(CORE_LINK_LIBS_PUBLIC ghc_filesystem Threads::Threads)
+set(CORE_LINK_LIBS_PRIVATE "")
+
+# Helper function to add library to link list
+function(add_to_core_link_libs LIB_VAR BUILD_TYPE)
+  if(BUILD_TYPE STREQUAL "SHARED")
+    list(APPEND CORE_LINK_LIBS_PRIVATE ${${LIB_VAR}_SHARED})
+  else()
+    list(APPEND CORE_LINK_LIBS_PRIVATE ${${LIB_VAR}_STATIC})
+  endif()
+  set(CORE_LINK_LIBS_PRIVATE
+      ${CORE_LINK_LIBS_PRIVATE}
+      PARENT_SCOPE)
+endfunction()
+
+# Collect all dependency libraries
+if(DFTRACER_UTILS_BUILD_SHARED OR DFTRACER_UTILS_BUILD_STATIC)
+  # noop
+endif()
+
+# Compile options for coverage
+set(COVERAGE_COMPILE_OPTIONS "")
+set(COVERAGE_LINK_OPTIONS "")
+if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  set(COVERAGE_COMPILE_OPTIONS --coverage -fprofile-arcs -ftest-coverage)
+  set(COVERAGE_LINK_OPTIONS --coverage)
+endif()
+
+create_library(
+  NAME
+  dftracer_utils_core
+  NAMESPACE
+  dftracer_utils_core
+  SOURCES
+  ${DFTRACER_UTILS_CORE_SOURCES}
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils core library (indexer, reader, pipeline)"
+  URL
+  "https://github.com/LLNL/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  PUBLIC_LINK_LIBRARIES
+  ghc_filesystem
+  Threads::Threads
+  PUBLIC_INCLUDE_DIRS
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE_COMPILE_OPTIONS
+  ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_REQUIRES
+  "${PKG_CONFIG_REQUIRES}"
+  PKG_CONFIG_LIBS_PRIVATE
+  "${PKG_CONFIG_LIBS_PRIVATE}")
+
+# Post-process core library targets to add dependency linking and warnings
+foreach(variant shared static)
+  string(TOUPPER ${variant} VARIANT_UPPER)
+  if(TARGET dftracer_utils_core_${variant})
+    # Link dependencies using helper functions
+    link_cpp_logger(dftracer_utils_core_${variant} ${VARIANT_UPPER})
+    link_yyjson(dftracer_utils_core_${variant} ${VARIANT_UPPER})
+    link_xxhash(dftracer_utils_core_${variant} ${VARIANT_UPPER})
+    link_sqlite3(dftracer_utils_core_${variant} ${VARIANT_UPPER})
+    link_zlib(dftracer_utils_core_${variant} ${VARIANT_UPPER})
+
+    # Add stdfs if needed
+    add_stdfs_if_needed(dftracer_utils_core_${variant})
+
+    # Set warnings
+    target_set_warnings(dftracer_utils_core_${variant})
+
+    # Link coverage if needed
+    if(COVERAGE_LINK_OPTIONS)
+      target_link_libraries(dftracer_utils_core_${variant}
+                            PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+  endif()
+endforeach()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Utilities Library
+# +++++++++++++++++++++++++++++++++++++++++
+
+create_library(
+  NAME
+  dftracer_utils_utilities
+  NAMESPACE
+  dftracer_utils_utilities
+  SOURCES
+  ${DFTRACER_UTILS_UTILITIES_SOURCES}
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils utilities library (hash, io, compression, composites)"
+  URL
+  "https://github.com/LLNL/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  SHARED_LINK_LIBRARIES
+  dftracer_utils_core::shared
+  STATIC_LINK_LIBRARIES
+  dftracer_utils_core::static
+  PUBLIC_INCLUDE_DIRS
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE_COMPILE_OPTIONS
+  ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_core"
+  FIND_DEPENDENCIES
+  dftracer_utils_core)
+
+# Post-process utilities library targets
+foreach(variant shared static)
+  if(TARGET dftracer_utils_utilities_${variant})
+    # No need to link dependencies here - they're inherited from core
+
+    # Set warnings
+    target_set_warnings(dftracer_utils_utilities_${variant})
+
+    # Link coverage if needed
+    if(COVERAGE_LINK_OPTIONS)
+      target_link_libraries(dftracer_utils_utilities_${variant}
+                            PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+  endif()
+endforeach()
+
+# Create unified configs for core and utilities libraries This allows discovery
+# via "dftracer_utils_core" instead of "dftracer_utils_core_shared"
+create_unified_library_config(
+  NAME
+  dftracer_utils_core
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils core library (indexer, reader, pipeline)"
+  URL
+  "https://github.com/LLNL/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC})
+
+create_unified_library_config(
+  NAME
+  dftracer_utils_utilities
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils utilities library (hash, io, compression, composites)"
+  URL
+  "https://github.com/LLNL/dftracer-utils"
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_core"
+  FIND_DEPENDENCIES
+  dftracer_utils_core
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC})
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Unified Interface Library
+# +++++++++++++++++++++++++++++++++++++++++
+
+# Create interface libraries that link both core and utilities
+if(DFTRACER_UTILS_BUILD_SHARED)
+  add_library(dftracer_utils_shared INTERFACE)
+  target_link_libraries(
+    dftracer_utils_shared INTERFACE dftracer_utils_core::shared
+                                    dftracer_utils_utilities::shared)
+
+  # Create aliases
+  add_library(dftracer_utils::shared ALIAS dftracer_utils_shared)
+  add_library(dftracer_utils ALIAS dftracer_utils_shared)
+  add_library(dftracer::utils ALIAS dftracer_utils_shared)
+  add_library(dftracer_utils::dftracer_utils ALIAS dftracer_utils_shared)
+
+  # Export the interface library
+  install(TARGETS dftracer_utils_shared EXPORT dftracer_utilsTargets)
+endif()
+
+if(DFTRACER_UTILS_BUILD_STATIC)
+  add_library(dftracer_utils_static INTERFACE)
+  target_link_libraries(
+    dftracer_utils_static INTERFACE dftracer_utils_core::static
+                                    dftracer_utils_utilities::static)
+
+  # Create aliases
+  add_library(dftracer_utils::static ALIAS dftracer_utils_static)
+
+  # If shared is not built, create default aliases
+  if(NOT DFTRACER_UTILS_BUILD_SHARED)
+    add_library(dftracer_utils ALIAS dftracer_utils_static)
+    add_library(dftracer::utils ALIAS dftracer_utils_static)
+    add_library(dftracer_utils::dftracer_utils ALIAS dftracer_utils_static)
+  endif()
+
+  # Export the interface library
+  install(TARGETS dftracer_utils_static EXPORT dftracer_utilsTargets)
+endif()
+
+# Create unified package config for dftracer_utils
+if(DFTRACER_UTILS_BUILD_SHARED)
+  set(DFTRACER_UTILS_PREFERRED_TYPE "shared")
+elseif(DFTRACER_UTILS_BUILD_STATIC)
+  set(DFTRACER_UTILS_PREFERRED_TYPE "static")
+endif()
+
+if(DFTRACER_UTILS_PREFERRED_TYPE)
+  # Create the unified CMake Config file programmatically
+  set(UNIFIED_CONFIG_CONTENT "")
+  string(APPEND UNIFIED_CONFIG_CONTENT "@PACKAGE_INIT@\n\n")
+  string(APPEND UNIFIED_CONFIG_CONTENT "include(CMakeFindDependencyMacro)\n\n")
+  string(APPEND UNIFIED_CONFIG_CONTENT "# Find core and utilities libraries\n")
+  string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_core)\n")
+  string(APPEND UNIFIED_CONFIG_CONTENT
+         "find_dependency(dftracer_utils_utilities)\n\n")
+  string(APPEND UNIFIED_CONFIG_CONTENT "# Include the unified targets file\n")
+  string(
+    APPEND UNIFIED_CONFIG_CONTENT
+    "include(\"\${CMAKE_CURRENT_LIST_DIR}/dftracer_utilsTargets.cmake\")\n\n")
+
+  # Add convenient aliases
+  string(APPEND UNIFIED_CONFIG_CONTENT "# Create convenient aliases\n")
+  if(DFTRACER_UTILS_BUILD_SHARED)
+    string(APPEND UNIFIED_CONFIG_CONTENT
+           "if(TARGET dftracer_utils::dftracer_utils_shared)\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "  # dftracer_utils::shared\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT
+           "  if(NOT TARGET dftracer_utils::shared)\n")
+    string(
+      APPEND
+      UNIFIED_CONFIG_CONTENT
+      "    add_library(dftracer_utils::shared ALIAS dftracer_utils::dftracer_utils_shared)\n"
+    )
+    string(APPEND UNIFIED_CONFIG_CONTENT "  endif()\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT
+           "  # dftracer_utils_shared (without namespace)\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT
+           "  if(NOT TARGET dftracer_utils_shared)\n")
+    string(
+      APPEND
+      UNIFIED_CONFIG_CONTENT
+      "    add_library(dftracer_utils_shared ALIAS dftracer_utils::dftracer_utils_shared)\n"
+    )
+    string(APPEND UNIFIED_CONFIG_CONTENT "  endif()\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "endif()\n\n")
+  endif()
+
+  if(DFTRACER_UTILS_BUILD_STATIC)
+    string(APPEND UNIFIED_CONFIG_CONTENT
+           "if(TARGET dftracer_utils::dftracer_utils_static)\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "  # dftracer_utils::static\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT
+           "  if(NOT TARGET dftracer_utils::static)\n")
+    string(
+      APPEND
+      UNIFIED_CONFIG_CONTENT
+      "    add_library(dftracer_utils::static ALIAS dftracer_utils::dftracer_utils_static)\n"
+    )
+    string(APPEND UNIFIED_CONFIG_CONTENT "  endif()\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT
+           "  # dftracer_utils_static (without namespace)\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT
+           "  if(NOT TARGET dftracer_utils_static)\n")
+    string(
+      APPEND
+      UNIFIED_CONFIG_CONTENT
+      "    add_library(dftracer_utils_static ALIAS dftracer_utils::dftracer_utils_static)\n"
+    )
+    string(APPEND UNIFIED_CONFIG_CONTENT "  endif()\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "endif()\n\n")
+  endif()
+
+  string(APPEND UNIFIED_CONFIG_CONTENT
+         "check_required_components(dftracer_utils)\n")
+
+  # Write the config template
+  set(UNIFIED_CONFIG_TEMPLATE
+      "${CMAKE_CURRENT_BINARY_DIR}/dftracer_utilsConfig.cmake.in")
+  file(WRITE ${UNIFIED_CONFIG_TEMPLATE} ${UNIFIED_CONFIG_CONTENT})
+
+  # Configure the config file
+  include(CMakePackageConfigHelpers)
+  set(UNIFIED_CONFIG_FILE
+      "${CMAKE_CURRENT_BINARY_DIR}/dftracer_utilsConfig.cmake")
+  configure_package_config_file(
+    ${UNIFIED_CONFIG_TEMPLATE} ${UNIFIED_CONFIG_FILE}
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils)
+
+  # Create version file
+  set(UNIFIED_VERSION_FILE
+      "${CMAKE_CURRENT_BINARY_DIR}/dftracer_utilsConfigVersion.cmake")
+  write_basic_package_version_file(
+    ${UNIFIED_VERSION_FILE}
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+  # Install config files
+  install(FILES ${UNIFIED_CONFIG_FILE} ${UNIFIED_VERSION_FILE}
+          DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils)
+
+  # Install export targets
+  install(
+    EXPORT dftracer_utilsTargets
+    FILE dftracer_utilsTargets.cmake
+    NAMESPACE dftracer_utils::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils)
+
+  # Create a unified pkg-config file
+  create_pkgconfig_file(
+    TARGET
+    dftracer_utils
+    NAME
+    dftracer_utils
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils library (core + utilities)"
+    URL
+    "https://github.com/LLNL/dftracer-utils"
+    REQUIRES
+    "dftracer_utils_core dftracer_utils_utilities")
+
+  # ==========================================================================
+  # Create variant-specific wrapper configs for dftracer_utils_static and
+  # dftracer_utils_shared These allow discovery via
+  # "find_package(dftracer_utils_static)" and
+  # "find_package(dftracer_utils_shared)"
+  # ==========================================================================
+
+  # dftracer_utils_shared wrapper config
+  if(DFTRACER_UTILS_BUILD_SHARED)
+    set(VARIANT_CONFIG_CONTENT "")
+    string(APPEND VARIANT_CONFIG_CONTENT "@PACKAGE_INIT@\n\n")
+    string(APPEND VARIANT_CONFIG_CONTENT
+           "# dftracer_utils_shared wrapper config\n")
+    string(APPEND VARIANT_CONFIG_CONTENT
+           "# This simply includes the main dftracer_utils config\n\n")
+    string(
+      APPEND
+      VARIANT_CONFIG_CONTENT
+      "include(\${CMAKE_CURRENT_LIST_DIR}/../dftracer_utils/dftracer_utilsConfig.cmake)\n\n"
+    )
+    string(APPEND VARIANT_CONFIG_CONTENT "# Ensure the target is available\n")
+    string(APPEND VARIANT_CONFIG_CONTENT
+           "if(NOT TARGET dftracer_utils_shared)\n")
+    string(
+      APPEND
+      VARIANT_CONFIG_CONTENT
+      "  message(FATAL_ERROR \"dftracer_utils_shared target not found. Shared library may not have been built.\")\n"
+    )
+    string(APPEND VARIANT_CONFIG_CONTENT "endif()\n\n")
+    string(APPEND VARIANT_CONFIG_CONTENT
+           "check_required_components(dftracer_utils_shared)\n")
+
+    set(VARIANT_CONFIG_TEMPLATE
+        "${CMAKE_CURRENT_BINARY_DIR}/dftracer_utils_sharedConfig.cmake.in")
+    file(WRITE ${VARIANT_CONFIG_TEMPLATE} ${VARIANT_CONFIG_CONTENT})
+
+    set(VARIANT_CONFIG_FILE
+        "${CMAKE_CURRENT_BINARY_DIR}/dftracer_utils_sharedConfig.cmake")
+    configure_package_config_file(
+      ${VARIANT_CONFIG_TEMPLATE} ${VARIANT_CONFIG_FILE}
+      INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_shared)
+
+    set(VARIANT_VERSION_FILE
+        "${CMAKE_CURRENT_BINARY_DIR}/dftracer_utils_sharedConfigVersion.cmake")
+    write_basic_package_version_file(
+      ${VARIANT_VERSION_FILE}
+      VERSION ${PROJECT_VERSION}
+      COMPATIBILITY SameMajorVersion)
+
+    install(FILES ${VARIANT_CONFIG_FILE} ${VARIANT_VERSION_FILE}
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_shared)
+  endif()
+
+  # dftracer_utils_static wrapper config
+  if(DFTRACER_UTILS_BUILD_STATIC)
+    set(VARIANT_CONFIG_CONTENT "")
+    string(APPEND VARIANT_CONFIG_CONTENT "@PACKAGE_INIT@\n\n")
+    string(APPEND VARIANT_CONFIG_CONTENT
+           "# dftracer_utils_static wrapper config\n")
+    string(APPEND VARIANT_CONFIG_CONTENT
+           "# This simply includes the main dftracer_utils config\n\n")
+    string(
+      APPEND
+      VARIANT_CONFIG_CONTENT
+      "include(\${CMAKE_CURRENT_LIST_DIR}/../dftracer_utils/dftracer_utilsConfig.cmake)\n\n"
+    )
+    string(APPEND VARIANT_CONFIG_CONTENT "# Ensure the target is available\n")
+    string(APPEND VARIANT_CONFIG_CONTENT
+           "if(NOT TARGET dftracer_utils_static)\n")
+    string(
+      APPEND
+      VARIANT_CONFIG_CONTENT
+      "  message(FATAL_ERROR \"dftracer_utils_static target not found. Static library may not have been built.\")\n"
+    )
+    string(APPEND VARIANT_CONFIG_CONTENT "endif()\n\n")
+    string(APPEND VARIANT_CONFIG_CONTENT
+           "check_required_components(dftracer_utils_static)\n")
+
+    set(VARIANT_CONFIG_TEMPLATE
+        "${CMAKE_CURRENT_BINARY_DIR}/dftracer_utils_staticConfig.cmake.in")
+    file(WRITE ${VARIANT_CONFIG_TEMPLATE} ${VARIANT_CONFIG_CONTENT})
+
+    set(VARIANT_CONFIG_FILE
+        "${CMAKE_CURRENT_BINARY_DIR}/dftracer_utils_staticConfig.cmake")
+    configure_package_config_file(
+      ${VARIANT_CONFIG_TEMPLATE} ${VARIANT_CONFIG_FILE}
+      INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_static)
+
+    set(VARIANT_VERSION_FILE
+        "${CMAKE_CURRENT_BINARY_DIR}/dftracer_utils_staticConfigVersion.cmake")
+    write_basic_package_version_file(
+      ${VARIANT_VERSION_FILE}
+      VERSION ${PROJECT_VERSION}
+      COMPATIBILITY SameMajorVersion)
+
+    install(FILES ${VARIANT_CONFIG_FILE} ${VARIANT_VERSION_FILE}
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/dftracer_utils_static)
+  endif()
+endif()
+
+# Install headers
+install(
+  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/dftracer/utils/
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dftracer/utils
+  FILES_MATCHING
+  PATTERN "*.h")
+
+install(
+  DIRECTORY ${CMAKE_BINARY_DIR}/include/dftracer/utils/
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dftracer/utils
+  FILES_MATCHING
+  PATTERN "*.h")
 
 # ##############################################################################
 # Executables
 # ##############################################################################
 
-set(DFTRACER_BINARIES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/bin/dftracer_reader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/bin/dftracer_tar.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/bin/dftracer_event_count.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/bin/dftracer_pgzip.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/bin/dftracer_merge.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/bin/dftracer_split.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/bin/dftracer_info.cpp)
+if(DFTRACER_UTILS_BUILD_BINARIES)
+  set(DFTRACER_BINARIES
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_reader.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_tar.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_event_count.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_pgzip.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_merge.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_split.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_info.cpp)
 
-foreach(bin ${DFTRACER_BINARIES})
-  string(REPLACE ".cpp" "" bin_exec ${bin})
-  string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/bin/" "" bin_exec
-                 ${bin_exec})
+  foreach(bin ${DFTRACER_BINARIES})
+    string(REPLACE ".cpp" "" bin_exec ${bin})
+    string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/" ""
+                   bin_exec ${bin_exec})
 
-  add_executable(${bin_exec} ${bin})
-  set_target_properties(${bin_exec} PROPERTIES OUTPUT_NAME "${bin_exec}")
-  target_link_libraries(
-    ${bin_exec} PRIVATE dftracer_utils argparse::argparse ghc_filesystem
-    yyjson::yyjson_static xxHash::xxhash_static)
-  link_sqlite3(${bin_exec} STATIC)
-  link_zlib(${bin_exec} STATIC)
+    add_executable(${bin_exec} ${bin})
+    set_target_properties(
+      ${bin_exec} PROPERTIES OUTPUT_NAME "${bin_exec}" RUNTIME_OUTPUT_DIRECTORY
+                                                       ${CMAKE_BINARY_DIR}/bin)
 
-  target_include_directories(${bin_exec}
-                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+    # Link to unified library (which includes both core and utilities)
+    target_link_libraries(${bin_exec} PRIVATE dftracer_utils argparse::argparse
+                                              ghc_filesystem)
 
-  target_set_warnings(${bin_exec})
+    target_include_directories(${bin_exec}
+                               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 
-  # Apply coverage flags if enabled
-  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(${bin_exec} PRIVATE --coverage -fprofile-arcs
-                                               -ftest-coverage)
-    target_link_libraries(${bin_exec} PRIVATE --coverage)
-  endif()
+    target_set_warnings(${bin_exec})
 
-  # Install executable to dftracer/bin
-  install(TARGETS ${bin_exec} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    # Apply coverage flags if enabled
+    if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+      target_compile_options(${bin_exec} PRIVATE --coverage -fprofile-arcs
+                                                 -ftest-coverage)
+      target_link_libraries(${bin_exec} PRIVATE --coverage)
+    endif()
 
-  # Create Python wrapper for venv/bin that calls the binary in site-packages
-  if (SKBUILD)
-    create_python_wrapper(${bin_exec})
-  endif()
-endforeach()
+    # Install executable
+    install(TARGETS ${bin_exec} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+    # Create Python wrapper for venv/bin that calls the binary in site-packages
+    if(SKBUILD)
+      create_python_wrapper(${bin_exec})
+    endif()
+  endforeach()
+endif()
 
 # ##############################################################################
 # Python binding
@@ -215,14 +648,26 @@ find_package(
   COMPONENTS Interpreter ${DEV_MODULE}
   OPTIONAL_COMPONENTS Development.SABIModule)
 
-if(Python_FOUND)
-  # if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  # set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
-  # set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release"
-  # "MinSizeRel" "RelWithDebInfo") endif()
+if(DFTRACER_UTILS_BUILD_PYTHON)
+  if(NOT Python_FOUND)
+    message(
+      FATAL_ERROR "Python was not found, but DFTRACER_UTILS_BUILD_PYTHON is ON")
+  endif()
+
+  if(NOT DFTRACER_UTILS_BUILD_SHARED)
+    message(
+      FATAL_ERROR
+        "Python bindings require shared library build (DFTRACER_UTILS_BUILD_SHARED must be ON)"
+    )
+  endif()
+
+  message(STATUS "Building Python bindings")
 
   # Python C API binding sources
-  python_add_library(dftracer_utils_ext MODULE WITH_SOABI
+  python_add_library(
+    dftracer_utils_ext
+    MODULE
+    WITH_SOABI
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/dftracer_utils_ext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.h
@@ -233,98 +678,13 @@ if(Python_FOUND)
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.h
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.cpp)
 
+  # Link to unified library to test if this fixes the bus error
   target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils::shared)
 
   set_target_properties(
-    dftracer_utils_ext
-    PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dftracer/utils")
+    dftracer_utils_ext PROPERTIES LIBRARY_OUTPUT_DIRECTORY
+                                  "${CMAKE_BINARY_DIR}/dftracer/utils")
 
-  install(TARGETS dftracer_utils_ext
-          LIBRARY DESTINATION "dftracer/utils")
+  install(TARGETS dftracer_utils_ext LIBRARY DESTINATION "dftracer/utils")
 
 endif()
-
-# ##############################################################################
-# Installations
-# ##############################################################################
-
-# Install directive for libraries
-
-set(INSTALLABLE_TARGETS dftracer_utils dftracer_utils_shared)
-if(TARGET sqlite3)
-  list(APPEND INSTALLABLE_TARGETS sqlite3)
-endif()
-if(TARGET sqlite3_static)
-  list(APPEND INSTALLABLE_TARGETS sqlite3_static)
-endif()
-if(TARGET ghc_filesystem)
-  list(APPEND INSTALLABLE_TARGETS ghc_filesystem)
-endif()
-if(TARGET xxhash)
-  list(APPEND INSTALLABLE_TARGETS xxhash)
-endif()
-if(TARGET xxhash_static)
-  list(APPEND INSTALLABLE_TARGETS xxhash_static)
-endif()
-if(TARGET yyjson)
-  list(APPEND INSTALLABLE_TARGETS yyjson)
-endif()
-if(TARGET yyjson_static)
-  list(APPEND INSTALLABLE_TARGETS yyjson_static)
-endif()
-if(TARGET dftracer_zlib)
-  list(APPEND INSTALLABLE_TARGETS dftracer_zlib)
-endif()
-if(TARGET dftracer_zlibstatic)
-  list(APPEND INSTALLABLE_TARGETS dftracer_zlibstatic)
-endif()
-if(TARGET cpp-logger)
-  list(APPEND INSTALLABLE_TARGETS cpp-logger)
-endif()
-
-install(TARGETS ${INSTALLABLE_TARGETS} EXPORT dftracer_utilsTargets)
-
-# Install headers
-install(
-  DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../include/dftracer/utils/
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dftracer/utils
-  FILES_MATCHING
-  PATTERN "*.h")
-
-install(
-  DIRECTORY ${CMAKE_BINARY_DIR}/include/dftracer/utils/
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dftracer/utils
-  FILES_MATCHING
-  PATTERN "*.h")
-
-message(STATUS "Creating package config for dftracer_utils")
-
-# Determine which dependencies to require based on what was found vs built with
-# CPM
-set(PKG_CONFIG_REQUIRES "")
-set(PKG_CONFIG_LIBS_PRIVATE "")
-
-# Only add sqlite3 to pkg-config requirements if it was found on system
-if(SQLite3_FOUND AND NOT SQLite3_CPM)
-  set(PKG_CONFIG_REQUIRES "${PKG_CONFIG_REQUIRES} sqlite3")
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lsqlite3")
-endif()
-
-# Only add zlib to pkg-config requirements if it was found on system
-if(ZLIB_FOUND AND NOT ZLIB_CPM)
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lz")
-endif()
-
-create_package_config(
-  TARGET
-  dftracer_utils
-  VERSION
-  ${DFTRACER_UTILS_PACKAGE_VERSION}
-  DESCRIPTION
-  "DFTracer utils library for processing gzipped files"
-  URL
-  "https://github.com/LLNL/dftracer-utils"
-  REQUIRES
-  "${PKG_CONFIG_REQUIRES}"
-  LIBS_PRIVATE
-  "${PKG_CONFIG_LIBS_PRIVATE}")

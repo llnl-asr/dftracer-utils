@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEXER_INDEXER_H
 #define DFTRACER_UTILS_INDEXER_INDEXER_H
 
-#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/indexer/checkpoint.h>
 
 #ifdef __cplusplus
@@ -31,7 +31,7 @@ void dft_indexer_destroy(dft_indexer_handle_t indexer);
 #ifdef __cplusplus
 }
 
-#include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/core/common/archive_format.h>
 
 #include <cstddef>
 #include <cstdint>

@@ -1,7 +1,7 @@
 #include "testing_utilities.h"
 
-#include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/utils/filesystem.h>
+#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <zlib.h>
 
 #include <cstdio>

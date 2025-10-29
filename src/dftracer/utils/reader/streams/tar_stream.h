@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_READER_STREAMS_TAR_STREAM_H
 #define DFTRACER_UTILS_READER_STREAMS_TAR_STREAM_H
 
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/tar_indexer.h>
 #include <dftracer/utils/reader/streams/gzip_stream.h>
 #include <dftracer/utils/reader/tar_reader.h>
@@ -26,7 +26,7 @@ class TarStream : public GzipStream {
 
     // Current file being read
     const TarReader::TarFileInfo* current_file_;
-    std::unique_ptr<Stream> underlying_stream_;
+    std::unique_ptr<dftracer::utils::ReaderStream> underlying_stream_;
 
    public:
     TarStream()
@@ -66,7 +66,7 @@ class TarStream : public GzipStream {
     }
 
     void reset() override {
-        Stream::reset();
+        GzipStream::reset();
         file_mapping_.clear();
         current_file_index_ = 0;
         current_file_offset_ = 0;
@@ -81,7 +81,7 @@ class TarStream : public GzipStream {
             return;
         }
 
-        DFTRACER_UTILS_LOG_DEBUG("Building TAR logical mapping");
+        DFTRACER_UTILS_LOG_DEBUG("%s", "Building TAR logical mapping");
 
         auto tar_files = tar_indexer.list_files();
         file_mapping_.clear();

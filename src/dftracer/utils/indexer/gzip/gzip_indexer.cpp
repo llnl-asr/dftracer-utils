@@ -1,6 +1,7 @@
-#include <dftracer/utils/common/checkpointer.h>
-#include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/checkpointer.h>
+#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/checkpoint_size.h>
 #include <dftracer/utils/indexer/common/gzip_checkpointer.h>
 #include <dftracer/utils/indexer/common/gzip_inflater.h>
@@ -8,7 +9,6 @@
 #include <dftracer/utils/indexer/gzip/gzip_indexer.h>
 #include <dftracer/utils/indexer/gzip/queries/queries.h>
 #include <dftracer/utils/indexer/helpers.h>
-#include <dftracer/utils/utils/filesystem.h>
 
 #include <cstdio>
 
@@ -18,7 +18,7 @@ namespace dftracer::utils::gzip_indexer {
 extern const char *const &SQL_SCHEMA;
 
 static void init_schema(const SqliteDatabase &db) {
-    DFTRACER_UTILS_LOG_DEBUG("Initializing GZIP indexer schema", "");
+    DFTRACER_UTILS_LOG_DEBUG("%s", "Initializing GZIP indexer schema");
     int rc = sqlite3_exec(db.get(), SQL_SCHEMA, NULL, NULL, NULL);
     if (rc != SQLITE_OK) {
         throw IndexerError(IndexerError::Type::DATABASE_ERROR,
@@ -141,7 +141,10 @@ GzipIndexer::GzipIndexer(const std::string &gz_path_,
     open();
 }
 
-GzipIndexer::~GzipIndexer() { close(); }
+GzipIndexer::~GzipIndexer() {
+    DFTRACER_UTILS_LOG_DEBUG("Destroying GZIP indexer for %s", gz_path.c_str());
+    close();
+}
 
 GzipIndexer::GzipIndexer(GzipIndexer &&other) noexcept
     : gz_path(std::move(other.gz_path)),
@@ -182,7 +185,11 @@ void GzipIndexer::open() {
     }
 }
 
-void GzipIndexer::close() { db.close(); }
+void GzipIndexer::close() {
+    DFTRACER_UTILS_LOG_DEBUG("Closing GZIP indexer database for %s",
+                             gz_path.c_str());
+    db.close();
+}
 
 void GzipIndexer::build() const {
     if (!force_rebuild && !need_rebuild()) {

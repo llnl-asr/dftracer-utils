@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_READER_STREAMS_GZIP_STREAM_H
 #define DFTRACER_UTILS_READER_STREAMS_GZIP_STREAM_H
 
-#include <dftracer/utils/common/checkpointer.h>
+#include <dftracer/utils/core/common/checkpointer.h>
 #include <dftracer/utils/indexer/checkpoint.h>
 #include <dftracer/utils/indexer/indexer.h>
 #include <dftracer/utils/reader/error.h>
@@ -14,7 +14,7 @@
 
 using namespace dftracer::utils;
 
-class GzipStream : public Stream {
+class GzipStream : public dftracer::utils::StreamBase {
    protected:
     FILE *file_handle_;
     mutable ReaderInflater inflater_;
@@ -33,7 +33,7 @@ class GzipStream : public Stream {
 
    public:
     GzipStream()
-        : Stream(),
+        : StreamBase(),
           file_handle_(nullptr),
           current_position_(0),
           target_end_bytes_(0),
@@ -44,6 +44,8 @@ class GzipStream : public Stream {
           use_checkpoint_(false),
           start_bytes_(0) {}
 
+    virtual ~GzipStream() { reset(); }
+
     bool matches(const std::string &gz_path, std::size_t /*start_bytes*/,
                  std::size_t end_bytes) const {
         // Reuse the stream if same file and same end position.
@@ -52,11 +54,11 @@ class GzipStream : public Stream {
         return current_gz_path_ == gz_path && target_end_bytes_ == end_bytes;
     }
 
-    bool is_finished() const { return is_finished_; }
+    bool done() const override { return is_finished_; }
 
-    virtual std::size_t stream(char *buffer, std::size_t buffer_size) = 0;
+    std::size_t read(char *buffer, std::size_t buffer_size) override = 0;
 
-    virtual void reset() {
+    void reset() override {
         current_gz_path_.clear();
         start_bytes_ = 0;
         current_position_ = 0;
@@ -65,7 +67,7 @@ class GzipStream : public Stream {
         is_active_ = false;
         is_finished_ = false;
         if (file_handle_) {
-            fclose(file_handle_);
+            std::fclose(file_handle_);
             file_handle_ = nullptr;
         }
         inflater_.reset();
@@ -75,7 +77,7 @@ class GzipStream : public Stream {
 
    protected:
     FILE *open_file(const std::string &path) {
-        FILE *file = fopen(path.c_str(), "rb");
+        FILE *file = std::fopen(path.c_str(), "rb");
         if (!file) {
             throw ReaderError(ReaderError::FILE_IO_ERROR,
                               "Failed to open file: " + path);
@@ -93,9 +95,9 @@ class GzipStream : public Stream {
         return file;
     }
 
-    virtual void initialize(const std::string &gz_path, std::size_t start_bytes,
-                            std::size_t end_bytes,
-                            dftracer::utils::Indexer &indexer) {
+    void initialize(const std::string &gz_path, std::size_t start_bytes,
+                    std::size_t end_bytes,
+                    dftracer::utils::Indexer &indexer) override {
         if (is_active_) {
             reset();
         }

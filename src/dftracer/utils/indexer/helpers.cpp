@@ -1,6 +1,6 @@
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/helpers.h>
-#include <dftracer/utils/utils/filesystem.h>
 #include <xxhash.h>
 
 // Platform-specific includes for file stats
@@ -63,12 +63,14 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
     XXH3_state_t *state = XXH3_createState();
     if (!state) {
         DFTRACER_UTILS_LOG_ERROR("Failed to create XXH3 state", "");
+        std::fclose(file);
         return 0;
     }
     const XXH64_hash_t seed = 0;
     if (XXH3_64bits_reset_withSeed(state, seed) == XXH_ERROR) {
         DFTRACER_UTILS_LOG_ERROR("Failed to reset XXH3 state", "");
         XXH3_freeState(state);
+        std::fclose(file);
         return 0;
     }
 

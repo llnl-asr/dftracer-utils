@@ -214,14 +214,18 @@ void test_data_range_reading(void) {
     size_t total_bytes = 0;
     char* output = NULL;
 
-    // Stream data from first 50 bytes
+    // Stream data from first 50 bytes [0, 50)
     int bytes_read;
-    while ((bytes_read = dft_reader_read_line_bytes(reader, 0, 50, buffer,
+    size_t offset = 0;
+    size_t end = 50;
+    while (offset < end &&
+           (bytes_read = dft_reader_read_line_bytes(reader, offset, end, buffer,
                                                     buffer_size)) > 0) {
         output = realloc(output, total_bytes + bytes_read);
         TEST_ASSERT_NOT_NULL(output);
         memcpy(output + total_bytes, buffer, bytes_read);
         total_bytes += bytes_read;
+        offset += bytes_read;
     }
 
     TEST_ASSERT_NOT_NULL(output);
@@ -371,14 +375,18 @@ void test_memory_management(void) {
         size_t total_bytes = 0;
         char* output = NULL;
 
-        // Stream data until no more available
+        // Stream data until no more available [0, 30)
         int bytes_read;
-        while ((bytes_read = dft_reader_read_line_bytes(reader, 0, 30, buffer,
-                                                        sizeof(buffer))) > 0) {
+        size_t offset = 0;
+        size_t end = 30;
+        while (offset < end &&
+               (bytes_read = dft_reader_read_line_bytes(
+                    reader, offset, end, buffer, sizeof(buffer))) > 0) {
             output = realloc(output, total_bytes + bytes_read);
             TEST_ASSERT_NOT_NULL(output);
             memcpy(output + total_bytes, buffer, bytes_read);
             total_bytes += bytes_read;
+            offset += bytes_read;
         }
 
         if (total_bytes > 0) {
@@ -420,16 +428,20 @@ void test_json_boundary_detection(void) {
     size_t total_bytes = 0;
     char* output = NULL;
 
-    // Stream data until no more available
+    // Stream data until no more available [0, 100)
     // NOTE: Individual streaming buffer chunks may contain partial JSON data
     // (Approach 2)
     int bytes_read;
-    while ((bytes_read = dft_reader_read_line_bytes(reader, 0, 100, buffer,
+    size_t offset = 0;
+    size_t end = 100;
+    while (offset < end &&
+           (bytes_read = dft_reader_read_line_bytes(reader, offset, end, buffer,
                                                     sizeof(buffer))) > 0) {
         output = realloc(output, total_bytes + bytes_read);
         TEST_ASSERT_NOT_NULL(output);
         memcpy(output + total_bytes, buffer, bytes_read);
         total_bytes += bytes_read;
+        offset += bytes_read;
     }
 
     if (output && total_bytes > 0) {
@@ -522,14 +534,18 @@ void test_regression_for_truncated_json_output(void) {
     size_t total_bytes = 0;
     char* output = NULL;
 
-    // Stream data until no more available
+    // Stream data until no more available [0, 10000)
     int bytes_read;
-    while ((bytes_read = dft_reader_read_line_bytes(reader, 0, 10000, buffer,
+    size_t offset = 0;
+    size_t end = 10000;
+    while (offset < end &&
+           (bytes_read = dft_reader_read_line_bytes(reader, offset, end, buffer,
                                                     sizeof(buffer))) > 0) {
         output = realloc(output, total_bytes + bytes_read);
         TEST_ASSERT_NOT_NULL(output);
         memcpy(output + total_bytes, buffer, bytes_read);
         total_bytes += bytes_read;
+        offset += bytes_read;
     }
 
     if (output && total_bytes > 0) {
@@ -566,13 +582,17 @@ void test_regression_for_truncated_json_output(void) {
     total_bytes = 0;
     output = NULL;
 
-    // Stream data until no more available
-    while ((bytes_read = dft_reader_read_line_bytes(reader, 0, 100, buffer,
+    // Stream data until no more available [0, 100)
+    offset = 0;
+    end = 100;
+    while (offset < end &&
+           (bytes_read = dft_reader_read_line_bytes(reader, offset, end, buffer,
                                                     sizeof(buffer))) > 0) {
         output = realloc(output, total_bytes + bytes_read);
         TEST_ASSERT_NOT_NULL(output);
         memcpy(output + total_bytes, buffer, bytes_read);
         total_bytes += bytes_read;
+        offset += bytes_read;
     }
 
     if (output && total_bytes > 0) {
@@ -616,14 +636,18 @@ void test_reader_raw_basic_functionality(void) {
     size_t total_bytes = 0;
     char* raw_result = NULL;
 
-    // Stream raw data until no more available
+    // Stream raw data until no more available [0, 50)
     int bytes_read;
-    while ((bytes_read = dft_reader_read(reader, 0, 50, buffer, buffer_size)) >
-           0) {
+    size_t offset = 0;
+    size_t end = 50;
+    while (offset < end &&
+           (bytes_read = dft_reader_read(reader, offset, end, buffer,
+                                         buffer_size)) > 0) {
         raw_result = realloc(raw_result, total_bytes + bytes_read);
         TEST_ASSERT_NOT_NULL(raw_result);
         memcpy(raw_result + total_bytes, buffer, bytes_read);
         total_bytes += bytes_read;
+        offset += bytes_read;
     }
 
     TEST_ASSERT_TRUE(total_bytes <= 50);
@@ -660,24 +684,32 @@ void test_reader_raw_vs_regular_comparison(void) {
     char* raw_result = NULL;
     char* regular_result = NULL;
 
-    // Raw read (new default behavior)
+    // Raw read (new default behavior) [0, 100)
     int bytes_read1;
-    while ((bytes_read1 =
-                dft_reader_read(reader1, 0, 100, buffer1, buffer_size)) > 0) {
+    size_t offset1 = 0;
+    size_t end1 = 100;
+    while (offset1 < end1 &&
+           (bytes_read1 = dft_reader_read(reader1, offset1, end1, buffer1,
+                                          buffer_size)) > 0) {
         raw_result = realloc(raw_result, total_bytes1 + bytes_read1);
         TEST_ASSERT_NOT_NULL(raw_result);
         memcpy(raw_result + total_bytes1, buffer1, bytes_read1);
         total_bytes1 += bytes_read1;
+        offset1 += bytes_read1;
     }
 
-    // Line bytes read (old read behavior)
+    // Line bytes read (old read behavior) [0, 100)
     int bytes_read2;
-    while ((bytes_read2 = dft_reader_read_line_bytes(reader2, 0, 100, buffer2,
-                                                     buffer_size)) > 0) {
+    size_t offset2 = 0;
+    size_t end2 = 100;
+    while (offset2 < end2 &&
+           (bytes_read2 = dft_reader_read_line_bytes(
+                reader2, offset2, end2, buffer2, buffer_size)) > 0) {
         regular_result = realloc(regular_result, total_bytes2 + bytes_read2);
         TEST_ASSERT_NOT_NULL(regular_result);
         memcpy(regular_result + total_bytes2, buffer2, bytes_read2);
         total_bytes2 += bytes_read2;
+        offset2 += bytes_read2;
     }
 
     // Raw read should be equal to requested size (100 bytes)
@@ -726,30 +758,37 @@ void test_reader_raw_edge_cases(void) {
     size_t total_bytes = 0;
     char* output = NULL;
 
-    // Single byte read
+    // Single byte read [0, 1)
     int bytes_read;
-    while ((bytes_read =
-                dft_reader_read(reader, 0, 1, buffer, sizeof(buffer))) > 0) {
+    size_t offset = 0;
+    size_t end = 1;
+    while (offset < end &&
+           (bytes_read = dft_reader_read(reader, offset, end, buffer,
+                                         sizeof(buffer))) > 0) {
         output = realloc(output, total_bytes + bytes_read);
         TEST_ASSERT_NOT_NULL(output);
         memcpy(output + total_bytes, buffer, bytes_read);
         total_bytes += bytes_read;
+        offset += bytes_read;
     }
     TEST_ASSERT_EQUAL_size_t(1, total_bytes);
     free(output);
 
-    // Read near end of file
+    // Read near end of file [max_bytes - 10, max_bytes - 1)
     if (max_bytes > 10) {
         output = NULL;
         total_bytes = 0;
+        offset = max_bytes - 10;
+        end = max_bytes - 1;
 
-        while (
-            (bytes_read = dft_reader_read(reader, max_bytes - 10, max_bytes - 1,
-                                          buffer, sizeof(buffer))) > 0) {
+        while (offset < end &&
+               (bytes_read = dft_reader_read(reader, offset, end, buffer,
+                                             sizeof(buffer))) > 0) {
             output = realloc(output, total_bytes + bytes_read);
             TEST_ASSERT_NOT_NULL(output);
             memcpy(output + total_bytes, buffer, bytes_read);
             total_bytes += bytes_read;
+            offset += bytes_read;
         }
         TEST_ASSERT_EQUAL_size_t(9, total_bytes);
         free(output);
@@ -787,12 +826,16 @@ void test_reader_raw_small_buffer(void) {
     char* output = NULL;
 
     int bytes_read;
-    while ((bytes_read = dft_reader_read(reader, 0, 200, small_buffer,
+    size_t offset = 0;
+    size_t end = 200;
+    while (offset < end &&
+           (bytes_read = dft_reader_read(reader, offset, end, small_buffer,
                                          small_buffer_size)) > 0) {
         output = realloc(output, total_bytes + bytes_read);
         TEST_ASSERT_NOT_NULL(output);
         memcpy(output + total_bytes, small_buffer, bytes_read);
         total_bytes += bytes_read;
+        offset += bytes_read;
         total_calls++;
         TEST_ASSERT_TRUE(bytes_read <= small_buffer_size);
         if (total_calls > 50) break;  // Safety guard
@@ -839,13 +882,16 @@ void test_reader_raw_multiple_ranges(void) {
             char* segment = NULL;
 
             int bytes_read;
-            while ((bytes_read =
-                        dft_reader_read(reader, ranges[i].start, ranges[i].end,
-                                        buffer, sizeof(buffer))) > 0) {
+            size_t offset = ranges[i].start;
+            size_t end = ranges[i].end;
+            while (offset < end &&
+                   (bytes_read = dft_reader_read(reader, offset, end, buffer,
+                                                 sizeof(buffer))) > 0) {
                 segment = realloc(segment, total_bytes + bytes_read);
                 TEST_ASSERT_NOT_NULL(segment);
                 memcpy(segment + total_bytes, buffer, bytes_read);
                 total_bytes += bytes_read;
+                offset += bytes_read;
             }
 
             size_t expected_size = ranges[i].end - ranges[i].start;
@@ -922,12 +968,15 @@ void test_reader_full_file_comparison_raw_vs_json_boundary(void) {
     char* raw_content = NULL;
 
     int bytes_read1;
-    while ((bytes_read1 = dft_reader_read(reader1, 0, max_bytes, buffer,
+    size_t offset1 = 0;
+    while (offset1 < max_bytes &&
+           (bytes_read1 = dft_reader_read(reader1, offset1, max_bytes, buffer,
                                           sizeof(buffer))) > 0) {
         raw_content = realloc(raw_content, raw_total_bytes + bytes_read1);
         TEST_ASSERT_NOT_NULL(raw_content);
         memcpy(raw_content + raw_total_bytes, buffer, bytes_read1);
         raw_total_bytes += bytes_read1;
+        offset1 += bytes_read1;
     }
 
     // Read entire file with line-boundary aware API
@@ -935,12 +984,15 @@ void test_reader_full_file_comparison_raw_vs_json_boundary(void) {
     char* json_content = NULL;
 
     int bytes_read2;
-    while ((bytes_read2 = dft_reader_read_line_bytes(
-                reader2, 0, max_bytes, buffer, sizeof(buffer))) > 0) {
+    size_t offset2 = 0;
+    while (offset2 < max_bytes &&
+           (bytes_read2 = dft_reader_read_line_bytes(
+                reader2, offset2, max_bytes, buffer, sizeof(buffer))) > 0) {
         json_content = realloc(json_content, json_total_bytes + bytes_read2);
         TEST_ASSERT_NOT_NULL(json_content);
         memcpy(json_content + json_total_bytes, buffer, bytes_read2);
         json_total_bytes += bytes_read2;
+        offset2 += bytes_read2;
     }
 
     // Both should read the entire file

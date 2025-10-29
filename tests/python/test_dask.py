@@ -4,7 +4,6 @@ End-to-end Dask integration tests for  utilities
 Tests combining indexer and reader functionality with Dask distributed computing
 """
 
-from fileinput import filename
 import pytest
 import os
 

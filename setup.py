@@ -1,7 +1,7 @@
-# we presume installed build dependencies
 from __future__ import annotations
 
 from setuptools import setup
+
 from setuptools_scm import ScmVersion
 
 

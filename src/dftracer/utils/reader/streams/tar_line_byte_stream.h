@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_READER_STREAMS_TAR_LINE_BYTE_STREAM_H
 #define DFTRACER_UTILS_READER_STREAMS_TAR_LINE_BYTE_STREAM_H
 
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/reader/streams/gzip_line_byte_stream.h>
 #include <dftracer/utils/reader/streams/tar_stream.h>
 
@@ -55,7 +55,7 @@ class TarLineByteStream : public TarStream {
             current_position_);
     }
 
-    std::size_t stream(char* buffer, std::size_t buffer_size) override {
+    std::size_t read(char* buffer, std::size_t buffer_size) override {
 #ifdef __GNUC__
         __builtin_prefetch(buffer, 1, 3);
 #endif
@@ -123,7 +123,7 @@ class TarLineByteStream : public TarStream {
             }
 
             std::size_t bytes_read =
-                current_file_stream_->stream(temp_buffer.data(), max_read);
+                current_file_stream_->read(temp_buffer.data(), max_read);
 
             DFTRACER_UTILS_LOG_DEBUG(
                 "TarLineByteStream::stream - read %zu bytes from file %s "

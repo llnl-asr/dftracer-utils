@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEXER_TAR_INDEXER_H
 #define DFTRACER_UTILS_INDEXER_TAR_INDEXER_H
 
-#include <dftracer/utils/common/archive_format.h>
-#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/core/common/archive_format.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/indexer/checkpoint.h>
 #include <dftracer/utils/indexer/indexer.h>
 #include <dftracer/utils/indexer/sqlite/database.h>

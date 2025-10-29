@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/checkpoint_size.h>
 #include <dftracer/utils/indexer/helpers.h>
 #include <sys/stat.h>

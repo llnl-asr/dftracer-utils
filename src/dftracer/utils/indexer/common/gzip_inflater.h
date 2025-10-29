@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_INDEXER_COMMON_GZIP_INFLATER_H
 #define DFTRACER_UTILS_INDEXER_COMMON_GZIP_INFLATER_H
 
-#include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/inflater.h>
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/common/inflater.h>
+#include <dftracer/utils/core/common/logging.h>
 
 #include <cstddef>
 #include <cstdint>

@@ -4,9 +4,7 @@
 #include <dftracer/utils/indexer/indexer.h>
 #include <dftracer/utils/reader/line_processor.h>
 #include <dftracer/utils/reader/reader.h>
-#include <dftracer/utils/reader/streams/gzip_byte_stream.h>
-#include <dftracer/utils/reader/streams/gzip_factory.h>
-#include <dftracer/utils/reader/streams/gzip_line_byte_stream.h>
+#include <dftracer/utils/reader/reader_stream_cache.h>
 
 #include <cstddef>
 #include <memory>
@@ -17,7 +15,7 @@ class GzipReader : public Reader {
    public:
     GzipReader(const std::string &gz_path, const std::string &idx_path,
                std::size_t index_ckpt_size = Indexer::DEFAULT_CHECKPOINT_SIZE);
-    explicit GzipReader(Indexer *indexer);
+    explicit GzipReader(std::shared_ptr<Indexer> indexer);
     ~GzipReader();
 
     // Disable copy constructor and copy assignment
@@ -44,6 +42,11 @@ class GzipReader : public Reader {
                                         std::size_t end_bytes,
                                         LineProcessor &processor) override;
 
+    std::unique_ptr<ReaderStream> stream(StreamType stream_type,
+                                         RangeType range_type,
+                                         std::size_t start,
+                                         std::size_t end) override;
+
     void reset() override;
     bool is_valid() const override;
     std::string get_format_name() const override;
@@ -53,20 +56,8 @@ class GzipReader : public Reader {
     std::string idx_path;
     bool is_open;
     std::size_t default_buffer_size;
-    std::unique_ptr<Indexer>
-        owned_indexer;     // Only used when we create the indexer
-    Indexer *indexer_ptr;  // Non-owning pointer to indexer (could be owned or
-                           // external)
-    std::unique_ptr<GzipStreamFactory> stream_factory;
-    std::unique_ptr<GzipByteStream> byte_stream;
-    std::unique_ptr<GzipLineByteStream> line_byte_stream;
-
-    // Helper method for line processing
-    std::size_t process_lines(const char *buffer_data, std::size_t buffer_size,
-                              std::size_t &current_line, std::size_t start_line,
-                              std::size_t end_line,
-                              std::string &line_accumulator,
-                              LineProcessor &processor);
+    std::shared_ptr<Indexer> indexer;
+    ReaderStreamCache stream_cache_;
 };
 
 }  // namespace dftracer::utils

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEXER_TAR_PARSER_H
 #define DFTRACER_UTILS_INDEXER_TAR_PARSER_H
 
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/logging.h>
 
 #include <cstddef>
 #include <cstdint>

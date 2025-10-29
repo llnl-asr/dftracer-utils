@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/checkpoint.h>
 #include <dftracer/utils/indexer/indexer.h>
 #include <dftracer/utils/indexer/indexer_factory.h>
@@ -13,8 +13,8 @@ static int validate_handle(dft_indexer_handle_t indexer) {
     return indexer ? 0 : -1;
 }
 
-static Indexer *cast_indexer(dft_indexer_handle_t indexer) {
-    return static_cast<Indexer *>(indexer);
+static std::shared_ptr<Indexer> *cast_indexer(dft_indexer_handle_t indexer) {
+    return static_cast<std::shared_ptr<Indexer> *>(indexer);
 }
 
 dft_indexer_handle_t dft_indexer_create(const char *gz_path,
@@ -30,7 +30,8 @@ dft_indexer_handle_t dft_indexer_create(const char *gz_path,
         auto indexer = IndexerFactory::create(
             gz_path, idx_path, checkpoint_size, force_rebuild != 0);
         if (indexer) {
-            return static_cast<dft_indexer_handle_t>(indexer.release());
+            return static_cast<dft_indexer_handle_t>(
+                new std::shared_ptr<Indexer>(indexer));
         }
         return nullptr;
     } catch (const std::exception &e) {
@@ -45,7 +46,7 @@ int dft_indexer_build(dft_indexer_handle_t indexer) {
     }
 
     try {
-        cast_indexer(indexer)->build();
+        (*cast_indexer(indexer))->build();
         return 0;
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to build index: %s", e.what());
@@ -59,7 +60,7 @@ int dft_indexer_need_rebuild(dft_indexer_handle_t indexer) {
     }
 
     try {
-        return cast_indexer(indexer)->need_rebuild() ? 1 : 0;
+        return (*cast_indexer(indexer))->need_rebuild() ? 1 : 0;
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to check if rebuild is needed: %s",
                                  e.what());
@@ -73,7 +74,7 @@ int dft_indexer_exists(dft_indexer_handle_t indexer) {
     }
 
     try {
-        return cast_indexer(indexer)->exists() ? 1 : 0;
+        return (*cast_indexer(indexer))->exists() ? 1 : 0;
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to check if index exists: %s",
                                  e.what());
@@ -87,7 +88,7 @@ uint64_t dft_indexer_get_max_bytes(dft_indexer_handle_t indexer) {
     }
 
     try {
-        return cast_indexer(indexer)->get_max_bytes();
+        return (*cast_indexer(indexer))->get_max_bytes();
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to get max bytes: %s", e.what());
         return 0;
@@ -100,7 +101,7 @@ uint64_t dft_indexer_get_num_lines(dft_indexer_handle_t indexer) {
     }
 
     try {
-        return cast_indexer(indexer)->get_num_lines();
+        return (*cast_indexer(indexer))->get_num_lines();
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to get number of lines: %s", e.what());
         return 0;
@@ -117,8 +118,9 @@ int dft_indexer_find_checkpoint(dft_indexer_handle_t indexer,
     try {
         IndexerCheckpoint temp_ckpt;
 
-        if (cast_indexer(indexer)->find_checkpoint(
-                static_cast<size_t>(target_offset), temp_ckpt)) {
+        if ((*cast_indexer(indexer))
+                ->find_checkpoint(static_cast<size_t>(target_offset),
+                                  temp_ckpt)) {
             checkpoint->uc_offset = static_cast<uint64_t>(temp_ckpt.uc_offset);
             checkpoint->c_offset = static_cast<uint64_t>(temp_ckpt.c_offset);
             checkpoint->bits = temp_ckpt.bits;
@@ -149,7 +151,7 @@ int dft_indexer_get_checkpoints(dft_indexer_handle_t indexer,
     }
 
     try {
-        auto ckpts = cast_indexer(indexer)->get_checkpoints();
+        auto ckpts = (*cast_indexer(indexer))->get_checkpoints();
 
         auto temp_count = ckpts.size();
         if (temp_count == 0) {
@@ -232,7 +234,7 @@ void dft_indexer_free_checkpoints(dft_indexer_checkpoint_t *checkpoints,
 
 void dft_indexer_destroy(dft_indexer_handle_t indexer) {
     if (indexer) {
-        delete static_cast<Indexer *>(indexer);
+        delete cast_indexer(indexer);
     }
 }
 

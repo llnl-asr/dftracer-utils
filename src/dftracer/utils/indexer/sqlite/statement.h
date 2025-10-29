@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEXER_SQLITE_STATEMENT_H
 #define DFTRACER_UTILS_INDEXER_SQLITE_STATEMENT_H
 
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/error.h>
 #include <dftracer/utils/indexer/sqlite/database.h>
 #include <sqlite3.h>

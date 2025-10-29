@@ -1,9 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/indexer/indexer.h>
 #include <dftracer/utils/indexer/indexer_factory.h>
 #include <dftracer/utils/reader/reader.h>
 #include <dftracer/utils/reader/reader_factory.h>
-#include <dftracer/utils/utils/filesystem.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -230,10 +230,13 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
             std::string content;
 
             // Read this chunk
-            while ((bytes_written = reader->read_line_bytes(
-                        current_start, current_end, buffer.data(),
-                        buffer.size())) > 0) {
+            std::size_t offset = current_start;
+            while (offset < current_end &&
+                   (bytes_written = reader->read_line_bytes(
+                        offset, current_end, buffer.data(), buffer.size())) >
+                       0) {
                 content.append(buffer.data(), bytes_written);
+                offset += bytes_written;
             }
 
             if (!content.empty()) {
@@ -291,9 +294,13 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
         std::size_t bytes_written = 0;
         std::string single_read_content;
 
-        while ((bytes_written = reader->read_line_bytes(
-                    0, large_read_size, buffer.data(), buffer.size())) > 0) {
+        std::size_t offset = 0;
+        while (offset < large_read_size &&
+               (bytes_written = reader->read_line_bytes(
+                    offset, large_read_size, buffer.data(), buffer.size())) >
+                   0) {
             single_read_content.append(buffer.data(), bytes_written);
+            offset += bytes_written;
         }
 
         // Validate JSON completeness for single large read
@@ -317,9 +324,12 @@ TEST_CASE("Robustness - Large file continuous stride reading") {
             std::string chunk_content;
             bytes_written = 0;
 
-            while ((bytes_written = stride_reader->read_line_bytes(
-                        start, end, buffer.data(), buffer.size())) > 0) {
+            std::size_t chunk_offset = start;
+            while (chunk_offset < end &&
+                   (bytes_written = stride_reader->read_line_bytes(
+                        chunk_offset, end, buffer.data(), buffer.size())) > 0) {
                 chunk_content.append(buffer.data(), bytes_written);
+                chunk_offset += bytes_written;
             }
 
             // Validate JSON completeness for each stride chunk
@@ -392,10 +402,12 @@ TEST_CASE("Robustness - Different buffer sizes consistency") {
             std::size_t bytes_written = 0;
             std::string content;
 
-            while ((bytes_written = test_reader->read_line_bytes(
-                        start_pos, end_pos, buffer.data(), buffer.size())) >
-                   0) {
+            std::size_t offset = start_pos;
+            while (offset < end_pos &&
+                   (bytes_written = test_reader->read_line_bytes(
+                        offset, end_pos, buffer.data(), buffer.size())) > 0) {
                 content.append(buffer.data(), bytes_written);
+                offset += bytes_written;
             }
 
             // Validate JSON completeness
@@ -463,10 +475,13 @@ TEST_CASE("Robustness - Boundary edge cases") {
                 std::string content;
 
                 // Read 100 bytes starting at position
-                while ((bytes_written = reader->read_line_bytes(
-                            pos, pos + 100, buffer.data(), buffer.size())) >
-                       0) {
+                std::size_t offset = pos;
+                while (offset < pos + 100 &&
+                       (bytes_written = reader->read_line_bytes(
+                            offset, pos + 100, buffer.data(), buffer.size())) >
+                           0) {
                     content.append(buffer.data(), bytes_written);
+                    offset += bytes_written;
                 }
 
                 // Should get 0 bytes since we cannot find single line
@@ -503,10 +518,14 @@ TEST_CASE("Robustness - Boundary edge cases") {
                 std::string content;
 
                 // Read 100 bytes starting at position
-                while ((bytes_written = reader->read_line_bytes(
-                            pos, pos + env.get_bytes_per_line(), buffer.data(),
-                            buffer.size())) > 0) {
+                std::size_t end_pos = pos + env.get_bytes_per_line();
+                std::size_t offset = pos;
+                while (offset < end_pos &&
+                       (bytes_written = reader->read_line_bytes(
+                            offset, end_pos, buffer.data(), buffer.size())) >
+                           0) {
                     content.append(buffer.data(), bytes_written);
+                    offset += bytes_written;
                 }
 
                 // Should get at least env.get_bytes_per_line() bytes due to
@@ -539,9 +558,12 @@ TEST_CASE("Robustness - Boundary edge cases") {
             std::size_t bytes_written = 0;
             std::string content;
 
-            while ((bytes_written = reader->read_line_bytes(
-                        start, end, buffer.data(), buffer.size())) > 0) {
+            std::size_t offset = start;
+            while (offset < end &&
+                   (bytes_written = reader->read_line_bytes(
+                        offset, end, buffer.data(), buffer.size())) > 0) {
                 content.append(buffer.data(), bytes_written);
+                offset += bytes_written;
             }
 
             if (!content.empty()) {
@@ -612,10 +634,12 @@ TEST_CASE("Robustness - Complete file sequential read") {
             std::size_t bytes_written = 0;
             std::string content;
 
-            while ((bytes_written = reader->read_line_bytes(
-                        current_pos, end_pos, buffer.data(), buffer.size())) >
-                   0) {
+            std::size_t offset = current_pos;
+            while (offset < end_pos &&
+                   (bytes_written = reader->read_line_bytes(
+                        offset, end_pos, buffer.data(), buffer.size())) > 0) {
                 content.append(buffer.data(), bytes_written);
+                offset += bytes_written;
             }
 
             if (!content.empty()) {
@@ -671,9 +695,12 @@ TEST_CASE("Robustness - Complete file sequential read") {
         std::size_t bytes_written = 0;
         std::string complete_content;
 
-        while ((bytes_written = reader->read_line_bytes(
-                    0, max_bytes, buffer.data(), buffer.size())) > 0) {
+        std::size_t offset = 0;
+        while (offset < max_bytes &&
+               (bytes_written = reader->read_line_bytes(
+                    offset, max_bytes, buffer.data(), buffer.size())) > 0) {
             complete_content.append(buffer.data(), bytes_written);
+            offset += bytes_written;
         }
 
         // Validate JSON completeness for single read
@@ -696,10 +723,13 @@ TEST_CASE("Robustness - Complete file sequential read") {
             bytes_written = 0;
             std::string chunk_content;
 
-            while ((bytes_written = chunked_reader->read_line_bytes(
-                        current_pos, end_pos, buffer.data(), buffer.size())) >
-                   0) {
+            std::size_t chunk_offset = current_pos;
+            while (chunk_offset < end_pos &&
+                   (bytes_written = chunked_reader->read_line_bytes(
+                        chunk_offset, end_pos, buffer.data(), buffer.size())) >
+                       0) {
                 chunk_content.append(buffer.data(), bytes_written);
+                chunk_offset += bytes_written;
             }
 
             // Validate JSON completeness for each chunk
@@ -765,10 +795,13 @@ TEST_CASE("Robustness - JSON validation and consistency") {
                 std::size_t bytes_written = 0;
                 std::string content;
 
-                while ((bytes_written = test_reader->read_line_bytes(
-                            range.first, range.second, buffer.data(),
+                std::size_t offset = range.first;
+                while (offset < range.second &&
+                       (bytes_written = test_reader->read_line_bytes(
+                            offset, range.second, buffer.data(),
                             buffer.size())) > 0) {
                     content.append(buffer.data(), bytes_written);
+                    offset += bytes_written;
                 }
 
                 // Every line must be valid JSON
@@ -802,10 +835,12 @@ TEST_CASE("Robustness - JSON validation and consistency") {
             std::size_t bytes_written = 0;
             std::string content;
 
-            while ((bytes_written = test_reader->read_line_bytes(
-                        start_pos, end_pos, buffer.data(), buffer.size())) >
-                   0) {
+            std::size_t offset = start_pos;
+            while (offset < end_pos &&
+                   (bytes_written = test_reader->read_line_bytes(
+                        offset, end_pos, buffer.data(), buffer.size())) > 0) {
                 content.append(buffer.data(), bytes_written);
+                offset += bytes_written;
             }
 
             REQUIRE(validate_json_lines(content));
@@ -841,9 +876,12 @@ TEST_CASE("Robustness - JSON validation and consistency") {
         std::size_t bytes_written = 0;
         std::string sequential_content;
 
-        while ((bytes_written = seq_reader->read_line_bytes(
-                    0, test_size, buffer.data(), buffer.size())) > 0) {
+        std::size_t offset = 0;
+        while (offset < test_size &&
+               (bytes_written = seq_reader->read_line_bytes(
+                    offset, test_size, buffer.data(), buffer.size())) > 0) {
             sequential_content.append(buffer.data(), bytes_written);
+            offset += bytes_written;
         }
 
         REQUIRE(validate_json_lines(sequential_content));
@@ -870,10 +908,13 @@ TEST_CASE("Robustness - JSON validation and consistency") {
                 bytes_written = 0;
                 std::string chunk_content;
 
-                while ((bytes_written = chunked_reader->read_line_bytes(
-                            current_pos, end_pos, buffer.data(),
+                std::size_t chunk_offset = current_pos;
+                while (chunk_offset < end_pos &&
+                       (bytes_written = chunked_reader->read_line_bytes(
+                            chunk_offset, end_pos, buffer.data(),
                             buffer.size())) > 0) {
                     chunk_content.append(buffer.data(), bytes_written);
+                    chunk_offset += bytes_written;
                 }
 
                 REQUIRE(validate_json_lines(chunk_content));
@@ -953,9 +994,12 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
         std::size_t bytes_written = 0;
         std::string complete_content;
 
-        while ((bytes_written = reader->read_line_bytes(
-                    0, max_bytes, buffer.data(), buffer.size())) > 0) {
+        std::size_t offset = 0;
+        while (offset < max_bytes &&
+               (bytes_written = reader->read_line_bytes(
+                    offset, max_bytes, buffer.data(), buffer.size())) > 0) {
             complete_content.append(buffer.data(), bytes_written);
+            offset += bytes_written;
         }
 
         // Validate single read
@@ -983,10 +1027,13 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
                 bytes_written = 0;
                 std::string chunk_content;
 
-                while ((bytes_written = stride_reader->read_line_bytes(
-                            current_pos, end_pos, buffer.data(),
+                std::size_t chunk_offset = current_pos;
+                while (chunk_offset < end_pos &&
+                       (bytes_written = stride_reader->read_line_bytes(
+                            chunk_offset, end_pos, buffer.data(),
                             buffer.size())) > 0) {
                     chunk_content.append(buffer.data(), bytes_written);
+                    chunk_offset += bytes_written;
                 }
 
                 // Validate each chunk
@@ -1053,10 +1100,13 @@ TEST_CASE("Robustness - Complete file reading equivalence") {
                 std::size_t bytes_written = 0;
                 std::string content;
 
-                while ((bytes_written = test_reader->read_line_bytes(
-                            current_pos, end_pos, buffer.data(),
-                            buffer.size())) > 0) {
+                std::size_t offset = current_pos;
+                while (offset < end_pos &&
+                       (bytes_written = test_reader->read_line_bytes(
+                            offset, end_pos, buffer.data(), buffer.size())) >
+                           0) {
                     content.append(buffer.data(), bytes_written);
+                    offset += bytes_written;
                 }
 
                 REQUIRE(validate_json_lines(content));
@@ -1134,9 +1184,12 @@ TEST_CASE("Robustness - Memory and performance stress") {
                 std::size_t bytes_written = 0;
                 std::string content;
 
-                while ((bytes_written = reader->read_line_bytes(
-                            start, end, buffer.data(), buffer.size())) > 0) {
+                std::size_t offset = start;
+                while (offset < end &&
+                       (bytes_written = reader->read_line_bytes(
+                            offset, end, buffer.data(), buffer.size())) > 0) {
                     content.append(buffer.data(), bytes_written);
+                    offset += bytes_written;
                     total_bytes_written += bytes_written;
                 }
 
@@ -1152,7 +1205,7 @@ TEST_CASE("Robustness - Memory and performance stress") {
 
     SUBCASE("Concurrent reader instances") {
         // Create multiple readers for the same file
-        std::vector<std::unique_ptr<Reader>> readers;
+        std::vector<std::shared_ptr<Reader>> readers;
 
         for (std::size_t i = 0; i < 5; ++i) {
             readers.push_back(
@@ -1168,9 +1221,13 @@ TEST_CASE("Robustness - Memory and performance stress") {
             std::size_t bytes_written = 0;
             std::string content;
 
-            while ((bytes_written = reader->read(0, 1024 * 1024, buffer.data(),
-                                                 buffer.size())) > 0) {
+            std::size_t offset = 0;
+            while (offset < 1024 * 1024 &&
+                   (bytes_written = reader->read(
+                        offset, 1024 * 1024, buffer.data(), buffer.size())) >
+                       0) {
                 content.append(buffer.data(), bytes_written);
+                offset += bytes_written;
             }
 
             CHECK(content.size() >= 1024 * 1024);
@@ -1197,9 +1254,13 @@ TEST_CASE("Robustness - Memory and performance stress") {
                 std::size_t bytes_written = 0;
                 std::string content;
 
-                while ((bytes_written = thread_reader->read_line_bytes(
-                            0, max_bytes, buffer.data(), buffer.size())) > 0) {
+                std::size_t offset = 0;
+                while (offset < max_bytes &&
+                       (bytes_written = thread_reader->read_line_bytes(
+                            offset, max_bytes, buffer.data(), buffer.size())) >
+                           0) {
                     content.append(buffer.data(), bytes_written);
+                    offset += bytes_written;
                 }
 
                 // Validate JSON completeness
@@ -1238,9 +1299,13 @@ TEST_CASE("Robustness - Memory and performance stress") {
                 std::size_t bytes_written = 0;
                 std::string content;
 
-                while ((bytes_written = async_reader->read_line_bytes(
-                            0, max_bytes, buffer.data(), buffer.size())) > 0) {
+                std::size_t offset = 0;
+                while (offset < max_bytes &&
+                       (bytes_written = async_reader->read_line_bytes(
+                            offset, max_bytes, buffer.data(), buffer.size())) >
+                           0) {
                     content.append(buffer.data(), bytes_written);
+                    offset += bytes_written;
                 }
 
                 // Validate JSON completeness
@@ -1334,7 +1399,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
             printf(
                 "WARN: Skipping line reading robustness tests - no line "
                 "data\n");
-            WARN("Skipping line reading robustness tests - no line data");
+            MESSAGE("Skipping line reading robustness tests - no line data");
             return;
         }
 
@@ -1444,7 +1509,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         }
 
         if (total_lines == 0) {
-            WARN("Skipping large line range tests - no line data");
+            MESSAGE("Skipping large line range tests - no line data");
             return;
         }
 
@@ -1511,7 +1576,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         }
 
         if (total_lines == 0) {
-            WARN("Skipping single line tests - no line data");
+            MESSAGE("Skipping single line tests - no line data");
             return;
         }
 
@@ -1567,7 +1632,7 @@ TEST_CASE("Robustness - Line-based reading stress tests") {
         }
 
         if (total_lines == 0) {
-            WARN("Skipping boundary condition tests - no line data");
+            MESSAGE("Skipping boundary condition tests - no line data");
             return;
         }
 
@@ -1671,7 +1736,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
 
     SUBCASE("Multiple reader instances return identical results") {
         // Create multiple readers
-        std::vector<std::unique_ptr<Reader>> readers;
+        std::vector<std::shared_ptr<Reader>> readers;
         for (std::size_t i = 0; i < 5; ++i) {
             readers.push_back(
                 ReaderFactory::create(gz_file, idx_file, mb_to_b(1.0)));
@@ -1774,7 +1839,7 @@ TEST_CASE("Robustness - Line reading consistency across multiple readers") {
 
         // Accept if line reading is not supported with current data format
         if (successful_reads == 0 && failed_reads > 0) {
-            WARN(
+            MESSAGE(
                 "Concurrent line reading skipped - JSON line format may not be "
                 "fully "
                 "supported");

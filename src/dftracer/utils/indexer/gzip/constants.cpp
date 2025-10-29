@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/core/common/constants.h>
 
 namespace dftracer::utils::gzip_indexer {
 

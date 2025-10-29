@@ -82,6 +82,7 @@ function(create_pkgconfig_file)
   set(options "")
   set(oneValueArgs
       TARGET
+      NAME
       VERSION
       DESCRIPTION
       URL
@@ -93,6 +94,11 @@ function(create_pkgconfig_file)
   cmake_parse_arguments(PKG "${options}" "${oneValueArgs}" "${multiValueArgs}"
                         ${ARGN})
 
+  # Use NAME if provided, otherwise use TARGET for both name and library
+  if(NOT PKG_NAME)
+    set(PKG_NAME ${PKG_TARGET})
+  endif()
+
   # Generate pkg-config file content
   set(PC_CONTENT "")
   string(APPEND PC_CONTENT "prefix=${CMAKE_INSTALL_PREFIX}\n")
@@ -101,7 +107,7 @@ function(create_pkgconfig_file)
   string(APPEND PC_CONTENT
          "includedir=\${prefix}/${CMAKE_INSTALL_INCLUDEDIR}\n")
   string(APPEND PC_CONTENT "\n")
-  string(APPEND PC_CONTENT "Name: ${PKG_TARGET}\n")
+  string(APPEND PC_CONTENT "Name: ${PKG_NAME}\n")
   string(APPEND PC_CONTENT "Description: ${PKG_DESCRIPTION}\n")
   string(APPEND PC_CONTENT "Version: ${PKG_VERSION}\n")
 
@@ -124,8 +130,8 @@ function(create_pkgconfig_file)
   string(APPEND PC_CONTENT "Libs: -L\${libdir} -l${PKG_TARGET}\n")
   string(APPEND PC_CONTENT "Cflags: -I\${includedir}\n")
 
-  # Write pkg-config file
-  set(PC_FILE "${CMAKE_CURRENT_BINARY_DIR}/${PKG_TARGET}.pc")
+  # Write pkg-config file using NAME for the filename
+  set(PC_FILE "${CMAKE_CURRENT_BINARY_DIR}/${PKG_NAME}.pc")
   file(WRITE ${PC_FILE} ${PC_CONTENT})
 
   # Install pkg-config file
@@ -157,7 +163,7 @@ include(CMakeFindDependencyMacro)
 
 # ZLIB dependency
 find_library(ZLIB_LIBRARY_BUNDLED
-    NAMES z libz zlib
+    NAMES dftracer_zlib libdftracer_zlib
     PATHS \${_IMPORT_PREFIX}/lib
     NO_DEFAULT_PATH
 )
@@ -170,16 +176,24 @@ if(ZLIB_LIBRARY_BUNDLED)
         NO_DEFAULT_PATH
     )
 
-    if(ZLIB_INCLUDE_DIR_BUNDLED AND NOT TARGET ZLIB::ZLIB)
-        add_library(ZLIB::ZLIB UNKNOWN IMPORTED)
-        set_target_properties(ZLIB::ZLIB PROPERTIES
+    if(ZLIB_INCLUDE_DIR_BUNDLED AND NOT TARGET dftracer::zlib)
+        add_library(dftracer::zlib UNKNOWN IMPORTED)
+        set_target_properties(dftracer::zlib PROPERTIES
             IMPORTED_LOCATION \"\${ZLIB_LIBRARY_BUNDLED}\"
             INTERFACE_INCLUDE_DIRECTORIES \"\${ZLIB_INCLUDE_DIR_BUNDLED}\"
         )
     endif()
+
+    # Also create ZLIB::ZLIB alias for compatibility
+    if(NOT TARGET ZLIB::ZLIB)
+        add_library(ZLIB::ZLIB ALIAS dftracer::zlib)
+    endif()
 else()
-    # Fall back to system zlib
-    find_dependency(ZLIB REQUIRED)
+    # Fall back to system zlib (require minimum version 1.2)
+    find_dependency(ZLIB 1.2 REQUIRED)
+    if(NOT TARGET dftracer::zlib)
+        add_library(dftracer::zlib ALIAS ZLIB::ZLIB)
+    endif()
 endif()
 
 # SQLITE3 dependency
@@ -205,9 +219,9 @@ if(SQLITE3_LIBRARY_BUNDLED)
         )
     endif()
 else()
-    # Fall back to system sqlite3 via pkg-config
+    # Fall back to system sqlite3 via pkg-config (require minimum version 3.35)
     find_dependency(PkgConfig REQUIRED)
-    pkg_check_modules(SQLITE3 REQUIRED sqlite3)
+    pkg_check_modules(SQLITE3 REQUIRED sqlite3>=3.35)
 
     if(SQLITE3_FOUND AND NOT TARGET SQLite::SQLite3)
         add_library(SQLite::SQLite3 UNKNOWN IMPORTED)
@@ -218,60 +232,51 @@ else()
     endif()
 endif()
 
-# SPDLOG dependency
-find_library(SPDLOG_LIBRARY_BUNDLED
-    NAMES spdlog libspdlog
+# XXHASH dependency
+find_library(XXHASH_LIBRARY_BUNDLED
+    NAMES xxhash libxxhash
     PATHS \${_IMPORT_PREFIX}/lib
     NO_DEFAULT_PATH
 )
 
-if(SPDLOG_LIBRARY_BUNDLED)
-    # Found spdlog that was built with this package
-    find_path(SPDLOG_INCLUDE_DIR_BUNDLED
-        NAMES spdlog/spdlog.h
+if(XXHASH_LIBRARY_BUNDLED)
+    # Found xxhash that was built with this package
+    find_path(XXHASH_INCLUDE_DIR_BUNDLED
+        NAMES xxhash.h
         PATHS \${_IMPORT_PREFIX}/include
         NO_DEFAULT_PATH
     )
 
-    if(SPDLOG_INCLUDE_DIR_BUNDLED AND NOT TARGET spdlog::spdlog)
-        add_library(spdlog::spdlog UNKNOWN IMPORTED)
-        set_target_properties(spdlog::spdlog PROPERTIES
-            IMPORTED_LOCATION \"\${SPDLOG_LIBRARY_BUNDLED}\"
-            INTERFACE_INCLUDE_DIRECTORIES \"\${SPDLOG_INCLUDE_DIR_BUNDLED}\"
-        )
-    endif()
+    if(XXHASH_INCLUDE_DIR_BUNDLED)
+        # Create shared target if not exists
+        if(NOT TARGET xxHash::xxhash)
+            add_library(xxHash::xxhash UNKNOWN IMPORTED)
+            set_target_properties(xxHash::xxhash PROPERTIES
+                IMPORTED_LOCATION \"\${XXHASH_LIBRARY_BUNDLED}\"
+                INTERFACE_INCLUDE_DIRECTORIES \"\${XXHASH_INCLUDE_DIR_BUNDLED}\"
+            )
+        endif()
 
-    # Also create header-only alias if not exists
-    if(NOT TARGET spdlog::spdlog_header_only)
-        add_library(spdlog::spdlog_header_only INTERFACE IMPORTED)
-        set_target_properties(spdlog::spdlog_header_only PROPERTIES
-            INTERFACE_INCLUDE_DIRECTORIES \"\${SPDLOG_INCLUDE_DIR_BUNDLED}\"
+        # Also look for static version
+        find_library(XXHASH_STATIC_LIBRARY_BUNDLED
+            NAMES xxhash_static libxxhash_static
+            PATHS \${_IMPORT_PREFIX}/lib
+            NO_DEFAULT_PATH
         )
+
+        if(XXHASH_STATIC_LIBRARY_BUNDLED AND NOT TARGET xxHash::xxhash_static)
+            add_library(xxHash::xxhash_static UNKNOWN IMPORTED)
+            set_target_properties(xxHash::xxhash_static PROPERTIES
+                IMPORTED_LOCATION \"\${XXHASH_STATIC_LIBRARY_BUNDLED}\"
+                INTERFACE_INCLUDE_DIRECTORIES \"\${XXHASH_INCLUDE_DIR_BUNDLED}\"
+            )
+        endif()
     endif()
 else()
-    # Try to find system spdlog
-    find_dependency(spdlog QUIET)
-    if(NOT spdlog_FOUND)
-        # If spdlog is not found, create an interface target for header-only usage
-        if(NOT TARGET spdlog::spdlog_header_only)
-            add_library(spdlog::spdlog_header_only INTERFACE IMPORTED)
-            # Try to find the library in system locations
-            find_library(SPDLOG_LIB spdlog)
-            if(SPDLOG_LIB)
-                set_target_properties(spdlog::spdlog_header_only PROPERTIES
-                    INTERFACE_LINK_LIBRARIES \"\${SPDLOG_LIB}\"
-                )
-            else()
-                # Fallback to just the library name for header-only usage
-                set_target_properties(spdlog::spdlog_header_only PROPERTIES
-                    INTERFACE_COMPILE_DEFINITIONS \"SPDLOG_HEADER_ONLY\"
-                )
-            endif()
-        endif()
-
-        if(NOT TARGET spdlog::spdlog)
-            add_library(spdlog::spdlog ALIAS spdlog::spdlog_header_only)
-        endif()
+    # Try to find system xxhash (no version check, 0.8+ is widely available)
+    find_dependency(xxHash QUIET)
+    if(NOT xxHash_FOUND)
+        message(WARNING \"xxHash not found. Minimum version 0.8.0 is recommended.\")
     endif()
 endif()
 
@@ -316,8 +321,11 @@ if(YYJSON_LIBRARY_BUNDLED)
         endif()
     endif()
 else()
-    # Try to find system yyjson
-    find_dependency(yyjson QUIET)
+    # Try to find system yyjson (require minimum version 0.10.0)
+    find_dependency(yyjson 0.10.0 QUIET)
+    if(NOT yyjson_FOUND)
+        message(WARNING \"yyjson not found or version too old. Minimum version 0.10.0 is required.\")
+    endif()
 endif()
 
 # GHC_FILESYSTEM dependency (header-only)
@@ -337,39 +345,35 @@ else()
     find_dependency(ghc_filesystem QUIET)
 endif()
 
-# PICOSHA2 dependency (header-only)
-find_path(PICOSHA2_INCLUDE_DIR_BUNDLED
-    NAMES picosha2.h
-    PATHS \${_IMPORT_PREFIX}/include
+# CPP-LOGGER dependency
+find_library(CPP_LOGGER_LIBRARY_BUNDLED
+    NAMES cpp-logger libcpp-logger
+    PATHS \${_IMPORT_PREFIX}/lib
     NO_DEFAULT_PATH
 )
 
-if(PICOSHA2_INCLUDE_DIR_BUNDLED AND NOT TARGET picosha2)
-    add_library(picosha2 INTERFACE IMPORTED)
-    set_target_properties(picosha2 PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES \"\${PICOSHA2_INCLUDE_DIR_BUNDLED}\"
+if(CPP_LOGGER_LIBRARY_BUNDLED)
+    # Found cpp-logger that was built with this package
+    find_path(CPP_LOGGER_INCLUDE_DIR_BUNDLED
+        NAMES cpp-logger/Logger.h
+        PATHS \${_IMPORT_PREFIX}/include
+        NO_DEFAULT_PATH
     )
+
+    if(CPP_LOGGER_INCLUDE_DIR_BUNDLED AND NOT TARGET cpp-logger)
+        add_library(cpp-logger UNKNOWN IMPORTED)
+        set_target_properties(cpp-logger PROPERTIES
+            IMPORTED_LOCATION \"\${CPP_LOGGER_LIBRARY_BUNDLED}\"
+            INTERFACE_INCLUDE_DIRECTORIES \"\${CPP_LOGGER_INCLUDE_DIR_BUNDLED}\"
+        )
+    endif()
+else()
+    # Try to find system cpp-logger
+    find_dependency(cpp-logger QUIET)
 endif()
 
 # Include the targets file
 include(\"\${CMAKE_CURRENT_LIST_DIR}/${PKG_TARGET}Targets.cmake\")
-
-# Main target (no namespace): ${PKG_TARGET} -> points to static
-if(TARGET ${PKG_TARGET}::${PKG_TARGET} AND NOT TARGET ${PKG_TARGET})
-    add_library(${PKG_TARGET} ALIAS ${PKG_TARGET}::${PKG_TARGET})
-endif()
-
-# Static alias: ${PKG_TARGET}::static -> points to main static target
-if(TARGET ${PKG_TARGET}::${PKG_TARGET} AND NOT TARGET ${PKG_TARGET}::static)
-    add_library(${PKG_TARGET}::static ALIAS ${PKG_TARGET}::${PKG_TARGET})
-endif()
-
-# Shared alias: ${PKG_TARGET}::shared -> points to shared target (if it exists)
-if(TARGET ${PKG_TARGET}::shared AND NOT TARGET ${PKG_TARGET}::shared)
-    # Target already exists, no alias needed
-elseif(TARGET ${PKG_TARGET}::dft_reader_shared AND NOT TARGET ${PKG_TARGET}::shared)
-    add_library(${PKG_TARGET}::shared ALIAS ${PKG_TARGET}::dft_reader_shared)
-endif()
 
 check_required_components(${PKG_TARGET})
 ")
@@ -392,16 +396,12 @@ check_required_components(${PKG_TARGET})
   install(FILES ${CONFIG_FILE} ${VERSION_FILE}
           DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PKG_TARGET})
 
-  # Export targets
+  # Export targets for installation Note: The install(EXPORT ...) is already
+  # handled in src/CMakeLists.txt and the export() for build tree is also
+  # handled there, so we don't duplicate it here
   install(
     EXPORT ${PKG_TARGET}Targets
     FILE ${PKG_TARGET}Targets.cmake
     NAMESPACE ${PKG_TARGET}::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PKG_TARGET})
-
-  # Export targets for build tree
-  export(
-    EXPORT ${PKG_TARGET}Targets
-    FILE "${CMAKE_CURRENT_BINARY_DIR}/${PKG_TARGET}Targets.cmake"
-    NAMESPACE ${PKG_TARGET}::)
 endfunction()

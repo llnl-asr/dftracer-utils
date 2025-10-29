@@ -1,7 +1,7 @@
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/indexer_factory.h>
 #include <dftracer/utils/indexer/tar/queries/queries.h>
-#include <dftracer/utils/reader/streams/tar_factory.h>
+#include <dftracer/utils/reader/streams/tar_byte_stream.h>
 #include <dftracer/utils/reader/string_line_processor.h>
 #include <dftracer/utils/reader/tar_reader.h>
 
@@ -20,14 +20,13 @@ TarReader::TarReader(const std::string &tar_gz_path_,
       idx_path(idx_path_),
       is_open(false),
       default_buffer_size(DEFAULT_TAR_READER_BUFFER_SIZE),
-      is_indexer_initialized_internally(true),
       logical_mapping_cached(false),
       cached_total_logical_bytes(0),
       cached_total_logical_lines(0) {
     try {
         printf("Creating TAR reader for gz: %s and index: %s\n",
                tar_gz_path.c_str(), idx_path.c_str());
-        indexer = std::make_unique<TarIndexer>(tar_gz_path, idx_path,
+        indexer = std::make_shared<TarIndexer>(tar_gz_path, idx_path,
                                                index_ckpt_size, false);
         is_open = true;
 
@@ -41,10 +40,9 @@ TarReader::TarReader(const std::string &tar_gz_path_,
     }
 }
 
-TarReader::TarReader(TarIndexer *indexer_)
+TarReader::TarReader(std::shared_ptr<TarIndexer> indexer_)
     : default_buffer_size(DEFAULT_TAR_READER_BUFFER_SIZE),
-      indexer(std::unique_ptr<TarIndexer>(indexer_)),
-      is_indexer_initialized_internally(false),
+      indexer(indexer_),
       logical_mapping_cached(false),
       cached_total_logical_bytes(0),
       cached_total_logical_lines(0) {
@@ -56,33 +54,7 @@ TarReader::TarReader(TarIndexer *indexer_)
     idx_path = indexer->get_idx_path();
 }
 
-TarReader::~TarReader() {
-    try {
-        DFTRACER_UTILS_LOG_DEBUG("Destroying TarReader for %s",
-                                 tar_gz_path.c_str());
-
-        if (indexer) {
-            if (!is_indexer_initialized_internally) {
-                // For externally managed indexer, release ownership without
-                // deleting
-                DFTRACER_UTILS_LOG_DEBUG(
-                    "Releasing externally managed TAR indexer");
-                indexer.release();
-            } else {
-                // For internally managed indexer, let unique_ptr destructor
-                // handle it
-                DFTRACER_UTILS_LOG_DEBUG(
-                    "Destroying internally managed TAR indexer");
-            }
-        }
-
-        DFTRACER_UTILS_LOG_DEBUG("TarReader destruction completed for %s",
-                                 tar_gz_path.c_str());
-    } catch (const std::exception &e) {
-        DFTRACER_UTILS_LOG_ERROR("Error during TarReader destruction: %s",
-                                 e.what());
-    }
-}
+TarReader::~TarReader() = default;
 
 TarReader::TarReader(TarReader &&other) noexcept
     : tar_gz_path(std::move(other.tar_gz_path)),
@@ -90,8 +62,6 @@ TarReader::TarReader(TarReader &&other) noexcept
       is_open(other.is_open),
       default_buffer_size(other.default_buffer_size),
       indexer(std::move(other.indexer)),
-      is_indexer_initialized_internally(
-          other.is_indexer_initialized_internally),
       logical_mapping_cached(other.logical_mapping_cached),
       cached_file_mapping(std::move(other.cached_file_mapping)),
       cached_total_logical_bytes(other.cached_total_logical_bytes),
@@ -107,8 +77,6 @@ TarReader &TarReader::operator=(TarReader &&other) noexcept {
         is_open = other.is_open;
         default_buffer_size = other.default_buffer_size;
         indexer = std::move(other.indexer);
-        is_indexer_initialized_internally =
-            other.is_indexer_initialized_internally;
         logical_mapping_cached = other.logical_mapping_cached;
         cached_file_mapping = std::move(other.cached_file_mapping);
         cached_total_logical_bytes = other.cached_total_logical_bytes;
@@ -139,6 +107,14 @@ const std::string &TarReader::get_idx_path() const { return idx_path; }
 
 void TarReader::set_buffer_size(std::size_t size) {
     default_buffer_size = size;
+}
+
+std::unique_ptr<ReaderStream> TarReader::stream(
+    [[maybe_unused]] StreamType stream_type,
+    [[maybe_unused]] RangeType range_type, [[maybe_unused]] std::size_t start,
+    [[maybe_unused]] std::size_t end) {
+    // TODO: Implement TAR stream creation
+    throw std::runtime_error("TarReader::stream() not yet implemented");
 }
 
 // Archive structure operations
@@ -399,7 +375,7 @@ void TarReader::build_logical_mapping() const {
     }
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "Building logical content mapping for TAR.GZ file");
+        "%s", "Building logical content mapping for TAR.GZ file");
 
     try {
         // Get all TAR file entries from the indexer
@@ -536,22 +512,16 @@ std::string TarReader::read_file_content(const TarFileInfo &file_info,
         std::vector<char> buffer(actual_size);
 
         // Create a TAR byte stream to read file content
-        TarStreamFactory tar_stream_factory(*indexer);
-        auto byte_stream = tar_stream_factory.create_byte_stream(
-            tar_gz_path, file_data_start, file_data_end);
-
-        if (!byte_stream) {
-            DFTRACER_UTILS_LOG_DEBUG(
-                "Failed to create TAR byte stream for file content");
-            return "";
-        }
+        auto byte_stream = std::make_unique<TarByteStream>();
+        byte_stream->initialize(tar_gz_path, file_data_start, file_data_end,
+                                *indexer);
 
         std::size_t total_read = 0;
         while (total_read < actual_size) {
             std::size_t chunk_size = std::min(actual_size - total_read,
                                               static_cast<std::size_t>(8192));
             std::size_t bytes_read =
-                byte_stream->stream(buffer.data() + total_read, chunk_size);
+                byte_stream->read(buffer.data() + total_read, chunk_size);
 
             if (bytes_read == 0) {
                 break;  // EOF or error

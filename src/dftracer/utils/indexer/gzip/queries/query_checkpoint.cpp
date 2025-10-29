@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/indexer/gzip/queries/queries.h>
 #include <dftracer/utils/indexer/sqlite/statement.h>
 
@@ -16,13 +16,13 @@ bool query_checkpoint(const SqliteDatabase& db, std::size_t target_offset,
     // checkpoint)
     if (target_offset == 0) {
         DFTRACER_UTILS_LOG_DEBUG(
-            "query_checkpoint: target_offset is 0, returning false");
+            "%s", "query_checkpoint: target_offset is 0, returning false");
         return false;
     }
 
     if (file_id == -1) {
         DFTRACER_UTILS_LOG_DEBUG(
-            "query_checkpoint: file_id is -1, returning false");
+            "%s", "query_checkpoint: file_id is -1, returning false");
         return false;
     }
 

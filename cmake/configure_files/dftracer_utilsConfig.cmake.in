@@ -1,0 +1,44 @@
+@PACKAGE_INIT@
+
+# dftracer_utils unified package config
+# This file provides a unified interface to the dftracer_utils library
+
+set(DFTRACER_UTILS_PREFERRED_TYPE "@DFTRACER_UTILS_PREFERRED_TYPE@")
+
+# Include both shared and static configs if they exist
+include(${CMAKE_CURRENT_LIST_DIR}/../dftracer_utils_shared/dftracer_utils_sharedConfig.cmake OPTIONAL)
+include(${CMAKE_CURRENT_LIST_DIR}/../dftracer_utils_static/dftracer_utils_staticConfig.cmake OPTIONAL)
+
+# Create standard aliases for the specific library types
+# Shared library: dftracer_utils_shared::dftracer_utils_shared -> dftracer_utils::shared
+if(TARGET dftracer_utils_shared::dftracer_utils_shared)
+  if(NOT TARGET dftracer_utils::shared)
+    add_library(dftracer_utils::shared ALIAS dftracer_utils_shared::dftracer_utils_shared)
+  endif()
+endif()
+
+# Static library: dftracer_utils_static::dftracer_utils_static -> dftracer_utils::static
+if(TARGET dftracer_utils_static::dftracer_utils_static)
+  if(NOT TARGET dftracer_utils::static)
+    add_library(dftracer_utils::static ALIAS dftracer_utils_static::dftracer_utils_static)
+  endif()
+endif()
+
+# Create unified aliases that point to the preferred library type
+if(DFTRACER_UTILS_PREFERRED_TYPE STREQUAL "shared" AND TARGET dftracer_utils_shared::dftracer_utils_shared)
+  if(NOT TARGET dftracer_utils::dftracer_utils)
+    add_library(dftracer_utils::dftracer_utils ALIAS dftracer_utils_shared::dftracer_utils_shared)
+  endif()
+  if(NOT TARGET dftracer_utils)
+    add_library(dftracer_utils ALIAS dftracer_utils_shared::dftracer_utils_shared)
+  endif()
+elseif(DFTRACER_UTILS_PREFERRED_TYPE STREQUAL "static" AND TARGET dftracer_utils_static::dftracer_utils_static)
+  if(NOT TARGET dftracer_utils::dftracer_utils)
+    add_library(dftracer_utils::dftracer_utils ALIAS dftracer_utils_static::dftracer_utils_static)
+  endif()
+  if(NOT TARGET dftracer_utils)
+    add_library(dftracer_utils ALIAS dftracer_utils_static::dftracer_utils_static)
+  endif()
+endif()
+
+check_required_components(dftracer_utils)

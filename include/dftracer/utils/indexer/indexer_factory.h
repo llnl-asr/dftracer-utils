@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_INDEXER_FACTORY_H
 #define DFTRACER_UTILS_INDEXER_FACTORY_H
 
-#include <dftracer/utils/common/archive_format.h>
-#include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/format_detector.h>
+#include <dftracer/utils/core/common/archive_format.h>
+#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/common/format_detector.h>
 #include <dftracer/utils/indexer/indexer.h>
 
 #include <memory>
@@ -26,10 +26,10 @@ class IndexerFactory {
      * if empty)
      * @param checkpoint_size Checkpoint size in bytes
      * @param force Force rebuilding the index even if it exists
-     * @return Unique pointer to the appropriate indexer, or nullptr if format
+     * @return Shared pointer to the appropriate indexer, or nullptr if format
      * not supported
      */
-    static std::unique_ptr<Indexer> create(
+    static std::shared_ptr<Indexer> create(
         const std::string &archive_path, const std::string &idx_path = "",
         std::uint64_t checkpoint_size =
             constants::indexer::DEFAULT_CHECKPOINT_SIZE,

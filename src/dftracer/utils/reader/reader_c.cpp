@@ -1,4 +1,4 @@
-#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/reader/reader.h>
 #include <dftracer/utils/reader/reader_factory.h>
 
@@ -6,8 +6,8 @@
 
 using namespace dftracer::utils;
 
-static Reader *cast_reader(dft_reader_handle_t reader) {
-    return static_cast<Reader *>(reader);
+static std::shared_ptr<Reader> *cast_reader(dft_reader_handle_t reader) {
+    return static_cast<std::shared_ptr<Reader> *>(reader);
 }
 
 extern "C" {
@@ -27,7 +27,10 @@ dft_reader_handle_t dft_reader_create(const char *gz_path, const char *idx_path,
 
     try {
         auto reader = ReaderFactory::create(gz_path, idx_path, index_ckpt_size);
-        return static_cast<dft_reader_handle_t>(reader.release());
+        // For C API, we need to transfer ownership - create a new shared_ptr on
+        // heap
+        return static_cast<dft_reader_handle_t>(
+            new std::shared_ptr<Reader>(reader));
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to create DFT reader: %s", e.what());
         return nullptr;
@@ -44,8 +47,11 @@ dft_reader_handle_t dft_reader_create_with_indexer(
     DFTRACER_UTILS_LOG_DEBUG("Creating DFT reader with provided indexer", "");
 
     try {
-        auto reader = ReaderFactory::create(static_cast<Indexer *>(indexer));
-        return static_cast<dft_reader_handle_t>(reader.release());
+        // Indexer handle is now a shared_ptr<Indexer>*
+        auto indexer_ptr = static_cast<std::shared_ptr<Indexer> *>(indexer);
+        auto reader = ReaderFactory::create(*indexer_ptr);
+        return static_cast<dft_reader_handle_t>(
+            new std::shared_ptr<Reader>(reader));
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to create DFT reader with indexer: %s",
                                  e.what());
@@ -65,7 +71,7 @@ int dft_reader_get_max_bytes(dft_reader_handle_t reader, size_t *max_bytes) {
     }
 
     try {
-        *max_bytes = cast_reader(reader)->get_max_bytes();
+        *max_bytes = (*cast_reader(reader))->get_max_bytes();
         return 0;
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to get max bytes: %s", e.what());
@@ -79,7 +85,7 @@ int dft_reader_get_num_lines(dft_reader_handle_t reader, size_t *num_lines) {
     }
 
     try {
-        *num_lines = cast_reader(reader)->get_num_lines();
+        *num_lines = (*cast_reader(reader))->get_num_lines();
         return 0;
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to get number of lines: %s", e.what());
@@ -94,8 +100,9 @@ int dft_reader_read(dft_reader_handle_t reader, size_t start_bytes,
     }
 
     try {
-        size_t bytes_read = cast_reader(reader)->read(start_bytes, end_bytes,
-                                                      buffer, buffer_size);
+        size_t bytes_read =
+            (*cast_reader(reader))
+                ->read(start_bytes, end_bytes, buffer, buffer_size);
         return static_cast<int>(bytes_read);
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to read: %s", e.what());
@@ -111,8 +118,9 @@ int dft_reader_read_line_bytes(dft_reader_handle_t reader, size_t start_bytes,
     }
 
     try {
-        size_t bytes_read = cast_reader(reader)->read_line_bytes(
-            start_bytes, end_bytes, buffer, buffer_size);
+        size_t bytes_read =
+            (*cast_reader(reader))
+                ->read_line_bytes(start_bytes, end_bytes, buffer, buffer_size);
         return static_cast<int>(bytes_read);
     } catch (const std::exception &e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to read line bytes: %s", e.what());
@@ -130,7 +138,7 @@ int dft_reader_read_lines(dft_reader_handle_t reader, size_t start_line,
 
     try {
         std::string result =
-            cast_reader(reader)->read_lines(start_line, end_line);
+            (*cast_reader(reader))->read_lines(start_line, end_line);
 
         size_t result_size = result.size();
         if (result_size >= buffer_size) {
@@ -152,7 +160,7 @@ int dft_reader_read_lines(dft_reader_handle_t reader, size_t start_line,
 
 void dft_reader_reset(dft_reader_handle_t reader) {
     if (reader) {
-        cast_reader(reader)->reset();
+        (*cast_reader(reader))->reset();
     }
 }
 

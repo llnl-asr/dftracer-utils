@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_READER_INFLATER_H
 #define DFTRACER_UTILS_READER_INFLATER_H
 
-#include <dftracer/utils/common/checkpointer.h>
-#include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/inflater.h>
-#include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/core/common/checkpointer.h>
+#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/common/inflater.h>
+#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/indexer/checkpoint.h>
 
 namespace dftracer::utils {

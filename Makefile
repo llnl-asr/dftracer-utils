@@ -93,6 +93,10 @@ install-debug: build
 
 	@cd build && cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=$$(pwd)/install .. && make -j$$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
+cmake-format:
+	@echo "Formatting CMake files..."
+	cmake-format CMakeLists.txt src/CMakeLists.txt cmake/**/*.cmake --in-place
+
 # Clean all builds
 clean:
 	@echo "Cleaning all build directories..."

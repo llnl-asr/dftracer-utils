@@ -1,0 +1,139 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 23,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Development (RelWithDebInfo)",
+      "description": "Development build with optimizations and debug info",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/build-${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "DFTRACER_UTILS_BUILD_SHARED": "ON",
+        "DFTRACER_UTILS_BUILD_STATIC": "ON",
+        "DFTRACER_UTILS_BUILD_BINARIES": "ON",
+        "DFTRACER_UTILS_BUILD_PYTHON": "OFF",
+        "DFTRACER_UTILS_DEBUG": "OFF",
+        "DFTRACER_UTILS_TESTS": "OFF"
+      }
+    },
+    {
+      "name": "dev-python",
+      "displayName": "Development with Python (RelWithDebInfo)",
+      "description": "Development build with Python bindings",
+      "inherits": "dev",
+      "cacheVariables": {
+        "DFTRACER_UTILS_BUILD_PYTHON": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Debug build with verbose logging",
+      "inherits": "dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "DFTRACER_UTILS_DEBUG": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "Optimized release build",
+      "inherits": "dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "DFTRACER_UTILS_DEBUG": "OFF"
+      }
+    },
+    {
+      "name": "shared-only",
+      "displayName": "Shared Library Only (RelWithDebInfo)",
+      "description": "Build only shared library",
+      "inherits": "dev",
+      "cacheVariables": {
+        "DFTRACER_UTILS_BUILD_STATIC": "OFF"
+      }
+    },
+    {
+      "name": "static-only",
+      "displayName": "Static Library Only (RelWithDebInfo)",
+      "description": "Build only static library",
+      "inherits": "dev",
+      "cacheVariables": {
+        "DFTRACER_UTILS_BUILD_SHARED": "OFF",
+        "DFTRACER_UTILS_BUILD_PYTHON": "OFF"
+      }
+    },
+    {
+      "name": "tests",
+      "displayName": "Tests (RelWithDebInfo)",
+      "description": "Build with tests enabled",
+      "inherits": "dev",
+      "cacheVariables": {
+        "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_DEBUG": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "displayName": "Development Build",
+      "configurePreset": "dev",
+      "jobs": 0
+    },
+    {
+      "name": "dev-python",
+      "displayName": "Development Build with Python",
+      "configurePreset": "dev-python",
+      "jobs": 0
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug Build",
+      "configurePreset": "debug",
+      "jobs": 0
+    },
+    {
+      "name": "release",
+      "displayName": "Release Build",
+      "configurePreset": "release",
+      "jobs": 0
+    },
+    {
+      "name": "shared-only",
+      "displayName": "Shared Library Build",
+      "configurePreset": "shared-only",
+      "jobs": 0
+    },
+    {
+      "name": "static-only",
+      "displayName": "Static Library Build",
+      "configurePreset": "static-only",
+      "jobs": 0
+    },
+    {
+      "name": "tests",
+      "displayName": "Tests Build",
+      "configurePreset": "tests",
+      "jobs": 0
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "tests",
+      "displayName": "Run Tests",
+      "configurePreset": "tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

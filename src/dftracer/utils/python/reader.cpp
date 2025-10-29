@@ -1,15 +1,20 @@
 #include <Python.h>
+#include <dftracer/utils/core/utils/timer.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/lazy_json_line_processor.h>
 #include <dftracer/utils/python/pylist_line_processor.h>
 #include <dftracer/utils/python/reader.h>
 #include <dftracer/utils/reader/reader.h>
-#include <dftracer/utils/utils/timer.h>
 #include <structmember.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+
+std::shared_ptr<dftracer::utils::Reader> *cast_reader_handle(
+    dft_reader_handle_t handle) {
+    return static_cast<std::shared_ptr<dftracer::utils::Reader> *>(handle);
+}
 
 static void Reader_dealloc(ReaderObject *self) {
     if (self->handle) {
@@ -255,9 +260,9 @@ static PyObject *Reader_read(ReaderObject *self, PyObject *args) {
         return NULL;
     }
 
-    int bytes_read;
-    while ((bytes_read = dft_reader_read(self->handle, start_bytes, end_bytes,
-                                         buffer, buffer_size)) > 0) {
+    int bytes_read = dft_reader_read(self->handle, start_bytes, end_bytes,
+                                     buffer, buffer_size);
+    if (bytes_read > 0) {
         PyObject *chunk = PyBytes_FromStringAndSize(buffer, bytes_read);
         if (!chunk) {
             PyMem_RawFree(buffer);
@@ -306,9 +311,8 @@ static PyObject *Reader_read_lines(ReaderObject *self, PyObject *args) {
 
     try {
         PyListLineProcessor processor;
-        dftracer::utils::Reader *cpp_reader =
-            static_cast<dftracer::utils::Reader *>(self->handle);
-        cpp_reader->read_lines_with_processor(start_line, end_line, processor);
+        (*cast_reader_handle(self->handle))
+            ->read_lines_with_processor(start_line, end_line, processor);
         return processor.get_result();
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -329,10 +333,8 @@ static PyObject *Reader_read_line_bytes(ReaderObject *self, PyObject *args) {
 
     try {
         PyListLineProcessor processor;
-        dftracer::utils::Reader *cpp_reader =
-            static_cast<dftracer::utils::Reader *>(self->handle);
-        cpp_reader->read_line_bytes_with_processor(start_bytes, end_bytes,
-                                                   processor);
+        (*cast_reader_handle(self->handle))
+            ->read_line_bytes_with_processor(start_bytes, end_bytes, processor);
         return processor.get_result();
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -354,10 +356,8 @@ static PyObject *Reader_read_line_bytes_json(ReaderObject *self,
 
     try {
         PyLazyJSONLineProcessor processor;
-        dftracer::utils::Reader *cpp_reader =
-            static_cast<dftracer::utils::Reader *>(self->handle);
-        cpp_reader->read_line_bytes_with_processor(start_bytes, end_bytes,
-                                                   processor);
+        (*cast_reader_handle(self->handle))
+            ->read_line_bytes_with_processor(start_bytes, end_bytes, processor);
         return processor.get_result();
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
@@ -388,9 +388,8 @@ static PyObject *Reader_read_lines_json(ReaderObject *self, PyObject *args) {
 
     try {
         PyLazyJSONLineProcessor processor;
-        dftracer::utils::Reader *cpp_reader =
-            static_cast<dftracer::utils::Reader *>(self->handle);
-        cpp_reader->read_lines_with_processor(start_line, end_line, processor);
+        (*cast_reader_handle(self->handle))
+            ->read_lines_with_processor(start_line, end_line, processor);
         return processor.get_result();
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());

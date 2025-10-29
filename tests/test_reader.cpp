@@ -1,11 +1,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/indexer/error.h>
 #include <dftracer/utils/indexer/indexer.h>
 #include <dftracer/utils/indexer/indexer_factory.h>
 #include <dftracer/utils/reader/error.h>
 #include <dftracer/utils/reader/reader.h>
 #include <dftracer/utils/reader/reader_factory.h>
-#include <dftracer/utils/utils/filesystem.h>
 #include <doctest/doctest.h>
 
 #include <fstream>
@@ -68,7 +68,7 @@ TEST_CASE("C++ Indexer - Basic functionality") {
         auto indexer2 = std::move(indexer1);
 
         // Move assignment
-        std::unique_ptr<Indexer> indexer3 = std::move(indexer2);
+        std::shared_ptr<Indexer> indexer3 = std::move(indexer2);
         REQUIRE(indexer3 != nullptr);
     }
 }
@@ -130,10 +130,11 @@ TEST_CASE("C++ Reader - Basic functionality") {
         std::string result;
 
         // Stream data until no more available
-        std::size_t bytes_read;
-        while ((bytes_read = reader->read(0, 50, buffer, buffer_size)) > 0) {
-            result.append(buffer, bytes_read);
-        }
+        std::size_t bytes_read = reader->read(0, 50, buffer, buffer_size);
+        CHECK(bytes_read > 0);
+
+        std::printf("Read %zu bytes\n", bytes_read);
+        result.append(buffer, bytes_read);
 
         CHECK(result.size() <= 50);
         CHECK(!result.empty());
@@ -200,10 +201,9 @@ TEST_CASE("C++ API - Data range reading") {
         std::string content;
 
         // Stream data until no more available
-        std::size_t bytes_read;
-        while ((bytes_read = reader->read(0, 50, buffer, buffer_size)) > 0) {
-            content.append(buffer, bytes_read);
-        }
+        std::size_t bytes_read = reader->read(0, 50, buffer, buffer_size);
+        CHECK(bytes_read > 0);
+        content.append(buffer, bytes_read);
 
         CHECK(content.size() <= 50);
         CHECK(content.find("{") != std::string::npos);
@@ -271,20 +271,28 @@ TEST_CASE("C++ API - Integration test") {
         // Read multiple ranges using streaming API
         char buffer[1024];
 
-        // Read first range
+        // Read first range [0, 100)
         std::string content1;
         std::size_t bytes_read;
-        while ((bytes_read = reader->read(0, 100, buffer, sizeof(buffer))) >
-               0) {
+        std::size_t offset1 = 0;
+        std::size_t end1 = 100;
+        while (offset1 < end1 &&
+               (bytes_read =
+                    reader->read(offset1, end1, buffer, sizeof(buffer))) > 0) {
             content1.append(buffer, bytes_read);
+            offset1 += bytes_read;
         }
         CHECK(content1.size() <= 100);
 
-        // Read second range
+        // Read second range [100, 200)
         std::string content2;
-        while ((bytes_read = reader->read(100, 200, buffer, sizeof(buffer))) >
-               0) {
+        std::size_t offset2 = 100;
+        std::size_t end2 = 200;
+        while (offset2 < end2 &&
+               (bytes_read =
+                    reader->read(offset2, end2, buffer, sizeof(buffer))) > 0) {
             content2.append(buffer, bytes_read);
+            offset2 += bytes_read;
         }
         CHECK(content2.size() <= 100);
 
@@ -320,10 +328,13 @@ TEST_CASE("C++ API - Memory safety stress test") {
         char buffer[1024];
         std::size_t total_bytes = 0;
         std::size_t bytes_read;
+        std::size_t offset = 0;
+        std::size_t end = 4 * 1024 * 1024;
 
-        while ((bytes_read = reader->read(0, 4 * 1024 * 1024, buffer,
-                                          sizeof(buffer))) > 0) {
+        while (offset < end && (bytes_read = reader->read(
+                                    offset, end, buffer, sizeof(buffer))) > 0) {
             total_bytes += bytes_read;
+            offset += bytes_read;
         }
 
         CHECK(total_bytes >= 50);
@@ -475,18 +486,26 @@ TEST_CASE("C++ API - Advanced reader functionality") {
         char buffer1[1024], buffer2[1024];
         std::string result1, result2;
 
-        // Read from first reader
+        // Read from first reader [0, 100)
         std::size_t bytes_read1;
-        while ((bytes_read1 = reader1->read(0, 100, buffer1, sizeof(buffer1))) >
-               0) {
+        std::size_t offset1 = 0;
+        std::size_t end1 = 100;
+        while (offset1 < end1 &&
+               (bytes_read1 = reader1->read(offset1, end1, buffer1,
+                                            sizeof(buffer1))) > 0) {
             result1.append(buffer1, bytes_read1);
+            offset1 += bytes_read1;
         }
 
-        // Read from second reader
+        // Read from second reader [0, 100)
         std::size_t bytes_read2;
-        while ((bytes_read2 = reader2->read(0, 100, buffer2, sizeof(buffer2))) >
-               0) {
+        std::size_t offset2 = 0;
+        std::size_t end2 = 100;
+        while (offset2 < end2 &&
+               (bytes_read2 = reader2->read(offset2, end2, buffer2,
+                                            sizeof(buffer2))) > 0) {
             result2.append(buffer2, bytes_read2);
+            offset2 += bytes_read2;
         }
 
         CHECK(!result1.empty());
@@ -521,32 +540,43 @@ TEST_CASE("C++ API - Advanced reader functionality") {
         char buffer[2048];
         std::string result;
 
-        // Small reads
+        // Small reads [0, 10)
         result.clear();
         std::size_t bytes_read;
-        while ((bytes_read = reader->read_line_bytes(0, 10, buffer,
-                                                     sizeof(buffer))) > 0) {
+        std::size_t offset = 0;
+        std::size_t end = 10;
+        while (offset < end && (bytes_read = reader->read_line_bytes(
+                                    offset, end, buffer, sizeof(buffer))) > 0) {
             result.append(buffer, bytes_read);
+            offset += bytes_read;
         }
         // Small reads should return no data
         CHECK(result.size() == 0);
 
-        // Medium reads
+        // Medium reads [100, 1000)
         if (max_bytes > 1000) {
             result.clear();
-            while ((bytes_read = reader->read_line_bytes(100, 1000, buffer,
+            offset = 100;
+            end = 1000;
+            while (offset < end &&
+                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
                                                          sizeof(buffer))) > 0) {
                 result.append(buffer, bytes_read);
+                offset += bytes_read;
             }
             CHECK(result.size() <= 900);
         }
 
-        // Large reads
+        // Large reads [1000, 10000)
         if (max_bytes > 10000) {
             result.clear();
-            while ((bytes_read = reader->read_line_bytes(1000, 10000, buffer,
+            offset = 1000;
+            end = 10000;
+            while (offset < end &&
+                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
                                                          sizeof(buffer))) > 0) {
                 result.append(buffer, bytes_read);
+                offset += bytes_read;
             }
             CHECK(result.size() >= 9000);
         }
@@ -562,19 +592,27 @@ TEST_CASE("C++ API - Advanced reader functionality") {
         std::size_t bytes_read;
 
         if (max_bytes > 100) {
-            // Read near the end of file
+            // Read near the end of file [max_bytes - 50, max_bytes)
             result.clear();
-            while ((bytes_read = reader->read(max_bytes - 50, max_bytes, buffer,
+            std::size_t offset = max_bytes - 50;
+            std::size_t end = max_bytes;
+            while (offset < end &&
+                   (bytes_read = reader->read(offset, end, buffer,
                                               sizeof(buffer))) > 0) {
                 result.append(buffer, bytes_read);
+                offset += bytes_read;
             }
             CHECK(result.size() > 0);
 
-            // Read at exact boundaries
+            // Read at exact boundaries [0, 1)
             result.clear();
-            while ((bytes_read = reader->read(0, 1, buffer, sizeof(buffer))) >
-                   0) {
+            offset = 0;
+            end = 1;
+            while (offset < end &&
+                   (bytes_read = reader->read(offset, end, buffer,
+                                              sizeof(buffer))) > 0) {
                 result.append(buffer, bytes_read);
+                offset += bytes_read;
             }
             CHECK(result.size() <= 1);
         }
@@ -613,10 +651,13 @@ TEST_CASE("C++ API - JSON boundary detection") {
         char buffer[2048];
         std::string content;
         std::size_t bytes_read;
+        std::size_t offset = 0;
+        std::size_t end = 100;
 
-        while ((bytes_read = reader->read_line_bytes(0, 100, buffer,
-                                                     sizeof(buffer))) > 0) {
+        while (offset < end && (bytes_read = reader->read_line_bytes(
+                                    offset, end, buffer, sizeof(buffer))) > 0) {
             content.append(buffer, bytes_read);
+            offset += bytes_read;
         }
 
         CHECK(content.size() <= 100);  // Should get at least what was requested
@@ -638,10 +679,13 @@ TEST_CASE("C++ API - JSON boundary detection") {
         char buffer[2048];
         std::string content;
         std::size_t bytes_read;
+        std::size_t offset = 0;
+        std::size_t end = 500;
 
-        while ((bytes_read = reader->read_line_bytes(0, 500, buffer,
-                                                     sizeof(buffer))) > 0) {
+        while (offset < end && (bytes_read = reader->read_line_bytes(
+                                    offset, end, buffer, sizeof(buffer))) > 0) {
             content.append(buffer, bytes_read);
+            offset += bytes_read;
         }
 
         CHECK(content.size() <= 500);
@@ -670,11 +714,14 @@ TEST_CASE("C++ API - JSON boundary detection") {
             char buffer[2048];
             std::string content;
             std::size_t bytes_read;
+            std::size_t offset = current_pos;
+            std::size_t end = current_pos + segment_size;
 
-            while ((bytes_read = reader->read_line_bytes(
-                        current_pos, current_pos + segment_size, buffer,
-                        sizeof(buffer))) > 0) {
+            while (offset < end &&
+                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
+                                                         sizeof(buffer))) > 0) {
                 content.append(buffer, bytes_read);
+                offset += bytes_read;
             }
 
             segments.push_back(content);
@@ -732,15 +779,19 @@ TEST_CASE("C++ API - Regression and stress tests") {
         std::size_t max_bytes = reader->get_max_bytes();
         CHECK(max_bytes > 10000);  // Should be a large file
 
-        // Read large chunks
+        // Read large chunks [1000, 50000)
         if (max_bytes > 50000) {
             char buffer[4096];
             std::string content;
 
             std::size_t bytes_read;
-            while ((bytes_read = reader->read_line_bytes(1000, 50000, buffer,
+            std::size_t offset = 1000;
+            std::size_t end = 50000;
+            while (offset < end &&
+                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
                                                          sizeof(buffer))) > 0) {
                 content.append(buffer, bytes_read);
+                offset += bytes_read;
             }
 
             // Check data integrity instead of strict size limits
@@ -807,9 +858,13 @@ TEST_CASE("C++ API - Regression and stress tests") {
             std::string content;
 
             std::size_t bytes_read;
-            while ((bytes_read = reader->read_line_bytes(0, 10000, buffer,
+            std::size_t offset = 0;
+            std::size_t end = 10000;
+            while (offset < end &&
+                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
                                                          sizeof(buffer))) > 0) {
                 content.append(buffer, bytes_read);
+                offset += bytes_read;
             }
 
             CHECK(content.size() <= 10000);
@@ -833,9 +888,13 @@ TEST_CASE("C++ API - Regression and stress tests") {
             std::string content;
 
             std::size_t bytes_read;
-            while ((bytes_read = reader->read_line_bytes(0, 100, buffer,
+            std::size_t offset = 0;
+            std::size_t end = 100;
+            while (offset < end &&
+                   (bytes_read = reader->read_line_bytes(offset, end, buffer,
                                                          sizeof(buffer))) > 0) {
                 content.append(buffer, bytes_read);
+                offset += bytes_read;
             }
 
             CHECK(content.size() <=
@@ -877,10 +936,14 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         char buffer[1024];
         std::string raw_result;
 
-        // Stream raw data until no more available
+        // Stream raw data until no more available [0, 50)
         std::size_t bytes_read;
-        while ((bytes_read = reader->read(0, 50, buffer, buffer_size)) > 0) {
+        std::size_t offset = 0;
+        std::size_t end = 50;
+        while (offset < end && (bytes_read = reader->read(offset, end, buffer,
+                                                          buffer_size)) > 0) {
             raw_result.append(buffer, bytes_read);
+            offset += bytes_read;
         }
 
         CHECK(raw_result.size() >= 50);
@@ -902,18 +965,26 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         char buffer1[1024], buffer2[1024];
         std::string raw_result, regular_result;
 
-        // Raw read (new default behavior)
+        // Raw read (new default behavior) [0, 100)
         std::size_t bytes_read1;
-        while ((bytes_read1 = reader1->read(0, 100, buffer1, buffer_size)) >
-               0) {
+        std::size_t offset1 = 0;
+        std::size_t end1 = 100;
+        while (offset1 < end1 &&
+               (bytes_read1 =
+                    reader1->read(offset1, end1, buffer1, buffer_size)) > 0) {
             raw_result.append(buffer1, bytes_read1);
+            offset1 += bytes_read1;
         }
 
-        // Line bytes read (old read behavior)
+        // Line bytes read (old read behavior) [0, 100)
         std::size_t bytes_read2;
-        while ((bytes_read2 = reader2->read_line_bytes(0, 100, buffer2,
+        std::size_t offset2 = 0;
+        std::size_t end2 = 100;
+        while (offset2 < end2 &&
+               (bytes_read2 = reader2->read_line_bytes(offset2, end2, buffer2,
                                                        buffer_size)) > 0) {
             regular_result.append(buffer2, bytes_read2);
+            offset2 += bytes_read2;
         }
 
         // Raw read should be closer to requested size (100 bytes)
@@ -944,18 +1015,28 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         char buffer1[512], buffer2[512];
         std::string result1, result2;
 
-        // Test explicit gz_path overload
+        // Test explicit gz_path overload [0, 75)
         std::size_t bytes_read1;
-        while ((bytes_read1 = reader->read(0, 75, buffer1, buffer_size)) > 0) {
+        std::size_t offset1 = 0;
+        std::size_t end1 = 75;
+        while (offset1 < end1 &&
+               (bytes_read1 =
+                    reader->read(offset1, end1, buffer1, buffer_size)) > 0) {
             result1.append(buffer1, bytes_read1);
+            offset1 += bytes_read1;
         }
 
         reader->reset();
 
-        // Test stored gz_path overload
+        // Test stored gz_path overload [0, 75)
         std::size_t bytes_read2;
-        while ((bytes_read2 = reader->read(0, 75, buffer2, buffer_size)) > 0) {
+        std::size_t offset2 = 0;
+        std::size_t end2 = 75;
+        while (offset2 < end2 &&
+               (bytes_read2 =
+                    reader->read(offset2, end2, buffer2, buffer_size)) > 0) {
             result2.append(buffer2, bytes_read2);
+            offset2 += bytes_read2;
         }
 
         // Both should return identical results
@@ -972,20 +1053,28 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         char buffer[1024];
         std::string result;
 
-        // Single byte read
+        // Single byte read [0, 1)
         result.clear();
         std::size_t bytes_read;
-        while ((bytes_read = reader->read(0, 1, buffer, sizeof(buffer))) > 0) {
+        std::size_t offset = 0;
+        std::size_t end = 1;
+        while (offset < end && (bytes_read = reader->read(
+                                    offset, end, buffer, sizeof(buffer))) > 0) {
             result.append(buffer, bytes_read);
+            offset += bytes_read;
         }
         CHECK(result.size() == 1);
 
-        // Read near end of file
+        // Read near end of file [max_bytes - 10, max_bytes - 1)
         if (max_bytes > 10) {
             result.clear();
-            while ((bytes_read = reader->read(max_bytes - 10, max_bytes - 1,
-                                              buffer, sizeof(buffer))) > 0) {
+            offset = max_bytes - 10;
+            end = max_bytes - 1;
+            while (offset < end &&
+                   (bytes_read = reader->read(offset, end, buffer,
+                                              sizeof(buffer))) > 0) {
                 result.append(buffer, bytes_read);
+                offset += bytes_read;
             }
             CHECK(result.size() == 9);
         }
@@ -1006,9 +1095,13 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t total_calls = 0;
 
         std::size_t bytes_read;
-        while ((bytes_read = reader->read(0, 200, small_buffer,
+        std::size_t offset = 0;
+        std::size_t end = 200;
+        while (offset < end &&
+               (bytes_read = reader->read(offset, end, small_buffer,
                                           small_buffer_size)) > 0) {
             result.append(small_buffer, bytes_read);
+            offset += bytes_read;
             total_calls++;
             CHECK(bytes_read <= small_buffer_size);
             if (total_calls > 50) break;  // Safety guard
@@ -1035,10 +1128,13 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
             if (range.second <= max_bytes) {
                 std::string segment;
                 std::size_t bytes_read;
-                while ((bytes_read = reader->read(range.first, range.second,
-                                                  buffer, sizeof(buffer))) >
-                       0) {
+                std::size_t offset = range.first;
+                std::size_t end = range.second;
+                while (offset < end &&
+                       (bytes_read = reader->read(offset, end, buffer,
+                                                  sizeof(buffer))) > 0) {
                     segment.append(buffer, bytes_read);
+                    offset += bytes_read;
                 }
 
                 CHECK(segment.size() >= (range.second - range.first));
@@ -1061,20 +1157,26 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
         std::size_t max_bytes = reader1->get_max_bytes();
         char buffer[4096];
 
-        // Read entire file with raw API
+        // Read entire file with raw API [0, max_bytes)
         std::string raw_content;
         std::size_t bytes_read1;
-        while ((bytes_read1 =
-                    reader1->read(0, max_bytes, buffer, sizeof(buffer))) > 0) {
+        std::size_t offset1 = 0;
+        while (offset1 < max_bytes &&
+               (bytes_read1 = reader1->read(offset1, max_bytes, buffer,
+                                            sizeof(buffer))) > 0) {
             raw_content.append(buffer, bytes_read1);
+            offset1 += bytes_read1;
         }
 
-        // Read entire file with line-boundary aware API
+        // Read entire file with line-boundary aware API [0, max_bytes)
         std::string json_content;
         std::size_t bytes_read2;
-        while ((bytes_read2 = reader2->read_line_bytes(0, max_bytes, buffer,
-                                                       sizeof(buffer))) > 0) {
+        std::size_t offset2 = 0;
+        while (offset2 < max_bytes &&
+               (bytes_read2 = reader2->read_line_bytes(
+                    offset2, max_bytes, buffer, sizeof(buffer))) > 0) {
             json_content.append(buffer, bytes_read2);
+            offset2 += bytes_read2;
         }
 
         // Both should read the entire file
@@ -1139,10 +1241,9 @@ TEST_CASE("C++ Reader - Line reading functionality") {
         // Skip line reading tests if indexer doesn't have proper line support
         // This can happen with very small test files
         if (total_lines == 0 || checkpoints.empty()) {
-            WARN(
+            MESSAGE(
                 "Skipping line reading tests - indexer has no line data (file "
-                "too "
-                "small?)");
+                "too small?)");
             return;
         }
 
@@ -1376,9 +1477,12 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
                 std::string result;
 
                 std::size_t bytes_read;
-                while ((bytes_read = reader->read(start, end, buffer,
+                std::size_t offset = start;
+                while (offset < end &&
+                       (bytes_read = reader->read(offset, end, buffer,
                                                   sizeof(buffer))) > 0) {
                     result.append(buffer, bytes_read);
+                    offset += bytes_read;
                 }
 
                 CHECK(result.size() <= (end - start));
@@ -1414,21 +1518,25 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
         }
 
         // Create multiple readers
-        std::vector<std::unique_ptr<Reader>> readers;
+        std::vector<std::shared_ptr<Reader>> readers;
         for (int i = 0; i < 5; ++i) {
             readers.push_back(ReaderFactory::create(gz_file, idx_file));
             CHECK(readers.back()->is_valid());
         }
 
-        // All should be able to read simultaneously
+        // All should be able to read simultaneously [0, 50)
         for (auto& reader : readers) {
             char buffer[1024];
             std::string result;
 
             std::size_t bytes_read;
-            while ((bytes_read = reader->read(0, 50, buffer, sizeof(buffer))) >
-                   0) {
+            std::size_t offset = 0;
+            std::size_t end = 50;
+            while (offset < end &&
+                   (bytes_read = reader->read(offset, end, buffer,
+                                              sizeof(buffer))) > 0) {
                 result.append(buffer, bytes_read);
+                offset += bytes_read;
             }
 
             CHECK(result.size() <= 50);
@@ -1453,21 +1561,28 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             std::string result;
             std::size_t bytes_read;
 
-            // Read from near the end
+            // Read from near the end [max_bytes - 100, max_bytes - 1)
             result.clear();
-            while ((bytes_read = reader->read(max_bytes - 100, max_bytes - 1,
-                                              buffer, sizeof(buffer))) > 0) {
+            std::size_t offset = max_bytes - 100;
+            std::size_t end = max_bytes - 1;
+            while (offset < end &&
+                   (bytes_read = reader->read(offset, end, buffer,
+                                              sizeof(buffer))) > 0) {
                 result.append(buffer, bytes_read);
+                offset += bytes_read;
             }
             CHECK(result.size() <= 100);
 
-            // Read the very last byte
+            // Read the very last byte [max_bytes - 1, max_bytes)
             if (max_bytes > 1) {
                 result.clear();
-                while ((bytes_read = reader->read(max_bytes - 1, max_bytes,
-                                                  buffer, sizeof(buffer))) >
-                       0) {
+                offset = max_bytes - 1;
+                end = max_bytes;
+                while (offset < end &&
+                       (bytes_read = reader->read(offset, end, buffer,
+                                                  sizeof(buffer))) > 0) {
                     result.append(buffer, bytes_read);
+                    offset += bytes_read;
                 }
                 CHECK(result.size() <= 1);
             }
@@ -1496,19 +1611,27 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
             std::string result;
             std::size_t bytes_read;
 
-            // First range
+            // First range [0, 1000)
             result.clear();
-            while ((bytes_read =
-                        reader->read(0, 1000, buffer, sizeof(buffer))) > 0) {
+            std::size_t offset = 0;
+            std::size_t end = 1000;
+            while (offset < end &&
+                   (bytes_read = reader->read(offset, end, buffer,
+                                              sizeof(buffer))) > 0) {
                 result.append(buffer, bytes_read);
+                offset += bytes_read;
             }
             CHECK(result.size() <= 1000);
 
-            // Second range
+            // Second range [500, 1500)
             result.clear();
-            while ((bytes_read =
-                        reader->read(500, 1500, buffer, sizeof(buffer))) > 0) {
+            offset = 500;
+            end = 1500;
+            while (offset < end &&
+                   (bytes_read = reader->read(offset, end, buffer,
+                                              sizeof(buffer))) > 0) {
                 result.append(buffer, bytes_read);
+                offset += bytes_read;
             }
             CHECK(result.size() <= 1000);
         }

@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_READER_STREAMS_GZIP_LINE_BYTE_STREAM_H
 #define DFTRACER_UTILS_READER_STREAMS_GZIP_LINE_BYTE_STREAM_H
 
-#include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/reader/streams/gzip_stream.h>
 
 #include <cstddef>
@@ -23,9 +23,9 @@ class GzipLineByteStream : public GzipStream {
         partial_line_buffer_.reserve(1 * 1024 * 1024);
     }
 
-    virtual void initialize(const std::string &gz_path, std::size_t start_bytes,
-                            std::size_t end_bytes,
-                            dftracer::utils::Indexer &indexer) override {
+    void initialize(const std::string &gz_path, std::size_t start_bytes,
+                    std::size_t end_bytes,
+                    dftracer::utils::Indexer &indexer) override {
         GzipStream::initialize(gz_path, start_bytes, end_bytes, indexer);
         actual_start_bytes_ = find_line_start(start_bytes);
         current_position_ = actual_start_bytes_;
@@ -78,7 +78,7 @@ class GzipLineByteStream : public GzipStream {
         return actual_start;
     }
 
-    std::size_t stream(char *buffer, std::size_t buffer_size) override {
+    std::size_t read(char *buffer, std::size_t buffer_size) override {
 // Prefetch buffer for writing
 #ifdef __GNUC__
         __builtin_prefetch(buffer, 1, 3);
@@ -90,6 +90,10 @@ class GzipLineByteStream : public GzipStream {
         }
 
         if (is_at_target_end()) {
+            DFTRACER_UTILS_LOG_DEBUG(
+                "GzipLineByteStream: at target end, current_position=%zu, "
+                "target_end_bytes=%zu",
+                current_position_, target_end_bytes_);
             is_finished_ = true;
             return 0;
         }
@@ -140,17 +144,16 @@ class GzipLineByteStream : public GzipStream {
 
         current_position_ += bytes_read;
 
+        // Update partial buffer with any incomplete line data
+        update_partial_buffer(buffer, adjusted_size, total_data_size);
+
         if (adjusted_size == 0) {
             DFTRACER_UTILS_LOG_DEBUG(
-                "No complete line found, need to read more data, try "
-                "increasing the "
-                "end bytes",
-                "");
-            is_finished_ = true;
+                "%s",
+                "No complete line found in current buffer, will read more data "
+                "on next call");
             return 0;
         }
-
-        update_partial_buffer(buffer, adjusted_size, total_data_size);
 
         return adjusted_size;
     }

@@ -1,7 +1,7 @@
 #ifndef __DFTRACER_UTILS_INDEXER_CHECKPOINT_SIZE_H
 #define __DFTRACER_UTILS_INDEXER_CHECKPOINT_SIZE_H
 
-#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/core/common/constants.h>
 
 #include <cstddef>
 #include <cstdint>

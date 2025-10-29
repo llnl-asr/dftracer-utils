@@ -51,8 +51,8 @@ install
 build_*
 coverage/
 .venv
+*venv*
 
-.venv
 *.egg-info
 .cpmsource
 _skbuild
@@ -69,7 +69,7 @@ CLAUDE.md
 TODO
 temp
 
-*.pfw.gz
+*.gz
 traces
 refs
 dfanalyzer

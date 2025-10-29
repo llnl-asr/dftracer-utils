@@ -1,11 +1,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/indexer/error.h>
 #include <dftracer/utils/indexer/indexer.h>
 #include <dftracer/utils/indexer/indexer_factory.h>
 #include <dftracer/utils/reader/error.h>
 #include <dftracer/utils/reader/reader.h>
 #include <dftracer/utils/reader/reader_factory.h>
-#include <dftracer/utils/utils/filesystem.h>
 #include <doctest/doctest.h>
 
 #include <fstream>
@@ -18,6 +18,8 @@
 
 using namespace dft_utils_test;
 using namespace dftracer::utils;
+
+std::string format_name(Format format);
 
 // Parameterized test fixture for different formats
 class FormatTestFixture {
@@ -127,7 +129,7 @@ TEST_CASE_TEMPLATE("Reader creation and basic functionality", FormatType,
     indexer->build();
 
     SUBCASE("Reader creation with indexer") {
-        auto reader = ReaderFactory::create(indexer.get());
+        auto reader = ReaderFactory::create(indexer);
         CHECK(reader != nullptr);
         CHECK(reader->is_valid());
     }
@@ -149,7 +151,7 @@ TEST_CASE_TEMPLATE("Data reading operations", FormatType, GZIPFormat,
     REQUIRE(indexer != nullptr);
     indexer->build();
 
-    auto reader = ReaderFactory::create(indexer.get());
+    auto reader = ReaderFactory::create(indexer);
     REQUIRE(reader != nullptr);
 
     SUBCASE("Basic data reading") {
@@ -231,13 +233,13 @@ TEST_CASE_TEMPLATE("JSON boundary detection", FormatType, GZIPFormat,
     REQUIRE(indexer != nullptr);
     indexer->build();
 
-    auto reader = ReaderFactory::create(indexer.get());
+    auto reader = ReaderFactory::create(indexer);
     REQUIRE(reader != nullptr);
 
     SUBCASE("JSON boundary vs raw reading comparison") {
         // Create two readers - one for raw reading, one for JSON boundary
         // detection
-        auto raw_reader = ReaderFactory::create(indexer.get());
+        auto raw_reader = ReaderFactory::create(indexer);
         REQUIRE(raw_reader != nullptr);
 
         const std::size_t buffer_size = 1024;
@@ -288,13 +290,12 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat,
     uint64_t total_lines = indexer->get_num_lines();
     CHECK(total_lines > 0);
 
-    auto reader = ReaderFactory::create(indexer.get());
+    auto reader = ReaderFactory::create(indexer);
     REQUIRE(reader != nullptr);
 
     SUBCASE("Basic line reading") {
         const std::size_t buffer_size = 1024;
         std::vector<char> buffer(buffer_size);
-        std::size_t bytes_written;
         std::size_t line_count = 0;
 
         for (std::size_t line = 1;
@@ -326,7 +327,6 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat,
 
             const std::size_t buffer_size = 1024;
             std::vector<char> buffer(buffer_size);
-            std::size_t bytes_written;
 
             try {
                 // Convert to 1-based indexing
@@ -360,7 +360,7 @@ TEST_CASE("TAR.GZ specific functionality") {
         indexer->build();
 
         // Verify that we can read from the tar.gz archive
-        auto reader = ReaderFactory::create(indexer.get());
+        auto reader = ReaderFactory::create(indexer);
         REQUIRE(reader != nullptr);
 
         const std::size_t buffer_size = 1024;
@@ -386,7 +386,7 @@ TEST_CASE("TAR.GZ specific functionality") {
         // "file" field values)
         std::string content(buffer.data(), std::min(buffer_size, total_bytes));
         // Reset reader and read all content for verification
-        reader = ReaderFactory::create(indexer.get());
+        reader = ReaderFactory::create(indexer);
         std::vector<char> full_content(total_bytes + 1024);
         std::size_t full_total = 0;
         std::size_t current_pos_full = 0;
@@ -448,7 +448,7 @@ TEST_CASE("GZIP specific functionality") {
         CHECK(indexer->get_num_lines() ==
               200);  // Should have exactly 200 lines
 
-        auto reader = ReaderFactory::create(indexer.get());
+        auto reader = ReaderFactory::create(indexer);
         REQUIRE(reader != nullptr);
 
         // Read some content and verify it's the simple gzip format

@@ -46,7 +46,11 @@ build-dir = "build/{wheel_tag}"
 
 # Package discovery
 wheel.packages = ["python/dftracer"]
-sdist.include = ["python/dftracer/utils/_version.py", "cmake/tests"]
+sdist.include = [
+  "python/dftracer/utils/_version.py",
+  "python/dftracer/utils/py.typed",
+  "cmake/tests",
+]
 sdist.exclude = [
   "tests/**",
   "*.DS_Store",
@@ -75,6 +79,13 @@ sdist.exclude = [
 ]
 
 cmake.build-type = "Release"
+cmake.args = [
+  "-DDFTRACER_UTILS_BUILD_PYTHON=ON",
+  "-DDFTRACER_UTILS_BUILD_SHARED=ON",
+  "-DDFTRACER_UTILS_BUILD_STATIC=OFF",
+  "-DDFTRACER_UTILS_BUILD_BINARIES=ON",
+  "-DDCMAKE_CXX_FLAGS='-fsanitize=address -g'",
+]
 
 [tool.cibuildwheel]
 build-verbosity = 1

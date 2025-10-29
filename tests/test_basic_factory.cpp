@@ -29,7 +29,7 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
         REQUIRE(indexer != nullptr);
         indexer->build();
 
-        auto reader = ReaderFactory::create(indexer.get());
+        auto reader = ReaderFactory::create(indexer);
         REQUIRE(reader != nullptr);
         CHECK(reader->is_valid());
         CHECK(reader->get_archive_path() == gz_file);
@@ -72,7 +72,7 @@ TEST_CASE("Factory Pattern - Basic TAR.GZ functionality") {
         REQUIRE(indexer != nullptr);
         indexer->build();
 
-        auto reader = ReaderFactory::create(indexer.get());
+        auto reader = ReaderFactory::create(indexer);
         REQUIRE(reader != nullptr);
         CHECK(reader->is_valid());
         CHECK(reader->get_archive_path() == tar_gz_file);
@@ -93,7 +93,7 @@ TEST_CASE("Basic Reading Operations") {
     REQUIRE(indexer != nullptr);
     indexer->build();
 
-    auto reader = ReaderFactory::create(indexer.get());
+    auto reader = ReaderFactory::create(indexer);
     REQUIRE(reader != nullptr);
 
     SUBCASE("Basic metadata access") {

@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/filesystem/directory_scanner.h>
-#include <dftracer/utils/utilities/io/file_reader.h>
+#include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
+#include <dftracer/utils/utilities/io/file_reader_utility.h>
 #include <doctest/doctest.h>
 
 #include <fstream>
@@ -267,7 +267,7 @@ TEST_CASE("FileReaderUtility - Composition with DirectoryScanner") {
     }
 
     // Scan and read
-    Directory dir{test_dir};
+    DirectoryScannerUtilityInput dir{test_dir};
     auto files = scanner.process(dir);
 
     int files_read = 0;

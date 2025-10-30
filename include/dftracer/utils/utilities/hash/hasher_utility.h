@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_HASH_HASHER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_HASH_HASHER_UTILITY_H
 
-#include <dftracer/utils/utilities/hash/base_hasher.h>
-#include <dftracer/utils/utilities/hash/shared.h>
-#include <dftracer/utils/utilities/hash/std_hasher.h>
-#include <dftracer/utils/utilities/hash/xxh3_hasher.h>
-#include <dftracer/utils/utilities/hash/xxh64_hasher.h>
+#include <dftracer/utils/utilities/hash/internal/base_hasher_utility.h>
+#include <dftracer/utils/utilities/hash/std_hasher_utility.h>
+#include <dftracer/utils/utilities/hash/types.h>
+#include <dftracer/utils/utilities/hash/xxh3_hasher_utility.h>
+#include <dftracer/utils/utilities/hash/xxh64_hasher_utility.h>
 
 #include <memory>
 #include <string_view>
@@ -33,23 +33,21 @@ namespace dftracer::utils::utilities::hash {
  * Hash result = hasher->update("raw data");
  * @endcode
  */
-class HasherUtility : public BaseHasherUtility {
+class HasherUtility : public internal::BaseHasherUtility {
    private:
-    std::unique_ptr<BaseHasherUtility> impl_;
+    std::unique_ptr<internal::BaseHasherUtility> impl_;
     HashAlgorithm algorithm_;
 
    public:
     explicit HasherUtility(HashAlgorithm algo = HashAlgorithm::XXH3_64)
         : algorithm_(algo) {
         create_impl();
-        // impl constructors already initialize their state
     }
 
     ~HasherUtility() override = default;
 
-    // Bring base class overloads into scope
-    using BaseHasherUtility::process;
-    using BaseHasherUtility::update;
+    using internal::BaseHasherUtility::process;
+    using internal::BaseHasherUtility::update;
 
     /**
      * @brief Change the hash algorithm.

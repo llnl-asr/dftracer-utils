@@ -3,10 +3,10 @@
 
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/reader/reader_factory.h>
 #include <dftracer/utils/utilities/io/lines/line_bytes_range.h>
 #include <dftracer/utils/utilities/io/lines/line_range.h>
 #include <dftracer/utils/utilities/io/lines/line_types.h>
+#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
 #include <memory>
 #include <string>

@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/indexer/indexer_factory.h>
-#include <dftracer/utils/reader/reader.h>
-#include <dftracer/utils/reader/reader_factory.h>
-#include <dftracer/utils/reader/stream.h>
-#include <dftracer/utils/reader/stream_type.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/utilities/reader/internal/reader.h>
+#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/utilities/reader/internal/stream.h>
+#include <dftracer/utils/utilities/reader/internal/stream_type.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -20,6 +20,8 @@
 #include <vector>
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::utilities::reader::internal;
 using namespace dft_utils_test;
 
 // Helper function to create a test file with variable line lengths
@@ -512,10 +514,13 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests") {
             indexer->build();
         }
 
-        auto reader = ReaderFactory::create(gz_file, idx_file);
-        REQUIRE(reader != nullptr);
+        std::size_t max_bytes;
+        {
+            auto reader = ReaderFactory::create(gz_file, idx_file);
+            REQUIRE(reader != nullptr);
+            max_bytes = reader->get_max_bytes();
+        }
 
-        std::size_t max_bytes = reader->get_max_bytes();
         const int num_threads = 16;
         std::size_t chunk_size = max_bytes / num_threads;
 
@@ -527,6 +532,13 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests") {
         for (int i = 0; i < num_threads; ++i) {
             threads.emplace_back([&, i]() {
                 try {
+                    // Create separate reader per thread
+                    auto reader = ReaderFactory::create(gz_file, idx_file);
+                    if (!reader) {
+                        errors++;
+                        return;
+                    }
+
                     std::size_t start = i * chunk_size;
                     std::size_t end = (i == num_threads - 1)
                                           ? max_bytes
@@ -828,12 +840,17 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
 
             for (int i = 0; i < num_workers; ++i) {
                 threads.emplace_back([&, i]() {
+                    // Create separate reader per thread
+                    auto thread_reader =
+                        ReaderFactory::create(gz_file, idx_file);
+                    if (!thread_reader) return;
+
                     std::size_t start = i * chunk_size;
                     std::size_t end = (i == num_workers - 1)
                                           ? max_bytes
                                           : (i + 1) * chunk_size;
 
-                    auto stream = reader->stream(
+                    auto stream = thread_reader->stream(
                         StreamConfig()
                             .stream_type(StreamType::MULTI_LINES_BYTES)
                             .range_type(RangeType::BYTE_RANGE)
@@ -876,6 +893,216 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
             CHECK(unique_count == worker_lines.size());
             CHECK(worker_lines.size() == reference_lines.size());
             CHECK(worker_lines == reference_lines);
+        }
+    }
+}
+
+TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
+    SUBCASE("Test with different buffer sizes") {
+        TestEnvironment env(3000);
+        REQUIRE(env.is_valid());
+
+        std::string gz_file =
+            create_variable_line_test_file(env.get_dir(), 3000, 100, 300);
+        REQUIRE(!gz_file.empty());
+
+        std::string idx_file = env.get_index_path(gz_file);
+
+        {
+            auto indexer =
+                IndexerFactory::create(gz_file, idx_file, mb_to_b(2.0));
+            indexer->build();
+        }
+
+        auto reference_reader = ReaderFactory::create(gz_file, idx_file);
+        REQUIRE(reference_reader != nullptr);
+
+        std::size_t max_bytes = reference_reader->get_max_bytes();
+
+        // Read full file with default buffer to get reference
+        auto ref_stream = reference_reader->stream(
+            StreamConfig()
+                .stream_type(StreamType::MULTI_LINES_BYTES)
+                .range_type(RangeType::BYTE_RANGE)
+                .from(0)
+                .to(max_bytes)
+                .buffer_size(0));  // Use default
+
+        std::vector<char> buffer(512 * 1024);
+        std::string reference_content;
+        while (!ref_stream->done()) {
+            std::size_t bytes_read =
+                ref_stream->read(buffer.data(), buffer.size());
+            if (bytes_read > 0) {
+                reference_content.append(buffer.data(), bytes_read);
+            }
+        }
+
+        std::vector<std::string> reference_lines;
+        std::istringstream ref_stream_str(reference_content);
+        std::string line;
+        while (std::getline(ref_stream_str, line)) {
+            if (!line.empty()) reference_lines.push_back(line);
+        }
+        std::sort(reference_lines.begin(), reference_lines.end());
+
+        CHECK(reference_lines.size() == 3000);
+
+        // Test with various buffer sizes
+        std::vector<std::size_t> buffer_sizes = {
+            32 * 1024,        // 32KB (smaller than default 64KB)
+            64 * 1024,        // 64KB (default)
+            256 * 1024,       // 256KB
+            1 * 1024 * 1024,  // 1MB
+            4 * 1024 * 1024,  // 4MB (StreamConfig default)
+            8 * 1024 * 1024   // 8MB (large)
+        };
+
+        for (std::size_t buf_size : buffer_sizes) {
+            INFO("Testing buffer size: ", buf_size, " bytes");
+
+            auto reader = ReaderFactory::create(gz_file, idx_file);
+            REQUIRE(reader != nullptr);
+
+            // Test reading full file with this buffer size
+            auto stream =
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::MULTI_LINES_BYTES)
+                                   .range_type(RangeType::BYTE_RANGE)
+                                   .from(0)
+                                   .to(max_bytes)
+                                   .buffer_size(buf_size));
+
+            std::string content;
+            while (!stream->done()) {
+                std::size_t bytes_read =
+                    stream->read(buffer.data(), buffer.size());
+                if (bytes_read > 0) {
+                    content.append(buffer.data(), bytes_read);
+                }
+            }
+
+            std::vector<std::string> lines;
+            std::istringstream stream_str(content);
+            while (std::getline(stream_str, line)) {
+                if (!line.empty()) lines.push_back(line);
+            }
+            std::sort(lines.begin(), lines.end());
+
+            CHECK(lines.size() == reference_lines.size());
+            CHECK(lines == reference_lines);
+        }
+    }
+
+    SUBCASE("Test chunked reads with different buffer sizes") {
+        TestEnvironment env(2000);
+        REQUIRE(env.is_valid());
+
+        std::string gz_file =
+            create_variable_line_test_file(env.get_dir(), 2000, 80, 200);
+        REQUIRE(!gz_file.empty());
+
+        std::string idx_file = env.get_index_path(gz_file);
+
+        {
+            auto indexer =
+                IndexerFactory::create(gz_file, idx_file, mb_to_b(1.5));
+            indexer->build();
+        }
+
+        std::size_t max_bytes;
+        {
+            auto reader = ReaderFactory::create(gz_file, idx_file);
+            max_bytes = reader->get_max_bytes();
+        }
+
+        std::size_t mid_point = max_bytes / 2;
+
+        std::vector<std::size_t> buffer_sizes = {
+            64 * 1024,        // 64KB
+            512 * 1024,       // 512KB
+            2 * 1024 * 1024,  // 2MB
+            8 * 1024 * 1024   // 8MB
+        };
+
+        for (std::size_t buf_size : buffer_sizes) {
+            INFO("Testing chunked read with buffer size: ", buf_size, " bytes");
+
+            std::vector<char> read_buffer(512 * 1024);
+
+            // Read first half
+            {
+                auto reader = ReaderFactory::create(gz_file, idx_file);
+                auto stream1 = reader->stream(
+                    StreamConfig()
+                        .stream_type(StreamType::MULTI_LINES_BYTES)
+                        .range_type(RangeType::BYTE_RANGE)
+                        .from(0)
+                        .to(mid_point)
+                        .buffer_size(buf_size));
+
+                std::string chunk1;
+                while (!stream1->done()) {
+                    std::size_t bytes_read =
+                        stream1->read(read_buffer.data(), read_buffer.size());
+                    if (bytes_read > 0) {
+                        chunk1.append(read_buffer.data(), bytes_read);
+                    }
+                }
+                CHECK(!chunk1.empty());
+            }
+
+            // Read second half
+            {
+                auto reader = ReaderFactory::create(gz_file, idx_file);
+                auto stream2 = reader->stream(
+                    StreamConfig()
+                        .stream_type(StreamType::MULTI_LINES_BYTES)
+                        .range_type(RangeType::BYTE_RANGE)
+                        .from(mid_point)
+                        .to(max_bytes)
+                        .buffer_size(buf_size));
+
+                std::string chunk2;
+                while (!stream2->done()) {
+                    std::size_t bytes_read =
+                        stream2->read(read_buffer.data(), read_buffer.size());
+                    if (bytes_read > 0) {
+                        chunk2.append(read_buffer.data(), bytes_read);
+                    }
+                }
+                CHECK(!chunk2.empty());
+            }
+
+            // Read full file
+            {
+                auto reader = ReaderFactory::create(gz_file, idx_file);
+                auto stream_full = reader->stream(
+                    StreamConfig()
+                        .stream_type(StreamType::MULTI_LINES_BYTES)
+                        .range_type(RangeType::BYTE_RANGE)
+                        .from(0)
+                        .to(max_bytes)
+                        .buffer_size(buf_size));
+
+                std::string full;
+                while (!stream_full->done()) {
+                    std::size_t bytes_read = stream_full->read(
+                        read_buffer.data(), read_buffer.size());
+                    if (bytes_read > 0) {
+                        full.append(read_buffer.data(), bytes_read);
+                    }
+                }
+
+                std::vector<std::string> full_lines;
+                std::istringstream full_stream(full);
+                std::string line;
+                while (std::getline(full_stream, line)) {
+                    if (!line.empty()) full_lines.push_back(line);
+                }
+
+                CHECK(full_lines.size() == 2000);
+            }
         }
     }
 }

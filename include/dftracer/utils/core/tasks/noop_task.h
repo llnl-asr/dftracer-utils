@@ -8,23 +8,24 @@
 namespace dftracer::utils {
 
 /**
- * NoOpTask - Pass-through task for multiple source nodes
+ * NoOpTask - Pass-through task for multiple source or destination nodes
  *
- * This task is automatically created by Pipeline when multiple source tasks
- * are specified. It simply passes through its input unchanged.
+ * This task is automatically created by Pipeline when multiple source or
+ * destination tasks are specified. It simply acts as a synchronization point.
  *
  * Purpose:
- * - Ensures every pipeline has exactly one source node
- * - Provides trackability for multiple independent starting points
+ * - Ensures every pipeline has exactly one source/destination node
+ * - Provides trackability for multiple independent starting/ending points
+ * - Returns void to bypass type validation (works with any parent types)
  */
 class NoOpTask : public Task {
    public:
-    NoOpTask()
+    explicit NoOpTask(std::string name = "__noop__")
         : Task(
-              []() {
-                  // No-op: just a synchronization point for multiple sources
+              []() -> void {
+                  // No-op: just a synchronization point
               },
-              "__noop_source__") {}
+              std::move(name)) {}
 
     virtual ~NoOpTask() = default;
 };
@@ -32,8 +33,8 @@ class NoOpTask : public Task {
 /**
  * Helper function to create a NoOpTask
  */
-inline std::shared_ptr<NoOpTask> make_noop_task() {
-    return std::make_shared<NoOpTask>();
+inline std::shared_ptr<NoOpTask> make_noop_task(std::string name = "__noop__") {
+    return std::make_shared<NoOpTask>(std::move(name));
 }
 
 }  // namespace dftracer::utils

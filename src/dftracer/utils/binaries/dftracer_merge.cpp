@@ -2,17 +2,11 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config_manager.h>
+#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
-#include <dftracer/utils/indexer/indexer.h>
-#include <dftracer/utils/utilities/composites/batch_processor.h>
-#include <dftracer/utils/utilities/composites/chunk_verifier.h>
-#include <dftracer/utils/utilities/composites/dft/event_collector.h>
-#include <dftracer/utils/utilities/composites/dft/event_hasher.h>
-#include <dftracer/utils/utilities/composites/dft/index_builder.h>
-#include <dftracer/utils/utilities/composites/dft/utils.h>
-#include <dftracer/utils/utilities/composites/file_merger.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/utilities/utilities.h>
 
 #include <argparse/argparse.hpp>
 #include <chrono>
@@ -24,6 +18,7 @@
 #include <vector>
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::composites;
 using EventId = utilities::composites::dft::EventId;
 
@@ -207,7 +202,7 @@ int main(int argc, char** argv) {
     // ========================================================================
     // Create Pipeline with Configuration
     // ========================================================================
-    auto pipeline_config = PipelineConfigManager()
+    auto pipeline_config = PipelineConfig()
                                .with_name("DFTracer Merge")
                                .with_executor_threads(executor_threads)
                                .with_scheduler_threads(scheduler_threads);
@@ -223,22 +218,23 @@ int main(int argc, char** argv) {
     auto create_merge_inputs =
         [&temp_dir, &index_dir, checkpoint_size,
          force_override](const std::vector<std::string>& files)
-        -> std::vector<FileMergerUtilityInput> {
-        std::vector<FileMergerUtilityInput> inputs;
+        -> std::vector<FileMergeValidatorUtilityInput> {
+        std::vector<FileMergeValidatorUtilityInput> inputs;
         inputs.reserve(files.size());
 
         for (const auto& file : files) {
             // Determine temp file path
             std::string temp_file =
                 temp_dir + "/merge_temp_" +
-                std::to_string(FileMergerUtility::get_next_counter()) + ".tmp";
+                std::to_string(FileMergeValidatorUtility::get_next_counter()) +
+                ".tmp";
 
-            auto input =
-                FileMergerUtilityInput::from_file(file)
-                    .with_output(temp_file)
-                    .with_index(dft::determine_index_path(file, index_dir))
-                    .with_checkpoint_size(checkpoint_size)
-                    .with_force_rebuild(force_override);
+            auto input = FileMergeValidatorUtilityInput::from_file(file)
+                             .with_output(temp_file)
+                             .with_index(dft::internal::determine_index_path(
+                                 file, index_dir))
+                             .with_checkpoint_size(checkpoint_size)
+                             .with_force_rebuild(force_override);
 
             inputs.push_back(input);
         }
@@ -250,32 +246,32 @@ int main(int argc, char** argv) {
         make_task(create_merge_inputs, "CreateMergeInputs");
 
     // Task 1.2: Process files using BatchProcessorUtility with
-    // FileMergerUtility
-    auto file_merger_func =
-        [](TaskContext&,
-           const FileMergerUtilityInput& input) -> FileMergerUtilityOutput {
-        FileMergerUtility merger;
+    // FileMergeValidatorUtility
+    auto file_merger_func = [](TaskContext&,
+                               const FileMergeValidatorUtilityInput& input)
+        -> FileMergeValidatorUtilityOutput {
+        FileMergeValidatorUtility merger;
         return merger.process(input);
     };
 
-    auto file_processor_batch = std::make_shared<
-        BatchProcessorUtility<FileMergerUtilityInput, FileMergerUtilityOutput>>(
+    auto file_processor_batch = std::make_shared<BatchProcessorUtility<
+        FileMergeValidatorUtilityInput, FileMergeValidatorUtilityOutput>>(
         file_merger_func);
 
     auto task1_process_files = utilities::use(file_processor_batch).as_task();
     task1_process_files->with_name("ProcessFiles");
 
     // ========================================================================
-    // Task 2: Combine results into final output using FileCombinerUtility
+    // Task 2: Combine results into final output using FileMergerUtility
     // ========================================================================
     DFTRACER_UTILS_LOG_INFO("%s", "Task 2: Combining results...");
 
     // Task 2.1: Create combiner input
     auto create_combiner_input =
         [output_file, compress_output](
-            const std::vector<FileMergerUtilityOutput>& merge_results)
-        -> FileCombinerUtilityInput {
-        FileCombinerUtilityInput input;
+            const std::vector<FileMergeValidatorUtilityOutput>& merge_results)
+        -> FileMergerUtilityInput {
+        FileMergerUtilityInput input;
         input.output_file = output_file;
         input.compress = compress_output;
         input.file_results = merge_results;
@@ -288,9 +284,9 @@ int main(int argc, char** argv) {
 
     // Task 2.2: Combine files
     auto combine_files =
-        [](const FileCombinerUtilityInput& input) -> FileCombinerUtilityOutput {
-        FileCombinerUtility combiner;
-        return combiner.process(input);
+        [](const FileMergerUtilityInput& input) -> FileMergerUtilityOutput {
+        FileMergerUtility merger;
+        return merger.process(input);
     };
 
     auto task2_combine = make_task(combine_files, "CombineFiles");
@@ -312,9 +308,9 @@ int main(int argc, char** argv) {
         // counts We actually need to collect from original input files for
         // proper verification
         auto input_hasher = [hasher, checkpoint_size, force_override,
-                             &index_dir](
-                                const std::vector<FileMergerUtilityOutput>&
-                                    merge_results) {
+                             &index_dir](const std::vector<
+                                         FileMergeValidatorUtilityOutput>&
+                                             merge_results) {
             // Create metadata from merge results to use existing collector
             std::vector<
                 utilities::composites::dft::MetadataCollectorUtilityOutput>
@@ -340,9 +336,8 @@ int main(int argc, char** argv) {
                              gz_suffix.size(), gz_suffix) == 0);
 
                     if (is_compressed) {
-                        meta.idx_path =
-                            utilities::composites::dft::determine_index_path(
-                                result.file_path, index_dir);
+                        meta.idx_path = utilities::composites::dft::internal::
+                            determine_index_path(result.file_path, index_dir);
                     }
 
                     metadata.push_back(meta);
@@ -366,7 +361,7 @@ int main(int argc, char** argv) {
 
         // Task 3.3: Output event collector - reuse collected events from merge
         auto output_event_collector =
-            [](TaskContext&, const FileCombinerUtilityOutput& result) {
+            [](TaskContext&, const FileMergerUtilityOutput& result) {
                 // Simply return the events we already collected during the
                 // merge process
                 return result.collected_events;
@@ -382,8 +377,8 @@ int main(int argc, char** argv) {
         // Task 3.5: Create chunk verifier utility
         auto verifier =
             std::make_shared<utilities::composites::ChunkVerifierUtility<
-                FileCombinerUtilityOutput, FileMergerUtilityOutput, EventId>>(
-                input_hasher, output_event_collector, event_hasher);
+                FileMergerUtilityOutput, FileMergeValidatorUtilityOutput,
+                EventId>>(input_hasher, output_event_collector, event_hasher);
 
         // Task 3.6: Task definition - Use utility adapter pattern
         task3_verify = utilities::use(verifier).as_task();
@@ -391,10 +386,11 @@ int main(int argc, char** argv) {
 
         // Task 3.7: Combiner to merge output and input results for verification
         task3_verify->with_combiner(
-            [](const FileCombinerUtilityOutput& output,
-               const std::vector<FileMergerUtilityOutput>& inputs) {
+            [](const FileMergerUtilityOutput& output,
+               const std::vector<FileMergeValidatorUtilityOutput>& inputs) {
                 return utilities::composites::ChunkVerificationUtilityInput<
-                           FileCombinerUtilityOutput, FileMergerUtilityOutput>::
+                           FileMergerUtilityOutput,
+                           FileMergeValidatorUtilityOutput>::
                     from_chunks({output})  // Single "chunk" (the merged file)
                         .with_metadata(inputs);
             });
@@ -425,8 +421,9 @@ int main(int argc, char** argv) {
 
     // Get results
     auto merge_results =
-        task1_process_files->get<std::vector<FileMergerUtilityOutput>>();
-    auto combine_result = task2_combine->get<FileCombinerUtilityOutput>();
+        task1_process_files
+            ->get<std::vector<FileMergeValidatorUtilityOutput>>();
+    auto combine_result = task2_combine->get<FileMergerUtilityOutput>();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;

@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/indexer/indexer_factory.h>
-#include <dftracer/utils/utilities/composites/line_batch_processor.h>
+#include <dftracer/utils/utilities/composites/line_batch_processor_utility.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/io/lines/line_types.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -11,6 +11,7 @@
 #include <thread>
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::composites;
 using namespace dftracer::utils::utilities::io::lines;
 using namespace dft_utils_test;

@@ -3,7 +3,7 @@
 
 #include <Python.h>
 #include <dftracer/utils/python/indexer.h>
-#include <dftracer/utils/reader/reader.h>
+#include <dftracer/utils/utilities/reader/internal/reader.h>
 
 #include <cstddef>
 #include <cstdint>

@@ -10,7 +10,7 @@
 
 namespace dftracer::utils {
 
-Pipeline::Pipeline(const PipelineConfigManager& config)
+Pipeline::Pipeline(const PipelineConfig& config)
     : name_(config.name),
       executor_threads_(config.executor_threads),
       error_policy_(config.error_policy),
@@ -50,11 +50,11 @@ void Pipeline::set_destination(std::shared_ptr<Task> destination) {
     validated_ = false;  // Need to revalidate
 }
 
-void Pipeline::add_sources(
+void Pipeline::set_source(
     std::initializer_list<std::shared_ptr<Task>> sources) {
     if (sources.size() == 0) {
         throw PipelineError(PipelineError::VALIDATION_ERROR,
-                            "Cannot add zero sources");
+                            "Cannot set zero sources");
     }
 
     if (sources.size() == 1) {
@@ -64,7 +64,7 @@ void Pipeline::add_sources(
     }
 
     // Multiple sources - create NoOpTask
-    auto noop = make_noop_task();
+    auto noop = make_noop_task("__start__");
 
     // Connect all sources as children of noop
     for (auto& source : sources) {
@@ -76,6 +76,35 @@ void Pipeline::add_sources(
     }
 
     source_ = noop;
+    validated_ = false;
+}
+
+void Pipeline::set_destination(
+    std::initializer_list<std::shared_ptr<Task>> destinations) {
+    if (destinations.size() == 0) {
+        throw PipelineError(PipelineError::VALIDATION_ERROR,
+                            "Cannot set zero destinations");
+    }
+
+    if (destinations.size() == 1) {
+        // Single destination - no need for NoOpTask
+        set_destination(*destinations.begin());
+        return;
+    }
+
+    // Multiple destinations - create NoOpTask
+    auto noop = make_noop_task("__end__");
+
+    // Connect all destinations as parents of noop
+    for (auto& dest : destinations) {
+        if (!dest) {
+            throw PipelineError(PipelineError::VALIDATION_ERROR,
+                                "Destination task cannot be null");
+        }
+        noop->depends_on(dest);
+    }
+
+    destination_ = noop;
     validated_ = false;
 }
 

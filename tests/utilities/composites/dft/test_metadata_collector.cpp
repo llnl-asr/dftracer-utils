@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/composites/dft/metadata_collector.h>
+#include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <doctest/doctest.h>
 #include <unistd.h>  // for getpid()
 

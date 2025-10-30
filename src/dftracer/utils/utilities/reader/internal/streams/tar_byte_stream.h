@@ -1,0 +1,215 @@
+#ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_TAR_BYTE_STREAM_H
+#define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_TAR_BYTE_STREAM_H
+
+#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/span.h>
+#include <dftracer/utils/utilities/reader/internal/streams/gzip_byte_stream.h>
+#include <dftracer/utils/utilities/reader/internal/streams/tar_stream.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+
+namespace dftracer::utils::utilities::reader::internal {
+
+/**
+ * TAR-aware byte stream that provides logical content reading from TAR.GZ
+ * files. Presents concatenated file contents without TAR headers.
+ */
+class TarByteStream : public TarStream {
+   private:
+    dftracer::utils::utilities::indexer::internal::tar::TarIndexer
+        *tar_indexer_ptr_;
+    std::unique_ptr<GzipByteStream> current_file_stream_;
+    std::size_t buffer_size_;
+
+   public:
+    explicit TarByteStream(std::size_t buffer_size = 0)
+        : TarStream(), tar_indexer_ptr_(nullptr), buffer_size_(buffer_size) {}
+
+    void initialize(const std::string &tar_gz_path, std::size_t start_bytes,
+                    std::size_t end_bytes,
+                    dftracer::utils::utilities::indexer::internal::Indexer
+                        &indexer) override {
+        DFTRACER_UTILS_LOG_DEBUG(
+            "TarByteStream::initialize - start_bytes=%zu, end_bytes=%zu",
+            start_bytes, end_bytes);
+
+        // Cast to TarIndexer for TAR-specific operations
+        tar_indexer_ptr_ = dynamic_cast<
+            dftracer::utils::utilities::indexer::internal::tar::TarIndexer *>(
+            &indexer);
+        if (!tar_indexer_ptr_) {
+            throw ReaderError(ReaderError::INITIALIZATION_ERROR,
+                              "TarByteStream requires a TarIndexer");
+        }
+
+        TarStream::initialize(tar_gz_path, start_bytes, end_bytes, indexer);
+        current_position_ = start_bytes;
+
+        // Initialize stream for current file if we have one
+        if (current_file_) {
+            initialize_current_file_stream();
+        }
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "TarByteStream::initialize - completed, current_position_=%zu",
+            current_position_);
+    }
+
+    std::size_t read(char *buffer, std::size_t buffer_size) override {
+#ifdef __GNUC__
+        __builtin_prefetch(buffer, 1, 3);
+#endif
+
+        if (!decompression_initialized_) {
+            throw ReaderError(ReaderError::INITIALIZATION_ERROR,
+                              "TAR streaming session not properly initialized");
+        }
+
+        if (is_at_target_end()) {
+            is_finished_ = true;
+            return 0;
+        }
+
+        std::size_t total_bytes_read = 0;
+        std::size_t remaining_buffer = buffer_size;
+
+        while (remaining_buffer > 0 && current_position_ < target_end_bytes_ &&
+               current_file_) {
+            // Calculate how much we can read from current file
+            std::size_t file_remaining =
+                current_file_->file_size - current_file_offset_;
+            std::size_t logical_remaining =
+                target_end_bytes_ - current_position_;
+            std::size_t max_read = std::min(
+                remaining_buffer, std::min(file_remaining, logical_remaining));
+
+            if (max_read == 0) {
+                // Move to next file
+                if (!advance_to_next_file()) {
+                    break;
+                }
+                initialize_current_file_stream();
+                continue;
+            }
+
+            // Read from current file stream
+            if (!current_file_stream_) {
+                initialize_current_file_stream();
+                if (!current_file_stream_) {
+                    break;
+                }
+            }
+
+            std::size_t bytes_read =
+                current_file_stream_->read(buffer + total_bytes_read, max_read);
+
+            DFTRACER_UTILS_LOG_DEBUG(
+                "TarByteStream::stream - read %zu bytes from file %s (offset "
+                "%zu)",
+                bytes_read, current_file_->file_name.c_str(),
+                current_file_offset_);
+
+            if (bytes_read == 0) {
+                // Current file stream is finished, move to next file
+                if (!advance_to_next_file()) {
+                    break;
+                }
+                initialize_current_file_stream();
+                continue;
+            }
+
+            total_bytes_read += bytes_read;
+            remaining_buffer -= bytes_read;
+            current_position_ += bytes_read;
+            current_file_offset_ += bytes_read;
+
+            // Check if we've finished the current file
+            if (current_file_offset_ >= current_file_->file_size) {
+                if (!advance_to_next_file()) {
+                    break;
+                }
+                initialize_current_file_stream();
+            }
+        }
+
+        if (total_bytes_read == 0 || current_position_ >= target_end_bytes_) {
+            is_finished_ = true;
+        }
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "TarByteStream::stream - total bytes read: %zu (position: %zu / "
+            "%zu)",
+            total_bytes_read, current_position_, target_end_bytes_);
+
+        return total_bytes_read;
+    }
+
+    // Zero-copy read - stub for now
+    span_view<const char> read() override {
+        // TODO: Implement zero-copy read for TarByteStream
+        return {};
+    }
+
+    void reset() override {
+        TarStream::reset();
+        current_file_stream_.reset();
+        tar_indexer_ptr_ = nullptr;
+    }
+
+   private:
+    void initialize_current_file_stream() {
+        current_file_stream_.reset();
+
+        if (!current_file_ || !tar_indexer_ptr_) {
+            return;
+        }
+
+        // Get the actual file data offset from the TAR indexer
+        dftracer::utils::utilities::indexer::internal::tar::TarIndexer::
+            TarFileInfo tar_file_info;
+        if (!tar_indexer_ptr_->find_file(current_file_->file_name,
+                                         tar_file_info)) {
+            DFTRACER_UTILS_LOG_ERROR("Failed to find TAR file: %s",
+                                     current_file_->file_name.c_str());
+            return;
+        }
+
+        // Calculate actual byte range for this file segment
+        std::uint64_t actual_start =
+            tar_file_info.data_offset + current_file_offset_;
+        std::uint64_t actual_end =
+            tar_file_info.data_offset + current_file_->file_size;
+
+        // Clamp to our target range
+        std::uint64_t logical_start =
+            current_file_->logical_start_offset + current_file_offset_;
+        std::uint64_t logical_end =
+            std::min(static_cast<std::uint64_t>(target_end_bytes_),
+                     current_file_->logical_end_offset);
+
+        if (logical_start >= logical_end) {
+            return;
+        }
+
+        // Adjust actual end based on logical constraint
+        std::uint64_t logical_size = logical_end - logical_start;
+        actual_end = actual_start + logical_size;
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Initializing stream for file %s: actual[%lu-%lu] logical[%lu-%lu]",
+            current_file_->file_name.c_str(), actual_start, actual_end,
+            logical_start, logical_end);
+
+        // Create and initialize the underlying byte stream
+        current_file_stream_ = std::make_unique<GzipByteStream>(buffer_size_);
+        current_file_stream_->initialize(
+            current_gz_path_, static_cast<std::size_t>(actual_start),
+            static_cast<std::size_t>(actual_end), *tar_indexer_ptr_);
+    }
+};
+
+}  // namespace dftracer::utils::utilities::reader::internal
+
+#endif  // DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_TAR_BYTE_STREAM_H

@@ -1,7 +1,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/pipeline/error.h>
 #include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/pipeline/pipeline_config_manager.h>
+#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
 #include <dftracer/utils/core/pipeline/watchdog.h>
 #include <dftracer/utils/core/tasks/task.h>
@@ -50,7 +50,7 @@ Scheduler::Scheduler(Executor* executor)
     start_scheduling_thread();
 }
 
-Scheduler::Scheduler(Executor* executor, const PipelineConfigManager& config)
+Scheduler::Scheduler(Executor* executor, const PipelineConfig& config)
     : executor_(executor),
       num_scheduling_threads_(
           config.scheduler_threads > 0 ? config.scheduler_threads : 1),

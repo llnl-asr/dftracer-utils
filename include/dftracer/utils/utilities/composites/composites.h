@@ -10,16 +10,17 @@
  */
 
 // Core workflow types
-#include <dftracer/utils/utilities/composites/composite_types.h>
+#include <dftracer/utils/utilities/composites/types.h>
 
 // Generic composites
-#include <dftracer/utils/utilities/composites/batch_processor.h>
-#include <dftracer/utils/utilities/composites/chunk_verifier.h>
-#include <dftracer/utils/utilities/composites/directory_file_processor.h>
-#include <dftracer/utils/utilities/composites/file_compressor.h>
-#include <dftracer/utils/utilities/composites/file_decompressor.h>
-#include <dftracer/utils/utilities/composites/indexed_file_reader.h>
-#include <dftracer/utils/utilities/composites/line_batch_processor.h>
+#include <dftracer/utils/utilities/composites/batch_processor_utility.h>
+#include <dftracer/utils/utilities/composites/chunk_verifier_utility.h>
+#include <dftracer/utils/utilities/composites/directory_file_processor_utility.h>
+#include <dftracer/utils/utilities/composites/file_compressor_utility.h>
+#include <dftracer/utils/utilities/composites/file_decompressor_utility.h>
+#include <dftracer/utils/utilities/composites/file_merger_utility.h>
+#include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
+#include <dftracer/utils/utilities/composites/line_batch_processor_utility.h>
 
 // DFTracer-specific composites
 #include <dftracer/utils/utilities/composites/dft/dft.h>

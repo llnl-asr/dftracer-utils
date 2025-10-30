@@ -263,6 +263,103 @@ static PyObject* JSON_keys(JSONObject* self, PyObject* Py_UNUSED(ignored)) {
     return keys;
 }
 
+static PyObject* JSON_values(JSONObject* self, PyObject* Py_UNUSED(ignored)) {
+    if (!JSON_ensure_parsed(self)) {
+        return NULL;
+    }
+
+    yyjson_val* root = JSON_get_root(self);
+    if (!yyjson_is_obj(root)) {
+        return PyList_New(0);
+    }
+
+    PyObject* values = PyList_New(0);
+    if (!values) return NULL;
+
+    std::size_t idx, max;
+    yyjson_val *key_val, *val_val;
+    yyjson_obj_foreach(root, idx, max, key_val, val_val) {
+        PyObject* py_val;
+        // If the value is an object or array, return a lazy wrapper
+        if (yyjson_is_obj(val_val) || yyjson_is_arr(val_val)) {
+            py_val = JSON_from_yyjson_val(self->doc, val_val);
+        } else {
+            py_val = yyjson_val_to_python(val_val);
+        }
+
+        if (!py_val) {
+            Py_DECREF(values);
+            return NULL;
+        }
+
+        if (PyList_Append(values, py_val) < 0) {
+            Py_DECREF(py_val);
+            Py_DECREF(values);
+            return NULL;
+        }
+        Py_DECREF(py_val);
+    }
+
+    return values;
+}
+
+static PyObject* JSON_items(JSONObject* self, PyObject* Py_UNUSED(ignored)) {
+    if (!JSON_ensure_parsed(self)) {
+        return NULL;
+    }
+
+    yyjson_val* root = JSON_get_root(self);
+    if (!yyjson_is_obj(root)) {
+        return PyList_New(0);
+    }
+
+    PyObject* items = PyList_New(0);
+    if (!items) return NULL;
+
+    std::size_t idx, max;
+    yyjson_val *key_val, *val_val;
+    yyjson_obj_foreach(root, idx, max, key_val, val_val) {
+        const char* key_str = yyjson_get_str(key_val);
+        PyObject* py_key = PyUnicode_FromString(key_str);
+        if (!py_key) {
+            Py_DECREF(items);
+            return NULL;
+        }
+
+        PyObject* py_val;
+        // If the value is an object or array, return a lazy wrapper
+        if (yyjson_is_obj(val_val) || yyjson_is_arr(val_val)) {
+            py_val = JSON_from_yyjson_val(self->doc, val_val);
+        } else {
+            py_val = yyjson_val_to_python(val_val);
+        }
+
+        if (!py_val) {
+            Py_DECREF(py_key);
+            Py_DECREF(items);
+            return NULL;
+        }
+
+        PyObject* tuple = PyTuple_Pack(2, py_key, py_val);
+        Py_DECREF(py_key);
+        Py_DECREF(py_val);
+
+        if (!tuple) {
+            Py_DECREF(items);
+            return NULL;
+        }
+
+        if (PyList_Append(items, tuple) < 0) {
+            Py_DECREF(tuple);
+            Py_DECREF(items);
+            return NULL;
+        }
+        Py_DECREF(tuple);
+    }
+
+    return items;
+}
+
 static PyObject* JSON_get(JSONObject* self, PyObject* args) {
     PyObject* key;
     PyObject* default_value = Py_None;
@@ -305,6 +402,119 @@ static PyObject* JSON_get(JSONObject* self, PyObject* args) {
     return yyjson_val_to_python(val);
 }
 
+// Helper function to recursively convert yyjson_val to Python dict/list
+static PyObject* yyjson_val_to_python_deep(yyjson_val* val) {
+    if (yyjson_is_null(val)) {
+        Py_RETURN_NONE;
+    } else if (yyjson_is_bool(val)) {
+        if (yyjson_get_bool(val)) {
+            Py_RETURN_TRUE;
+        } else {
+            Py_RETURN_FALSE;
+        }
+    } else if (yyjson_is_uint(val)) {
+        return PyLong_FromUnsignedLongLong(yyjson_get_uint(val));
+    } else if (yyjson_is_int(val)) {
+        return PyLong_FromLongLong(yyjson_get_int(val));
+    } else if (yyjson_is_real(val)) {
+        return PyFloat_FromDouble(yyjson_get_real(val));
+    } else if (yyjson_is_str(val)) {
+        return PyUnicode_FromString(yyjson_get_str(val));
+    } else if (yyjson_is_arr(val)) {
+        std::size_t idx, max;
+        yyjson_val* item;
+        PyObject* list = PyList_New(0);
+        if (!list) return NULL;
+
+        yyjson_arr_foreach(val, idx, max, item) {
+            PyObject* py_item = yyjson_val_to_python_deep(item);
+            if (!py_item) {
+                Py_DECREF(list);
+                return NULL;
+            }
+            if (PyList_Append(list, py_item) < 0) {
+                Py_DECREF(py_item);
+                Py_DECREF(list);
+                return NULL;
+            }
+            Py_DECREF(py_item);
+        }
+        return list;
+    } else if (yyjson_is_obj(val)) {
+        std::size_t idx, max;
+        yyjson_val *key_val, *val_val;
+        PyObject* dict = PyDict_New();
+        if (!dict) return NULL;
+
+        yyjson_obj_foreach(val, idx, max, key_val, val_val) {
+            const char* key_str = yyjson_get_str(key_val);
+            PyObject* py_key = PyUnicode_FromString(key_str);
+            PyObject* py_val = yyjson_val_to_python_deep(val_val);
+
+            if (!py_key || !py_val) {
+                Py_XDECREF(py_key);
+                Py_XDECREF(py_val);
+                Py_DECREF(dict);
+                return NULL;
+            }
+
+            if (PyDict_SetItem(dict, py_key, py_val) < 0) {
+                Py_DECREF(py_key);
+                Py_DECREF(py_val);
+                Py_DECREF(dict);
+                return NULL;
+            }
+
+            Py_DECREF(py_key);
+            Py_DECREF(py_val);
+        }
+        return dict;
+    }
+
+    Py_RETURN_NONE;
+}
+
+static PyObject* JSON_unwrap(JSONObject* self, PyObject* Py_UNUSED(ignored)) {
+    if (!JSON_ensure_parsed(self)) {
+        return NULL;
+    }
+
+    yyjson_val* root = JSON_get_root(self);
+    return yyjson_val_to_python_deep(root);
+}
+
+static PyObject* JSON_copy(JSONObject* self, PyObject* Py_UNUSED(ignored)) {
+    if (!JSON_ensure_parsed(self)) {
+        return NULL;
+    }
+
+    // If this is a subtree wrapper, create a new wrapper pointing to the same
+    // subtree
+    if (self->root != nullptr) {
+        return JSON_from_yyjson_val(self->doc, self->root);
+    }
+
+    // For top-level documents, we need to serialize and re-parse since
+    // the original json_data was modified in-place by YYJSON_READ_INSITU
+    yyjson_val* root = JSON_get_root(self);
+    if (root) {
+        char* json_str = yyjson_val_write(root, 0, NULL);
+        if (!json_str) {
+            PyErr_SetString(PyExc_RuntimeError,
+                            "Failed to serialize JSON for copy");
+            return NULL;
+        }
+
+        size_t len = strlen(json_str);
+        PyObject* result = JSON_from_data(json_str, len);
+        free(json_str);
+        return result;
+    }
+
+    // Empty object
+    return JSON_from_data("{}", 2);
+}
+
 static PyObject* JSON_iter(JSONObject* self) {
     if (!JSON_ensure_parsed(self)) {
         return NULL;
@@ -342,12 +552,47 @@ static PyObject* JSON_repr(JSONObject* self) {
     return result;
 }
 
+static Py_ssize_t JSON_length(JSONObject* self) {
+    if (!JSON_ensure_parsed(self)) {
+        return -1;
+    }
+
+    yyjson_val* root = JSON_get_root(self);
+    if (!yyjson_is_obj(root)) {
+        return 0;
+    }
+
+    return (Py_ssize_t)yyjson_obj_size(root);
+}
+
+static int JSON_bool(JSONObject* self) {
+    if (!JSON_ensure_parsed(self)) {
+        return -1;
+    }
+
+    yyjson_val* root = JSON_get_root(self);
+    if (!yyjson_is_obj(root)) {
+        return 0;  // Non-objects are falsy
+    }
+
+    // Return true if object has at least one key
+    return yyjson_obj_size(root) > 0 ? 1 : 0;
+}
+
 PyMethodDef JSON_methods[] = {{"__contains__", (PyCFunction)JSON_contains,
                                METH_O, "Check if key exists in JSON object"},
                               {"keys", (PyCFunction)JSON_keys, METH_NOARGS,
                                "Get all keys from JSON object"},
+                              {"values", (PyCFunction)JSON_values, METH_NOARGS,
+                               "Get all values from JSON object"},
+                              {"items", (PyCFunction)JSON_items, METH_NOARGS,
+                               "Get all key-value pairs from JSON object"},
                               {"get", (PyCFunction)JSON_get, METH_VARARGS,
                                "Get value by key with optional default"},
+                              {"unwrap", (PyCFunction)JSON_unwrap, METH_NOARGS,
+                               "Unwrap lazy JSON to native Python dict/list"},
+                              {"copy", (PyCFunction)JSON_copy, METH_NOARGS,
+                               "Return a shallow copy of the JSON object"},
                               {NULL}};
 
 PySequenceMethods JSON_as_sequence = {
@@ -355,7 +600,12 @@ PySequenceMethods JSON_as_sequence = {
 };
 
 PyMappingMethods JSON_as_mapping = {
+    .mp_length = (lenfunc)JSON_length,
     .mp_subscript = (binaryfunc)JSON_getitem,
+};
+
+PyNumberMethods JSON_as_number = {
+    .nb_bool = (inquiry)JSON_bool,
 };
 
 PyTypeObject JSONType = {
@@ -368,7 +618,7 @@ PyTypeObject JSONType = {
     0,                                          /* tp_setattr */
     0,                                          /* tp_as_async */
     (reprfunc)JSON_repr,                        /* tp_repr */
-    0,                                          /* tp_as_number */
+    &JSON_as_number,                            /* tp_as_number */
     &JSON_as_sequence,                          /* tp_as_sequence */
     &JSON_as_mapping,                           /* tp_as_mapping */
     0,                                          /* tp_hash */

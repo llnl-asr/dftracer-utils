@@ -1,9 +1,15 @@
+// Suppress GCC 14.3.0 false positive warnings
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wnull-dereference"
+#endif
+
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config_manager.h>
+#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
-#include <dftracer/utils/utilities/composites/chunk_verifier.h>
+#include <dftracer/utils/utilities/composites/chunk_verifier_utility.h>
 #include <doctest/doctest.h>
 
 #include <any>
@@ -29,7 +35,7 @@ struct TestMetadata {
     std::string name;
     std::size_t total_events;
 
-    TestMetadata() : total_events(0) {}
+    TestMetadata() : name(""), total_events(0) {}
     TestMetadata(const std::string& n, std::size_t t)
         : name(n), total_events(t) {}
 };
@@ -89,7 +95,7 @@ TEST_SUITE("ChunkVerifier") {
             // Need N+1 threads: 1 for main task + N for parallel chunk
             // processing
             auto pipeline_config =
-                PipelineConfigManager()
+                PipelineConfig()
                     .with_executor_threads(4)  // 1 main + 3 chunks
                     .with_scheduler_threads(1)
                     .with_watchdog(true)
@@ -152,7 +158,7 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfigManager()
+            auto pipeline_config = PipelineConfig()
                                        .with_executor_threads(4)
                                        .with_scheduler_threads(1);
             Pipeline pipeline(pipeline_config);
@@ -213,7 +219,7 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfigManager()
+            auto pipeline_config = PipelineConfig()
                                        .with_executor_threads(4)
                                        .with_scheduler_threads(1);
             Pipeline pipeline(pipeline_config);
@@ -268,7 +274,7 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfigManager()
+            auto pipeline_config = PipelineConfig()
                                        .with_executor_threads(2)
                                        .with_scheduler_threads(1);
             Pipeline pipeline(pipeline_config);
@@ -326,7 +332,7 @@ TEST_SUITE("ChunkVerifier") {
             {
                 // Need at least 2 threads: 1 for main task + 1 for subtasks
                 auto pipeline_config =
-                    PipelineConfigManager()
+                    PipelineConfig()
                         .with_executor_threads(
                             2)  // Increased from 1 to avoid deadlock
                         .with_scheduler_threads(1);
@@ -383,7 +389,7 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfigManager()
+            auto pipeline_config = PipelineConfig()
                                        .with_executor_threads(2)
                                        .with_scheduler_threads(1);
             Pipeline pipeline(pipeline_config);

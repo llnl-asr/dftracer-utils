@@ -4,16 +4,17 @@
 #include <dftracer/utils/python/lazy_json_line_processor.h>
 #include <dftracer/utils/python/pylist_line_processor.h>
 #include <dftracer/utils/python/reader.h>
-#include <dftracer/utils/reader/reader.h>
+#include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <structmember.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 
-std::shared_ptr<dftracer::utils::Reader> *cast_reader_handle(
-    dft_reader_handle_t handle) {
-    return static_cast<std::shared_ptr<dftracer::utils::Reader> *>(handle);
+std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader> *
+cast_reader_handle(dft_reader_handle_t handle) {
+    return static_cast<std::shared_ptr<
+        dftracer::utils::utilities::reader::internal::Reader> *>(handle);
 }
 
 static void Reader_dealloc(ReaderObject *self) {

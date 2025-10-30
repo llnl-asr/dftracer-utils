@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/composites/dft/chunk_extractor.h>
+#include <dftracer/utils/utilities/composites/dft/chunk_extractor_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -19,10 +19,10 @@ TEST_SUITE("ChunkExtractor") {
         std::string test_file = env.create_dft_test_file(5);
 
         // Create manifest
-        DFTracerChunkManifest manifest;
+        internal::DFTracerChunkManifest manifest;
         manifest.total_size_mb = 0.001;
 
-        DFTracerChunkSpec spec;
+        internal::DFTracerChunkSpec spec;
         spec.file_path = test_file;
         spec.size_mb = 0.001;
         spec.start_line = 0;

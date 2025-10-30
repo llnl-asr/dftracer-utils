@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/composites/dft/event_collector.h>
-#include <dftracer/utils/utilities/composites/dft/metadata_collector.h>
+#include <dftracer/utils/utilities/composites/dft/event_collector_utility.h>
+#include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>

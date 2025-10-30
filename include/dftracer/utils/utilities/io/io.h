@@ -24,14 +24,10 @@
  */
 
 // File readers and writers
-#include <dftracer/utils/utilities/io/binary_file_reader.h>
-#include <dftracer/utils/utilities/io/file_reader.h>
-#include <dftracer/utils/utilities/io/streaming_file_reader.h>
-#include <dftracer/utils/utilities/io/streaming_file_writer.h>
-
-// Streaming utilities
-#include <dftracer/utils/utilities/io/chunk_iterator.h>
-#include <dftracer/utils/utilities/io/streaming.h>
+#include <dftracer/utils/utilities/io/binary_file_reader_utility.h>
+#include <dftracer/utils/utilities/io/file_reader_utility.h>
+#include <dftracer/utils/utilities/io/streaming_file_reader_utility.h>
+#include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
 
 // I/O types
 #include <dftracer/utils/utilities/io/types/types.h>

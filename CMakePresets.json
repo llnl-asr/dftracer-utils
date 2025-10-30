@@ -130,6 +130,9 @@
       "name": "tests",
       "displayName": "Run Tests",
       "configurePreset": "tests",
+      "execution": {
+        "jobs": 0
+      },
       "output": {
         "outputOnFailure": true
       }

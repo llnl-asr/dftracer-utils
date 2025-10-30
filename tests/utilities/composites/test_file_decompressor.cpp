@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/composites/file_compressor.h>
-#include <dftracer/utils/utilities/composites/file_decompressor.h>
+#include <dftracer/utils/utilities/composites/file_compressor_utility.h>
+#include <dftracer/utils/utilities/composites/file_decompressor_utility.h>
 #include <doctest/doctest.h>
 
 #include <fstream>
@@ -269,6 +269,13 @@ TEST_SUITE("FileDecompressor") {
             std::string binary_file = "./binary.dat";
             std::string compressed_file = binary_file + ".gz";
 
+            // Ensure cleanup happens even if test fails
+            auto cleanup = [&]() {
+                if (fs::exists(binary_file)) fs::remove(binary_file);
+                if (fs::exists(compressed_file)) fs::remove(compressed_file);
+            };
+            std::shared_ptr<void> guard(nullptr, [&](void*) { cleanup(); });
+
             // Create binary file with specific pattern
             std::ofstream ofs(binary_file, std::ios::binary);
             std::vector<unsigned char> original_data;
@@ -285,6 +292,7 @@ TEST_SUITE("FileDecompressor") {
             FileCompressorUtility compressor;
             auto compress_result = compressor.process(
                 FileCompressionUtilityInput::from_file(binary_file));
+            INFO("Compression error: ", compress_result.error_message);
             REQUIRE(compress_result.success == true);
 
             fs::remove(binary_file);
@@ -293,6 +301,7 @@ TEST_SUITE("FileDecompressor") {
             FileDecompressorUtility decompressor;
             auto decompress_result = decompressor.process(
                 FileDecompressionUtilityInput::from_file(compressed_file));
+            INFO("Decompression error: ", decompress_result.error_message);
             REQUIRE(decompress_result.success == true);
 
             // Verify binary content
@@ -303,10 +312,6 @@ TEST_SUITE("FileDecompressor") {
 
             CHECK(decompressed_data.size() == original_data.size());
             CHECK(decompressed_data == original_data);
-
-            // Clean up
-            fs::remove(compressed_file);
-            fs::remove(binary_file);
         }
     }
 }

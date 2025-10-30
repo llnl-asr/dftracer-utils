@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/composites/dft/event_hasher.h>
+#include <dftracer/utils/utilities/composites/dft/event_hasher_utility.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils::utilities::composites::dft;

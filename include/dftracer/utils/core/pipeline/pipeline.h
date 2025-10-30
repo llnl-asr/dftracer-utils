@@ -3,13 +3,15 @@
 
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/pipeline/error.h>
-#include <dftracer/utils/core/pipeline/pipeline_config_manager.h>
+#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/pipeline/pipeline_output.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
 
 #include <any>
+#include <initializer_list>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
@@ -49,8 +51,8 @@ class Pipeline {
      * Constructor with configuration manager
      * @param config Pipeline configuration (includes name, threads, etc.)
      */
-    explicit Pipeline(const PipelineConfigManager& config =
-                          PipelineConfigManager::default_config());
+    explicit Pipeline(
+        const PipelineConfig& config = PipelineConfig::default_config());
 
     ~Pipeline();
 
@@ -63,20 +65,49 @@ class Pipeline {
     Pipeline& operator=(Pipeline&&) = default;
 
     /**
-     * Set source task
+     * Set source task (single task)
      */
     void set_source(std::shared_ptr<Task> source);
 
     /**
-     * Set destination task (optional - if nullptr, all terminal tasks are
-     * destinations)
+     * Set multiple source tasks (initializer list - auto-creates NoOpTask as
+     * parent)
+     */
+    void set_source(std::initializer_list<std::shared_ptr<Task>> sources);
+
+    /**
+     * Set multiple source tasks (variadic - auto-creates NoOpTask as parent)
+     */
+    template <typename... Tasks>
+    auto set_source(Tasks&&... sources) -> std::enable_if_t<
+        (sizeof...(Tasks) > 1) &&
+        (std::is_convertible_v<Tasks, std::shared_ptr<Task>> && ...)> {
+        set_source({std::forward<Tasks>(sources)...});
+    }
+
+    /**
+     * Set destination task (single task - optional, if nullptr all terminal
+     * tasks are destinations)
      */
     void set_destination(std::shared_ptr<Task> destination);
 
     /**
-     * Add multiple source tasks (auto-creates NoOpTask as parent)
+     * Set multiple destination tasks (initializer list - auto-creates NoOpTask
+     * as child)
      */
-    void add_sources(std::initializer_list<std::shared_ptr<Task>> sources);
+    void set_destination(
+        std::initializer_list<std::shared_ptr<Task>> destinations);
+
+    /**
+     * Set multiple destination tasks (variadic - auto-creates NoOpTask as
+     * child)
+     */
+    template <typename... Tasks>
+    auto set_destination(Tasks&&... destinations) -> std::enable_if_t<
+        (sizeof...(Tasks) > 1) &&
+        (std::is_convertible_v<Tasks, std::shared_ptr<Task>> && ...)> {
+        set_destination({std::forward<Tasks>(destinations)...});
+    }
 
     /**
      * Validate pipeline before execution

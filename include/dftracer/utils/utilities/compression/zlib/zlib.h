@@ -57,10 +57,10 @@
  * @endcode
  */
 
-#include <dftracer/utils/utilities/compression/zlib/compressor.h>
-#include <dftracer/utils/utilities/compression/zlib/decompressor.h>
-#include <dftracer/utils/utilities/compression/zlib/shared.h>
-#include <dftracer/utils/utilities/compression/zlib/streaming_compressor.h>
-#include <dftracer/utils/utilities/compression/zlib/streaming_decompressor.h>
+#include <dftracer/utils/utilities/compression/zlib/compressor_utility.h>
+#include <dftracer/utils/utilities/compression/zlib/decompressor_utility.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
+#include <dftracer/utils/utilities/compression/zlib/types.h>
 
 #endif  // DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_H

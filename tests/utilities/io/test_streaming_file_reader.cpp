@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/io/streaming_file_reader.h>
+#include <dftracer/utils/utilities/io/streaming_file_reader_utility.h>
 #include <doctest/doctest.h>
 
 #include <fstream>

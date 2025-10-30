@@ -41,62 +41,64 @@ set(DFTRACER_UTILS_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task_future.cpp
-    # Indexer
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/indexer_c.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/helpers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/checkpoint_size.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/error.cpp
-    # Indexer factory
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/indexer_factory.cpp
-    # GZIP indexer
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/delete_file_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/insert_checkpoint_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/insert_file_metadata_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/insert_file_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/query_checkpoint.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/query_checkpoints.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/query_file_id.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/query_max_bytes.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/query_num_lines.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/query_schema_validity.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/query_stored_file_info.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/queries/query_checkpoint_size.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/gzip_indexer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/gzip/constants.cpp
-    # TAR indexer
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/tar_parser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/tar_indexer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/constants.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/queries/insert_file_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/queries/insert_archive_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/queries/insert_archive_metadata_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/queries/insert_tar_file_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/queries/insert_tar_checkpoint_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/queries/query_archive_id.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/queries/query_tar_files.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/queries/query_tar_checkpoints.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/indexer/tar/queries/query_metadata.cpp
-    # Reader
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/reader_c.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/stream_c.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/gzip_reader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/tar_reader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/reader_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/reader/error.cpp)
+)
 
 # -----------------------------------------
 # Utilities library sources
 # -----------------------------------------
 
 set(DFTRACER_UTILS_UTILITIES_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/metadata_collector.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/chunk_extractor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/chunk_manifest_mapper.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_id_extractor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_collector.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/file_merger.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_hasher.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/metadata_collector_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/chunk_extractor_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/chunk_manifest_mapper_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_id_extractor_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_collector_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/file_merger_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_hasher_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/internal/utils.cpp
+
+    # Indexer
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_c.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/checkpoint_size.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/error.cpp
+    # Indexer factory
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_factory.cpp
+    # GZIP indexer
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/delete_file_record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/insert_checkpoint_record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/insert_file_metadata_record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/insert_file_record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_checkpoint.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_checkpoints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_file_id.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_max_bytes.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_num_lines.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_schema_validity.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_stored_file_info.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_checkpoint_size.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/constants.cpp
+    # TAR indexer
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/tar_parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/tar_indexer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/constants.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_file_record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_archive_record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_archive_metadata_record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_tar_file_record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_tar_checkpoint_record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/query_archive_id.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/query_tar_files.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/query_tar_checkpoints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/query_metadata.cpp
+    # Reader
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_c.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/stream_c.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/gzip_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/tar_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/error.cpp
 )
 
 # Determine which dependencies to require based on what was found vs built with

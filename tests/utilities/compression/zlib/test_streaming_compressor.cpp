@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/compression/zlib/streaming_compressor.h>
-#include <dftracer/utils/utilities/compression/zlib/streaming_decompressor.h>
-#include <dftracer/utils/utilities/io/chunk_iterator.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
+#include <dftracer/utils/utilities/io/types/types.h>
 #include <doctest/doctest.h>
 
 #include <fstream>

@@ -1,9 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/indexer/indexer_factory.h>
-#include <dftracer/utils/reader/reader.h>
-#include <dftracer/utils/reader/reader_factory.h>
-#include <dftracer/utils/reader/stream.h>
-#include <dftracer/utils/reader/stream_type.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/utilities/reader/internal/reader.h>
+#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/utilities/reader/internal/stream.h>
+#include <dftracer/utils/utilities/reader/internal/stream_type.h>
 #include <doctest/doctest.h>
 
 #include <memory>
@@ -13,6 +13,8 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::utilities::reader::internal;
 using namespace dft_utils_test;
 
 TEST_CASE("C++ Reader Streaming API - BYTES stream") {
@@ -629,5 +631,195 @@ TEST_CASE("C++ Reader Streaming API - Format identification") {
         CHECK(reader->get_archive_path() == gz_file);
         CHECK(reader->get_idx_path() == idx_file);
         CHECK(reader->get_max_bytes() > 0);
+    }
+}
+
+TEST_CASE("C++ Reader Streaming API - Buffer Size Tests") {
+    TestEnvironment env;
+    REQUIRE(env.is_valid());
+
+    std::string gz_file = env.create_test_gzip_file();
+    REQUIRE(!gz_file.empty());
+
+    std::string idx_file = env.get_index_path(gz_file);
+
+    // Build index first
+    {
+        auto indexer = IndexerFactory::create(gz_file, idx_file, mb_to_b(0.5));
+        REQUIRE(indexer != nullptr);
+        indexer->build();
+    }
+
+    auto reader = ReaderFactory::create(gz_file, idx_file);
+    REQUIRE(reader != nullptr);
+    std::size_t max_bytes = reader->get_max_bytes();
+
+    std::vector<std::size_t> buffer_sizes = {
+        32 * 1024,        // 32KB
+        64 * 1024,        // 64KB (default)
+        256 * 1024,       // 256KB
+        1 * 1024 * 1024,  // 1MB
+        4 * 1024 * 1024,  // 4MB
+        8 * 1024 * 1024   // 8MB
+    };
+
+    SUBCASE("BYTES stream with different buffer sizes") {
+        // Get reference data with default buffer
+        std::string reference_data;
+        {
+            auto stream = reader->stream(StreamConfig()
+                                             .stream_type(StreamType::BYTES)
+                                             .range_type(RangeType::BYTE_RANGE)
+                                             .from(0)
+                                             .to(max_bytes)
+                                             .buffer_size(0));
+
+            std::vector<char> buffer(512 * 1024);
+            while (!stream->done()) {
+                std::size_t bytes_read =
+                    stream->read(buffer.data(), buffer.size());
+                if (bytes_read > 0) {
+                    reference_data.append(buffer.data(), bytes_read);
+                }
+            }
+        }
+
+        for (std::size_t buf_size : buffer_sizes) {
+            INFO("Testing BYTES stream with buffer size: ", buf_size);
+
+            auto stream = reader->stream(StreamConfig()
+                                             .stream_type(StreamType::BYTES)
+                                             .range_type(RangeType::BYTE_RANGE)
+                                             .from(0)
+                                             .to(max_bytes)
+                                             .buffer_size(buf_size));
+
+            std::string data;
+            std::vector<char> buffer(512 * 1024);
+            while (!stream->done()) {
+                std::size_t bytes_read =
+                    stream->read(buffer.data(), buffer.size());
+                if (bytes_read > 0) {
+                    data.append(buffer.data(), bytes_read);
+                }
+            }
+
+            CHECK(data.size() == reference_data.size());
+            CHECK(data == reference_data);
+        }
+    }
+
+    SUBCASE("LINE stream with different buffer sizes") {
+        // Get reference lines with default buffer
+        std::vector<std::string> reference_lines;
+        {
+            auto stream = reader->stream(StreamConfig()
+                                             .stream_type(StreamType::LINE)
+                                             .range_type(RangeType::LINE_RANGE)
+                                             .from(1)
+                                             .to(50)
+                                             .buffer_size(0));
+
+            char buffer[4096];
+            while (!stream->done()) {
+                std::size_t bytes_read =
+                    stream->read(buffer, sizeof(buffer) - 1);
+                if (bytes_read > 0) {
+                    buffer[bytes_read] = '\0';
+                    reference_lines.push_back(std::string(buffer, bytes_read));
+                }
+            }
+        }
+
+        for (std::size_t buf_size : buffer_sizes) {
+            INFO("Testing LINE stream with buffer size: ", buf_size);
+
+            auto stream = reader->stream(StreamConfig()
+                                             .stream_type(StreamType::LINE)
+                                             .range_type(RangeType::LINE_RANGE)
+                                             .from(1)
+                                             .to(50)
+                                             .buffer_size(buf_size));
+
+            std::vector<std::string> lines;
+            char buffer[4096];
+            while (!stream->done()) {
+                std::size_t bytes_read =
+                    stream->read(buffer, sizeof(buffer) - 1);
+                if (bytes_read > 0) {
+                    buffer[bytes_read] = '\0';
+                    lines.push_back(std::string(buffer, bytes_read));
+                }
+            }
+
+            CHECK(lines.size() == reference_lines.size());
+            CHECK(lines == reference_lines);
+        }
+    }
+
+    SUBCASE("MULTI_LINES stream with different buffer sizes") {
+        // Get reference lines with default buffer
+        std::vector<std::string> reference_lines;
+        {
+            auto stream =
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::MULTI_LINES)
+                                   .range_type(RangeType::LINE_RANGE)
+                                   .from(1)
+                                   .to(50)
+                                   .buffer_size(0));
+
+            std::vector<char> buffer(64 * 1024);
+            std::string content;
+            while (!stream->done()) {
+                std::size_t bytes_read =
+                    stream->read(buffer.data(), buffer.size());
+                if (bytes_read > 0) {
+                    content.append(buffer.data(), bytes_read);
+                }
+            }
+
+            std::istringstream ss(content);
+            std::string line;
+            while (std::getline(ss, line)) {
+                if (!line.empty()) {
+                    reference_lines.push_back(line);
+                }
+            }
+        }
+
+        for (std::size_t buf_size : buffer_sizes) {
+            INFO("Testing MULTI_LINES stream with buffer size: ", buf_size);
+
+            auto stream =
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::MULTI_LINES)
+                                   .range_type(RangeType::LINE_RANGE)
+                                   .from(1)
+                                   .to(50)
+                                   .buffer_size(buf_size));
+
+            std::vector<char> buffer(64 * 1024);
+            std::string content;
+            while (!stream->done()) {
+                std::size_t bytes_read =
+                    stream->read(buffer.data(), buffer.size());
+                if (bytes_read > 0) {
+                    content.append(buffer.data(), bytes_read);
+                }
+            }
+
+            std::vector<std::string> lines;
+            std::istringstream ss(content);
+            std::string line;
+            while (std::getline(ss, line)) {
+                if (!line.empty()) {
+                    lines.push_back(line);
+                }
+            }
+
+            CHECK(lines.size() == reference_lines.size());
+            CHECK(lines == reference_lines);
+        }
     }
 }

@@ -2,12 +2,12 @@
 #define DFTRACER_UTILS_UTILITIES_IO_LINES_SOURCES_INDEXED_FILE_LINE_ITERATOR_H
 
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/reader/reader.h>
-#include <dftracer/utils/reader/reader_factory.h>
-#include <dftracer/utils/reader/stream.h>
-#include <dftracer/utils/reader/stream_type.h>
 #include <dftracer/utils/utilities/io/lines/iterator.h>
 #include <dftracer/utils/utilities/io/lines/line_types.h>
+#include <dftracer/utils/utilities/reader/internal/reader.h>
+#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/utilities/reader/internal/stream.h>
+#include <dftracer/utils/utilities/reader/internal/stream_type.h>
 
 #include <cstring>
 #include <iterator>
@@ -43,8 +43,10 @@ namespace dftracer::utils::utilities::io::lines::sources {
  */
 class IndexedFileLineIteratorConfig {
    private:
-    std::shared_ptr<dftracer::utils::Reader> reader_;
-    RangeType range_type_ = RangeType::LINE_RANGE;
+    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+        reader_;
+    dftracer::utils::utilities::reader::internal::RangeType range_type_ =
+        dftracer::utils::utilities::reader::internal::RangeType::LINE_RANGE;
     std::size_t start_ = 1;
     std::size_t end_ = 0;
     std::size_t buffer_size_ = 1024 * 1024;  // 1MB default buffer
@@ -54,24 +56,29 @@ class IndexedFileLineIteratorConfig {
 
     IndexedFileLineIteratorConfig& with_file(
         const std::string& file_path, const std::string& index_path = "") {
-        reader_ = dftracer::utils::ReaderFactory::create(file_path, index_path);
+        reader_ =
+            dftracer::utils::utilities::reader::internal::ReaderFactory::create(
+                file_path, index_path);
         return *this;
     }
 
     IndexedFileLineIteratorConfig& with_reader(
-        std::shared_ptr<dftracer::utils::Reader> reader) {
+        std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+            reader) {
         reader_ = reader;
         return *this;
     }
 
-    IndexedFileLineIteratorConfig& with_range_type(RangeType type) {
+    IndexedFileLineIteratorConfig& with_range_type(
+        dftracer::utils::utilities::reader::internal::RangeType type) {
         range_type_ = type;
         return *this;
     }
 
     IndexedFileLineIteratorConfig& with_line_range(std::size_t start_line,
                                                    std::size_t end_line) {
-        range_type_ = RangeType::LINE_RANGE;
+        range_type_ =
+            dftracer::utils::utilities::reader::internal::RangeType::LINE_RANGE;
         start_ = start_line;
         end_ = end_line;
         return *this;
@@ -79,7 +86,8 @@ class IndexedFileLineIteratorConfig {
 
     IndexedFileLineIteratorConfig& with_byte_range(std::size_t start_bytes,
                                                    std::size_t end_bytes) {
-        range_type_ = RangeType::BYTE_RANGE;
+        range_type_ =
+            dftracer::utils::utilities::reader::internal::RangeType::BYTE_RANGE;
         start_ = start_bytes;
         end_ = end_bytes;
         return *this;
@@ -90,8 +98,13 @@ class IndexedFileLineIteratorConfig {
         return *this;
     }
 
-    std::shared_ptr<dftracer::utils::Reader> reader() const { return reader_; }
-    RangeType range_type() const { return range_type_; }
+    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+    reader() const {
+        return reader_;
+    }
+    dftracer::utils::utilities::reader::internal::RangeType range_type() const {
+        return range_type_;
+    }
     std::size_t start() const { return start_; }
     std::size_t end() const { return end_; }
     std::size_t buffer_size() const { return buffer_size_; }
@@ -110,7 +123,9 @@ class IndexedFileLineIteratorConfig {
  *
  * Usage:
  * @code
- * auto reader = ReaderFactory::create("file.gz", "file.gz.idx");
+ * auto reader =
+ * dftracer::utils::utilities::reader::internal::ReaderFactory::create("file.gz",
+ * "file.gz.idx");
  *
  * auto config = IndexedFileLineIteratorConfig()
  *     .with_reader(reader)
@@ -126,7 +141,8 @@ class IndexedFileLineIteratorConfig {
 class IndexedFileLineIterator {
    private:
     IndexedFileLineIteratorConfig config_;
-    std::unique_ptr<ReaderStream> stream_;
+    std::unique_ptr<dftracer::utils::utilities::reader::internal::ReaderStream>
+        stream_;
     std::size_t current_position_;
     mutable std::string line_buffer_;    // Buffer to hold current line data
     mutable std::string stream_buffer_;  // Buffer for reading from stream
@@ -164,7 +180,8 @@ class IndexedFileLineIterator {
         }
 
         // Validate range based on type
-        if (config_.range_type() == RangeType::LINE_RANGE) {
+        if (config_.range_type() == dftracer::utils::utilities::reader::
+                                        internal::RangeType::LINE_RANGE) {
             if (config_.end() == 0) {
                 std::size_t num_lines = config_.reader()->get_num_lines();
                 DFTRACER_UTILS_LOG_DEBUG(
@@ -188,15 +205,23 @@ class IndexedFileLineIterator {
             }
         }
 
-        StreamConfig stream_config;
-        if (config_.range_type() == RangeType::LINE_RANGE) {
-            stream_config.stream_type(StreamType::LINE)
-                .range_type(RangeType::LINE_RANGE)
+        dftracer::utils::utilities::reader::internal::StreamConfig
+            stream_config;
+        if (config_.range_type() == dftracer::utils::utilities::reader::
+                                        internal::RangeType::LINE_RANGE) {
+            stream_config
+                .stream_type(dftracer::utils::utilities::reader::internal::
+                                 StreamType::LINE)
+                .range_type(dftracer::utils::utilities::reader::internal::
+                                RangeType::LINE_RANGE)
                 .from(config_.start())
                 .to(config_.end());
         } else {
-            stream_config.stream_type(StreamType::LINE_BYTES)
-                .range_type(RangeType::BYTE_RANGE)
+            stream_config
+                .stream_type(dftracer::utils::utilities::reader::internal::
+                                 StreamType::LINE_BYTES)
+                .range_type(dftracer::utils::utilities::reader::internal::
+                                RangeType::BYTE_RANGE)
                 .from(config_.start())
                 .to(config_.end());
         }
@@ -318,12 +343,15 @@ class IndexedFileLineIterator {
     /**
      * @brief Get the range type being used.
      */
-    RangeType range_type() const { return config_.range_type(); }
+    dftracer::utils::utilities::reader::internal::RangeType range_type() const {
+        return config_.range_type();
+    }
 
     /**
      * @brief Get the underlying Reader.
      */
-    std::shared_ptr<dftracer::utils::Reader> get_reader() const {
+    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+    get_reader() const {
         return config_.reader();
     }
 

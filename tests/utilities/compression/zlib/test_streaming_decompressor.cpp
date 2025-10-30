@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/compression/zlib/streaming_compressor.h>
-#include <dftracer/utils/utilities/compression/zlib/streaming_decompressor.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
 #include <doctest/doctest.h>
 
 #include <memory>

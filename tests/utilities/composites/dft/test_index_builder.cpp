@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/composites/dft/index_builder.h>
+#include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>

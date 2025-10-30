@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
 #include <dftracer/utils/core/utilities/utility_traits.h>
-#include <dftracer/utils/utilities/composites/batch_processor.h>
+#include <dftracer/utils/utilities/composites/batch_processor_utility.h>
 #include <doctest/doctest.h>
 
 #include <chrono>

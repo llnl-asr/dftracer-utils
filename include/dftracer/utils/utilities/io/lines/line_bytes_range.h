@@ -69,8 +69,8 @@ class LineBytesRange {
      * @param end_byte Ending byte offset (0-based, exclusive)
      */
     static LineBytesRange from_indexed_file(
-        std::shared_ptr<dftracer::utils::Reader> reader, std::size_t start_byte,
-        std::size_t end_byte) {
+        std::shared_ptr<reader::internal::Reader> reader,
+        std::size_t start_byte, std::size_t end_byte) {
         return LineBytesRange(
             sources::IndexedFileBytesIterator(reader, start_byte, end_byte));
     }

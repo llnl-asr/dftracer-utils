@@ -1,5 +1,5 @@
-#include <dftracer/utils/indexer/indexer.h>
 #include <dftracer/utils/reader/reader.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

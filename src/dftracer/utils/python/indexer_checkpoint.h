@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_PYTHON_INDEXER_CHECKPOINT_H
 
 #include <Python.h>
-#include <dftracer/utils/indexer/checkpoint.h>
+#include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 
 typedef struct {
     PyObject_HEAD dft_indexer_checkpoint_t checkpoint;

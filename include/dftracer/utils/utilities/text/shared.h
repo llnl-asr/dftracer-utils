@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_TEXT_SHARED_H
 #define DFTRACER_UTILS_UTILITIES_TEXT_SHARED_H
 
-#include <dftracer/utils/utilities/hash/shared.h>
+#include <dftracer/utils/utilities/hash/hash.h>
 #include <dftracer/utils/utilities/io/lines/line_types.h>
 
 #include <functional>

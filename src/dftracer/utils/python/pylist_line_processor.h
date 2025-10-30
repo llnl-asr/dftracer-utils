@@ -3,12 +3,13 @@
 
 #include <Python.h>
 #include <dftracer/utils/core/utils/timer.h>
-#include <dftracer/utils/reader/line_processor.h>
+#include <dftracer/utils/utilities/reader/internal/line_processor.h>
 
 #include <cstdio>
 #include <stdexcept>
 
-class PyListLineProcessor : public dftracer::utils::LineProcessor {
+class PyListLineProcessor
+    : public dftracer::utils::utilities::reader::internal::LineProcessor {
    private:
     PyObject* py_list_;
 

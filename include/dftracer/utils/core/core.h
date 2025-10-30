@@ -7,7 +7,7 @@
 #include <dftracer/utils/core/pipeline/error.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config_manager.h>
+#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/pipeline/pipeline_output.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
 #include <dftracer/utils/core/pipeline/task_queue.h>

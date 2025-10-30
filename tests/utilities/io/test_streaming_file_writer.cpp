@@ -1,6 +1,11 @@
+// Suppress GCC 14.3.0 false positive warnings
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wnull-dereference"
+#endif
+
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/io/streaming_file_writer.h>
+#include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
 #include <doctest/doctest.h>
 
 #include <fstream>

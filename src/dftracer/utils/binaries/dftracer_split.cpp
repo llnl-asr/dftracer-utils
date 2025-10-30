@@ -1,11 +1,11 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config_manager.h>
+#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
-#include <dftracer/utils/indexer/indexer.h>
 #include <dftracer/utils/utilities/composites/composites.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/io/types/types.h>
 
 #include <argparse/argparse.hpp>
@@ -19,8 +19,12 @@ int main(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
 
     auto default_checkpoint_size_str =
-        std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE) + " B (" +
-        std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE / (1024 * 1024)) +
+        std::to_string(dftracer::utils::utilities::indexer::internal::Indexer::
+                           DEFAULT_CHECKPOINT_SIZE) +
+        " B (" +
+        std::to_string(dftracer::utils::utilities::indexer::internal::Indexer::
+                           DEFAULT_CHECKPOINT_SIZE /
+                       (1024 * 1024)) +
         " MB)";
 
     argparse::ArgumentParser program("dftracer_split",
@@ -61,8 +65,9 @@ int main(int argc, char** argv) {
         .help("Checkpoint size for indexing in bytes (default: " +
               default_checkpoint_size_str + ")")
         .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(Indexer::DEFAULT_CHECKPOINT_SIZE));
+        .default_value(static_cast<std::size_t>(
+            dftracer::utils::utilities::indexer::internal::Indexer::
+                DEFAULT_CHECKPOINT_SIZE));
 
     program.add_argument("--executor-threads")
         .help(
@@ -142,7 +147,7 @@ int main(int argc, char** argv) {
     }
 
     // Create pipeline with configuration
-    auto pipeline_config = PipelineConfigManager()
+    auto pipeline_config = PipelineConfig()
                                .with_name("DFTracer Split")
                                .with_executor_threads(executor_threads)
                                .with_scheduler_threads(scheduler_threads);
@@ -171,8 +176,9 @@ int main(int argc, char** argv) {
                                        TaskContext& /*ctx*/,
                                        const std::string& file_path)
         -> utilities::composites::dft::IndexBuildUtilityOutput {
-        std::string idx_path = utilities::composites::dft::determine_index_path(
-            file_path, index_dir);
+        std::string idx_path =
+            utilities::composites::dft::internal::determine_index_path(
+                file_path, index_dir);
         auto input =
             utilities::composites::dft::IndexBuildUtilityInput::from_file(
                 file_path)
@@ -206,8 +212,9 @@ int main(int argc, char** argv) {
                                   TaskContext& /*ctx*/,
                                   const std::string& file_path)
         -> utilities::composites::dft::MetadataCollectorUtilityOutput {
-        std::string idx_path = utilities::composites::dft::determine_index_path(
-            file_path, index_dir);
+        std::string idx_path =
+            utilities::composites::dft::internal::determine_index_path(
+                file_path, index_dir);
 
         auto input = utilities::composites::dft::MetadataCollectorUtilityInput::
                          from_file(file_path)
@@ -247,8 +254,8 @@ int main(int argc, char** argv) {
     using ChunkMappingInput = MetadataCollectOutput;
 
     // Task 3.2: Output - Chunk manifests
-    using ChunkMappingOutput =
-        std::vector<utilities::composites::dft::DFTracerChunkManifest>;
+    using ChunkMappingOutput = std::vector<
+        utilities::composites::dft::internal::DFTracerChunkManifest>;
 
     // Task 3.3: Utility definition - Transform metadata to chunk manifests
     auto create_chunk_mappings_func =

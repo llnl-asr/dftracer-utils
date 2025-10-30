@@ -2,11 +2,11 @@
 #define DFTRACER_UTILS_UTILITIES_IO_LINES_SOURCES_INDEXED_FILE_BYTES_ITERATOR_H
 
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/reader/reader.h>
-#include <dftracer/utils/reader/stream.h>
-#include <dftracer/utils/reader/stream_type.h>
 #include <dftracer/utils/utilities/io/lines/iterator.h>
 #include <dftracer/utils/utilities/io/lines/line_types.h>
+#include <dftracer/utils/utilities/reader/internal/reader.h>
+#include <dftracer/utils/utilities/reader/internal/stream.h>
+#include <dftracer/utils/utilities/reader/internal/stream_type.h>
 
 #include <cstring>
 #include <iterator>
@@ -36,8 +36,10 @@ namespace dftracer::utils::utilities::io::lines::sources {
  */
 class IndexedFileBytesIterator {
    private:
-    std::shared_ptr<dftracer::utils::Reader> reader_;
-    std::unique_ptr<ReaderStream> stream_;
+    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+        reader_;
+    std::unique_ptr<dftracer::utils::utilities::reader::internal::ReaderStream>
+        stream_;
     std::size_t start_byte_;
     std::size_t end_byte_;
     std::size_t current_line_num_;
@@ -60,9 +62,11 @@ class IndexedFileBytesIterator {
      * @param end_byte Ending byte offset (0-based, exclusive)
      * @param buffer_size Size of buffer for reading (default 1MB)
      */
-    IndexedFileBytesIterator(std::shared_ptr<dftracer::utils::Reader> reader,
-                             std::size_t start_byte, std::size_t end_byte,
-                             std::size_t buffer_size = 1024 * 1024)
+    IndexedFileBytesIterator(
+        std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+            reader,
+        std::size_t start_byte, std::size_t end_byte,
+        std::size_t buffer_size = 1024 * 1024)
         : reader_(reader),
           start_byte_(start_byte),
           end_byte_(end_byte),
@@ -87,11 +91,14 @@ class IndexedFileBytesIterator {
             end_byte_);
 
         // Create a LINE_BYTES stream for byte-range iteration
-        stream_ = reader_->stream(StreamConfig()
-                                      .stream_type(StreamType::LINE_BYTES)
-                                      .range_type(RangeType::BYTE_RANGE)
-                                      .from(start_byte_)
-                                      .to(end_byte_));
+        stream_ = reader_->stream(
+            dftracer::utils::utilities::reader::internal::StreamConfig()
+                .stream_type(dftracer::utils::utilities::reader::internal::
+                                 StreamType::LINE_BYTES)
+                .range_type(dftracer::utils::utilities::reader::internal::
+                                RangeType::BYTE_RANGE)
+                .from(start_byte_)
+                .to(end_byte_));
         if (!stream_) {
             throw std::runtime_error("Failed to create stream");
         }
@@ -186,7 +193,8 @@ class IndexedFileBytesIterator {
     /**
      * @brief Get the underlying Reader.
      */
-    std::shared_ptr<dftracer::utils::Reader> get_reader() const {
+    std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
+    get_reader() const {
         return reader_;
     }
 

@@ -188,15 +188,15 @@ class TestReader:
         with Environment(lines=50) as env:
             gz_file = env.create_test_gzip_file_with_nested_json()
             env.build_index(gz_file, checkpoint_size_bytes=512*1024)
-            
+
             with dft_utils.Reader(gz_file) as reader:
                 num_lines = reader.get_num_lines()
-                
+
                 if num_lines > 2:
                     # Test JSON line reading (1-based)
                     json_objects = reader.read_lines_json(1, 4)
                     assert isinstance(json_objects, list)
-                    
+
                     for json_obj in json_objects:
                         # Should be JSON objects, not dicts
                         assert hasattr(json_obj, '__getitem__')  # Dictionary-like access
@@ -206,7 +206,117 @@ class TestReader:
                         if "events" in json_obj:
                             events = json_obj["events"]
                             assert type(events).__name__ == "JSON"
-    
+
+    def test_json_dict_methods(self):
+        """Test JSON object dict-like methods"""
+        with Environment(lines=50) as env:
+            gz_file = env.create_test_gzip_file_with_nested_json()
+            env.build_index(gz_file, checkpoint_size_bytes=512*1024)
+
+            with dft_utils.Reader(gz_file) as reader:
+                num_lines = reader.get_num_lines()
+
+                if num_lines > 0:
+                    json_objects = reader.read_lines_json(1, 2)
+                    assert len(json_objects) > 0
+
+                    json_obj = json_objects[0]
+
+                    # Test keys()
+                    keys = json_obj.keys()
+                    assert isinstance(keys, list)
+                    assert len(keys) > 0
+                    assert all(isinstance(k, str) for k in keys)
+
+                    # Test values()
+                    values = json_obj.values()
+                    assert isinstance(values, list)
+                    assert len(values) == len(keys)
+
+                    # Test items()
+                    items = json_obj.items()
+                    assert isinstance(items, list)
+                    assert len(items) == len(keys)
+                    for item in items:
+                        assert isinstance(item, tuple)
+                        assert len(item) == 2
+                        assert isinstance(item[0], str)  # key is string
+
+                    # Test __len__()
+                    assert len(json_obj) == len(keys)
+                    assert len(json_obj) > 0
+
+                    # Test __bool__()
+                    assert bool(json_obj) is True  # Non-empty object is truthy
+                    if json_obj:  # Should work in if statements
+                        pass  # This should execute
+                    else:
+                        assert False, "Non-empty JSON object should be truthy"
+
+                    # Test that nested objects in values/items are lazy JSON objects
+                    if "metadata" in json_obj:
+                        metadata = json_obj["metadata"]
+                        assert type(metadata).__name__ == "JSON"
+
+                        # Test dict methods on nested object
+                        assert len(metadata) > 0
+                        assert bool(metadata) is True  # Non-empty nested object is truthy
+                        nested_keys = metadata.keys()
+                        assert isinstance(nested_keys, list)
+
+                        nested_values = metadata.values()
+                        assert isinstance(nested_values, list)
+
+                        nested_items = metadata.items()
+                        assert isinstance(nested_items, list)
+
+    def test_json_unwrap_and_copy(self):
+        """Test JSON unwrap() and copy() methods"""
+        with Environment(lines=50) as env:
+            gz_file = env.create_test_gzip_file_with_nested_json()
+            env.build_index(gz_file, checkpoint_size_bytes=512*1024)
+
+            with dft_utils.Reader(gz_file) as reader:
+                num_lines = reader.get_num_lines()
+
+                if num_lines > 0:
+                    json_objects = reader.read_lines_json(1, 2)
+                    assert len(json_objects) > 0
+
+                    json_obj = json_objects[0]
+
+                    # Test unwrap() - should return native Python dict
+                    unwrapped = json_obj.unwrap()
+                    assert isinstance(unwrapped, dict)
+                    assert "id" in unwrapped
+                    assert "metadata" in unwrapped
+
+                    # Verify nested objects are also unwrapped (not lazy JSON)
+                    if "metadata" in unwrapped:
+                        assert isinstance(unwrapped["metadata"], dict)
+                        assert type(unwrapped["metadata"]).__name__ == "dict"
+
+                    # Verify arrays are unwrapped to lists
+                    if "events" in unwrapped:
+                        assert isinstance(unwrapped["events"], list)
+
+                    # Test copy() - should return a new JSON object
+                    json_copy = json_obj.copy()
+                    assert type(json_copy).__name__ == "JSON"
+                    assert json_copy is not json_obj  # Different object
+
+                    # Copy should have same data
+                    assert len(json_copy) == len(json_obj)
+                    assert list(json_copy.keys()) == list(json_obj.keys())
+
+                    # Test copy on nested objects
+                    if "metadata" in json_obj:
+                        metadata = json_obj["metadata"]
+                        metadata_copy = metadata.copy()
+                        assert type(metadata_copy).__name__ == "JSON"
+                        assert metadata_copy is not metadata
+                        assert len(metadata_copy) == len(metadata)
+
     def test_reader_edge_cases(self):
         """Test reader edge cases"""
         with Environment() as env:

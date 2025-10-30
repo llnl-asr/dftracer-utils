@@ -14,16 +14,16 @@ except PackageNotFoundError:
     # package is not installed
     pass
 
+
 def dft_reader(
-    gzip_path_or_indexer: Union[str, Indexer], 
-    index_path: Optional[str] = None
+    gzip_path_or_indexer: Union[str, Indexer], index_path: Optional[str] = None
 ):
     """Create a reader
-    
+
     Args:
         gzip_path_or_indexer: Either a path to gzip file or a Indexer instance
         index_path: Path to index file (ignored if indexer is provided)
-        
+
     Returns:
         Reader instance
     """
@@ -31,6 +31,7 @@ def dft_reader(
         return Reader(gzip_path_or_indexer.gz_path, indexer=gzip_path_or_indexer)
     else:
         return Reader(gzip_path_or_indexer, index_path)
+
 
 __version__ = "1.0.0"
 __all__ = [

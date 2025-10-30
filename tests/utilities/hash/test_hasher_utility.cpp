@@ -1,6 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/hash/hasher_utility.h>
-#include <dftracer/utils/utilities/hash/xxh3_hasher.h>
+#include <dftracer/utils/utilities/hash/hash.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils::utilities::hash;

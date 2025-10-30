@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/indexer/indexer_factory.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/io/lines/sources/indexed_file_line_iterator.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -12,6 +12,8 @@
 using namespace dftracer::utils::utilities::io::lines::sources;
 using namespace dftracer::utils::utilities::io::lines;
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::utilities::reader::internal;
 using namespace dft_utils_test;
 
 TEST_SUITE("IndexedFileLineIterator") {

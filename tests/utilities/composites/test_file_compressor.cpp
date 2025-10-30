@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/composites/file_compressor.h>
+#include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <doctest/doctest.h>
 
 #include <fstream>
@@ -192,6 +192,13 @@ TEST_SUITE("FileCompressor") {
             std::string test_file = "./empty.txt";
             std::string output_file = test_file + ".gz";
 
+            // Ensure cleanup happens even if test fails
+            auto cleanup = [&]() {
+                if (fs::exists(test_file)) fs::remove(test_file);
+                if (fs::exists(output_file)) fs::remove(output_file);
+            };
+            std::shared_ptr<void> guard(nullptr, [&](void*) { cleanup(); });
+
             // Create empty file
             std::ofstream ofs(test_file);
             ofs.close();
@@ -201,16 +208,13 @@ TEST_SUITE("FileCompressor") {
             auto input = FileCompressionUtilityInput::from_file(test_file);
             auto result = compressor.process(input);
 
+            INFO("Compression error: ", result.error_message);
             CHECK(result.success == true);
             CHECK(result.original_size == 0);
             // Empty files may produce empty compressed files with streaming
             // compression
             CHECK(result.compressed_size >= 0);
             CHECK(fs::exists(output_file));
-
-            // Clean up
-            fs::remove(test_file);
-            fs::remove(output_file);
         }
 
         SUBCASE("Invalid compression level") {
@@ -245,6 +249,13 @@ TEST_SUITE("FileCompressor") {
             std::string test_file = "./binary.dat";
             std::string output_file = test_file + ".gz";
 
+            // Ensure cleanup happens even if test fails
+            auto cleanup = [&]() {
+                if (fs::exists(test_file)) fs::remove(test_file);
+                if (fs::exists(output_file)) fs::remove(output_file);
+            };
+            std::shared_ptr<void> guard(nullptr, [&](void*) { cleanup(); });
+
             // Create binary file with random data
             std::ofstream ofs(test_file, std::ios::binary);
             std::random_device rd;
@@ -263,14 +274,11 @@ TEST_SUITE("FileCompressor") {
             auto input = FileCompressionUtilityInput::from_file(test_file);
             auto result = compressor.process(input);
 
+            INFO("Compression error: ", result.error_message);
             CHECK(result.success == true);
             CHECK(result.original_size == data.size());
             CHECK(result.compressed_size > 0);
             CHECK(fs::exists(output_file));
-
-            // Clean up
-            fs::remove(test_file);
-            fs::remove(output_file);
         }
     }
 }

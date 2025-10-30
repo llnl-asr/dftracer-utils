@@ -5,7 +5,7 @@
 #include <dftracer/utils/core/common/inflater.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
-#include <dftracer/utils/indexer/checkpoint.h>
+#include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 
 #include <cstddef>
 #include <cstdint>

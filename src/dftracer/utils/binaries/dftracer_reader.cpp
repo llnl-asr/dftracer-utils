@@ -2,14 +2,14 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/indexer/indexer.h>
-#include <dftracer/utils/indexer/indexer_factory.h>
-#include <dftracer/utils/reader/reader.h>
-#include <dftracer/utils/reader/reader_factory.h>
-#include <dftracer/utils/reader/stream.h>
-#include <dftracer/utils/reader/stream_config.h>
-#include <dftracer/utils/reader/stream_type.h>
 #include <dftracer/utils/utilities/composites/composites.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/utilities/reader/internal/reader.h>
+#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/utilities/reader/internal/stream.h>
+#include <dftracer/utils/utilities/reader/internal/stream_config.h>
+#include <dftracer/utils/utilities/reader/internal/stream_type.h>
 
 #include <algorithm>
 #include <argparse/argparse.hpp>
@@ -19,6 +19,8 @@
 #include <cstring>
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::utilities::reader::internal;
 
 int main(int argc, char **argv) {
     DFTRACER_UTILS_LOGGER_INIT();
@@ -115,8 +117,8 @@ int main(int argc, char **argv) {
     if (!index_path.empty()) {
         idx_path = index_path;
     } else {
-        idx_path = utilities::composites::dft::determine_index_path(gz_path,
-                                                                    index_dir);
+        idx_path = utilities::composites::dft::internal::determine_index_path(
+            gz_path, index_dir);
     }
 
 #if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED
@@ -198,7 +200,7 @@ int main(int argc, char **argv) {
                                    .range_type(RangeType::LINE_RANGE)
                                    .from(start_line)
                                    .to(end_line)
-                                   .buffer(read_buffer_size));
+                                   .buffer_size(read_buffer_size));
 
 #if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED
             std::size_t line_count = 0;
@@ -240,7 +242,7 @@ int main(int argc, char **argv) {
                                              .range_type(RangeType::BYTE_RANGE)
                                              .from(start_bytes_)
                                              .to(end_bytes_)
-                                             .buffer(read_buffer_size));
+                                             .buffer_size(read_buffer_size));
 
 #if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
             std::size_t total_bytes = 0;

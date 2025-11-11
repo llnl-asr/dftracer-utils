@@ -55,11 +55,15 @@ struct PipelineConfig {
     ErrorHandler error_handler =
         nullptr;                  // Custom error handler (for CUSTOM policy)
     bool enable_watchdog = true;  // Hang detection
-    std::chrono::milliseconds global_timeout{0};        // 0 = wait forever
-    std::chrono::milliseconds default_task_timeout{0};  // 0 = wait forever
-    std::chrono::milliseconds watchdog_interval{100};   // Check frequency
-    std::chrono::milliseconds long_task_warning_threshold{
-        10000};                                         // Warning threshold
+    std::chrono::seconds global_timeout{0};        // 0 = wait forever
+    std::chrono::seconds default_task_timeout{0};  // 0 = wait forever
+    std::chrono::seconds watchdog_interval{1};     // Check frequency
+    std::chrono::seconds long_task_warning_threshold{
+        300};  // Warning threshold (5 minutes)
+    std::chrono::seconds executor_idle_timeout{
+        300};  // Executor idle timeout (5 minutes)
+    std::chrono::seconds executor_deadlock_timeout{
+        600};  // Executor deadlock timeout (10 minutes)
 
     /**
      * Set pipeline name
@@ -113,7 +117,7 @@ struct PipelineConfig {
     /**
      * Set global timeout (0 = wait forever)
      */
-    PipelineConfig& with_global_timeout(std::chrono::milliseconds timeout) {
+    PipelineConfig& with_global_timeout(std::chrono::seconds timeout) {
         global_timeout = timeout;
         return *this;
     }
@@ -121,7 +125,7 @@ struct PipelineConfig {
     /**
      * Set default task timeout (0 = wait forever)
      */
-    PipelineConfig& with_task_timeout(std::chrono::milliseconds timeout) {
+    PipelineConfig& with_task_timeout(std::chrono::seconds timeout) {
         default_task_timeout = timeout;
         return *this;
     }
@@ -129,7 +133,7 @@ struct PipelineConfig {
     /**
      * Set watchdog check interval
      */
-    PipelineConfig& with_watchdog_interval(std::chrono::milliseconds interval) {
+    PipelineConfig& with_watchdog_interval(std::chrono::seconds interval) {
         watchdog_interval = interval;
         return *this;
     }
@@ -137,25 +141,26 @@ struct PipelineConfig {
     /**
      * Set long-running task warning threshold
      */
-    PipelineConfig& with_warning_threshold(
-        std::chrono::milliseconds threshold) {
+    PipelineConfig& with_warning_threshold(std::chrono::seconds threshold) {
         long_task_warning_threshold = threshold;
         return *this;
     }
 
     /**
-     * Create default configuration
+     * Set executor idle timeout
      */
-    static PipelineConfig default_config() {
-        PipelineConfig config;
-        config.executor_threads = 0;  // hardware_concurrency
-        config.scheduler_threads = 1;
-        config.enable_watchdog = true;
-        config.global_timeout = std::chrono::milliseconds(0);
-        config.default_task_timeout = std::chrono::milliseconds(0);
-        config.watchdog_interval = std::chrono::milliseconds(100);
-        config.long_task_warning_threshold = std::chrono::milliseconds(10000);
-        return config;
+    PipelineConfig& with_executor_idle_timeout(std::chrono::seconds timeout) {
+        executor_idle_timeout = timeout;
+        return *this;
+    }
+
+    /**
+     * Set executor deadlock timeout
+     */
+    PipelineConfig& with_executor_deadlock_timeout(
+        std::chrono::seconds timeout) {
+        executor_deadlock_timeout = timeout;
+        return *this;
     }
 
     /**
@@ -176,12 +181,29 @@ struct PipelineConfig {
     }
 
     /**
+     * Create default configuration
+     */
+    static PipelineConfig default_config() {
+        PipelineConfig config;
+        config.executor_threads = 0;  // hardware_concurrency
+        config.scheduler_threads = 1;
+        config.enable_watchdog = true;
+        config.global_timeout = std::chrono::seconds(0);
+        config.default_task_timeout = std::chrono::seconds(0);
+        config.watchdog_interval = std::chrono::seconds(1);
+        config.long_task_warning_threshold = std::chrono::seconds(300);
+        config.executor_idle_timeout = std::chrono::seconds(300);
+        config.executor_deadlock_timeout = std::chrono::seconds(600);
+        return config;
+    }
+
+    /**
      * Create configuration with timeouts
      */
     static PipelineConfig with_timeouts(
         std::size_t num_threads = 0,
-        std::chrono::milliseconds global_timeout = std::chrono::seconds(60),
-        std::chrono::milliseconds task_timeout = std::chrono::seconds(30)) {
+        std::chrono::seconds global_timeout = std::chrono::seconds(60),
+        std::chrono::seconds task_timeout = std::chrono::seconds(30)) {
         return PipelineConfig()
             .with_executor_threads(num_threads)
             .with_watchdog(true)

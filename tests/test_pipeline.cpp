@@ -102,14 +102,14 @@ TEST_CASE("PipelineConfig - Fluent API chaining") {
                       .with_watchdog(true)
                       .with_global_timeout(std::chrono::minutes(1))
                       .with_task_timeout(std::chrono::seconds(30))
-                      .with_watchdog_interval(std::chrono::milliseconds(50))
+                      .with_watchdog_interval(std::chrono::seconds(1))
                       .with_warning_threshold(std::chrono::seconds(5));
 
     CHECK(config.executor_threads == 8);
     CHECK(config.enable_watchdog == true);
     CHECK(config.global_timeout == std::chrono::minutes(1));
     CHECK(config.default_task_timeout == std::chrono::seconds(30));
-    CHECK(config.watchdog_interval == std::chrono::milliseconds(50));
+    CHECK(config.watchdog_interval == std::chrono::seconds(1));
     CHECK(config.long_task_warning_threshold == std::chrono::seconds(5));
 }
 
@@ -330,9 +330,9 @@ TEST_CASE("Scheduler - Global timeout triggers") {
     // Use a very short timeout to make test fast and deterministic
     auto config = PipelineConfig()
                       .with_executor_threads(4)
-                      .with_global_timeout(std::chrono::milliseconds(50))
+                      .with_global_timeout(std::chrono::seconds(1))
                       .with_watchdog(true)
-                      .with_watchdog_interval(std::chrono::milliseconds(10));
+                      .with_watchdog_interval(std::chrono::seconds(1));
 
     // Create executor and scheduler in a scope so they cleanup properly
     {
@@ -392,11 +392,11 @@ TEST_CASE("Scheduler - Global timeout triggers") {
 
 TEST_CASE("Scheduler - No timeout with zero value") {
     Executor executor(4);
-    auto config = PipelineConfig()
-                      .with_executor_threads(4)
-                      .with_global_timeout(
-                          std::chrono::milliseconds(0))  // 0 = wait forever
-                      .with_watchdog(false);
+    auto config =
+        PipelineConfig()
+            .with_executor_threads(4)
+            .with_global_timeout(std::chrono::seconds(0))  // 0 = wait forever
+            .with_watchdog(false);
 
     Scheduler scheduler(&executor, config);
 
@@ -590,8 +590,8 @@ TEST_CASE("Integration - Full pipeline with all features") {
                       .with_watchdog(true)
                       .with_global_timeout(std::chrono::seconds(5))
                       .with_task_timeout(std::chrono::seconds(1))
-                      .with_watchdog_interval(std::chrono::milliseconds(50))
-                      .with_warning_threshold(std::chrono::milliseconds(500));
+                      .with_watchdog_interval(std::chrono::seconds(1))
+                      .with_warning_threshold(std::chrono::seconds(1));
 
     Scheduler scheduler(&executor, config);
 
@@ -855,9 +855,9 @@ TEST_CASE("Error Scenario - Per-task timeout") {
     auto config = PipelineConfig()
                       .with_executor_threads(4)
                       .with_watchdog(true)
-                      .with_task_timeout(std::chrono::milliseconds(
-                          150))  // Set default (increased for CI)
-                      .with_watchdog_interval(std::chrono::milliseconds(25));
+                      .with_task_timeout(std::chrono::seconds(
+                          1))  // Set default (increased for CI)
+                      .with_watchdog_interval(std::chrono::seconds(1));
 
     {
         Executor executor(4);

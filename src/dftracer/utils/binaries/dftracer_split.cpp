@@ -91,6 +91,42 @@ int main(int argc, char** argv) {
         .help("Verify output chunks match input by comparing event IDs")
         .flag();
 
+    program.add_argument("--disable-watchdog")
+        .help("Disable watchdog for hang detection")
+        .flag();
+
+    program.add_argument("--watchdog-global-timeout")
+        .help(
+            "Watchdog global timeout for pipeline execution in seconds (0 = no "
+            "timeout)")
+        .scan<'d', int>()
+        .default_value(0);
+
+    program.add_argument("--watchdog-task-timeout")
+        .help("Watchdog default task timeout in seconds (0 = no timeout)")
+        .scan<'d', int>()
+        .default_value(0);
+
+    program.add_argument("--watchdog-interval")
+        .help("Watchdog check interval in seconds")
+        .scan<'d', int>()
+        .default_value(1);
+
+    program.add_argument("--watchdog-warning-threshold")
+        .help("Watchdog long-running task warning threshold in seconds")
+        .scan<'d', int>()
+        .default_value(300);
+
+    program.add_argument("--watchdog-idle-timeout")
+        .help("Watchdog idle timeout in seconds (0 = use default)")
+        .scan<'d', int>()
+        .default_value(300);
+
+    program.add_argument("--watchdog-deadlock-timeout")
+        .help("Watchdog deadlock timeout in seconds (0 = use default)")
+        .scan<'d', int>()
+        .default_value(600);
+
     try {
         program.parse_args(argc, argv);
     } catch (const std::exception& err) {
@@ -113,6 +149,13 @@ int main(int argc, char** argv) {
     std::size_t scheduler_threads =
         program.get<std::size_t>("--scheduler-threads");
     std::string index_dir = program.get<std::string>("--index-dir");
+    bool disable_watchdog = program.get<bool>("--disable-watchdog");
+    int global_timeout = program.get<int>("--watchdog-global-timeout");
+    int task_timeout = program.get<int>("--watchdog-task-timeout");
+    int watchdog_interval = program.get<int>("--watchdog-interval");
+    int warning_threshold = program.get<int>("--watchdog-warning-threshold");
+    int idle_timeout = program.get<int>("--watchdog-idle-timeout");
+    int deadlock_timeout = program.get<int>("--watchdog-deadlock-timeout");
 
     // Setup temp index directory
     std::string temp_index_dir;
@@ -147,10 +190,19 @@ int main(int argc, char** argv) {
     }
 
     // Create pipeline with configuration
-    auto pipeline_config = PipelineConfig()
-                               .with_name("DFTracer Split")
-                               .with_executor_threads(executor_threads)
-                               .with_scheduler_threads(scheduler_threads);
+    auto pipeline_config =
+        PipelineConfig()
+            .with_name("DFTracer Split")
+            .with_executor_threads(executor_threads)
+            .with_scheduler_threads(scheduler_threads)
+            .with_watchdog(!disable_watchdog)
+            .with_global_timeout(std::chrono::seconds(global_timeout))
+            .with_task_timeout(std::chrono::seconds(task_timeout))
+            .with_watchdog_interval(std::chrono::seconds(watchdog_interval))
+            .with_warning_threshold(std::chrono::seconds(warning_threshold))
+            .with_executor_idle_timeout(std::chrono::seconds(idle_timeout))
+            .with_executor_deadlock_timeout(
+                std::chrono::seconds(deadlock_timeout));
 
     Pipeline pipeline(pipeline_config);
 

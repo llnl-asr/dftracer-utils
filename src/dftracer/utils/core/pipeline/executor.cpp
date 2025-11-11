@@ -24,14 +24,20 @@ void set_current_worker_context(void* context) {
     tls_current_worker_context = context;
 }
 
-Executor::Executor(size_t num_threads)
+Executor::Executor(size_t num_threads, std::chrono::seconds idle_timeout,
+                   std::chrono::seconds deadlock_timeout)
     : num_threads_(num_threads == 0 ? std::thread::hardware_concurrency()
                                     : num_threads),
-      last_activity_time_(std::chrono::steady_clock::now()) {
+      last_activity_time_(std::chrono::steady_clock::now()),
+      idle_timeout_(idle_timeout),
+      deadlock_timeout_(deadlock_timeout) {
     if (num_threads_ == 0) {
         num_threads_ = 2;  // Fallback if hardware_concurrency returns 0
     }
-    DFTRACER_UTILS_LOG_DEBUG("Executor created with %zu threads", num_threads_);
+    DFTRACER_UTILS_LOG_DEBUG(
+        "Executor created with %zu threads, idle_timeout=%lld s, "
+        "deadlock_timeout=%lld s",
+        num_threads_, idle_timeout_.count(), deadlock_timeout_.count());
 }
 
 Executor::~Executor() { shutdown(); }
@@ -329,9 +335,9 @@ bool Executor::is_responsive() const {
         auto now = std::chrono::steady_clock::now();
         auto idle_time = now - last_activity_time_;
 
-        // If idle for more than 5 seconds with pending tasks, consider
+        // If idle for more than idle_timeout with pending tasks, consider
         // unresponsive
-        if (idle_time > std::chrono::seconds(5)) {
+        if (idle_time > idle_timeout_) {
             DFTRACER_UTILS_LOG_WARN(
                 "Executor appears unresponsive: %zu tasks in queue, idle for "
                 "%lld ms",
@@ -354,8 +360,9 @@ bool Executor::is_responsive() const {
         auto now = std::chrono::steady_clock::now();
         auto idle_time = now - last_activity_time_;
 
-        // If all threads busy but no activity for 10 seconds, likely deadlocked
-        if (idle_time > std::chrono::seconds(10)) {
+        // If all threads busy but no activity for deadlock_timeout, likely
+        // deadlocked
+        if (idle_time > deadlock_timeout_) {
             DFTRACER_UTILS_LOG_WARN(
                 "Executor appears deadlocked: %zu threads, %zu active tasks, "
                 "idle for %lld ms",

@@ -199,6 +199,10 @@ class Executor {
     // Shutdown coordination
     std::atomic<bool> shutdown_requested_{false};
 
+    // Responsiveness timeout thresholds
+    std::chrono::seconds idle_timeout_;
+    std::chrono::seconds deadlock_timeout_;
+
     // Task registry for progress tracking
     std::unordered_map<TaskIndex, TaskInfo> task_registry_;
     mutable std::shared_mutex registry_mutex_;  // Allow concurrent reads
@@ -207,8 +211,13 @@ class Executor {
     /**
      * Constructor
      * @param num_threads Number of worker threads (0 = hardware_concurrency)
+     * @param idle_timeout Timeout for idle executor with pending tasks
+     * @param deadlock_timeout Timeout for potential deadlock detection
      */
-    explicit Executor(size_t num_threads = 0);
+    explicit Executor(
+        size_t num_threads = 0,
+        std::chrono::seconds idle_timeout = std::chrono::seconds(5),
+        std::chrono::seconds deadlock_timeout = std::chrono::seconds(10));
 
     ~Executor();
 

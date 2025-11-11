@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <memory>
+#include <iostream>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer::internal;

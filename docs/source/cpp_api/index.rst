@@ -14,6 +14,9 @@ This section contains the C++ API documentation for dftracer utilities.
    reader
    indexer
    pipeline
+   coro
+   task_graph
+   utilities
 
 Overview
 --------
@@ -24,6 +27,9 @@ The dftracer utilities C++ library is organized into several namespaces:
 - ``dftracer::utils::reader`` - Trace file reading
 - ``dftracer::utils::indexer`` - Indexing capabilities
 - ``dftracer::utils::pipeline`` - Processing pipelines
+- ``dftracer::utils::coro`` - C++20 coroutine primitives
+- ``dftracer::utils::task_graph`` - DAG-based task graph builder
+- ``dftracer::utils::utilities`` - Composable processing utilities
 
 Main Classes
 ------------

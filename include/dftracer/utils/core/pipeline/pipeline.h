@@ -8,6 +8,7 @@
 #include <dftracer/utils/core/pipeline/scheduler.h>
 
 #include <any>
+#include <cstddef>
 #include <initializer_list>
 #include <memory>
 #include <string>
@@ -42,7 +43,6 @@ class Pipeline {
     std::string name_;
     bool validated_{false};
 
-    size_t executor_threads_;
     ErrorPolicy error_policy_{ErrorPolicy::FAIL_FAST};
     ErrorHandler error_handler_{nullptr};
 
@@ -76,6 +76,11 @@ class Pipeline {
     void set_source(std::initializer_list<std::shared_ptr<Task>> sources);
 
     /**
+     * Set multiple source tasks (vector - auto-creates NoOpTask as parent)
+     */
+    void set_source(const std::vector<std::shared_ptr<Task>>& sources);
+
+    /**
      * Set multiple source tasks (variadic - auto-creates NoOpTask as parent)
      */
     template <typename... Tasks>
@@ -97,6 +102,12 @@ class Pipeline {
      */
     void set_destination(
         std::initializer_list<std::shared_ptr<Task>> destinations);
+
+    /**
+     * Set multiple destination tasks (vector - auto-creates NoOpTask as child)
+     */
+    void set_destination(
+        const std::vector<std::shared_ptr<Task>>& destinations);
 
     /**
      * Set multiple destination tasks (variadic - auto-creates NoOpTask as
@@ -145,7 +156,7 @@ class Pipeline {
      * Set progress callback
      */
     void set_progress_callback(
-        std::function<void(size_t completed, size_t total)> callback);
+        std::function<void(std::size_t completed, std::size_t total)> callback);
 
     /**
      * Get pipeline name

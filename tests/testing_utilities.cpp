@@ -87,7 +87,7 @@ static void write_tar_header(std::ostream& out, const std::string& filename,
     }
 
     // Write checksum in octal
-    std::snprintf(header + 148, 8, "%06o\0", checksum);
+    std::snprintf(header + 148, 8, "%06o", checksum);
 
     out.write(header, 512);
 }

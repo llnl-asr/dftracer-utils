@@ -55,7 +55,9 @@ static std::string read_gzip_fname(FILE* f) {
     if (flg & 0x04) {
         unsigned char x[2];
         if (std::fread(x, 1, 2, f) != 2) return {};
-        uint16_t xlen = (uint16_t)x[0] | ((uint16_t)x[1] << 8);
+        auto xlen =
+            static_cast<std::uint16_t>(static_cast<std::uint16_t>(x[0]) |
+                                       (static_cast<std::uint16_t>(x[1]) << 8));
         pos += 2;
         if (!skip(xlen)) return {};
     }

@@ -12,6 +12,8 @@ need_xxhash()
 need_cpplogger()
 need_yyjson()
 need_nonstd_span()
+need_readerwriterqueue()
+need_concurrentqueue()
 
 # ##############################################################################
 # Libraries
@@ -33,8 +35,12 @@ set(DFTRACER_UTILS_CORE_SOURCES
     # Pipeline - New Architecture
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/pipeline.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/task_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/io_executor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/io_backend.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/io_backends/kqueue_backend.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/io_backends/thread_pool_backend.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/io_backends/io_uring_backend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/watchdog.cpp
     # Tasks
@@ -54,6 +60,7 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_id_extractor_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_collector_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/file_merger_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/streaming_file_merger_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_hasher_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/internal/utils.cpp
 
@@ -195,6 +202,8 @@ create_library(
     ghc_filesystem
     nonstd::span-lite
     Threads::Threads
+    readerwriterqueue
+    concurrentqueue
   PUBLIC_INCLUDE_DIRS
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>

@@ -7,11 +7,15 @@
 
 static PyModuleDef dftracer_utils_module = {
     PyModuleDef_HEAD_INIT,
-    .m_name = "dftracer_utils_ext",
-    .m_doc =
-        "DFTracer utils module with indexer, reader, and lazy JSON "
-        "functionality",
-    .m_size = -1,
+    "dftracer_utils_ext", /* m_name */
+    "DFTracer utils module with indexer, reader, and lazy JSON "
+    "functionality",      /* m_doc */
+    -1,                   /* m_size */
+    NULL,                 /* m_methods */
+    NULL,                 /* m_slots */
+    NULL,                 /* m_traverse */
+    NULL,                 /* m_clear */
+    NULL                  /* m_free */
 };
 
 PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {

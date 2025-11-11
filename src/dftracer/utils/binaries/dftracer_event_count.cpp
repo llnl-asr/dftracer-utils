@@ -9,7 +9,6 @@
 
 #include <argparse/argparse.hpp>
 #include <chrono>
-#include <thread>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer::internal;
@@ -92,29 +91,23 @@ int main(int argc, char** argv) {
     // Create pipeline with configuration
     auto pipeline_config = PipelineConfig()
                                .with_name("DFTracer Event Count")
-                               .with_executor_threads(executor_threads)
+                               .with_compute_threads(executor_threads)
                                .with_scheduler_threads(scheduler_threads);
 
     Pipeline pipeline(pipeline_config);
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // ========================================================================
     // Task 1: Build Indexes
-    // ========================================================================
     DFTRACER_UTILS_LOG_INFO("%s", "Task 1: Building indexes...");
 
-    // Task 1.1: Input - Directory input for file discovery
     auto index_dir_input =
         utilities::composites::DirectoryProcessInput::from_directory(log_dir)
             .with_extensions({".pfw", ".pfw.gz"});
 
-    // Task 1.2: Output - Index build results
     using IndexBuildOutput = utilities::composites::BatchFileProcessOutput<
         utilities::composites::dft::IndexBuildUtilityOutput>;
 
-    // Task 1.3: Utility definition - DirectoryFileProcessorUtility with
-    // IndexBuilder
     auto index_builder_processor = [checkpoint_size, force_rebuild, &index_dir](
                                        TaskContext& /*ctx*/,
                                        const std::string& file_path)
@@ -136,21 +129,15 @@ int main(int argc, char** argv) {
             utilities::composites::dft::IndexBuildUtilityOutput>>(
             index_builder_processor);
 
-    // Task 1.4: Task definition - Convert utility to task
     auto task1_build_indexes = utilities::use(index_workflow).as_task();
     task1_build_indexes->with_name("BuildIndexes");
 
-    // ========================================================================
     // Task 2: Collect Metadata
-    // ========================================================================
     DFTRACER_UTILS_LOG_INFO("%s", "Task 2: Collecting metadata...");
 
-    // Task 2.1: Output - Metadata collection results
     using MetadataCollectOutput = utilities::composites::BatchFileProcessOutput<
         utilities::composites::dft::MetadataCollectorUtilityOutput>;
 
-    // Task 2.2: Utility definition - DirectoryFileProcessorUtility with
-    // MetadataCollector
     auto metadata_processor = [checkpoint_size, force_rebuild, &index_dir](
                                   TaskContext& /*ctx*/,
                                   const std::string& file_path)
@@ -174,30 +161,21 @@ int main(int argc, char** argv) {
             utilities::composites::dft::MetadataCollectorUtilityOutput>>(
             metadata_processor);
 
-    // Task 2.3: Task definition - Convert utility to task
     auto task2_collect_metadata = utilities::use(metadata_workflow).as_task();
     task2_collect_metadata->with_name("CollectMetadata");
 
-    // Task 2 needs the same directory input as Task 1
     task2_collect_metadata->with_combiner([&log_dir](const IndexBuildOutput&) {
-        // Return fresh directory input for metadata collection
         return utilities::composites::DirectoryProcessInput::from_directory(
                    log_dir)
             .with_extensions({".pfw", ".pfw.gz"});
     });
 
-    // ========================================================================
     // Task 3: Aggregate Event Counts
-    // ========================================================================
     DFTRACER_UTILS_LOG_INFO("%s", "Task 3: Aggregating event counts...");
 
-    // Task 3.1: Input - Metadata from Task 2
     using AggregateInput = MetadataCollectOutput;
-
-    // Task 3.2: Output - Total event count
     using AggregateOutput = std::size_t;
 
-    // Task 3.3: Utility definition - Sum up valid_events from all metadata
     auto aggregate_counts_func =
         [](const AggregateInput& batch_result) -> AggregateOutput {
         DFTRACER_UTILS_LOG_INFO("Aggregating event counts from %zu files...",
@@ -221,15 +199,10 @@ int main(int argc, char** argv) {
         return total_events;
     };
 
-    // Task 3.4: Task definition
     auto task3_aggregate_counts =
         make_task(aggregate_counts_func, "AggregateEventCounts");
 
-    // ========================================================================
     // Execute Pipeline
-    // ========================================================================
-
-    // Define dependencies
     task2_collect_metadata->depends_on(task1_build_indexes);
     task3_aggregate_counts->depends_on(task2_collect_metadata);
 
@@ -237,10 +210,8 @@ int main(int argc, char** argv) {
     pipeline.set_source(task1_build_indexes);
     pipeline.set_destination(task3_aggregate_counts);
 
-    // Execute pipeline with initial input
     pipeline.execute(index_dir_input);
 
-    // Get final results
     auto total_events = task3_aggregate_counts->get<AggregateOutput>();
     auto metadata_results =
         task2_collect_metadata->get<MetadataCollectOutput>();
@@ -248,14 +219,8 @@ int main(int argc, char** argv) {
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
-    // ========================================================================
-    // Print Results
-    // ========================================================================
-
-    // Output total event count (for scripting)
     std::printf("%zu\n", total_events);
 
-    // Log detailed statistics
     std::size_t successful_files = 0;
     for (const auto& meta : metadata_results.results) {
         if (meta.success) {

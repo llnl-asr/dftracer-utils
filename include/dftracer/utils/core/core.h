@@ -10,7 +10,7 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/pipeline/pipeline_output.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
-#include <dftracer/utils/core/pipeline/task_queue.h>
+#include <dftracer/utils/core/pipeline/task_item.h>
 #include <dftracer/utils/core/pipeline/watchdog.h>
 
 // Tasks

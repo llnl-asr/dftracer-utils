@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -70,6 +71,10 @@ class Watchdog {
     std::thread watchdog_thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> shutdown_requested_{false};
+
+    // For interruptible sleep
+    std::mutex sleep_mutex_;
+    std::condition_variable sleep_cv_;
 
     // Callbacks
     TimeoutCallback timeout_callback_;

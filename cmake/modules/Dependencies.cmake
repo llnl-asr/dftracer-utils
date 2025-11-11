@@ -1,5 +1,13 @@
+# ==============================================================================
+# CPM Configuration
+# ==============================================================================
+
 set(CPM_USE_LOCAL_PACKAGES ON)
 set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/.cpmsource")
+
+# ==============================================================================
+# System Dependencies
+# ==============================================================================
 
 find_package(Threads REQUIRED)
 
@@ -15,6 +23,10 @@ find_package(
   Python 3.8
   COMPONENTS Interpreter ${DEV_MODULE}
   OPTIONAL_COMPONENTS Development.SABIModule)
+
+# ==============================================================================
+# Logging Dependencies
+# ==============================================================================
 
 function(need_cpplogger)
   # First try to find cpp-logger from the system or other projects
@@ -73,6 +85,10 @@ function(need_cpplogger)
           cpp-logger_static
           PROPERTIES OUTPUT_NAME cpp-logger ARCHIVE_OUTPUT_DIRECTORY
                                             ${CMAKE_BINARY_DIR}/lib)
+        # Suppress GNU extension warning from cpp-logger's use of ##__VA_ARGS__
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+          target_compile_options(cpp-logger_static PRIVATE -Wno-gnu-zero-variadic-macro-arguments)
+        endif()
         add_library(cpp-logger::cpp-logger_static ALIAS cpp-logger_static)
         list(APPEND CPPLOGGER_TARGETS cpp-logger_static)
         message(STATUS "Added cpp-logger static library")
@@ -93,6 +109,10 @@ function(need_cpplogger)
           PROPERTIES OUTPUT_NAME cpp-logger
                      LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
                      ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+        # Suppress GNU extension warning from cpp-logger's use of ##__VA_ARGS__
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+          target_compile_options(cpp-logger_shared PRIVATE -Wno-gnu-zero-variadic-macro-arguments)
+        endif()
         add_library(cpp-logger::cpp-logger ALIAS cpp-logger_shared)
         list(APPEND CPPLOGGER_TARGETS cpp-logger_shared)
         message(STATUS "Added cpp-logger shared library")
@@ -195,6 +215,10 @@ function(link_cpp_logger TARGET_NAME LIBRARY_TYPE)
   endif()
 endfunction()
 
+# ==============================================================================
+# Utility Dependencies
+# ==============================================================================
+
 function(need_argparse)
   if(NOT argparse_ADDED)
     cpmaddpackage(
@@ -239,6 +263,10 @@ function(need_nonstd_span)
       0.11.0)
   endif()
 endfunction()
+
+# ==============================================================================
+# JSON and Serialization Dependencies
+# ==============================================================================
 
 function(need_yyjson)
   if(NOT yyjson_ADDED)
@@ -313,6 +341,10 @@ function(need_yyjson)
       DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/yyjson)
   endif()
 endfunction()
+
+# ==============================================================================
+# Database Dependencies
+# ==============================================================================
 
 function(need_sqlite3)
   find_package(SQLite3 3.35 QUIET)
@@ -522,6 +554,10 @@ function(link_sqlite3 TARGET_NAME LIBRARY_TYPE)
     endif()
   endif()
 endfunction()
+
+# ==============================================================================
+# Compression Dependencies
+# ==============================================================================
 
 function(need_zlib)
   find_package(ZLIB 1.2 QUIET)
@@ -815,6 +851,10 @@ function(link_zlib TARGET_NAME LIBRARY_TYPE)
   endif()
 endfunction()
 
+# ==============================================================================
+# Hashing and Cryptography Dependencies
+# ==============================================================================
+
 function(need_xxhash)
   if(NOT xxhash_ADDED)
     cpmaddpackage(
@@ -1002,6 +1042,84 @@ function(need_picosha2)
     endif()
   endif()
 endfunction()
+
+# ==============================================================================
+# Concurrency Dependencies
+# ==============================================================================
+
+function(need_readerwriterqueue)
+  if(NOT readerwriterqueue_ADDED)
+    cpmaddpackage(
+      NAME
+      readerwriterqueue
+      GITHUB_REPOSITORY
+      cameron314/readerwriterqueue
+      GIT_TAG
+      211616e0554f93152ab3108b8d93fbc23174a9d9
+      DOWNLOAD_ONLY
+      YES)
+
+    if(readerwriterqueue_ADDED)
+      add_library(readerwriterqueue INTERFACE)
+      target_include_directories(
+        readerwriterqueue
+        INTERFACE $<BUILD_INTERFACE:${readerwriterqueue_SOURCE_DIR}>
+                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      install(
+        FILES ${readerwriterqueue_SOURCE_DIR}/readerwriterqueue.h
+              ${readerwriterqueue_SOURCE_DIR}/atomicops.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+      # Install and export the target
+      install(TARGETS readerwriterqueue EXPORT readerwriterqueueTargets)
+      install(
+        EXPORT readerwriterqueueTargets
+        FILE readerwriterqueueTargets.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/readerwriterqueue)
+
+      message(STATUS "Added readerwriterqueue header-only library")
+    endif()
+  endif()
+endfunction()
+
+function(need_concurrentqueue)
+  if(NOT concurrentqueue_ADDED)
+    cpmaddpackage(
+      NAME
+      concurrentqueue
+      GITHUB_REPOSITORY
+      cameron314/concurrentqueue
+      GIT_TAG
+      c68072129c8a5b4025122ca5a0c82ab14b30cb03
+      DOWNLOAD_ONLY
+      YES)
+
+    if(concurrentqueue_ADDED)
+      add_library(concurrentqueue INTERFACE)
+      target_include_directories(
+        concurrentqueue INTERFACE $<BUILD_INTERFACE:${concurrentqueue_SOURCE_DIR}>
+                                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      install(
+        FILES ${concurrentqueue_SOURCE_DIR}/concurrentqueue.h
+              ${concurrentqueue_SOURCE_DIR}/blockingconcurrentqueue.h
+              ${concurrentqueue_SOURCE_DIR}/lightweightsemaphore.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+      # Install and export the target
+      install(TARGETS concurrentqueue EXPORT concurrentqueueTargets)
+      install(
+        EXPORT concurrentqueueTargets
+        FILE concurrentqueueTargets.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/concurrentqueue)
+
+      message(STATUS "Added concurrentqueue header-only library")
+    endif()
+  endif()
+endfunction()
+
+# ==============================================================================
+# Data Processing Dependencies
+# ==============================================================================
 
 function(need_arrow)
   find_package(Arrow 21.0.0 QUIET)
@@ -1216,6 +1334,10 @@ function(link_arrow TARGET_NAME LIBRARY_TYPE)
   endif()
 endfunction()
 
+# ==============================================================================
+# Testing Dependencies
+# ==============================================================================
+
 function(need_test_deps)
   cpmaddpackage(NAME doctest GITHUB_REPOSITORY doctest/doctest VERSION 2.4.11)
 
@@ -1236,6 +1358,10 @@ function(need_test_deps)
     target_include_directories(unity_lib PUBLIC ${unity_SOURCE_DIR}/src)
   endif()
 endfunction()
+
+# ==============================================================================
+# Compiler Feature Checks and Helpers
+# ==============================================================================
 
 macro(check_std_filesystem)
   try_compile(

@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/composites/dft/chunk_extractor_utility.h>
+#include <dftracer/utils/utilities/composites/dft/event_hasher_utility.h>
 #include <dftracer/utils/utilities/io/lines/line_range.h>
 #include <dftracer/utils/utilities/io/lines/streaming_line_reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -59,10 +60,7 @@ ChunkExtractorUtilityOutput ChunkExtractorUtility::extract_and_write(
 
     std::size_t total_events = 0;
 
-    // NEW: Pre-allocate event_ids vector for performance
-    result.event_ids.reserve(5000);
-
-    // NEW: Create event ID extractor utility
+    IncrementalEventHasher event_hasher;
     auto event_id_extractor = std::make_shared<EventIdExtractor>();
 
     // Process each chunk spec in the manifest
@@ -77,10 +75,7 @@ ChunkExtractorUtilityOutput ChunkExtractorUtility::extract_and_write(
                     .with_line_range(spec.start_line, spec.end_line);
             LineRange line_range = StreamingLineReader::read(reader_config);
 
-            std::size_t line_count = 0;
             for (const auto& line : line_range) {
-                line_count++;
-
                 const char* trimmed;
                 std::size_t trimmed_length;
                 if (json_trim_and_validate(line.content.data(),
@@ -91,13 +86,12 @@ ChunkExtractorUtilityOutput ChunkExtractorUtility::extract_and_write(
                     std::fwrite(trimmed, 1, trimmed_length, output_fp);
                     std::fwrite("\n", 1, 1, output_fp);
 
-                    // NEW: Extract and collect event ID for verification
                     auto extract_input = EventIdExtractionInput::from_json(
                         std::string_view(trimmed, trimmed_length));
                     EventId event_id =
                         event_id_extractor->process(extract_input);
                     if (event_id.is_valid()) {
-                        result.event_ids.push_back(event_id);
+                        event_hasher.update(event_id);
                     }
 
                     total_events++;
@@ -132,13 +126,12 @@ ChunkExtractorUtilityOutput ChunkExtractorUtility::extract_and_write(
                     std::fwrite(trimmed, 1, trimmed_length, output_fp);
                     std::fwrite("\n", 1, 1, output_fp);
 
-                    // NEW: Extract and collect event ID for verification
                     auto extract_input = EventIdExtractionInput::from_json(
                         std::string_view(trimmed, trimmed_length));
                     EventId event_id =
                         event_id_extractor->process(extract_input);
                     if (event_id.is_valid()) {
-                        result.event_ids.push_back(event_id);
+                        event_hasher.update(event_id);
                     }
 
                     total_events++;
@@ -153,10 +146,11 @@ ChunkExtractorUtilityOutput ChunkExtractorUtility::extract_and_write(
 
     result.events = total_events;
     result.size_mb = input.manifest.total_size_mb;
+    result.event_hash = event_hasher.get_hash();
 
-    DFTRACER_UTILS_LOG_DEBUG(
-        "Chunk %d: Extracted %zu events and collected %zu event IDs",
-        input.chunk_index, total_events, result.event_ids.size());
+    DFTRACER_UTILS_LOG_DEBUG("Chunk %d: Extracted %zu events, hash=0x%zx",
+                             input.chunk_index, total_events,
+                             result.event_hash);
 
     // Compress if requested
     if (input.compress && total_events > 0) {

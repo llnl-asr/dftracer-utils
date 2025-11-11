@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DIRECTORY_FILE_PROCESSOR_UTILITY_H
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/utilities.h>
@@ -91,27 +92,25 @@ class DirectoryFileProcessorUtility
         // Step 3: Get TaskContext for parallel execution
         TaskContext& ctx = this->context();
 
-        // Step 4: Submit parallel tasks for each file
-        std::vector<std::shared_future<std::any>> futures;
+        // Step 4: Spawn parallel tasks for each file
+        std::vector<TaskFuture<FileOutput>> futures;
         futures.reserve(files.size());
 
         for (const auto& file_path : files) {
-            // Create task from processor - captures ctx from outer scope
-            auto task = make_task(
-                [proc = processor_, &ctx](std::string path) -> FileOutput {
-                    return proc(ctx, path);
+            auto task =
+                make_task([proc = processor_](
+                              TaskContext& task_ctx,
+                              std::string path) -> coro::CoroTask<FileOutput> {
+                    co_return proc(task_ctx, path);
                 });
-
-            // Submit task with input
-            auto future = ctx.submit_task(task, std::any{file_path});
+            auto future = ctx.spawn<FileOutput>(task, file_path);
             futures.push_back(future);
         }
 
         // Step 5: Wait for all tasks to complete (synchronization point)
         output.results.reserve(files.size());
         for (auto& future : futures) {
-            std::any result_any = future.get();
-            output.results.push_back(std::any_cast<FileOutput>(result_any));
+            output.results.push_back(future.get());
         }
 
         // Step 6: Finalize aggregated statistics

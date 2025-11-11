@@ -1,8 +1,12 @@
 #ifndef DFTRACER_UTILS_CORE_PIPELINE_EXECUTOR_H
 #define DFTRACER_UTILS_CORE_PIPELINE_EXECUTOR_H
 
+#include <blockingconcurrentqueue.h>
+#include <concurrentqueue.h>
+#include <dftracer/utils/core/common/timer_service.h>
 #include <dftracer/utils/core/common/typedefs.h>
-#include <dftracer/utils/core/pipeline/task_queue.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/pipeline/task_item.h>
 
 #include <atomic>
 #include <chrono>
@@ -25,6 +29,7 @@ namespace dftracer::utils {
 class Task;
 class TaskContext;
 class Scheduler;
+class IOExecutor;  // Forward declaration
 
 /**
  * Task submission hint for queue selection
@@ -42,7 +47,7 @@ struct TaskInfo {
     TaskIndex task_id;
     TaskIndex parent_task_id;  // -1 for root tasks
     std::string name;
-    size_t worker_id;          // Which worker is executing
+    std::size_t worker_id;     // Which worker is executing
 
     enum State {
         QUEUED,                // In queue (shared or local)
@@ -58,7 +63,7 @@ struct TaskInfo {
 
     // Child tracking
     std::vector<TaskIndex> child_task_ids;
-    std::atomic<size_t> completed_children{0};
+    std::atomic<std::size_t> completed_children{0};
 
     // Error info
     std::string error_message;
@@ -80,13 +85,13 @@ struct TaskProgress {
     double execution_duration_ms;
 
     // Progress
-    size_t total_subtasks;
-    size_t completed_subtasks;
+    std::size_t total_subtasks;
+    std::size_t completed_subtasks;
     double progress_percentage;  // 0-100
 
     // Location
-    std::string
-        location;  // "shared_queue", "worker_2_local", "executing_on_worker_3"
+    // "shared_queue", "worker_2_local", "executing_on_worker_3"
+    std::string location;
 
     // Children
     std::vector<TaskProgress> children;  // Recursive structure!
@@ -97,37 +102,37 @@ struct TaskProgress {
  */
 struct ExecutorProgress {
     // Overall stats
-    size_t total_tasks_submitted;
-    size_t tasks_queued;
-    size_t tasks_running;
-    size_t tasks_completed;
-    size_t tasks_failed;
+    std::size_t total_tasks_submitted;
+    std::size_t tasks_queued;
+    std::size_t tasks_running;
+    std::size_t tasks_completed;
+    std::size_t tasks_failed;
 
     // Queue depths
-    size_t shared_queue_depth;
-    std::vector<size_t> worker_queue_depths;
+    std::size_t shared_queue_depth;
+    std::vector<std::size_t> worker_queue_depths;
 
     // Task tree (root tasks with their children)
     std::vector<TaskProgress> root_tasks;
 
     // Worker states
     struct WorkerStatus {
-        size_t worker_id;
+        std::size_t worker_id;
         bool is_idle;
         std::optional<TaskIndex> current_task_id;
         std::string current_task_name;
-        size_t local_queue_depth;
+        std::size_t local_queue_depth;
     };
     std::vector<WorkerStatus> workers;
 
     // Performance metrics
     double avg_queue_wait_ms;
     double avg_execution_time_ms;
-    size_t total_tasks_stolen;
+    std::size_t total_tasks_stolen;
 
     // Errors
-    std::vector<std::pair<TaskIndex, std::string>>
-        recent_errors;  // task_id, error_msg
+    // task_id, error_msg
+    std::vector<std::pair<TaskIndex, std::string>> recent_errors;
 };
 
 /**
@@ -148,7 +153,7 @@ class Executor {
    private:
     // Worker context for per-thread state
     struct WorkerContext {
-        size_t worker_id;
+        std::size_t worker_id;
         std::deque<TaskItem> local_queue;  // Worker's private queue
         mutable std::mutex queue_mutex;    // Protects local queue
         std::condition_variable cv;        // For waking up worker
@@ -168,18 +173,21 @@ class Executor {
         // Worker thread
         std::thread thread;
 
-        explicit WorkerContext(size_t id) : worker_id(id) {}
+        explicit WorkerContext(std::size_t id) : worker_id(id) {}
     };
 
-    // Shared queue for external submissions
-    TaskQueue shared_queue_;  // Renamed from queue_
+    // Work queues
+    moodycamel::ConcurrentQueue<TaskItem>
+        shared_queue_;        // Fast non-blocking queue for CPU tasks
+    moodycamel::BlockingConcurrentQueue<TaskItem>
+        io_slow_path_queue_;  // Blocking queue for I/O tasks
 
     // Per-worker contexts
     std::vector<std::unique_ptr<WorkerContext>> workers_;
-    std::atomic<size_t> next_worker_{0};  // For round-robin submission
+    std::atomic<std::size_t> next_worker_{0};  // For round-robin submission
 
     std::atomic<bool> running_{false};
-    size_t num_threads_;
+    std::size_t num_threads_;
 
     CompletionCallback completion_callback_;
     std::mutex callback_mutex_;
@@ -188,10 +196,10 @@ class Executor {
     Scheduler* scheduler_{nullptr};
 
     // Global tracking
-    std::atomic<size_t> tasks_completed_{0};
-    std::atomic<size_t> tasks_started_{0};
-    std::atomic<size_t> total_tasks_submitted_{0};
-    std::atomic<size_t> total_tasks_stolen_{0};
+    std::atomic<std::size_t> tasks_completed_{0};
+    std::atomic<std::size_t> tasks_started_{0};
+    std::atomic<std::size_t> total_tasks_submitted_{0};
+    std::atomic<std::size_t> total_tasks_stolen_{0};
 
     std::chrono::steady_clock::time_point last_activity_time_;
     mutable std::mutex activity_mutex_;
@@ -202,10 +210,27 @@ class Executor {
     // Responsiveness timeout thresholds
     std::chrono::seconds idle_timeout_;
     std::chrono::seconds deadlock_timeout_;
+    // Timer service for timeout operations
+    TimerService timer_service_;
 
     // Task registry for progress tracking
     std::unordered_map<TaskIndex, TaskInfo> task_registry_;
-    mutable std::shared_mutex registry_mutex_;  // Allow concurrent reads
+    mutable std::shared_mutex registry_mutex_;
+
+    struct SuspendedCoro {
+        std::unique_ptr<coro::CoroTask<void>> coro;
+        TaskIndex task_id;
+        std::shared_ptr<Task> task;  // The task that is suspended
+    };
+    std::unordered_map<TaskIndex, SuspendedCoro>
+        suspended_coros_;  // Key: awaited task ID, Value: suspended task info
+    mutable std::mutex suspended_coros_mutex_;
+
+    // Queue for pending coroutine resumptions (for when_all, etc.)
+    moodycamel::ConcurrentQueue<std::coroutine_handle<>> pending_resumptions_;
+
+    // I/O executor (optional, created by Pipeline based on config)
+    std::unique_ptr<IOExecutor> io_executor_;
 
    public:
     /**
@@ -215,7 +240,7 @@ class Executor {
      * @param deadlock_timeout Timeout for potential deadlock detection
      */
     explicit Executor(
-        size_t num_threads = 0,
+        std::size_t num_threads = 0,
         std::chrono::seconds idle_timeout = std::chrono::seconds(5),
         std::chrono::seconds deadlock_timeout = std::chrono::seconds(10));
 
@@ -245,11 +270,6 @@ class Executor {
     void reset();
 
     /**
-     * Get reference to the shared task queue
-     */
-    TaskQueue& get_queue() { return shared_queue_; }
-
-    /**
      * Set completion callback (called when task finishes)
      */
     void set_completion_callback(CompletionCallback callback);
@@ -260,6 +280,11 @@ class Executor {
     void set_scheduler(Scheduler* scheduler) { scheduler_ = scheduler; }
 
     /**
+     * Get timer service for timeout operations
+     */
+    TimerService& get_timer_service() { return timer_service_; }
+
+    /**
      * Check if executor is running
      */
     bool is_running() const { return running_.load(); }
@@ -267,7 +292,7 @@ class Executor {
     /**
      * Get number of worker threads
      */
-    size_t get_num_threads() const { return num_threads_; }
+    std::size_t get_num_threads() const { return num_threads_; }
 
     /**
      * Request graceful shutdown
@@ -308,6 +333,61 @@ class Executor {
      */
     std::optional<TaskProgress> get_task_progress(TaskIndex task_id) const;
 
+    // ========================================================================
+    // I/O Executor Management (called by Pipeline, not by user)
+    // ========================================================================
+
+    /**
+     * Create and attach I/O executor (called by Pipeline during construction)
+     *
+     * This is called by Pipeline when config.is_io_executor_enabled() is true.
+     * Users never call this directly - it's part of internal initialization.
+     *
+     * @param num_io_threads Number of I/O threads (typically 2-4)
+     */
+    void create_io_executor(std::size_t num_io_threads);
+
+    /**
+     * Check if I/O executor is attached
+     * @return true if async I/O is available
+     */
+    bool has_io_executor() const { return io_executor_ != nullptr; }
+
+    /**
+     * Get I/O executor (for internal use by TaskContext)
+     * @return Pointer to IOExecutor, or nullptr if not enabled
+     */
+    IOExecutor* get_io_executor() { return io_executor_.get(); }
+    const IOExecutor* get_io_executor() const { return io_executor_.get(); }
+
+    /**
+     * Store a suspended coroutine for async operations
+     * @param awaited_task_id The ID of the task being awaited (map key)
+     * @param coro The coroutine to store (ownership transferred)
+     * @param suspended_task The task that is suspended
+     */
+    void store_suspended_coro(TaskIndex awaited_task_id,
+                              std::unique_ptr<coro::CoroTask<void>> coro,
+                              std::shared_ptr<Task> suspended_task);
+
+    /**
+     * Resume a suspended coroutine (called by completion callback)
+     * @param task_id Task ID whose coroutine should be resumed
+     * @return true if coroutine was found and resumed, false otherwise
+     */
+    bool resume_suspended_coro(TaskIndex task_id);
+
+    /**
+     * Schedule a coroutine handle to be resumed on the executor's thread pool
+     * This is a lightweight operation that submits the resumption as work
+     * @param handle The coroutine handle to resume
+     *
+     * This is useful for when_all and other coroutine combinators that need
+     * to resume coroutines from completion callbacks without directly calling
+     * .resume()
+     */
+    void schedule_coroutine_resumption(std::coroutine_handle<> handle);
+
    private:
     /**
      * Try to steal and execute one task from the queue (internal use)
@@ -321,9 +401,15 @@ class Executor {
     void worker_thread(WorkerContext* context);
 
     /**
-     * Execute a single task
+     * Execute a single task (coroutine)
      */
-    void execute_task(WorkerContext* context, TaskItem& item);
+    coro::CoroTask<void> execute_task(WorkerContext* context, TaskItem& item);
+
+    /**
+     * Drive a coroutine to completion or suspension
+     * If it suspends for async work, store it for later resumption
+     */
+    void drive_coroutine(coro::CoroTask<void> coro, std::shared_ptr<Task> task);
 
     /**
      * Try to pop from worker's local queue
@@ -339,7 +425,7 @@ class Executor {
      * Update task location in registry
      */
     void update_task_location(TaskIndex task_id, TaskInfo::Location location,
-                              size_t worker_id);
+                              std::size_t worker_id);
 
     /**
      * Build task progress tree recursively
@@ -357,15 +443,11 @@ class Executor {
      */
     void mark_activity();
 
+    template <typename T>
     friend class TaskFuture;
     friend class Scheduler;
 };
 
-// Helper functions for work-stealing support
-Executor* get_current_executor();
-void set_current_executor(Executor* exec);
-
-// Helper functions for worker context (thread-local) - internal use
 void* get_current_worker_context();
 void set_current_worker_context(void* context);
 

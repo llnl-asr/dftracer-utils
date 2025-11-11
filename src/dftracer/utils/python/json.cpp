@@ -595,17 +595,35 @@ PyMethodDef JSON_methods[] = {{"__contains__", (PyCFunction)JSON_contains,
                                "Return a shallow copy of the JSON object"},
                               {NULL}};
 
+// gcc11_bandaid: Use positional initializers instead of designated
 PySequenceMethods JSON_as_sequence = {
-    .sq_contains = JSON_contains_sq,
+    NULL,            /* sq_length */
+    NULL,            /* sq_concat */
+    NULL,            /* sq_repeat */
+    NULL,            /* sq_item */
+    NULL,            /* was_sq_slice */
+    NULL,            /* sq_ass_item */
+    NULL,            /* was_sq_ass_slice */
+    JSON_contains_sq /* sq_contains */
 };
 
 PyMappingMethods JSON_as_mapping = {
-    .mp_length = (lenfunc)JSON_length,
-    .mp_subscript = (binaryfunc)JSON_getitem,
+    (lenfunc)JSON_length,     /* mp_length */
+    (binaryfunc)JSON_getitem, /* mp_subscript */
+    NULL                      /* mp_ass_subscript */
 };
 
 PyNumberMethods JSON_as_number = {
-    .nb_bool = (inquiry)JSON_bool,
+    NULL,               /* nb_add */
+    NULL,               /* nb_subtract */
+    NULL,               /* nb_multiply */
+    NULL,               /* nb_remainder */
+    NULL,               /* nb_divmod */
+    NULL,               /* nb_power */
+    NULL,               /* nb_negative */
+    NULL,               /* nb_positive */
+    NULL,               /* nb_absolute */
+    (inquiry)JSON_bool, /* nb_bool */
 };
 
 PyTypeObject JSONType = {

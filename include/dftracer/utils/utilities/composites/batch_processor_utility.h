@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_BATCH_PROCESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_BATCH_PROCESSOR_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
@@ -102,19 +103,19 @@ class BatchProcessorUtility
         // Get TaskContext for parallel execution
         TaskContext& ctx = this->context();
 
-        // Submit parallel tasks for each item
-        std::vector<std::shared_future<std::any>> futures;
+        // Spawn parallel tasks for each item
+        std::vector<TaskFuture<ItemOutput>> futures;
         futures.reserve(items.size());
 
         for (const auto& item : items) {
-            // Create task from processor - captures ctx from outer scope
-            auto task = make_task(
-                [proc = processor_, &ctx](ItemInput in) -> ItemOutput {
-                    return proc(ctx, in);
+            auto task =
+                make_task([proc = processor_](
+                              TaskContext& task_ctx,
+                              ItemInput in) -> coro::CoroTask<ItemOutput> {
+                    co_return proc(task_ctx, in);
                 });
 
-            // Submit task with input
-            auto future = ctx.submit_task(task, std::any{item});
+            auto future = ctx.spawn<ItemOutput>(task, item);
             futures.push_back(future);
         }
 
@@ -123,8 +124,7 @@ class BatchProcessorUtility
         results.reserve(futures.size());
 
         for (auto& future : futures) {
-            std::any result_any = future.get();
-            results.push_back(std::any_cast<ItemOutput>(result_any));
+            results.push_back(future.get());
         }
 
         // Sort if comparator provided

@@ -83,8 +83,7 @@ struct ChunkExtractorUtilityOutput {
     std::size_t events;  // DFTracer-specific: number of JSON events
     bool success;
 
-    // NEW: Event IDs collected during extraction for verification
-    std::vector<EventId> event_ids;
+    std::size_t event_hash = 0;
 
     ChunkExtractorUtilityOutput()
         : chunk_index(0), size_mb(0.0), events(0), success(false) {}
@@ -101,7 +100,6 @@ struct ChunkExtractorUtilityOutput {
         return chunk_index == other.chunk_index &&
                output_path == other.output_path && size_mb == other.size_mb &&
                events == other.events && success == other.success;
-        // Note: event_ids not compared for performance
     }
 
     bool operator!=(const ChunkExtractorUtilityOutput& other) const {
@@ -110,27 +108,13 @@ struct ChunkExtractorUtilityOutput {
 };
 
 /**
- * @brief Workflow for extracting and merging chunks from DFTracer files.
- *
- * This workflow:
- * 1. Reads byte ranges from multiple file specs (compressed or plain)
- * 2. Filters valid JSON events
- * 3. Writes them to output file with hash computation
- * 4. Optionally compresses the result
- *
- * Uses byte-based ChunkSpec from io::ChunkSpec for precise I/O control.
- *
- * Composes:
- * - Reader API for byte-based reading
- * - JSON validation for filtering
- * - StreamingFileWriter for output
- * - Optional gzip compression
+ * @brief Extracts and merges chunks from DFTracer files.
  *
  * Usage:
  * @code
- * DFTracerChunkExtractor extractor;
+ * ChunkExtractorUtility extractor;
  *
- * auto input = DFTracerChunkExtractionUtilityInput::from_manifest(1, manifest)
+ * auto input = ChunkExtractorUtilityInput::from_manifest(1, manifest)
  *                  .with_output_dir("/output")
  *                  .with_app_name("myapp")
  *                  .with_compression(true);

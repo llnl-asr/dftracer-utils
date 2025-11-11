@@ -212,6 +212,9 @@ function(create_library)
     if(LIB_PROPERTIES)
       set_target_properties(${TARGET_NAME} PROPERTIES ${LIB_PROPERTIES})
     endif()
+
+    # Enable C++20 coroutines support
+    target_enable_coroutine(${TARGET_NAME})
   endmacro()
 
   # ============================================================================

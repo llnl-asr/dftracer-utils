@@ -46,10 +46,11 @@ std::shared_ptr<Task> Task::with_name(std::string name) {
     return shared_from_this();
 }
 
-std::any Task::execute(TaskContext& context, const std::any& input) {
+coro::CoroTask<std::any> Task::execute(TaskContext& context,
+                                       const std::any& input) {
     try {
-        std::any result = func_(context, input);
-        return result;
+        std::any result = co_await func_(context, input);
+        co_return result;
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Task '%s' execution failed: %s",
                                  name_.c_str(), e.what());
@@ -100,8 +101,59 @@ bool Task::validate_connection(std::type_index from, std::type_index to) const {
         return true;
     }
 
+    // std::any can accept any type (for tap, logging, etc.)
+    if (to == typeid(std::any)) {
+        return true;
+    }
+
     // Exact type match
     return from == to;
+}
+
+std::shared_ptr<Task> Task::operator&(std::shared_ptr<Task> other) {
+    // Create a combiner task that depends on both this and other
+    // When a task has multiple parents, it receives a vector<any> as input
+    auto combiner = make_task(
+        [](TaskContext&,
+           const std::vector<std::any>& inputs) -> coro::CoroTask<std::any> {
+            // inputs[0] is from first parent (this), inputs[1] is from second
+            // (other)
+            if (inputs.size() != 2) {
+                throw std::runtime_error(
+                    "AND combiner expects exactly 2 inputs");
+            }
+            // Return tuple of both results
+            co_return std::make_any<std::tuple<std::any, std::any>>(inputs[0],
+                                                                    inputs[1]);
+        },
+        "AND_combiner");
+
+    // Combiner depends on both tasks
+    combiner->depends_on(shared_from_this());
+    combiner->depends_on(other);
+
+    // Set a custom combiner to pass inputs as vector
+    combiner->with_combiner(
+        [](const std::vector<std::any>& inputs) -> std::any {
+            return std::make_any<std::vector<std::any>>(inputs);
+        });
+
+    return combiner;
+}
+
+std::shared_ptr<Task> Task::operator^(std::shared_ptr<Task> tap_task) {
+    if (!tap_task) {
+        throw PipelineError(PipelineError::VALIDATION_ERROR,
+                            "Tap task cannot be null");
+    }
+    auto passthrough = make_task(
+        [](TaskContext&, const std::any& input) -> coro::CoroTask<std::any> {
+            co_return input;
+        },
+        "TAP_passthrough");
+    passthrough->depends_on(shared_from_this());
+    tap_task->depends_on(shared_from_this());
+    return passthrough;
 }
 
 }  // namespace dftracer::utils

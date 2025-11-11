@@ -109,8 +109,8 @@ function(target_set_warnings TARGET_NAME)
       )
     endif()
 
-    # Clang-specific warnings
-    if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+    # Clang-specific warnings (includes AppleClang)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
       target_compile_options(
         ${TARGET_NAME}
         PRIVATE -Wmove # Warn about move semantics issues
@@ -119,6 +119,7 @@ function(target_set_warnings TARGET_NAME)
                 -Wthread-safety # Warn about thread safety issues
                 -Wimplicit-int-float-conversion # Warn about implicit int to
                                                 # float conversions
+                -Wno-gnu-zero-variadic-macro-arguments # Disable GNU extension warning for ##__VA_ARGS__
                 -Wshorten-64-to-32 # Warn about 64-bit to 32-bit conversions
       )
     endif()

@@ -1,3 +1,17 @@
+function(target_enable_coroutine target)
+  # Enable C++20 coroutines support
+  # Modern C++20 compilers support coroutines natively without special flags
+  # Only older GCC (< 11) needs -fcoroutines flag
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "11.0")
+      target_compile_options(${target} PRIVATE -fcoroutines)
+    endif()
+  endif()
+  # Clang (including Apple Clang) supports C++20 coroutines natively
+  # No flags needed for Clang >= 14 or Apple Clang >= 13
+  # -fcoroutines-ts is deprecated and should not be used
+endfunction()
+
 function(target_enable_coverage target ENABLE_COVERAGE)
   if(ENABLE_COVERAGE)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

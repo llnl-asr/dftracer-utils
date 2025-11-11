@@ -33,14 +33,18 @@ using ErrorHandler =
  * Configuration  for Pipeline execution
  *
  * Thread Architecture:
- * - Executor threads: Worker pool that executes task functions
+ * - Executor threads: Worker pool that executes task functions (compute
+ * threads)
+ * - I/O threads: Dedicated pool for async I/O operations (optional, 0 =
+ * disabled)
  * - Scheduler threads: Coordination and monitoring (usually 1)
  * - Watchdog: Optional monitoring thread for hang detection
  *
  * Usage (Fluent API):
  *   auto config = PipelineConfig()
  *       .with_name("MyPipeline")
- *       .with_executor_threads(4)
+ *       .with_compute_threads(16)  // CPU-bound work
+ *       .with_io_threads(4)        // I/O-bound work (enables async I/O)
  *       .with_scheduler_threads(2)
  *       .with_error_policy(ErrorPolicy::FAIL_FAST)
  *       .with_watchdog(true)
@@ -48,9 +52,11 @@ using ErrorHandler =
  *       .with_task_timeout(std::chrono::seconds(10));
  */
 struct PipelineConfig {
-    std::string name = "";              // Pipeline name
-    std::size_t executor_threads = 0;   // 0 = hardware_concurrency
-    std::size_t scheduler_threads = 1;  // Usually 1
+    std::string name = "";       // Pipeline name
+    std::size_t executor_threads =
+        0;                       // 0 = hardware_concurrency (compute threads)
+    std::size_t io_threads = 0;  // I/O thread pool size (0 = disabled)
+    std::size_t scheduler_threads = 1;                  // Usually 1
     ErrorPolicy error_policy = ErrorPolicy::FAIL_FAST;  // Error handling policy
     ErrorHandler error_handler =
         nullptr;                  // Custom error handler (for CUSTOM policy)
@@ -74,10 +80,25 @@ struct PipelineConfig {
     }
 
     /**
-     * Set number of executor threads
+     * Set number of compute threads (worker threads for CPU-bound work)
+     * 0 = hardware_concurrency (default)
      */
-    PipelineConfig& with_executor_threads(std::size_t threads) {
+    PipelineConfig& with_compute_threads(std::size_t threads) {
         executor_threads = threads;
+        return *this;
+    }
+
+    /**
+     * Set number of I/O threads (enables async I/O)
+     *
+     * When set to > 0, enables IOExecutor for async I/O operations.
+     * Recommended: 2-4 threads for most workloads.
+     * 0 = disabled (spawn_io() executes inline, default)
+     *
+     * @param threads Number of I/O threads (0 = disabled)
+     */
+    PipelineConfig& with_io_threads(std::size_t threads) {
+        io_threads = threads;
         return *this;
     }
 
@@ -88,6 +109,11 @@ struct PipelineConfig {
         scheduler_threads = threads;
         return *this;
     }
+
+    /**
+     * Check if async I/O is enabled
+     */
+    bool is_io_executor_enabled() const { return io_threads > 0; }
 
     /**
      * Set error handling policy
@@ -167,7 +193,7 @@ struct PipelineConfig {
      * Create sequential execution configuration (1 thread)
      */
     static PipelineConfig sequential() {
-        return PipelineConfig().with_executor_threads(1).with_watchdog(
+        return PipelineConfig().with_compute_threads(1).with_watchdog(
             false);  // Less useful for single-threaded
     }
 
@@ -176,7 +202,7 @@ struct PipelineConfig {
      */
     static PipelineConfig parallel(std::size_t num_threads = 0) {
         return PipelineConfig()
-            .with_executor_threads(num_threads)  // 0 = hardware_concurrency
+            .with_compute_threads(num_threads)  // 0 = hardware_concurrency
             .with_watchdog(true);
     }
 
@@ -205,7 +231,7 @@ struct PipelineConfig {
         std::chrono::seconds global_timeout = std::chrono::seconds(60),
         std::chrono::seconds task_timeout = std::chrono::seconds(30)) {
         return PipelineConfig()
-            .with_executor_threads(num_threads)
+            .with_compute_threads(num_threads)
             .with_watchdog(true)
             .with_global_timeout(global_timeout)
             .with_task_timeout(task_timeout);

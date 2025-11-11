@@ -95,7 +95,7 @@ TEST_SUITE("ChunkVerifier") {
             // processing
             auto pipeline_config =
                 PipelineConfig()
-                    .with_executor_threads(4)  // 1 main + 3 chunks
+                    .with_compute_threads(4)  // 1 main + 3 chunks
                     .with_scheduler_threads(1)
                     .with_watchdog(true)
                     .with_task_timeout(std::chrono::seconds(5));
@@ -157,9 +157,9 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfig()
-                                       .with_executor_threads(4)
-                                       .with_scheduler_threads(1);
+            auto pipeline_config =
+                PipelineConfig().with_compute_threads(4).with_scheduler_threads(
+                    1);
             Pipeline pipeline(pipeline_config);
 
             std::vector<TestChunk> chunks = {TestChunk(1, {1, 2, 3})};
@@ -218,9 +218,9 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfig()
-                                       .with_executor_threads(4)
-                                       .with_scheduler_threads(1);
+            auto pipeline_config =
+                PipelineConfig().with_compute_threads(4).with_scheduler_threads(
+                    1);
             Pipeline pipeline(pipeline_config);
 
             // Create many chunks
@@ -273,9 +273,9 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfig()
-                                       .with_executor_threads(2)
-                                       .with_scheduler_threads(1);
+            auto pipeline_config =
+                PipelineConfig().with_compute_threads(2).with_scheduler_threads(
+                    1);
             Pipeline pipeline(pipeline_config);
 
             std::vector<TestChunk> chunks;
@@ -332,7 +332,7 @@ TEST_SUITE("ChunkVerifier") {
                 // Need at least 2 threads: 1 for main task + 1 for subtasks
                 auto pipeline_config =
                     PipelineConfig()
-                        .with_executor_threads(
+                        .with_compute_threads(
                             2)  // Increased from 1 to avoid deadlock
                         .with_scheduler_threads(1);
                 Pipeline pipeline(pipeline_config);
@@ -388,9 +388,9 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfig()
-                                       .with_executor_threads(2)
-                                       .with_scheduler_threads(1);
+            auto pipeline_config =
+                PipelineConfig().with_compute_threads(2).with_scheduler_threads(
+                    1);
             Pipeline pipeline(pipeline_config);
 
             std::vector<TestChunk> chunks = {TestChunk(1, {1, 2}),

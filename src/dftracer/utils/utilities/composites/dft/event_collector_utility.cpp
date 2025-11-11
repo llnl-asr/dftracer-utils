@@ -136,30 +136,4 @@ EventCollectorUtilityOutput EventCollectorFromMetadataUtility::process(
     return events;
 }
 
-EventCollectorUtilityOutput EventCollectorFromChunksUtility::process(
-    const EventCollectorFromChunksUtilityInput& input) {
-    // OPTIMIZATION: No file reading! Just aggregate event IDs from extraction
-    // results Event IDs were already collected during chunk extraction
-
-    std::vector<EventId> events;
-
-    for (const auto& chunk : input.chunks) {
-        if (!chunk.success) continue;
-
-        // Simply copy the event IDs that were collected during extraction
-        events.insert(events.end(), chunk.event_ids.begin(),
-                      chunk.event_ids.end());
-    }
-
-    // Sort events for consistent hashing
-    std::sort(events.begin(), events.end());
-
-    DFTRACER_UTILS_LOG_DEBUG(
-        "EventCollectorFromChunks: Aggregated %zu events from %zu chunks (no "
-        "file reads)",
-        events.size(), input.chunks.size());
-
-    return events;
-}
-
 }  // namespace dftracer::utils::utilities::composites::dft

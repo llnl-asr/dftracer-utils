@@ -42,6 +42,12 @@ void Watchdog::stop() {
 
     running_ = false;
 
+    // Wake up the watchdog thread immediately
+    {
+        std::lock_guard<std::mutex> lock(sleep_mutex_);
+        sleep_cv_.notify_one();
+    }
+
     if (watchdog_thread_.joinable()) {
         watchdog_thread_.join();
     }
@@ -117,8 +123,12 @@ void Watchdog::watchdog_loop() {
     DFTRACER_UTILS_LOG_DEBUG("%s", "Watchdog loop started");
 
     while (running_.load()) {
-        // Sleep for check interval
-        std::this_thread::sleep_for(check_interval_);
+        // Interruptible sleep using condition variable
+        {
+            std::unique_lock<std::mutex> lock(sleep_mutex_);
+            sleep_cv_.wait_for(lock, check_interval_,
+                               [this] { return !running_.load(); });
+        }
 
         if (!running_.load() || shutdown_requested_.load()) {
             break;

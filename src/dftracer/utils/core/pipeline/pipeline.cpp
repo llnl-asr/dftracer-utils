@@ -6,13 +6,13 @@
 #include <dftracer/utils/core/tasks/task.h>
 
 #include <algorithm>
+#include <any>
 #include <sstream>
 
 namespace dftracer::utils {
 
 Pipeline::Pipeline(const PipelineConfig& config)
     : name_(config.name),
-      executor_threads_(config.executor_threads),
       error_policy_(config.error_policy),
       error_handler_(config.error_handler) {
     // Create executor with configured threads and responsiveness timeouts
@@ -99,6 +99,63 @@ void Pipeline::set_destination(
 
     // Connect all destinations as parents of noop
     for (auto& dest : destinations) {
+        if (!dest) {
+            throw PipelineError(PipelineError::VALIDATION_ERROR,
+                                "Destination task cannot be null");
+        }
+        noop->depends_on(dest);
+    }
+
+    destination_ = noop;
+    validated_ = false;
+}
+
+void Pipeline::set_source(const std::vector<std::shared_ptr<Task>>& sources) {
+    if (sources.empty()) {
+        throw PipelineError(PipelineError::VALIDATION_ERROR,
+                            "Cannot set zero sources");
+    }
+
+    if (sources.size() == 1) {
+        // Single source - no need for NoOpTask
+        set_source(sources[0]);
+        return;
+    }
+
+    // Multiple sources - create NoOpTask
+    auto noop = make_noop_task("__start__");
+
+    // Connect all sources as children of noop
+    for (const auto& source : sources) {
+        if (!source) {
+            throw PipelineError(PipelineError::VALIDATION_ERROR,
+                                "Source task cannot be null");
+        }
+        source->depends_on(noop);
+    }
+
+    source_ = noop;
+    validated_ = false;
+}
+
+void Pipeline::set_destination(
+    const std::vector<std::shared_ptr<Task>>& destinations) {
+    if (destinations.empty()) {
+        throw PipelineError(PipelineError::VALIDATION_ERROR,
+                            "Cannot set zero destinations");
+    }
+
+    if (destinations.size() == 1) {
+        // Single destination - no need for NoOpTask
+        set_destination(destinations[0]);
+        return;
+    }
+
+    // Multiple destinations - create NoOpTask
+    auto noop = make_noop_task("__end__");
+
+    // Connect all destinations as parents of noop
+    for (const auto& dest : destinations) {
         if (!dest) {
             throw PipelineError(PipelineError::VALIDATION_ERROR,
                                 "Destination task cannot be null");
@@ -277,7 +334,14 @@ bool Pipeline::validate_types() {
             // For single parent, types should match (unless task has custom
             // combiner)
             if (task->get_parents().size() == 1 && !task->has_combiner()) {
-                if (parent->get_output_type() != task->get_input_type()) {
+                // std::any can accept any input type, and std::any output can
+                // feed any input (wildcard in both directions)
+                bool types_match =
+                    (parent->get_output_type() == task->get_input_type()) ||
+                    (task->get_input_type() == typeid(std::any)) ||
+                    (parent->get_output_type() == typeid(std::any));
+
+                if (!types_match) {
                     std::ostringstream oss;
                     oss << "Type mismatch: task '" << task->get_name()
                         << "' expects " << task->get_input_type().name()

@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_PIPELINE_SCHEDULER_H
 #define DFTRACER_UTILS_CORE_PIPELINE_SCHEDULER_H
 
+#include <concurrentqueue.h>
+#include <dftracer/utils/core/common/sharded_mutex.h>
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 
@@ -8,21 +10,23 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <coroutine>
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace dftracer::utils {
 
 class Task;
 class Executor;
-class ExecutorProgress;
+struct ExecutorProgress;
 class Watchdog;
 
 /**
@@ -42,21 +46,21 @@ enum class TaskPriority {
  */
 struct SchedulerMetrics {
     // Scheduling performance
-    size_t ready_queue_depth;
-    size_t total_scheduled;
-    size_t scheduling_threads_active;
+    std::size_t ready_queue_depth;
+    std::size_t total_scheduled;
+    std::size_t scheduling_threads_active;
     double avg_scheduling_latency_ms;
 
     // Pipeline state
-    size_t total_pipeline_tasks;
-    size_t pending_tasks;
+    std::size_t total_pipeline_tasks;
+    std::size_t pending_tasks;
     double pipeline_elapsed_time_ms;
 
     // Error tracking
     std::vector<std::pair<TaskIndex, std::string>> recent_failures;
 
     // Priority distribution
-    std::map<TaskPriority, size_t> tasks_by_priority;
+    std::map<TaskPriority, std::size_t> tasks_by_priority;
 
     // Timing
     std::chrono::steady_clock::time_point start_time;
@@ -83,10 +87,9 @@ class Scheduler {
     std::atomic<bool> scheduling_running_{false};
     std::size_t num_scheduling_threads_{1};
 
-    // Task queue for scheduling (tasks that became ready)
-    std::queue<std::shared_ptr<Task>> ready_queue_;
-    mutable std::mutex ready_mutex_;
-    std::condition_variable ready_cv_;
+    // Task queue for scheduling (tasks that became ready) - lock-free MPMC
+    moodycamel::ConcurrentQueue<std::shared_ptr<Task>> ready_queue_;
+    std::atomic<bool> has_ready_tasks_{false};
 
     // Watchdog integration
     std::unique_ptr<Watchdog> watchdog_;
@@ -105,7 +108,7 @@ class Scheduler {
     mutable std::mutex tracking_mutex_;
 
     // Pending count for execution coordination
-    std::atomic<size_t> pending_count_{0};
+    std::atomic<std::size_t> pending_count_{0};
     std::condition_variable done_cv_;
     std::mutex done_mutex_;
 
@@ -117,14 +120,20 @@ class Scheduler {
     std::string timeout_reason_;
 
     // Progress callback
-    std::function<void(size_t completed, size_t total)> progress_callback_;
-    std::atomic<size_t> total_tasks_{0};
+    std::function<void(std::size_t completed, std::size_t total)>
+        progress_callback_;
+    std::atomic<std::size_t> total_tasks_{0};
 
     // Metrics tracking
-    std::atomic<size_t> total_scheduled_{
+    std::atomic<std::size_t> total_scheduled_{
         0};  // Total tasks scheduled to executor
     std::chrono::steady_clock::time_point metrics_start_time_;
     mutable std::mutex metrics_mutex_;
+
+    // Coroutine support - completion callbacks
+    using CallbackMap =
+        std::unordered_map<TaskIndex, std::vector<std::function<void()>>>;
+    ShardedMutex<CallbackMap, 64> completion_callbacks_;
 
    public:
     /**
@@ -195,7 +204,7 @@ class Scheduler {
      * Set progress callback
      */
     void set_progress_callback(
-        std::function<void(size_t completed, size_t total)> callback);
+        std::function<void(std::size_t completed, std::size_t total)> callback);
 
     /**
      * Set global timeout (0 = wait forever)
@@ -247,6 +256,51 @@ class Scheduler {
      */
     ExecutorProgress get_executor_progress() const;
 
+    /**
+     * Get executor reference (for TaskFuture async suspension)
+     */
+    Executor* get_executor() const { return executor_; }
+
+    // ========================================================================
+    // Coroutine Support - Completion Callbacks
+    // ========================================================================
+
+    /**
+     * Register callback to be invoked when task completes
+     *
+     * OPTIMIZED: Uses ShardedMutex for minimal contention.
+     * Multiple tasks can register callbacks concurrently without blocking.
+     *
+     * @param task_id Task identifier
+     * @param callback Function to invoke on completion: []() { ... }
+     *
+     * Thread-safe: Only locks the specific shard for this task_id.
+     * Other tasks registering callbacks concurrently don't block.
+     *
+     * Usage:
+     * @code
+     * // Called from TaskFuture::await_suspend()
+     * scheduler->register_task_completion_callback(task_id, [awaiting]() {
+     *     awaiting.resume();  // Resume awaiting coroutine
+     * });
+     * @endcode
+     */
+    void register_task_completion_callback(TaskIndex task_id,
+                                           std::function<void()> callback);
+
+    /**
+     * Invoke completion callbacks for a task
+     *
+     * OPTIMIZED: Only locks the specific shard for this task_id.
+     * Other tasks completing concurrently don't block.
+     *
+     * @param task_id Task identifier
+     *
+     * Called by on_task_completed() when a task finishes.
+     * Invokes all registered callbacks (e.g., resuming awaiting coroutines).
+     */
+    void invoke_completion_callbacks(TaskIndex task_id);
+
    private:
     /**
      * Validate task graph types (called before scheduling)
@@ -271,18 +325,20 @@ class Scheduler {
     /**
      * Submit a task to the executor queue
      */
-    void submit_task_to_executor(std::shared_ptr<Task> task, std::any input);
+    void submit_task_to_executor(std::shared_ptr<Task> task,
+                                 const std::any& input);
 
     /**
      * Count total tasks reachable from source
      */
-    size_t count_reachable_tasks(std::shared_ptr<Task> source);
+    std::size_t count_reachable_tasks(std::shared_ptr<Task> source);
 
     /**
      * DFS helper for counting tasks
      */
     void count_tasks_dfs(std::shared_ptr<Task> task,
-                         std::unordered_set<TaskIndex>& visited, size_t& count);
+                         std::unordered_set<TaskIndex>& visited,
+                         std::size_t& count);
 
     /**
      * Initialize pending counts for all tasks

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_CHUNK_VERIFIER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_CHUNK_VERIFIER_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/utilities.h>
@@ -140,26 +141,25 @@ class ChunkVerifierUtility
         TaskContext& ctx = this->context();
 
         // Step 3: Collect events from all chunks in parallel
-        std::vector<TaskFuture> futures;
+        std::vector<TaskFuture<std::vector<EventType>>> futures;
         futures.reserve(input.chunks.size());
 
         for (const auto& chunk : input.chunks) {
-            // Create task from event collector - captures ctx from outer scope
-            auto task = make_task([collector = event_collector_, &ctx](
-                                      ChunkType c) -> std::vector<EventType> {
-                return collector(ctx, c);
-            });
-
-            // Submit task with input
-            auto future = ctx.submit_task(task, std::any{chunk});
+            auto task = make_task(
+                [collector = event_collector_](
+                    TaskContext& task_ctx,
+                    ChunkType c) -> coro::CoroTask<std::vector<EventType>> {
+                    co_return collector(task_ctx, c);
+                });
+            // Spawn with typed future (no std::any wrapping needed!)
+            auto future = ctx.spawn<std::vector<EventType>>(task, chunk);
             futures.push_back(future);
         }
 
         // Step 4: Gather all events
         std::vector<EventType> output_events;
         for (auto& future : futures) {
-            std::any result_any = future.get();
-            auto events = std::any_cast<std::vector<EventType>>(result_any);
+            auto events = future.get();
             output_events.insert(output_events.end(), events.begin(),
                                  events.end());
         }

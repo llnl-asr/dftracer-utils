@@ -163,7 +163,8 @@ size_t JsonSerializer::serialize_node(char* buffer, int index,
         16384,  // Large buffer size to handle long strings
         R"({"id":%d,"name":"%s","cat":"%s","pid":%u,"tid":%u,"ts":%llu,"dur":%llu,"ph":"X","args":{%s}})",
         index, node.get_name().c_str(), node.get_category().c_str(), process_id,
-        thread_id, node.get_start_time(), node.get_duration(),
+        thread_id, static_cast<unsigned long long>(node.get_start_time()),
+        static_cast<unsigned long long>(node.get_duration()),
         all_args.str().c_str());
 
     // Add newline terminator

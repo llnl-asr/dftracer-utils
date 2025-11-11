@@ -26,7 +26,17 @@ link_zlib(testing_utilities STATIC)
 
 set(TEST_CPP_SOURCES
     # Pipeline tests
-    test_pipeline.cpp
+    pipeline/test_pipeline.cpp
+    pipeline/test_io_pipeline.cpp
+    pipeline/test_task_scope.cpp
+    pipeline/test_simple_scope.cpp
+    # Coroutine tests
+    coro/test_coro_syntax.cpp
+    coro/test_channel.cpp
+    coro/test_generator.cpp
+    coro/test_async_generator.cpp
+    # Task Graph tests
+    task_graph/test_task_graph.cpp
     # Reader tests
     reader/test_reader.cpp
     reader/test_reader_stream.cpp
@@ -50,6 +60,7 @@ foreach(test_file ${TEST_CPP_SOURCES})
   target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(${target_name} PRIVATE doctest::doctest testing_utilities)
   target_set_warnings(${target_name})
+  target_enable_coroutine(${target_name})
 
   # Set output directory to preserve folder structure in binaries
   get_filename_component(bin_dir ${bin_exec} DIRECTORY)

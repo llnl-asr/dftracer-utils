@@ -14,18 +14,11 @@
 #include <chrono>
 #include <iomanip>
 #include <iostream>
-#include <sstream>
-#include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::composites;
 using namespace dftracer::utils::utilities::composites::dft;
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
 
 static std::string format_size(std::uint64_t bytes) {
     const char* units[] = {"B", "KB", "MB", "GB", "TB"};
@@ -309,37 +302,25 @@ int main(int argc, char** argv) {
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // ========================================================================
-    // Create Pipeline with Configuration
-    // ========================================================================
     auto pipeline_config = PipelineConfig()
                                .with_name("DFTracer File Info")
-                               .with_executor_threads(executor_threads)
+                               .with_compute_threads(executor_threads)
                                .with_scheduler_threads(scheduler_threads);
 
     Pipeline pipeline(pipeline_config);
 
-    // ========================================================================
-    // Task 1: Collect Metadata (INTRA-TASK PARALLELISM via
-    // BatchProcessorUtility)
-    // ========================================================================
+    // Task 1: Collect Metadata
     DFTRACER_UTILS_LOG_INFO("%s", "Task 1: Collecting metadata...");
 
-    // Task 1.1: Input - List of file paths
     using MetadataInputList = std::vector<std::string>;
-
-    // Task 1.2: Output - Batch metadata results
     using MetadataOutputList = std::vector<MetadataCollectorUtilityOutput>;
 
-    // Task 1.3: Utility definition - Create batch processor for metadata
-    // collection
     auto metadata_collector = std::make_shared<MetadataCollectorUtility>();
     auto batch_processor =
         std::make_shared<BatchProcessorUtility<MetadataCollectorUtilityInput,
                                                MetadataCollectorUtilityOutput>>(
             metadata_collector);
 
-    // Task 1.4: Function to create inputs from file paths
     auto create_inputs_func = [checkpoint_size, force_rebuild,
                                index_dir](const MetadataInputList& file_paths)
         -> std::vector<MetadataCollectorUtilityInput> {
@@ -364,26 +345,19 @@ int main(int argc, char** argv) {
         return inputs;
     };
 
-    // Task 1.5: Create transformation task
     auto task1_create_inputs =
         make_task(create_inputs_func, "CreateMetadataInputs");
 
-    // Task 1.6: Convert batch processor to task
     auto task1_collect_metadata = utilities::use(batch_processor).as_task();
     task1_collect_metadata->with_name("CollectMetadata");
 
-    // Task 1.7: Link tasks
     task1_collect_metadata->depends_on(task1_create_inputs);
 
-    // ========================================================================
     // Task 2: Aggregate and Print Results
-    // ========================================================================
     DFTRACER_UTILS_LOG_INFO("%s", "Task 2: Setting up result aggregation...");
 
-    // Task 2.1: Input - Metadata results from Task 1
     using AggregationInput = MetadataOutputList;
 
-    // Task 2.2: Output - Aggregated statistics
     struct AggregationOutput {
         std::uint64_t total_compressed = 0;
         std::uint64_t total_uncompressed = 0;
@@ -392,7 +366,6 @@ int main(int argc, char** argv) {
         std::size_t total_files = 0;
     };
 
-    // Task 2.3: Utility definition - Print and aggregate results
     auto aggregate_results_func =
         [verbose](const AggregationInput& all_info) -> AggregationOutput {
         AggregationOutput output;
@@ -412,34 +385,21 @@ int main(int argc, char** argv) {
         return output;
     };
 
-    // Task 2.4: Task definition
     auto task2_aggregate =
         make_task(aggregate_results_func, "AggregateResults");
 
-    // ========================================================================
-    // Define Dependencies and Execute Pipeline
-    // ========================================================================
-
-    // Define dependencies
+    // Execute Pipeline
     task2_aggregate->depends_on(task1_collect_metadata);
 
-    // Set up pipeline
     pipeline.set_source(task1_create_inputs);
     pipeline.set_destination(task2_aggregate);
-
-    // Execute pipeline with initial input
     pipeline.execute(files);
 
-    // Get final results
     auto metadata_results = task1_collect_metadata->get<MetadataOutputList>();
     auto aggregation_result = task2_aggregate->get<AggregationOutput>();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
-
-    // ========================================================================
-    // Print Summary
-    // ========================================================================
 
     if (files.size() > 1) {
         std::printf("==========================================\n");

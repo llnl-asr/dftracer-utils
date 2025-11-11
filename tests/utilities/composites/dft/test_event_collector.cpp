@@ -41,27 +41,4 @@ TEST_SUITE("EventCollector") {
             CHECK(event_ids[0].id > 0);
         }
     }
-
-    TEST_CASE("EventCollector - Collect from chunks") {
-        // Create mock chunk output
-        std::vector<ChunkExtractorUtilityOutput> chunks;
-
-        ChunkExtractorUtilityOutput chunk1;
-        chunk1.chunk_index = 0;
-        chunk1.success = true;
-        chunk1.events = 5;
-        // Add some mock event IDs
-        chunk1.event_ids.push_back(EventId(1, 1000, 2000));
-        chunk1.event_ids.push_back(EventId(2, 1001, 2001));
-        chunks.push_back(chunk1);
-
-        auto input = EventCollectorFromChunksUtilityInput::from_chunks(chunks)
-                         .with_checkpoint_size(10);
-
-        EventCollectorFromChunksUtility collector;
-        auto event_ids = collector.process(input);
-
-        // Should get the event IDs from the chunks
-        CHECK(event_ids.size() >= 2);
-    }
 }

@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/pipeline/executor.h>
+#include <dftracer/utils/core/pipeline/io_executor.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/tasks/task_context.h>
 
@@ -8,23 +9,15 @@
 
 namespace dftracer::utils {
 
-// Thread-local storage for current executor (for work-stealing)
-static thread_local Executor* tls_current_executor = nullptr;
 static thread_local void* tls_current_worker_context = nullptr;
 
-// Helper functions to access thread-local executor
-Executor* get_current_executor() { return tls_current_executor; }
-
-void set_current_executor(Executor* exec) { tls_current_executor = exec; }
-
-// Helper functions for worker context
 void* get_current_worker_context() { return tls_current_worker_context; }
 
 void set_current_worker_context(void* context) {
     tls_current_worker_context = context;
 }
 
-Executor::Executor(size_t num_threads, std::chrono::seconds idle_timeout,
+Executor::Executor(std::size_t num_threads, std::chrono::seconds idle_timeout,
                    std::chrono::seconds deadlock_timeout)
     : num_threads_(num_threads == 0 ? std::thread::hardware_concurrency()
                                     : num_threads),
@@ -52,8 +45,10 @@ void Executor::start() {
     workers_.clear();
     workers_.reserve(num_threads_);
 
+    timer_service_.start();
+
     // Create worker contexts and start threads
-    for (size_t i = 0; i < num_threads_; ++i) {
+    for (std::size_t i = 0; i < num_threads_; ++i) {
         auto worker = std::make_unique<WorkerContext>(i);
         worker->last_activity = std::chrono::steady_clock::now();
         worker->thread =
@@ -66,13 +61,18 @@ void Executor::start() {
 }
 
 void Executor::shutdown() {
+    // Shutdown I/O executor if it exists (do this even if executor not running)
+    if (io_executor_) {
+        io_executor_->shutdown();
+        io_executor_.reset();
+    }
+
     if (!running_) {
         return;
     }
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Shutting down executor");
     running_ = false;
-    shared_queue_.shutdown();
 
     // Wake up all workers
     for (auto& worker : workers_) {
@@ -87,6 +87,9 @@ void Executor::shutdown() {
     }
 
     workers_.clear();
+
+    timer_service_.stop();
+
     DFTRACER_UTILS_LOG_DEBUG("%s", "Executor shutdown complete");
 }
 
@@ -103,31 +106,38 @@ void Executor::set_completion_callback(CompletionCallback callback) {
 void Executor::worker_thread(WorkerContext* context) {
     DFTRACER_UTILS_LOG_DEBUG("Worker %zu started", context->worker_id);
 
-    // Set thread-local storage
     set_current_worker_context(context);
-    set_current_executor(this);
 
     while (running_) {
         TaskItem task;
+        std::coroutine_handle<> pending_resume;
 
         // Priority order:
+        // 0. Pending coroutine resumptions (highest priority for
+        // responsiveness)
+        if (pending_resumptions_.try_dequeue(pending_resume)) {
+            context->is_idle = false;
+            if (pending_resume && !pending_resume.done()) {
+                pending_resume.resume();
+            }
+        }
         // 1. Own local queue (LIFO for cache locality)
-        if (try_pop_local(context, task)) {
+        else if (try_pop_local(context, task)) {
             context->is_idle = false;
-            execute_task(context, task);
+            drive_coroutine(execute_task(context, task), task.task);
         }
-        // 2. Shared queue (for scheduler submissions)
-        else if (auto item_opt = shared_queue_.pop(false)) {
+        // 3. Shared queue (for scheduler submissions)
+        else if (shared_queue_.try_dequeue(task)) {
             context->is_idle = false;
-            execute_task(context, *item_opt);
+            drive_coroutine(execute_task(context, task), task.task);
         }
-        // 3. Steal from other workers (FIFO - oldest tasks)
+        // 4. Steal from other workers (FIFO - oldest tasks)
         else if (try_steal_from_others(context, task)) {
             context->tasks_stolen++;
             context->is_idle = false;
-            execute_task(context, task);
+            drive_coroutine(execute_task(context, task), task.task);
         }
-        // 4. No work available
+        // 5. No work available
         else {
             context->is_idle = true;
             std::unique_lock<std::mutex> lock(context->queue_mutex);
@@ -136,20 +146,19 @@ void Executor::worker_thread(WorkerContext* context) {
         }
     }
 
-    // Clear thread-local storage
     set_current_worker_context(nullptr);
-    set_current_executor(nullptr);
 
     DFTRACER_UTILS_LOG_DEBUG("Worker %zu terminated", context->worker_id);
 }
 
-void Executor::execute_task(WorkerContext* context, TaskItem& item) {
+coro::CoroTask<void> Executor::execute_task(WorkerContext* context,
+                                            TaskItem& item) {
     auto task = item.task;
     auto input = item.input;
 
     if (!task) {
         DFTRACER_UTILS_LOG_WARN("%s", "Null task in execute");
-        return;
+        co_return;
     }
 
     // Update worker context
@@ -176,27 +185,15 @@ void Executor::execute_task(WorkerContext* context, TaskItem& item) {
         }
     }
 
-    // ExecutorGuard ensures thread-local executor is set
-    struct ExecutorGuard {
-        Executor* prev;
-        ExecutorGuard(Executor* exec) {
-            prev = get_current_executor();
-            set_current_executor(exec);
-        }
-        ~ExecutorGuard() { set_current_executor(prev); }
-    };
-    ExecutorGuard guard(this);
-
     try {
-        // Create task context
-        TaskContext task_context(scheduler_, task->get_id());
+        TaskContext task_context(scheduler_, task->get_id(), this);
 
-        // Execute task
+        // Execute task (co_await the coroutine)
         DFTRACER_UTILS_LOG_DEBUG("Worker %zu executing task ID %ld ('%s')",
                                  context->worker_id, task->get_id(),
                                  task->get_name().c_str());
 
-        std::any result = task->execute(task_context, *input);
+        std::any result = co_await task->execute(task_context, *input);
 
         // Fulfill promise
         task->fulfill_promise(std::move(result));
@@ -295,6 +292,8 @@ void Executor::execute_task(WorkerContext* context, TaskItem& item) {
         std::lock_guard<std::mutex> lock(context->task_name_mutex);
         context->current_task_name.clear();
     }
+
+    co_return;
 }
 
 void Executor::notify_completion(std::shared_ptr<Task> task) {
@@ -304,6 +303,95 @@ void Executor::notify_completion(std::shared_ptr<Task> task) {
     }
 }
 
+void Executor::store_suspended_coro(TaskIndex awaited_task_id,
+                                    std::unique_ptr<coro::CoroTask<void>> coro,
+                                    std::shared_ptr<Task> suspended_task) {
+    std::lock_guard<std::mutex> lock(suspended_coros_mutex_);
+
+    DFTRACER_UTILS_LOG_DEBUG(
+        "Storing suspended wrapper coroutine for task ID %d (waiting for task "
+        "ID %d)",
+        suspended_task->get_id(), awaited_task_id);
+
+    suspended_coros_[awaited_task_id] =
+        SuspendedCoro{.coro = std::move(coro),
+                      .task_id = suspended_task->get_id(),
+                      .task = suspended_task};
+}
+
+bool Executor::resume_suspended_coro(TaskIndex task_id) {
+    std::unique_ptr<coro::CoroTask<void>> coro_to_resume;
+    std::shared_ptr<Task> suspended_task;
+
+    {
+        std::lock_guard<std::mutex> lock(suspended_coros_mutex_);
+
+        auto it = suspended_coros_.find(task_id);
+        if (it == suspended_coros_.end()) {
+            DFTRACER_UTILS_LOG_DEBUG(
+                "No suspended coroutine found for task ID %d", task_id);
+            return false;
+        }
+
+        // Extract the wrapper CoroTask and the suspended task
+        coro_to_resume = std::move(it->second.coro);
+        suspended_task = it->second.task;
+
+        // Remove from map
+        suspended_coros_.erase(it);
+    }
+
+    // Resume the wrapper CoroTask outside the lock
+    // This will continue the execute_task coroutine, which will return control
+    // to the user's co_await point, calling TaskFuture::await_resume()
+    DFTRACER_UTILS_LOG_DEBUG(
+        "Resuming suspended wrapper coroutine for task ID %d",
+        suspended_task->get_id());
+
+    if (coro_to_resume) {
+        // root_promise is already set from initial drive_coroutine call
+
+        // Clear the async flag since we're resuming
+        coro_to_resume->set_awaiting_async(false);
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "About to resume coroutine for task ID %d in loop",
+            suspended_task->get_id());
+
+        // Resume the wrapper coroutine until completion or next suspension
+        while (coro_to_resume && !coro_to_resume->done() &&
+               !coro_to_resume->is_awaiting_async()) {
+            coro_to_resume->resume();
+        }
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Coroutine resume loop finished for task ID %d: done=%d, "
+            "awaiting_async=%d",
+            suspended_task->get_id(), coro_to_resume->done(),
+            coro_to_resume->is_awaiting_async());
+
+        // If it suspended again for another async operation, store it again
+        if (coro_to_resume && !coro_to_resume->done() &&
+            coro_to_resume->is_awaiting_async()) {
+            // Get the NEW task ID we're waiting for from promise
+            TaskIndex new_awaited_id =
+                coro_to_resume->handle().promise().get_awaited_task_id();
+            DFTRACER_UTILS_LOG_DEBUG(
+                "Task ID %d suspended again waiting for task ID %d",
+                suspended_task->get_id(), new_awaited_id);
+            // Reset the awaited task id in promise before storing
+            coro_to_resume->handle().promise().set_awaited_task_id(-1);
+            store_suspended_coro(new_awaited_id, std::move(coro_to_resume),
+                                 suspended_task);
+        } else if (coro_to_resume && coro_to_resume->done()) {
+            DFTRACER_UTILS_LOG_DEBUG("Task ID %d completed after resumption",
+                                     suspended_task->get_id());
+        }
+    }
+
+    return true;
+}
+
 void Executor::request_shutdown() {
     if (shutdown_requested_.load()) {
         return;  // Already requested
@@ -311,9 +399,30 @@ void Executor::request_shutdown() {
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Shutdown requested for executor");
     shutdown_requested_ = true;
+}
 
-    // Stop accepting new tasks
-    shared_queue_.shutdown();
+void Executor::schedule_coroutine_resumption(std::coroutine_handle<> handle) {
+    if (!handle || handle.done()) {
+        return;  // Invalid or already completed
+    }
+
+    // Enqueue the coroutine handle for resumption by a worker thread
+    pending_resumptions_.enqueue(handle);
+
+    // Optionally wake up one idle worker to process the resumption
+    // For now, workers will pick it up in their next iteration
+}
+
+// Forward declaration for when_all.h (avoids circular dependency)
+void schedule_coroutine_resumption_helper(Executor* executor,
+                                          std::coroutine_handle<> handle);
+
+// Helper function for when_all.h (avoids circular dependency)
+void schedule_coroutine_resumption_helper(Executor* executor,
+                                          std::coroutine_handle<> handle) {
+    if (executor) {
+        executor->schedule_coroutine_resumption(handle);
+    }
 }
 
 bool Executor::is_responsive() const {
@@ -328,7 +437,7 @@ bool Executor::is_responsive() const {
     }
 
     // Check if we have pending tasks but no recent activity
-    size_t queue_size = shared_queue_.size();
+    std::size_t queue_size = shared_queue_.size_approx();
     if (queue_size > 0) {
         // Get time since last activity
         std::lock_guard<std::mutex> lock(activity_mutex_);
@@ -350,9 +459,9 @@ bool Executor::is_responsive() const {
 
     // Check if all threads might be deadlocked
     // (all threads busy but no progress for a while)
-    size_t started = tasks_started_.load();
-    size_t completed = tasks_completed_.load();
-    size_t active = started - completed;
+    std::size_t started = tasks_started_.load();
+    std::size_t completed = tasks_completed_.load();
+    std::size_t active = started - completed;
 
     if (active >= num_threads_) {
         // All threads busy - check if making progress
@@ -396,20 +505,20 @@ bool Executor::try_steal_one_task() {
     // Try to get work from:
     // 1. Own local queue first
     if (try_pop_local(worker_context, task)) {
-        execute_task(worker_context, task);
+        drive_coroutine(execute_task(worker_context, task), task.task);
         return true;
     }
 
     // 2. Shared queue
-    if (auto task_opt = shared_queue_.pop(false)) {
-        execute_task(worker_context, *task_opt);
+    if (shared_queue_.try_dequeue(task)) {
+        drive_coroutine(execute_task(worker_context, task), task.task);
         return true;
     }
 
     // 3. Steal from others
     if (try_steal_from_others(worker_context, task)) {
         worker_context->tasks_stolen++;
-        execute_task(worker_context, task);
+        drive_coroutine(execute_task(worker_context, task), task.task);
         return true;
     }
 
@@ -435,18 +544,17 @@ bool Executor::try_steal_from_others(WorkerContext* thief, TaskItem& item) {
     }
 
     // Try to steal from other workers in round-robin fashion
-    size_t start_idx = (thief->worker_id + 1) % workers_.size();
+    std::size_t start_idx = (thief->worker_id + 1) % workers_.size();
 
-    for (size_t i = 0; i < workers_.size() - 1; ++i) {
-        size_t victim_idx = (start_idx + i) % workers_.size();
+    for (std::size_t i = 0; i < workers_.size() - 1; ++i) {
+        std::size_t victim_idx = (start_idx + i) % workers_.size();
         auto& victim = workers_[victim_idx];
 
         if (victim.get() == thief) continue;  // Don't steal from self
 
-        // Try to lock victim's queue (non-blocking)
         std::unique_lock<std::mutex> lock(victim->queue_mutex,
                                           std::try_to_lock);
-        if (!lock.owns_lock()) continue;  // Victim is busy, try next
+        if (!lock.owns_lock()) continue;
 
         if (!victim->local_queue.empty()) {
             // Steal from FRONT (oldest task - FIFO)
@@ -462,31 +570,60 @@ bool Executor::try_steal_from_others(WorkerContext* thief, TaskItem& item) {
     return false;
 }
 
+void Executor::drive_coroutine(coro::CoroTask<void> coro,
+                               std::shared_ptr<Task> task) {
+    TaskIndex initial_awaited_id =
+        coro.handle().promise().get_awaited_task_id();
+    bool already_awaiting_async = (initial_awaited_id != -1) && !coro.done();
+
+    auto& promise = coro.handle().promise();
+    promise.set_root_promise(&promise);
+    promise.set_executor(this);
+
+    if (!already_awaiting_async) {
+        while (!coro.done() && !coro.is_awaiting_async()) {
+            coro.resume();
+        }
+    }
+
+    bool is_awaiting = already_awaiting_async || coro.is_awaiting_async();
+    if (!coro.done() && is_awaiting) {
+        // Read awaited_id from promise BEFORE moving coro
+        TaskIndex awaited_id = coro.handle().promise().get_awaited_task_id();
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Coroutine for task ID %d suspended waiting for task ID %d, "
+            "storing it",
+            task->get_id(), awaited_id);
+
+        // Reset the awaited task id in promise before storing
+        coro.handle().promise().set_awaited_task_id(-1);
+
+        auto coro_ptr = std::make_unique<coro::CoroTask<void>>(std::move(coro));
+        store_suspended_coro(awaited_id, std::move(coro_ptr), task);
+    }
+}
+
 void Executor::submit_with_context(const TaskItem& item,
                                    TaskIndex parent_task_id,
                                    SubmissionHint hint) {
-    // Register task in the registry
     {
         std::unique_lock<std::shared_mutex> lock(registry_mutex_);
 
-        // Construct TaskInfo in place
-        auto [it, inserted] = task_registry_.emplace(
-            std::piecewise_construct,
-            std::forward_as_tuple(item.task->get_id()),
-            std::forward_as_tuple()  // Default construct TaskInfo
-        );
+        auto [it, inserted] =
+            task_registry_.emplace(std::piecewise_construct,
+                                   std::forward_as_tuple(item.task->get_id()),
+                                   std::forward_as_tuple());
 
         if (inserted) {
-            // Initialize the newly created TaskInfo
             it->second.task_id = item.task->get_id();
             it->second.parent_task_id = parent_task_id;
             it->second.name = item.task->get_name();
             it->second.state = TaskInfo::QUEUED;
             it->second.queued_at = std::chrono::steady_clock::now();
             it->second.location = TaskInfo::SHARED_QUEUE;
-            it->second.worker_id = static_cast<size_t>(-1);
+            it->second.worker_id = static_cast<std::size_t>(-1);
 
-            // Update parent's child list
             if (parent_task_id != -1) {
                 auto parent_it = task_registry_.find(parent_task_id);
                 if (parent_it != task_registry_.end()) {
@@ -497,16 +634,14 @@ void Executor::submit_with_context(const TaskItem& item,
         }
     }
 
-    // Increment total submitted count
     ++total_tasks_submitted_;
 
-    // Decide where to submit
     auto* worker_context =
         static_cast<WorkerContext*>(get_current_worker_context());
 
     if (hint == SubmissionHint::FORCE_SHARED || !worker_context) {
         // Submit to shared queue
-        shared_queue_.push(item);
+        shared_queue_.enqueue(item);
         update_task_location(item.task->get_id(), TaskInfo::SHARED_QUEUE, -1);
     } else {
         // Submit to local queue of current worker
@@ -522,7 +657,7 @@ void Executor::submit_with_context(const TaskItem& item,
 
 void Executor::update_task_location(TaskIndex task_id,
                                     TaskInfo::Location location,
-                                    size_t worker_id) {
+                                    std::size_t worker_id) {
     std::unique_lock<std::shared_mutex> lock(registry_mutex_);
     auto it = task_registry_.find(task_id);
     if (it != task_registry_.end()) {
@@ -565,14 +700,13 @@ ExecutorProgress Executor::get_progress() const {
                 break;
         }
 
-        // Collect recent errors
         if (info.state == TaskInfo::FAILED && !info.error_message.empty()) {
             progress.recent_errors.push_back({task_id, info.error_message});
         }
     }
 
     // Queue depths
-    progress.shared_queue_depth = shared_queue_.size();
+    progress.shared_queue_depth = shared_queue_.size_approx();
     for (const auto& worker : workers_) {
         std::lock_guard<std::mutex> queue_lock(worker->queue_mutex);
         progress.worker_queue_depths.push_back(worker->local_queue.size());
@@ -728,6 +862,31 @@ TaskProgress Executor::build_task_progress_tree(
     }
 
     return progress;
+}
+
+// ============================================================================
+// I/O Executor Management
+// ============================================================================
+
+void Executor::create_io_executor(std::size_t num_io_threads) {
+    if (running_) {
+        throw std::runtime_error(
+            "Cannot create I/O executor while executor is running");
+    }
+
+    if (io_executor_) {
+        throw std::runtime_error("I/O executor already exists");
+    }
+
+    if (num_io_threads == 0) {
+        throw std::invalid_argument("num_io_threads must be > 0");
+    }
+
+    io_executor_ =
+        IOExecutor::create(num_io_threads, num_threads_, &io_slow_path_queue_);
+
+    // Start I/O threads
+    io_executor_->start();
 }
 
 }  // namespace dftracer::utils

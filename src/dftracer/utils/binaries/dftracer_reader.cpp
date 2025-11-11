@@ -11,9 +11,7 @@
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 
-#include <algorithm>
 #include <argparse/argparse.hpp>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

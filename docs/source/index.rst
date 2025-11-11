@@ -12,7 +12,8 @@ Features
 
 - **High-performance trace file reading**: Efficient reading of compressed trace files
 - **Indexing capabilities**: Fast indexing and searching of trace data
-- **Pipeline processing**: Flexible data processing pipelines
+- **Pipeline processing**: Parallel data processing with tasks, coroutines, and channels
+- **Task graphs**: DAG-based workflow builder with fan-out, fan-in, map, reduce patterns
 - **Python bindings**: Easy-to-use Python interface
 - **Cross-platform**: Works on Linux, macOS, and other Unix-like systems
 
@@ -29,8 +30,9 @@ Features
 
    installation
    quickstart
+   pipeline
    cli
-   call-tree
+   utilities
    api/index
    cpp_api/index
    developers

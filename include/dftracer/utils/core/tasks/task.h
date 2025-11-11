@@ -3,6 +3,8 @@
 
 #include <dftracer/utils/core/common/type_name.h>
 #include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/tasks/task_traits.h>
 
 #include <any>
 #include <atomic>
@@ -26,6 +28,11 @@
 namespace dftracer::utils {
 
 class TaskContext;
+class Task;
+
+// Forward declaration for use in template methods
+template <typename Func>
+std::shared_ptr<Task> make_task(Func&& func, std::string name = "");
 
 /**
  * Task - Self-contained DAG node with dependencies
@@ -42,7 +49,9 @@ class Task : public std::enable_shared_from_this<Task> {
    private:
     std::string name_;            // User-provided name (or empty)
     std::string type_signature_;  // Auto-generated type representation
-    std::function<std::any(TaskContext&, const std::any&)> func_;
+
+    std::function<coro::CoroTask<std::any>(TaskContext&, const std::any&)>
+        func_;
 
     std::type_index input_type_;
     std::type_index output_type_;
@@ -234,6 +243,22 @@ class Task : public std::enable_shared_from_this<Task> {
     std::type_index get_output_type() const { return output_type_; }
 
     /**
+     * Set input type (for special cases like tap with std::any)
+     */
+    void set_input_type(std::type_index type) {
+        input_type_ = type;
+        type_signature_ = generate_type_signature();
+    }
+
+    /**
+     * Set output type (for special cases like tap with std::any)
+     */
+    void set_output_type(std::type_index type) {
+        output_type_ = type;
+        type_signature_ = generate_type_signature();
+    }
+
+    /**
      * Get task name formatted as: "NAME (type_signature)" or just
      * "(type_signature)"
      */
@@ -289,28 +314,133 @@ class Task : public std::enable_shared_from_this<Task> {
      */
     bool has_timeout() const { return timeout_.count() > 0; }
 
+    // ========================================================================
+    // Combinators and syntactic sugar
+    // ========================================================================
+
+    /**
+     * Chain operation using then() - create dependent task with transformation
+     * @param func Transformation function
+     * @param name Optional name for the new task
+     * @return New task that depends on this task
+     *
+     * Usage:
+     * @code
+     * auto task1 = make_task([](TaskContext& ctx) -> CoroTask<int> {
+     *     co_return 42;
+     * });
+     *
+     * auto task2 = task1->then([](TaskContext& ctx, int x) ->
+     * CoroTask<std::string> { co_return std::to_string(x * 2);
+     * });
+     * @endcode
+     */
+    template <typename Func>
+    std::shared_ptr<Task> then(Func&& func, std::string name = "") {
+        auto new_task = make_task(std::forward<Func>(func), std::move(name));
+        new_task->depends_on(shared_from_this());
+        return new_task;
+    }
+
+    /**
+     * Tap operation - inspect/log value without transformation
+     * Creates a pass-through task that executes a side effect
+     *
+     * @param func Inspection function (doesn't return a value or returns same
+     * type)
+     * @param name Optional name for the tap task
+     * @return This task (for method chaining)
+     *
+     * Usage:
+     * @code
+     * auto pipeline = task1
+     *     ->tap([](TaskContext& ctx, int x) -> CoroTask<void> {
+     *         std::cout << "Value: " << x << "\n";
+     *         co_return;
+     *     }, "log")
+     *     ->then([](TaskContext& ctx, int x) -> CoroTask<int> {
+     *         co_return x * 2;
+     *     });
+     * @endcode
+     */
+    template <typename Func>
+    std::shared_ptr<Task> tap(Func&& func, std::string name = "") {
+        using Traits =
+            dftracer::utils::detail::function_traits<std::decay_t<Func>>;
+        using TapInputType = typename Traits::input_type;
+
+        auto wrapper = [captured_func = std::forward<Func>(func)](
+                           TaskContext& ctx,
+                           TapInputType input) -> coro::CoroTask<TapInputType> {
+            if constexpr (std::is_same_v<TapInputType, std::any>) {
+                co_await std::invoke(captured_func, ctx, input);
+            } else {
+                co_await std::invoke(captured_func, ctx, input);
+            }
+            co_return input;
+        };
+
+        auto tap_task = make_task(std::move(wrapper), std::move(name));
+        tap_task->depends_on(shared_from_this());
+        return tap_task;
+    }
+
+    /**
+     * Operator& for parallel composition (AND) - creates independent tasks
+     * Creates a combiner task that depends on both input tasks
+     *
+     * @param other Second task to run in parallel
+     * @param name Optional name for the combiner task
+     * @return Task that waits for both and returns tuple of results
+     *
+     * Usage:
+     * @code
+     * auto combined = task1 & task2;  // Both run in parallel
+     * auto [result1, result2] = combined->get<std::tuple<int, std::string>>();
+     * @endcode
+     */
+    std::shared_ptr<Task> operator&(std::shared_ptr<Task> other);
+
+    /**
+     * Operator^ for tap/tee composition - send output to both paths
+     * Creates a tap task that receives this task's output as a side effect
+     *
+     * @param tap_task Task to receive the output (runs as side effect)
+     * @return This task (for method chaining), output continues from here
+     *
+     * Usage:
+     * @code
+     * auto logger = make_task([](TaskContext& ctx, const std::any& x) ->
+     * CoroTask<void> { std::cout << "Value: " << std::any_cast<int>(x) << "\n";
+     *     co_return;
+     * });
+     *
+     * auto result = task1 ^ logger;  // task1's output goes to logger as side
+     * effect
+     * // result continues with task1's output type
+     * @endcode
+     */
+    std::shared_ptr<Task> operator^(std::shared_ptr<Task> tap_task);
+
    private:
     /**
      * Execute task function with given input
-     * (Internal - called by Executor)
      */
-    std::any execute(TaskContext& context, const std::any& input);
+    coro::CoroTask<std::any> execute(TaskContext& context,
+                                     const std::any& input);
 
     /**
      * Apply custom combiner to parent outputs
-     * (Internal - called by Scheduler)
      */
     std::any apply_combiner(const std::vector<std::any>& inputs) const;
 
     /**
      * Decrement pending parents count
-     * (Internal - called by Scheduler when parent completes)
      */
     void decrement_pending_parents() { --pending_parents_count_; }
 
     /**
      * Initialize pending parents count
-     * (Internal - called by Scheduler before execution)
      */
     void initialize_pending_count() {
         pending_parents_count_ = static_cast<int>(parents_.size());
@@ -339,10 +469,12 @@ class Task : public std::enable_shared_from_this<Task> {
 
     /**
      * Wrap different function signatures to common signature
+     *
+     * ⭐ Returns function that produces CoroTask<std::any>
      */
     template <typename Func>
-    std::function<std::any(TaskContext&, const std::any&)> wrap_function(
-        Func&& func);
+    std::function<coro::CoroTask<std::any>(TaskContext&, const std::any&)>
+    wrap_function(Func&& func);
 
     /**
      * Type deduction helpers
@@ -417,13 +549,94 @@ class Task : public std::enable_shared_from_this<Task> {
  * Helper function to create a shared_ptr<Task>
  */
 template <typename Func>
-std::shared_ptr<Task> make_task(Func&& func, std::string name = "") {
+std::shared_ptr<Task> make_task(Func&& func, std::string name) {
     return std::make_shared<Task>(std::forward<Func>(func), std::move(name));
+}
+
+/**
+ * Operator> for forward composition (task > func)
+ * Creates a new task that depends on the input task
+ *
+ * @param task Upstream task
+ * @param func Transformation function for new task
+ * @return New task that depends on the upstream task
+ *
+ * Usage:
+ * @code
+ * auto pipeline = task1 > [](TaskContext& ctx, int x) -> CoroTask<std::string>
+ * { co_return std::to_string(x * 2);
+ * };
+ * @endcode
+ */
+template <typename Func>
+std::shared_ptr<Task> operator>(std::shared_ptr<Task> task, Func&& func) {
+    auto new_task = make_task(std::forward<Func>(func));
+    new_task->depends_on(task);
+    return new_task;
+}
+
+/**
+ * Operator< for reverse composition (func < task)
+ * Creates a new task that depends on the input task
+ *
+ * @param func Function for new task
+ * @param task Upstream task
+ * @return New task that depends on the upstream task
+ *
+ * Usage:
+ * @code
+ * auto pipeline = [](TaskContext& ctx, int x) -> CoroTask<std::string> {
+ *     co_return std::to_string(x * 2);
+ * } < make_task([](TaskContext& ctx) -> CoroTask<int> {
+ *     co_return 42;
+ * });
+ * @endcode
+ */
+template <typename Func>
+std::shared_ptr<Task> operator<(Func&& func, std::shared_ptr<Task> task) {
+    auto new_task = make_task(std::forward<Func>(func));
+    new_task->depends_on(task);
+    return new_task;
+}
+
+/**
+ * Free function wrapper for operator& - enables natural syntax with shared_ptr
+ * @param lhs First task
+ * @param rhs Second task
+ * @return Combined task that waits for both and returns tuple of results
+ *
+ * Usage:
+ * @code
+ * auto combined = task1 & task2;  // Natural syntax!
+ * auto result = combined->get<std::tuple<std::any, std::any>>();
+ * @endcode
+ */
+inline std::shared_ptr<Task> operator&(std::shared_ptr<Task> lhs,
+                                       std::shared_ptr<Task> rhs) {
+    return lhs->operator&(rhs);
+}
+
+/**
+ * Free function wrapper for operator^ - enables natural syntax with shared_ptr
+ * @param source Source task
+ * @param tap_task Tap task to receive output as side effect
+ * @return Pass-through task that preserves source output type
+ *
+ * Usage:
+ * @code
+ * auto result = task1 ^ logger;  // task1's output goes to logger, continues
+ * with task1's type
+ * @endcode
+ */
+inline std::shared_ptr<Task> operator^(std::shared_ptr<Task> source,
+                                       std::shared_ptr<Task> tap_task) {
+    return source->operator^(tap_task);
 }
 
 }  // namespace dftracer::utils
 
 // Include template implementations
-#include "task_impl.h"
+#include <dftracer/utils/core/tasks/task_future_impl.h>
+#include <dftracer/utils/core/tasks/task_impl.h>
 
 #endif  // DFTRACER_UTILS_CORE_TASKS_TASK_H

@@ -9,8 +9,6 @@
 
 #include <argparse/argparse.hpp>
 #include <chrono>
-#include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer::internal;
@@ -126,13 +124,10 @@ int main(int argc, char** argv) {
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // ========================================================================
-    // Create Pipeline with Configuration
-    // ========================================================================
     auto pipeline_config =
         PipelineConfig()
             .with_name("DFTracer Parallel Gzip")
-            .with_executor_threads(executor_threads)
+            .with_compute_threads(executor_threads)
             .with_scheduler_threads(scheduler_threads)
             .with_watchdog(!disable_watchdog)
             .with_global_timeout(std::chrono::seconds(global_timeout))
@@ -145,23 +140,16 @@ int main(int argc, char** argv) {
 
     Pipeline pipeline(pipeline_config);
 
-    // ========================================================================
-    // Task 1: Compress Files (INTRA-TASK PARALLELISM via
-    // DirectoryFileProcessorUtility)
-    // ========================================================================
+    // Task 1: Compress Files
     DFTRACER_UTILS_LOG_INFO("%s", "Task 1: Compressing files...");
 
-    // Task 1.1: Input - Directory input for file discovery and compression
     auto dir_input =
         DirectoryProcessInput::from_directory(input_dir).with_extensions(
             {".pfw"});
 
-    // Task 1.2: Output - Batch compression results
     using CompressFilesOutput =
         BatchFileProcessOutput<FileCompressionUtilityOutput>;
 
-    // Task 1.3: Utility definition - DirectoryFileProcessorUtility with
-    // FileCompressorUtility
     auto file_compressor =
         [compression_level](
             TaskContext& /*ctx*/,
@@ -176,20 +164,15 @@ int main(int argc, char** argv) {
         DirectoryFileProcessorUtility<FileCompressionUtilityOutput>>(
         file_compressor);
 
-    // Task 1.4: Task definition - Convert utility to task
     auto task1_compress_files = utilities::use(compress_workflow).as_task();
     task1_compress_files->with_name("CompressFiles");
 
-    // ========================================================================
     // Task 2: Cleanup Original Files and Report Results
-    // ========================================================================
     DFTRACER_UTILS_LOG_INFO("%s",
                             "Task 2: Setting up cleanup and reporting...");
 
-    // Task 2.1: Input - Compression results from Task 1
     using CleanupInput = CompressFilesOutput;
 
-    // Task 2.2: Output - Final statistics
     struct CleanupOutput {
         std::size_t successful = 0;
         std::size_t total_files = 0;
@@ -197,7 +180,6 @@ int main(int argc, char** argv) {
         std::size_t total_compressed_size = 0;
     };
 
-    // Task 2.3: Utility definition - Cleanup and aggregate results
     auto cleanup_and_report_func =
         [verbose](const CleanupInput& batch_result) -> CleanupOutput {
         CleanupOutput output;
@@ -235,33 +217,20 @@ int main(int argc, char** argv) {
         return output;
     };
 
-    // Task 2.4: Task definition
     auto task2_cleanup = make_task(cleanup_and_report_func, "CleanupAndReport");
 
-    // ========================================================================
-    // Define Dependencies and Execute Pipeline
-    // ========================================================================
-
-    // Define dependencies
+    // Execute Pipeline
     task2_cleanup->depends_on(task1_compress_files);
 
-    // Set up pipeline
     pipeline.set_source(task1_compress_files);
     pipeline.set_destination(task2_cleanup);
-
-    // Execute pipeline with initial input
     pipeline.execute(dir_input);
 
-    // Get final results
     auto compression_results = task1_compress_files->get<CompressFilesOutput>();
     auto cleanup_result = task2_cleanup->get<CleanupOutput>();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
-
-    // ========================================================================
-    // Print Results
-    // ========================================================================
 
     double overall_ratio =
         cleanup_result.total_original_size > 0

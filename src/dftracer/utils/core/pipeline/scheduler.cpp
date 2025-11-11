@@ -181,11 +181,8 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
     // Increment pending count for source task
     ++pending_count_;
 
-    {
-        std::lock_guard<std::mutex> lock(ready_mutex_);
-        ready_queue_.push(source);
-    }
-    ready_cv_.notify_one();
+    ready_queue_.enqueue(source);
+    has_ready_tasks_.store(true, std::memory_order_release);
 
     // Wait for completion WITH TIMEOUT
     {
@@ -358,13 +355,22 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
             ++pending_count_;
 
             // Add to ready queue
-            {
-                std::lock_guard<std::mutex> lock(ready_mutex_);
-                ready_queue_.push(child);
-            }
-            ready_cv_.notify_one();
+            ready_queue_.enqueue(child);
+            has_ready_tasks_.store(true, std::memory_order_release);
         }
     }
+
+    // Report progress using executor's metrics
+    // NOTE: Must be called BEFORE decrementing pending_count_ and notify_all()
+    // to avoid race condition where schedule() returns before progress callback
+    // is invoked for the last task
+    if (progress_callback_) {
+        auto executor_progress = executor_->get_progress();
+        progress_callback_(executor_progress.tasks_completed, total_tasks_);
+    }
+
+    // Invoke coroutine completion callbacks (resume awaiting coroutines)
+    invoke_completion_callbacks(task->get_id());
 
     // Decrement pending count
     // Only if not already decremented by handle_task_error
@@ -374,12 +380,6 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
             std::lock_guard<std::mutex> lock(done_mutex_);
             done_cv_.notify_all();
         }
-    }
-
-    // Report progress using executor's metrics
-    if (progress_callback_) {
-        auto executor_progress = executor_->get_progress();
-        progress_callback_(executor_progress.tasks_completed, total_tasks_);
     }
 }
 
@@ -558,8 +558,8 @@ std::any Scheduler::prepare_input_for_task(std::shared_ptr<Task> task) {
         return std::any{};
     }
 
-    // Pack parent outputs into a tuple for type-safe multi-arg functions
-    // The Task's wrap_function will handle unpacking the tuple
+    // Pack parent outputs into a vector for type-safe multi-arg functions
+    // The Task's wrap_function will handle unpacking into typed arguments
     std::vector<std::any> parent_outputs;
     parent_outputs.reserve(parents.size());
     for (const auto& parent : parents) {
@@ -567,35 +567,12 @@ std::any Scheduler::prepare_input_for_task(std::shared_ptr<Task> task) {
         parent_outputs.push_back(future.get());
     }
 
-    // Create tuple based on number of parents
-    // The actual tuple type will be checked by Task's type system
-    switch (parents.size()) {
-        case 2: {
-            return std::any(
-                std::make_tuple(parent_outputs[0], parent_outputs[1]));
-        }
-        case 3: {
-            return std::any(std::make_tuple(
-                parent_outputs[0], parent_outputs[1], parent_outputs[2]));
-        }
-        case 4: {
-            return std::any(
-                std::make_tuple(parent_outputs[0], parent_outputs[1],
-                                parent_outputs[2], parent_outputs[3]));
-        }
-        case 5: {
-            return std::any(std::make_tuple(
-                parent_outputs[0], parent_outputs[1], parent_outputs[2],
-                parent_outputs[3], parent_outputs[4]));
-        }
-        default:
-            // Fallback to vector for >5 parents
-            return std::any(parent_outputs);
-    }
+    // Return the vector - wrap_function will unpack it into the typed tuple
+    return std::any(parent_outputs);
 }
 
 void Scheduler::submit_task_to_executor(std::shared_ptr<Task> task,
-                                        std::any input) {
+                                        const std::any& input) {
     DFTRACER_UTILS_LOG_DEBUG("Submitting task ID %ld ('%s') to executor",
                              task->get_id(), task->get_name().c_str());
 
@@ -741,7 +718,16 @@ void Scheduler::validate_task_types(std::shared_ptr<Task> task) {
             // For single parent without combiner, types should match
             if (current->get_parents().size() == 1 &&
                 !current->has_combiner()) {
-                if (parent->get_output_type() != current->get_input_type()) {
+                // std::any works as a wildcard in both directions:
+                // - A task expecting std::any can accept any input type
+                // - A task outputting std::any can connect to any input type
+                // (runtime cast)
+                bool types_match =
+                    (parent->get_output_type() == current->get_input_type()) ||
+                    (current->get_input_type() == typeid(std::any)) ||
+                    (parent->get_output_type() == typeid(std::any));
+
+                if (!types_match) {
                     std::string parent_type =
                         Task::demangle_type_name(parent->get_output_type());
                     std::string task_type =
@@ -817,7 +803,6 @@ void Scheduler::stop_scheduling_thread() {
     }
 
     scheduling_running_ = false;
-    ready_cv_.notify_all();
 
     // Join all scheduling threads
     for (auto& thread : scheduling_threads_) {
@@ -835,26 +820,32 @@ void Scheduler::scheduling_loop() {
     DFTRACER_UTILS_LOG_DEBUG("%s", "Scheduling loop started");
 
     while (scheduling_running_.load()) {
-        std::unique_lock<std::mutex> lock(ready_mutex_);
-
-        // Wait for ready tasks or shutdown
-        ready_cv_.wait(lock, [this] {
-            return !ready_queue_.empty() || !scheduling_running_.load() ||
-                   shutdown_requested_.load();
-        });
+        if (!has_ready_tasks_.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
 
         if (!scheduling_running_.load() || shutdown_requested_.load()) {
             break;
         }
 
-        // Process all ready tasks
-        while (!ready_queue_.empty()) {
-            auto task = ready_queue_.front();
-            ready_queue_.pop();
-
-            lock.unlock();
+        std::shared_ptr<Task> task;
+        while (ready_queue_.try_dequeue(task)) {
             process_ready_task(task);
-            lock.lock();
+        }
+
+        // Only clear the flag if queue is actually empty after processing.
+        // Use compare_exchange to avoid overwriting a concurrent set to true.
+        // If someone set it to true while we were processing, we'll see it
+        // on the next iteration.
+        bool expected = true;
+        if (!ready_queue_.try_dequeue(task)) {
+            // Queue is empty, try to clear the flag
+            has_ready_tasks_.compare_exchange_strong(expected, false,
+                                                     std::memory_order_acq_rel);
+        } else {
+            // Found another task, process it
+            process_ready_task(task);
         }
     }
 
@@ -915,7 +906,6 @@ void Scheduler::request_shutdown() {
     executor_->request_shutdown();
 
     // Wake up waiting threads
-    ready_cv_.notify_all();
     done_cv_.notify_all();
 }
 
@@ -940,10 +930,7 @@ SchedulerMetrics Scheduler::get_metrics() const {
     auto now = std::chrono::steady_clock::now();
 
     // Scheduling performance
-    {
-        std::lock_guard<std::mutex> lock(ready_mutex_);
-        metrics.ready_queue_depth = ready_queue_.size();
-    }
+    metrics.ready_queue_depth = ready_queue_.size_approx();
     metrics.total_scheduled = total_scheduled_.load();
 
     // Count active scheduling threads
@@ -995,6 +982,45 @@ ExecutorProgress Scheduler::get_executor_progress() const {
         return executor_->get_progress();
     }
     return ExecutorProgress{};
+}
+
+// ============================================================================
+// Coroutine Support - Completion Callbacks
+// ============================================================================
+
+void Scheduler::register_task_completion_callback(
+    TaskIndex task_id, std::function<void()> callback) {
+    // OPTIMIZED: Uses ShardedMutex for minimal contention
+    // Only locks the specific shard for this task_id
+    completion_callbacks_.with_shard(task_id, [&](CallbackMap& callbacks) {
+        callbacks[task_id].push_back(std::move(callback));
+    });
+}
+
+void Scheduler::invoke_completion_callbacks(TaskIndex task_id) {
+    // OPTIMIZED: Only locks the specific shard for this task_id
+    // Other tasks completing concurrently don't block
+    completion_callbacks_.with_shard(task_id, [&](CallbackMap& callbacks) {
+        if (auto it = callbacks.find(task_id); it != callbacks.end()) {
+            // Invoke all registered callbacks
+            for (auto& callback : it->second) {
+                try {
+                    callback();  // Resume awaiting coroutines
+                } catch (const std::exception& e) {
+                    DFTRACER_UTILS_LOG_ERROR(
+                        "Exception in completion callback for task ID %d: %s",
+                        task_id, e.what());
+                } catch (...) {
+                    DFTRACER_UTILS_LOG_ERROR(
+                        "Unknown exception in completion callback for task ID "
+                        "%d",
+                        task_id);
+                }
+            }
+            // Clean up callbacks after invocation
+            callbacks.erase(it);
+        }
+    });
 }
 
 }  // namespace dftracer::utils

@@ -145,7 +145,8 @@ class CallTreeImpl {
         // Print node info
         out << node->get_name() << " [" << node->get_category() << "] "
             << "level=" << node->get_level() << " "
-            << "dur=" << (node->get_duration() / 1000.0) << "ms "
+            << "dur=" << (static_cast<double>(node->get_duration()) / 1000.0)
+            << "ms "
             << "children=" << node->get_children().size() << "\n";
 
         // Print children
@@ -177,7 +178,8 @@ class CallTreeImpl {
         // Print node info
         printf("%s [%s] level=%d dur=%.3fms children=%zu\n",
                node->get_name().c_str(), node->get_category().c_str(),
-               node->get_level(), node->get_duration() / 1000.0,
+               node->get_level(),
+               static_cast<double>(node->get_duration()) / 1000.0,
                node->get_children().size());
 
         // Print children
@@ -405,11 +407,12 @@ bool CallTree::save_to_file(const std::string& filename) const {
     for (const auto& node : nodes) {
         file.write(reinterpret_cast<const char*>(&node.id), sizeof(node.id));
 
-        std::uint32_t name_len = node.name.size();
+        std::uint32_t name_len = static_cast<std::uint32_t>(node.name.size());
         file.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
         file.write(node.name.data(), name_len);
 
-        std::uint32_t cat_len = node.category.size();
+        std::uint32_t cat_len =
+            static_cast<std::uint32_t>(node.category.size());
         file.write(reinterpret_cast<const char*>(&cat_len), sizeof(cat_len));
         file.write(node.category.data(), cat_len);
 
@@ -530,8 +533,9 @@ bool CallTree::save_to_json(const std::string& filename) const {
 
                 // Add children to stack in reverse order for depth-first
                 const auto& children = node->get_children();
-                for (auto it = children.rbegin(); it != children.rend(); ++it) {
-                    stack.push_back(*it);
+                for (auto child_it = children.rbegin();
+                     child_it != children.rend(); ++child_it) {
+                    stack.push_back(*child_it);
                 }
 
                 // Write comma separator for next event
@@ -650,7 +654,7 @@ CallTreeStats CallTree::get_statistics() const {
         if (count_per_level[i] > 0) {
             stats.avg_time_per_level_us[i] =
                 static_cast<double>(total_time_per_level[i]) /
-                count_per_level[i];
+                static_cast<double>(count_per_level[i]);
         } else {
             stats.avg_time_per_level_us[i] = 0.0;
         }

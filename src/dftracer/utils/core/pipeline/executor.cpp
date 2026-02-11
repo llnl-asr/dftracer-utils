@@ -572,11 +572,15 @@ bool Executor::try_steal_from_others(WorkerContext* thief, TaskItem& item) {
 
 void Executor::drive_coroutine(coro::CoroTask<void> coro,
                                std::shared_ptr<Task> task) {
-    TaskIndex initial_awaited_id =
-        coro.handle().promise().get_awaited_task_id();
+    auto handle = coro.handle();
+    if (!handle) {
+        return;
+    }
+
+    TaskIndex initial_awaited_id = handle.promise().get_awaited_task_id();
     bool already_awaiting_async = (initial_awaited_id != -1) && !coro.done();
 
-    auto& promise = coro.handle().promise();
+    auto& promise = handle.promise();
     promise.set_root_promise(&promise);
     promise.set_executor(this);
 
@@ -589,7 +593,7 @@ void Executor::drive_coroutine(coro::CoroTask<void> coro,
     bool is_awaiting = already_awaiting_async || coro.is_awaiting_async();
     if (!coro.done() && is_awaiting) {
         // Read awaited_id from promise BEFORE moving coro
-        TaskIndex awaited_id = coro.handle().promise().get_awaited_task_id();
+        TaskIndex awaited_id = handle.promise().get_awaited_task_id();
 
         DFTRACER_UTILS_LOG_DEBUG(
             "Coroutine for task ID %d suspended waiting for task ID %d, "
@@ -597,7 +601,7 @@ void Executor::drive_coroutine(coro::CoroTask<void> coro,
             task->get_id(), awaited_id);
 
         // Reset the awaited task id in promise before storing
-        coro.handle().promise().set_awaited_task_id(-1);
+        handle.promise().set_awaited_task_id(-1);
 
         auto coro_ptr = std::make_unique<coro::CoroTask<void>>(std::move(coro));
         store_suspended_coro(awaited_id, std::move(coro_ptr), task);

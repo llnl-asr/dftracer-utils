@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
     for (size_t i = 0; i < std::min(nodes.size(), size_t(5)); i++) {
         const auto& node = nodes[i];
         printf("    [%zu] %s (level=%d, duration=%.3fms)\n",
-               i, node.name.c_str(), node.level, node.duration_us / 1000.0);
+               i, node.name.c_str(), node.level, static_cast<double>(node.duration_us) / 1000.0);
     }
     printf("\n");
     

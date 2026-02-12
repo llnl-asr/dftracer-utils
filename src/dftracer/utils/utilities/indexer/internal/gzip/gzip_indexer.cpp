@@ -29,7 +29,8 @@ static void init_schema(const SqliteDatabase &db) {
 
 static bool process_chunks(FILE *fp, const SqliteDatabase &db, int file_id,
                            std::uint64_t ckpt_size, std::uint64_t &total_lines,
-                           std::uint64_t &total_uc_size) {
+                           std::uint64_t &total_uc_size,
+                           std::uint64_t &tail_line_count) {
     GzipInflater inflater;
     if (!inflater.initialize(fp)) {
         return false;
@@ -37,36 +38,11 @@ static bool process_chunks(FILE *fp, const SqliteDatabase &db, int file_id,
 
     std::uint64_t checkpoint_idx = 0;
     std::uint64_t current_uc_offset = 0;
+    std::uint64_t next_ckpt_offset = ckpt_size;
     std::uint64_t line_count_in_chunk = 0;
-    std::uint64_t first_line_in_chunk = total_lines;
+    std::uint64_t first_line_in_chunk = total_lines + 1;  // 1-based
 
     while (true) {
-        std::size_t chunk_start_uc = current_uc_offset;
-        std::size_t chunk_start_c = inflater.get_total_input_consumed();
-
-        // Create checkpoint if we've processed enough data
-        if (current_uc_offset > 0 && (current_uc_offset % ckpt_size) == 0) {
-            GzipCheckpointer checkpointer(inflater, chunk_start_uc);
-            if (checkpointer.create(chunk_start_c)) {
-                std::vector<unsigned char> compressed_dict;
-                if (checkpointer.compress(compressed_dict)) {
-                    InsertCheckpointData checkpoint_data = {
-                        checkpoint_idx++,
-                        chunk_start_uc,
-                        0,  // uc_size - will be updated later
-                        0,  // c_size - will be updated later
-                        chunk_start_c,
-                        checkpointer.bits,
-                        compressed_dict.data(),
-                        compressed_dict.size(),
-                        line_count_in_chunk,
-                        first_line_in_chunk,
-                        total_lines - 1};
-                    insert_checkpoint_record(db, file_id, checkpoint_data);
-                }
-            }
-        }
-
         GzipInflaterResult result;
         if (!inflater.read(fp, result)) {
             if (result.bytes_read == 0) {
@@ -82,10 +58,100 @@ static bool process_chunks(FILE *fp, const SqliteDatabase &db, int file_id,
         current_uc_offset += result.bytes_read;
         total_lines += result.lines_found;
         line_count_in_chunk += result.lines_found;
+
+        // Create checkpoint when we cross a boundary and are at a deflate
+        // block boundary (read() now stops at block boundaries via Z_BLOCK).
+        if (current_uc_offset >= next_ckpt_offset && result.at_block_boundary) {
+            std::size_t chunk_start_uc = current_uc_offset;
+            std::size_t chunk_start_c = inflater.get_total_input_consumed();
+
+            GzipCheckpointer checkpointer(inflater, chunk_start_uc);
+            if (checkpointer.create(chunk_start_c)) {
+                std::vector<unsigned char> compressed_dict;
+                if (checkpointer.compress(compressed_dict)) {
+                    InsertCheckpointData checkpoint_data = {
+                        checkpoint_idx++,
+                        chunk_start_uc,
+                        0,  // uc_size - will be updated later
+                        0,  // c_size - will be updated later
+                        chunk_start_c,
+                        checkpointer.bits,
+                        compressed_dict.data(),
+                        compressed_dict.size(),
+                        line_count_in_chunk,
+                        first_line_in_chunk,
+                        total_lines};  // 1-based: last line = total_lines
+                    insert_checkpoint_record(db, file_id, checkpoint_data);
+
+                    // Reset chunk counters for next chunk
+                    line_count_in_chunk = 0;
+                    first_line_in_chunk = total_lines + 1;  // 1-based
+                    next_ckpt_offset = current_uc_offset + ckpt_size;
+                }
+            }
+        }
     }
 
     total_uc_size = current_uc_offset;
+    tail_line_count = line_count_in_chunk;
     return true;
+}
+
+// After all checkpoints are inserted, compute uc_size / c_size for each
+// and extend the last checkpoint's line range to cover the tail data.
+static void finalize_checkpoints(const SqliteDatabase &db, int file_id,
+                                 std::uint64_t total_uc_size,
+                                 std::uint64_t total_lines,
+                                 std::uint64_t tail_line_count) {
+    // 1. Set uc_size = distance to next checkpoint (or total_uc_size for last).
+    {
+        const char *sql =
+            "UPDATE checkpoints SET "
+            "uc_size = COALESCE("
+            "  (SELECT c2.uc_offset FROM checkpoints c2 "
+            "   WHERE c2.file_id = checkpoints.file_id "
+            "   AND c2.checkpoint_idx = checkpoints.checkpoint_idx + 1), ?"
+            ") - uc_offset, "
+            "c_size = COALESCE("
+            "  (SELECT c2.c_offset FROM checkpoints c2 "
+            "   WHERE c2.file_id = checkpoints.file_id "
+            "   AND c2.checkpoint_idx = checkpoints.checkpoint_idx + 1), "
+            "  c_offset"
+            ") - c_offset "
+            "WHERE file_id = ?";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(db.get(), sql, -1, &stmt, nullptr) ==
+            SQLITE_OK) {
+            sqlite3_bind_int64(stmt, 1,
+                               static_cast<std::int64_t>(total_uc_size));
+            sqlite3_bind_int(stmt, 2, file_id);
+            sqlite3_step(stmt);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // 2. Extend the last checkpoint's line range to cover the tail data
+    //    (lines after the last block boundary that didn't trigger a new
+    //    checkpoint).
+    if (tail_line_count > 0 && total_lines > 0) {
+        const char *sql =
+            "UPDATE checkpoints SET last_line_num = ?, "
+            "num_lines = num_lines + ? "
+            "WHERE file_id = ? AND checkpoint_idx = "
+            "(SELECT MAX(checkpoint_idx) FROM checkpoints WHERE file_id = ?)";
+        sqlite3_stmt *stmt = nullptr;
+        if (sqlite3_prepare_v2(db.get(), sql, -1, &stmt, nullptr) ==
+            SQLITE_OK) {
+            sqlite3_bind_int64(
+                stmt, 1, static_cast<std::int64_t>(total_lines));  // 1-based
+            sqlite3_bind_int64(stmt, 2,
+                               static_cast<std::int64_t>(tail_line_count));
+            sqlite3_bind_int(stmt, 3, file_id);
+            sqlite3_bind_int(stmt, 4, file_id);
+            sqlite3_step(stmt);
+        }
+        sqlite3_finalize(stmt);
+    }
 }
 
 static bool build_index(const SqliteDatabase &db, int file_id,
@@ -97,12 +163,15 @@ static bool build_index(const SqliteDatabase &db, int file_id,
 
     std::uint64_t total_lines = 0;
     std::uint64_t total_uc_size = 0;
+    std::uint64_t tail_line_count = 0;
 
-    bool success =
-        process_chunks(fp, db, file_id, ckpt_size, total_lines, total_uc_size);
+    bool success = process_chunks(fp, db, file_id, ckpt_size, total_lines,
+                                  total_uc_size, tail_line_count);
     std::fclose(fp);
 
     if (success) {
+        finalize_checkpoints(db, file_id, total_uc_size, total_lines,
+                             tail_line_count);
         insert_file_metadata_record(db, file_id, ckpt_size, total_lines,
                                     total_uc_size);
     }

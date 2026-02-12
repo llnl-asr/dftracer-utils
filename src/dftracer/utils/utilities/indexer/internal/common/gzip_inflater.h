@@ -120,10 +120,16 @@ class GzipInflater : public Inflater {
             }
 
             // Check for proper block boundary (end of header or non-last
-            // deflate block)
+            // deflate block).  Stop here so the caller can inspect
+            // stream.data_type and create a checkpoint if needed.
+            // Only break if we've actually produced output (avail_out <
+            // buffer size), otherwise we'd stop at the gzip header boundary
+            // before any data is decompressed.
             if ((stream.data_type & 0xc0) == 0x80) {
                 result.at_block_boundary = true;
-                // Continue processing - don't break immediately
+                if (stream.avail_out < sizeof(out_buffer)) {
+                    break;
+                }
             }
         }
 

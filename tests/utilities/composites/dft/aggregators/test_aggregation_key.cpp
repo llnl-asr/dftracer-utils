@@ -1,7 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <doctest/doctest.h>
-
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
+#include <doctest/doctest.h>
 
 #include <unordered_map>
 
@@ -13,8 +12,8 @@ static AggregationKey make_key(
     const std::string& hhash = "hh1", const std::string& fhash = "fh1",
     std::uint64_t time_bucket = 0,
     const std::unordered_map<std::string, std::string>& extra = {}) {
-    return AggregationKey{cat, name, pid, tid, hhash, fhash, time_bucket,
-                          extra};
+    return AggregationKey{cat,   name,  pid,         tid,
+                          hhash, fhash, time_bucket, extra};
 }
 
 TEST_SUITE("AggregationKey") {
@@ -63,8 +62,8 @@ TEST_SUITE("AggregationKey") {
         }
 
         SUBCASE("Different extra_keys") {
-            auto other = make_key("cat1", "name1", 1, 1, "hh1", "fh1", 0,
-                                  {{"k", "v"}});
+            auto other =
+                make_key("cat1", "name1", 1, 1, "hh1", "fh1", 0, {{"k", "v"}});
             CHECK_FALSE(base == other);
         }
     }
@@ -99,7 +98,8 @@ TEST_SUITE("AggregationKey") {
         }
     }
 
-    TEST_CASE("AggregationKey - Extra keys equality regardless of insertion order") {
+    TEST_CASE(
+        "AggregationKey - Extra keys equality regardless of insertion order") {
         auto k1 = make_key("cat1", "name1", 1, 1, "hh1", "fh1", 0,
                            {{"a", "1"}, {"b", "2"}});
         auto k2 = make_key("cat1", "name1", 1, 1, "hh1", "fh1", 0,

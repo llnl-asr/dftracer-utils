@@ -402,8 +402,8 @@ int main(int argc, char** argv) {
 
                 // File producers: one per input file
                 for (const auto& file_path : input_files) {
-                    scope.spawn([&, file_path](
-                                    TaskContext& /*fctx*/) -> coro::CoroTask<void> {
+                    scope.spawn([&, file_path](TaskContext& /*fctx*/)
+                                    -> coro::CoroTask<void> {
                         // Build index
                         std::string idx_path =
                             composites::dft::internal::determine_index_path(
@@ -572,16 +572,18 @@ int main(int argc, char** argv) {
     std::printf("  Execution time: %.2f seconds\n", duration.count() / 1000.0);
     std::printf("  Files processed: %zu\n", agg_results.total_files_processed);
     std::printf("  Bytes processed: %.2f MB\n",
-                static_cast<double>(agg_results.total_bytes_processed) / (1024.0 * 1024.0));
+                static_cast<double>(agg_results.total_bytes_processed) /
+                    (1024.0 * 1024.0));
     std::printf("  Events processed: %zu\n",
                 agg_results.total_events_processed);
     std::printf("  Unique aggregation keys: %zu\n",
                 agg_results.aggregations.size());
-    std::printf(
-        "  Throughput: %.2f MB/s, %.2f events/s\n",
-        (static_cast<double>(agg_results.total_bytes_processed) / (1024.0 * 1024.0)) /
-            (duration.count() / 1000.0),
-        static_cast<double>(agg_results.total_events_processed) / (duration.count() / 1000.0));
+    std::printf("  Throughput: %.2f MB/s, %.2f events/s\n",
+                (static_cast<double>(agg_results.total_bytes_processed) /
+                 (1024.0 * 1024.0)) /
+                    (duration.count() / 1000.0),
+                static_cast<double>(agg_results.total_events_processed) /
+                    (duration.count() / 1000.0));
     std::printf("  Output file: %s\n", output_file.c_str());
     std::printf("  Write status: %s\n", write_success ? "SUCCESS" : "FAILED");
     std::printf("==========================================\n");

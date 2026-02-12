@@ -1,7 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <doctest/doctest.h>
-
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
+#include <doctest/doctest.h>
 
 using namespace dftracer::utils::utilities::composites::dft::aggregators;
 
@@ -93,9 +92,9 @@ TEST_SUITE("AggregationConfig") {
 
         // Both category and name must pass
         CHECK(config.passes_filters("io", "read"));
-        CHECK_FALSE(config.passes_filters("io", "write"));     // name fails
-        CHECK_FALSE(config.passes_filters("net", "read"));     // cat fails
-        CHECK_FALSE(config.passes_filters("net", "write"));    // both fail
+        CHECK_FALSE(config.passes_filters("io", "write"));   // name fails
+        CHECK_FALSE(config.passes_filters("net", "read"));   // cat fails
+        CHECK_FALSE(config.passes_filters("net", "write"));  // both fail
     }
 
     TEST_CASE("AggregationConfig - Empty include list acts as include all") {

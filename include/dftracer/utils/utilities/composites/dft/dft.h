@@ -27,4 +27,7 @@
 // Aggregators
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregators.h>
 
+// Indexing (bloom filters, chunk statistics, chunk indexer, bloom queries)
+#include <dftracer/utils/utilities/composites/dft/indexing/indexing.h>
+
 #endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_DFT_H

@@ -211,13 +211,13 @@ class TaskScope {
         channel.register_producer();
         spawn([&channel, func = std::forward<Func>(generator_func)](
                   TaskContext& ctx) -> coro::CoroTask<void> {
+            auto guard = channel.adopt_producer();
             coro::Generator<T> gen = func(ctx);
 
             for (auto item : gen) {
                 channel.send_blocking(std::move(item));
             }
 
-            channel.release_producer();
             co_return;
         });
     }
@@ -252,13 +252,13 @@ class TaskScope {
         channel->register_producer();
         spawn([channel, func = std::forward<Func>(generator_func)](
                   TaskContext& ctx) -> coro::CoroTask<void> {
+            auto guard = channel->adopt_producer();
             coro::Generator<T> gen = func(ctx);
 
             for (auto item : gen) {
                 channel->send_blocking(std::move(item));
             }
 
-            channel->release_producer();
             co_return;
         });
     }
@@ -268,7 +268,7 @@ class TaskScope {
      *
      * Wrapper around spawn() - runs on COMPUTE thread pool
      * AsyncGenerator supports async value production (co_await per iteration)
-     * Automatically manages producer_guard for proper channel closure
+     * Automatically manages producer lifecycle via adopt_producer()
      *
      * @param channel The channel to send items to (by reference)
      * @param async_generator_func Function returning AsyncGenerator<T>
@@ -296,13 +296,13 @@ class TaskScope {
         channel.register_producer();
         spawn([&channel, func = std::forward<Func>(async_generator_func)](
                   TaskContext& ctx) -> coro::CoroTask<void> {
+            auto guard = channel.adopt_producer();
             coro::AsyncGenerator<T> gen = func(ctx);
 
             while (auto item = co_await gen.next()) {
                 channel.send_blocking(std::move(*item));
             }
 
-            channel.release_producer();
             co_return;
         });
     }
@@ -335,15 +335,68 @@ class TaskScope {
         channel->register_producer();
         spawn([channel, func = std::forward<Func>(async_generator_func)](
                   TaskContext& ctx) -> coro::CoroTask<void> {
+            auto guard = channel->adopt_producer();
             coro::AsyncGenerator<T> gen = func(ctx);
 
             while (auto item = co_await gen.next()) {
                 channel->send_blocking(std::move(*item));
             }
 
-            channel->release_producer();
             co_return;
         });
+    }
+
+    /**
+     * Spawn N producers that each run a coroutine producing into Channel<T>
+     *
+     * Pre-registers all producers, then spawns N coroutines each with an
+     * adopt_producer() guard for automatic cleanup.
+     *
+     * @param channel The channel to send items to (shared_ptr)
+     * @param count Number of parallel producer instances
+     * @param producer_func Function to run in each producer
+     *                      Signature: (TaskContext&, std::size_t index) ->
+     *                      CoroTask<void>
+     *
+     * Example:
+     * @code
+     * scope.spawn_producers(channel, 4,
+     *     [&](TaskContext& ctx, std::size_t idx) -> coro::CoroTask<void> {
+     *         for (auto& item : get_items_for(idx))
+     *             channel->send_blocking(std::move(item));
+     *         co_return;
+     *     });
+     * @endcode
+     */
+    template <typename T, typename Func>
+    void spawn_producers(std::shared_ptr<coro::Channel<T>> channel,
+                         std::size_t count, Func&& producer_func) {
+        channel->register_producers(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            spawn([channel, func = producer_func,
+                   i](TaskContext& ctx) -> coro::CoroTask<void> {
+                auto guard = channel->adopt_producer();
+                co_await func(ctx, i);
+                co_return;
+            });
+        }
+    }
+
+    /**
+     * Spawn N producers (reference version)
+     */
+    template <typename T, typename Func>
+    void spawn_producers(coro::Channel<T>& channel, std::size_t count,
+                         Func&& producer_func) {
+        channel.register_producers(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            spawn([&channel, func = producer_func,
+                   i](TaskContext& ctx) -> coro::CoroTask<void> {
+                auto guard = channel.adopt_producer();
+                co_await func(ctx, i);
+                co_return;
+            });
+        }
     }
 
     /**
@@ -418,6 +471,72 @@ class TaskScope {
                       TaskContext& ctx) -> coro::CoroTask<void> {
                 while (auto item = co_await ctx.receive_async(channel)) {
                     co_await func(ctx, std::move(*item));
+                }
+                co_return;
+            });
+        }
+    }
+
+    // ========================================================================
+    // Transform (Consumer-Producer Bridge)
+    // ========================================================================
+
+    /**
+     * Spawn N workers that consume from one channel, transform, and produce
+     * into another channel (1:1 mapping).
+     *
+     * Handles producer registration and RAII cleanup on the output channel
+     * automatically. Each worker loops over the input channel and sends
+     * the transformed result to the output channel.
+     *
+     * @param input Input channel to consume from (shared_ptr)
+     * @param output Output channel to produce into (shared_ptr)
+     * @param count Number of parallel transform workers
+     * @param transform_func Function to transform each item
+     *                       Signature: (TaskContext&, TIn) -> CoroTask<TOut>
+     *
+     * Example:
+     * @code
+     * scope.spawn_transforms(chunk_chan, result_chan, 8,
+     *     [](TaskContext& ctx, Chunk chunk) -> coro::CoroTask<Result> {
+     *         auto result = process(chunk);
+     *         co_return result;
+     *     });
+     * @endcode
+     */
+    template <typename TIn, typename TOut, typename Func>
+    void spawn_transforms(std::shared_ptr<coro::Channel<TIn>> input,
+                          std::shared_ptr<coro::Channel<TOut>> output,
+                          std::size_t count, Func&& transform_func) {
+        output->register_producers(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            spawn([input, output, func = transform_func](
+                      TaskContext& ctx) -> coro::CoroTask<void> {
+                auto guard = output->adopt_producer();
+                while (auto item = co_await ctx.receive_async(input)) {
+                    auto result = co_await func(ctx, std::move(*item));
+                    output->send_blocking(std::move(result));
+                }
+                co_return;
+            });
+        }
+    }
+
+    /**
+     * Spawn N transform workers (reference version)
+     */
+    template <typename TIn, typename TOut, typename Func>
+    void spawn_transforms(coro::Channel<TIn>& input,
+                          coro::Channel<TOut>& output, std::size_t count,
+                          Func&& transform_func) {
+        output.register_producers(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            spawn([&input, &output, func = transform_func](
+                      TaskContext& ctx) -> coro::CoroTask<void> {
+                auto guard = output.adopt_producer();
+                while (auto item = co_await ctx.receive_async(input)) {
+                    auto result = co_await func(ctx, std::move(*item));
+                    output.send_blocking(std::move(result));
                 }
                 co_return;
             });

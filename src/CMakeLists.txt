@@ -76,6 +76,27 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/perfetto_trace_writer_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregator_summary_utility.cpp
 
+    # DFT Indexing (bloom filters, statistics, queries)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_chunk_bloom_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_file_bloom_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_chunk_statistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_index_dimension.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_hash_resolution.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_chunk_bloom_filters.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_file_bloom_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_index_dimensions.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_hash_by_resolved.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_resolved_by_hash.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_chunk_bloom_filters.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_file_bloom_filter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_chunk_statistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_hash_resolutions.cpp
+
     # Indexer
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_c.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/helpers.cpp
@@ -649,7 +670,9 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_merge.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_split.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_info.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_aggregator.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_aggregator.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_index.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_gen_fake_trace.cpp)
 
   foreach(bin ${DFTRACER_BINARIES})
     string(REPLACE ".cpp" "" bin_exec ${bin})

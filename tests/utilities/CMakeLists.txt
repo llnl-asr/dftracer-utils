@@ -30,6 +30,12 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/test_index_builder.cpp
     composites/dft/test_metadata_collector.cpp
 
+    # DFT Indexing Composites
+    composites/dft/indexing/test_bloom_filter.cpp
+    composites/dft/indexing/test_chunk_statistics.cpp
+    composites/dft/indexing/test_chunk_indexer.cpp
+    composites/dft/indexing/test_bloom_query.cpp
+
     # DFT Aggregator Composites
     composites/dft/aggregators/test_ddsketch.cpp
     composites/dft/aggregators/test_aggregation_metrics.cpp

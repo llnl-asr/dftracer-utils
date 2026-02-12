@@ -134,7 +134,6 @@ class TestIndexer:
                     assert hasattr(checkpoint, 'c_offset')
                     assert hasattr(checkpoint, 'c_size')
                     assert hasattr(checkpoint, 'bits')
-                    assert hasattr(checkpoint, 'dict_compressed')
                     assert hasattr(checkpoint, 'num_lines')
                     
                     assert isinstance(checkpoint.checkpoint_idx, int)

@@ -1,7 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <doctest/doctest.h>
-
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
+#include <doctest/doctest.h>
 
 #include <cmath>
 

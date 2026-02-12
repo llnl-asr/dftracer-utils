@@ -16,26 +16,33 @@ namespace dftracer::utils::coro {
 /**
  * Channel<T> - Producer-consumer queue for streaming data
  *
- * Usage:
+ * Usage (simple — guard registers and releases automatically):
  * @code
- * Channel<Chunk> channel(1000);
+ * auto channel = make_channel<Chunk>(1000);
  *
- * // Producer task
  * auto producer = make_task([&](TaskContext& ctx) -> CoroTask<void> {
- *     Channel<Chunk>::ProducerGuard guard(&channel);
- *     for (auto chunk : read_chunks()) {
- *         channel.send_blocking(std::move(chunk));
- *     }
- *     // ProducerGuard destructor auto-closes when last producer exits
+ *     auto guard = channel->producer_guard();  // registers
+ *     for (auto chunk : read_chunks())
+ *         channel->send_blocking(std::move(chunk));
+ *     // ~ProducerGuard auto-releases; channel closes when last exits
  * });
+ * @endcode
  *
- * // Consumer task
- * auto consumer = make_task([&](TaskContext& ctx) -> CoroTask<void> {
- *     Chunk chunk;
- *     while (channel.receive(chunk)) {
- *         process(chunk);
- *     }
- * });
+ * Usage (coroutines — pre-register then adopt for RAII release):
+ * @code
+ * auto channel = make_channel<Chunk>(0);
+ *
+ * // Pre-register before spawning so consumers see producers immediately
+ * for (std::size_t i = 0; i < N; ++i)
+ *     channel->register_producer();
+ *
+ * for (std::size_t i = 0; i < N; ++i) {
+ *     scope.spawn([&](TaskContext& ctx) -> CoroTask<void> {
+ *         auto guard = channel->adopt_producer();  // no increment
+ *         // ... work ...
+ *         co_return;  // ~ProducerGuard auto-releases
+ *     });
+ * }
  * @endcode
  */
 template <typename T>
@@ -46,16 +53,25 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      * Automatically closes channel when last producer exits
      */
     class ProducerGuard {
+       public:
+        /// Tag type: adopt an already-registered producer slot (no increment).
+        struct Adopt {};
+
        private:
         Channel* channel_;
 
        public:
+        /// Register a new producer slot.
         explicit ProducerGuard(Channel* ch) : channel_(ch) {
             if (channel_) {
                 channel_->num_producers_.fetch_add(1,
                                                    std::memory_order_relaxed);
             }
         }
+
+        /// Adopt an existing producer registration (no increment).
+        /// Use after register_producer() when you need RAII release only.
+        ProducerGuard(Channel* ch, Adopt) : channel_(ch) {}
 
         ~ProducerGuard() {
             if (!channel_) return;
@@ -141,10 +157,28 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     ProducerGuard producer_guard() { return ProducerGuard(this); }
 
     /**
-     * Pre-register a producer before the task actually starts
+     * Adopt an already-registered producer slot as an RAII guard.
+     * Call register_producer() first, then adopt_producer() inside the
+     * coroutine/thread to get automatic release on scope exit.
+     */
+    ProducerGuard adopt_producer() {
+        return ProducerGuard(this, typename ProducerGuard::Adopt{});
+    }
+
+    /**
+     * Pre-register a single producer before the task actually starts
      */
     void register_producer() {
         num_producers_.fetch_add(1, std::memory_order_release);
+    }
+
+    /**
+     * Pre-register multiple producers at once
+     */
+    void register_producers(std::size_t n) {
+        if (n > 0) {
+            num_producers_.fetch_add(n, std::memory_order_release);
+        }
     }
 
     /**

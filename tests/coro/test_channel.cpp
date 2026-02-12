@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/core/tasks/task_scope.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -973,4 +974,388 @@ TEST_CASE(
         }
     }
     CHECK(total_produced.load() == expected_sum);
+}
+
+// ============================================================================
+// adopt_producer() and register_producer() Tests
+// ============================================================================
+
+TEST_CASE("Channel - adopt_producer() basic") {
+    Channel<int> channel(10);
+
+    CHECK(channel.num_producers() == 0);
+
+    // Pre-register, then adopt
+    channel.register_producer();
+    CHECK(channel.num_producers() == 1);
+
+    {
+        auto guard = channel.adopt_producer();  // no increment
+        CHECK(channel.num_producers() == 1);    // still 1
+    }
+    // guard destroyed -> released
+    CHECK(channel.num_producers() == 0);
+    CHECK(channel.is_closed() == true);
+}
+
+TEST_CASE("Channel - register_producer() bulk") {
+    Channel<int> channel(10);
+
+    channel.register_producers(5);
+    CHECK(channel.num_producers() == 5);
+
+    // Adopt and release one at a time
+    for (int i = 0; i < 5; ++i) {
+        auto guard = channel.adopt_producer();
+        CHECK(channel.num_producers() == static_cast<std::size_t>(5 - i));
+    }
+    // All released
+    CHECK(channel.num_producers() == 0);
+    CHECK(channel.is_closed() == true);
+}
+
+TEST_CASE("Channel - register_producers(0) is a no-op") {
+    Channel<int> channel(10);
+
+    channel.register_producers(0);
+    CHECK(channel.num_producers() == 0);
+}
+
+TEST_CASE("Channel - adopt_producer() with threads") {
+    Channel<int> channel(100);
+
+    constexpr int NUM_PRODUCERS = 4;
+    constexpr int ITEMS_PER_PRODUCER = 250;
+    std::atomic<int> total_produced{0};
+    std::atomic<int> total_consumed{0};
+
+    // Pre-register all producers
+    channel.register_producers(NUM_PRODUCERS);
+
+    // Producer threads use adopt_producer()
+    std::vector<std::thread> producers;
+    for (int p = 0; p < NUM_PRODUCERS; ++p) {
+        producers.emplace_back([&, p]() {
+            auto guard = channel.adopt_producer();  // RAII release
+            for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+                int value = p * 1000 + i;
+                channel.send_blocking(value);
+                total_produced.fetch_add(value);
+            }
+        });
+    }
+
+    // Consumer thread
+    std::thread consumer([&]() {
+        int value;
+        while (channel.receive(value)) {
+            total_consumed.fetch_add(value);
+        }
+    });
+
+    for (auto& t : producers) t.join();
+    consumer.join();
+
+    CHECK(total_produced.load() == total_consumed.load());
+}
+
+TEST_CASE("Channel - adopt_producer() with scope.spawn() pattern") {
+    auto channel = coro::make_channel<int>(100);
+
+    constexpr int NUM_PRODUCERS = 4;
+    constexpr int ITEMS_PER_PRODUCER = 50;
+    std::atomic<int> total_produced{0};
+    std::atomic<int> total_consumed{0};
+
+    auto streaming_task = make_task(
+        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+            co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+                // Pre-register before spawning
+                channel->register_producers(NUM_PRODUCERS);
+
+                // Spawn producers that adopt pre-registered slots
+                for (int p = 0; p < NUM_PRODUCERS; ++p) {
+                    scope.spawn(
+                        [&, p](TaskContext& /*pctx*/) -> coro::CoroTask<void> {
+                            auto guard = channel->adopt_producer();
+                            for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+                                int value = p * 1000 + i;
+                                channel->send_blocking(value);
+                                total_produced.fetch_add(value);
+                            }
+                            co_return;
+                        });
+                }
+
+                // Consumer coroutine
+                scope.spawn([&](TaskContext& cctx) -> coro::CoroTask<void> {
+                    while (auto item = co_await cctx.receive_async(channel)) {
+                        total_consumed.fetch_add(*item);
+                    }
+                    co_return;
+                });
+
+                co_return;
+            });
+            co_return;
+        },
+        "ScopeSpawnAdopt");
+
+    auto config = PipelineConfig()
+                      .with_name("AdoptScopeSpawn")
+                      .with_compute_threads(NUM_PRODUCERS + 1)
+                      .with_io_threads(2);
+
+    Pipeline pipeline(config);
+    pipeline.set_source(streaming_task);
+    pipeline.set_destination(streaming_task);
+    pipeline.execute();
+
+    CHECK(total_produced.load() == total_consumed.load());
+    int expected_sum = 0;
+    for (int p = 0; p < NUM_PRODUCERS; ++p) {
+        for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+            expected_sum += p * 1000 + i;
+        }
+    }
+    CHECK(total_produced.load() == expected_sum);
+}
+
+TEST_CASE("Channel - adopt_producer() early exit in scope.spawn()") {
+    auto channel = coro::make_channel<int>(100);
+
+    constexpr int NUM_PRODUCERS = 4;
+    std::atomic<int> total_consumed{0};
+
+    auto streaming_task = make_task(
+        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+            co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+                channel->register_producers(NUM_PRODUCERS);
+
+                // Some producers exit early (simulating skip/error)
+                for (int p = 0; p < NUM_PRODUCERS; ++p) {
+                    scope.spawn(
+                        [&, p](TaskContext& /*pctx*/) -> coro::CoroTask<void> {
+                            auto guard = channel->adopt_producer();
+                            if (p % 2 == 0) {
+                                // Early exit - guard still releases
+                                co_return;
+                            }
+                            for (int i = 0; i < 10; ++i) {
+                                channel->send_blocking(p * 100 + i);
+                            }
+                            co_return;
+                        });
+                }
+
+                // Consumer
+                scope.spawn([&](TaskContext& cctx) -> coro::CoroTask<void> {
+                    while (auto item = co_await cctx.receive_async(channel)) {
+                        total_consumed.fetch_add(1);
+                    }
+                    co_return;
+                });
+
+                co_return;
+            });
+            co_return;
+        },
+        "EarlyExitAdopt");
+
+    auto config = PipelineConfig()
+                      .with_name("AdoptEarlyExit")
+                      .with_compute_threads(NUM_PRODUCERS + 1)
+                      .with_io_threads(2);
+
+    Pipeline pipeline(config);
+    pipeline.set_source(streaming_task);
+    pipeline.set_destination(streaming_task);
+    pipeline.execute();
+
+    // Only producers 1 and 3 send 10 items each
+    CHECK(total_consumed.load() == 20);
+}
+
+TEST_CASE("Channel - adopt_producer() two-stage pipeline with scope.spawn()") {
+    auto stage1 = coro::make_channel<int>(50);
+    auto stage2 = coro::make_channel<int>(50);
+
+    constexpr int NUM_PRODUCERS = 3;
+    constexpr int NUM_WORKERS = 2;
+    constexpr int ITEMS_PER_PRODUCER = 20;
+    std::atomic<int> total_consumed{0};
+
+    auto streaming_task = make_task(
+        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+            co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+                // Stage 1: producers -> stage1 channel
+                stage1->register_producers(NUM_PRODUCERS);
+                for (int p = 0; p < NUM_PRODUCERS; ++p) {
+                    scope.spawn(
+                        [&, p](TaskContext& /*pctx*/) -> coro::CoroTask<void> {
+                            auto guard = stage1->adopt_producer();
+                            for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+                                stage1->send_blocking(p * 1000 + i);
+                            }
+                            co_return;
+                        });
+                }
+
+                // Stage 2: workers read stage1, write stage2
+                stage2->register_producers(NUM_WORKERS);
+                for (int w = 0; w < NUM_WORKERS; ++w) {
+                    scope.spawn([&](TaskContext& wctx) -> coro::CoroTask<void> {
+                        auto guard = stage2->adopt_producer();
+                        while (auto item =
+                                   co_await wctx.receive_async(stage1)) {
+                            stage2->send_blocking(*item * 2);
+                        }
+                        co_return;
+                    });
+                }
+
+                // Final consumer
+                scope.spawn([&](TaskContext& cctx) -> coro::CoroTask<void> {
+                    while (auto item = co_await cctx.receive_async(stage2)) {
+                        total_consumed.fetch_add(1);
+                    }
+                    co_return;
+                });
+
+                co_return;
+            });
+            co_return;
+        },
+        "TwoStagePipeline");
+
+    auto config = PipelineConfig()
+                      .with_name("AdoptTwoStage")
+                      .with_compute_threads(NUM_PRODUCERS + NUM_WORKERS + 1)
+                      .with_io_threads(2);
+
+    Pipeline pipeline(config);
+    pipeline.set_source(streaming_task);
+    pipeline.set_destination(streaming_task);
+    pipeline.execute();
+
+    CHECK(total_consumed.load() == NUM_PRODUCERS * ITEMS_PER_PRODUCER);
+}
+
+// ============================================================================
+// spawn_transforms() Tests
+// ============================================================================
+
+TEST_CASE("Channel - spawn_transforms() basic") {
+    auto input = coro::make_channel<int>(50);
+    auto output = coro::make_channel<int>(50);
+
+    constexpr int NUM_ITEMS = 100;
+    std::atomic<int> total_consumed{0};
+
+    auto streaming_task = make_task(
+        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+            co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+                // Single producer
+                scope.spawn_producer(
+                    input, [](TaskContext& /*ctx*/) -> coro::Generator<int> {
+                        for (int i = 1; i <= NUM_ITEMS; ++i) {
+                            co_yield i;
+                        }
+                    });
+
+                // Transform: square each value
+                scope.spawn_transforms(
+                    input, output, 4,
+                    [](TaskContext& /*ctx*/, int val) -> coro::CoroTask<int> {
+                        co_return val* val;
+                    });
+
+                // Consumer
+                scope.spawn_consumers(
+                    output, 1,
+                    [&](TaskContext& /*ctx*/, int val) -> coro::CoroTask<void> {
+                        total_consumed.fetch_add(val);
+                        co_return;
+                    });
+
+                co_return;
+            });
+            co_return;
+        },
+        "TransformBasic");
+
+    auto config = PipelineConfig()
+                      .with_name("SpawnTransforms")
+                      .with_compute_threads(6)
+                      .with_io_threads(2);
+
+    Pipeline pipeline(config);
+    pipeline.set_source(streaming_task);
+    pipeline.set_destination(streaming_task);
+    pipeline.execute();
+
+    // sum of squares 1..100
+    int expected = 0;
+    for (int i = 1; i <= NUM_ITEMS; ++i) expected += i * i;
+    CHECK(total_consumed.load() == expected);
+}
+
+TEST_CASE("Channel - spawn_transforms() two-stage pipeline") {
+    auto stage1 = coro::make_channel<int>(50);
+    auto stage2 = coro::make_channel<std::string>(50);
+    auto stage3 = coro::make_channel<std::string>(50);
+
+    std::atomic<int> total_consumed{0};
+
+    auto streaming_task = make_task(
+        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+            co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+                // Producer: emit integers
+                scope.spawn_producer(
+                    stage1, [](TaskContext& /*ctx*/) -> coro::Generator<int> {
+                        for (int i = 0; i < 50; ++i) co_yield i;
+                    });
+
+                // Transform 1: int -> string
+                scope.spawn_transforms(
+                    stage1, stage2, 2,
+                    [](TaskContext& /*ctx*/,
+                       int val) -> coro::CoroTask<std::string> {
+                        co_return std::to_string(val);
+                    });
+
+                // Transform 2: string -> string (prefix)
+                scope.spawn_transforms(
+                    stage2, stage3, 2,
+                    [](TaskContext& /*ctx*/,
+                       std::string val) -> coro::CoroTask<std::string> {
+                        co_return "item_" + val;
+                    });
+
+                // Consumer
+                scope.spawn_consumers(
+                    stage3, 1,
+                    [&](TaskContext& /*ctx*/,
+                        std::string /*val*/) -> coro::CoroTask<void> {
+                        total_consumed.fetch_add(1);
+                        co_return;
+                    });
+
+                co_return;
+            });
+            co_return;
+        },
+        "TwoStageTransform");
+
+    auto config = PipelineConfig()
+                      .with_name("ChainedTransforms")
+                      .with_compute_threads(8)
+                      .with_io_threads(2);
+
+    Pipeline pipeline(config);
+    pipeline.set_source(streaming_task);
+    pipeline.set_destination(streaming_task);
+    pipeline.execute();
+
+    CHECK(total_consumed.load() == 50);
 }

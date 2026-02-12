@@ -1,0 +1,1127 @@
+#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/pipeline/pipeline.h>
+#include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
+#include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
+
+#include <argparse/argparse.hpp>
+#include <cstdint>
+#include <cstdio>
+#include <random>
+#include <string>
+#include <vector>
+
+using namespace dftracer::utils;
+using namespace dftracer::utils::utilities;
+using namespace dftracer::utils::utilities::composites::dft;
+using namespace dftracer::utils::utilities::composites::dft::indexing;
+namespace compression = dftracer::utils::utilities::compression;
+namespace io = dftracer::utils::utilities::io;
+
+// ---------------------------------------------------------------------------
+// TraceWriter – compresses via ManualStreamingCompressorUtility and writes
+//               via StreamingFileWriterUtility.  Natural deflate blocks
+//               provide block boundaries for the gzip indexer.
+// ---------------------------------------------------------------------------
+class TraceWriter {
+   public:
+    explicit TraceWriter(const std::string& path) : writer_(path) {}
+
+    ~TraceWriter() { close(); }
+
+    TraceWriter(const TraceWriter&) = delete;
+    TraceWriter& operator=(const TraceWriter&) = delete;
+
+    void write(const std::string& s) {
+        io::RawData raw(s);
+        auto compressed_chunks = compressor_.process(raw);
+        for (const auto& chunk : compressed_chunks) {
+            writer_.process(io::RawData(chunk.data));
+        }
+    }
+
+    void close() {
+        auto final_chunks = compressor_.finalize();
+        for (const auto& chunk : final_chunks) {
+            writer_.process(io::RawData(chunk.data));
+        }
+        writer_.close();
+    }
+
+   private:
+    compression::zlib::ManualStreamingCompressorUtility compressor_;
+    io::StreamingFileWriterUtility writer_;
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Deterministic 16-char hex hash using the project's HasherUtility
+static std::string make_hash(const std::string& name) {
+    hash::HasherUtility hasher;
+    hasher.reset();
+    auto h = hasher.process(name);
+    char buf[17];
+    std::snprintf(buf, sizeof(buf), "%016llx",
+                  static_cast<unsigned long long>(h.value));
+    return std::string(buf);
+}
+
+// +/-30% random variance around base
+static std::uint64_t jitter(std::mt19937_64& rng, std::uint64_t base) {
+    std::uniform_real_distribution<double> dist(0.7, 1.3);
+    return static_cast<std::uint64_t>(static_cast<double>(base) * dist(rng));
+}
+
+// Escape a JSON string value (no surrounding quotes)
+static void json_escape(std::string& out, const std::string& s) {
+    for (char c : s) {
+        switch (c) {
+            case '"':
+                out += "\\\"";
+                break;
+            case '\\':
+                out += "\\\\";
+                break;
+            default:
+                out += c;
+                break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event serialisers – build one JSON line and write it
+// ---------------------------------------------------------------------------
+
+// Metadata event: {"name":"HH"/"FH"/"SH","ph":"M",
+//                  "args":{"hhash":"...","name":"...","value":"..."}}
+static void emit_metadata(TraceWriter& w, const std::string& kind,
+                          const std::string& hhash,
+                          const std::string& resolved_name,
+                          const std::string& hash_value) {
+    std::string buf;
+    buf.reserve(256);
+    buf += R"({"name":")";
+    buf += kind;
+    buf += R"(","ph":"M","args":{"hhash":")";
+    json_escape(buf, hhash);
+    buf += R"(","name":")";
+    json_escape(buf, resolved_name);
+    buf += R"(","value":")";
+    json_escape(buf, hash_value);
+    buf += R"("}})";
+    buf += '\n';
+    w.write(buf);
+}
+
+// Regular event (duration, ph=X)
+struct EventArgs {
+    std::uint64_t pid = 0;
+    std::uint64_t tid = 0;
+    std::string name;
+    std::string cat;
+    std::uint64_t ts = 0;
+    std::uint64_t dur = 0;
+    std::string hhash;
+    std::string fhash;
+    std::string cmd_hash;
+    // Optional extra args appended verbatim (no leading comma)
+    std::string extra;
+};
+
+static void emit_event(TraceWriter& w, const EventArgs& a) {
+    char num_buf[64];
+    std::string buf;
+    buf.reserve(512);
+
+    buf += R"({"name":")";
+    json_escape(buf, a.name);
+    buf += R"(","cat":")";
+    json_escape(buf, a.cat);
+
+    std::snprintf(num_buf, sizeof(num_buf),
+                  R"(","pid":%llu,"tid":%llu,"ts":%llu,"dur":%llu,"ph":"X")",
+                  static_cast<unsigned long long>(a.pid),
+                  static_cast<unsigned long long>(a.tid),
+                  static_cast<unsigned long long>(a.ts),
+                  static_cast<unsigned long long>(a.dur));
+    buf += num_buf;
+
+    buf += R"(,"args":{)";
+
+    buf += R"("hhash":")";
+    json_escape(buf, a.hhash);
+    buf += '"';
+
+    if (!a.fhash.empty()) {
+        buf += R"(,"fhash":")";
+        json_escape(buf, a.fhash);
+        buf += '"';
+    }
+    if (!a.cmd_hash.empty()) {
+        buf += R"(,"cmd_hash":")";
+        json_escape(buf, a.cmd_hash);
+        buf += '"';
+    }
+    if (!a.extra.empty()) {
+        buf += ',';
+        buf += a.extra;
+    }
+
+    buf += R"(}})";
+    buf += '\n';
+    w.write(buf);
+}
+
+// ---------------------------------------------------------------------------
+// Verify: build bloom indices and run queries to prove chunk-skipping works
+// ---------------------------------------------------------------------------
+struct QuerySpec {
+    std::string label;
+    std::unordered_map<std::string, std::vector<std::string>> predicates;
+};
+
+static int run_verify(const std::vector<std::string>& file_paths,
+                      const std::vector<QuerySpec>& queries,
+                      std::size_t ckpt_size) {
+    // Extra dimensions: arbitrary dot-paths into args
+    std::vector<std::string> extra_dims = {"ret", "count", "offset", "epoch",
+                                           "step"};
+
+    std::vector<std::string> all_dimensions = {"name",  "cat",   "pid",  "tid",
+                                               "hhash", "fhash", "shash"};
+    for (const auto& dim : extra_dims) {
+        all_dimensions.push_back(dim);
+    }
+
+    ChunkIndexerConfig indexer_config;
+    indexer_config.expected_entries_per_chunk = 1024;
+    indexer_config.false_positive_rate = 0.01;
+    indexer_config.extra_dimensions = extra_dims;
+
+    std::printf("\n==========================================\n");
+    std::printf("Verify: building bloom indices\n");
+    std::printf("==========================================\n");
+
+    for (const auto& file_path : file_paths) {
+        std::string abs_path = fs::absolute(file_path).string();
+
+        // 1. Build gzip index
+        std::string idx_path = internal::determine_index_path(abs_path, "");
+        auto idx_input = IndexBuildUtilityInput::from_file(abs_path)
+                             .with_checkpoint_size(ckpt_size)
+                             .with_force_rebuild(true)
+                             .with_index(idx_path);
+        IndexBuilderUtility{}.process(idx_input);
+
+        // 2. Collect metadata
+        auto meta_input = MetadataCollectorUtilityInput::from_file(abs_path)
+                              .with_checkpoint_size(ckpt_size)
+                              .with_force_rebuild(false)
+                              .with_index(idx_path);
+        auto metadata = MetadataCollectorUtility{}.process(meta_input);
+
+        if (!metadata.success) {
+            std::fprintf(stderr, "  WARN: metadata failed for %s\n",
+                         abs_path.c_str());
+            continue;
+        }
+
+        // 3. Index chunks and write to .bidx
+        std::string bidx_path = determine_bloom_index_path(abs_path, "");
+        BloomIndexDatabase bidx(bidx_path);
+        bidx.init_schema();
+
+        std::uint64_t file_hash_val = 0;
+        if (fs::exists(abs_path)) {
+            file_hash_val = static_cast<std::uint64_t>(fs::file_size(abs_path));
+        }
+        int fid = bidx.get_or_create_file_info(abs_path, file_hash_val);
+
+        std::size_t file_size = metadata.uncompressed_size;
+        std::size_t num_ckpts = metadata.num_checkpoints;
+
+        struct ChunkWork {
+            std::uint64_t idx;
+            std::size_t start;
+            std::size_t end;
+        };
+        std::vector<ChunkWork> chunks;
+
+        if (num_ckpts == 0) {
+            chunks.push_back({0, 0, file_size});
+        } else {
+            std::size_t bytes_per = file_size / num_ckpts;
+            for (std::size_t i = 0; i < num_ckpts; ++i) {
+                std::size_t start = i * bytes_per;
+                std::size_t end =
+                    (i + 1 == num_ckpts) ? file_size : (i + 1) * bytes_per;
+                chunks.push_back({static_cast<std::uint64_t>(i), start, end});
+            }
+        }
+
+        bidx.begin_transaction();
+        std::unordered_map<std::string, BloomFilter> file_blooms;
+        HashResolutions all_hr;
+        std::size_t total_events = 0;
+
+        for (const auto& chunk : chunks) {
+            ChunkIndexerInput ci;
+            ci.with_file_path(abs_path)
+                .with_idx_path(idx_path)
+                .with_checkpoint_size(ckpt_size)
+                .with_checkpoint_idx(chunk.idx)
+                .with_byte_range(chunk.start, chunk.end)
+                .with_config(indexer_config)
+                .with_batch_size(4 * 1024 * 1024);
+
+            ChunkIndexerUtility idx_util;
+            auto output = idx_util.process(ci);
+            total_events += output.events_processed;
+
+            for (auto& [dim, bloom] : output.bloom_filters) {
+                auto blob = bloom.serialize();
+                queries::insert_chunk_bloom_filter(
+                    bidx.db(), fid, output.checkpoint_idx, dim, blob.data(),
+                    static_cast<int>(blob.size()), bloom.num_entries());
+
+                auto it = file_blooms.find(dim);
+                if (it == file_blooms.end()) {
+                    file_blooms.emplace(dim, std::move(bloom));
+                } else {
+                    it->second.merge_from(bloom);
+                }
+            }
+
+            queries::insert_chunk_statistics(
+                bidx.db(), fid, output.checkpoint_idx, output.statistics);
+
+            for (auto& [dim, resolutions] : output.hash_resolutions) {
+                for (auto& [h, resolved] : resolutions) {
+                    all_hr[dim][h] = resolved;
+                }
+            }
+        }
+
+        for (auto& [dim, bloom] : file_blooms) {
+            auto blob = bloom.serialize();
+            queries::insert_file_bloom_filter(bidx.db(), fid, dim, blob.data(),
+                                              static_cast<int>(blob.size()),
+                                              bloom.num_entries());
+        }
+        for (const auto& [dim, resolutions] : all_hr) {
+            for (const auto& [h, resolved] : resolutions) {
+                queries::insert_hash_resolution(bidx.db(), fid, dim, h,
+                                                resolved);
+            }
+        }
+        for (const auto& dim : all_dimensions) {
+            queries::insert_index_dimension(bidx.db(), fid, dim);
+        }
+
+        bidx.commit_transaction();
+
+        std::string basename = fs::path(abs_path).filename().string();
+        std::printf("  %s: indexed (%zu events, %zu chunks)\n",
+                    basename.c_str(), total_events, chunks.size());
+    }
+
+    // Run queries
+    std::printf("\n==========================================\n");
+    std::printf("Verify: bloom filter query results\n");
+    std::printf("==========================================\n");
+    std::printf("  %-40s  %s  %s\n", "Query", "Files matched",
+                "Chunks skipped");
+    std::printf("  %-40s  %s  %s\n", "----------------------------------------",
+                "-------------", "--------------");
+
+    for (const auto& q : queries) {
+        std::size_t files_matched = 0;
+        std::size_t total_chunks = 0;
+        std::size_t chunks_matched = 0;
+
+        for (const auto& file_path : file_paths) {
+            std::string abs_path = fs::absolute(file_path).string();
+            std::string bidx_path = determine_bloom_index_path(abs_path, "");
+
+            BloomQueryInput input;
+            input.with_bidx_path(bidx_path).with_file_path(abs_path);
+            for (const auto& [dim, vals] : q.predicates) {
+                input.with_predicate(dim, vals);
+            }
+
+            BloomQueryUtility query_util;
+            auto result = query_util.process(input);
+
+            total_chunks += result.total_checkpoints;
+            if (result.file_may_match) {
+                files_matched++;
+                chunks_matched += result.candidate_checkpoints.size();
+            }
+        }
+
+        std::size_t chunks_skipped =
+            total_chunks > 0 ? total_chunks - chunks_matched : 0;
+        std::printf("  %-40s  %zu/%zu          %zu/%zu\n", q.label.c_str(),
+                    files_matched, file_paths.size(), chunks_skipped,
+                    total_chunks);
+    }
+
+    std::printf("==========================================\n");
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// main
+// ---------------------------------------------------------------------------
+int main(int argc, char** argv) {
+    DFTRACER_UTILS_LOGGER_INIT();
+
+    argparse::ArgumentParser program("dftracer_gen_fake_trace",
+                                     DFTRACER_UTILS_PACKAGE_VERSION);
+    program.add_description(
+        "Generate realistic DFTracer traces modeled after UNet3D training. "
+        "Produces per-rank .pfw.gz files with known patterns "
+        "suitable for testing bloom-filter indexing.");
+
+    program.add_argument("-o", "--output-dir")
+        .help("Output directory for trace files")
+        .required();
+
+    program.add_argument("-p", "--num-processes")
+        .help("Number of ranks")
+        .scan<'d', int>()
+        .default_value(4);
+
+    program.add_argument("-H", "--num-hosts")
+        .help("Number of hosts")
+        .scan<'d', int>()
+        .default_value(2);
+
+    program.add_argument("-e", "--num-epochs")
+        .help("Training epochs")
+        .scan<'d', int>()
+        .default_value(100);
+
+    program.add_argument("-s", "--steps-per-epoch")
+        .help("Steps per epoch")
+        .scan<'d', int>()
+        .default_value(500);
+
+    program.add_argument("--checkpoint-every")
+        .help("Checkpoint every N epochs")
+        .scan<'d', int>()
+        .default_value(5);
+
+    program.add_argument("--validation-every")
+        .help("Validate every N epochs")
+        .scan<'d', int>()
+        .default_value(2);
+
+    program.add_argument("--num-train-files")
+        .help("Training data shards")
+        .scan<'d', int>()
+        .default_value(8);
+
+    program.add_argument("--num-val-files")
+        .help("Validation data shards")
+        .scan<'d', int>()
+        .default_value(2);
+
+    program.add_argument("--step-duration-ms")
+        .help("Base step duration in milliseconds")
+        .scan<'d', int>()
+        .default_value(100);
+
+    program.add_argument("--seed")
+        .help("Random seed for duration jitter")
+        .scan<'d', std::uint64_t>()
+        .default_value(static_cast<std::uint64_t>(42));
+
+    program.add_argument("--verify")
+        .help(
+            "After generation, build bloom indices and run queries to "
+            "verify chunk-skipping works")
+        .flag();
+
+    program.add_argument("--checkpoint-size")
+        .help(
+            "Gzip checkpoint size in bytes for indexing (default: 2 MB). "
+            "Smaller values produce more chunks and better demonstrate "
+            "chunk-level bloom filter skipping.")
+        .scan<'d', std::size_t>()
+        .default_value(static_cast<std::size_t>(2 * 1024 * 1024));
+
+    try {
+        program.parse_args(argc, argv);
+    } catch (const std::exception& err) {
+        std::fprintf(stderr, "Error: %s\n", err.what());
+        std::fprintf(stderr, "%s\n", program.help().str().c_str());
+        return 1;
+    }
+
+    const std::string output_dir = program.get<std::string>("--output-dir");
+    const int num_ranks = program.get<int>("--num-processes");
+    const int num_hosts = program.get<int>("--num-hosts");
+    const int num_epochs = program.get<int>("--num-epochs");
+    const int steps_per_epoch = program.get<int>("--steps-per-epoch");
+    const int checkpoint_every = program.get<int>("--checkpoint-every");
+    const int validation_every = program.get<int>("--validation-every");
+    const int num_train_files = program.get<int>("--num-train-files");
+    const int num_val_files = program.get<int>("--num-val-files");
+    const int step_dur_ms = program.get<int>("--step-duration-ms");
+    const std::uint64_t base_seed = program.get<std::uint64_t>("--seed");
+    const bool verify = program.get<bool>("--verify");
+    const std::size_t checkpoint_size =
+        program.get<std::size_t>("--checkpoint-size");
+
+    // Convert base step duration to microseconds
+    const std::uint64_t step_dur_us =
+        static_cast<std::uint64_t>(step_dur_ms) * 1000ULL;
+
+    // Create output directory
+    fs::create_directories(output_dir);
+
+    // -----------------------------------------------------------------------
+    // Pre-compute hashes using project HasherUtility
+    // -----------------------------------------------------------------------
+    std::vector<std::string> host_names(num_hosts);
+    std::vector<std::string> host_hashes(num_hosts);
+    for (int h = 0; h < num_hosts; ++h) {
+        host_names[h] = "node-" + std::to_string(h);
+        host_hashes[h] = make_hash(host_names[h]);
+    }
+
+    std::vector<std::string> train_file_names(num_train_files);
+    std::vector<std::string> train_file_hashes(num_train_files);
+    for (int f = 0; f < num_train_files; ++f) {
+        train_file_names[f] = "/data/train/shard_" + std::to_string(f) + ".h5";
+        train_file_hashes[f] = make_hash(train_file_names[f]);
+    }
+
+    std::vector<std::string> val_file_names(num_val_files);
+    std::vector<std::string> val_file_hashes(num_val_files);
+    for (int f = 0; f < num_val_files; ++f) {
+        val_file_names[f] = "/data/val/val_" + std::to_string(f) + ".h5";
+        val_file_hashes[f] = make_hash(val_file_names[f]);
+    }
+
+    const std::string ckpt_file_name = "/checkpoints/model_ckpt.pt";
+    const std::string ckpt_file_hash = make_hash(ckpt_file_name);
+
+    const std::string script_name = "python train_unet3d.py";
+    const std::string script_hash = make_hash(script_name);
+
+    // -----------------------------------------------------------------------
+    // Banner
+    // -----------------------------------------------------------------------
+    std::printf("==========================================\n");
+    std::printf("DFTracer Fake Trace Generator (UNet3D)\n");
+    std::printf("==========================================\n");
+    std::printf("  Ranks: %d   Hosts: %d\n", num_ranks, num_hosts);
+    std::printf("  Epochs: %d   Steps/epoch: %d\n", num_epochs,
+                steps_per_epoch);
+    std::printf("  Checkpoint every: %d   Validation every: %d\n",
+                checkpoint_every, validation_every);
+    std::printf("  Train shards: %d   Val files: %d\n", num_train_files,
+                num_val_files);
+    std::printf("  Step duration: %d ms   Format: .pfw.gz\n", step_dur_ms);
+    std::printf("  Seed: %llu   Verify: %s\n",
+                static_cast<unsigned long long>(base_seed),
+                verify ? "yes" : "no");
+    std::printf("  Output: %s\n", output_dir.c_str());
+    std::printf("==========================================\n\n");
+
+    std::vector<std::string> generated_files(num_ranks);
+    std::vector<std::size_t> rank_event_counts(num_ranks, 0);
+
+    for (int rank = 0; rank < num_ranks; ++rank) {
+        generated_files[rank] =
+            output_dir + "/rank_" + std::to_string(rank) + ".pfw.gz";
+    }
+
+    // -----------------------------------------------------------------------
+    // Generate one file per rank (parallel via pipeline)
+    // -----------------------------------------------------------------------
+    auto pipeline_config = PipelineConfig::default_config().with_name(
+        "DFTracer Fake Trace Generator");
+    Pipeline pipeline(pipeline_config);
+
+    std::vector<std::shared_ptr<Task>> rank_tasks;
+    for (int rank = 0; rank < num_ranks; ++rank) {
+        auto task = make_task(
+            [&, rank]([[maybe_unused]] TaskContext& ctx)
+                -> coro::CoroTask<std::size_t> {
+                const std::string& path = generated_files[rank];
+                TraceWriter writer(path);
+
+                std::mt19937_64 rng(
+                    base_seed + static_cast<std::uint64_t>(rank) * 10000ULL);
+
+                const int host_idx = rank % num_hosts;
+                const std::string& my_hhash = host_hashes[host_idx];
+                const std::uint64_t pid =
+                    1000 + static_cast<std::uint64_t>(rank);
+                const std::uint64_t tid_main = pid * 10;
+                const std::uint64_t tid_io = pid * 10 + 1;
+
+                // Determine which train shards this rank reads (round-robin)
+                std::vector<int> my_train_shards;
+                for (int f = rank; f < num_train_files; f += num_ranks) {
+                    my_train_shards.push_back(f);
+                }
+                if (my_train_shards.empty()) {
+                    my_train_shards.push_back(rank % num_train_files);
+                }
+
+                // -------------------------------------------------------------------
+                // Metadata header
+                // -------------------------------------------------------------------
+                emit_metadata(writer, "HH", my_hhash, host_names[host_idx],
+                              my_hhash);
+
+                for (int si : my_train_shards) {
+                    emit_metadata(writer, "FH", my_hhash, train_file_names[si],
+                                  train_file_hashes[si]);
+                }
+                for (int vi = 0; vi < num_val_files; ++vi) {
+                    emit_metadata(writer, "FH", my_hhash, val_file_names[vi],
+                                  val_file_hashes[vi]);
+                }
+                emit_metadata(writer, "FH", my_hhash, ckpt_file_name,
+                              ckpt_file_hash);
+                emit_metadata(writer, "SH", my_hhash, script_name, script_hash);
+
+                std::size_t rank_events = 0;
+                std::uint64_t ts = 1000000000ULL;  // 1 second in us
+
+                // -------------------------------------------------------------------
+                // Per epoch
+                // -------------------------------------------------------------------
+                for (int epoch = 0; epoch < num_epochs; ++epoch) {
+                    // Training steps
+                    for (int step = 0; step < steps_per_epoch; ++step) {
+                        char extra[256];
+
+                        // -- Data loading I/O (5-7 events on io thread) --
+                        int shard_idx =
+                            my_train_shards[step % static_cast<int>(
+                                                       my_train_shards.size())];
+                        const std::string& data_fhash =
+                            train_file_hashes[shard_idx];
+                        std::uint64_t io_size = jitter(rng, 4096);
+
+                        // open
+                        {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_io;
+                            a.name = "open";
+                            a.cat = "POSIX";
+                            a.ts = ts;
+                            a.dur = jitter(rng, 5);
+                            a.hhash = my_hhash;
+                            a.fhash = data_fhash;
+                            a.cmd_hash = script_hash;
+                            std::snprintf(extra, sizeof(extra), R"("ret":3)");
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // pread / read / fread (randomly 3-5 calls)
+                        int num_reads = 3 + static_cast<int>(rng() % 3);
+                        const char* read_ops[] = {"pread", "read", "fread"};
+                        for (int r = 0; r < num_reads; ++r) {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_io;
+                            a.name = read_ops[r % 3];
+                            a.cat = "POSIX";
+                            a.ts = ts;
+                            a.dur = jitter(rng, 20);
+                            a.hhash = my_hhash;
+                            a.fhash = data_fhash;
+                            a.cmd_hash = script_hash;
+                            std::uint64_t offset =
+                                static_cast<std::uint64_t>(r) * io_size;
+                            std::snprintf(
+                                extra, sizeof(extra),
+                                R"("ret":%llu,"count":%llu,"offset":%llu)",
+                                static_cast<unsigned long long>(io_size),
+                                static_cast<unsigned long long>(io_size),
+                                static_cast<unsigned long long>(offset));
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // close
+                        {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_io;
+                            a.name = "close";
+                            a.cat = "POSIX";
+                            a.ts = ts;
+                            a.dur = jitter(rng, 3);
+                            a.hhash = my_hhash;
+                            a.fhash = data_fhash;
+                            a.cmd_hash = script_hash;
+                            std::snprintf(extra, sizeof(extra), R"("ret":0)");
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // -- Forward pass (5 events on main thread) --
+                        const char* fwd_ops[] = {"conv3d", "batch_norm", "relu",
+                                                 "max_pool", "upsample"};
+                        for (int f = 0; f < 5; ++f) {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_main;
+                            a.name = fwd_ops[f];
+                            a.cat = "APP";
+                            a.ts = ts;
+                            a.dur = jitter(rng, step_dur_us / 5);
+                            a.hhash = my_hhash;
+                            a.cmd_hash = script_hash;
+                            std::snprintf(extra, sizeof(extra),
+                                          R"("epoch":%d,"step":%d)", epoch,
+                                          step);
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // -- Loss + backward (3 events) --
+                        const char* back_ops[] = {"dice_loss", "backward",
+                                                  "allreduce"};
+                        for (int b = 0; b < 3; ++b) {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_main;
+                            a.name = back_ops[b];
+                            a.cat = "APP";
+                            a.ts = ts;
+                            a.dur = jitter(rng, step_dur_us / 4);
+                            a.hhash = my_hhash;
+                            a.cmd_hash = script_hash;
+                            std::snprintf(extra, sizeof(extra),
+                                          R"("epoch":%d,"step":%d)", epoch,
+                                          step);
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // -- Optimizer step (1 event) --
+                        {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_main;
+                            a.name = "optimizer_step";
+                            a.cat = "APP";
+                            a.ts = ts;
+                            a.dur = jitter(rng, step_dur_us / 8);
+                            a.hhash = my_hhash;
+                            a.cmd_hash = script_hash;
+                            std::snprintf(extra, sizeof(extra),
+                                          R"("epoch":%d,"step":%d)", epoch,
+                                          step);
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+                    }
+
+                    // Validation (every validation_every epochs)
+                    if (validation_every > 0 &&
+                        (epoch + 1) % validation_every == 0) {
+                        const int val_steps = 10;
+                        for (int vs = 0; vs < val_steps; ++vs) {
+                            char extra[256];
+                            int vf_idx = vs % num_val_files;
+                            const std::string& vf_hash =
+                                val_file_hashes[vf_idx];
+                            std::uint64_t vio_size = jitter(rng, 4096);
+
+                            // open
+                            {
+                                EventArgs a;
+                                a.pid = pid;
+                                a.tid = tid_io;
+                                a.name = "open";
+                                a.cat = "POSIX";
+                                a.ts = ts;
+                                a.dur = jitter(rng, 5);
+                                a.hhash = my_hhash;
+                                a.fhash = vf_hash;
+                                a.cmd_hash = script_hash;
+                                std::snprintf(extra, sizeof(extra),
+                                              R"("ret":4)");
+                                a.extra = extra;
+                                emit_event(writer, a);
+                                ts += a.dur;
+                                ++rank_events;
+                            }
+
+                            // read calls (2-3)
+                            int num_reads = 2 + static_cast<int>(rng() % 2);
+                            const char* read_ops[] = {"pread", "read", "fread"};
+                            for (int r = 0; r < num_reads; ++r) {
+                                EventArgs a;
+                                a.pid = pid;
+                                a.tid = tid_io;
+                                a.name = read_ops[r % 3];
+                                a.cat = "POSIX";
+                                a.ts = ts;
+                                a.dur = jitter(rng, 20);
+                                a.hhash = my_hhash;
+                                a.fhash = vf_hash;
+                                a.cmd_hash = script_hash;
+                                std::snprintf(
+                                    extra, sizeof(extra),
+                                    R"("ret":%llu,"count":%llu,"offset":%llu)",
+                                    static_cast<unsigned long long>(vio_size),
+                                    static_cast<unsigned long long>(vio_size),
+                                    static_cast<unsigned long long>(
+                                        static_cast<std::uint64_t>(r) *
+                                        vio_size));
+                                a.extra = extra;
+                                emit_event(writer, a);
+                                ts += a.dur;
+                                ++rank_events;
+                            }
+
+                            // close
+                            {
+                                EventArgs a;
+                                a.pid = pid;
+                                a.tid = tid_io;
+                                a.name = "close";
+                                a.cat = "POSIX";
+                                a.ts = ts;
+                                a.dur = jitter(rng, 3);
+                                a.hhash = my_hhash;
+                                a.fhash = vf_hash;
+                                a.cmd_hash = script_hash;
+                                std::snprintf(extra, sizeof(extra),
+                                              R"("ret":0)");
+                                a.extra = extra;
+                                emit_event(writer, a);
+                                ts += a.dur;
+                                ++rank_events;
+                            }
+
+                            // val_forward
+                            {
+                                EventArgs a;
+                                a.pid = pid;
+                                a.tid = tid_main;
+                                a.name = "val_forward";
+                                a.cat = "APP";
+                                a.ts = ts;
+                                a.dur = jitter(rng, step_dur_us / 3);
+                                a.hhash = my_hhash;
+                                a.cmd_hash = script_hash;
+                                std::snprintf(extra, sizeof(extra),
+                                              R"("epoch":%d,"step":%d)", epoch,
+                                              vs);
+                                a.extra = extra;
+                                emit_event(writer, a);
+                                ts += a.dur;
+                                ++rank_events;
+                            }
+
+                            // val_loss
+                            {
+                                EventArgs a;
+                                a.pid = pid;
+                                a.tid = tid_main;
+                                a.name = "val_loss";
+                                a.cat = "APP";
+                                a.ts = ts;
+                                a.dur = jitter(rng, step_dur_us / 6);
+                                a.hhash = my_hhash;
+                                a.cmd_hash = script_hash;
+                                std::snprintf(extra, sizeof(extra),
+                                              R"("epoch":%d,"step":%d)", epoch,
+                                              vs);
+                                a.extra = extra;
+                                emit_event(writer, a);
+                                ts += a.dur;
+                                ++rank_events;
+                            }
+                        }
+                    }
+
+                    // Checkpoint (every checkpoint_every epochs)
+                    if (checkpoint_every > 0 &&
+                        (epoch + 1) % checkpoint_every == 0) {
+                        char extra[256];
+
+                        // open checkpoint file
+                        {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_io;
+                            a.name = "open";
+                            a.cat = "POSIX";
+                            a.ts = ts;
+                            a.dur = jitter(rng, 10);
+                            a.hhash = my_hhash;
+                            a.fhash = ckpt_file_hash;
+                            a.cmd_hash = script_hash;
+                            std::snprintf(extra, sizeof(extra), R"("ret":5)");
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // pwrite calls (10-20)
+                        int num_writes = 10 + static_cast<int>(rng() % 11);
+                        for (int wr = 0; wr < num_writes; ++wr) {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_io;
+                            a.name = (wr % 2 == 0) ? "pwrite" : "write";
+                            a.cat = "POSIX";
+                            a.ts = ts;
+                            a.dur = jitter(rng, 50);
+                            a.hhash = my_hhash;
+                            a.fhash = ckpt_file_hash;
+                            a.cmd_hash = script_hash;
+                            std::uint64_t wr_size =
+                                jitter(rng, 1048576);  // ~1 MB
+                            std::snprintf(
+                                extra, sizeof(extra),
+                                R"("ret":%llu,"count":%llu,"offset":%llu)",
+                                static_cast<unsigned long long>(wr_size),
+                                static_cast<unsigned long long>(wr_size),
+                                static_cast<unsigned long long>(
+                                    static_cast<std::uint64_t>(wr) * wr_size));
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // fsync
+                        {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_io;
+                            a.name = "fsync";
+                            a.cat = "POSIX";
+                            a.ts = ts;
+                            a.dur = jitter(rng, 200);
+                            a.hhash = my_hhash;
+                            a.fhash = ckpt_file_hash;
+                            a.cmd_hash = script_hash;
+                            std::snprintf(extra, sizeof(extra), R"("ret":0)");
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // close
+                        {
+                            EventArgs a;
+                            a.pid = pid;
+                            a.tid = tid_io;
+                            a.name = "close";
+                            a.cat = "POSIX";
+                            a.ts = ts;
+                            a.dur = jitter(rng, 3);
+                            a.hhash = my_hhash;
+                            a.fhash = ckpt_file_hash;
+                            a.cmd_hash = script_hash;
+                            std::snprintf(extra, sizeof(extra), R"("ret":0)");
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ts += a.dur;
+                            ++rank_events;
+                        }
+                    }
+                }
+
+                writer.close();
+                rank_event_counts[rank] = rank_events;
+                co_return rank_events;
+            },
+            "Rank-" + std::to_string(rank));
+        rank_tasks.push_back(task);
+    }
+
+    pipeline.set_source(rank_tasks);
+    pipeline.execute();
+
+    std::size_t total_events = 0;
+    for (int rank = 0; rank < num_ranks; ++rank) {
+        std::printf("  rank %d: %zu events -> %s\n", rank,
+                    rank_event_counts[rank], generated_files[rank].c_str());
+        total_events += rank_event_counts[rank];
+    }
+
+    // -----------------------------------------------------------------------
+    // Summary banner
+    // -----------------------------------------------------------------------
+    std::printf("\n==========================================\n");
+    std::printf("Generation complete\n");
+    std::printf("==========================================\n");
+    std::printf("  Total events: %zu\n", total_events);
+    std::printf("  Total files:  %d\n", num_ranks);
+    std::printf("\nInteresting queries for bloom filter testing:\n");
+    std::printf(
+        "  1. name=pwrite                   (checkpoint I/O, ~%d%% of "
+        "epochs)\n",
+        checkpoint_every > 0 ? 100 / checkpoint_every : 0);
+    std::printf("  2. fhash=%s  (validation data, ~%d%% of epochs)\n",
+                val_file_hashes[0].c_str(),
+                validation_every > 0 ? 100 / validation_every : 0);
+    if (!train_file_hashes.empty()) {
+        std::printf("  3. fhash=%s  (rank-specific train shard)\n",
+                    train_file_hashes[0].c_str());
+    }
+    std::printf("  4. hhash=%s  (host-specific, %s)\n", host_hashes[0].c_str(),
+                host_names[0].c_str());
+    std::printf("  5. name=allreduce                (every step, dense)\n");
+    std::printf(
+        "  6. name=fsync                    (checkpoint only, sparse)\n");
+    std::printf("==========================================\n");
+
+    // -----------------------------------------------------------------------
+    // Verify mode: build bloom indices and run queries
+    // -----------------------------------------------------------------------
+    if (verify) {
+        std::vector<QuerySpec> test_queries;
+
+        // --- Single-dimension queries ---
+
+        // name dimension
+        test_queries.push_back(
+            {"name=pwrite (sparse, ckpt only)", {{"name", {"pwrite"}}}});
+        test_queries.push_back(
+            {"name=allreduce (dense, every step)", {{"name", {"allreduce"}}}});
+        test_queries.push_back(
+            {"name=fsync (sparse, ckpt only)", {{"name", {"fsync"}}}});
+        test_queries.push_back(
+            {"name=val_forward (periodic)", {{"name", {"val_forward"}}}});
+
+        // cat dimension
+        test_queries.push_back(
+            {"cat=POSIX (all I/O events)", {{"cat", {"POSIX"}}}});
+        test_queries.push_back(
+            {"cat=APP (all compute events)", {{"cat", {"APP"}}}});
+
+        // pid dimension (rank-specific)
+        std::string pid0 = std::to_string(1000);
+        test_queries.push_back(
+            {"pid=" + pid0 + " (rank 0 only)", {{"pid", {pid0}}}});
+
+        // tid dimension (io thread vs main thread)
+        std::string tid_io_0 = std::to_string(10001);
+        test_queries.push_back(
+            {"tid=" + tid_io_0 + " (rank 0 io thread)", {{"tid", {tid_io_0}}}});
+
+        // fhash dimension (resolved file names)
+        test_queries.push_back({"fhash=" + val_file_names[0] + " (resolved)",
+                                {{"fhash", {val_file_hashes[0]}}}});
+        if (!train_file_hashes.empty()) {
+            test_queries.push_back(
+                {"fhash=" + train_file_names[0] + " (resolved)",
+                 {{"fhash", {train_file_hashes[0]}}}});
+        }
+        test_queries.push_back(
+            {"fhash=ckpt (resolved)", {{"fhash", {ckpt_file_hash}}}});
+
+        // hhash dimension (host-specific)
+        test_queries.push_back({"hhash=" + host_names[0] + " (resolved)",
+                                {{"hhash", {host_hashes[0]}}}});
+
+        // shash dimension (script hash)
+        test_queries.push_back(
+            {"shash=train_unet3d (resolved)", {{"shash", {script_hash}}}});
+
+        // --- Multi-dimension AND queries ---
+
+        // name AND cat (checkpoint writes that are POSIX I/O)
+        test_queries.push_back({"name=pwrite AND cat=POSIX",
+                                {{"name", {"pwrite"}}, {"cat", {"POSIX"}}}});
+
+        // name AND fhash (fsync on checkpoint file only)
+        test_queries.push_back(
+            {"name=fsync AND fhash=ckpt",
+             {{"name", {"fsync"}}, {"fhash", {ckpt_file_hash}}}});
+
+        // cat AND hhash (POSIX I/O on node-0)
+        test_queries.push_back(
+            {"cat=POSIX AND hhash=" + host_names[0],
+             {{"cat", {"POSIX"}}, {"hhash", {host_hashes[0]}}}});
+
+        // cat AND pid (APP events for rank 0)
+        test_queries.push_back(
+            {"cat=APP AND pid=" + pid0, {{"cat", {"APP"}}, {"pid", {pid0}}}});
+
+        // name AND hhash AND fhash (read on node-0 for train shard 0)
+        if (!train_file_hashes.empty()) {
+            test_queries.push_back(
+                {"name=read AND hhash=" + host_names[0] + " AND fhash=shard_0",
+                 {{"name", {"read"}},
+                  {"hhash", {host_hashes[0]}},
+                  {"fhash", {train_file_hashes[0]}}}});
+        }
+
+        // --- OR-within dimension queries ---
+
+        // name = pwrite OR write (all checkpoint write ops)
+        test_queries.push_back({"name=pwrite|write (ckpt writes)",
+                                {{"name", {"pwrite", "write"}}}});
+
+        // name = open OR close (all open/close ops)
+        test_queries.push_back({"name=open|close (all open/close)",
+                                {{"name", {"open", "close"}}}});
+
+        // fhash = any val file (all validation I/O)
+        test_queries.push_back(
+            {"fhash=any val file (OR)",
+             {{"fhash", std::vector<std::string>(val_file_hashes.begin(),
+                                                 val_file_hashes.end())}}});
+
+        // --- Negative tests ---
+        test_queries.push_back(
+            {"name=NONEXISTENT (expect 0)", {{"name", {"NONEXISTENT"}}}});
+        test_queries.push_back(
+            {"cat=NONEXISTENT (expect 0)", {{"cat", {"NONEXISTENT"}}}});
+        test_queries.push_back({"name=pwrite AND cat=APP (impossible)",
+                                {{"name", {"pwrite"}}, {"cat", {"APP"}}}});
+
+        return run_verify(generated_files, test_queries, checkpoint_size);
+    }
+
+    return 0;
+}

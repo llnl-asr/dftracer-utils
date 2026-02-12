@@ -59,7 +59,9 @@ int main(int argc, char* argv[]) {
     printf("------------------------------------------------------------\n");
     
     for (size_t i = 0; i < stats.num_levels; i++) {
-        double percent = (static_cast<double>(stats.nodes_per_level[i]) / stats.total_nodes) * 100.0;
+        double percent = (stats.total_nodes == 0)
+            ? 0.0
+            : (static_cast<double>(stats.nodes_per_level[i]) / static_cast<double>(stats.total_nodes)) * 100.0;
         printf("%-10zu%-15zu%-20.3f%-14.1f%%\n",
                i, stats.nodes_per_level[i],
                stats.avg_time_per_level_us[i] / 1000.0, percent);

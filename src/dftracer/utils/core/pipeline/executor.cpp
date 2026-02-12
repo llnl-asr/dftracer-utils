@@ -591,16 +591,23 @@ void Executor::drive_coroutine(coro::CoroTask<void> coro,
         // Read awaited_id from promise BEFORE moving coro
         TaskIndex awaited_id = coro.handle().promise().get_awaited_task_id();
 
+        // For IO suspensions (awaited_id == -1), use the task's own ID
+        // as storage key. IO completion resumes the inner coroutine
+        // directly via IO_Continuation; the entry just keeps the
+        // CoroTask alive.
+        TaskIndex storage_key =
+            (awaited_id == -1) ? task->get_id() : awaited_id;
+
         DFTRACER_UTILS_LOG_DEBUG(
-            "Coroutine for task ID %d suspended waiting for task ID %d, "
+            "Coroutine for task ID %d suspended (awaited=%d, key=%d), "
             "storing it",
-            task->get_id(), awaited_id);
+            task->get_id(), awaited_id, storage_key);
 
         // Reset the awaited task id in promise before storing
         coro.handle().promise().set_awaited_task_id(-1);
 
         auto coro_ptr = std::make_unique<coro::CoroTask<void>>(std::move(coro));
-        store_suspended_coro(awaited_id, std::move(coro_ptr), task);
+        store_suspended_coro(storage_key, std::move(coro_ptr), task);
     }
 }
 

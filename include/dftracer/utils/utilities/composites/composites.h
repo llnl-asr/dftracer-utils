@@ -23,6 +23,9 @@
 #include <dftracer/utils/utilities/composites/line_batch_processor_utility.h>
 #include <dftracer/utils/utilities/composites/streaming_file_merger_utility.h>
 
+// General-purpose composites
+#include <dftracer/utils/utilities/composites/json_parser_utility.h>
+
 // DFTracer-specific composites
 #include <dftracer/utils/utilities/composites/dft/dft.h>
 

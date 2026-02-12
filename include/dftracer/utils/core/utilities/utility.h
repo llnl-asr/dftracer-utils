@@ -26,6 +26,7 @@ namespace dftracer::utils::utilities {
 // Forward declare tags namespace
 namespace tags {
 struct NeedsContext;
+struct Parallelizable;
 }  // namespace tags
 
 /**

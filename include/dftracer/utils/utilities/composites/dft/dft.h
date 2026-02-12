@@ -24,4 +24,7 @@
 // Utilities
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 
+// Aggregators
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregators.h>
+
 #endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_DFT_H

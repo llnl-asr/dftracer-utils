@@ -30,6 +30,12 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/test_index_builder.cpp
     composites/dft/test_metadata_collector.cpp
 
+    # DFT Aggregator Composites
+    composites/dft/aggregators/test_ddsketch.cpp
+    composites/dft/aggregators/test_aggregation_metrics.cpp
+    composites/dft/aggregators/test_aggregation_key.cpp
+    composites/dft/aggregators/test_aggregation_config.cpp
+
     # Compression
     compression/zlib/test_compressor.cpp
     compression/zlib/test_decompressor.cpp

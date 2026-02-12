@@ -12,15 +12,16 @@ template <typename Promise>
 bool IOAwaitable<T>::await_suspend(std::coroutine_handle<Promise> h) {
     continuation_ = h;
 
-    // Mark as awaiting async work
+    // Mark local promise as awaiting async work
     if constexpr (requires { h.promise().awaiting_async_; }) {
         h.promise().awaiting_async_ = true;
     }
 
-    // Try to get IOExecutor from the promise chain
+    // Try to get IOExecutor and root promise from the promise chain
     IOExecutor* io_executor = nullptr;
+    PromiseBase* root = nullptr;
     if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
-        auto* root = h.promise().get_root_promise();
+        root = h.promise().get_root_promise();
         if (root) {
             Executor* executor = root->get_executor();
             if (executor) {
@@ -31,6 +32,13 @@ bool IOAwaitable<T>::await_suspend(std::coroutine_handle<Promise> h) {
 
     // If IOExecutor is available and running, submit async I/O
     if (io_executor && io_executor->is_running() && io_func_) {
+        // Signal root promise so drive_coroutine stops its resume loop.
+        // awaited_task_id stays -1; drive_coroutine uses the task's own
+        // ID as the storage key for IO-suspended coros.
+        if (root) {
+            root->awaiting_async_ = true;
+        }
+
         // Create a wrapper that captures this IOAwaitable's state
         auto* self = this;
         io_executor->submit_io_operation(
@@ -73,15 +81,16 @@ template <typename Promise>
 bool IOAwaitable<void>::await_suspend(std::coroutine_handle<Promise> h) {
     continuation_ = h;
 
-    // Mark as awaiting async work
+    // Mark local promise as awaiting async work
     if constexpr (requires { h.promise().awaiting_async_; }) {
         h.promise().awaiting_async_ = true;
     }
 
-    // Try to get IOExecutor from the promise chain
+    // Try to get IOExecutor and root promise from the promise chain
     IOExecutor* io_executor = nullptr;
+    PromiseBase* root = nullptr;
     if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
-        auto* root = h.promise().get_root_promise();
+        root = h.promise().get_root_promise();
         if (root) {
             Executor* executor = root->get_executor();
             if (executor) {
@@ -92,6 +101,13 @@ bool IOAwaitable<void>::await_suspend(std::coroutine_handle<Promise> h) {
 
     // If IOExecutor is available and running, submit async I/O
     if (io_executor && io_executor->is_running() && io_func_) {
+        // Signal root promise so drive_coroutine stops its resume loop.
+        // awaited_task_id stays -1; drive_coroutine uses the task's own
+        // ID as the storage key for IO-suspended coros.
+        if (root) {
+            root->awaiting_async_ = true;
+        }
+
         // Create a wrapper that captures this IOAwaitable's state
         auto* self = this;
         io_executor->submit_io_operation(

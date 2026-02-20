@@ -103,6 +103,9 @@ struct ProvenanceSegment {
 std::vector<ProvenanceSegment> query_provenance_segments(
     const SqliteDatabase& db, int source_idx);
 
+std::vector<ProvenanceSegment> query_all_provenance_segments(
+    const SqliteDatabase& db);
+
 std::string query_provenance_info(const SqliteDatabase& db,
                                   const std::string& key);
 

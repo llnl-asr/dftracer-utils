@@ -53,6 +53,28 @@ std::vector<ProvenanceSegment> query_provenance_segments(
     return results;
 }
 
+std::vector<ProvenanceSegment> query_all_provenance_segments(
+    const SqliteDatabase& db) {
+    SqliteStmt stmt(db,
+                    "SELECT source_idx, source_checkpoint, "
+                    "output_line_start, output_line_end, "
+                    "event_count "
+                    "FROM provenance_segments "
+                    "ORDER BY output_line_start;");
+
+    std::vector<ProvenanceSegment> results;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        ProvenanceSegment s;
+        s.source_idx = sqlite3_column_int(stmt, 0);
+        s.source_checkpoint = sqlite3_column_int(stmt, 1);
+        s.output_line_start = sqlite3_column_int(stmt, 2);
+        s.output_line_end = sqlite3_column_int(stmt, 3);
+        s.event_count = sqlite3_column_int(stmt, 4);
+        results.push_back(std::move(s));
+    }
+    return results;
+}
+
 std::string query_provenance_info(const SqliteDatabase& db,
                                   const std::string& key) {
     SqliteStmt stmt(db,

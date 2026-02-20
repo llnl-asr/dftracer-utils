@@ -81,3 +81,9 @@ venv
 docs/build/
 docs/doxygen/
 docs/source/**/_autosummary/
+
+# LSP
+compile_commands.json
+
+PLANS.md
+docs/plans

@@ -42,6 +42,8 @@ set(UTILITIES_TEST_SOURCES
     # DFT Reorganization Composites
     composites/dft/reorganize/test_reorganization_planner.cpp
     composites/dft/reorganize/test_reorganize_integration.cpp
+    composites/dft/reorganize/test_reconstruction_planner.cpp
+    composites/dft/reorganize/test_reconstruct_integration.cpp
 
     # DFT Views Composites
     composites/dft/views/test_view_definition.cpp

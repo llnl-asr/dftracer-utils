@@ -10,6 +10,7 @@
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
@@ -93,6 +94,12 @@ int main(int argc, char** argv) {
         .scan<'d', std::size_t>()
         .default_value(static_cast<std::size_t>(4));
 
+    program.add_argument("--manifest")
+        .help(
+            "Also build .midx manifest index "
+            "(per-checkpoint event line routing)")
+        .flag();
+
     try {
         program.parse_args(argc, argv);
     } catch (const std::exception& err) {
@@ -114,6 +121,7 @@ int main(int argc, char** argv) {
         program.get<std::size_t>("--expected-entries");
     double false_positive_rate = program.get<double>("--false-positive-rate");
     std::size_t batch_size_mb = program.get<std::size_t>("--read-batch-size");
+    bool build_manifest = program.get<bool>("--manifest");
 
     auto split_string = [](const std::string& str) {
         std::vector<std::string> result;
@@ -160,6 +168,7 @@ int main(int argc, char** argv) {
                         i < extra_dimensions.size() - 1 ? ", " : "\n");
         }
     }
+    std::printf("  Build manifest: %s\n", build_manifest ? "true" : "false");
     std::printf("==========================================\n\n");
 
     // Discover input files
@@ -240,6 +249,38 @@ int main(int argc, char** argv) {
                             total_files_skipped++;
                         }
 
+                        if (build_manifest) {
+                            ManifestIndexBuildInput manifest_input;
+                            manifest_input.file_path = input_files[i];
+                            manifest_input.index_dir = index_dir;
+                            manifest_input.checkpoint_size = checkpoint_size;
+                            manifest_input.batch_size =
+                                batch_size_mb * 1024 * 1024;
+                            manifest_input.force_rebuild = force_rebuild;
+
+                            auto m_utility =
+                                std::make_shared<ManifestIndexBuilderUtility>();
+                            behaviors::BehaviorChain<ManifestIndexBuildInput,
+                                                     ManifestIndexBuildOutput>
+                                m_chain;
+                            behaviors::UtilityExecutor<
+                                ManifestIndexBuildInput,
+                                ManifestIndexBuildOutput,
+                                utilities::tags::NeedsContext>
+                                m_executor(m_utility, std::move(m_chain));
+
+                            auto m_result = m_executor.execute_with_context(
+                                fctx, manifest_input);
+
+                            if (!m_result.success && !m_result.was_skipped) {
+                                DFTRACER_UTILS_LOG_ERROR(
+                                    "Manifest index failed "
+                                    "for %s: %s",
+                                    input_files[i].c_str(),
+                                    m_result.error_message.c_str());
+                            }
+                        }
+
                         co_return;
                     });
                 }
@@ -272,6 +313,9 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < all_dimensions.size(); ++i) {
         std::printf("%s%s", all_dimensions[i].c_str(),
                     i < all_dimensions.size() - 1 ? ", " : "\n");
+    }
+    if (build_manifest) {
+        std::printf("  Manifest index: built\n");
     }
     std::printf("==========================================\n");
 

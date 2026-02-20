@@ -32,6 +32,7 @@ struct ChunkIndexerConfig {
 
     std::size_t expected_entries_per_chunk = 1024;
     double false_positive_rate = 0.01;
+    bool build_manifest = false;
 
     // Compute a hash of this config for change detection
     std::size_t compute_hash() const {
@@ -50,6 +51,7 @@ struct ChunkIndexerConfig {
         }
         hasher.update(expected_entries_per_chunk);
         hasher.update(false_positive_rate);
+        hasher.update(build_manifest);
         return hasher.get_hash().value;
     }
 };
@@ -183,6 +185,17 @@ struct ChunkIndexerInput {
     }
 };
 
+struct EventLineGroup {
+    std::string cat;
+    std::string name;
+    std::vector<std::uint32_t> line_numbers;
+};
+
+struct MetadataLineGroup {
+    std::string meta_type;
+    std::vector<std::uint32_t> line_numbers;
+};
+
 struct ChunkIndexerOutput {
     std::uint64_t checkpoint_idx = 0;
     std::unordered_map<std::string, BloomFilter> bloom_filters;
@@ -190,6 +203,8 @@ struct ChunkIndexerOutput {
     HashResolutions hash_resolutions;
     std::size_t events_processed = 0;
     bool success = false;
+    std::vector<EventLineGroup> event_line_groups;
+    std::vector<MetadataLineGroup> metadata_line_groups;
 };
 
 class ChunkIndexerUtility

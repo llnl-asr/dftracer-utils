@@ -1,0 +1,36 @@
+#include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
+#include <dftracer/utils/utilities/indexer/internal/error.h>
+#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
+
+namespace dftracer::utils::utilities::composites::dft::indexing::queries {
+
+using indexer::internal::IndexerError;
+using indexer::internal::SqliteStmt;
+
+void insert_metadata_lines(const SqliteDatabase& db, int file_info_id,
+                           std::uint64_t checkpoint_idx,
+                           const std::string& meta_type,
+                           const std::vector<std::uint32_t>& line_numbers) {
+    auto blob = pack_line_numbers(line_numbers);
+
+    SqliteStmt stmt(db,
+                    "INSERT OR REPLACE INTO checkpoint_metadata_lines"
+                    "(checkpoint_idx, file_info_id, meta_type, "
+                    "line_numbers) "
+                    "VALUES(?, ?, ?, ?);");
+
+    stmt.bind_int64(1, static_cast<std::int64_t>(checkpoint_idx));
+    stmt.bind_int(2, file_info_id);
+    stmt.bind_text(3, meta_type);
+    stmt.bind_blob(4, blob.data(), static_cast<int>(blob.size()));
+
+    int result = sqlite3_step(stmt);
+    if (result != SQLITE_DONE) {
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Failed to insert metadata lines: " +
+                               std::string(sqlite3_errmsg(db.get())));
+    }
+}
+
+}  // namespace
+   // dftracer::utils::utilities::composites::dft::indexing::queries

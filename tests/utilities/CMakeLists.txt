@@ -35,6 +35,9 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/indexing/test_chunk_statistics.cpp
     composites/dft/indexing/test_chunk_indexer.cpp
     composites/dft/indexing/test_bloom_query.cpp
+    composites/dft/indexing/test_manifest_indexer.cpp
+    composites/dft/indexing/test_manifest_index_builder.cpp
+    composites/dft/indexing/test_manifest_queries.cpp
 
     # DFT Views Composites
     composites/dft/views/test_view_definition.cpp

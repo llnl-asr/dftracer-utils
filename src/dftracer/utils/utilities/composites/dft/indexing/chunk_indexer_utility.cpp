@@ -7,6 +7,7 @@
 #include <yyjson.h>
 
 #include <cstring>
+#include <map>
 #include <string_view>
 
 // Import JsonValue from common json namespace
@@ -141,7 +142,8 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
 
     // If we have existing bloom filters, we need to read the chunk data
     // to populate the missing ones
-    bool need_rescan = !missing_dims.empty();
+    bool collect_manifest = input.config.build_manifest;
+    bool need_rescan = !missing_dims.empty() || collect_manifest;
 
     // Create reader if needed
     std::shared_ptr<reader::internal::Reader> reader;
@@ -192,6 +194,11 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
             static_cast<unsigned long long>(input.checkpoint_idx));
         return output;
     }
+
+    std::uint32_t line_number = 0;
+    std::map<std::pair<std::string, std::string>, std::vector<std::uint32_t>>
+        event_lines;
+    std::map<std::string, std::vector<std::uint32_t>> metadata_lines;
 
     while (!stream->done()) {
         auto chunk = stream->read();
@@ -255,6 +262,11 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
                                             resolved;
                                     }
                                 }
+                            }
+                            if (collect_manifest) {
+                                std::string meta_type(name_sv);
+                                metadata_lines[meta_type].push_back(
+                                    line_number);
                             }
                         } else {
                             // Regular event: index into bloom filters + stats
@@ -352,6 +364,11 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
                                 }
                             }
 
+                            if (collect_manifest) {
+                                event_lines[{std::string(cat_sv),
+                                             std::string(name_sv)}]
+                                    .push_back(line_number);
+                            }
                             output.events_processed++;
                         }
                     }
@@ -360,6 +377,25 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
             }
 
             pos = (newline - data) + 1;
+            line_number++;
+        }
+    }
+
+    if (collect_manifest) {
+        output.event_line_groups.reserve(event_lines.size());
+        for (auto& [key, lines] : event_lines) {
+            EventLineGroup g;
+            g.cat = key.first;
+            g.name = key.second;
+            g.line_numbers = std::move(lines);
+            output.event_line_groups.push_back(std::move(g));
+        }
+        output.metadata_line_groups.reserve(metadata_lines.size());
+        for (auto& [meta_type, lines] : metadata_lines) {
+            MetadataLineGroup g;
+            g.meta_type = meta_type;
+            g.line_numbers = std::move(lines);
+            output.metadata_line_groups.push_back(std::move(g));
         }
     }
 

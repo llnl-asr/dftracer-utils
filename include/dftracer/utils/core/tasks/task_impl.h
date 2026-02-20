@@ -33,10 +33,10 @@ Task::wrap_function(Func&& func) {
                 if constexpr (is_coroutine) {
                     auto user_coro = (*func_ptr)(ctx);
                     if constexpr (std::is_void_v<OutputType>) {
-                        co_await user_coro;
+                        co_await std::move(user_coro);
                         co_return std::any{};
                     } else {
-                        auto result = co_await user_coro;
+                        auto result = co_await std::move(user_coro);
                         co_return std::any(std::move(result));
                     }
                 } else {
@@ -54,10 +54,10 @@ Task::wrap_function(Func&& func) {
                 if constexpr (is_coroutine) {
                     auto user_coro = (*func_ptr)();
                     if constexpr (std::is_void_v<OutputType>) {
-                        co_await user_coro;
+                        co_await std::move(user_coro);
                         co_return std::any{};
                     } else {
-                        auto result = co_await user_coro;
+                        auto result = co_await std::move(user_coro);
                         co_return std::any(std::move(result));
                     }
                 } else {
@@ -104,23 +104,23 @@ Task::wrap_function(Func&& func) {
                         auto user_coro = detail::apply_tuple_with_context(
                             *func_ptr, ctx, typed_input);
                         if constexpr (std::is_void_v<OutputType>) {
-                            co_await user_coro;
+                            co_await std::move(user_coro);
                             co_return std::any{};
                         } else {
-                            auto result = co_await user_coro;
+                            auto result = co_await std::move(user_coro);
                             co_return std::any(std::move(result));
                         }
                     } else {
                         auto user_coro = (*func_ptr)(ctx, typed_input);
                         if constexpr (std::is_void_v<OutputType>) {
-                            co_await user_coro;
+                            co_await std::move(user_coro);
                             co_return std::any{};
                         } else if constexpr (std::is_same_v<OutputType,
                                                             std::any>) {
                             // Already std::any, no need to wrap
-                            co_return co_await user_coro;
+                            co_return co_await std::move(user_coro);
                         } else {
-                            auto result = co_await user_coro;
+                            auto result = co_await std::move(user_coro);
                             co_return std::any(std::move(result));
                         }
                     }
@@ -176,19 +176,19 @@ Task::wrap_function(Func&& func) {
                         auto user_coro =
                             detail::apply_tuple(*func_ptr, typed_input);
                         if constexpr (std::is_void_v<OutputType>) {
-                            co_await user_coro;
+                            co_await std::move(user_coro);
                             co_return std::any{};
                         } else {
-                            auto result = co_await user_coro;
+                            auto result = co_await std::move(user_coro);
                             co_return std::any(std::move(result));
                         }
                     } else {
                         auto user_coro = (*func_ptr)(typed_input);
                         if constexpr (std::is_void_v<OutputType>) {
-                            co_await user_coro;
+                            co_await std::move(user_coro);
                             co_return std::any{};
                         } else {
-                            auto result = co_await user_coro;
+                            auto result = co_await std::move(user_coro);
                             co_return std::any(std::move(result));
                         }
                     }

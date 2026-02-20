@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_TYPES_H
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <cstddef>
@@ -210,14 +211,13 @@ struct hash<dftracer::utils::utilities::composites::DirectoryProcessInput> {
     std::size_t operator()(
         const dftracer::utils::utilities::composites::DirectoryProcessInput&
             input) const {
-        std::size_t h1 = std::hash<std::string>{}(input.directory_path);
-        std::size_t h2 = std::hash<bool>{}(input.recursive);
-        // Hash the extensions vector
-        std::size_t h3 = 0;
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(input.directory_path);
+        hasher.update(input.recursive);
         for (const auto& ext : input.extensions) {
-            h3 ^= std::hash<std::string>{}(ext);
+            hasher.update(ext);
         }
-        return h1 ^ (h2 << 1) ^ (h3 << 2);
+        return hasher.get_hash().value;
     }
 };
 

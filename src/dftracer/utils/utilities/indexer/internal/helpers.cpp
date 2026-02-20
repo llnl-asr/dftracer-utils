@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 // Platform-specific includes for file stats
@@ -63,25 +64,19 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
         return 0;
     }
 
-    // Simple hash accumulator using std::hash
-    std::size_t hash_accumulator = 0;
+    dftracer::utils::utilities::hash::HasherUtility hasher;
     std::vector<unsigned char> buffer(HASH_BUFFER_SIZE);
 
     std::size_t bytes_read = 0;
     while ((bytes_read = std::fread(buffer.data(), 1, buffer.size(), file)) >
            0) {
-        // Create a string_view for the buffer and hash it
         std::string_view chunk(reinterpret_cast<const char *>(buffer.data()),
                                bytes_read);
-        std::size_t chunk_hash = std::hash<std::string_view>{}(chunk);
-
-        // Combine hashes using a simple but effective method
-        hash_accumulator ^= chunk_hash + 0x9e3779b9 + (hash_accumulator << 6) +
-                            (hash_accumulator >> 2);
+        hasher.update(chunk);
     }
     std::fclose(file);
 
-    return static_cast<std::uint64_t>(hash_accumulator);
+    return static_cast<std::uint64_t>(hasher.get_hash().value);
 }
 
 std::uint64_t file_size_bytes(const std::string &path) {

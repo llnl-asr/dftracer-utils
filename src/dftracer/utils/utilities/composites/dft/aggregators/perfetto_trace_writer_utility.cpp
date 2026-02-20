@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/perfetto_trace_writer_utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
 
 #include <algorithm>
@@ -13,7 +14,7 @@ namespace dftracer::utils::utilities::composites::dft::aggregators {
 
 std::uint64_t PerfettoTraceWriterUtility::generate_synthetic_tid(
     const AggregationKey& key) const {
-    std::hash<std::string> hasher;
+    dftracer::utils::utilities::hash::HasherUtility hasher;
     std::string key_str = key.cat + ":" + key.name + ":" +
                           std::to_string(key.pid) + ":" +
                           std::to_string(key.time_bucket);
@@ -26,7 +27,7 @@ std::uint64_t PerfettoTraceWriterUtility::generate_synthetic_tid(
         key_str += ":" + k + "=" + v;
     }
 
-    std::size_t hash = hasher(key_str);
+    std::size_t hash = hasher.process(key_str).value;
     return 1000000000ULL + (hash % 1000000ULL);
 }
 

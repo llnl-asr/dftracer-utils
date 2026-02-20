@@ -6,6 +6,7 @@
 #include <dftracer/utils/utilities/composites/dft/event_hasher_utility.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
 #include <dftracer/utils/utilities/composites/file_merger_utility.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <atomic>
 #include <memory>
@@ -34,12 +35,11 @@ struct StreamingMergeBatchUtility {
 
     void add(std::string content, const dft::EventId& event_id) {
         contents.push_back(std::move(content));
-        std::size_t event_hash = std::hash<std::uint64_t>{}(event_id.id);
-        event_hash ^= std::hash<std::int64_t>{}(event_id.pid) + 0x9e3779b9 +
-                      (event_hash << 6) + (event_hash >> 2);
-        event_hash ^= std::hash<std::int64_t>{}(event_id.tid) + 0x9e3779b9 +
-                      (event_hash << 6) + (event_hash >> 2);
-        batch_hash += event_hash;
+        utilities::hash::HasherUtility hasher;
+        hasher.update(event_id.id);
+        hasher.update(event_id.pid);
+        hasher.update(event_id.tid);
+        batch_hash += hasher.get_hash().value;
     }
 
     std::size_t size() const { return contents.size(); }

@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_IO_TYPES_CHUNK_SPEC_H
 #define DFTRACER_UTILS_UTILITIES_IO_TYPES_CHUNK_SPEC_H
 
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
+
 #include <cstddef>
 #include <string>
 
@@ -50,12 +52,13 @@ template <>
 struct hash<dftracer::utils::utilities::io::ChunkSpec> {
     std::size_t operator()(
         const dftracer::utils::utilities::io::ChunkSpec& spec) const noexcept {
-        std::size_t h1 = std::hash<std::string>{}(spec.file_path);
-        std::size_t h2 = std::hash<std::string>{}(spec.idx_path);
-        std::size_t h3 = std::hash<double>{}(spec.size_mb);
-        std::size_t h4 = std::hash<std::size_t>{}(spec.start_byte);
-        std::size_t h5 = std::hash<std::size_t>{}(spec.end_byte);
-        return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3) ^ (h5 << 4);
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(spec.file_path);
+        hasher.update(spec.idx_path);
+        hasher.update(spec.size_mb);
+        hasher.update(spec.start_byte);
+        hasher.update(spec.end_byte);
+        return hasher.get_hash().value;
     }
 };
 }  // namespace std

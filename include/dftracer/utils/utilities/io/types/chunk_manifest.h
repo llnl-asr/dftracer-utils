@@ -39,13 +39,13 @@ template <>
 struct hash<dftracer::utils::utilities::io::ChunkManifest> {
     std::size_t operator()(const dftracer::utils::utilities::io::ChunkManifest&
                                manifest) const noexcept {
-        std::size_t h1 = std::hash<double>{}(manifest.total_size_mb);
-        std::size_t h2 = 0;
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(manifest.total_size_mb);
         for (const auto& spec : manifest.specs) {
-            h2 ^= std::hash<dftracer::utils::utilities::io::ChunkSpec>{}(spec) +
-                  0x9e3779b9 + (h2 << 6) + (h2 >> 2);
+            hasher.update(
+                std::hash<::dftracer::utils::utilities::io::ChunkSpec>{}(spec));
         }
-        return h1 ^ (h2 << 1);
+        return hasher.get_hash().value;
     }
 };
 }  // namespace std

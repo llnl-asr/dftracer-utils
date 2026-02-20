@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_IO_TYPES_RAW_DATA_H
 #define DFTRACER_UTILS_UTILITIES_IO_TYPES_RAW_DATA_H
 
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
+
 #include <cstring>
 #include <initializer_list>
 #include <string>
@@ -72,13 +74,9 @@ template <>
 struct hash<dftracer::utils::utilities::io::RawData> {
     std::size_t operator()(
         const dftracer::utils::utilities::io::RawData& raw) const noexcept {
-        // Hash the data bytes
-        std::size_t h = 0;
-        for (const auto& byte : raw.data) {
-            h ^= std::hash<unsigned char>{}(byte) + 0x9e3779b9 + (h << 6) +
-                 (h >> 2);
-        }
-        return h;
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(raw.data);
+        return hasher.get_hash().value;
     }
 };
 }  // namespace std

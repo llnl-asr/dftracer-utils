@@ -43,16 +43,10 @@ coverage-view:
 
 # Build and run tests without coverage
 test:
-	@echo "Building and running tests with $(BUILD_TOOL)..."
-	@mkdir -p build_test
-	@cmake -S . -B build_test \
-		-G"$(BUILD_GENERATOR)" \
-		-DCMAKE_BUILD_TYPE=Debug \
-		-DDFTRACER_UTILS_TESTS=ON \
-		-DDFTRACER_UTILS_DEBUG=ON \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-	@cmake --build build_test -j $(NUM_JOBS)
-	@ctest --test-dir build_test --output-on-failure -j $(NUM_JOBS)
+	@echo "Building and running tests..."
+	@cmake --preset tests
+	@cmake --build --preset tests
+	@ctest --preset tests
 
 # Run tests with coverage (requires coverage build)
 test-coverage:

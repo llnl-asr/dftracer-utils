@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_IO_TYPES_COMPRESSED_DATA_H
 #define DFTRACER_UTILS_UTILITIES_IO_TYPES_COMPRESSED_DATA_H
 
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
+
 #include <cstddef>
 #include <vector>
 
@@ -59,16 +61,10 @@ template <>
 struct hash<dftracer::utils::utilities::io::CompressedData> {
     std::size_t operator()(const dftracer::utils::utilities::io::CompressedData&
                                compressed) const noexcept {
-        // Hash the data bytes
-        std::size_t h = 0;
-        for (const auto& byte : compressed.data) {
-            h ^= std::hash<unsigned char>{}(byte) + 0x9e3779b9 + (h << 6) +
-                 (h >> 2);
-        }
-        // Combine with original_size
-        h ^= std::hash<std::size_t>{}(compressed.original_size) + 0x9e3779b9 +
-             (h << 6) + (h >> 2);
-        return h;
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(compressed.data);
+        hasher.update(compressed.original_size);
+        return hasher.get_hash().value;
     }
 };
 }  // namespace std

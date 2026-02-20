@@ -12,8 +12,7 @@ namespace dftracer::utils::utilities::hash {
 /**
  * @brief std::hash-based hasher utility.
  *
- * Note: This is not a true streaming hash - it combines hashes of chunks.
- * Use xxHash variants for better quality streaming hashing.
+ * Combines hashes of chunks using the boost hash_combine technique.
  */
 class StdHasherUtility : public internal::BaseHasherUtility {
    private:

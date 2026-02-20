@@ -8,7 +8,6 @@ need_zlib()
 need_sqlite3()
 need_argparse()
 need_ghc_filesystem()
-need_xxhash()
 need_cpplogger()
 need_yyjson()
 need_nonstd_span()
@@ -216,7 +215,7 @@ else()
 endif()
 
 # Add other dependencies built with CPM
-set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lyyjson -lxxhash")
+set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lyyjson")
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Core Library
@@ -287,7 +286,6 @@ foreach(variant shared static)
     # Link dependencies using helper functions
     link_cpp_logger(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_yyjson(dftracer_utils_core_${variant} ${VARIANT_UPPER})
-    link_xxhash(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_sqlite3(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_zlib(dftracer_utils_core_${variant} ${VARIANT_UPPER})
 

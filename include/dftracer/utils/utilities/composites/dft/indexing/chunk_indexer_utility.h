@@ -36,9 +36,7 @@ struct ChunkIndexerConfig {
 
     // Compute a hash of this config for change detection
     std::size_t compute_hash() const {
-        utilities::hash::HasherUtility hasher(
-            utilities::hash::HashAlgorithm::STD);
-        hasher.reset();
+        utilities::hash::HasherUtility hasher;
         hasher.update(index_name);
         hasher.update(index_cat);
         hasher.update(index_pid);

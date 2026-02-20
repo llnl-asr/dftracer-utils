@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/dft/event_collector_utility.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <cstdint>
 #include <functional>
@@ -31,7 +32,7 @@ using EventHashOutput = std::uint64_t;
 /**
  * @brief Workflow for computing a hash from a collection of EventIds.
  *
- * Uses XXH3 to hash the id, pid, tid fields of each event in order.
+ * Uses HasherUtility to hash the id, pid, tid fields of each event.
  * Events should be sorted before hashing for consistent results.
  */
 class EventHasher : public utilities::Utility<EventHashInput, EventHashOutput> {
@@ -62,12 +63,11 @@ class IncrementalEventHasher
     IncrementalEventHasher() = default;
 
     void update(const EventId& event) {
-        std::size_t event_hash = std::hash<std::uint64_t>{}(event.id);
-        event_hash ^= std::hash<std::int64_t>{}(event.pid) + 0x9e3779b9 +
-                      (event_hash << 6) + (event_hash >> 2);
-        event_hash ^= std::hash<std::int64_t>{}(event.tid) + 0x9e3779b9 +
-                      (event_hash << 6) + (event_hash >> 2);
-        hash_ += event_hash;
+        utilities::hash::HasherUtility hasher;
+        hasher.update(event.id);
+        hasher.update(event.pid);
+        hasher.update(event.tid);
+        hash_ += hasher.get_hash().value;
     }
 
     void update(const std::vector<EventId>& events) {

@@ -855,80 +855,6 @@ endfunction()
 # Hashing and Cryptography Dependencies
 # ==============================================================================
 
-function(need_xxhash)
-  if(NOT xxhash_ADDED)
-    cpmaddpackage(
-      NAME
-      xxhash
-      GITHUB_REPOSITORY
-      Cyan4973/xxHash
-      GIT_TAG
-      v0.8.3
-      OPTIONS
-      "XXHASH_BUILD_XXHSUM OFF"
-      "XXHASH_BUNDLED_MODE ON"
-      SOURCE_SUBDIR
-      cmake_unofficial
-      DOWNLOAD_ONLY
-      YES)
-    if(xxhash_ADDED)
-      set(XXHASH_TARGETS)
-
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        add_library(xxhash_shared SHARED "${xxhash_SOURCE_DIR}/xxhash.c")
-        target_include_directories(
-          xxhash_shared PUBLIC $<BUILD_INTERFACE:${xxhash_SOURCE_DIR}>
-                               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-        set_target_properties(
-          xxhash_shared
-          PROPERTIES OUTPUT_NAME xxhash
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        add_library(xxHash::xxhash ALIAS xxhash_shared)
-        list(APPEND XXHASH_TARGETS xxhash_shared)
-        message(STATUS "Added xxhash shared library")
-      endif()
-
-      if(DFTRACER_UTILS_BUILD_STATIC)
-        add_library(xxhash_static STATIC "${xxhash_SOURCE_DIR}/xxhash.c")
-        target_include_directories(
-          xxhash_static PUBLIC $<BUILD_INTERFACE:${xxhash_SOURCE_DIR}>
-                               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-        set_target_properties(
-          xxhash_static
-          PROPERTIES OUTPUT_NAME xxhash
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        add_library(xxHash::xxhash_static ALIAS xxhash_static)
-        list(APPEND XXHASH_TARGETS xxhash_static)
-        message(STATUS "Added xxhash static library")
-        # If only static is built, make it the default alias
-        if(NOT DFTRACER_UTILS_BUILD_SHARED)
-          add_library(xxHash::xxhash ALIAS xxhash_static)
-        endif()
-      endif()
-
-      install(FILES ${xxhash_SOURCE_DIR}/xxhash.h
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-      if(XXHASH_TARGETS)
-        install(
-          TARGETS ${XXHASH_TARGETS}
-          EXPORT xxhashTargets
-          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-
-        # Install the export set
-        install(
-          EXPORT xxhashTargets
-          FILE xxhashTargets.cmake
-          NAMESPACE xxHash::
-          DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/xxhash)
-      endif()
-    endif()
-  endif()
-endfunction()
-
 function(link_yyjson TARGET_NAME LIBRARY_TYPE)
   # Validate parameters
   if(NOT TARGET_NAME)
@@ -969,50 +895,6 @@ function(link_yyjson TARGET_NAME LIBRARY_TYPE)
     else()
       message(
         FATAL_ERROR "link_yyjson: No yyjson found! Call need_yyjson() first.")
-    endif()
-  endif()
-endfunction()
-
-function(link_xxhash TARGET_NAME LIBRARY_TYPE)
-  # Validate parameters
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_xxhash: TARGET_NAME is required")
-  endif()
-
-  if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
-    message(
-      FATAL_ERROR "link_xxhash: LIBRARY_TYPE must be either STATIC or SHARED")
-  endif()
-
-  if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_xxhash: Target '${TARGET_NAME}' does not exist")
-  endif()
-
-  # Link appropriate xxhash variant Use PUBLIC linkage since xxhash headers may
-  # be included in public headers
-  if(LIBRARY_TYPE STREQUAL "STATIC")
-    # For static libraries, prefer static xxhash if available
-    if(TARGET xxhash_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC xxHash::xxhash_static)
-      message(STATUS "Linked ${TARGET_NAME} to xxhash_static")
-    elseif(TARGET xxhash_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC xxHash::xxhash)
-      message(STATUS "Linked ${TARGET_NAME} to xxhash (shared)")
-    else()
-      message(
-        FATAL_ERROR "link_xxhash: No xxhash found! Call need_xxhash() first.")
-    endif()
-  else() # SHARED
-    # For shared libraries, prefer shared xxhash if available
-    if(TARGET xxhash_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC xxHash::xxhash)
-      message(STATUS "Linked ${TARGET_NAME} to xxhash (shared)")
-    elseif(TARGET xxhash_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC xxHash::xxhash_static)
-      message(STATUS "Linked ${TARGET_NAME} to xxhash_static")
-    else()
-      message(
-        FATAL_ERROR "link_xxhash: No xxhash found! Call need_xxhash() first.")
     endif()
   endif()
 endfunction()

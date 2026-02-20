@@ -1,4 +1,5 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <algorithm>
 #include <cmath>
@@ -84,12 +85,12 @@ BloomFilter BloomFilter::from_blob(const unsigned char* data,
 
 void BloomFilter::compute_hashes(std::string_view value, std::uint64_t& h1,
                                  std::uint64_t& h2) const {
-    std::hash<std::string_view> hasher;
-    h1 = hasher(value);
+    dftracer::utils::utilities::hash::HasherUtility hasher;
+    hasher.update(value);
+    h1 = hasher.get_hash().value;
     // Second hash: mix with a different seed using FNV-like mixing
     std::uint64_t seed = 0x517cc1b727220a95ULL;
-    h2 = hasher(value) * seed + 0x9e3779b97f4a7c15ULL;
-    // Ensure h2 is different from h1
+    h2 = h1 * seed + 0x9e3779b97f4a7c15ULL;
     h2 ^= (h2 >> 33);
     h2 *= 0xff51afd7ed558ccdULL;
     h2 ^= (h2 >> 33);

@@ -1,11 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_HASH_HASHER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_HASH_HASHER_UTILITY_H
 
+#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 #include <dftracer/utils/utilities/hash/internal/base_hasher_utility.h>
 #include <dftracer/utils/utilities/hash/std_hasher_utility.h>
 #include <dftracer/utils/utilities/hash/types.h>
-#include <dftracer/utils/utilities/hash/xxh3_hasher_utility.h>
-#include <dftracer/utils/utilities/hash/xxh64_hasher_utility.h>
 
 #include <memory>
 #include <string_view>
@@ -15,18 +14,18 @@ namespace dftracer::utils::utilities::hash {
 /**
  * @brief Unified hasher utility that can use different algorithms.
  *
- * This utility provides a single interface that can switch between different
- * hash algorithms (XXH3, XXH64, std::hash) using a factory pattern.
+ * This utility provides a single interface that can switch between
+ * different hash algorithms using a factory pattern.
  *
  * Usage:
  * @code
  * auto hasher =
- * std::make_shared<HasherUtility>(HashAlgorithm::XXH3_64);
+ * std::make_shared<HasherUtility>(HashAlgorithm::STD);
  * hasher->reset();
  *
  * hasher->process("chunk1");
  * hasher->process("chunk2");
- * Hash final = hasher->get_hash();  // Get final hash after last process
+ * Hash final = hasher->get_hash();
  *
  * // Or use update() directly for raw data
  * hasher->reset();
@@ -39,7 +38,7 @@ class HasherUtility : public internal::BaseHasherUtility {
     HashAlgorithm algorithm_;
 
    public:
-    explicit HasherUtility(HashAlgorithm algo = HashAlgorithm::XXH3_64)
+    explicit HasherUtility(HashAlgorithm algo = HashAlgorithm::FNV1A_64)
         : algorithm_(algo) {
         create_impl();
     }
@@ -84,17 +83,14 @@ class HasherUtility : public internal::BaseHasherUtility {
    private:
     void create_impl() {
         switch (algorithm_) {
-            case HashAlgorithm::XXH3_64:
-                impl_ = std::make_unique<XXH3HasherUtility>();
-                break;
-            case HashAlgorithm::XXH64:
-                impl_ = std::make_unique<XXH64HasherUtility>();
+            case HashAlgorithm::FNV1A_64:
+                impl_ = std::make_unique<Fnv1aHasherUtility>();
                 break;
             case HashAlgorithm::STD:
                 impl_ = std::make_unique<StdHasherUtility>();
                 break;
             default:
-                impl_ = std::make_unique<StdHasherUtility>();
+                impl_ = std::make_unique<Fnv1aHasherUtility>();
                 break;
         }
     }

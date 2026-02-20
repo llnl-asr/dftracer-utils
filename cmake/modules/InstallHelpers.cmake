@@ -232,54 +232,6 @@ else()
     endif()
 endif()
 
-# XXHASH dependency
-find_library(XXHASH_LIBRARY_BUNDLED
-    NAMES xxhash libxxhash
-    PATHS \${_IMPORT_PREFIX}/lib
-    NO_DEFAULT_PATH
-)
-
-if(XXHASH_LIBRARY_BUNDLED)
-    # Found xxhash that was built with this package
-    find_path(XXHASH_INCLUDE_DIR_BUNDLED
-        NAMES xxhash.h
-        PATHS \${_IMPORT_PREFIX}/include
-        NO_DEFAULT_PATH
-    )
-
-    if(XXHASH_INCLUDE_DIR_BUNDLED)
-        # Create shared target if not exists
-        if(NOT TARGET xxHash::xxhash)
-            add_library(xxHash::xxhash UNKNOWN IMPORTED)
-            set_target_properties(xxHash::xxhash PROPERTIES
-                IMPORTED_LOCATION \"\${XXHASH_LIBRARY_BUNDLED}\"
-                INTERFACE_INCLUDE_DIRECTORIES \"\${XXHASH_INCLUDE_DIR_BUNDLED}\"
-            )
-        endif()
-
-        # Also look for static version
-        find_library(XXHASH_STATIC_LIBRARY_BUNDLED
-            NAMES xxhash_static libxxhash_static
-            PATHS \${_IMPORT_PREFIX}/lib
-            NO_DEFAULT_PATH
-        )
-
-        if(XXHASH_STATIC_LIBRARY_BUNDLED AND NOT TARGET xxHash::xxhash_static)
-            add_library(xxHash::xxhash_static UNKNOWN IMPORTED)
-            set_target_properties(xxHash::xxhash_static PROPERTIES
-                IMPORTED_LOCATION \"\${XXHASH_STATIC_LIBRARY_BUNDLED}\"
-                INTERFACE_INCLUDE_DIRECTORIES \"\${XXHASH_INCLUDE_DIR_BUNDLED}\"
-            )
-        endif()
-    endif()
-else()
-    # Try to find system xxhash (no version check, 0.8+ is widely available)
-    find_dependency(xxHash QUIET)
-    if(NOT xxHash_FOUND)
-        message(WARNING \"xxHash not found. Minimum version 0.8.0 is recommended.\")
-    endif()
-endif()
-
 # YYJSON dependency
 find_library(YYJSON_LIBRARY_BUNDLED
     NAMES yyjson libyyjson

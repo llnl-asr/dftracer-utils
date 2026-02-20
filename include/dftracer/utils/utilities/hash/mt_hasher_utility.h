@@ -23,7 +23,7 @@ namespace dftracer::utils::utilities::hash {
  *
  * // Or specify algorithm
  * auto hasher =
- * std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
+ * std::make_shared<MTHasherUtility>(HashAlgorithm::STD);
  *
  * // Safe to use from multiple threads
  * hasher->reset();
@@ -39,7 +39,7 @@ class MTHasherUtility : public HasherUtility {
     mutable std::mutex mutex_;
 
    public:
-    explicit MTHasherUtility(HashAlgorithm algo = HashAlgorithm::XXH3_64)
+    explicit MTHasherUtility(HashAlgorithm algo = HashAlgorithm::FNV1A_64)
         : HasherUtility(algo) {}
 
     ~MTHasherUtility() override = default;

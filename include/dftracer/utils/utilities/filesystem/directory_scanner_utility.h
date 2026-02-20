@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <functional>
 #include <string>
@@ -112,9 +113,10 @@ struct hash<
     std::size_t operator()(
         const dftracer::utils::utilities::filesystem::
             DirectoryScannerUtilityInput& dir) const noexcept {
-        std::size_t h1 = std::hash<std::string>{}(dir.path.string());
-        std::size_t h2 = std::hash<bool>{}(dir.recursive);
-        return h1 ^ (h2 << 1);
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(dir.path.string());
+        hasher.update(dir.recursive);
+        return hasher.get_hash().value;
     }
 };
 }  // namespace std

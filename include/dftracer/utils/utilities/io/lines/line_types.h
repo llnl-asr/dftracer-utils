@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_IO_LINES_LINE_TYPES_H
 #define DFTRACER_UTILS_UTILITIES_IO_LINES_LINE_TYPES_H
 
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
+
 #include <cstddef>
 #include <functional>
 #include <string>
@@ -137,10 +139,10 @@ template <>
 struct hash<dftracer::utils::utilities::io::lines::Line> {
     std::size_t operator()(
         const dftracer::utils::utilities::io::lines::Line& line) const {
-        // Combine hash of content and line number
-        std::size_t h1 = std::hash<std::string_view>{}(line.content);
-        std::size_t h2 = std::hash<std::size_t>{}(line.line_number);
-        return h1 ^ (h2 << 1);
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(line.content);
+        hasher.update(line.line_number);
+        return hasher.get_hash().value;
     }
 };
 
@@ -148,12 +150,12 @@ template <>
 struct hash<dftracer::utils::utilities::io::lines::LineReadInput> {
     std::size_t operator()(
         const dftracer::utils::utilities::io::lines::LineReadInput& req) const {
-        // Combine hashes of all fields
-        std::size_t h1 = std::hash<std::string>{}(req.file_path);
-        std::size_t h2 = std::hash<std::string>{}(req.idx_path);
-        std::size_t h3 = std::hash<std::size_t>{}(req.start_line);
-        std::size_t h4 = std::hash<std::size_t>{}(req.end_line);
-        return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(req.file_path);
+        hasher.update(req.idx_path);
+        hasher.update(req.start_line);
+        hasher.update(req.end_line);
+        return hasher.get_hash().value;
     }
 };
 
@@ -161,13 +163,13 @@ template <>
 struct hash<dftracer::utils::utilities::io::lines::Lines> {
     std::size_t operator()(const dftracer::utils::utilities::io::lines::Lines&
                                lines) const noexcept {
-        std::size_t h = 0;
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
         for (const auto& line : lines.lines) {
-            h ^=
-                std::hash<dftracer::utils::utilities::io::lines::Line>{}(line) +
-                0x9e3779b9 + (h << 6) + (h >> 2);
+            hasher.update(
+                std::hash<::dftracer::utils::utilities::io::lines::Line>{}(
+                    line));
         }
-        return h;
+        return hasher.get_hash().value;
     }
 };
 

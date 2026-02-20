@@ -26,23 +26,17 @@ TEST_CASE("MTHasherUtility - Basic Operations") {
         CHECK(after_reset.value == 0);
     }
 
-    SUBCASE("Algorithm switching") {
-        auto hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
-        CHECK(hasher->get_algorithm() == HashAlgorithm::XXH3_64);
-
-        hasher->set_algorithm(HashAlgorithm::XXH64);
-        CHECK(hasher->get_algorithm() == HashAlgorithm::XXH64);
-
-        hasher->set_algorithm(HashAlgorithm::STD);
-        CHECK(hasher->get_algorithm() == HashAlgorithm::STD);
+    SUBCASE("Default algorithm is FNV1A_64") {
+        auto hasher = std::make_shared<MTHasherUtility>();
+        CHECK(hasher->get_algorithm() == HashAlgorithm::FNV1A_64);
     }
 }
 
 TEST_CASE("MTHasherUtility - Hash Correctness") {
     SUBCASE("Single update matches direct hasher") {
         auto mt_hasher =
-            std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
-        auto direct_hasher = std::make_shared<XXH3HasherUtility>();
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
+        auto direct_hasher = std::make_shared<Fnv1aHasherUtility>();
 
         mt_hasher->reset();
         direct_hasher->reset();
@@ -58,8 +52,8 @@ TEST_CASE("MTHasherUtility - Hash Correctness") {
 
     SUBCASE("Incremental hashing") {
         auto mt_hasher =
-            std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
-        auto direct_hasher = std::make_shared<XXH3HasherUtility>();
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
+        auto direct_hasher = std::make_shared<Fnv1aHasherUtility>();
 
         mt_hasher->reset();
         direct_hasher->reset();
@@ -76,7 +70,8 @@ TEST_CASE("MTHasherUtility - Hash Correctness") {
 
         CHECK(mt_hash == direct_hash);
 
-        // Single update should match
+        // Single update should match (FNV-1a is
+        // streaming)
         mt_hasher->reset();
         direct_hasher->reset();
 
@@ -92,8 +87,8 @@ TEST_CASE("MTHasherUtility - Hash Correctness") {
 
     SUBCASE("Process method") {
         auto mt_hasher =
-            std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
-        auto direct_hasher = std::make_shared<XXH3HasherUtility>();
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
+        auto direct_hasher = std::make_shared<Fnv1aHasherUtility>();
 
         mt_hasher->reset();
         direct_hasher->reset();
@@ -107,7 +102,8 @@ TEST_CASE("MTHasherUtility - Hash Correctness") {
 
 TEST_CASE("MTHasherUtility - Thread Safety") {
     SUBCASE("Concurrent updates with coordination") {
-        auto hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
+        auto hasher =
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
         hasher->reset();
 
         const int num_threads = 4;
@@ -118,7 +114,7 @@ TEST_CASE("MTHasherUtility - Thread Safety") {
         for (int t = 0; t < num_threads; ++t) {
             threads.emplace_back([hasher, updates_per_thread]() {
                 for (int i = 0; i < updates_per_thread; ++i) {
-                    hasher->update("x");  // Single byte update
+                    hasher->update("x");
                 }
             });
         }
@@ -127,26 +123,24 @@ TEST_CASE("MTHasherUtility - Thread Safety") {
             thread.join();
         }
 
-        // Verify we got some hash (not checking specific value since order is
-        // not guaranteed)
+        // Verify we got some hash
         Hash result = hasher->get_hash();
         CHECK(result.value != 0);
 
         // Compare with sequential updates
-        auto sequential = std::make_shared<XXH3HasherUtility>();
+        auto sequential = std::make_shared<Fnv1aHasherUtility>();
         sequential->reset();
         for (int i = 0; i < num_threads * updates_per_thread; ++i) {
             sequential->update("x");
         }
         Hash sequential_hash = sequential->get_hash();
 
-        // Note: Due to mutex locking, the MT version should produce the same
-        // hash as sequential if all threads are doing the same updates
         CHECK(result == sequential_hash);
     }
 
     SUBCASE("Concurrent get_hash calls") {
-        auto hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
+        auto hasher =
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
         hasher->reset();
         hasher->update("test data");
 
@@ -172,7 +166,8 @@ TEST_CASE("MTHasherUtility - Thread Safety") {
     }
 
     SUBCASE("Concurrent reset and update") {
-        auto hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
+        auto hasher =
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
 
         const int num_iterations = 50;
         std::vector<std::thread> threads;
@@ -197,68 +192,11 @@ TEST_CASE("MTHasherUtility - Thread Safety") {
         }
 
         // Should not crash - that's the main test
-        // Hash value is indeterminate due to race, but should be valid
-        CHECK(true);  // If we got here, thread safety worked
-    }
-
-    SUBCASE("Concurrent algorithm switching") {
-        auto hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
-
-        std::vector<std::thread> threads;
-
-        // Each thread switches algorithm
-        threads.emplace_back([hasher]() {
-            for (int i = 0; i < 20; ++i) {
-                hasher->set_algorithm(HashAlgorithm::XXH3_64);
-                std::this_thread::sleep_for(std::chrono::microseconds(10));
-            }
-        });
-
-        threads.emplace_back([hasher]() {
-            for (int i = 0; i < 20; ++i) {
-                hasher->set_algorithm(HashAlgorithm::XXH64);
-                std::this_thread::sleep_for(std::chrono::microseconds(10));
-            }
-        });
-
-        threads.emplace_back([hasher]() {
-            for (int i = 0; i < 20; ++i) {
-                hasher->set_algorithm(HashAlgorithm::STD);
-                std::this_thread::sleep_for(std::chrono::microseconds(10));
-            }
-        });
-
-        for (auto& thread : threads) {
-            thread.join();
-        }
-
-        // Should not crash
-        HashAlgorithm final_algo = hasher->get_algorithm();
-        CHECK((final_algo == HashAlgorithm::XXH3_64 ||
-               final_algo == HashAlgorithm::XXH64 ||
-               final_algo == HashAlgorithm::STD));
+        CHECK(true);
     }
 }
 
-TEST_CASE("MTHasherUtility - Different Algorithms") {
-    SUBCASE("XXH3_64 algorithm") {
-        auto mt_hasher =
-            std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
-        mt_hasher->reset();
-        mt_hasher->update("test");
-        Hash result = mt_hasher->get_hash();
-        CHECK(result.value != 0);
-    }
-
-    SUBCASE("XXH64 algorithm") {
-        auto mt_hasher =
-            std::make_shared<MTHasherUtility>(HashAlgorithm::XXH64);
-        mt_hasher->reset();
-        mt_hasher->update("test");
-        Hash result = mt_hasher->get_hash();
-        CHECK(result.value != 0);
-    }
-
+TEST_CASE("MTHasherUtility - STD Algorithm") {
     SUBCASE("STD algorithm") {
         auto mt_hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::STD);
         mt_hasher->reset();
@@ -266,55 +204,32 @@ TEST_CASE("MTHasherUtility - Different Algorithms") {
         Hash result = mt_hasher->get_hash();
         CHECK(result.value != 0);
     }
-
-    SUBCASE("Different algorithms produce different hashes") {
-        std::string test_data = "test data for hashing";
-
-        auto xxh3_hasher =
-            std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
-        xxh3_hasher->reset();
-        xxh3_hasher->update(test_data);
-        Hash xxh3_hash = xxh3_hasher->get_hash();
-
-        auto xxh64_hasher =
-            std::make_shared<MTHasherUtility>(HashAlgorithm::XXH64);
-        xxh64_hasher->reset();
-        xxh64_hasher->update(test_data);
-        Hash xxh64_hash = xxh64_hasher->get_hash();
-
-        auto std_hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::STD);
-        std_hasher->reset();
-        std_hasher->update(test_data);
-        Hash std_hash = std_hasher->get_hash();
-
-        // Different algorithms should produce different hashes (very likely)
-        CHECK(xxh3_hash.value != xxh64_hash.value);
-        CHECK(xxh3_hash.value != std_hash.value);
-        CHECK(xxh64_hash.value != std_hash.value);
-    }
 }
 
 TEST_CASE("MTHasherUtility - Edge Cases") {
     SUBCASE("Empty string") {
-        auto hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
+        auto hasher =
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
         hasher->reset();
         hasher->update("");
         Hash result = hasher->get_hash();
-        CHECK(result.value != 0);  // Empty string still has a hash
+        CHECK(result.value != 0);
     }
 
     SUBCASE("Large data") {
-        auto hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
+        auto hasher =
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
         hasher->reset();
 
-        std::string large_data(1024 * 1024, 'x');  // 1MB of 'x'
+        std::string large_data(1024 * 1024, 'x');
         hasher->update(large_data);
         Hash result = hasher->get_hash();
         CHECK(result.value != 0);
     }
 
     SUBCASE("Many small updates") {
-        auto hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
+        auto hasher =
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
         hasher->reset();
 
         for (int i = 0; i < 1000; ++i) {
@@ -325,7 +240,8 @@ TEST_CASE("MTHasherUtility - Edge Cases") {
     }
 
     SUBCASE("Binary data") {
-        auto hasher = std::make_shared<MTHasherUtility>(HashAlgorithm::XXH3_64);
+        auto hasher =
+            std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
         hasher->reset();
 
         std::vector<unsigned char> binary_data = {0x00, 0x01, 0x02, 0xFF, 0xFE};

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_IO_STREAMING_H
 #define DFTRACER_UTILS_UTILITIES_IO_STREAMING_H
 
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <dftracer/utils/utilities/io/types/types.h>
 
 #include <functional>
@@ -61,9 +62,10 @@ struct hash<dftracer::utils::utilities::io::StreamReadInput> {
     std::size_t operator()(
         const dftracer::utils::utilities::io::StreamReadInput& req)
         const noexcept {
-        std::size_t h1 = std::hash<std::string>{}(req.path.string());
-        std::size_t h2 = std::hash<std::size_t>{}(req.chunk_size);
-        return h1 ^ (h2 << 1);
+        ::dftracer::utils::utilities::hash::HasherUtility hasher;
+        hasher.update(req.path.string());
+        hasher.update(req.chunk_size);
+        return hasher.get_hash().value;
     }
 };
 }  // namespace std

@@ -4,9 +4,11 @@
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/hash/types.h>
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace dftracer::utils::utilities::hash::internal {
 
@@ -71,6 +73,26 @@ class BaseHasherUtility : public utilities::Utility<std::string, Hash> {
     update(const T& value) {
         update(
             std::string_view(reinterpret_cast<const char*>(&value), sizeof(T)));
+    }
+
+    /**
+     * @brief Update the hash with a vector of raw bytes.
+     *
+     * @param data Vector of unsigned char to hash
+     */
+    void update(const std::vector<unsigned char>& data) {
+        update(std::string_view(reinterpret_cast<const char*>(data.data()),
+                                data.size()));
+    }
+
+    /**
+     * @brief Combine a hash value into a seed (boost-style).
+     *
+     * @param seed The seed to combine into
+     * @param value The hash value to combine
+     */
+    static void hash_combine(std::size_t& seed, std::size_t value) {
+        seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
 
     /**

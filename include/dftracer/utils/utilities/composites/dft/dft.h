@@ -30,4 +30,7 @@
 // Indexing (bloom filters, chunk statistics, chunk indexer, bloom queries)
 #include <dftracer/utils/utilities/composites/dft/indexing/indexing.h>
 
+// Statistics (trace statistics, aggregation, querying)
+#include <dftracer/utils/utilities/composites/dft/statistics/statistics.h>
+
 #endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_DFT_H

@@ -1,10 +1,10 @@
-#include <dftracer/utils/utilities/composites/dft/aggregators/ddsketch.h>
+#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
-namespace dftracer::utils::utilities::composites::dft::aggregators {
+namespace dftracer::utils::utilities::common::statistics {
 
 DDSketch::DDSketch(double relative_accuracy)
     : gamma_((1.0 + relative_accuracy) / (1.0 - relative_accuracy)),
@@ -151,4 +151,4 @@ std::size_t DDSketch::memory_usage() const {
            bins_.capacity() * sizeof(std::pair<int, uint64_t>);
 }
 
-}  // namespace dftracer::utils::utilities::composites::dft::aggregators
+}  // namespace dftracer::utils::utilities::common::statistics

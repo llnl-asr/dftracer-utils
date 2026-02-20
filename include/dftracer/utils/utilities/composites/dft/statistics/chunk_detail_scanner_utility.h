@@ -1,0 +1,44 @@
+#ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_CHUNK_DETAIL_SCANNER_UTILITY_H
+#define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_CHUNK_DETAIL_SCANNER_UTILITY_H
+
+#include <dftracer/utils/core/utilities/tags/parallelizable.h>
+#include <dftracer/utils/core/utilities/utility.h>
+#include <dftracer/utils/utilities/composites/dft/statistics/detailed_statistics.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace dftracer::utils::utilities::composites::dft::statistics {
+
+struct ChunkDetailScanInput {
+    std::string file_path;
+    std::string idx_path;
+    std::size_t checkpoint_size = 0;
+    std::size_t start_byte = 0;
+    std::size_t end_byte = 0;
+    std::uint64_t checkpoint_idx = 0;
+    std::size_t batch_size = 4 * 1024 * 1024;
+    std::vector<std::string> filter_names;
+    std::vector<std::string> filter_categories;
+    std::vector<std::string> group_by;
+};
+
+struct ChunkDetailScanOutput {
+    DetailedStatistics stats;
+    bool success = false;
+};
+
+class ChunkDetailScannerUtility
+    : public utilities::Utility<ChunkDetailScanInput, ChunkDetailScanOutput,
+                                utilities::tags::Parallelizable> {
+   public:
+    ChunkDetailScannerUtility() = default;
+
+    ChunkDetailScanOutput process(const ChunkDetailScanInput& input) override;
+};
+
+}  // namespace dftracer::utils::utilities::composites::dft::statistics
+
+#endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_CHUNK_DETAIL_SCANNER_UTILITY_H

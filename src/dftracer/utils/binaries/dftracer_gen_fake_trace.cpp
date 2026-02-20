@@ -405,22 +405,22 @@ int main(int argc, char** argv) {
     program.add_argument("-p", "--num-processes")
         .help("Number of ranks")
         .scan<'d', int>()
-        .default_value(4);
+        .default_value(8);
 
     program.add_argument("-H", "--num-hosts")
         .help("Number of hosts")
         .scan<'d', int>()
-        .default_value(2);
+        .default_value(4);
 
     program.add_argument("-e", "--num-epochs")
         .help("Training epochs")
         .scan<'d', int>()
-        .default_value(100);
+        .default_value(500);
 
     program.add_argument("-s", "--steps-per-epoch")
         .help("Steps per epoch")
         .scan<'d', int>()
-        .default_value(500);
+        .default_value(1000);
 
     program.add_argument("--checkpoint-every")
         .help("Checkpoint every N epochs")

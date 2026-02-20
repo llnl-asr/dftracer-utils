@@ -1,9 +1,9 @@
-#include <dftracer/utils/utilities/composites/json_parser_utility.h>
+#include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/io/file_reader_utility.h>
 
 #include <cstring>
 
-namespace dftracer::utils::utilities::composites {
+namespace dftracer::utils::utilities::common::json {
 
 JsonValue JsonValue::at(const char* path) const {
     if (!val_ || !path) return JsonValue(nullptr);
@@ -91,4 +91,4 @@ void StringJsonParserUtility::reset() {
     content_ = utilities::text::Text{};
 }
 
-}  // namespace dftracer::utils::utilities::composites
+}  // namespace dftracer::utils::utilities::common::json

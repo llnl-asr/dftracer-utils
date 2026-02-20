@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_METRICS_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_METRICS_H
 
-#include <dftracer/utils/utilities/composites/dft/aggregators/ddsketch.h>
+#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 
 #include <cstdint>
 #include <limits>
@@ -9,6 +9,9 @@
 #include <unordered_map>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
+
+// Import DDSketch from common statistics
+using common::statistics::DDSketch;
 
 struct MetricStats {
     std::uint64_t total = 0;

@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_ASSOCIATION_TRACKER_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_ASSOCIATION_TRACKER_H
 
+#include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
-#include <dftracer/utils/utilities/composites/json_parser_utility.h>
 
 #include <cstdint>
 #include <string>
@@ -11,6 +11,9 @@
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
+
+// Import JsonValue from common json namespace
+using dftracer::utils::utilities::common::json::JsonValue;
 
 struct BoundaryInterval {
     std::string name;

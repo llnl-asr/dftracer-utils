@@ -3,12 +3,12 @@
 
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
+#include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
-#include <dftracer/utils/utilities/composites/json_parser_utility.h>
 
 #include <cstddef>
 #include <memory>
@@ -16,6 +16,9 @@
 #include <unordered_map>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
+
+// Import JsonValue from common json namespace
+using dftracer::utils::utilities::common::json::JsonValue;
 
 struct ChunkAggregatorInput {
     std::string file_path;

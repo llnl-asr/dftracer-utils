@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_DDSKETCH_H
-#define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_DDSKETCH_H
+#ifndef DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_DDSKETCH_H
+#define DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_DDSKETCH_H
 
 #include <cstddef>
 #include <cstdint>
@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils::utilities::composites::dft::aggregators {
+namespace dftracer::utils::utilities::common::statistics {
 
 /// Deterministic, merge-order-independent percentile estimation using
 /// fixed logarithmic bins. Merges are commutative — A+B+C always produces
@@ -51,6 +51,6 @@ class DDSketch {
     void add_to_bin(int index, uint64_t count);
 };
 
-}  // namespace dftracer::utils::utilities::composites::dft::aggregators
+}  // namespace dftracer::utils::utilities::common::statistics
 
-#endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_DDSKETCH_H
+#endif  // DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_DDSKETCH_H

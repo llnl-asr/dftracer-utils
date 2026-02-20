@@ -36,8 +36,15 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/indexing/test_chunk_indexer.cpp
     composites/dft/indexing/test_bloom_query.cpp
 
+    # DFT Statistics Composites
+    composites/dft/statistics/test_trace_statistics.cpp
+    composites/dft/statistics/test_statistics_aggregator.cpp
+    composites/dft/statistics/test_statistics_query.cpp
+    common/statistics/test_log2_histogram.cpp
+    composites/dft/statistics/test_detailed_statistics.cpp
+
     # DFT Aggregator Composites
-    composites/dft/aggregators/test_ddsketch.cpp
+    common/statistics/test_ddsketch.cpp
     composites/dft/aggregators/test_aggregation_metrics.cpp
     composites/dft/aggregators/test_aggregation_key.cpp
     composites/dft/aggregators/test_aggregation_config.cpp

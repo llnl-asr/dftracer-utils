@@ -64,6 +64,14 @@ std::vector<std::string> query_index_dimensions(const SqliteDatabase& db,
 bool has_index_dimension(const SqliteDatabase& db, int file_info_id,
                          const std::string& dimension);
 
+struct ChunkStatisticsResult {
+    std::uint64_t checkpoint_idx;
+    ChunkStatistics stats;
+};
+
+std::vector<ChunkStatisticsResult> query_chunk_statistics(
+    const SqliteDatabase& db, int file_info_id);
+
 std::vector<std::string> query_hash_by_resolved(
     const SqliteDatabase& db, const std::string& dimension,
     const std::string& resolved_value);

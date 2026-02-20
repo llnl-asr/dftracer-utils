@@ -1,0 +1,198 @@
+#include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
+#include <yyjson.h>
+
+#include <algorithm>
+#include <cstdio>
+#include <sstream>
+
+namespace dftracer::utils::utilities::common::statistics {
+
+std::size_t Log2Histogram::bin_index(std::uint64_t value) {
+    if (value == 0) return 0;
+    // floor(log2(value)) + 1
+    // __builtin_clzll: count leading zeros for unsigned long long (64-bit)
+    return static_cast<std::size_t>(63 - __builtin_clzll(value)) + 1;
+}
+
+std::uint64_t Log2Histogram::bin_lower(std::size_t bin) {
+    if (bin == 0) return 0;
+    if (bin == 1) return 1;
+    return static_cast<std::uint64_t>(1) << (bin - 1);
+}
+
+std::uint64_t Log2Histogram::bin_upper(std::size_t bin) {
+    if (bin == 0) return 0;
+    if (bin >= 64) return std::numeric_limits<std::uint64_t>::max();
+    return (static_cast<std::uint64_t>(1) << bin);
+}
+
+void Log2Histogram::add(std::uint64_t value, std::uint64_t count) {
+    std::size_t idx = bin_index(value);
+    bins_[idx] += count;
+    total_count_ += count;
+}
+
+void Log2Histogram::merge(const Log2Histogram& other) {
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        bins_[i] += other.bins_[i];
+    }
+    total_count_ += other.total_count_;
+}
+
+double Log2Histogram::approx_percentile(double p) const {
+    if (total_count_ == 0) return 0.0;
+    if (p <= 0.0) return 0.0;
+    if (p >= 1.0) {
+        // Find the highest non-empty bin
+        for (std::size_t i = NUM_BINS; i > 0; --i) {
+            if (bins_[i - 1] > 0) {
+                return static_cast<double>(bin_upper(i - 1));
+            }
+        }
+        return 0.0;
+    }
+
+    double target = p * static_cast<double>(total_count_);
+    double cumulative = 0.0;
+
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+        cumulative += static_cast<double>(bins_[i]);
+        if (cumulative >= target) {
+            // Interpolate within the bin
+            double prev_cumulative = cumulative - static_cast<double>(bins_[i]);
+            double fraction =
+                (target - prev_cumulative) / static_cast<double>(bins_[i]);
+            double lo = static_cast<double>(bin_lower(i));
+            double hi = static_cast<double>(bin_upper(i));
+            return lo + fraction * (hi - lo);
+        }
+    }
+
+    return 0.0;
+}
+
+namespace {
+std::string format_count(std::uint64_t count) {
+    if (count < 1000) return std::to_string(count);
+    std::string s = std::to_string(count);
+    std::string result;
+    int pos = 0;
+    int len = static_cast<int>(s.size());
+    for (int i = 0; i < len; ++i) {
+        if (pos > 0 && (len - i) % 3 == 0) result += ',';
+        result += s[i];
+        ++pos;
+    }
+    return result;
+}
+
+std::string format_range(std::uint64_t lo, std::uint64_t hi,
+                         const std::string& unit) {
+    char buf[128];
+    if (lo == hi && lo == 0) {
+        std::snprintf(buf, sizeof(buf), "0 %s", unit.c_str());
+    } else {
+        std::snprintf(buf, sizeof(buf), "[%s, %s) %s", format_count(lo).c_str(),
+                      format_count(hi).c_str(), unit.c_str());
+    }
+    return buf;
+}
+}  // namespace
+
+std::string Log2Histogram::render_ascii(std::size_t max_width,
+                                        const std::string& unit) const {
+    if (total_count_ == 0) return "    (no data)\n";
+
+    // Find max count for scaling
+    std::uint64_t max_count = 0;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] > max_count) max_count = bins_[i];
+    }
+
+    std::ostringstream out;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+
+        std::string range = format_range(bin_lower(i), bin_upper(i), unit);
+        std::string count_str = format_count(bins_[i]);
+
+        // Scale bar
+        std::size_t bar_len = 0;
+        if (max_count > 0) {
+            bar_len = static_cast<std::size_t>(static_cast<double>(bins_[i]) /
+                                               static_cast<double>(max_count) *
+                                               static_cast<double>(max_width));
+            if (bar_len == 0 && bins_[i] > 0) bar_len = 1;
+        }
+
+        char line[256];
+        std::snprintf(line, sizeof(line), "    %-24s |%-*s %s\n", range.c_str(),
+                      static_cast<int>(max_width),
+                      std::string(bar_len, '#').c_str(), count_str.c_str());
+        out << line;
+    }
+
+    return out.str();
+}
+
+yyjson_mut_val* Log2Histogram::to_yyjson(yyjson_mut_doc* doc) const {
+    yyjson_mut_val* arr = yyjson_mut_arr(doc);
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+        yyjson_mut_val* pair = yyjson_mut_arr(doc);
+        yyjson_mut_arr_add_uint(doc, pair, static_cast<std::uint64_t>(i));
+        yyjson_mut_arr_add_uint(doc, pair, bins_[i]);
+        yyjson_mut_arr_append(arr, pair);
+    }
+    return arr;
+}
+
+std::string Log2Histogram::to_json() const {
+    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
+    yyjson_mut_val* arr = to_yyjson(doc);
+    yyjson_mut_doc_set_root(doc, arr);
+
+    char* json_str = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, nullptr);
+    std::string result(json_str ? json_str : "[]");
+    if (json_str) free(json_str);
+    yyjson_mut_doc_free(doc);
+    return result;
+}
+
+Log2Histogram Log2Histogram::from_json(const std::string& json) {
+    Log2Histogram hist;
+
+    yyjson_doc* doc =
+        yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
+    if (!doc) return hist;
+
+    yyjson_val* root = yyjson_doc_get_root(doc);
+    if (!root || !yyjson_is_arr(root)) {
+        yyjson_doc_free(doc);
+        return hist;
+    }
+
+    std::size_t idx, max;
+    yyjson_val* pair;
+    yyjson_arr_foreach(root, idx, max, pair) {
+        if (!yyjson_is_arr(pair) || yyjson_arr_size(pair) != 2) continue;
+        yyjson_val* bin_idx_val = yyjson_arr_get(pair, 0);
+        yyjson_val* count_val = yyjson_arr_get(pair, 1);
+        if (!yyjson_is_uint(bin_idx_val) || !yyjson_is_uint(count_val))
+            continue;
+
+        std::size_t bin_idx =
+            static_cast<std::size_t>(yyjson_get_uint(bin_idx_val));
+        std::uint64_t count = yyjson_get_uint(count_val);
+        if (bin_idx < NUM_BINS) {
+            hist.bins_[bin_idx] += count;
+            hist.total_count_ += count;
+        }
+    }
+
+    yyjson_doc_free(doc);
+    return hist;
+}
+
+}  // namespace dftracer::utils::utilities::common::statistics

@@ -13,13 +13,11 @@ constexpr std::size_t HEADER_SIZE =
     12;  // 4 bytes num_hashes + 4 bytes num_entries + 4 bytes num_bits
 
 void write_u32_le(unsigned char* buf, std::uint32_t val) {
-    unsigned char tmp[4] = {
-        static_cast<unsigned char>(val & 0xFF),
-        static_cast<unsigned char>((val >> 8) & 0xFF),
-        static_cast<unsigned char>((val >> 16) & 0xFF),
-        static_cast<unsigned char>((val >> 24) & 0xFF),
-    };
-    std::memcpy(buf, tmp, 4);
+    if (!buf) return;  // Defensive check to silence compiler warning
+    buf[0] = static_cast<unsigned char>(val & 0xFF);
+    buf[1] = static_cast<unsigned char>((val >> 8) & 0xFF);
+    buf[2] = static_cast<unsigned char>((val >> 16) & 0xFF);
+    buf[3] = static_cast<unsigned char>((val >> 24) & 0xFF);
 }
 
 std::uint32_t read_u32_le(const unsigned char* buf) {

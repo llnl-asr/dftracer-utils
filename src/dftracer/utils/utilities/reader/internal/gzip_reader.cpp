@@ -408,33 +408,47 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
                 "end_bytes=%zu, max_bytes=%zu",
                 start_bytes, end_bytes, indexer->get_max_bytes());
         } else {
-            // Use checkpoint to determine byte range
-            if (checkpoints[0].checkpoint_idx == 0) {
+            // Use checkpoint to determine byte range.
+            //
+            // Checkpoint uc_offset values fall at deflate block boundaries
+            // which may land in the middle of a text line.  When we start
+            // decompressing from such a mid-line position the first "line"
+            // seen by MultiLineStream is a partial fragment.  If
+            // actual_start_line == start_line the fragment is emitted as
+            // the requested first line, producing wrong content.
+            //
+            // To avoid this we choose a checkpoint whose last_line_num is
+            // strictly less than (start - 1), guaranteeing
+            // actual_start_line < start.  MultiLineStream then filters
+            // out the (potentially partial) early lines before reaching
+            // the requested range.
+            auto all_checkpoints = indexer->get_checkpoints();
+            bool found_start = false;
+
+            // Walk checkpoints from the end to find the latest one whose
+            // line range ends before (start - 1).
+            for (auto it = all_checkpoints.rbegin();
+                 it != all_checkpoints.rend(); ++it) {
+                if (it->last_line_num < start - 1) {
+                    start_bytes = it->uc_offset;
+                    actual_start_line = it->last_line_num + 1;
+                    found_start = true;
+                    break;
+                }
+            }
+
+            if (!found_start) {
+                // No suitable checkpoint found — start from beginning
                 start_bytes = 0;
                 actual_start_line = 1;
-            } else {
-                // Get previous checkpoint to find starting offset and line
-                // number
-                auto all_checkpoints = indexer->get_checkpoints();
-                // Default to first checkpoint's first line if we can't find
-                // previous
-                for (const auto &prev_ckpt : all_checkpoints) {
-                    if (prev_ckpt.checkpoint_idx ==
-                        checkpoints[0].checkpoint_idx - 1) {
-                        start_bytes = prev_ckpt.uc_offset;
-                        // Line number after previous checkpoint's last line
-                        actual_start_line = prev_ckpt.last_line_num + 1;
-                        break;
-                    }
-                }
             }
 
             const auto &last_checkpoint = checkpoints.back();
             end_bytes = last_checkpoint.uc_offset + last_checkpoint.uc_size;
 
             DFTRACER_UTILS_LOG_DEBUG(
-                "Using checkpoints: start_checkpoint_idx=%zu (first_line=%zu, "
-                "last_line=%zu), "
+                "Using checkpoints: matched_first_idx=%zu "
+                "(first_line=%zu, last_line=%zu), "
                 "end_checkpoint_idx=%zu (first_line=%zu, last_line=%zu), "
                 "byte_range=%zu-%zu, actual_start_line=%zu",
                 checkpoints[0].checkpoint_idx, checkpoints[0].first_line_num,

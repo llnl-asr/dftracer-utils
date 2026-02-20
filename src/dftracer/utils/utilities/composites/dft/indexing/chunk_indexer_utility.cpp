@@ -1,13 +1,16 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
-#include <dftracer/utils/utilities/composites/json_parser_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <yyjson.h>
 
 #include <cstring>
 #include <string_view>
+
+// Import JsonValue from common json namespace
+using dftracer::utils::utilities::common::json::JsonValue;
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
@@ -20,7 +23,7 @@ static const std::string DIM_SHASH = "shash";
 
 // Convert a JsonValue to string for bloom filter insertion.
 // Handles strings, integers, floats, bools.
-std::string json_value_to_string(const composites::JsonValue& val) {
+std::string json_value_to_string(const JsonValue& val) {
     if (val.is_string()) {
         return val.get<std::string>();
     } else if (val.is_uint()) {
@@ -132,7 +135,7 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
                 if (doc) {
                     yyjson_val* root = yyjson_doc_get_root(doc);
                     if (root && yyjson_is_obj(root)) {
-                        composites::JsonValue json(root);
+                        JsonValue json(root);
                         std::string_view ph =
                             json["ph"].get<std::string_view>();
 
@@ -140,7 +143,7 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
                             // Metadata event: collect hash resolutions
                             std::string_view name_sv =
                                 json["name"].get<std::string_view>();
-                            composites::JsonValue args = json["args"];
+                            JsonValue args = json["args"];
 
                             if (args.exists()) {
                                 std::string hash_val =
@@ -198,7 +201,7 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
                                 output.bloom_filters.at("tid").add(tid_str);
                             }
 
-                            composites::JsonValue args = json["args"];
+                            JsonValue args = json["args"];
                             if (args.exists()) {
                                 // Hash dimensions: add hash to bloom
                                 if (input.config.index_hhash) {
@@ -237,8 +240,7 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
                                 // Extra dimensions: arbitrary nested dot-paths
                                 for (const auto& dim :
                                      input.config.extra_dimensions) {
-                                    composites::JsonValue val =
-                                        args.at(dim.c_str());
+                                    JsonValue val = args.at(dim.c_str());
                                     if (val.exists()) {
                                         std::string str_val =
                                             json_value_to_string(val);

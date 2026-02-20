@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_JSON_PARSER_UTILITY_H
-#define DFTRACER_UTILS_UTILITIES_COMPOSITES_JSON_PARSER_UTILITY_H
+#ifndef DFTRACER_UTILS_UTILITIES_COMMON_JSON_JSON_VALUE_H
+#define DFTRACER_UTILS_UTILITIES_COMMON_JSON_JSON_VALUE_H
 
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/text/shared.h>
@@ -14,7 +14,7 @@
 #include <string_view>
 #include <type_traits>
 
-namespace dftracer::utils::utilities::composites {
+namespace dftracer::utils::utilities::common::json {
 
 /**
  * Lightweight zero-cost wrapper around yyjson_val* with convenient accessors.
@@ -202,6 +202,6 @@ class StringJsonParserUtility
     void reset();
 };
 
-}  // namespace dftracer::utils::utilities::composites
+}  // namespace dftracer::utils::utilities::common::json
 
-#endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_JSON_PARSER_UTILITY_H
+#endif  // DFTRACER_UTILS_UTILITIES_COMMON_JSON_JSON_VALUE_H

@@ -271,7 +271,7 @@ class GzipLineByteStream : public GzipStream {
         }
 
         if (newline_pos != SIZE_MAX) {
-            bool at_file_end = target_end_bytes_ >= max_file_bytes_;
+            bool at_file_end = current_position_ >= max_file_bytes_;
             std::size_t remaining = buffer_size - newline_pos;
             if (remaining > 0 && at_file_end) {
                 return buffer_size;
@@ -279,7 +279,7 @@ class GzipLineByteStream : public GzipStream {
             return newline_pos;
         }
 
-        bool at_file_end = target_end_bytes_ >= max_file_bytes_;
+        bool at_file_end = current_position_ >= max_file_bytes_;
         if (is_finished_ || at_file_end) {
             return buffer_size;
         }

@@ -65,6 +65,51 @@ void delete_event_ranges(const SqliteDatabase& db, int file_info_id);
 
 void delete_metadata_lines(const SqliteDatabase& db, int file_info_id);
 
+// --- Provenance operations ---
+
+void insert_provenance_info(const SqliteDatabase& db, const std::string& key,
+                            const std::string& value);
+
+void insert_provenance_source(const SqliteDatabase& db, int file_info_id,
+                              int source_idx, const std::string& path,
+                              int num_checkpoints,
+                              const std::string& event_hash);
+
+void insert_provenance_group(const SqliteDatabase& db, const std::string& name,
+                             const std::string& predicate);
+
+void insert_provenance_segment(const SqliteDatabase& db, int source_idx,
+                               int source_checkpoint, int output_line_start,
+                               int output_line_end, int event_count);
+
+struct ProvenanceSource {
+    int source_idx;
+    std::string path;
+    int num_checkpoints;
+    std::string event_hash;
+};
+
+std::vector<ProvenanceSource> query_provenance_sources(const SqliteDatabase& db,
+                                                       int file_info_id);
+
+struct ProvenanceSegment {
+    int source_idx;
+    int source_checkpoint;
+    int output_line_start;
+    int output_line_end;
+    int event_count;
+};
+
+std::vector<ProvenanceSegment> query_provenance_segments(
+    const SqliteDatabase& db, int source_idx);
+
+std::string query_provenance_info(const SqliteDatabase& db,
+                                  const std::string& key);
+
+std::string query_provenance_group_name(const SqliteDatabase& db);
+
+std::string query_provenance_group_predicate(const SqliteDatabase& db);
+
 }  // namespace
    // dftracer::utils::utilities::composites::dft::indexing::queries
 

@@ -42,6 +42,39 @@ static const char* MANIFEST_INDEX_SCHEMA = R"(
         ON checkpoint_event_ranges(file_info_id, checkpoint_idx);
     CREATE INDEX IF NOT EXISTS idx_metadata_checkpoint
         ON checkpoint_metadata_lines(file_info_id, checkpoint_idx);
+
+    CREATE TABLE IF NOT EXISTS provenance_info (
+        key     TEXT PRIMARY KEY,
+        value   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS provenance_sources (
+        source_idx      INTEGER PRIMARY KEY,
+        file_info_id    INTEGER NOT NULL
+            REFERENCES file_info(id) ON DELETE CASCADE,
+        path            TEXT NOT NULL,
+        num_checkpoints INTEGER NOT NULL,
+        event_hash      TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS provenance_group (
+        name        TEXT NOT NULL,
+        predicate   TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS provenance_segments (
+        segment_id          INTEGER PRIMARY KEY,
+        source_idx          INTEGER NOT NULL
+            REFERENCES provenance_sources(source_idx),
+        source_checkpoint   INTEGER NOT NULL,
+        output_line_start   INTEGER NOT NULL,
+        output_line_end     INTEGER NOT NULL,
+        event_count         INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_provenance_source
+        ON provenance_segments(
+            source_idx, source_checkpoint);
 )";
 
 ManifestIndexDatabase::ManifestIndexDatabase(const std::string& midx_path)

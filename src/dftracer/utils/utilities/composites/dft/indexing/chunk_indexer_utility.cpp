@@ -21,6 +21,12 @@ static const std::string DIM_HHASH = "hhash";
 static const std::string DIM_FHASH = "fhash";
 static const std::string DIM_SHASH = "shash";
 
+// Dimension name constants
+static const std::string DIM_NAME = "name";
+static const std::string DIM_CAT = "cat";
+static const std::string DIM_PID = "pid";
+static const std::string DIM_TID = "tid";
+
 // Convert a JsonValue to string for bloom filter insertion.
 // Handles strings, integers, floats, bools.
 std::string json_value_to_string(const JsonValue& val) {
@@ -38,6 +44,26 @@ std::string json_value_to_string(const JsonValue& val) {
     return {};
 }
 
+// Build set of dimensions to index based on config
+std::vector<std::string> get_target_dimensions(
+    const ChunkIndexerConfig& config) {
+    std::vector<std::string> dims;
+
+    if (config.index_name) dims.push_back(DIM_NAME);
+    if (config.index_cat) dims.push_back(DIM_CAT);
+    if (config.index_pid) dims.push_back(DIM_PID);
+    if (config.index_tid) dims.push_back(DIM_TID);
+    if (config.index_hhash) dims.push_back(DIM_HHASH);
+    if (config.index_fhash) dims.push_back(DIM_FHASH);
+    if (config.index_shash) dims.push_back(DIM_SHASH);
+
+    for (const auto& extra : config.extra_dimensions) {
+        dims.push_back(extra);
+    }
+
+    return dims;
+}
+
 }  // namespace
 
 ChunkIndexerOutput ChunkIndexerUtility::process(
@@ -47,44 +73,107 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
     output.events_processed = 0;
     output.success = false;
 
-    // Initialize bloom filters for each configured dimension
+    // Check if we have existing state for incremental re-scanning
+    const ChunkIndexState* existing = nullptr;
+    if (input.existing_state) {
+        existing = input.existing_state.get();
+    }
+
+    // Determine which dimensions need to be indexed
+    std::vector<std::string> target_dims = get_target_dimensions(input.config);
+    std::vector<std::string> missing_dims;
+
+    if (existing) {
+        // Compute missing dimensions from existing state
+        missing_dims = existing->indexed_dims.missing_dimensions(input.config);
+
+        // Check if config parameters (false_positive_rate,
+        // expected_entries_per_chunk) have changed since last index
+        std::size_t current_hash = input.config.compute_hash();
+        bool config_changed =
+            existing->config_hash != 0 && existing->config_hash != current_hash;
+
+        if (config_changed) {
+            DFTRACER_UTILS_LOG_INFO(
+                "ChunkIndexer: Config changed for checkpoint %llu, "
+                "forcing full re-index",
+                static_cast<unsigned long long>(input.checkpoint_idx));
+            missing_dims = target_dims;
+        }
+
+        // If no dimensions are missing and config hasn't changed, return
+        // existing state
+        if (missing_dims.empty()) {
+            DFTRACER_UTILS_LOG_INFO(
+                "ChunkIndexer: All dimensions already indexed for checkpoint "
+                "%llu, skipping re-scan",
+                static_cast<unsigned long long>(input.checkpoint_idx));
+
+            // Copy existing state to output
+            output.bloom_filters.clear();
+            output.hash_resolutions = existing->hash_resolutions;
+            output.statistics = existing->statistics;
+            output.events_processed = existing->events_processed;
+            output.success = true;
+            return output;
+        }
+
+        DFTRACER_UTILS_LOG_INFO(
+            "ChunkIndexer: Incremental re-scan for checkpoint %llu, "
+            "missing %zu dimensions",
+            static_cast<unsigned long long>(input.checkpoint_idx),
+            missing_dims.size());
+    } else {
+        // No existing state - need to index all dimensions
+        missing_dims = target_dims;
+    }
+
+    // Initialize bloom filters for missing dimensions
     auto make_bloom = [&]() {
         return BloomFilter(input.config.expected_entries_per_chunk,
                            input.config.false_positive_rate);
     };
 
-    if (input.config.index_name)
-        output.bloom_filters.emplace("name", make_bloom());
-    if (input.config.index_cat)
-        output.bloom_filters.emplace("cat", make_bloom());
-    if (input.config.index_pid)
-        output.bloom_filters.emplace("pid", make_bloom());
-    if (input.config.index_tid)
-        output.bloom_filters.emplace("tid", make_bloom());
-    if (input.config.index_hhash)
-        output.bloom_filters.emplace(DIM_HHASH, make_bloom());
-    if (input.config.index_fhash)
-        output.bloom_filters.emplace(DIM_FHASH, make_bloom());
-    if (input.config.index_shash)
-        output.bloom_filters.emplace(DIM_SHASH, make_bloom());
-
-    for (const auto& dim : input.config.extra_dimensions) {
+    // Create bloom filters only for dimensions that need indexing
+    for (const auto& dim : missing_dims) {
         output.bloom_filters.emplace(dim, make_bloom());
     }
 
-    // Create reader
-    auto reader_input = composites::IndexedReadInput::from_file(input.file_path)
-                            .with_checkpoint_size(input.checkpoint_size)
-                            .with_index(input.idx_path);
+    // If we have existing bloom filters, we need to read the chunk data
+    // to populate the missing ones
+    bool need_rescan = !missing_dims.empty();
 
-    composites::IndexedFileReaderUtility reader_utility;
-    auto reader = reader_utility.process(reader_input);
+    // Create reader if needed
+    std::shared_ptr<reader::internal::Reader> reader;
+    if (need_rescan) {
+        auto reader_input =
+            composites::IndexedReadInput::from_file(input.file_path)
+                .with_checkpoint_size(input.checkpoint_size)
+                .with_index(input.idx_path);
 
-    if (!reader) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "ChunkIndexer: Failed to create reader for %s checkpoint %llu",
-            input.file_path.c_str(),
-            static_cast<unsigned long long>(input.checkpoint_idx));
+        composites::IndexedFileReaderUtility reader_utility;
+        reader = reader_utility.process(reader_input);
+
+        if (!reader) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "ChunkIndexer: Failed to create reader for %s checkpoint %llu",
+                input.file_path.c_str(),
+                static_cast<unsigned long long>(input.checkpoint_idx));
+            return output;
+        }
+    }
+
+    // Initialize statistics and hash resolutions
+    if (existing) {
+        // Start with existing statistics and resolutions
+        output.statistics = existing->statistics;
+        output.hash_resolutions = existing->hash_resolutions;
+        output.events_processed = existing->events_processed;
+    }
+
+    if (!need_rescan) {
+        // Nothing to do - all dimensions already indexed
+        output.success = true;
         return output;
     }
 
@@ -181,48 +270,58 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
                             std::uint64_t dur =
                                 json["dur"].get<std::uint64_t>();
 
-                            // Update statistics
+                            // Update statistics (always update for accuracy)
                             output.statistics.update_from_event(
                                 name_sv, cat_sv, pid, tid, ts, dur);
 
-                            // Add to bloom filters
-                            if (input.config.index_name && !name_sv.empty()) {
-                                output.bloom_filters.at("name").add(name_sv);
+                            // Add to bloom filters for missing dimensions only
+                            auto it = output.bloom_filters.find(DIM_NAME);
+                            if (it != output.bloom_filters.end() &&
+                                !name_sv.empty()) {
+                                it->second.add(name_sv);
                             }
-                            if (input.config.index_cat && !cat_sv.empty()) {
-                                output.bloom_filters.at("cat").add(cat_sv);
+
+                            it = output.bloom_filters.find(DIM_CAT);
+                            if (it != output.bloom_filters.end() &&
+                                !cat_sv.empty()) {
+                                it->second.add(cat_sv);
                             }
-                            if (input.config.index_pid) {
+
+                            it = output.bloom_filters.find(DIM_PID);
+                            if (it != output.bloom_filters.end()) {
                                 std::string pid_str = std::to_string(pid);
-                                output.bloom_filters.at("pid").add(pid_str);
+                                it->second.add(pid_str);
                             }
-                            if (input.config.index_tid) {
+
+                            it = output.bloom_filters.find(DIM_TID);
+                            if (it != output.bloom_filters.end()) {
                                 std::string tid_str = std::to_string(tid);
-                                output.bloom_filters.at("tid").add(tid_str);
+                                it->second.add(tid_str);
                             }
 
                             JsonValue args = json["args"];
                             if (args.exists()) {
                                 // Hash dimensions: add hash to bloom
-                                if (input.config.index_hhash) {
+                                it = output.bloom_filters.find(DIM_HHASH);
+                                if (it != output.bloom_filters.end()) {
                                     std::string_view hhash =
                                         args["hhash"].get<std::string_view>();
                                     if (!hhash.empty()) {
-                                        output.bloom_filters.at(DIM_HHASH).add(
-                                            hhash);
+                                        it->second.add(hhash);
                                     }
                                 }
 
-                                if (input.config.index_fhash) {
+                                it = output.bloom_filters.find(DIM_FHASH);
+                                if (it != output.bloom_filters.end()) {
                                     std::string_view fhash =
                                         args["fhash"].get<std::string_view>();
                                     if (!fhash.empty()) {
-                                        output.bloom_filters.at(DIM_FHASH).add(
-                                            fhash);
+                                        it->second.add(fhash);
                                     }
                                 }
 
-                                if (input.config.index_shash) {
+                                it = output.bloom_filters.find(DIM_SHASH);
+                                if (it != output.bloom_filters.end()) {
                                     // shash can be under cmd_hash or exec_hash
                                     std::string_view shash =
                                         args["cmd_hash"]
@@ -232,21 +331,22 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
                                                     .get<std::string_view>();
                                     }
                                     if (!shash.empty()) {
-                                        output.bloom_filters.at(DIM_SHASH).add(
-                                            shash);
+                                        it->second.add(shash);
                                     }
                                 }
 
                                 // Extra dimensions: arbitrary nested dot-paths
                                 for (const auto& dim :
                                      input.config.extra_dimensions) {
-                                    JsonValue val = args.at(dim.c_str());
-                                    if (val.exists()) {
-                                        std::string str_val =
-                                            json_value_to_string(val);
-                                        if (!str_val.empty()) {
-                                            output.bloom_filters.at(dim).add(
-                                                str_val);
+                                    it = output.bloom_filters.find(dim);
+                                    if (it != output.bloom_filters.end()) {
+                                        JsonValue val = args.at(dim.c_str());
+                                        if (val.exists()) {
+                                            std::string str_val =
+                                                json_value_to_string(val);
+                                            if (!str_val.empty()) {
+                                                it->second.add(str_val);
+                                            }
                                         }
                                     }
                                 }

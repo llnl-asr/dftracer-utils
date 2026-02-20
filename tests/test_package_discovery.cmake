@@ -33,12 +33,12 @@ elseif(TEST_TYPE STREQUAL "cmake")
   # Test CMake find_package discovery
   message(STATUS "Testing CMake find_package discovery for ${LIBRARY_NAME}...")
 
-  # Check if config file exists
+  # Check if config file exists (support both lib/ and lib64/ install layouts)
   find_file(
     ${LIBRARY_NAME_UPPER}_CONFIG
     NAMES ${LIBRARY_NAME}Config.cmake
     PATHS ${CMAKE_PREFIX_PATH}
-    PATH_SUFFIXES lib/cmake/${LIBRARY_NAME}
+    PATH_SUFFIXES lib/cmake/${LIBRARY_NAME} lib64/cmake/${LIBRARY_NAME}
     NO_DEFAULT_PATH)
 
   if(NOT ${LIBRARY_NAME_UPPER}_CONFIG)
@@ -60,12 +60,12 @@ elseif(TEST_TYPE STREQUAL "target")
   string(TOUPPER "${BASE_LIBRARY_NAME}" BASE_LIBRARY_NAME_UPPER)
   string(REPLACE "-" "_" BASE_LIBRARY_NAME_UPPER "${BASE_LIBRARY_NAME_UPPER}")
 
-  # Check if config file exists
+  # Check if config file exists (support both lib/ and lib64/ install layouts)
   find_file(
     ${BASE_LIBRARY_NAME_UPPER}_CONFIG
     NAMES ${BASE_LIBRARY_NAME}Config.cmake
     PATHS ${CMAKE_PREFIX_PATH}
-    PATH_SUFFIXES lib/cmake/${BASE_LIBRARY_NAME}
+    PATH_SUFFIXES lib/cmake/${BASE_LIBRARY_NAME} lib64/cmake/${BASE_LIBRARY_NAME}
     NO_DEFAULT_PATH)
 
   if(NOT ${BASE_LIBRARY_NAME_UPPER}_CONFIG)
@@ -84,14 +84,14 @@ elseif(TEST_TYPE STREQUAL "target")
     ${BASE_LIBRARY_NAME_UPPER}_SHARED_TARGETS
     NAMES ${BASE_LIBRARY_NAME}_sharedTargets.cmake
     PATHS ${CMAKE_PREFIX_PATH}
-    PATH_SUFFIXES lib/cmake/${BASE_LIBRARY_NAME}_shared
+    PATH_SUFFIXES lib/cmake/${BASE_LIBRARY_NAME}_shared lib64/cmake/${BASE_LIBRARY_NAME}_shared
     NO_DEFAULT_PATH)
 
   find_file(
     ${BASE_LIBRARY_NAME_UPPER}_STATIC_TARGETS
     NAMES ${BASE_LIBRARY_NAME}_staticTargets.cmake
     PATHS ${CMAKE_PREFIX_PATH}
-    PATH_SUFFIXES lib/cmake/${BASE_LIBRARY_NAME}_static
+    PATH_SUFFIXES lib/cmake/${BASE_LIBRARY_NAME}_static lib64/cmake/${BASE_LIBRARY_NAME}_static
     NO_DEFAULT_PATH)
 
   # Also check unified targets file (for dftracer_utils only)
@@ -99,7 +99,7 @@ elseif(TEST_TYPE STREQUAL "target")
     ${BASE_LIBRARY_NAME_UPPER}_TARGETS
     NAMES ${BASE_LIBRARY_NAME}Targets.cmake
     PATHS ${CMAKE_PREFIX_PATH}
-    PATH_SUFFIXES lib/cmake/${BASE_LIBRARY_NAME}
+    PATH_SUFFIXES lib/cmake/${BASE_LIBRARY_NAME} lib64/cmake/${BASE_LIBRARY_NAME}
     NO_DEFAULT_PATH)
 
   set(TARGETS_ALIAS_FOUND -1)

@@ -43,9 +43,11 @@ class LargeTestEnvironment {
         : bytes_per_line_(bytes_per_line) {
         // Calculate number of lines needed for target size
         num_lines_ = (target_size_mb * 1024 * 1024) / bytes_per_line;
+        static std::atomic<std::uint64_t> counter{0};
         temp_dir_ =
             fs::temp_directory_path() /
-            ("dft_robustness_test_" + std::to_string(std::time(nullptr)));
+            ("dft_robustness_test_" + std::to_string(std::time(nullptr)) + "_" +
+             std::to_string(counter.fetch_add(1)));
         fs::create_directories(temp_dir_);
     }
 

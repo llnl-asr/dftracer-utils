@@ -11,9 +11,11 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
@@ -23,6 +25,7 @@ using dftracer::utils::utilities::common::json::JsonValue;
 struct ChunkAggregatorInput {
     std::string file_path;
     std::string idx_path;
+    std::string bidx_path;
     std::size_t start_byte;
     std::size_t end_byte;
     std::size_t start_line;
@@ -30,6 +33,7 @@ struct ChunkAggregatorInput {
     AggregationConfig config;
     std::size_t checkpoint_size;
     int chunk_index;
+    std::unordered_map<std::string, std::vector<std::string>> bloom_predicates;
 
     std::size_t batch_size = 4 * 1024 * 1024;
 
@@ -40,6 +44,11 @@ struct ChunkAggregatorInput {
 
     ChunkAggregatorInput& with_idx_path(const std::string& path) {
         idx_path = path;
+        return *this;
+    }
+
+    ChunkAggregatorInput& with_bidx_path(const std::string& path) {
+        bidx_path = path;
         return *this;
     }
 
@@ -72,6 +81,12 @@ struct ChunkAggregatorInput {
 
     ChunkAggregatorInput& with_batch_size(std::size_t size) {
         batch_size = size;
+        return *this;
+    }
+
+    ChunkAggregatorInput& with_bloom_predicate(
+        const std::string& dimension, const std::vector<std::string>& values) {
+        bloom_predicates[dimension] = values;
         return *this;
     }
 };

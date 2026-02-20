@@ -1,5 +1,9 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/chunk_aggregator_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
@@ -8,7 +12,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <set>
 #include <string_view>
+#include <unordered_set>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
@@ -135,6 +141,104 @@ ChunkAggregationOutput ChunkAggregatorUtility::process(
                                 input.chunk_index, input.file_path.c_str(),
                                 input.start_byte, input.end_byte);
     }
+
+    // --- Bloom Filter Chunk Skipping ---
+    // If bloom_predicates are provided, query bloom index to determine
+    // if this chunk should be processed
+    if (!input.bloom_predicates.empty() && !input.bidx_path.empty()) {
+        using namespace dftracer::utils::utilities::composites::dft::indexing;
+
+        try {
+            BloomIndexDatabase bidx(input.bidx_path);
+            int file_info_id = bidx.get_file_info_id(input.file_path);
+            if (file_info_id >= 0) {
+                // Get indexed dimensions
+                auto indexed_dims =
+                    queries::query_index_dimensions(bidx.db(), file_info_id);
+                std::unordered_set<std::string> indexed_set(
+                    indexed_dims.begin(), indexed_dims.end());
+
+                // Build effective predicates (filter to indexed dimensions
+                // only)
+                std::unordered_map<std::string, std::vector<std::string>>
+                    effective_predicates;
+                for (const auto& [dimension, values] : input.bloom_predicates) {
+                    if (indexed_set.find(dimension) != indexed_set.end()) {
+                        effective_predicates[dimension] = values;
+                    }
+                }
+
+                if (!effective_predicates.empty()) {
+                    // Calculate checkpoint range for this chunk.
+                    // Aggregation chunks can span multiple checkpoints
+                    // (e.g. 64MB chunk / 4MB checkpoint = 16 checkpoints).
+                    std::size_t checkpoint_size = input.checkpoint_size;
+                    if (checkpoint_size == 0) {
+                        checkpoint_size = 4 * 1024 * 1024;  // Default 4MB
+                    }
+                    std::uint64_t start_ckpt =
+                        input.start_byte / checkpoint_size;
+                    std::uint64_t end_ckpt =
+                        (input.end_byte > input.start_byte)
+                            ? (input.end_byte - 1) / checkpoint_size
+                            : start_ckpt;
+
+                    // Check if any predicate dimension indicates this chunk
+                    // might contain matching events
+                    bool chunk_may_match = false;
+
+                    for (const auto& [dimension, values] :
+                         effective_predicates) {
+                        auto chunk_blooms = queries::query_chunk_bloom_filters(
+                            bidx.db(), file_info_id, dimension);
+
+                        for (const auto& cb : chunk_blooms) {
+                            if (cb.checkpoint_idx < start_ckpt ||
+                                cb.checkpoint_idx > end_ckpt) {
+                                continue;
+                            }
+
+                            auto bloom = BloomFilter::from_blob(
+                                cb.bloom_data.data(), cb.bloom_data.size());
+
+                            // OR within dimension: at least one value must
+                            // possibly match
+                            for (const auto& val : values) {
+                                if (bloom.possibly_contains(val)) {
+                                    chunk_may_match = true;
+                                    break;
+                                }
+                            }
+
+                            if (chunk_may_match) {
+                                break;
+                            }
+                        }
+
+                        if (chunk_may_match) {
+                            break;
+                        }
+                    }
+
+                    if (!chunk_may_match) {
+                        // Skip this chunk - bloom filter indicates no match
+                        DFTRACER_UTILS_LOG_INFO(
+                            "Skipping chunk %d: no bloom filter match "
+                            "for predicates",
+                            input.chunk_index);
+                        output.success = true;
+                        output.aggregations.clear();
+                        return output;
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            DFTRACER_UTILS_LOG_WARN(
+                "Chunk %d: bloom index error: %s, processing chunk normally",
+                input.chunk_index, e.what());
+        }
+    }
+    // --- End Bloom Filter Chunk Skipping ---
 
     auto reader_input =
         utilities::composites::IndexedReadInput::from_file(input.file_path)

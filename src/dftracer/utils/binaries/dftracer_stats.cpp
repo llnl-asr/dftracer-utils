@@ -12,6 +12,7 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
@@ -42,7 +43,7 @@ using namespace dftracer::utils::utilities::composites::dft::statistics;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
 
-static StatisticsQueryType parse_query_type(const std::string& s) {
+static StatisticsQueryType parse_report_type_str(const std::string& s) {
     if (s == "summary") return StatisticsQueryType::SUMMARY;
     if (s == "categories") return StatisticsQueryType::CATEGORIES;
     if (s == "names") return StatisticsQueryType::NAMES;
@@ -497,9 +498,9 @@ int main(int argc, char** argv) {
 
     program.add_argument("--json").help("Output in JSON format").flag();
 
-    program.add_argument("--query")
+    program.add_argument("--report")
         .help(
-            "Query type: summary, categories, names, pid_tids, time_range, "
+            "Report type: summary, categories, names, pid_tids, time_range, "
             "duration, top-names, top-categories, detailed")
         .default_value<std::string>("summary");
 
@@ -527,18 +528,12 @@ int main(int argc, char** argv) {
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
 
-    program.add_argument("--filter-name")
+    program.add_argument("--query")
         .help(
-            "Filter events by operation name (bloom pre-filtering + exact "
-            "match, for --query detailed)")
-        .nargs(argparse::nargs_pattern::at_least_one)
-        .default_value<std::vector<std::string>>({});
-
-    program.add_argument("--filter-cat")
-        .help(
-            "Filter events by category (bloom pre-filtering + exact match, "
-            "for --query detailed)")
-        .nargs(argparse::nargs_pattern::at_least_one)
+            "Inline query for event filtering (e.g., "
+            "cat=POSIX,name=read|write). Uses bloom pre-filtering + exact "
+            "match for --report detailed.")
+        .nargs(argparse::nargs_pattern::any)
         .default_value<std::vector<std::string>>({});
 
     program.add_argument("--group-by")
@@ -560,21 +555,40 @@ int main(int argc, char** argv) {
     std::string directory = program.get<std::string>("--directory");
     std::string index_dir = program.get<std::string>("--index-dir");
     bool json_output = program.get<bool>("--json");
-    std::string query_str = program.get<std::string>("--query");
+    std::string report_str = program.get<std::string>("--report");
     std::uint64_t top_n = program.get<std::uint64_t>("--top-n");
     bool no_auto_index = program.get<bool>("--no-auto-index");
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    auto filter_names = program.get<std::vector<std::string>>("--filter-name");
-    auto filter_cats = program.get<std::vector<std::string>>("--filter-cat");
+    auto query_strs = program.get<std::vector<std::string>>("--query");
     auto group_by = program.get<std::vector<std::string>>("--group-by");
 
-    auto query_type = parse_query_type(query_str);
+    // Parse --query into unified predicates
+    PredicateParserInput parser_input;
+    parser_input.with_predicate_strings(query_strs);
+    auto parsed = PredicateParserUtility{}.process(parser_input);
+    PredicateMap merged_predicates =
+        parsed.success ? parsed.predicates : PredicateMap{};
+
+    // Extract filter_names and filter_cats from parsed predicates for
+    // event-level exact matching
+    std::vector<std::string> filter_names;
+    std::vector<std::string> filter_cats;
+    if (auto it = merged_predicates.find("name");
+        it != merged_predicates.end()) {
+        filter_names = it->second;
+    }
+    if (auto it = merged_predicates.find("cat");
+        it != merged_predicates.end()) {
+        filter_cats = it->second;
+    }
+
+    auto report_type = parse_report_type_str(report_str);
 
     // Default --group-by to "name" for detailed query so users always see
     // per-event breakdowns (not just global I/O aggregates)
-    if (query_type == StatisticsQueryType::DETAILED && group_by.empty()) {
+    if (report_type == StatisticsQueryType::DETAILED && group_by.empty()) {
         group_by.push_back("name");
     }
 
@@ -723,7 +737,7 @@ int main(int argc, char** argv) {
     auto start_time = std::chrono::high_resolution_clock::now();
 
     // Detailed query path: scan chunks on-demand with bloom pre-filtering
-    if (query_type == StatisticsQueryType::DETAILED) {
+    if (report_type == StatisticsQueryType::DETAILED) {
         // Determine if we need hash resolutions
         bool needs_hash_resolution = false;
         for (const auto& dim : group_by) {
@@ -766,34 +780,36 @@ int main(int argc, char** argv) {
             std::size_t file_size = metadata.uncompressed_size;
             std::size_t num_ckpts = metadata.num_checkpoints;
 
-            // Build bloom predicates from filters
-            std::unordered_map<std::string, std::vector<std::string>>
-                predicates;
-            if (!filter_names.empty()) {
-                predicates["name"] = filter_names;
-            }
-            if (!filter_cats.empty()) {
-                predicates["cat"] = filter_cats;
-            }
+            // Use merged predicates for bloom pre-filtering
+            const auto& predicates = merged_predicates;
 
             // Determine candidate checkpoints via bloom pre-filtering
             std::vector<std::uint64_t> candidate_checkpoints;
             std::uint64_t total_checkpoints = (num_ckpts == 0) ? 1 : num_ckpts;
 
             if (!predicates.empty() && fs::exists(bidx_path)) {
-                BloomQueryInput bq_input;
-                bq_input.bidx_path = bidx_path;
-                bq_input.file_path = file_path;
-                bq_input.predicates = predicates;
+                try {
+                    BloomQueryInput bq_input;
+                    bq_input.bidx_path = bidx_path;
+                    bq_input.file_path = file_path;
+                    bq_input.predicates = predicates;
 
-                BloomQueryUtility bloom_query;
-                auto bq_output = bloom_query.process(bq_input);
+                    BloomQueryUtility bloom_query;
+                    auto bq_output = bloom_query.process(bq_input);
 
-                if (bq_output.success) {
-                    candidate_checkpoints = bq_output.candidate_checkpoints;
-                    total_checkpoints = bq_output.total_checkpoints;
-                } else {
-                    // Fallback: scan all chunks
+                    if (bq_output.success) {
+                        candidate_checkpoints = bq_output.candidate_checkpoints;
+                        total_checkpoints = bq_output.total_checkpoints;
+                    } else {
+                        // Fallback: scan all chunks
+                        for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
+                            candidate_checkpoints.push_back(i);
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    DFTRACER_UTILS_LOG_WARN(
+                        "Bloom query failed for %s: %s, scanning all chunks",
+                        file_path.c_str(), e.what());
                     for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
                         candidate_checkpoints.push_back(i);
                     }
@@ -844,39 +860,49 @@ int main(int argc, char** argv) {
             // Load hash resolutions for display if needed
             std::unordered_map<std::string, std::string> hash_resolutions;
             if (needs_hash_resolution && fs::exists(bidx_path)) {
-                BloomIndexDatabase bidx_db(bidx_path);
-                int file_info_id = bidx_db.get_file_info_id(file_path);
-                if (file_info_id >= 0) {
-                    // Collect all unique hash keys that need resolution
-                    auto resolve_hashes = [&](const std::string& dim) {
-                        // Check grouped_duration keys
-                        for (const auto& [key, _] :
-                             file_detailed.grouped_duration) {
-                            if (hash_resolutions.count(key) == 0) {
-                                auto resolved = queries::query_resolved_by_hash(
-                                    bidx_db.db(), dim, key);
-                                if (resolved.has_value()) {
-                                    hash_resolutions[key] = resolved.value();
+                try {
+                    BloomIndexDatabase bidx_db(bidx_path);
+                    int file_info_id = bidx_db.get_file_info_id(file_path);
+                    if (file_info_id >= 0) {
+                        // Collect all unique hash keys that need resolution
+                        auto resolve_hashes = [&](const std::string& dim) {
+                            // Check grouped_duration keys
+                            for (const auto& [key, _] :
+                                 file_detailed.grouped_duration) {
+                                if (hash_resolutions.count(key) == 0) {
+                                    auto resolved =
+                                        queries::query_resolved_by_hash(
+                                            bidx_db.db(), dim, key);
+                                    if (resolved.has_value()) {
+                                        hash_resolutions[key] =
+                                            resolved.value();
+                                    }
                                 }
                             }
-                        }
-                        // Check grouped_io keys
-                        for (const auto& [key, _] : file_detailed.grouped_io) {
-                            if (hash_resolutions.count(key) == 0) {
-                                auto resolved = queries::query_resolved_by_hash(
-                                    bidx_db.db(), dim, key);
-                                if (resolved.has_value()) {
-                                    hash_resolutions[key] = resolved.value();
+                            // Check grouped_io keys
+                            for (const auto& [key, _] :
+                                 file_detailed.grouped_io) {
+                                if (hash_resolutions.count(key) == 0) {
+                                    auto resolved =
+                                        queries::query_resolved_by_hash(
+                                            bidx_db.db(), dim, key);
+                                    if (resolved.has_value()) {
+                                        hash_resolutions[key] =
+                                            resolved.value();
+                                    }
                                 }
                             }
-                        }
-                    };
+                        };
 
-                    for (const auto& dim : group_by) {
-                        if (dim == "fhash" || dim == "hhash") {
-                            resolve_hashes(dim);
+                        for (const auto& dim : group_by) {
+                            if (dim == "fhash" || dim == "hhash") {
+                                resolve_hashes(dim);
+                            }
                         }
                     }
+                } catch (const std::exception& e) {
+                    DFTRACER_UTILS_LOG_WARN("Hash resolution failed for %s: %s",
+                                            file_path.c_str(), e.what());
                 }
             }
 
@@ -978,7 +1004,7 @@ int main(int argc, char** argv) {
 
         StatisticsQueryInput qi;
         qi.stats = stats;
-        qi.query_type = query_type;
+        qi.query_type = report_type;
         qi.top_n = top_n;
 
         auto output = query_util.process(qi);
@@ -986,7 +1012,7 @@ int main(int argc, char** argv) {
         if (json_output) {
             std::printf("%s%s", output.to_json().c_str(),
                         i + 1 < all_stats.size() ? ",\n" : "\n");
-        } else if (query_type == StatisticsQueryType::SUMMARY) {
+        } else if (report_type == StatisticsQueryType::SUMMARY) {
             print_text_summary(stats, top_n);
         } else {
             print_text_query(output, stats.file_path);

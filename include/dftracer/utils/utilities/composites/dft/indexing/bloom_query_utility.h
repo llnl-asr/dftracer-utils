@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
 
 #include <cstdint>
 #include <string>
@@ -30,6 +31,25 @@ struct BloomQueryInput {
     BloomQueryInput& with_predicate(const std::string& dimension,
                                     const std::vector<std::string>& values) {
         predicates[dimension] = values;
+        return *this;
+    }
+
+    BloomQueryInput& with_predicate_string(const std::string& pred_str) {
+        PredicateParserInput parser_input;
+        parser_input.existing_predicates = predicates;
+        parser_input.with_predicate_string(pred_str);
+        auto result = PredicateParserUtility{}.process(parser_input);
+        if (result.success) {
+            predicates = std::move(result.predicates);
+        }
+        return *this;
+    }
+
+    BloomQueryInput& with_predicates(const PredicateMap& preds) {
+        for (const auto& [dim, vals] : preds) {
+            auto& existing = predicates[dim];
+            existing.insert(existing.end(), vals.begin(), vals.end());
+        }
         return *this;
     }
 };

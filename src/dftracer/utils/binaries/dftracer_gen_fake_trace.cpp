@@ -242,102 +242,110 @@ static int run_verify(const std::vector<std::string>& file_paths,
         }
 
         // 3. Index chunks and write to .bidx
-        std::string bidx_path = determine_bloom_index_path(abs_path, "");
-        BloomIndexDatabase bidx(bidx_path);
-        bidx.init_schema();
+        try {
+            std::string bidx_path = determine_bloom_index_path(abs_path, "");
+            BloomIndexDatabase bidx(bidx_path);
+            bidx.init_schema();
 
-        std::uint64_t file_hash_val = 0;
-        if (fs::exists(abs_path)) {
-            file_hash_val = static_cast<std::uint64_t>(fs::file_size(abs_path));
-        }
-        int fid = bidx.get_or_create_file_info(abs_path, file_hash_val);
-
-        std::size_t file_size = metadata.uncompressed_size;
-        std::size_t num_ckpts = metadata.num_checkpoints;
-
-        struct ChunkWork {
-            std::uint64_t idx;
-            std::size_t start;
-            std::size_t end;
-        };
-        std::vector<ChunkWork> chunks;
-
-        if (num_ckpts == 0) {
-            chunks.push_back({0, 0, file_size});
-        } else {
-            std::size_t bytes_per = file_size / num_ckpts;
-            for (std::size_t i = 0; i < num_ckpts; ++i) {
-                std::size_t start = i * bytes_per;
-                std::size_t end =
-                    (i + 1 == num_ckpts) ? file_size : (i + 1) * bytes_per;
-                chunks.push_back({static_cast<std::uint64_t>(i), start, end});
+            std::uint64_t file_hash_val = 0;
+            if (fs::exists(abs_path)) {
+                file_hash_val =
+                    static_cast<std::uint64_t>(fs::file_size(abs_path));
             }
-        }
+            int fid = bidx.get_or_create_file_info(abs_path, file_hash_val);
 
-        bidx.begin_transaction();
-        std::unordered_map<std::string, BloomFilter> file_blooms;
-        HashResolutions all_hr;
-        std::size_t total_events = 0;
+            std::size_t file_size = metadata.uncompressed_size;
+            std::size_t num_ckpts = metadata.num_checkpoints;
 
-        for (const auto& chunk : chunks) {
-            ChunkIndexerInput ci;
-            ci.with_file_path(abs_path)
-                .with_idx_path(idx_path)
-                .with_checkpoint_size(ckpt_size)
-                .with_checkpoint_idx(chunk.idx)
-                .with_byte_range(chunk.start, chunk.end)
-                .with_config(indexer_config)
-                .with_batch_size(4 * 1024 * 1024);
+            struct ChunkWork {
+                std::uint64_t idx;
+                std::size_t start;
+                std::size_t end;
+            };
+            std::vector<ChunkWork> chunks;
 
-            ChunkIndexerUtility idx_util;
-            auto output = idx_util.process(ci);
-            total_events += output.events_processed;
+            if (num_ckpts == 0) {
+                chunks.push_back({0, 0, file_size});
+            } else {
+                std::size_t bytes_per = file_size / num_ckpts;
+                for (std::size_t i = 0; i < num_ckpts; ++i) {
+                    std::size_t start = i * bytes_per;
+                    std::size_t end =
+                        (i + 1 == num_ckpts) ? file_size : (i + 1) * bytes_per;
+                    chunks.push_back(
+                        {static_cast<std::uint64_t>(i), start, end});
+                }
+            }
 
-            for (auto& [dim, bloom] : output.bloom_filters) {
+            bidx.begin_transaction();
+            std::unordered_map<std::string, BloomFilter> file_blooms;
+            HashResolutions all_hr;
+            std::size_t total_events = 0;
+
+            for (const auto& chunk : chunks) {
+                ChunkIndexerInput ci;
+                ci.with_file_path(abs_path)
+                    .with_idx_path(idx_path)
+                    .with_checkpoint_size(ckpt_size)
+                    .with_checkpoint_idx(chunk.idx)
+                    .with_byte_range(chunk.start, chunk.end)
+                    .with_config(indexer_config)
+                    .with_batch_size(4 * 1024 * 1024);
+
+                ChunkIndexerUtility idx_util;
+                auto output = idx_util.process(ci);
+                total_events += output.events_processed;
+
+                for (auto& [dim, bloom] : output.bloom_filters) {
+                    auto blob = bloom.serialize();
+                    queries::insert_chunk_bloom_filter(
+                        bidx.db(), fid, output.checkpoint_idx, dim, blob.data(),
+                        static_cast<int>(blob.size()), bloom.num_entries());
+
+                    auto it = file_blooms.find(dim);
+                    if (it == file_blooms.end()) {
+                        file_blooms.emplace(dim, std::move(bloom));
+                    } else {
+                        it->second.merge_from(bloom);
+                    }
+                }
+
+                queries::insert_chunk_statistics(
+                    bidx.db(), fid, output.checkpoint_idx, output.statistics);
+
+                for (auto& [dim, resolutions] : output.hash_resolutions) {
+                    for (auto& [h, resolved] : resolutions) {
+                        all_hr[dim][h] = resolved;
+                    }
+                }
+            }
+
+            for (auto& [dim, bloom] : file_blooms) {
                 auto blob = bloom.serialize();
-                queries::insert_chunk_bloom_filter(
-                    bidx.db(), fid, output.checkpoint_idx, dim, blob.data(),
+                queries::insert_file_bloom_filter(
+                    bidx.db(), fid, dim, blob.data(),
                     static_cast<int>(blob.size()), bloom.num_entries());
-
-                auto it = file_blooms.find(dim);
-                if (it == file_blooms.end()) {
-                    file_blooms.emplace(dim, std::move(bloom));
-                } else {
-                    it->second.merge_from(bloom);
+            }
+            for (const auto& [dim, resolutions] : all_hr) {
+                for (const auto& [h, resolved] : resolutions) {
+                    queries::insert_hash_resolution(bidx.db(), fid, dim, h,
+                                                    resolved);
                 }
             }
-
-            queries::insert_chunk_statistics(
-                bidx.db(), fid, output.checkpoint_idx, output.statistics);
-
-            for (auto& [dim, resolutions] : output.hash_resolutions) {
-                for (auto& [h, resolved] : resolutions) {
-                    all_hr[dim][h] = resolved;
-                }
+            for (const auto& dim : all_dimensions) {
+                queries::insert_index_dimension(bidx.db(), fid, dim);
             }
-        }
 
-        for (auto& [dim, bloom] : file_blooms) {
-            auto blob = bloom.serialize();
-            queries::insert_file_bloom_filter(bidx.db(), fid, dim, blob.data(),
-                                              static_cast<int>(blob.size()),
-                                              bloom.num_entries());
-        }
-        for (const auto& [dim, resolutions] : all_hr) {
-            for (const auto& [h, resolved] : resolutions) {
-                queries::insert_hash_resolution(bidx.db(), fid, dim, h,
-                                                resolved);
-            }
-        }
-        for (const auto& dim : all_dimensions) {
-            queries::insert_index_dimension(bidx.db(), fid, dim);
-        }
+            bidx.commit_transaction();
 
-        bidx.commit_transaction();
-
-        std::string basename = fs::path(abs_path).filename().string();
-        std::printf("  %s: indexed (%zu events, %zu chunks)\n",
-                    basename.c_str(), total_events, chunks.size());
+            std::string basename = fs::path(abs_path).filename().string();
+            std::printf("  %s: indexed (%zu events, %zu chunks)\n",
+                        basename.c_str(), total_events, chunks.size());
+        } catch (const std::exception& e) {
+            std::fprintf(stderr,
+                         "  WARN: bloom index generation failed for %s: %s\n",
+                         abs_path.c_str(), e.what());
+        }
     }
 
     // Run queries
@@ -358,19 +366,24 @@ static int run_verify(const std::vector<std::string>& file_paths,
             std::string abs_path = fs::absolute(file_path).string();
             std::string bidx_path = determine_bloom_index_path(abs_path, "");
 
-            BloomQueryInput input;
-            input.with_bidx_path(bidx_path).with_file_path(abs_path);
-            for (const auto& [dim, vals] : q.predicates) {
-                input.with_predicate(dim, vals);
-            }
+            try {
+                BloomQueryInput input;
+                input.with_bidx_path(bidx_path).with_file_path(abs_path);
+                for (const auto& [dim, vals] : q.predicates) {
+                    input.with_predicate(dim, vals);
+                }
 
-            BloomQueryUtility query_util;
-            auto result = query_util.process(input);
+                BloomQueryUtility query_util;
+                auto result = query_util.process(input);
 
-            total_chunks += result.total_checkpoints;
-            if (result.file_may_match) {
-                files_matched++;
-                chunks_matched += result.candidate_checkpoints.size();
+                total_chunks += result.total_checkpoints;
+                if (result.file_may_match) {
+                    files_matched++;
+                    chunks_matched += result.candidate_checkpoints.size();
+                }
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "  WARN: bloom query failed for %s: %s\n",
+                             abs_path.c_str(), e.what());
             }
         }
 

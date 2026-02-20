@@ -1,0 +1,123 @@
+#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
+#include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
+#include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
+
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace dftracer::utils::utilities::composites::dft::views {
+
+// ViewBuilderInput fluent builders
+ViewBuilderInput& ViewBuilderInput::with_view(const ViewDefinition& v) {
+    view = v;
+    return *this;
+}
+
+ViewBuilderInput& ViewBuilderInput::with_file_path(const std::string& path) {
+    file_path = path;
+    return *this;
+}
+
+ViewBuilderInput& ViewBuilderInput::with_bidx_path(const std::string& path) {
+    bidx_path = path;
+    return *this;
+}
+
+ViewBuilderInput& ViewBuilderInput::with_uncompressed_size(std::size_t s) {
+    uncompressed_size = s;
+    return *this;
+}
+
+ViewBuilderInput& ViewBuilderInput::with_num_checkpoints(std::size_t n) {
+    num_checkpoints = n;
+    return *this;
+}
+
+ViewBuilderOutput ViewBuilderUtility::process(const ViewBuilderInput& input) {
+    ViewBuilderOutput output;
+
+    std::uint64_t total_checkpoints =
+        (input.num_checkpoints == 0) ? 1 : input.num_checkpoints;
+    output.total_checkpoints = total_checkpoints;
+
+    // Build bloom predicates from all predicate groups (union across groups)
+    std::unordered_map<std::string, std::vector<std::string>> bloom_predicates;
+    for (const auto& predicate : input.view.predicates) {
+        for (const auto& [dim, values] : predicate.bloom_dims) {
+            std::string resolved_dim = resolve_bloom_dimension(dim);
+            auto& target = bloom_predicates[resolved_dim];
+            for (const auto& val : values) {
+                target.push_back(val);
+            }
+        }
+    }
+
+    // Determine candidate checkpoints via bloom pre-filtering
+    std::vector<std::uint64_t> candidate_checkpoints;
+
+    if (!bloom_predicates.empty() && !input.bidx_path.empty()) {
+        indexing::BloomQueryInput bq_input;
+        bq_input.bidx_path = input.bidx_path;
+        bq_input.file_path = input.file_path;
+        bq_input.predicates = bloom_predicates;
+
+        indexing::BloomQueryUtility bloom_query;
+        auto bq_output = bloom_query.process(bq_input);
+
+        if (bq_output.success) {
+            candidate_checkpoints = bq_output.candidate_checkpoints;
+            if (bq_output.total_checkpoints > 0) {
+                total_checkpoints = bq_output.total_checkpoints;
+                output.total_checkpoints = total_checkpoints;
+            }
+
+            if (!bq_output.file_may_match && candidate_checkpoints.empty()) {
+                // File definitely doesn't match
+                output.file_may_match = false;
+                output.skipped_checkpoints = total_checkpoints;
+                output.success = true;
+                return output;
+            }
+        } else {
+            // Bloom query failed, fall back to scanning all chunks
+            for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
+                candidate_checkpoints.push_back(i);
+            }
+        }
+    } else {
+        // No bloom predicates or no bidx: scan all chunks
+        for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
+            candidate_checkpoints.push_back(i);
+        }
+    }
+
+    // Compute byte ranges for each candidate checkpoint
+    for (auto ckpt_idx : candidate_checkpoints) {
+        ViewChunkCandidate candidate;
+        candidate.checkpoint_idx = ckpt_idx;
+
+        if (input.num_checkpoints > 0) {
+            std::size_t bytes_per =
+                input.uncompressed_size / input.num_checkpoints;
+            candidate.start_byte = ckpt_idx * bytes_per;
+            candidate.end_byte = (ckpt_idx + 1 == input.num_checkpoints)
+                                     ? input.uncompressed_size
+                                     : (ckpt_idx + 1) * bytes_per;
+        } else {
+            candidate.start_byte = 0;
+            candidate.end_byte = input.uncompressed_size;
+        }
+
+        output.candidates.push_back(candidate);
+    }
+
+    output.file_may_match = !output.candidates.empty();
+    output.skipped_checkpoints =
+        total_checkpoints - candidate_checkpoints.size();
+    output.success = true;
+    return output;
+}
+
+}  // namespace dftracer::utils::utilities::composites::dft::views

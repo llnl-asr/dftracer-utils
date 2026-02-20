@@ -5,7 +5,9 @@
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
+#include <dftracer/utils/utilities/hash/hasher_utility.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -30,11 +32,89 @@ struct ChunkIndexerConfig {
 
     std::size_t expected_entries_per_chunk = 1024;
     double false_positive_rate = 0.01;
+
+    // Compute a hash of this config for change detection
+    std::size_t compute_hash() const {
+        utilities::hash::HasherUtility hasher(
+            utilities::hash::HashAlgorithm::STD);
+        hasher.reset();
+        hasher.update(index_name);
+        hasher.update(index_cat);
+        hasher.update(index_pid);
+        hasher.update(index_tid);
+        hasher.update(index_hhash);
+        hasher.update(index_fhash);
+        hasher.update(index_shash);
+        for (const auto& dim : extra_dimensions) {
+            hasher.update(dim);
+        }
+        hasher.update(expected_entries_per_chunk);
+        hasher.update(false_positive_rate);
+        return hasher.get_hash().value;
+    }
 };
 
 // Hash resolution maps (collected once per file from metadata events)
 using HashResolveMap =
     std::shared_ptr<std::unordered_map<std::string, std::string>>;
+
+// Hash resolution entry: dimension -> {hash -> resolved_value}
+using HashResolutions =
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, std::string>>;
+
+// Tracks which dimensions have been indexed per chunk for incremental updates
+struct IndexedDimensions {
+    std::vector<std::string> dimensions;
+
+    bool has_dimension(const std::string& dim) const {
+        return std::find(dimensions.begin(), dimensions.end(), dim) !=
+               dimensions.end();
+    }
+
+    void add_dimension(const std::string& dim) {
+        if (!has_dimension(dim)) {
+            dimensions.push_back(dim);
+        }
+    }
+
+    // Compute missing dimensions from a target configuration
+    std::vector<std::string> missing_dimensions(
+        const ChunkIndexerConfig& config) const {
+        std::vector<std::string> missing;
+
+        auto check_dim = [this, &missing](const std::string& name,
+                                          bool enabled) {
+            if (enabled && !has_dimension(name)) {
+                missing.emplace_back(name);
+            }
+        };
+
+        check_dim(std::string("name"), config.index_name);
+        check_dim(std::string("cat"), config.index_cat);
+        check_dim(std::string("pid"), config.index_pid);
+        check_dim(std::string("tid"), config.index_tid);
+        check_dim(std::string("hhash"), config.index_hhash);
+        check_dim(std::string("fhash"), config.index_fhash);
+        check_dim(std::string("shash"), config.index_shash);
+
+        for (const auto& dim : config.extra_dimensions) {
+            check_dim(dim, true);
+        }
+
+        return missing;
+    }
+};
+
+// Per-chunk index state for incremental re-scanning
+struct ChunkIndexState {
+    std::uint64_t checkpoint_idx = 0;
+    std::size_t events_processed = 0;
+    IndexedDimensions indexed_dims;
+    HashResolutions hash_resolutions;
+    ChunkStatistics statistics;
+    std::size_t config_hash = 0;  // Detect config changes across re-scans
+};
 
 struct ChunkIndexerInput {
     std::string file_path;
@@ -92,12 +172,16 @@ struct ChunkIndexerInput {
         shash_map = std::move(sh);
         return *this;
     }
-};
 
-// Hash resolution entry: dimension -> {hash -> resolved_value}
-using HashResolutions =
-    std::unordered_map<std::string,
-                       std::unordered_map<std::string, std::string>>;
+    // Existing chunk state for incremental re-scanning
+    std::shared_ptr<ChunkIndexState> existing_state;
+
+    ChunkIndexerInput& with_existing_state(
+        std::shared_ptr<ChunkIndexState> state) {
+        existing_state = std::move(state);
+        return *this;
+    }
+};
 
 struct ChunkIndexerOutput {
     std::uint64_t checkpoint_idx = 0;

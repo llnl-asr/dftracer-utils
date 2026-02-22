@@ -1,7 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_CHANNEL_H
 #define DFTRACER_UTILS_CORE_CORO_CHANNEL_H
 
-#include <blockingconcurrentqueue.h>
+#include <concurrentqueue.h>
+#include <dftracer/utils/core/coro/resumption_helper.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -10,7 +11,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <stdexcept>
 
 namespace dftracer::utils::coro {
 
@@ -49,6 +49,16 @@ namespace dftracer::utils::coro {
 template <typename T>
 class Channel : public std::enable_shared_from_this<Channel<T>> {
    public:
+    struct ReceiveWaiterNode {
+        std::coroutine_handle<> handle;
+        std::optional<T>* result{nullptr};
+        bool* local_awaiting_async{nullptr};
+        bool* root_awaiting_async{nullptr};
+        dftracer::utils::Executor* executor{nullptr};
+        ReceiveWaiterNode* next{nullptr};
+    };
+    class ReceiveAwaitable;
+
     /**
      * RAII guard for producer tracking
      * Automatically closes channel when last producer exits
@@ -119,8 +129,147 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
     };
 
+    class ReceiveAwaitable {
+       private:
+        Channel* channel_;
+        std::optional<T> result_;
+        ReceiveWaiterNode waiter_{};
+        bool suspended_{false};
+
+       public:
+        explicit ReceiveAwaitable(Channel* channel) : channel_(channel) {}
+
+        ReceiveAwaitable(const ReceiveAwaitable&) = delete;
+        ReceiveAwaitable& operator=(const ReceiveAwaitable&) = delete;
+        ReceiveAwaitable(ReceiveAwaitable&&) = delete;
+        ReceiveAwaitable& operator=(ReceiveAwaitable&&) = delete;
+
+        bool await_ready() {
+            if (!channel_) {
+                result_ = std::nullopt;
+                return true;
+            }
+
+            T item;
+            if (channel_->try_receive(item)) {
+                result_ = std::optional<T>(std::move(item));
+                return true;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(channel_->state_mutex_);
+                if (channel_->try_receive(item)) {
+                    result_ = std::optional<T>(std::move(item));
+                    return true;
+                }
+
+                if (channel_->is_terminal_locked()) {
+                    result_ = std::nullopt;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        template <typename Promise>
+        bool await_suspend(std::coroutine_handle<Promise> h) {
+            if (!channel_) {
+                result_ = std::nullopt;
+                return false;
+            }
+
+            if constexpr (requires(Promise& p) { p.awaiting_async_ = true; }) {
+                h.promise().awaiting_async_ = true;
+                waiter_.local_awaiting_async = &h.promise().awaiting_async_;
+            } else {
+                waiter_.local_awaiting_async = nullptr;
+            }
+
+            if constexpr (requires(Promise& p) {
+                              p.get_root_promise();
+                              p.get_root_promise()->awaiting_async_ = true;
+                          }) {
+                auto* root = h.promise().get_root_promise();
+                if (root) {
+                    root->awaiting_async_ = true;
+                    waiter_.root_awaiting_async = &root->awaiting_async_;
+                    waiter_.executor = root->get_executor();
+                } else {
+                    waiter_.root_awaiting_async = nullptr;
+                    waiter_.executor = nullptr;
+                }
+            } else {
+                waiter_.root_awaiting_async = nullptr;
+                waiter_.executor = nullptr;
+            }
+
+            T item;
+            std::lock_guard<std::mutex> lock(channel_->state_mutex_);
+
+            if (channel_->try_receive(item)) {
+                result_ = std::optional<T>(std::move(item));
+                if (waiter_.local_awaiting_async) {
+                    *(waiter_.local_awaiting_async) = false;
+                }
+                if (waiter_.root_awaiting_async) {
+                    *(waiter_.root_awaiting_async) = false;
+                }
+                return false;
+            }
+
+            if (channel_->is_terminal_locked()) {
+                result_ = std::nullopt;
+                if (waiter_.local_awaiting_async) {
+                    *(waiter_.local_awaiting_async) = false;
+                }
+                if (waiter_.root_awaiting_async) {
+                    *(waiter_.root_awaiting_async) = false;
+                }
+                return false;
+            }
+
+            waiter_.handle = h;
+            waiter_.result = &result_;
+            waiter_.next = nullptr;
+            channel_->enqueue_receive_waiter_locked(&waiter_);
+            suspended_ = true;
+            return true;
+        }
+
+        std::optional<T> await_resume() {
+            suspended_ = false;
+            return std::move(result_);
+        }
+
+        ~ReceiveAwaitable() {
+            if (!suspended_ || !channel_) return;
+
+            std::lock_guard<std::mutex> lock(channel_->state_mutex_);
+            ReceiveWaiterNode* prev = nullptr;
+            ReceiveWaiterNode* curr = channel_->recv_waiters_head_;
+            while (curr) {
+                if (curr == &waiter_) {
+                    if (prev) {
+                        prev->next = curr->next;
+                    } else {
+                        channel_->recv_waiters_head_ = curr->next;
+                    }
+                    if (channel_->recv_waiters_tail_ == curr) {
+                        channel_->recv_waiters_tail_ = prev;
+                    }
+                    waiter_.next = nullptr;
+                    suspended_ = false;
+                    return;
+                }
+                prev = curr;
+                curr = curr->next;
+            }
+        }
+    };
+
    private:
-    moodycamel::BlockingConcurrentQueue<T> queue_;
+    moodycamel::ConcurrentQueue<T> queue_;
 
     std::size_t capacity_;
     mutable std::mutex state_mutex_;
@@ -129,18 +278,123 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     std::atomic<std::size_t> num_producers_{0};
     std::atomic<bool> had_producers_{false};
     std::atomic<std::size_t> active_sends_{0};
+    std::atomic<std::size_t> pending_items_{0};
     std::atomic<bool> user_closed_{false};
     std::atomic<bool> closed_{false};
+    ReceiveWaiterNode* recv_waiters_head_{nullptr};
+    ReceiveWaiterNode* recv_waiters_tail_{nullptr};
+
+    bool is_terminal_locked() const {
+        const bool no_producers =
+            num_producers_.load(std::memory_order_acquire) == 0;
+        const bool had_producers =
+            had_producers_.load(std::memory_order_acquire);
+        const bool no_active_sends =
+            active_sends_.load(std::memory_order_acquire) == 0;
+        const bool no_pending =
+            pending_items_.load(std::memory_order_acquire) == 0;
+        const bool user_closed = user_closed_.load(std::memory_order_acquire);
+        return (user_closed || (had_producers && no_producers)) &&
+               no_active_sends && no_pending;
+    }
+
+    void mark_item_consumed() {
+        pending_items_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+    void enqueue_receive_waiter_locked(ReceiveWaiterNode* node) {
+        node->next = nullptr;
+        if (recv_waiters_tail_) {
+            recv_waiters_tail_->next = node;
+        } else {
+            recv_waiters_head_ = node;
+        }
+        recv_waiters_tail_ = node;
+    }
+
+    ReceiveWaiterNode* pop_receive_waiter_locked() {
+        ReceiveWaiterNode* node = recv_waiters_head_;
+        if (!node) return nullptr;
+        recv_waiters_head_ = node->next;
+        if (!recv_waiters_head_) recv_waiters_tail_ = nullptr;
+        node->next = nullptr;
+        return node;
+    }
+
+    void wake_all_receive_waiters_terminal() {
+        for (;;) {
+            ReceiveWaiterNode* waiter = nullptr;
+            std::coroutine_handle<> handle;
+            dftracer::utils::Executor* resume_executor = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                waiter = pop_receive_waiter_locked();
+                if (!waiter) {
+                    return;
+                }
+
+                T item;
+                if (waiter->result) {
+                    if (queue_.try_dequeue(item)) {
+                        mark_item_consumed();
+                        *(waiter->result) = std::optional<T>(std::move(item));
+                    } else {
+                        *(waiter->result) = std::nullopt;
+                    }
+                }
+                handle = waiter->handle;
+                resume_executor = waiter->executor;
+            }
+
+            if (handle) {
+                if (resume_executor) {
+                    dftracer::utils::schedule_coroutine_resumption_helper(
+                        resume_executor, handle);
+                } else {
+                    handle.resume();
+                }
+            }
+        }
+    }
+
+    bool try_handoff_to_receive_waiter(T& item) {
+        std::coroutine_handle<> resume_handle;
+        dftracer::utils::Executor* resume_executor = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            ReceiveWaiterNode* waiter = pop_receive_waiter_locked();
+            if (!waiter) {
+                return false;
+            }
+            if (waiter->result) {
+                *(waiter->result) = std::optional<T>(std::move(item));
+            }
+            resume_handle = waiter->handle;
+            resume_executor = waiter->executor;
+        }
+        if (resume_handle) {
+            if (resume_executor) {
+                dftracer::utils::schedule_coroutine_resumption_helper(
+                    resume_executor, resume_handle);
+            } else {
+                resume_handle.resume();
+            }
+        }
+        return true;
+    }
 
     void notify_all_waiters() {
         cv_readable_.notify_all();
         cv_writable_.notify_all();
+        wake_all_receive_waiters_terminal();
     }
 
     void maybe_notify_terminal() {
         if (num_producers_.load(std::memory_order_acquire) == 0 &&
-            active_sends_.load(std::memory_order_acquire) == 0) {
+            active_sends_.load(std::memory_order_acquire) == 0 &&
+            pending_items_.load(std::memory_order_acquire) == 0) {
             cv_readable_.notify_all();
+            wake_all_receive_waiters_terminal();
         }
     }
 
@@ -226,6 +480,12 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         if (user_closed_.load(std::memory_order_acquire)) return false;
         active_sends_.fetch_add(1, std::memory_order_acq_rel);
 
+        if (try_handoff_to_receive_waiter(item)) {
+            active_sends_.fetch_sub(1, std::memory_order_acq_rel);
+            maybe_notify_terminal();
+            return true;
+        }
+
         // Wait for space if queue is at capacity
         if (capacity_ != SIZE_MAX) {
             std::unique_lock<std::mutex> lock(state_mutex_);
@@ -241,6 +501,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
         }
 
+        pending_items_.fetch_add(1, std::memory_order_acq_rel);
         queue_.enqueue(std::move(item));
         active_sends_.fetch_sub(1, std::memory_order_acq_rel);
         cv_readable_.notify_one();
@@ -257,7 +518,18 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     bool try_send(T item) {
         if (user_closed_.load(std::memory_order_acquire)) return false;
         active_sends_.fetch_add(1, std::memory_order_acq_rel);
+
+        if (try_handoff_to_receive_waiter(item)) {
+            active_sends_.fetch_sub(1, std::memory_order_acq_rel);
+            maybe_notify_terminal();
+            return true;
+        }
+
+        pending_items_.fetch_add(1, std::memory_order_acq_rel);
         bool ok = queue_.try_enqueue(std::move(item));
+        if (!ok) {
+            pending_items_.fetch_sub(1, std::memory_order_acq_rel);
+        }
         active_sends_.fetch_sub(1, std::memory_order_acq_rel);
         if (ok) {
             cv_readable_.notify_one();
@@ -276,6 +548,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     bool receive(T& item) {
         for (;;) {
             if (queue_.try_dequeue(item)) {
+                mark_item_consumed();
                 cv_writable_.notify_one();
                 return true;
             }
@@ -283,6 +556,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             std::unique_lock<std::mutex> lock(state_mutex_);
 
             if (queue_.try_dequeue(item)) {
+                mark_item_consumed();
                 lock.unlock();
                 cv_writable_.notify_one();
                 return true;
@@ -294,15 +568,20 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                 had_producers_.load(std::memory_order_acquire);
             const bool no_active_sends =
                 active_sends_.load(std::memory_order_acquire) == 0;
+            const bool no_pending =
+                pending_items_.load(std::memory_order_acquire) == 0;
             const bool user_closed =
                 user_closed_.load(std::memory_order_acquire);
 
             if ((user_closed || (had_producers && no_producers)) &&
-                no_active_sends) {
+                no_active_sends && no_pending) {
                 return false;
             }
 
-            cv_readable_.wait(lock);
+            cv_readable_.wait(lock, [this]() {
+                return pending_items_.load(std::memory_order_acquire) > 0 ||
+                       is_terminal_locked();
+            });
         }
     }
 
@@ -315,10 +594,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     bool try_receive(T& item) {
         const bool ok = queue_.try_dequeue(item);
         if (ok) {
+            mark_item_consumed();
             cv_writable_.notify_one();
         }
         return ok;
     }
+
+    ReceiveAwaitable receive_async() { return ReceiveAwaitable(this); }
 
     /**
      * Close channel
@@ -340,7 +622,8 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      */
     bool is_closed_and_done() const {
         return is_closed() &&
-               num_producers_.load(std::memory_order_acquire) == 0;
+               num_producers_.load(std::memory_order_acquire) == 0 &&
+               pending_items_.load(std::memory_order_acquire) == 0;
     }
 
     /**

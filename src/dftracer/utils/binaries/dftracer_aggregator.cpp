@@ -396,14 +396,14 @@ int main(int argc, char** argv) {
             co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
                 // Pre-register all file producers to prevent
                 // premature channel closure
-                for (std::size_t i = 0; i < input_files.size(); ++i) {
-                    chunk_chan->register_producer();
-                }
+                chunk_chan->register_producers(input_files.size());
 
                 // File producers: one per input file
                 for (const auto& file_path : input_files) {
                     scope.spawn([&, file_path](TaskContext& /*fctx*/)
                                     -> coro::CoroTask<void> {
+                        [[maybe_unused]] auto producer_guard =
+                            chunk_chan->adopt_producer();
                         // Build index
                         std::string idx_path =
                             composites::dft::internal::determine_index_path(
@@ -431,7 +431,6 @@ int main(int argc, char** argv) {
                         if (!metadata.success) {
                             DFTRACER_UTILS_LOG_WARN("Skipping file: %s",
                                                     file_path.c_str());
-                            chunk_chan->release_producer();
                             co_return;
                         }
 
@@ -455,26 +454,24 @@ int main(int argc, char** argv) {
                             chunk_chan->send_blocking(std::move(chunk));
                         }
 
-                        chunk_chan->release_producer();
                         co_return;
                     });
                 }
 
                 // Pre-register all chunk workers as producers
                 // on result_chan
-                for (std::size_t w = 0; w < executor_threads; ++w) {
-                    result_chan->register_producer();
-                }
+                result_chan->register_producers(executor_threads);
 
                 // Chunk workers: parallel aggregation
                 for (std::size_t w = 0; w < executor_threads; ++w) {
                     scope.spawn([&](TaskContext& wctx) -> coro::CoroTask<void> {
+                        [[maybe_unused]] auto producer_guard =
+                            result_chan->adopt_producer();
                         while (auto input =
                                    co_await wctx.receive_async(chunk_chan)) {
                             ChunkAggregatorUtility agg;
                             result_chan->send_blocking(agg.process(*input));
                         }
-                        result_chan->release_producer();
                         co_return;
                     });
                 }

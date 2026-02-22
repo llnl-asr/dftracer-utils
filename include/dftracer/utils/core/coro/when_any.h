@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 
+#include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
 
 #include <atomic>
@@ -16,12 +17,6 @@
 
 // Timer service needed for TimeoutAwaitable
 #include <dftracer/utils/core/common/timer_service.h>
-
-namespace dftracer::utils {
-class Executor;
-void schedule_coroutine_resumption_helper(Executor* executor,
-                                          std::coroutine_handle<> handle);
-}  // namespace dftracer::utils
 
 namespace dftracer::utils::coro {
 

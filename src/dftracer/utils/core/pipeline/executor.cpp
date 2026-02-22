@@ -435,10 +435,6 @@ void Executor::wake_all_workers() {
     }
 }
 
-// Forward declaration for when_all.h (avoids circular dependency)
-void schedule_coroutine_resumption_helper(Executor* executor,
-                                          std::coroutine_handle<> handle);
-
 // Helper function for when_all.h (avoids circular dependency)
 void schedule_coroutine_resumption_helper(Executor* executor,
                                           std::coroutine_handle<> handle) {

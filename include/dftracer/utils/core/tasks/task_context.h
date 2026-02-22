@@ -239,16 +239,12 @@ class TaskContext {
     bool has_async_io() const;
 
     /**
-     * Async receive from channel (offloads blocking receive to I/O thread)
+     * Async receive from channel (coroutine-native)
      *
-     * This method wraps channel.receive() and offloads it to the I/O thread
-     * pool if available, preventing worker threads from blocking.
-     *
-     * Use for: Receiving from channels in coroutine-based tasks
+     * Suspends the current coroutine without blocking an I/O thread.
      *
      * @param channel Channel to receive from
-     * @return IOAwaitable<std::optional<T>> - Some(value) if received, None if
-     * channel closed
+     * @return Awaitable yielding std::optional<T>
      *
      * Examples:
      * @code
@@ -262,36 +258,16 @@ class TaskContext {
      * @endcode
      */
     template <typename T>
-    auto receive_async(coro::Channel<T>& channel)
-        -> coro::IOAwaitable<std::optional<T>> {
-        return spawn_io([&channel]() -> std::optional<T> {
-            T item;
-            if (channel.receive(item)) {
-                return std::optional<T>(std::move(item));
-            }
-            return std::nullopt;
-        });
+    auto receive_async(coro::Channel<T>& channel) {
+        return channel.receive_async();
     }
 
     /**
      * Async receive from channel (shared_ptr version)
-     *
-     * Accepts a shared_ptr to the channel, ensuring the channel
-     * outlives the I/O operation.
-     *
-     * @param channel shared_ptr to the channel
-     * @return IOAwaitable that resolves to std::optional<T>
      */
     template <typename T>
-    auto receive_async(std::shared_ptr<coro::Channel<T>> channel)
-        -> coro::IOAwaitable<std::optional<T>> {
-        return spawn_io([channel]() -> std::optional<T> {
-            T item;
-            if (channel->receive(item)) {
-                return std::optional<T>(std::move(item));
-            }
-            return std::nullopt;
-        });
+    auto receive_async(std::shared_ptr<coro::Channel<T>> channel) {
+        return channel->receive_async();
     }
 
     // ========================================================================

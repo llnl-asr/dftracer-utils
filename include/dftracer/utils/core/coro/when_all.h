@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ALL_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ALL_H
 
+#include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
 
 #include <atomic>
@@ -11,12 +12,6 @@
 #include <tuple>
 #include <utility>
 #include <vector>
-
-namespace dftracer::utils {
-class Executor;
-void schedule_coroutine_resumption_helper(Executor* executor,
-                                          std::coroutine_handle<> handle);
-}  // namespace dftracer::utils
 
 namespace dftracer::utils::coro {
 

@@ -13,7 +13,6 @@
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <fstream>
@@ -133,7 +132,8 @@ TEST_SUITE("ReorganizationPlanner") {
 
     TEST_CASE("Plan with single group") {
         std::string test_dir =
-            "/tmp/test_planner_single_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_planner_single")
+                .string();
         fs::create_directories(test_dir);
 
         std::string trace_file = create_planner_test_trace(test_dir);
@@ -204,7 +204,8 @@ TEST_SUITE("ReorganizationPlanner") {
 
     TEST_CASE("Plan with multiple groups") {
         std::string test_dir =
-            "/tmp/test_planner_multi_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_planner_multi")
+                .string();
         fs::create_directories(test_dir);
 
         std::string trace_file = create_planner_test_trace(test_dir);
@@ -247,7 +248,7 @@ TEST_SUITE("ReorganizationPlanner") {
 
     TEST_CASE("Metadata in all groups") {
         std::string test_dir =
-            "/tmp/test_planner_meta_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_planner_meta").string();
         fs::create_directories(test_dir);
 
         std::string trace_file = create_planner_test_trace(test_dir);
@@ -282,7 +283,7 @@ TEST_SUITE("ReorganizationPlanner") {
 
     TEST_CASE("Provenance insert and query") {
         std::string test_dir =
-            "/tmp/test_planner_prov_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_planner_prov").string();
         fs::create_directories(test_dir);
         std::string midx_path = test_dir + "/test_prov.pfw.gz.midx";
 

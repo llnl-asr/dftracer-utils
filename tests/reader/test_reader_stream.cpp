@@ -276,13 +276,6 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream") {
                 read_count++;
                 total_bytes += bytes_read;
 
-                // Count newlines - should be multiple per read
-                int newlines = 0;
-                for (std::size_t i = 0; i < bytes_read; i++) {
-                    if (buffer[i] == '\n') {
-                        newlines++;
-                    }
-                }
             } else {
                 break;
             }

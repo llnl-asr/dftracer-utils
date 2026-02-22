@@ -7,15 +7,17 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <string>
 #include <vector>
 
 using namespace dftracer::utils::utilities::io;
+using namespace dft_utils_test;
 
 TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
-    fs::path test_file = "test_streaming_writer.txt";
+    fs::path test_file = make_unique_test_path("test_streaming_writer.txt");
 
     SUBCASE("Write single chunk") {
         {
@@ -83,7 +85,7 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Binary Data") {
-    fs::path test_file = "test_binary_writer.bin";
+    fs::path test_file = make_unique_test_path("test_binary_writer.bin");
 
     SUBCASE("Write binary data") {
         {
@@ -132,7 +134,7 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Append Mode") {
-    fs::path test_file = "test_append_writer.txt";
+    fs::path test_file = make_unique_test_path("test_append_writer.txt");
 
     // Write initial content
     {
@@ -158,7 +160,8 @@ TEST_CASE("StreamingFileWriterUtility - Append Mode") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
-    fs::path test_dir = "test_nested/dir/structure";
+    fs::path test_root = make_unique_test_path("test_nested");
+    fs::path test_dir = test_root / "dir" / "structure";
     fs::path test_file = test_dir / "file.txt";
 
     SUBCASE("Auto-create directories") {
@@ -172,7 +175,7 @@ TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
         CHECK(fs::exists(test_file));
         CHECK(fs::exists(test_dir));
 
-        fs::remove_all("test_nested");
+        fs::remove_all(test_root);
     }
 
     SUBCASE("Don't create directories") {
@@ -184,7 +187,7 @@ TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
 
 TEST_CASE("StreamingFileWriterUtility - Error Handling") {
     SUBCASE("Write to closed file") {
-        fs::path test_file = "test_closed_writer.txt";
+        fs::path test_file = make_unique_test_path("test_closed_writer.txt");
         StreamingFileWriterUtility writer(test_file);
         writer.close();
 
@@ -203,7 +206,7 @@ TEST_CASE("StreamingFileWriterUtility - Error Handling") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Large Files") {
-    fs::path test_file = "test_large_writer.dat";
+    fs::path test_file = make_unique_test_path("test_large_writer.dat");
 
     SUBCASE("Write 1MB in chunks") {
         {
@@ -245,7 +248,7 @@ TEST_CASE("StreamingFileWriterUtility - Large Files") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Round Trip") {
-    fs::path test_file = "test_round_trip.txt";
+    fs::path test_file = make_unique_test_path("test_round_trip.txt");
 
     SUBCASE("Write and read back") {
         std::string original_data;
@@ -272,7 +275,7 @@ TEST_CASE("StreamingFileWriterUtility - Round Trip") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Automatic Closure") {
-    fs::path test_file = "test_auto_close.txt";
+    fs::path test_file = make_unique_test_path("test_auto_close.txt");
 
     SUBCASE("Destructor closes file") {
         {
@@ -294,7 +297,7 @@ TEST_CASE("StreamingFileWriterUtility - Automatic Closure") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
-    fs::path test_file = "test_data_types.txt";
+    fs::path test_file = make_unique_test_path("test_data_types.txt");
 
     SUBCASE("Write text data") {
         {
@@ -340,7 +343,7 @@ TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
-    fs::path test_file = "test_truncate_append.txt";
+    fs::path test_file = make_unique_test_path("test_truncate_append.txt");
 
     // Write initial data
     {
@@ -368,7 +371,7 @@ TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
 }
 
 TEST_CASE("StreamingFileWriterUtility - Path Information") {
-    fs::path test_file = "test_path_info.txt";
+    fs::path test_file = make_unique_test_path("test_path_info.txt");
 
     {
         StreamingFileWriterUtility writer(test_file);

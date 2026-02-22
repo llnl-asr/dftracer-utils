@@ -20,7 +20,6 @@
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -263,7 +262,7 @@ static const SegmentInterval* find_segment(
 TEST_SUITE("ReconstructIntegration") {
     TEST_CASE("Round-trip: reorganize then reconstruct") {
         std::string test_dir =
-            "/tmp/test_recon_integ_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_recon_integ").string();
         std::string input_dir = test_dir + "/input";
         std::string reorg_dir = test_dir + "/reorg";
         std::string recon_dir = test_dir + "/reconstruct";

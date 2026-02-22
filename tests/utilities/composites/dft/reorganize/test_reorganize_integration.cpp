@@ -18,7 +18,6 @@
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-#include <unistd.h>
 
 #include <cstdio>
 #include <cstring>
@@ -237,7 +236,7 @@ static void execute_extraction(const ExtractionPlan& plan,
 TEST_SUITE("ReorganizeIntegration") {
     TEST_CASE("Full pipeline: two groups + remainder") {
         std::string test_dir =
-            "/tmp/test_reorg_integ_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_reorg_integ").string();
         std::string input_dir = test_dir + "/input";
         std::string output_dir = test_dir + "/output";
         fs::create_directories(input_dir);
@@ -327,7 +326,8 @@ TEST_SUITE("ReorganizeIntegration") {
 
     TEST_CASE("Compression and sidecar building") {
         std::string test_dir =
-            "/tmp/test_reorg_compress_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_reorg_compress")
+                .string();
         std::string input_dir = test_dir + "/input";
         std::string output_dir = test_dir + "/output";
         fs::create_directories(input_dir);

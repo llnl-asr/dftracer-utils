@@ -7,6 +7,7 @@
 #include <dftracer/utils/core/pipeline/scheduler.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <atomic>
 #include <chrono>
@@ -17,6 +18,7 @@
 #include <vector>
 
 using namespace dftracer::utils;
+using namespace dft_utils_test;
 
 // ============================================================================
 // IOExecutor Basic Tests
@@ -640,8 +642,7 @@ TEST_CASE("Real IO - Write and read file") {
     io_executor->start();
 
     const auto test_file =
-        (fs::temp_directory_path() / "test_io_executor_write_read.txt")
-            .string();
+        make_unique_test_path("test_io_executor_write_read.txt").string();
     const std::string test_data = "Hello from IOExecutor!";
     std::atomic<bool> write_done{false};
     std::atomic<bool> read_done{false};
@@ -710,10 +711,9 @@ TEST_CASE("Real IO - Multiple file writes") {
 
     // Create multiple write operations
     for (int i = 0; i < NUM_FILES; ++i) {
-        auto file_path =
-            (fs::temp_directory_path() /
-             ("test_io_executor_file_" + std::to_string(i) + ".txt"))
-                .string();
+        auto file_path = make_unique_test_path("test_io_executor_file_" +
+                                               std::to_string(i) + ".txt")
+                             .string();
         file_paths.push_back(file_path);
 
         auto write_func = [file_path, i, &completed]() {
@@ -770,8 +770,8 @@ TEST_CASE("Real IO - Concurrent reads and writes") {
 
     // Submit interleaved write and read operations
     for (int i = 0; i < NUM_OPS / 2; ++i) {
-        auto file_path = (fs::temp_directory_path() /
-                          ("test_io_concurrent_" + std::to_string(i) + ".txt"))
+        auto file_path = make_unique_test_path("test_io_concurrent_" +
+                                               std::to_string(i) + ".txt")
                              .string();
         file_paths.push_back(file_path);
 
@@ -794,12 +794,17 @@ TEST_CASE("Real IO - Concurrent reads and writes") {
 
         // Read operation
         auto read_func = [file_path, &read_count]() {
-            FILE* f = fopen(file_path.c_str(), "r");
-            if (f) {
-                char buffer[256];
-                fread(buffer, 1, sizeof(buffer), f);
-                fclose(f);
-                read_count.fetch_add(1);
+            for (int attempt = 0; attempt < 100; ++attempt) {
+                FILE* f = fopen(file_path.c_str(), "r");
+                if (f) {
+                    char buffer[256];
+                    size_t bytes_read = fread(buffer, 1, sizeof(buffer), f);
+                    (void)bytes_read;
+                    fclose(f);
+                    read_count.fetch_add(1);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
         };
 
@@ -832,7 +837,7 @@ TEST_CASE("Real IO - Large file write and read") {
     io_executor->start();
 
     const auto test_file =
-        (fs::temp_directory_path() / "test_io_large_file.bin").string();
+        make_unique_test_path("test_io_large_file.bin").string();
     constexpr size_t FILE_SIZE = 1024 * 1024;  // 1 MB
     std::vector<char> write_data(FILE_SIZE);
 
@@ -903,8 +908,7 @@ TEST_CASE("Real IO - File stat operations") {
 
     io_executor->start();
 
-    const auto test_file =
-        (fs::temp_directory_path() / "test_io_stat.txt").string();
+    const auto test_file = make_unique_test_path("test_io_stat.txt").string();
     const std::string test_content = "Test content for stat";
 
     std::atomic<bool> write_done{false};

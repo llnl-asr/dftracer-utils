@@ -3,16 +3,18 @@
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <dftracer/utils/utilities/io/binary_file_reader_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <vector>
 
 using namespace dftracer::utils::utilities::io;
 using namespace dftracer::utils::utilities::filesystem;
+using namespace dft_utils_test;
 
 TEST_CASE("BinaryFileReaderUtility - Basic Operations") {
     BinaryFileReaderUtility reader;
-    fs::path test_file = "test_binary_file_reader.bin";
+    fs::path test_file = make_unique_test_path("test_binary_file_reader.bin");
 
     SUBCASE("Read simple binary file") {
         // Create test file with binary data
@@ -75,7 +77,7 @@ TEST_CASE("BinaryFileReaderUtility - Error Handling") {
     }
 
     SUBCASE("Directory instead of file") {
-        fs::path test_dir = "test_dir_binary_reader";
+        fs::path test_dir = make_unique_test_path("test_dir_binary_reader");
         fs::create_directory(test_dir);
 
         FileEntry entry{test_dir};
@@ -87,7 +89,7 @@ TEST_CASE("BinaryFileReaderUtility - Error Handling") {
 
 TEST_CASE("BinaryFileReaderUtility - Different File Sizes") {
     BinaryFileReaderUtility reader;
-    fs::path test_file = "test_binary_sizes.bin";
+    fs::path test_file = make_unique_test_path("test_binary_sizes.bin");
 
     SUBCASE("Single byte") {
         {
@@ -142,7 +144,7 @@ TEST_CASE("BinaryFileReaderUtility - Different File Sizes") {
 
 TEST_CASE("BinaryFileReaderUtility - Different Data Patterns") {
     BinaryFileReaderUtility reader;
-    fs::path test_file = "test_binary_patterns.bin";
+    fs::path test_file = make_unique_test_path("test_binary_patterns.bin");
 
     SUBCASE("Sequential bytes") {
         {
@@ -223,7 +225,7 @@ TEST_CASE("BinaryFileReaderUtility - Different Data Patterns") {
 
 TEST_CASE("BinaryFileReaderUtility - Real World Scenarios") {
     BinaryFileReaderUtility reader;
-    fs::path test_file = "test_binary_real_world.bin";
+    fs::path test_file = make_unique_test_path("test_binary_real_world.bin");
 
     SUBCASE("Image header (PNG-like)") {
         {
@@ -277,7 +279,7 @@ TEST_CASE("BinaryFileReaderUtility - Composition with DirectoryScanner") {
     DirectoryScannerUtility scanner;
 
     // Create test directory with binary files
-    fs::path test_dir = "test_binary_composition_dir";
+    fs::path test_dir = make_unique_test_path("test_binary_composition_dir");
     fs::create_directory(test_dir);
 
     {

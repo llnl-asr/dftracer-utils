@@ -3,7 +3,6 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-#include <unistd.h>
 
 #include <fstream>
 #include <string>
@@ -58,7 +57,8 @@ static std::pair<std::string, std::size_t> create_test_trace_gz(
 TEST_SUITE("ChunkIndexerUtility") {
     TEST_CASE("ChunkIndexer - Process trace with metadata and events") {
         std::string test_dir =
-            "/tmp/test_chunk_indexer_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_chunk_indexer")
+                .string();
         fs::create_directories(test_dir);
 
         auto [trace_file, uncompressed_size] =
@@ -125,7 +125,8 @@ TEST_SUITE("ChunkIndexerUtility") {
 
     TEST_CASE("ChunkIndexer - Extra dimensions with nested keys") {
         std::string test_dir =
-            "/tmp/test_chunk_indexer_extra_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_chunk_indexer_extra")
+                .string();
         fs::create_directories(test_dir);
 
         auto [trace_file, uncompressed_size] =
@@ -170,7 +171,8 @@ TEST_SUITE("ChunkIndexerUtility") {
 
     TEST_CASE("ChunkIndexer - Events missing some fields") {
         std::string test_dir =
-            "/tmp/test_chunk_indexer_missing_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_chunk_indexer_missing")
+                .string();
         fs::create_directories(test_dir);
 
         std::string plain_path = test_dir + "/test_sparse.trace";

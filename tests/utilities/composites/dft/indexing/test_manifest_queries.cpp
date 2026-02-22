@@ -3,9 +3,10 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <doctest/doctest.h>
-#include <unistd.h>
 
 #include <string>
+
+#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
@@ -22,7 +23,8 @@ TEST_SUITE("ManifestQueries") {
 
     TEST_CASE("Insert and query event ranges") {
         std::string test_dir =
-            "/tmp/test_manifest_queries_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_manifest_queries")
+                .string();
         fs::create_directories(test_dir);
         std::string midx_path = test_dir + "/test.pfw.gz.midx";
 
@@ -61,7 +63,8 @@ TEST_SUITE("ManifestQueries") {
 
     TEST_CASE("Insert and query metadata lines") {
         std::string test_dir =
-            "/tmp/test_manifest_meta_q_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_manifest_meta_q")
+                .string();
         fs::create_directories(test_dir);
         std::string midx_path = test_dir + "/test.pfw.gz.midx";
 
@@ -93,7 +96,8 @@ TEST_SUITE("ManifestQueries") {
 
     TEST_CASE("Delete operations") {
         std::string test_dir =
-            "/tmp/test_manifest_delete_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_manifest_delete")
+                .string();
         fs::create_directories(test_dir);
         std::string midx_path = test_dir + "/test.pfw.gz.midx";
 

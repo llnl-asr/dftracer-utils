@@ -2,7 +2,13 @@
 #define DFTRACER_UTILS_TESTS_TESTING_UTILITIES_H
 
 #ifdef __cplusplus
+#include <dftracer/utils/core/common/filesystem.h>
+
+#include <atomic>
+#include <chrono>
+#include <functional>
 #include <string>
+#include <thread>
 #include <vector>
 extern "C" {
 #endif
@@ -101,12 +107,30 @@ int compress_file_to_gzip_c(const char* input_file, const char* output_file);
 
 size_t mb_to_b(double mb);
 
+/**
+ * Generate a unique path for temporary tests.
+ * Returns allocated string - caller must free
+ */
+char* test_make_unique_test_path(const char* name);
+
 #ifdef __cplusplus
 }
 
 namespace dft_utils_test {
 
 enum class Format { GZIP = 0, TAR_GZIP = 1 };
+
+inline fs::path make_unique_test_path(const std::string& name) {
+    static std::atomic<unsigned long long> counter{0};
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+    const auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
+    const auto unique_id =
+        std::to_string(now) + "_" + std::to_string(tid) + "_" +
+        std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
+    return fs::temp_directory_path() / (name + "_" + unique_id);
+}
 
 struct TarFileInfo {
     std::string filename;

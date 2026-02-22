@@ -4,12 +4,13 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.h>
 #include <doctest/doctest.h>
-#include <unistd.h>
 
 #include <fstream>
 #include <map>
 #include <string>
 #include <vector>
+
+#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
@@ -30,7 +31,8 @@ TEST_SUITE("ReconstructionPlanner") {
 
     TEST_CASE("Single reorganized file with provenance") {
         std::string test_dir =
-            "/tmp/test_recon_planner_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_recon_planner")
+                .string();
         fs::create_directories(test_dir);
 
         // Create a dummy reorganized file
@@ -114,7 +116,8 @@ TEST_SUITE("ReconstructionPlanner") {
         "Multiple reorganized files merge "
         "correctly") {
         std::string test_dir =
-            "/tmp/test_recon_planner_merge_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_recon_planner_merge")
+                .string();
         fs::create_directories(test_dir);
 
         // Create two dummy reorganized files
@@ -203,7 +206,8 @@ TEST_SUITE("ReconstructionPlanner") {
 
     TEST_CASE("File without provenance is skipped") {
         std::string test_dir =
-            "/tmp/test_recon_planner_noprov_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_recon_planner_noprov")
+                .string();
         fs::create_directories(test_dir);
 
         // Create a dummy file

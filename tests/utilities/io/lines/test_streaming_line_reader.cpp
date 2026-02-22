@@ -15,10 +15,11 @@ using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dft_utils_test;
 
 TEST_SUITE("StreamingLineReader") {
-    fs::path test_file = "test_streaming_line_reader.txt";
-    fs::path gz_file = "test_streaming_line_reader.gz";
-    fs::path tar_gz_file = "test_archive.tar.gz";
-    fs::path tgz_file = "test_archive.tgz";
+    fs::path test_file =
+        make_unique_test_path("test_streaming_line_reader.txt");
+    fs::path gz_file = make_unique_test_path("test_streaming_line_reader.gz");
+    fs::path tar_gz_file = make_unique_test_path("test_archive.tar.gz");
+    fs::path tgz_file = make_unique_test_path("test_archive.tgz");
 
     TEST_CASE("StreamingLineReader - Basic Plain File Reading") {
         SUBCASE("Read entire plain text file") {

@@ -81,6 +81,13 @@ foreach(test_file ${TEST_CPP_SOURCES})
   endif()
 
   add_test(NAME ${bin_exec} COMMAND ${target_name})
+
+  # Some highly concurrent tests can deadlock under extreme executor
+  # oversubscription when all binaries run in parallel. Keep them bounded.
+  if(bin_exec STREQUAL "pipeline/test_task_scope"
+     OR bin_exec STREQUAL "coro/test_channel")
+    set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 180)
+  endif()
 endforeach()
 
 # +++++++++++++++++++++++++++++++++++++++++

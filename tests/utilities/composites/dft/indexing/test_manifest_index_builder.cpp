@@ -12,7 +12,6 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-#include <unistd.h>
 
 #include <fstream>
 #include <string>
@@ -49,7 +48,8 @@ static std::string create_test_trace(const std::string& dir) {
 TEST_SUITE("ManifestIndexBuilder") {
     TEST_CASE("Build manifest index and query results") {
         std::string test_dir =
-            "/tmp/test_manifest_builder_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_manifest_builder")
+                .string();
         fs::create_directories(test_dir);
 
         std::string trace_file = create_test_trace(test_dir);
@@ -129,7 +129,8 @@ TEST_SUITE("ManifestIndexBuilder") {
 
     TEST_CASE("Skip already-indexed file") {
         std::string test_dir =
-            "/tmp/test_manifest_skip_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_manifest_skip")
+                .string();
         fs::create_directories(test_dir);
 
         std::string trace_file = create_test_trace(test_dir);

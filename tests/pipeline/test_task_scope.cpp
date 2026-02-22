@@ -17,6 +17,21 @@
 
 using namespace dftracer::utils;
 
+namespace {
+
+static void wait_for_task_completion_with_deadline(
+    const std::shared_ptr<Task>& task,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!task->is_completed()) {
+        REQUIRE(std::chrono::steady_clock::now() <= deadline);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(task->is_completed());
+}
+
+}  // namespace
+
 // ============================================================================
 // gcc11_bandaid: Helper coroutine functions to avoid GCC 11 ICE/SIGSEGV
 // with nested coroutine lambdas in scope.spawn()
@@ -161,7 +176,7 @@ TEST_CASE("TaskScope - Basic construction and spawning") {
         "ParentWithScope");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     CHECK(task_count.load() == 3);
 
@@ -187,7 +202,7 @@ TEST_CASE("TaskScope - Automatic join via ctx.scope()") {
         "AutoJoinScope");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     CHECK(sum.load() == 55);
 
@@ -212,7 +227,7 @@ TEST_CASE("TaskScope - More threads than tasks") {
         "MoreThreadsThanTasks");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     CHECK(sum.load() == 55);
 
@@ -237,7 +252,7 @@ TEST_CASE("TaskScope - Regression test for hang fix") {
         "HangRegressionTest");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     CHECK(sum.load() == 15);
 
@@ -267,7 +282,7 @@ TEST_CASE("TaskScope - spawn_producer with synchronous Generator") {
         "ProducerConsumerSync");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     // Sum: 0 + 10 + 20 + 30 + 40 = 100
     CHECK(items_received.load() == 100);
@@ -294,7 +309,7 @@ TEST_CASE("TaskScope - spawn_consumers with multiple consumers") {
         "MultipleConsumers");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     CHECK(items_processed.load() == 20);
 
@@ -343,7 +358,7 @@ TEST_CASE("TaskScope - spawn_async_producer with AsyncGenerator and I/O") {
         "AsyncGeneratorWithIO");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     // Sum: 1+2+3+...+10 = 55
     CHECK(sum.load() == 55);
@@ -397,7 +412,7 @@ TEST_CASE("TaskScope - spawn_async_producer with AsyncGenerator") {
         "AsyncProducerConsumer");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     // Sum: 0 + 10 + 20 + 30 + 40 = 100
     CHECK(items_received.load() == 100);
@@ -448,7 +463,7 @@ TEST_CASE("TaskScope - AsyncGenerator with multiple async producers") {
         "MultipleAsyncProducers");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     // 2 producers * 5 items each = 10 items
     CHECK(total_items.load() == 10);
@@ -488,7 +503,7 @@ TEST_CASE("TaskScope - Generator produces correct sum") {
         "SyncGeneratorSum");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     // Sum: 1+2+3+4+5 = 15
     CHECK(sync_result.load() == 15);
@@ -535,7 +550,7 @@ TEST_CASE("TaskScope - AsyncGenerator produces correct sum") {
         "AsyncGeneratorSum");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     // Sum: 1+2+3+4+5 = 15
     CHECK(async_result.load() == 15);
@@ -605,7 +620,7 @@ TEST_CASE(
         "SyncThenAsyncComparison");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     // Both should produce same sum: 1+2+3+4+5 = 15
     CHECK(sync_result.load() == 15);
@@ -664,7 +679,7 @@ TEST_CASE("TaskScope - AsyncGenerator with complex async operations") {
         "ComplexAsyncOperations");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     // Sum: 3 + 5 + 7 + 9 + 11 = 35
     CHECK(sum.load() == 35);
@@ -717,7 +732,7 @@ TEST_CASE("TaskScope - AsyncGenerator with multiple async consumers") {
         "AsyncProducerMultipleAsyncConsumers");
 
     scheduler.schedule(parent_task);
-    parent_task->wait();
+    wait_for_task_completion_with_deadline(parent_task);
 
     CHECK(items_processed.load() == 20);
 

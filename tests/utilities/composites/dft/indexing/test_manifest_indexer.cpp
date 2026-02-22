@@ -3,7 +3,6 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <fstream>
@@ -55,7 +54,8 @@ static std::pair<std::string, std::size_t> create_manifest_test_trace(
 TEST_SUITE("ManifestIndexer") {
     TEST_CASE("Manifest collection - event line groups") {
         std::string test_dir =
-            "/tmp/test_manifest_indexer_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_manifest_indexer")
+                .string();
         fs::create_directories(test_dir);
 
         auto [trace_file, uncompressed_size] =
@@ -121,7 +121,8 @@ TEST_SUITE("ManifestIndexer") {
 
     TEST_CASE("Manifest collection - metadata line groups") {
         std::string test_dir =
-            "/tmp/test_manifest_meta_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_manifest_meta")
+                .string();
         fs::create_directories(test_dir);
 
         auto [trace_file, uncompressed_size] =
@@ -178,7 +179,8 @@ TEST_SUITE("ManifestIndexer") {
 
     TEST_CASE("Manifest disabled by default") {
         std::string test_dir =
-            "/tmp/test_manifest_disabled_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_manifest_disabled")
+                .string();
         fs::create_directories(test_dir);
 
         auto [trace_file, uncompressed_size] =

@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/indexer/internal/tar/tar_indexer.h>
 
 #include <argparse/argparse.hpp>
+#include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -108,7 +109,8 @@ int main(int argc, char** argv) {
             printf("  Format: %s\n", indexer->get_format_name());
             printf("  Path: %s\n", indexer->get_archive_path().c_str());
             printf("  Index: %s\n", indexer->get_idx_path().c_str());
-            printf("  Total size: %zu bytes\n", indexer->get_max_bytes());
+            printf("  Total size: %" PRIu64 " bytes\n",
+                   static_cast<std::uint64_t>(indexer->get_max_bytes()));
             printf("  Total lines: %zu\n", indexer->get_num_lines());
             printf("  Checkpoints: %zu\n", indexer->get_checkpoints().size());
         }

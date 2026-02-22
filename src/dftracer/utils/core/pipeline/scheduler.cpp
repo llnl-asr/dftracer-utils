@@ -834,17 +834,13 @@ void Scheduler::scheduling_loop() {
             process_ready_task(task);
         }
 
-        // Only clear the flag if queue is actually empty after processing.
-        // Use compare_exchange to avoid overwriting a concurrent set to true.
-        // If someone set it to true while we were processing, we'll see it
-        // on the next iteration.
-        bool expected = true;
-        if (!ready_queue_.try_dequeue(task)) {
-            // Queue is empty, try to clear the flag
-            has_ready_tasks_.compare_exchange_strong(expected, false,
-                                                     std::memory_order_acq_rel);
-        } else {
-            // Found another task, process it
+        // Clear ready flag only after double-checking queue emptiness.
+        // A producer can enqueue between the first empty observation and the
+        // flag update. Re-checking avoids leaving queued work with
+        // has_ready_tasks_ == false.
+        has_ready_tasks_.store(false, std::memory_order_release);
+        if (ready_queue_.try_dequeue(task)) {
+            has_ready_tasks_.store(true, std::memory_order_release);
             process_ready_task(task);
         }
     }

@@ -4,10 +4,11 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <doctest/doctest.h>
-#include <unistd.h>
 
 #include <cmath>
 #include <string>
+
+#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
@@ -51,7 +52,7 @@ static void populate_test_bidx(const std::string& bidx_path,
 TEST_SUITE("StatisticsAggregatorUtility") {
     TEST_CASE("Aggregator - Basic aggregation from 3 chunks") {
         std::string test_dir =
-            "/tmp/test_stats_agg_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_stats_agg").string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -100,7 +101,8 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         StatisticsAggregatorInput input;
         input.file_path = "/fake/nonexistent.pfw.gz";
         input.bidx_path =
-            "/tmp/nonexistent_" + std::to_string(getpid()) + ".bidx";
+            dft_utils_test::make_unique_test_path("nonexistent").string() +
+            ".bidx";
 
         auto result = aggregator.process(input);
 
@@ -110,7 +112,8 @@ TEST_SUITE("StatisticsAggregatorUtility") {
 
     TEST_CASE("Aggregator - File not in bidx") {
         std::string test_dir =
-            "/tmp/test_stats_agg_notfound_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_stats_agg_notfound")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -132,7 +135,8 @@ TEST_SUITE("StatisticsAggregatorUtility") {
 
     TEST_CASE("Aggregator - Empty chunk_statistics") {
         std::string test_dir =
-            "/tmp/test_stats_agg_empty_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_stats_agg_empty")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -159,7 +163,8 @@ TEST_SUITE("StatisticsAggregatorUtility") {
 
     TEST_CASE("Aggregator - Welford's variance correctness") {
         std::string test_dir =
-            "/tmp/test_stats_agg_welford_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_stats_agg_welford")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";

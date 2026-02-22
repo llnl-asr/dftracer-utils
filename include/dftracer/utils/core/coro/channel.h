@@ -78,11 +78,6 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             std::size_t prev = channel_->num_producers_.fetch_sub(
                 1, std::memory_order_acq_rel);
             if (prev == 1) {
-                // Wait until no in-flight sends remain
-                while (channel_->active_sends_.load(
-                           std::memory_order_acquire) != 0) {
-                    std::this_thread::yield();
-                }
                 // Mark closed for consumers only if user hasn't closed already
                 if (!channel_->user_closed_.load(std::memory_order_acquire))
                     channel_->closed_.store(true, std::memory_order_release);
@@ -106,8 +101,11 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                     std::size_t remaining = channel_->num_producers_.fetch_sub(
                         1, std::memory_order_acq_rel);
                     if (remaining == 1) {
-                        std::atomic_thread_fence(std::memory_order_seq_cst);
-                        channel_->close();
+                        if (!channel_->user_closed_.load(
+                                std::memory_order_acquire)) {
+                            channel_->closed_.store(true,
+                                                    std::memory_order_release);
+                        }
                     }
                 }
                 channel_ = other.channel_;
@@ -188,9 +186,6 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         std::size_t prev =
             num_producers_.fetch_sub(1, std::memory_order_acq_rel);
         if (prev == 1) {
-            while (active_sends_.load(std::memory_order_acquire) != 0) {
-                std::this_thread::yield();
-            }
             if (!user_closed_.load(std::memory_order_acquire)) {
                 closed_.store(true, std::memory_order_release);
             }
@@ -247,8 +242,11 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         for (;;) {
             if (queue_.try_dequeue(item)) return true;
 
-            // If there are still producers, wait a bit for data
-            if (num_producers_.load(std::memory_order_acquire) > 0) {
+            // Keep waiting while producers exist or sends are still in-flight.
+            // This avoids a race where producer count reaches zero slightly
+            // before the final enqueue becomes visible.
+            if (num_producers_.load(std::memory_order_acquire) > 0 ||
+                active_sends_.load(std::memory_order_acquire) > 0) {
                 if (queue_.wait_dequeue_timed(item,
                                               std::chrono::milliseconds(1)))
                     return true;
@@ -263,6 +261,11 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             }
             if (queue_.wait_dequeue_timed(item, std::chrono::microseconds(200)))
                 return true;
+
+            // A sender may have become active during the final-drain checks.
+            if (active_sends_.load(std::memory_order_acquire) > 0) {
+                continue;
+            }
 
             // Double-check once more; if still nothing, we’re done.
             if (!queue_.try_dequeue(item)) return false;

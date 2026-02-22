@@ -487,10 +487,14 @@ TEST_CASE("Scheduler - Graceful shutdown") {
         }
     });
 
-    // Wait for tasks to actually start (more reliable than fixed sleep)
-    for (int i = 0; i < 100 && !tasks_started.load(); ++i) {
+    // Wait for tasks to actually start (bounded wait to avoid hanging forever)
+    auto start_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (!tasks_started.load() &&
+           std::chrono::steady_clock::now() < start_deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    REQUIRE(tasks_started.load());
 
     // Request shutdown
     scheduler.request_shutdown();
@@ -527,10 +531,14 @@ TEST_CASE("Scheduler - Shutdown during execution") {
         }
     });
 
-    // Wait for task to start
-    while (!task_running.load()) {
+    // Wait for task to start (bounded wait to avoid hanging forever)
+    auto running_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (!task_running.load() &&
+           std::chrono::steady_clock::now() < running_deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    REQUIRE(task_running.load());
 
     // Request shutdown while task is running
     scheduler.request_shutdown();

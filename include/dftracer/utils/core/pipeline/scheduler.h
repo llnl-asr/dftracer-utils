@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_CORE_PIPELINE_SCHEDULER_H
 #define DFTRACER_UTILS_CORE_PIPELINE_SCHEDULER_H
 
-#include <concurrentqueue.h>
 #include <dftracer/utils/core/common/sharded_mutex.h>
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
@@ -10,13 +9,10 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <coroutine>
 #include <cstddef>
 #include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,54 +22,18 @@ namespace dftracer::utils {
 
 class Task;
 class Executor;
-struct ExecutorProgress;
 class Watchdog;
-
-/**
- * Task priority levels for scheduling
- * Lower values = higher priority
- */
-enum class TaskPriority {
-    CRITICAL = 0,   // Highest priority - critical path tasks
-    HIGH = 1,       // High priority - important tasks
-    NORMAL = 2,     // Default priority
-    LOW = 3,        // Low priority
-    BACKGROUND = 4  // Lowest priority - background tasks
-};
-
-/**
- * Comprehensive scheduler metrics including executor progress
- */
-struct SchedulerMetrics {
-    // Scheduling performance
-    std::size_t ready_queue_depth;
-    std::size_t total_scheduled;
-    std::size_t scheduling_threads_active;
-    double avg_scheduling_latency_ms;
-
-    // Pipeline state
-    std::size_t total_pipeline_tasks;
-    std::size_t pending_tasks;
-    double pipeline_elapsed_time_ms;
-
-    // Error tracking
-    std::vector<std::pair<TaskIndex, std::string>> recent_failures;
-
-    // Priority distribution
-    std::map<TaskPriority, std::size_t> tasks_by_priority;
-
-    // Timing
-    std::chrono::steady_clock::time_point start_time;
-    std::chrono::steady_clock::time_point last_update;
-};
 
 /**
  * Scheduler - Manages task scheduling and dependency tracking
  *
+ * Tasks are submitted directly to the executor from the calling thread
+ * (source task) or from worker threads (child tasks on completion).
+ * No dedicated scheduling thread -- fully event-driven, push-based.
+ *
  * Features:
- * - Small thread pool for lightweight scheduling (1-2 threads)
  * - Traverses DAG and checks dependencies
- * - Submits ready tasks to executor queue
+ * - Submits ready tasks directly to executor
  * - Tracks completed tasks
  * - Handles error policies
  * - Supports dynamic task submission
@@ -82,14 +42,6 @@ class Scheduler {
    private:
     Executor* executor_;  // Reference to executor
     std::atomic<bool> running_{false};
-
-    std::vector<std::thread> scheduling_threads_;
-    std::atomic<bool> scheduling_running_{false};
-    std::size_t num_scheduling_threads_{1};
-
-    // Task queue for scheduling (tasks that became ready) - lock-free MPMC
-    moodycamel::ConcurrentQueue<std::shared_ptr<Task>> ready_queue_;
-    std::atomic<bool> has_ready_tasks_{false};
 
     // Watchdog integration
     std::unique_ptr<Watchdog> watchdog_;
@@ -123,12 +75,6 @@ class Scheduler {
     std::function<void(std::size_t completed, std::size_t total)>
         progress_callback_;
     std::atomic<std::size_t> total_tasks_{0};
-
-    // Metrics tracking
-    std::atomic<std::size_t> total_scheduled_{
-        0};  // Total tasks scheduled to executor
-    std::chrono::steady_clock::time_point metrics_start_time_;
-    mutable std::mutex metrics_mutex_;
 
     // Coroutine support - completion callbacks
     using CallbackMap =
@@ -237,24 +183,9 @@ class Scheduler {
     void reset();
 
     /**
-     * Check if task has completed
-     */
-    bool is_task_completed(TaskIndex task_id) const;
-
-    /**
      * Check if scheduler is running
      */
     bool is_running() const { return running_.load(); }
-
-    /**
-     * Get comprehensive metrics including executor progress
-     */
-    SchedulerMetrics get_metrics() const;
-
-    /**
-     * Get executor progress (convenience method)
-     */
-    ExecutorProgress get_executor_progress() const;
 
     /**
      * Get executor reference (for TaskFuture async suspension)
@@ -268,7 +199,7 @@ class Scheduler {
     /**
      * Register callback to be invoked when task completes
      *
-     * OPTIMIZED: Uses ShardedMutex for minimal contention.
+     * Uses ShardedMutex for minimal contention.
      * Multiple tasks can register callbacks concurrently without blocking.
      *
      * @param task_id Task identifier
@@ -291,7 +222,7 @@ class Scheduler {
     /**
      * Invoke completion callbacks for a task
      *
-     * OPTIMIZED: Only locks the specific shard for this task_id.
+     * Only locks the specific shard for this task_id.
      * Other tasks completing concurrently don't block.
      *
      * @param task_id Task identifier
@@ -306,16 +237,6 @@ class Scheduler {
      * Validate task graph types (called before scheduling)
      */
     void validate_task_types(std::shared_ptr<Task> task);
-
-    /**
-     * Schedule children of a completed task
-     */
-    void schedule_ready_children(std::shared_ptr<Task> completed_task);
-
-    /**
-     * Check if all parents of a task have completed
-     */
-    bool all_parents_completed(std::shared_ptr<Task> task) const;
 
     /**
      * Prepare input for a task from its parents' outputs
@@ -361,26 +282,6 @@ class Scheduler {
      * Used in CONTINUE/CUSTOM error policy
      */
     void skip_task_and_descendants(std::shared_ptr<Task> task);
-
-    /**
-     * Scheduling loop - runs in separate thread
-     */
-    void scheduling_loop();
-
-    /**
-     * Process a ready task
-     */
-    void process_ready_task(std::shared_ptr<Task> task);
-
-    /**
-     * Start scheduling thread
-     */
-    void start_scheduling_thread();
-
-    /**
-     * Stop scheduling thread
-     */
-    void stop_scheduling_thread();
 };
 
 }  // namespace dftracer::utils

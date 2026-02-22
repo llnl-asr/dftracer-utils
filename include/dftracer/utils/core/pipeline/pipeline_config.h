@@ -35,28 +35,23 @@ using ErrorHandler =
  * Thread Architecture:
  * - Executor threads: Worker pool that executes task functions (compute
  * threads)
- * - I/O threads: Dedicated pool for async I/O operations (optional, 0 =
- * disabled)
- * - Scheduler threads: Coordination and monitoring (usually 1)
+ * - Watchdog: Optional monitoring thread for hang detection
  * - Watchdog: Optional monitoring thread for hang detection
  *
  * Usage (Fluent API):
  *   auto config = PipelineConfig()
  *       .with_name("MyPipeline")
  *       .with_compute_threads(16)  // CPU-bound work
- *       .with_io_threads(4)        // I/O-bound work (enables async I/O)
- *       .with_scheduler_threads(2)
+ *       .with_error_policy(ErrorPolicy::FAIL_FAST)
  *       .with_error_policy(ErrorPolicy::FAIL_FAST)
  *       .with_watchdog(true)
  *       .with_global_timeout(std::chrono::seconds(30))
  *       .with_task_timeout(std::chrono::seconds(10));
  */
 struct PipelineConfig {
-    std::string name = "";       // Pipeline name
+    std::string name = "";  // Pipeline name
     std::size_t executor_threads =
-        0;                       // 0 = hardware_concurrency (compute threads)
-    std::size_t io_threads = 0;  // I/O thread pool size (0 = disabled)
-    std::size_t scheduler_threads = 1;                  // Usually 1
+        0;                  // 0 = hardware_concurrency (compute threads)
     ErrorPolicy error_policy = ErrorPolicy::FAIL_FAST;  // Error handling policy
     ErrorHandler error_handler =
         nullptr;                  // Custom error handler (for CUSTOM policy)
@@ -65,11 +60,13 @@ struct PipelineConfig {
     std::chrono::seconds default_task_timeout{0};  // 0 = wait forever
     std::chrono::seconds watchdog_interval{1};     // Check frequency
     std::chrono::seconds long_task_warning_threshold{
-        300};  // Warning threshold (5 minutes)
+        300};     // Warning threshold (5 minutes)
     std::chrono::seconds executor_idle_timeout{
-        300};  // Executor idle timeout (5 minutes)
+        300};     // Executor idle timeout (5 minutes)
     std::chrono::seconds executor_deadlock_timeout{
-        600};  // Executor deadlock timeout (10 minutes)
+        600};     // Executor deadlock timeout (10 minutes)
+    std::chrono::microseconds timeslice_duration{
+        10'000};  // Coroutine yield timeslice (10ms, 0 = disabled)
 
     /**
      * Set pipeline name
@@ -87,33 +84,6 @@ struct PipelineConfig {
         executor_threads = threads;
         return *this;
     }
-
-    /**
-     * Set number of I/O threads (enables async I/O)
-     *
-     * When set to > 0, enables IOExecutor for async I/O operations.
-     * Recommended: 2-4 threads for most workloads.
-     * 0 = disabled (spawn_io() executes inline, default)
-     *
-     * @param threads Number of I/O threads (0 = disabled)
-     */
-    PipelineConfig& with_io_threads(std::size_t threads) {
-        io_threads = threads;
-        return *this;
-    }
-
-    /**
-     * Set number of scheduler threads
-     */
-    PipelineConfig& with_scheduler_threads(std::size_t threads) {
-        scheduler_threads = threads;
-        return *this;
-    }
-
-    /**
-     * Check if async I/O is enabled
-     */
-    bool is_io_executor_enabled() const { return io_threads > 0; }
 
     /**
      * Set error handling policy
@@ -190,6 +160,14 @@ struct PipelineConfig {
     }
 
     /**
+     * Set coroutine timeslice duration (0 = disable automatic yielding)
+     */
+    PipelineConfig& with_timeslice(std::chrono::microseconds duration) {
+        timeslice_duration = duration;
+        return *this;
+    }
+
+    /**
      * Create sequential execution configuration (1 thread)
      */
     static PipelineConfig sequential() {
@@ -212,7 +190,6 @@ struct PipelineConfig {
     static PipelineConfig default_config() {
         PipelineConfig config;
         config.executor_threads = 0;  // hardware_concurrency
-        config.scheduler_threads = 1;
         config.enable_watchdog = true;
         config.global_timeout = std::chrono::seconds(0);
         config.default_task_timeout = std::chrono::seconds(0);

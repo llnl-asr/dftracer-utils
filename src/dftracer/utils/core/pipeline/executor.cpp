@@ -1,11 +1,13 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/yield.h>
 #include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/pipeline/io_executor.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 
 #include <chrono>
+#include <coroutine>
 #include <exception>
+#include <vector>
 
 namespace dftracer::utils {
 
@@ -15,6 +17,27 @@ void* get_current_worker_context() { return tls_current_worker_context; }
 
 void set_current_worker_context(void* context) {
     tls_current_worker_context = context;
+}
+
+static thread_local Executor* tls_current_executor = nullptr;
+
+Executor* Executor::current() noexcept { return tls_current_executor; }
+
+// Thread-local list of coroutine handles to destroy after the current
+// resume() returns.  FinalAwaiter pushes here instead of the shared
+// destroy_queue_ to avoid another worker freeing the frame while
+// the coroutine-suspend machinery is still accessing it.
+static thread_local std::vector<std::coroutine_handle<>> tls_pending_destroys;
+
+void schedule_thread_local_destroy(std::coroutine_handle<> h) {
+    tls_pending_destroys.push_back(h);
+}
+
+void drain_thread_local_destroys() {
+    for (auto h : tls_pending_destroys) {
+        if (h) h.destroy();
+    }
+    tls_pending_destroys.clear();
 }
 
 Executor::Executor(std::size_t num_threads, std::chrono::seconds idle_timeout,
@@ -47,13 +70,18 @@ void Executor::start() {
 
     timer_service_.start();
 
-    // Create worker contexts and start threads
+    // Create all worker contexts first so workers_ is stable before any
+    // worker thread can try to iterate/steal from it.
     for (std::size_t i = 0; i < num_threads_; ++i) {
         auto worker = std::make_unique<WorkerContext>(i);
         worker->last_activity = std::chrono::steady_clock::now();
+        workers_.push_back(std::move(worker));
+    }
+
+    // Start worker threads after all contexts are in place.
+    for (auto& worker : workers_) {
         worker->thread =
             std::thread(&Executor::worker_thread, this, worker.get());
-        workers_.push_back(std::move(worker));
     }
 
     DFTRACER_UTILS_LOG_DEBUG("Executor started with %zu worker threads",
@@ -61,23 +89,13 @@ void Executor::start() {
 }
 
 void Executor::shutdown() {
-    // Shutdown I/O executor if it exists (do this even if executor not running)
-    if (io_executor_) {
-        io_executor_->shutdown();
-        io_executor_.reset();
-    }
-
     if (!running_) {
         return;
     }
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Shutting down executor");
     running_ = false;
-
-    // Wake up all workers
-    for (auto& worker : workers_) {
-        worker->cv.notify_all();
-    }
+    wake_all_workers();
 
     // Join all worker threads
     for (auto& worker : workers_) {
@@ -99,7 +117,6 @@ void Executor::reset() {
 }
 
 void Executor::set_completion_callback(CompletionCallback callback) {
-    std::lock_guard<std::mutex> lock(callback_mutex_);
     completion_callback_ = std::move(callback);
 }
 
@@ -107,289 +124,68 @@ void Executor::worker_thread(WorkerContext* context) {
     DFTRACER_UTILS_LOG_DEBUG("Worker %zu started", context->worker_id);
 
     set_current_worker_context(context);
+    tls_current_executor = this;
+    coro::reset_timeslice();
 
     while (running_) {
-        TaskItem task;
+        // Drain deferred-destruction queue (released Coro handles).
+        drain_destroy_queue();
+
         std::coroutine_handle<> pending_resume;
 
-        // Priority order:
-        // 0. Pending coroutine resumptions (highest priority for
-        // responsiveness)
-        if (pending_resumptions_.try_dequeue(pending_resume)) {
-            context->is_idle = false;
+        // Snapshot the work signal BEFORE checking any queues.
+        // This ensures that any signal increment (from enqueue +
+        // signal_global_work) that happens AFTER this load will be detected by
+        // the wait predicate below, even if the actual queue check sees the
+        // queue as empty. Loading it inside the else branch (after queue
+        // checks) creates a race: work can arrive between the queue check and
+        // the signal load, causing the worker to sleep with the updated signal
+        // value while work sits in the queue.
+        const std::uint64_t observed_signal =
+            work_signal_.load(std::memory_order_acquire);
+
+        // Run queue: coroutine handles from enqueue() and
+        // schedule_coroutine_resumption().
+        if (run_queue_.try_dequeue(pending_resume)) {
+            coro::reset_timeslice();
+            context->is_idle.store(false, std::memory_order_relaxed);
             if (pending_resume && !pending_resume.done()) {
                 pending_resume.resume();
             }
+            // Destroy coroutine frames that FinalAwaiter deferred to this
+            // thread.  Safe: resume() has fully returned, so the frame
+            // is suspended at final_suspend and no code references it.
+            drain_thread_local_destroys();
         }
-        // 1. Own local queue (LIFO for cache locality)
-        else if (try_pop_local(context, task)) {
-            context->is_idle = false;
-            drive_coroutine(execute_task(context, task), task.task);
-        }
-        // 3. Shared queue (for scheduler submissions)
-        else if (shared_queue_.try_dequeue(task)) {
-            context->is_idle = false;
-            drive_coroutine(execute_task(context, task), task.task);
-        }
-        // 4. Steal from other workers (FIFO - oldest tasks)
-        else if (try_steal_from_others(context, task)) {
-            context->tasks_stolen++;
-            context->is_idle = false;
-            drive_coroutine(execute_task(context, task), task.task);
-        }
-        // 5. No work available
+        // No work available -- sleep until signaled.
         else {
-            context->is_idle = true;
+            context->is_idle.store(true, std::memory_order_relaxed);
             std::unique_lock<std::mutex> lock(context->queue_mutex);
-            context->cv.wait_for(lock, std::chrono::milliseconds(10),
-                                 [this] { return !running_.load(); });
+            context->cv.wait(lock, [this, observed_signal] {
+                return !running_.load(std::memory_order_acquire) ||
+                       work_signal_.load(std::memory_order_acquire) !=
+                           observed_signal;
+            });
         }
     }
 
+    // Final drain: destroy any frames deferred during the last resume().
+    drain_thread_local_destroys();
+
+    tls_current_executor = nullptr;
     set_current_worker_context(nullptr);
 
     DFTRACER_UTILS_LOG_DEBUG("Worker %zu terminated", context->worker_id);
 }
 
-coro::CoroTask<void> Executor::execute_task(WorkerContext* context,
-                                            TaskItem& item) {
-    auto task = item.task;
-    auto input = item.input;
-
-    if (!task) {
-        DFTRACER_UTILS_LOG_WARN("%s", "Null task in execute");
-        co_return;
-    }
-
-    // Update worker context
-    context->current_task_id = task->get_id();
-    {
-        std::lock_guard<std::mutex> lock(context->task_name_mutex);
-        context->current_task_name = task->get_name();
-    }
-    context->last_activity = std::chrono::steady_clock::now();
-
-    // Mark task start
-    mark_activity();
-    ++tasks_started_;
-
-    // Update task registry
-    {
-        std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-        auto it = task_registry_.find(task->get_id());
-        if (it != task_registry_.end()) {
-            it->second.state = TaskInfo::RUNNING;
-            it->second.started_at = std::chrono::steady_clock::now();
-            it->second.worker_id = context->worker_id;
-            it->second.location = TaskInfo::EXECUTING;
-        }
-    }
-
-    try {
-        TaskContext task_context(scheduler_, task->get_id(), this);
-
-        // Execute task (co_await the coroutine)
-        DFTRACER_UTILS_LOG_DEBUG("Worker %zu executing task ID %ld ('%s')",
-                                 context->worker_id, task->get_id(),
-                                 task->get_name().c_str());
-
-        std::any result = co_await task->execute(task_context, *input);
-
-        // Fulfill promise
-        task->fulfill_promise(std::move(result));
-
-        DFTRACER_UTILS_LOG_DEBUG("Task ID %ld ('%s') completed successfully",
-                                 task->get_id(), task->get_name().c_str());
-
-        // Mark task completion
-        mark_activity();
-        ++tasks_completed_;
-        context->tasks_executed++;
-
-        // Update task registry
-        {
-            std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-            auto it = task_registry_.find(task->get_id());
-            if (it != task_registry_.end()) {
-                it->second.state = TaskInfo::COMPLETED;
-                it->second.completed_at = std::chrono::steady_clock::now();
-                it->second.location = TaskInfo::DONE;
-
-                // Update parent's completed children count
-                if (it->second.parent_task_id != -1) {
-                    auto parent_it =
-                        task_registry_.find(it->second.parent_task_id);
-                    if (parent_it != task_registry_.end()) {
-                        parent_it->second.completed_children++;
-                    }
-                }
-            }
-        }
-
-        // Notify scheduler
-        notify_completion(task);
-
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Task ID %ld ('%s') failed: %s",
-                                 task->get_id(), task->get_name().c_str(),
-                                 e.what());
-
-        // Fulfill promise with exception
-        task->fulfill_promise_exception(std::current_exception());
-
-        // Mark task completion (even on error)
-        mark_activity();
-        ++tasks_completed_;
-        context->tasks_executed++;
-
-        // Update task registry
-        {
-            std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-            auto it = task_registry_.find(task->get_id());
-            if (it != task_registry_.end()) {
-                it->second.state = TaskInfo::FAILED;
-                it->second.completed_at = std::chrono::steady_clock::now();
-                it->second.error_message = e.what();
-                it->second.location = TaskInfo::DONE;
-            }
-        }
-
-        // Still notify scheduler (to handle error policy)
-        notify_completion(task);
-
-    } catch (...) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "Task ID %ld ('%s') failed with unknown exception", task->get_id(),
-            task->get_name().c_str());
-
-        // Fulfill promise with exception
-        task->fulfill_promise_exception(std::current_exception());
-
-        // Mark task completion (even on error)
-        mark_activity();
-        ++tasks_completed_;
-        context->tasks_executed++;
-
-        // Update task registry
-        {
-            std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-            auto it = task_registry_.find(task->get_id());
-            if (it != task_registry_.end()) {
-                it->second.state = TaskInfo::FAILED;
-                it->second.completed_at = std::chrono::steady_clock::now();
-                it->second.error_message = "Unknown exception";
-                it->second.location = TaskInfo::DONE;
-            }
-        }
-
-        // Still notify scheduler
-        notify_completion(task);
-    }
-
-    // Clear current task info
-    context->current_task_id = -1;
-    {
-        std::lock_guard<std::mutex> lock(context->task_name_mutex);
-        context->current_task_name.clear();
-    }
-
-    co_return;
-}
-
 void Executor::notify_completion(std::shared_ptr<Task> task) {
-    std::lock_guard<std::mutex> lock(callback_mutex_);
+    // No mutex needed -- the callback is set exactly once during Scheduler
+    // construction (before any task is submitted) and never modified after.
+    // on_task_completed uses only atomics, lock-free queues, and properly-
+    // locked shard mutexes, so concurrent calls from multiple workers are safe.
     if (completion_callback_) {
         completion_callback_(task);
     }
-}
-
-void Executor::store_suspended_coro(TaskIndex awaited_task_id,
-                                    std::unique_ptr<coro::CoroTask<void>> coro,
-                                    std::shared_ptr<Task> suspended_task) {
-    std::lock_guard<std::mutex> lock(suspended_coros_mutex_);
-
-    DFTRACER_UTILS_LOG_DEBUG(
-        "Storing suspended wrapper coroutine for task ID %d (waiting for task "
-        "ID %d)",
-        suspended_task->get_id(), awaited_task_id);
-
-    suspended_coros_[awaited_task_id] =
-        SuspendedCoro{.coro = std::move(coro),
-                      .task_id = suspended_task->get_id(),
-                      .task = suspended_task};
-}
-
-bool Executor::resume_suspended_coro(TaskIndex task_id) {
-    std::unique_ptr<coro::CoroTask<void>> coro_to_resume;
-    std::shared_ptr<Task> suspended_task;
-
-    {
-        std::lock_guard<std::mutex> lock(suspended_coros_mutex_);
-
-        auto it = suspended_coros_.find(task_id);
-        if (it == suspended_coros_.end()) {
-            DFTRACER_UTILS_LOG_DEBUG(
-                "No suspended coroutine found for task ID %d", task_id);
-            return false;
-        }
-
-        // Extract the wrapper CoroTask and the suspended task
-        coro_to_resume = std::move(it->second.coro);
-        suspended_task = it->second.task;
-
-        // Remove from map
-        suspended_coros_.erase(it);
-    }
-
-    // Resume the wrapper CoroTask outside the lock
-    // This will continue the execute_task coroutine, which will return control
-    // to the user's co_await point, calling TaskFuture::await_resume()
-    DFTRACER_UTILS_LOG_DEBUG(
-        "Resuming suspended wrapper coroutine for task ID %d",
-        suspended_task->get_id());
-
-    if (coro_to_resume) {
-        // root_promise is already set from initial drive_coroutine call
-
-        // Clear the async flag since we're resuming
-        coro_to_resume->set_awaiting_async(false);
-
-        DFTRACER_UTILS_LOG_DEBUG(
-            "About to resume coroutine for task ID %d in loop",
-            suspended_task->get_id());
-
-        // Resume the wrapper coroutine until completion or next suspension
-        while (coro_to_resume && !coro_to_resume->done() &&
-               !coro_to_resume->is_awaiting_async()) {
-            coro_to_resume->resume();
-        }
-
-        DFTRACER_UTILS_LOG_DEBUG(
-            "Coroutine resume loop finished for task ID %d: done=%d, "
-            "awaiting_async=%d",
-            suspended_task->get_id(), coro_to_resume->done(),
-            coro_to_resume->is_awaiting_async());
-
-        // If it suspended again for another async operation, store it again
-        if (coro_to_resume && !coro_to_resume->done() &&
-            coro_to_resume->is_awaiting_async()) {
-            // Get the NEW task ID we're waiting for from promise
-            TaskIndex new_awaited_id =
-                coro_to_resume->handle().promise().get_awaited_task_id();
-            DFTRACER_UTILS_LOG_DEBUG(
-                "Task ID %d suspended again waiting for task ID %d",
-                suspended_task->get_id(), new_awaited_id);
-            // Reset the awaited task id in promise before storing
-            coro_to_resume->handle().promise().set_awaited_task_id(-1);
-            store_suspended_coro(new_awaited_id, std::move(coro_to_resume),
-                                 suspended_task);
-        } else if (coro_to_resume && coro_to_resume->done()) {
-            DFTRACER_UTILS_LOG_DEBUG("Task ID %d completed after resumption",
-                                     suspended_task->get_id());
-        }
-    }
-
-    return true;
 }
 
 void Executor::request_shutdown() {
@@ -402,20 +198,43 @@ void Executor::request_shutdown() {
 }
 
 void Executor::schedule_coroutine_resumption(std::coroutine_handle<> handle) {
-    if (!handle || handle.done()) {
-        return;  // Invalid or already completed
-    }
-
-    // Enqueue the coroutine handle for resumption by a worker thread
-    pending_resumptions_.enqueue(handle);
-
-    // Optionally wake up one idle worker to process the resumption
-    // For now, workers will pick it up in their next iteration
+    // Delegate to enqueue() -- unified path for all coroutine handles.
+    enqueue(handle);
 }
 
-// Forward declaration for when_all.h (avoids circular dependency)
-void schedule_coroutine_resumption_helper(Executor* executor,
-                                          std::coroutine_handle<> handle);
+void Executor::signal_global_work() {
+    work_signal_.fetch_add(1, std::memory_order_acq_rel);
+    wake_all_workers();
+}
+
+void Executor::wake_one_worker() {
+    const std::size_t worker_count = workers_.size();
+    if (worker_count == 0) {
+        return;
+    }
+
+    const std::size_t worker_index =
+        next_worker_.fetch_add(1, std::memory_order_relaxed) % worker_count;
+    // Lock-then-unlock the worker's mutex before notifying.
+    // This ensures the worker is either before its predicate check (and will
+    // see the updated atomic state) or inside cv.wait (and will receive the
+    // notification). Without this, a notification sent between predicate
+    // evaluation and cv.wait entry is lost, causing the worker to hang.
+    workers_[worker_index]->queue_mutex.lock();
+    workers_[worker_index]->queue_mutex.unlock();
+    workers_[worker_index]->cv.notify_one();
+}
+
+void Executor::wake_all_workers() {
+    for (auto& worker : workers_) {
+        // Lock-then-unlock ensures the worker is either before its predicate
+        // check or inside cv.wait before the notification is sent.
+        // See wake_one_worker() for detailed rationale.
+        worker->queue_mutex.lock();
+        worker->queue_mutex.unlock();
+        worker->cv.notify_all();
+    }
+}
 
 // Helper function for when_all.h (avoids circular dependency)
 void schedule_coroutine_resumption_helper(Executor* executor,
@@ -423,6 +242,15 @@ void schedule_coroutine_resumption_helper(Executor* executor,
     if (executor) {
         executor->schedule_coroutine_resumption(handle);
     }
+}
+
+void Executor::enqueue(std::coroutine_handle<> handle) {
+    if (!handle || handle.done()) {
+        return;  // Invalid or already completed
+    }
+
+    run_queue_.enqueue(handle);
+    signal_global_work();
 }
 
 bool Executor::is_responsive() const {
@@ -434,27 +262,6 @@ bool Executor::is_responsive() const {
     // If not running, not responsive
     if (!running_.load()) {
         return false;
-    }
-
-    // Check if we have pending tasks but no recent activity
-    std::size_t queue_size = shared_queue_.size_approx();
-    if (queue_size > 0) {
-        // Get time since last activity
-        std::lock_guard<std::mutex> lock(activity_mutex_);
-        auto now = std::chrono::steady_clock::now();
-        auto idle_time = now - last_activity_time_;
-
-        // If idle for more than idle_timeout with pending tasks, consider
-        // unresponsive
-        if (idle_time > idle_timeout_) {
-            DFTRACER_UTILS_LOG_WARN(
-                "Executor appears unresponsive: %zu tasks in queue, idle for "
-                "%lld ms",
-                queue_size,
-                std::chrono::duration_cast<std::chrono::milliseconds>(idle_time)
-                    .count());
-            return false;
-        }
     }
 
     // Check if all threads might be deadlocked
@@ -469,12 +276,12 @@ bool Executor::is_responsive() const {
         auto now = std::chrono::steady_clock::now();
         auto idle_time = now - last_activity_time_;
 
-        // If all threads busy but no activity for deadlock_timeout, likely
-        // deadlocked
+        // If all threads busy but no activity for deadlock_timeout,
+        // likely deadlocked
         if (idle_time > deadlock_timeout_) {
             DFTRACER_UTILS_LOG_WARN(
-                "Executor appears deadlocked: %zu threads, %zu active tasks, "
-                "idle for %lld ms",
+                "Executor appears deadlocked: %zu threads, %zu active "
+                "tasks, idle for %lld ms",
                 num_threads_, active,
                 std::chrono::duration_cast<std::chrono::milliseconds>(idle_time)
                     .count());
@@ -488,182 +295,6 @@ bool Executor::is_responsive() const {
 void Executor::mark_activity() {
     std::lock_guard<std::mutex> lock(activity_mutex_);
     last_activity_time_ = std::chrono::steady_clock::now();
-}
-
-bool Executor::try_steal_one_task() {
-    // This is called by TaskFuture::get() for work-stealing
-    // Get the current worker context
-    auto* worker_context =
-        static_cast<WorkerContext*>(get_current_worker_context());
-    if (!worker_context) {
-        // Not in a worker thread, can't steal
-        return false;
-    }
-
-    TaskItem task;
-
-    // Try to get work from:
-    // 1. Own local queue first
-    if (try_pop_local(worker_context, task)) {
-        drive_coroutine(execute_task(worker_context, task), task.task);
-        return true;
-    }
-
-    // 2. Shared queue
-    if (shared_queue_.try_dequeue(task)) {
-        drive_coroutine(execute_task(worker_context, task), task.task);
-        return true;
-    }
-
-    // 3. Steal from others
-    if (try_steal_from_others(worker_context, task)) {
-        worker_context->tasks_stolen++;
-        drive_coroutine(execute_task(worker_context, task), task.task);
-        return true;
-    }
-
-    return false;
-}
-
-bool Executor::try_pop_local(WorkerContext* context, TaskItem& item) {
-    std::lock_guard<std::mutex> lock(context->queue_mutex);
-    if (!context->local_queue.empty()) {
-        // Pop from back (LIFO for better cache locality)
-        item = context->local_queue.back();
-        context->local_queue.pop_back();
-        return true;
-    }
-    return false;
-}
-
-bool Executor::try_steal_from_others(WorkerContext* thief, TaskItem& item) {
-    // Guard against empty workers_ (can happen during shutdown or
-    // initialization)
-    if (workers_.empty() || workers_.size() == 1) {
-        return false;
-    }
-
-    // Try to steal from other workers in round-robin fashion
-    std::size_t start_idx = (thief->worker_id + 1) % workers_.size();
-
-    for (std::size_t i = 0; i < workers_.size() - 1; ++i) {
-        std::size_t victim_idx = (start_idx + i) % workers_.size();
-        auto& victim = workers_[victim_idx];
-
-        if (victim.get() == thief) continue;  // Don't steal from self
-
-        std::unique_lock<std::mutex> lock(victim->queue_mutex,
-                                          std::try_to_lock);
-        if (!lock.owns_lock()) continue;
-
-        if (!victim->local_queue.empty()) {
-            // Steal from FRONT (oldest task - FIFO)
-            item = victim->local_queue.front();
-            victim->local_queue.pop_front();
-
-            DFTRACER_UTILS_LOG_DEBUG("Worker %zu stole task from worker %zu",
-                                     thief->worker_id, victim->worker_id);
-            return true;
-        }
-    }
-
-    return false;
-}
-
-void Executor::drive_coroutine(coro::CoroTask<void> coro,
-                               std::shared_ptr<Task> task) {
-    auto handle = coro.handle();
-    if (!handle) {
-        return;
-    }
-
-    TaskIndex initial_awaited_id = handle.promise().get_awaited_task_id();
-    bool already_awaiting_async = (initial_awaited_id != -1) && !coro.done();
-
-    auto& promise = handle.promise();
-    promise.set_root_promise(&promise);
-    promise.set_executor(this);
-
-    if (!already_awaiting_async) {
-        while (!coro.done() && !coro.is_awaiting_async()) {
-            coro.resume();
-        }
-    }
-
-    bool is_awaiting = already_awaiting_async || coro.is_awaiting_async();
-    if (!coro.done() && is_awaiting) {
-        // Read awaited_id from promise BEFORE moving coro
-        TaskIndex awaited_id = handle.promise().get_awaited_task_id();
-
-        // For IO suspensions (awaited_id == -1), use the task's own ID
-        // as storage key. IO completion resumes the inner coroutine
-        // directly via IO_Continuation; the entry just keeps the
-        // CoroTask alive.
-        TaskIndex storage_key =
-            (awaited_id == -1) ? task->get_id() : awaited_id;
-
-        DFTRACER_UTILS_LOG_DEBUG(
-            "Coroutine for task ID %d suspended (awaited=%d, key=%d), "
-            "storing it",
-            task->get_id(), awaited_id, storage_key);
-
-        // Reset the awaited task id in promise before storing
-        handle.promise().set_awaited_task_id(-1);
-
-        auto coro_ptr = std::make_unique<coro::CoroTask<void>>(std::move(coro));
-        store_suspended_coro(storage_key, std::move(coro_ptr), task);
-    }
-}
-
-void Executor::submit_with_context(const TaskItem& item,
-                                   TaskIndex parent_task_id,
-                                   SubmissionHint hint) {
-    {
-        std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-
-        auto [it, inserted] =
-            task_registry_.emplace(std::piecewise_construct,
-                                   std::forward_as_tuple(item.task->get_id()),
-                                   std::forward_as_tuple());
-
-        if (inserted) {
-            it->second.task_id = item.task->get_id();
-            it->second.parent_task_id = parent_task_id;
-            it->second.name = item.task->get_name();
-            it->second.state = TaskInfo::QUEUED;
-            it->second.queued_at = std::chrono::steady_clock::now();
-            it->second.location = TaskInfo::SHARED_QUEUE;
-            it->second.worker_id = static_cast<std::size_t>(-1);
-
-            if (parent_task_id != -1) {
-                auto parent_it = task_registry_.find(parent_task_id);
-                if (parent_it != task_registry_.end()) {
-                    parent_it->second.child_task_ids.push_back(
-                        item.task->get_id());
-                }
-            }
-        }
-    }
-
-    ++total_tasks_submitted_;
-
-    auto* worker_context =
-        static_cast<WorkerContext*>(get_current_worker_context());
-
-    if (hint == SubmissionHint::FORCE_SHARED || !worker_context) {
-        // Submit to shared queue
-        shared_queue_.enqueue(item);
-        update_task_location(item.task->get_id(), TaskInfo::SHARED_QUEUE, -1);
-    } else {
-        // Submit to local queue of current worker
-        {
-            std::lock_guard<std::mutex> lock(worker_context->queue_mutex);
-            worker_context->local_queue.push_back(item);
-        }
-        worker_context->cv.notify_one();
-        update_task_location(item.task->get_id(), TaskInfo::LOCAL_QUEUE,
-                             worker_context->worker_id);
-    }
 }
 
 void Executor::update_task_location(TaskIndex task_id,
@@ -687,7 +318,6 @@ ExecutorProgress Executor::get_progress() const {
     // Overall stats
     progress.total_tasks_submitted = total_tasks_submitted_.load();
     progress.tasks_completed = tasks_completed_.load();
-    progress.total_tasks_stolen = total_tasks_stolen_.load();
 
     // Count task states
     progress.tasks_queued = 0;
@@ -716,11 +346,9 @@ ExecutorProgress Executor::get_progress() const {
         }
     }
 
-    // Queue depths
-    progress.shared_queue_depth = shared_queue_.size_approx();
-    for (const auto& worker : workers_) {
-        std::lock_guard<std::mutex> queue_lock(worker->queue_mutex);
-        progress.worker_queue_depths.push_back(worker->local_queue.size());
+    for (std::size_t i = 0; i < workers_.size(); ++i) {
+        // No per-worker local queues anymore; report 0.
+        progress.worker_queue_depths.push_back(0);
     }
 
     // Build task trees (find root tasks)
@@ -745,28 +373,12 @@ ExecutorProgress Executor::get_progress() const {
             status.current_task_name = worker->current_task_name;
         }
 
-        {
-            std::lock_guard<std::mutex> queue_lock(worker->queue_mutex);
-            status.local_queue_depth = worker->local_queue.size();
-        }
+        status.local_queue_depth = 0;
 
         progress.workers.push_back(status);
     }
 
     return progress;
-}
-
-std::optional<TaskProgress> Executor::get_task_progress(
-    TaskIndex task_id) const {
-    std::shared_lock<std::shared_mutex> lock(registry_mutex_);
-
-    auto it = task_registry_.find(task_id);
-    if (it == task_registry_.end()) {
-        return std::nullopt;
-    }
-
-    std::unordered_set<TaskIndex> processed;
-    return build_task_progress_tree(task_id, processed);
 }
 
 TaskProgress Executor::build_task_progress_tree(
@@ -876,28 +488,202 @@ TaskProgress Executor::build_task_progress_tree(
 }
 
 // ============================================================================
-// I/O Executor Management
+// Phase 3: Coro-based task execution
 // ============================================================================
 
-void Executor::create_io_executor(std::size_t num_io_threads) {
-    if (running_) {
-        throw std::runtime_error(
-            "Cannot create I/O executor while executor is running");
+coro::Coro Executor::run_task(std::shared_ptr<Task> task,
+                              std::shared_ptr<std::any> input) {
+    // Get worker context from TLS (set by worker_thread at start).
+    auto* context = static_cast<WorkerContext*>(get_current_worker_context());
+
+    if (!context || !task) {
+        co_return;
     }
 
-    if (io_executor_) {
-        throw std::runtime_error("I/O executor already exists");
+    // Update worker context
+    context->current_task_id = task->get_id();
+    {
+        std::lock_guard<std::mutex> lock(context->task_name_mutex);
+        context->current_task_name = task->get_name();
+    }
+    context->last_activity = std::chrono::steady_clock::now();
+
+    // Mark task start
+    mark_activity();
+    ++tasks_started_;
+
+    // Update task registry to RUNNING
+    {
+        std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+        auto it = task_registry_.find(task->get_id());
+        if (it != task_registry_.end()) {
+            it->second.state = TaskInfo::RUNNING;
+            it->second.started_at = std::chrono::steady_clock::now();
+            it->second.worker_id = context->worker_id;
+            it->second.location = TaskInfo::EXECUTING;
+        }
     }
 
-    if (num_io_threads == 0) {
-        throw std::invalid_argument("num_io_threads must be > 0");
+    task->result().mark_running();
+
+    try {
+        CoroScope scope(this);
+
+        DFTRACER_UTILS_LOG_DEBUG("Worker %zu executing task ID %ld ('%s')",
+                                 context->worker_id, task->get_id(),
+                                 task->get_name().c_str());
+
+        auto coro_task = task->execute(scope, *input);
+        // Propagate executor to the CoroTask's PromiseBase so that nested
+        // awaitables (when_any, channel, etc.) can schedule resumptions.
+        // run_task() is a Coro (CoroPromise, not PromiseBase), so the normal
+        // PromiseBase propagation in CoroTask::await_suspend doesn't fire.
+        coro_task.handle().promise().set_executor(this);
+        std::any result = co_await std::move(coro_task);
+
+        // Set result via TaskResult
+        task->set_result(std::move(result));
+
+        DFTRACER_UTILS_LOG_DEBUG("Task ID %ld ('%s') completed successfully",
+                                 task->get_id(), task->get_name().c_str());
+
+        // Mark task completion
+        mark_activity();
+        ++tasks_completed_;
+        context->tasks_executed++;
+
+        // Update task registry to COMPLETED
+        {
+            std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+            auto it = task_registry_.find(task->get_id());
+            if (it != task_registry_.end()) {
+                it->second.state = TaskInfo::COMPLETED;
+                it->second.completed_at = std::chrono::steady_clock::now();
+                it->second.location = TaskInfo::DONE;
+
+                // Update parent's completed children count
+                if (it->second.parent_task_id != -1) {
+                    auto parent_it =
+                        task_registry_.find(it->second.parent_task_id);
+                    if (parent_it != task_registry_.end()) {
+                        parent_it->second.completed_children++;
+                    }
+                }
+            }
+        }
+
+        // Notify scheduler
+        notify_completion(task);
+
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_ERROR("Task ID %ld ('%s') failed: %s",
+                                 task->get_id(), task->get_name().c_str(),
+                                 e.what());
+
+        task->set_exception(std::current_exception());
+
+        mark_activity();
+        ++tasks_completed_;
+        context->tasks_executed++;
+
+        {
+            std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+            auto it = task_registry_.find(task->get_id());
+            if (it != task_registry_.end()) {
+                it->second.state = TaskInfo::FAILED;
+                it->second.completed_at = std::chrono::steady_clock::now();
+                it->second.error_message = e.what();
+                it->second.location = TaskInfo::DONE;
+            }
+        }
+
+        notify_completion(task);
+
+    } catch (...) {
+        DFTRACER_UTILS_LOG_ERROR(
+            "Task ID %ld ('%s') failed with unknown exception", task->get_id(),
+            task->get_name().c_str());
+
+        task->set_exception(std::current_exception());
+
+        mark_activity();
+        ++tasks_completed_;
+        context->tasks_executed++;
+
+        {
+            std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+            auto it = task_registry_.find(task->get_id());
+            if (it != task_registry_.end()) {
+                it->second.state = TaskInfo::FAILED;
+                it->second.completed_at = std::chrono::steady_clock::now();
+                it->second.error_message = "Unknown exception";
+                it->second.location = TaskInfo::DONE;
+            }
+        }
+
+        notify_completion(task);
     }
 
-    io_executor_ =
-        IOExecutor::create(num_io_threads, num_threads_, &io_slow_path_queue_);
+    // Clear current task info
+    context->current_task_id = -1;
+    {
+        std::lock_guard<std::mutex> lock(context->task_name_mutex);
+        context->current_task_name.clear();
+    }
 
-    // Start I/O threads
-    io_executor_->start();
+    co_return;
+}
+
+void Executor::submit_task(std::shared_ptr<Task> task,
+                           std::shared_ptr<std::any> input,
+                           TaskIndex parent_task_id) {
+    // Register in task registry
+    {
+        std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+
+        auto [it, inserted] = task_registry_.emplace(
+            std::piecewise_construct, std::forward_as_tuple(task->get_id()),
+            std::forward_as_tuple());
+
+        if (inserted) {
+            it->second.task_id = task->get_id();
+            it->second.parent_task_id = parent_task_id;
+            it->second.name = task->get_name();
+            it->second.state = TaskInfo::QUEUED;
+            it->second.queued_at = std::chrono::steady_clock::now();
+            it->second.location = TaskInfo::SHARED_QUEUE;
+            it->second.worker_id = static_cast<std::size_t>(-1);
+
+            if (parent_task_id != -1) {
+                auto parent_it = task_registry_.find(parent_task_id);
+                if (parent_it != task_registry_.end()) {
+                    parent_it->second.child_task_ids.push_back(task->get_id());
+                }
+            }
+        }
+    }
+
+    ++total_tasks_submitted_;
+
+    // Create Coro, set executor on promise, enqueue released handle
+    auto coro = run_task(std::move(task), std::move(input));
+    coro.handle().promise().executor = this;
+    enqueue(coro.release());
+}
+
+void Executor::schedule_destroy(std::coroutine_handle<> handle) {
+    if (handle) {
+        destroy_queue_.enqueue(handle);
+    }
+}
+
+void Executor::drain_destroy_queue() {
+    std::coroutine_handle<> to_destroy;
+    while (destroy_queue_.try_dequeue(to_destroy)) {
+        if (to_destroy) {
+            to_destroy.destroy();
+        }
+    }
 }
 
 }  // namespace dftracer::utils

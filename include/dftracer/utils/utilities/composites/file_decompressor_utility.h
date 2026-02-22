@@ -178,7 +178,7 @@ struct FileDecompressionUtilityOutput {
  * auto batch_decompressor = std::make_shared<
  *     BatchProcessor<FileDecompressionUtilityInput,
  * FileDecompressionUtilityOutput>>( [decompressor](const
- * FileDecompressionUtilityInput& input, TaskContext& ctx) { return
+ * FileDecompressionUtilityInput& input, CoroScope& ctx) { return
  * decompressor->process(input);
  *         }
  * );

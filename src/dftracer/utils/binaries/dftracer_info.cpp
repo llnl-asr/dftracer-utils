@@ -226,11 +226,6 @@ int main(int argc, char** argv) {
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
 
-    program.add_argument("--scheduler-threads")
-        .help("Number of scheduler threads (default: 1, typically not changed)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(1));
-
     try {
         program.parse_args(argc, argv);
     } catch (const std::exception& err) {
@@ -247,8 +242,6 @@ int main(int argc, char** argv) {
     std::string index_dir = program.get<std::string>("--index-dir");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    std::size_t scheduler_threads =
-        program.get<std::size_t>("--scheduler-threads");
 
     // Collect files to process
     std::vector<std::string> files;
@@ -296,7 +289,6 @@ int main(int argc, char** argv) {
     std::printf("  Index dir: %s\n",
                 index_dir.empty() ? "(auto)" : index_dir.c_str());
     std::printf("  Executor threads: %zu\n", executor_threads);
-    std::printf("  Scheduler threads: %zu\n", scheduler_threads);
     std::printf("  Verbose: %s\n", verbose ? "true" : "false");
     std::printf("==========================================\n\n");
 
@@ -304,8 +296,7 @@ int main(int argc, char** argv) {
 
     auto pipeline_config = PipelineConfig()
                                .with_name("DFTracer File Info")
-                               .with_compute_threads(executor_threads)
-                               .with_scheduler_threads(scheduler_threads);
+                               .with_compute_threads(executor_threads);
 
     Pipeline pipeline(pipeline_config);
 

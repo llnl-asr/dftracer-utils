@@ -5,8 +5,8 @@
 #include <dftracer/utils/core/task_graph/task_group.h>
 #include <dftracer/utils/core/task_graph/task_result.h>
 #include <dftracer/utils/core/task_graph/types.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 #include <doctest/doctest.h>
 
 #include <memory>
@@ -36,52 +36,53 @@ TEST_CASE("num_outputs - construction") {
 // ============================================================================
 
 TEST_CASE("TaskResult - make and get") {
-    auto result = TaskResult<int>::make(42);
+    auto result = task_graph::TaskResult<int>::make(42);
     CHECK(result.is_ready());
     CHECK(!result.empty());
     CHECK(result.get() == 42);
 }
 
 TEST_CASE("TaskResult - copy") {
-    auto result = TaskResult<std::string>::make("hello");
+    auto result = task_graph::TaskResult<std::string>::make("hello");
     auto copied = result.copy();
     CHECK(copied == "hello");
     CHECK(result.get() == "hello");
 }
 
 TEST_CASE("TaskResult - share") {
-    auto result = TaskResult<int>::make(100);
+    auto result = task_graph::TaskResult<int>::make(100);
     auto shared = result.share();
     CHECK(*shared == 100);
 }
 
 TEST_CASE("TaskResult - from_shared") {
     auto ptr = std::make_shared<int>(999);
-    auto result = TaskResult<int>::from_shared(ptr);
+    auto result = task_graph::TaskResult<int>::from_shared(ptr);
     CHECK(result.get() == 999);
 }
 
 TEST_CASE("TaskResult - empty result throws on get") {
-    TaskResult<int> empty;
+    task_graph::TaskResult<int> empty;
     CHECK(empty.empty());
     CHECK(!empty.is_ready());
     CHECK_THROWS_AS(empty.get(), std::runtime_error);
 }
 
-TEST_CASE("TaskResult<void> - make") {
-    auto result = TaskResult<void>::make();
+TEST_CASE("task_graph::TaskResult<void> - make") {
+    auto result = task_graph::TaskResult<void>::make();
     CHECK(result.is_ready());
     CHECK(!result.empty());
 }
 
 TEST_CASE("TaskResult - size_bytes for simple type") {
-    auto result = TaskResult<int>::make(42);
+    auto result = task_graph::TaskResult<int>::make(42);
     CHECK(result.size_bytes() >= sizeof(int));
 }
 
 TEST_CASE("TaskResult - size_bytes for vector") {
     std::vector<int> vec{1, 2, 3, 4, 5};
-    auto result = TaskResult<std::vector<int>>::make(std::move(vec));
+    auto result =
+        task_graph::TaskResult<std::vector<int>>::make(std::move(vec));
     CHECK(result.size_bytes() > sizeof(std::vector<int>));
 }
 
@@ -97,7 +98,7 @@ TEST_CASE("TaskGroup - empty construction") {
 
 TEST_CASE("TaskGroup - from single task") {
     auto task = make_task(
-        [](TaskContext&) -> coro::CoroTask<int> { co_return 42; }, "Test");
+        [](CoroScope&) -> coro::CoroTask<int> { co_return 42; }, "Test");
     TaskGroup<int> group(task);
     CHECK(group.size() == 1);
     CHECK(group.task() == task);
@@ -106,9 +107,9 @@ TEST_CASE("TaskGroup - from single task") {
 TEST_CASE("TaskGroup - from vector") {
     std::vector<std::shared_ptr<Task>> tasks;
     tasks.push_back(make_task(
-        [](TaskContext&) -> coro::CoroTask<int> { co_return 1; }, "T1"));
+        [](CoroScope&) -> coro::CoroTask<int> { co_return 1; }, "T1"));
     tasks.push_back(make_task(
-        [](TaskContext&) -> coro::CoroTask<int> { co_return 2; }, "T2"));
+        [](CoroScope&) -> coro::CoroTask<int> { co_return 2; }, "T2"));
 
     TaskGroup<int> group(tasks);
     CHECK(group.size() == 2);
@@ -117,10 +118,10 @@ TEST_CASE("TaskGroup - from vector") {
 
 TEST_CASE("TaskGroup - add and iterate") {
     TaskGroup<int> group;
-    group.add(make_task(
-        [](TaskContext&) -> coro::CoroTask<int> { co_return 1; }, "T1"));
-    group.add(make_task(
-        [](TaskContext&) -> coro::CoroTask<int> { co_return 2; }, "T2"));
+    group.add(make_task([](CoroScope&) -> coro::CoroTask<int> { co_return 1; },
+                        "T1"));
+    group.add(make_task([](CoroScope&) -> coro::CoroTask<int> { co_return 2; },
+                        "T2"));
 
     CHECK(group.size() == 2);
 
@@ -228,10 +229,11 @@ TEST_CASE("TaskGraph - builder without pipeline") {
 TEST_CASE("TaskGraph - parallel creates N tasks") {
     auto graph = TaskGraph::builder("Test");
 
-    auto group = graph.parallel<TaskResult<int>>(
+    auto group = graph.parallel<task_graph::TaskResult<int>>(
         4,
-        [](TaskContext&, std::size_t id) -> coro::CoroTask<TaskResult<int>> {
-            co_return TaskResult<int>::make(static_cast<int>(id));
+        [](CoroScope&,
+           std::size_t id) -> coro::CoroTask<task_graph::TaskResult<int>> {
+            co_return task_graph::TaskResult<int>::make(static_cast<int>(id));
         },
         "Worker");
 
@@ -242,10 +244,11 @@ TEST_CASE("TaskGraph - parallel creates N tasks") {
 TEST_CASE("TaskGraph - parallel tasks in graph") {
     auto graph = TaskGraph::builder("Test");
 
-    auto group = graph.parallel<TaskResult<int>>(
+    auto group = graph.parallel<task_graph::TaskResult<int>>(
         4,
-        [](TaskContext&, std::size_t id) -> coro::CoroTask<TaskResult<int>> {
-            co_return TaskResult<int>::make(static_cast<int>(id));
+        [](CoroScope&,
+           std::size_t id) -> coro::CoroTask<task_graph::TaskResult<int>> {
+            co_return task_graph::TaskResult<int>::make(static_cast<int>(id));
         },
         "Worker");
 
@@ -255,7 +258,7 @@ TEST_CASE("TaskGraph - parallel tasks in graph") {
 
 TEST_CASE("TaskGraph - wrap external task") {
     auto external = make_task(
-        [](TaskContext&) -> coro::CoroTask<int> { co_return 100; }, "External");
+        [](CoroScope&) -> coro::CoroTask<int> { co_return 100; }, "External");
 
     auto graph = TaskGraph::builder("Test");
     auto wrapped = graph.wrap<int>(external);
@@ -273,7 +276,7 @@ TEST_CASE("TaskGraph - parallel + reduce integration") {
 
     auto workers = graph.parallel<int>(
         8,
-        [](TaskContext&, std::size_t id) -> coro::CoroTask<int> {
+        [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
         "Worker");
@@ -282,7 +285,7 @@ TEST_CASE("TaskGraph - parallel + reduce integration") {
 
     auto reduced = graph.reduce<int>(
         workers, split_every{2},
-        [](TaskContext&, std::vector<int> items) -> coro::CoroTask<int> {
+        [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
             co_return sum;
@@ -301,7 +304,7 @@ TEST_CASE("TaskGraph - parallel + reduce integration") {
 
 TEST_CASE("TaskGraph - barebone task as input (before graph)") {
     auto source_task =
-        make_task([](TaskContext&) -> coro::CoroTask<int> { co_return 10; },
+        make_task([](CoroScope&) -> coro::CoroTask<int> { co_return 10; },
                   "BareboneSource");
 
     auto graph = TaskGraph::builder("WithBareboneInput");
@@ -309,7 +312,7 @@ TEST_CASE("TaskGraph - barebone task as input (before graph)") {
 
     auto mapped = graph.map<int>(
         wrapped,
-        [](TaskContext&, int value) -> coro::CoroTask<int> {
+        [](CoroScope&, int value) -> coro::CoroTask<int> {
             co_return value * 2;
         },
         "Double");
@@ -329,14 +332,14 @@ TEST_CASE("TaskGraph - barebone task consumes graph output (after graph)") {
 
     auto workers = graph.parallel<int>(
         4,
-        [](TaskContext&, std::size_t id) -> coro::CoroTask<int> {
+        [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
         "Worker");
 
     auto reduced = graph.reduce<int>(
         workers, split_every{2},
-        [](TaskContext&, std::vector<int> items) -> coro::CoroTask<int> {
+        [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
             co_return sum;
@@ -344,7 +347,7 @@ TEST_CASE("TaskGraph - barebone task consumes graph output (after graph)") {
         "Sum");
 
     auto consumer_task = make_task(
-        [](TaskContext&, int graph_result) -> coro::CoroTask<std::string> {
+        [](CoroScope&, int graph_result) -> coro::CoroTask<std::string> {
             co_return "Result: " + std::to_string(graph_result);
         },
         "BareboneConsumer");
@@ -364,7 +367,7 @@ TEST_CASE("TaskGraph - reduce with split_every > 2") {
 
     auto workers = graph.parallel<int>(
         9,
-        [](TaskContext&, std::size_t id) -> coro::CoroTask<int> {
+        [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
         "Worker");
@@ -373,7 +376,7 @@ TEST_CASE("TaskGraph - reduce with split_every > 2") {
 
     auto reduced = graph.reduce<int>(
         workers, split_every{3},
-        [](TaskContext&, std::vector<int> items) -> coro::CoroTask<int> {
+        [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
             co_return sum;
@@ -395,7 +398,7 @@ TEST_CASE("TaskGraph - fold with init value") {
 
     auto workers = graph.parallel<int>(
         5,
-        [](TaskContext&, std::size_t id) -> coro::CoroTask<int> {
+        [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
         "Worker");
@@ -422,7 +425,7 @@ TEST_CASE("TaskGraph - fold with product") {
 
     auto workers = graph.parallel<int>(
         4,
-        [](TaskContext&, std::size_t id) -> coro::CoroTask<int> {
+        [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
         "Worker");
@@ -445,7 +448,7 @@ TEST_CASE("TaskGraph - aggregate (map + reduce)") {
 
     auto workers = graph.parallel<int>(
         4,
-        [](TaskContext&, std::size_t id) -> coro::CoroTask<int> {
+        [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
         "Worker");
@@ -453,9 +456,9 @@ TEST_CASE("TaskGraph - aggregate (map + reduce)") {
     // Aggregate: square each value, then sum
     auto aggregated = graph.aggregate<int, int>(
         workers,
-        [](TaskContext&, int x) -> coro::CoroTask<int> { co_return x* x; },
+        [](CoroScope&, int x) -> coro::CoroTask<int> { co_return x* x; },
         split_every{2},
-        [](TaskContext&, std::vector<int> items) -> coro::CoroTask<int> {
+        [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
             co_return sum;
@@ -475,7 +478,7 @@ TEST_CASE("TaskGraph - aggregate with type transformation") {
 
     auto workers = graph.parallel<std::string>(
         3,
-        [](TaskContext&, std::size_t id) -> coro::CoroTask<std::string> {
+        [](CoroScope&, std::size_t id) -> coro::CoroTask<std::string> {
             co_return std::to_string(id + 1);
         },
         "Worker");
@@ -483,11 +486,11 @@ TEST_CASE("TaskGraph - aggregate with type transformation") {
     // Aggregate: convert string to int, then sum
     auto aggregated = graph.aggregate<int, int>(
         workers,
-        [](TaskContext&, std::string s) -> coro::CoroTask<int> {
+        [](CoroScope&, std::string s) -> coro::CoroTask<int> {
             co_return std::stoi(s);
         },
         split_every{2},
-        [](TaskContext&, std::vector<int> items) -> coro::CoroTask<int> {
+        [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
             co_return sum;
@@ -504,7 +507,7 @@ TEST_CASE("TaskGraph - aggregate with type transformation") {
 
 TEST_CASE("TaskGraph - barebone tasks on both ends") {
     auto source =
-        make_task([](TaskContext&) -> coro::CoroTask<int> { co_return 5; },
+        make_task([](CoroScope&) -> coro::CoroTask<int> { co_return 5; },
                   "BareboneStart");
 
     auto graph = TaskGraph::builder("FullIntegration");
@@ -512,14 +515,14 @@ TEST_CASE("TaskGraph - barebone tasks on both ends") {
 
     auto fanned = graph.fan_out<int>(
         wrapped, num_outputs{4},
-        [](TaskContext&, int input, std::size_t idx) -> coro::CoroTask<int> {
+        [](CoroScope&, int input, std::size_t idx) -> coro::CoroTask<int> {
             co_return input* static_cast<int>(idx + 1);
         },
         "Multiply");
 
     auto reduced = graph.reduce<int>(
         fanned, split_every{2},
-        [](TaskContext&, std::vector<int> items) -> coro::CoroTask<int> {
+        [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
             co_return sum;
@@ -527,7 +530,7 @@ TEST_CASE("TaskGraph - barebone tasks on both ends") {
         "Sum");
 
     auto consumer = make_task(
-        [](TaskContext&, int value) -> coro::CoroTask<int> {
+        [](CoroScope&, int value) -> coro::CoroTask<int> {
             co_return value * 10;
         },
         "BareboneEnd");
@@ -602,7 +605,7 @@ TEST_CASE("TaskGraph - partition + map") {
     auto parts = graph.partition<int>(data, num_partitions{3});
 
     auto mapped = graph.map<int>(
-        parts, [](TaskContext&, std::vector<int> chunk) -> coro::CoroTask<int> {
+        parts, [](CoroScope&, std::vector<int> chunk) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : chunk) sum += x;
             co_return sum;
@@ -630,7 +633,7 @@ TEST_CASE("TaskGraph - partition + reduce") {
     auto parts = graph.partition<int>(data, num_partitions{4});
 
     auto sums = graph.map<int>(
-        parts, [](TaskContext&, std::vector<int> chunk) -> coro::CoroTask<int> {
+        parts, [](CoroScope&, std::vector<int> chunk) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : chunk) sum += x;
             co_return sum;
@@ -638,7 +641,7 @@ TEST_CASE("TaskGraph - partition + reduce") {
 
     auto total = graph.reduce<int>(
         sums, split_every{2},
-        [](TaskContext&, std::vector<int> items) -> coro::CoroTask<int> {
+        [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
             int sum = 0;
             for (int x : items) sum += x;
             co_return sum;
@@ -678,7 +681,7 @@ TEST_CASE("TaskGraph - partition + map + concat_partitions") {
 
     auto doubled = graph.map<std::vector<int>>(
         parts,
-        [](TaskContext&,
+        [](CoroScope&,
            std::vector<int> chunk) -> coro::CoroTask<std::vector<int>> {
             for (auto& x : chunk) x *= 2;
             co_return chunk;

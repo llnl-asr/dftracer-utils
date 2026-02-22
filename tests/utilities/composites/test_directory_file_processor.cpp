@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
-#include <dftracer/utils/core/tasks/task_context.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
 #include <dftracer/utils/utilities/composites/directory_file_processor_utility.h>
 #include <doctest/doctest.h>
@@ -51,7 +51,7 @@ TEST_SUITE("DirectoryFileProcessor") {
             f4.close();
 
             // Create processor that counts lines in files
-            auto processor = [](TaskContext& ctx,
+            auto processor = [](CoroScope& ctx,
                                 const std::string& path) -> FileInfo {
                 (void)ctx;  // Not used in this test
 
@@ -129,7 +129,7 @@ TEST_SUITE("DirectoryFileProcessor") {
             std::ofstream(test_dir + "/config.yaml") << "key: value";
 
             // Processor that just returns file extension
-            auto processor = [](TaskContext& ctx,
+            auto processor = [](CoroScope& ctx,
                                 const std::string& path) -> std::string {
                 (void)ctx;
                 return fs::path(path).extension().string();
@@ -187,7 +187,7 @@ TEST_SUITE("DirectoryFileProcessor") {
 
             // Processor that returns relative path from test_dir
             auto processor = [test_dir](
-                                 TaskContext& ctx,
+                                 CoroScope& ctx,
                                  const std::string& path) -> std::string {
                 (void)ctx;
                 return fs::relative(path, test_dir).string();
@@ -237,7 +237,7 @@ TEST_SUITE("DirectoryFileProcessor") {
             std::string test_dir = "./test_empty";
             fs::create_directory(test_dir);
 
-            auto processor = [](TaskContext& ctx,
+            auto processor = [](CoroScope& ctx,
                                 const std::string& path) -> int {
                 (void)ctx;
                 (void)path;
@@ -274,7 +274,7 @@ TEST_SUITE("DirectoryFileProcessor") {
             std::ofstream(test_dir + "/file.cpp") << "code";
             std::ofstream(test_dir + "/file.h") << "header";
 
-            auto processor = [](TaskContext& ctx,
+            auto processor = [](CoroScope& ctx,
                                 const std::string& path) -> std::string {
                 (void)ctx;
                 return fs::path(path).filename().string();
@@ -316,7 +316,7 @@ TEST_SUITE("DirectoryFileProcessor") {
             std::ofstream(test_dir + "/file2.cpp") << "code";
             std::ofstream(test_dir + "/file3.md") << "markdown";
 
-            auto processor = [](TaskContext& ctx,
+            auto processor = [](CoroScope& ctx,
                                 const std::string& path) -> std::string {
                 (void)ctx;
                 return fs::path(path).extension().string();

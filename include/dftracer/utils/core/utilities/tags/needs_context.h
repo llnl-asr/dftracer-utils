@@ -4,13 +4,13 @@
 namespace dftracer::utils::utilities::tags {
 
 /**
- * @brief Marker tag indicating that a utility needs TaskContext for dynamic
+ * @brief Marker tag indicating that a utility needs CoroScope for dynamic
  * task emission.
  *
  * Usage:
  * @code
  * class MyUtility : public Utility<Input, Output, tags::NeedsContext> {
- *     Output process(const Input& input, TaskContext& ctx) override {
+ *     Output process(const Input& input, CoroScope& ctx) override {
  *         // Can use ctx.emit() here for dynamic task emission
  *         return result;
  *     }

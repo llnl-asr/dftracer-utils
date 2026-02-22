@@ -5,7 +5,7 @@
 
 namespace dftracer::utils {
 // Forward declaration
-class TaskContext;
+class CoroScope;
 }  // namespace dftracer::utils
 
 namespace dftracer::utils::utilities {
@@ -13,7 +13,7 @@ namespace dftracer::utils::utilities {
 namespace detail {
 
 /**
- * @brief SFINAE trait to detect if a type has process(I, TaskContext&) method.
+ * @brief SFINAE trait to detect if a type has process(I, CoroScope&) method.
  *
  * Primary template (false case) - used when the method doesn't exist.
  */
@@ -21,7 +21,7 @@ template <typename T, typename I, typename O, typename = void>
 struct has_process_with_context_impl : std::false_type {};
 
 /**
- * @brief Specialization for types that have process(I, TaskContext&) method.
+ * @brief Specialization for types that have process(I, CoroScope&) method.
  *
  * Uses std::void_t to detect if the expression is valid. If it compiles,
  * this specialization is chosen and inherits from std::true_type.
@@ -30,7 +30,7 @@ template <typename T, typename I, typename O>
 struct has_process_with_context_impl<
     T, I, O,
     std::void_t<decltype(std::declval<T&>().process(
-        std::declval<const I&>(), std::declval<TaskContext&>()))>>
+        std::declval<const I&>(), std::declval<CoroScope&>()))>>
     : std::true_type {};
 
 /**
@@ -39,7 +39,7 @@ struct has_process_with_context_impl<
  * Usage:
  * @code
  * if constexpr (detail::has_process_with_context_v<MyUtility, Input, Output>) {
- *     // Utility has process(I, TaskContext&)
+ *     // Utility has process(I, CoroScope&)
  * }
  * @endcode
  */

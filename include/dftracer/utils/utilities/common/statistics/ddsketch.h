@@ -10,10 +10,10 @@
 namespace dftracer::utils::utilities::common::statistics {
 
 /// Deterministic, merge-order-independent percentile estimation using
-/// fixed logarithmic bins. Merges are commutative — A+B+C always produces
+/// fixed logarithmic bins. Merges are commutative -- A+B+C always produces
 /// the same result regardless of order.
 ///
-/// Memory: O(log(max/min) / log(gamma)) bins — bounded by the value range,
+/// Memory: O(log(max/min) / log(gamma)) bins -- bounded by the value range,
 /// not the number of inserted elements.
 /// Accuracy: bounded relative error (default 1%).
 class DDSketch {

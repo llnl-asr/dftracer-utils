@@ -3,8 +3,8 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
@@ -20,7 +20,6 @@
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -95,15 +94,13 @@ static void build_midx(const std::string& trace_file,
     auto pipeline_config = PipelineConfig()
                                .with_name("ReconTestMidxBuild")
                                .with_compute_threads(2)
-                               .with_io_threads(2)
-                               .with_scheduler_threads(1)
                                .with_watchdog(false);
 
     Pipeline pipeline(pipeline_config);
     ManifestIndexBuildOutput result;
 
     auto task = make_task(
-        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+        [&](CoroScope& ctx) -> coro::CoroTask<void> {
             auto utility = std::make_shared<ManifestIndexBuilderUtility>();
             behaviors::BehaviorChain<ManifestIndexBuildInput,
                                      ManifestIndexBuildOutput>
@@ -263,7 +260,7 @@ static const SegmentInterval* find_segment(
 TEST_SUITE("ReconstructIntegration") {
     TEST_CASE("Round-trip: reorganize then reconstruct") {
         std::string test_dir =
-            "/tmp/test_recon_integ_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_recon_integ").string();
         std::string input_dir = test_dir + "/input";
         std::string reorg_dir = test_dir + "/reorg";
         std::string recon_dir = test_dir + "/reconstruct";

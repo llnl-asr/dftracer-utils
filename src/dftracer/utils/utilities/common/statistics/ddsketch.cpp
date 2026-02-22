@@ -55,7 +55,7 @@ void DDSketch::add(double value, double weight) {
     }
 
     // DDSketch handles positive values natively. For negative values,
-    // we treat them as their absolute value — appropriate since our
+    // we treat them as their absolute value -- appropriate since our
     // use case (durations, sizes) only produces non-negative values.
     double abs_value = std::abs(value);
     int idx = bin_index(abs_value);
@@ -113,7 +113,7 @@ double DDSketch::quantile(double q) const {
     // Walk bins returning bin midpoint for normal cases.
     // At gap boundaries (target rank near top of bin, next occupied bin is
     // non-adjacent), average the current bin's upper edge with the next
-    // bin's lower edge — analogous to standard quantile averaging of
+    // bin's lower edge -- analogous to standard quantile averaging of
     // boundary values in sorted data.
     for (std::size_t i = 0; i < bins_.size(); ++i) {
         auto [idx, bin_count] = bins_[i];

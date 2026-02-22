@@ -107,12 +107,12 @@ TEST_CASE("MTHasherUtility - Thread Safety") {
         hasher->reset();
 
         const int num_threads = 4;
-        const int updates_per_thread = 100;
+        constexpr int updates_per_thread = 100;
         std::vector<std::thread> threads;
 
         // Each thread updates with the same data
         for (int t = 0; t < num_threads; ++t) {
-            threads.emplace_back([hasher, updates_per_thread]() {
+            threads.emplace_back([hasher]() {
                 for (int i = 0; i < updates_per_thread; ++i) {
                     hasher->update("x");
                 }
@@ -169,18 +169,18 @@ TEST_CASE("MTHasherUtility - Thread Safety") {
         auto hasher =
             std::make_shared<MTHasherUtility>(HashAlgorithm::FNV1A_64);
 
-        const int num_iterations = 50;
+        constexpr int num_iterations = 50;
         std::vector<std::thread> threads;
 
         // One thread resets, another updates
-        threads.emplace_back([hasher, num_iterations]() {
+        threads.emplace_back([hasher]() {
             for (int i = 0; i < num_iterations; ++i) {
                 hasher->reset();
                 std::this_thread::sleep_for(std::chrono::microseconds(10));
             }
         });
 
-        threads.emplace_back([hasher, num_iterations]() {
+        threads.emplace_back([hasher]() {
             for (int i = 0; i < num_iterations; ++i) {
                 hasher->update("data");
                 std::this_thread::sleep_for(std::chrono::microseconds(10));

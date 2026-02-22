@@ -122,7 +122,7 @@ struct FileCompressionUtilityOutput {
  * auto batch_compressor = std::make_shared<
  *     BatchProcessor<FileCompressionUtilityInput,
  * FileCompressionUtilityOutput>>( [compressor](const
- * FileCompressionUtilityInput& input, TaskContext& ctx) { return
+ * FileCompressionUtilityInput& input, CoroScope& ctx) { return
  * compressor->process(input);
  *         }
  * );

@@ -3,34 +3,78 @@
 
 #include <dftracer/utils/core/coro/coroutine_traits.h>
 #include <dftracer/utils/core/pipeline/error.h>
-#include <dftracer/utils/core/tasks/task_context.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task_traits.h>
 
-#include <tuple>
 #include <type_traits>
 
 namespace dftracer::utils {
 
-// Template implementations
+// ============================================================================
+// Input decoding helper
+//
+// Converts std::any to the typed input expected by the user function.
+// Handles: std::any passthrough, tuple from vector<any>, typed vector,
+// and concrete type via any_cast.
+// ============================================================================
+
+namespace detail {
+
+template <typename T>
+T decode_input(const std::any& input) {
+    if constexpr (std::is_same_v<T, std::any>) {
+        return input;
+    } else if constexpr (is_tuple_v<T>) {
+        try {
+            auto vec = std::any_cast<std::vector<std::any>>(input);
+            return vector_to_tuple<T>(vec);
+        } catch (const std::bad_any_cast&) {
+            return std::any_cast<T>(input);
+        }
+    } else if constexpr (is_std_vector_v<T>) {
+        using Elem = vector_element_type_t<T>;
+        try {
+            auto vec = std::any_cast<std::vector<std::any>>(input);
+            return vector_any_to_typed<Elem>(vec);
+        } catch (const std::bad_any_cast&) {
+            return std::any_cast<T>(input);
+        }
+    } else {
+        return std::any_cast<T>(input);
+    }
+}
+
+}  // namespace detail
+
+// ============================================================================
+// wrap_function: type-erased coroutine factory
+//
+// Wraps any user callable into the uniform signature:
+//   CoroTask<std::any>(CoroScope&, const std::any&)
+// ============================================================================
 
 template <typename Func>
-std::function<coro::CoroTask<std::any>(TaskContext&, const std::any&)>
+std::function<coro::CoroTask<std::any>(CoroScope&, const std::any&)>
 Task::wrap_function(Func&& func) {
     using Traits = detail::function_traits<std::decay_t<Func>>;
     using InputType = typename Traits::input_type;
-    using RawOutputType = typename Traits::output_type;
-
-    constexpr bool is_coroutine = coro::is_coro_task_v<RawOutputType>;
-    using OutputType = coro::unwrap_coro_task_t<RawOutputType>;
+    using OutputType = typename Traits::output_type;
+    constexpr bool has_ctx = Traits::has_context;
+    constexpr bool is_coro = Traits::is_coroutine;
 
     auto func_ptr =
         std::make_shared<std::decay_t<Func>>(std::forward<Func>(func));
 
-    if constexpr (std::is_void_v<InputType>) {
-        if constexpr (Traits::has_context) {
-            return [func_ptr](TaskContext& ctx,
-                              const std::any&) -> coro::CoroTask<std::any> {
-                if constexpr (is_coroutine) {
+    return [func_ptr](CoroScope& ctx,
+                      const std::any& input) -> coro::CoroTask<std::any> {
+        // Build the invocation based on input type and context
+        // Note: avoid IIFE pattern here as it causes GCC 11/13 coroutine bugs.
+        // Instead, use explicit if-constexpr branches for coroutine invocation.
+
+        if constexpr (std::is_void_v<InputType>) {
+            // No input argument
+            if constexpr (is_coro) {
+                if constexpr (has_ctx) {
                     auto user_coro = (*func_ptr)(ctx);
                     if constexpr (std::is_void_v<OutputType>) {
                         co_await std::move(user_coro);
@@ -40,18 +84,6 @@ Task::wrap_function(Func&& func) {
                         co_return std::any(std::move(result));
                     }
                 } else {
-                    if constexpr (std::is_void_v<OutputType>) {
-                        (*func_ptr)(ctx);
-                        co_return std::any{};
-                    } else {
-                        co_return std::any((*func_ptr)(ctx));
-                    }
-                }
-            };
-        } else {
-            return [func_ptr](TaskContext&,
-                              const std::any&) -> coro::CoroTask<std::any> {
-                if constexpr (is_coroutine) {
                     auto user_coro = (*func_ptr)();
                     if constexpr (std::is_void_v<OutputType>) {
                         co_await std::move(user_coro);
@@ -59,6 +91,15 @@ Task::wrap_function(Func&& func) {
                     } else {
                         auto result = co_await std::move(user_coro);
                         co_return std::any(std::move(result));
+                    }
+                }
+            } else {
+                if constexpr (has_ctx) {
+                    if constexpr (std::is_void_v<OutputType>) {
+                        (*func_ptr)(ctx);
+                        co_return std::any{};
+                    } else {
+                        co_return std::any((*func_ptr)(ctx));
                     }
                 } else {
                     if constexpr (std::is_void_v<OutputType>) {
@@ -68,157 +109,92 @@ Task::wrap_function(Func&& func) {
                         co_return std::any((*func_ptr)());
                     }
                 }
-            };
-        }
-    } else {
-        if constexpr (Traits::has_context) {
-            return [func_ptr](
-                       TaskContext& ctx,
-                       const std::any& input) -> coro::CoroTask<std::any> {
-                InputType typed_input;
-                if constexpr (detail::is_tuple_v<InputType>) {
-                    try {
-                        auto vec = std::any_cast<std::vector<std::any>>(input);
-                        typed_input = detail::vector_to_tuple<InputType>(vec);
-                    } catch (const std::bad_any_cast&) {
-                        typed_input = std::any_cast<InputType>(input);
-                    }
-                } else if constexpr (detail::is_std_vector_v<InputType>) {
-                    using ElemType = detail::vector_element_type_t<InputType>;
-                    try {
-                        auto vec = std::any_cast<std::vector<std::any>>(input);
-                        typed_input =
-                            detail::vector_any_to_typed<ElemType>(vec);
-                    } catch (const std::bad_any_cast&) {
-                        typed_input = std::any_cast<InputType>(input);
-                    }
-                } else if constexpr (std::is_same_v<InputType, std::any>) {
-                    typed_input = input;
-                } else {
-                    typed_input = std::any_cast<InputType>(input);
-                }
-                if constexpr (is_coroutine) {
-                    // Note: Avoid IIFE pattern here as it causes GCC 11/13
-                    // coroutine bugs
-                    if constexpr (detail::is_tuple_v<InputType>) {
-                        auto user_coro = detail::apply_tuple_with_context(
-                            *func_ptr, ctx, typed_input);
-                        if constexpr (std::is_void_v<OutputType>) {
-                            co_await std::move(user_coro);
-                            co_return std::any{};
-                        } else {
-                            auto result = co_await std::move(user_coro);
-                            co_return std::any(std::move(result));
-                        }
-                    } else {
-                        auto user_coro = (*func_ptr)(ctx, typed_input);
-                        if constexpr (std::is_void_v<OutputType>) {
-                            co_await std::move(user_coro);
-                            co_return std::any{};
-                        } else if constexpr (std::is_same_v<OutputType,
-                                                            std::any>) {
-                            // Already std::any, no need to wrap
-                            co_return co_await std::move(user_coro);
-                        } else {
-                            auto result = co_await std::move(user_coro);
-                            co_return std::any(std::move(result));
-                        }
-                    }
-                } else {
-                    if constexpr (std::is_void_v<OutputType>) {
-                        if constexpr (detail::is_tuple_v<InputType>) {
-                            detail::apply_tuple_with_context(*func_ptr, ctx,
-                                                             typed_input);
-                        } else {
-                            (*func_ptr)(ctx, typed_input);
-                        }
-                        co_return std::any{};
-                    } else {
-                        if constexpr (detail::is_tuple_v<InputType>) {
-                            co_return std::any(detail::apply_tuple_with_context(
-                                *func_ptr, ctx, typed_input));
-                        } else {
-                            co_return std::any((*func_ptr)(ctx, typed_input));
-                        }
-                    }
-                }
-            };
+            }
         } else {
-            return [func_ptr](
-                       TaskContext&,
-                       const std::any& input) -> coro::CoroTask<std::any> {
-                InputType typed_input;
-                if constexpr (detail::is_tuple_v<InputType>) {
-                    try {
-                        auto vec = std::any_cast<std::vector<std::any>>(input);
-                        typed_input = detail::vector_to_tuple<InputType>(vec);
-                    } catch (const std::bad_any_cast&) {
-                        typed_input = std::any_cast<InputType>(input);
-                    }
-                } else if constexpr (detail::is_std_vector_v<InputType>) {
-                    using ElemType = detail::vector_element_type_t<InputType>;
-                    try {
-                        auto vec = std::any_cast<std::vector<std::any>>(input);
-                        typed_input =
-                            detail::vector_any_to_typed<ElemType>(vec);
-                    } catch (const std::bad_any_cast&) {
-                        typed_input = std::any_cast<InputType>(input);
-                    }
-                } else if constexpr (std::is_same_v<InputType, std::any>) {
-                    typed_input = input;
-                } else {
-                    typed_input = std::any_cast<InputType>(input);
-                }
-                if constexpr (is_coroutine) {
-                    // Note: Avoid IIFE pattern here as it causes GCC 11/13
-                    // coroutine bugs
-                    if constexpr (detail::is_tuple_v<InputType>) {
-                        auto user_coro =
-                            detail::apply_tuple(*func_ptr, typed_input);
-                        if constexpr (std::is_void_v<OutputType>) {
-                            co_await std::move(user_coro);
-                            co_return std::any{};
-                        } else {
-                            auto result = co_await std::move(user_coro);
-                            co_return std::any(std::move(result));
-                        }
-                    } else {
-                        auto user_coro = (*func_ptr)(typed_input);
-                        if constexpr (std::is_void_v<OutputType>) {
-                            co_await std::move(user_coro);
-                            co_return std::any{};
-                        } else {
-                            auto result = co_await std::move(user_coro);
-                            co_return std::any(std::move(result));
-                        }
-                    }
-                } else {
+            // Has input -- decode it
+            InputType typed_input = detail::decode_input<InputType>(input);
+
+            if constexpr (is_coro) {
+                if constexpr (detail::is_tuple_v<InputType> && has_ctx) {
+                    auto user_coro = detail::apply_tuple_with_context(
+                        *func_ptr, ctx, typed_input);
                     if constexpr (std::is_void_v<OutputType>) {
-                        if constexpr (detail::is_tuple_v<InputType>) {
-                            detail::apply_tuple(*func_ptr, typed_input);
-                        } else {
-                            (*func_ptr)(typed_input);
-                        }
+                        co_await std::move(user_coro);
                         co_return std::any{};
                     } else {
-                        if constexpr (detail::is_tuple_v<InputType>) {
-                            co_return std::any(
-                                detail::apply_tuple(*func_ptr, typed_input));
-                        } else {
-                            co_return std::any((*func_ptr)(typed_input));
-                        }
+                        auto result = co_await std::move(user_coro);
+                        co_return std::any(std::move(result));
+                    }
+                } else if constexpr (detail::is_tuple_v<InputType>) {
+                    auto user_coro =
+                        detail::apply_tuple(*func_ptr, typed_input);
+                    if constexpr (std::is_void_v<OutputType>) {
+                        co_await std::move(user_coro);
+                        co_return std::any{};
+                    } else {
+                        auto result = co_await std::move(user_coro);
+                        co_return std::any(std::move(result));
+                    }
+                } else if constexpr (has_ctx) {
+                    auto user_coro = (*func_ptr)(ctx, typed_input);
+                    if constexpr (std::is_void_v<OutputType>) {
+                        co_await std::move(user_coro);
+                        co_return std::any{};
+                    } else if constexpr (std::is_same_v<OutputType, std::any>) {
+                        co_return co_await std::move(user_coro);
+                    } else {
+                        auto result = co_await std::move(user_coro);
+                        co_return std::any(std::move(result));
+                    }
+                } else {
+                    auto user_coro = (*func_ptr)(typed_input);
+                    if constexpr (std::is_void_v<OutputType>) {
+                        co_await std::move(user_coro);
+                        co_return std::any{};
+                    } else {
+                        auto result = co_await std::move(user_coro);
+                        co_return std::any(std::move(result));
                     }
                 }
-            };
+            } else {
+                if constexpr (std::is_void_v<OutputType>) {
+                    if constexpr (detail::is_tuple_v<InputType> && has_ctx) {
+                        detail::apply_tuple_with_context(*func_ptr, ctx,
+                                                         typed_input);
+                    } else if constexpr (detail::is_tuple_v<InputType>) {
+                        detail::apply_tuple(*func_ptr, typed_input);
+                    } else if constexpr (has_ctx) {
+                        (*func_ptr)(ctx, typed_input);
+                    } else {
+                        (*func_ptr)(typed_input);
+                    }
+                    co_return std::any{};
+                } else {
+                    if constexpr (detail::is_tuple_v<InputType> && has_ctx) {
+                        co_return std::any(detail::apply_tuple_with_context(
+                            *func_ptr, ctx, typed_input));
+                    } else if constexpr (detail::is_tuple_v<InputType>) {
+                        co_return std::any(
+                            detail::apply_tuple(*func_ptr, typed_input));
+                    } else if constexpr (has_ctx) {
+                        co_return std::any((*func_ptr)(ctx, typed_input));
+                    } else {
+                        co_return std::any((*func_ptr)(typed_input));
+                    }
+                }
+            }
         }
-    }
+    };
 }
+
+// ============================================================================
+// Type deduction helpers
+// ============================================================================
 
 template <typename Func>
 std::type_index Task::deduce_input_type() {
     using Traits = detail::function_traits<std::decay_t<Func>>;
-    using RawInputType = typename Traits::input_type;
-    using InputType = coro::unwrap_coro_task_t<RawInputType>;
+    using InputType = typename Traits::input_type;
 
     if constexpr (std::is_void_v<InputType>) {
         return typeid(void);
@@ -230,8 +206,7 @@ std::type_index Task::deduce_input_type() {
 template <typename Func>
 std::type_index Task::deduce_output_type() {
     using Traits = detail::function_traits<std::decay_t<Func>>;
-    using RawOutputType = typename Traits::output_type;
-    using OutputType = coro::unwrap_coro_task_t<RawOutputType>;
+    using OutputType = typename Traits::output_type;
 
     if constexpr (std::is_void_v<OutputType>) {
         return typeid(void);
@@ -272,42 +247,10 @@ auto Task::with_combiner(Func&& combiner) -> std::enable_if_t<
     !std::is_same_v<std::decay_t<Func>,
                     std::function<std::any(const std::vector<std::any>&)>>,
     std::shared_ptr<Task>> {
-    using traits =
-        detail::function_traits<decltype(&std::decay_t<Func>::operator())>;
+    using traits = detail::function_traits<std::decay_t<Func>>;
     using func_type = typename traits::template as_std_function<std::any>;
     func_type typed_combiner = std::forward<Func>(combiner);
     return with_combiner(typed_combiner);
-}
-
-// ============================================================================
-// TaskContext::spawn_untracked template implementation
-// ============================================================================
-
-template <typename Func>
-auto TaskContext::spawn_untracked(Func&& func) -> TaskFuture<
-    typename std::invoke_result_t<Func, TaskContext&>::value_type> {
-    auto task = make_task(std::forward<Func>(func));
-    return spawn_untracked(task);
-}
-
-// ============================================================================
-// TaskFuture::get() implementations
-// ============================================================================
-
-template <typename T>
-T TaskFuture<T>::get() {
-    if (!task_) {
-        throw std::runtime_error("Invalid TaskFuture");
-    }
-    std::any result_any = task_->get_future().get();
-
-    if constexpr (!std::is_void_v<T>) {
-        if constexpr (std::is_same_v<T, std::any>) {
-            return result_any;
-        } else {
-            return std::any_cast<T>(result_any);
-        }
-    }
 }
 
 }  // namespace dftracer::utils

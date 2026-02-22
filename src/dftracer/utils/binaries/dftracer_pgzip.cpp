@@ -39,11 +39,6 @@ int main(int argc, char** argv) {
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
 
-    program.add_argument("--scheduler-threads")
-        .help("Number of scheduler threads (default: 1, typically not changed)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(1));
-
     program.add_argument("-l", "--compression-level")
         .help("Compression level (0-9, default: Z_DEFAULT_COMPRESSION)")
         .scan<'d', int>()
@@ -98,8 +93,6 @@ int main(int argc, char** argv) {
     bool verbose = program.get<bool>("--verbose");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    std::size_t scheduler_threads =
-        program.get<std::size_t>("--scheduler-threads");
     int compression_level = program.get<int>("--compression-level");
     bool disable_watchdog = program.get<bool>("--disable-watchdog");
     int global_timeout = program.get<int>("--watchdog-global-timeout");
@@ -118,7 +111,6 @@ int main(int argc, char** argv) {
     std::printf("  Input dir: %s\n", input_dir.c_str());
     std::printf("  Compression level: %d\n", compression_level);
     std::printf("  Executor threads: %zu\n", executor_threads);
-    std::printf("  Scheduler threads: %zu\n", scheduler_threads);
     std::printf("  Verbose: %s\n", verbose ? "true" : "false");
     std::printf("==========================================\n\n");
 
@@ -128,7 +120,6 @@ int main(int argc, char** argv) {
         PipelineConfig()
             .with_name("DFTracer Parallel Gzip")
             .with_compute_threads(executor_threads)
-            .with_scheduler_threads(scheduler_threads)
             .with_watchdog(!disable_watchdog)
             .with_global_timeout(std::chrono::seconds(global_timeout))
             .with_task_timeout(std::chrono::seconds(task_timeout))
@@ -152,7 +143,7 @@ int main(int argc, char** argv) {
 
     auto file_compressor =
         [compression_level](
-            TaskContext& /*ctx*/,
+            CoroScope& /*ctx*/,
             const std::string& file_path) -> FileCompressionUtilityOutput {
         auto input = FileCompressionUtilityInput::from_file(file_path,
                                                             compression_level);

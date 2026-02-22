@@ -27,14 +27,17 @@ link_zlib(testing_utilities STATIC)
 set(TEST_CPP_SOURCES
     # Pipeline tests
     pipeline/test_pipeline.cpp
-    pipeline/test_io_pipeline.cpp
+
     pipeline/test_task_scope.cpp
     pipeline/test_simple_scope.cpp
+    pipeline/test_coro_scope.cpp
     # Coroutine tests
     coro/test_coro_syntax.cpp
     coro/test_channel.cpp
     coro/test_generator.cpp
     coro/test_async_generator.cpp
+    coro/test_coro.cpp
+    coro/test_yield.cpp
     # Task Graph tests
     task_graph/test_task_graph.cpp
     # Reader tests
@@ -93,6 +96,26 @@ foreach(test_file ${TEST_CPP_SOURCES})
     if(TARGET dftracer_replay)
       add_dependencies(${target_name} dftracer_replay)
     endif()
+  endif()
+
+  # Default timeout for all tests (safety net against hangs in CI)
+  set(default_test_timeout 120)
+  if(DFTRACER_UTILS_ENABLE_TSAN)
+    set(default_test_timeout 300)
+  endif()
+  set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${default_test_timeout})
+
+  # These thread-heavy tests contend heavily when run together on low-core CI.
+  # Give them extra timeout and serialize via a shared lock.
+  if(bin_exec STREQUAL "pipeline/test_task_scope"
+     OR bin_exec STREQUAL "coro/test_channel")
+    set(heavy_thread_timeout 180)
+    if(DFTRACER_UTILS_ENABLE_TSAN)
+      set(heavy_thread_timeout 600)
+    endif()
+    set_tests_properties(${bin_exec} PROPERTIES
+                                           TIMEOUT ${heavy_thread_timeout}
+                                           RESOURCE_LOCK heavy_threading)
   endif()
 endforeach()
 

@@ -85,11 +85,6 @@ int main(int argc, char** argv) {
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
 
-    program.add_argument("--scheduler-threads")
-        .help("Number of scheduler threads (default: 1, typically not changed)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(1));
-
     program.add_argument("--index-dir")
         .help("Directory to store index files (default: system temp directory)")
         .default_value<std::string>("");
@@ -153,8 +148,6 @@ int main(int argc, char** argv) {
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    std::size_t scheduler_threads =
-        program.get<std::size_t>("--scheduler-threads");
     std::string index_dir = program.get<std::string>("--index-dir");
     bool disable_watchdog = program.get<bool>("--disable-watchdog");
     int global_timeout = program.get<int>("--watchdog-global-timeout");
@@ -189,7 +182,6 @@ int main(int argc, char** argv) {
     std::printf("  Output dir: %s\n", output_dir.c_str());
     std::printf("  Chunk size: %d MB\n", chunk_size_mb);
     std::printf("  Executor threads: %zu\n", executor_threads);
-    std::printf("  Scheduler threads: %zu\n", scheduler_threads);
     std::printf("==========================================\n\n");
 
     if (!fs::exists(output_dir)) {
@@ -201,7 +193,6 @@ int main(int argc, char** argv) {
         PipelineConfig()
             .with_name("DFTracer Split")
             .with_compute_threads(executor_threads)
-            .with_scheduler_threads(scheduler_threads)
             .with_watchdog(!disable_watchdog)
             .with_global_timeout(std::chrono::seconds(global_timeout))
             .with_task_timeout(std::chrono::seconds(task_timeout))
@@ -244,7 +235,7 @@ int main(int argc, char** argv) {
     auto file_metadata = graph.parallel<Metadata>(
         input_files.size(),
         [&input_files, checkpoint_size, force, &index_dir](
-            TaskContext&, std::size_t idx) -> coro::CoroTask<Metadata> {
+            CoroScope&, std::size_t idx) -> coro::CoroTask<Metadata> {
             const auto& file_path = input_files[idx];
 
             // Determine index path
@@ -279,7 +270,7 @@ int main(int argc, char** argv) {
 
     auto manifests_group = graph.reduce<std::vector<ChunkManifest>>(
         file_metadata, split_every{input_files.size()},
-        [chunk_size_mb](TaskContext&, std::vector<Metadata> all_metadata)
+        [chunk_size_mb](CoroScope&, std::vector<Metadata> all_metadata)
             -> coro::CoroTask<std::vector<ChunkManifest>> {
             DFTRACER_UTILS_LOG_INFO("Creating chunk mappings from %zu files...",
                                     all_metadata.size());
@@ -352,7 +343,7 @@ int main(int argc, char** argv) {
 
         // Verification task: combine hashes from extraction results
         task_verify_chunks = make_task(
-            [&file_metadata](TaskContext&, const ExtractChunksOutput& chunks)
+            [&file_metadata](CoroScope&, const ExtractChunksOutput& chunks)
                 -> coro::CoroTask<
                     utilities::composites::ChunkVerificationUtilityOutput> {
                 // Sum output hashes from extraction results

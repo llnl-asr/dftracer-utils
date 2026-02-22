@@ -3,8 +3,8 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
@@ -18,7 +18,6 @@
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-#include <unistd.h>
 
 #include <cstdio>
 #include <cstring>
@@ -92,15 +91,13 @@ static void build_midx_for_file(const std::string& trace_file,
     auto pipeline_config = PipelineConfig()
                                .with_name("IntegrationTestMidxBuild")
                                .with_compute_threads(2)
-                               .with_io_threads(2)
-                               .with_scheduler_threads(1)
                                .with_watchdog(false);
 
     Pipeline pipeline(pipeline_config);
     ManifestIndexBuildOutput result;
 
     auto task = make_task(
-        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+        [&](CoroScope& ctx) -> coro::CoroTask<void> {
             auto utility = std::make_shared<ManifestIndexBuilderUtility>();
             behaviors::BehaviorChain<ManifestIndexBuildInput,
                                      ManifestIndexBuildOutput>
@@ -237,7 +234,7 @@ static void execute_extraction(const ExtractionPlan& plan,
 TEST_SUITE("ReorganizeIntegration") {
     TEST_CASE("Full pipeline: two groups + remainder") {
         std::string test_dir =
-            "/tmp/test_reorg_integ_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_reorg_integ").string();
         std::string input_dir = test_dir + "/input";
         std::string output_dir = test_dir + "/output";
         fs::create_directories(input_dir);
@@ -327,7 +324,8 @@ TEST_SUITE("ReorganizeIntegration") {
 
     TEST_CASE("Compression and sidecar building") {
         std::string test_dir =
-            "/tmp/test_reorg_compress_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_reorg_compress")
+                .string();
         std::string input_dir = test_dir + "/input";
         std::string output_dir = test_dir + "/output";
         fs::create_directories(input_dir);
@@ -385,15 +383,13 @@ TEST_SUITE("ReorganizeIntegration") {
             auto pipeline_config = PipelineConfig()
                                        .with_name("SidecarBuild")
                                        .with_compute_threads(2)
-                                       .with_io_threads(2)
-                                       .with_scheduler_threads(1)
                                        .with_watchdog(false);
 
             Pipeline pipeline(pipeline_config);
             ManifestIndexBuildOutput midx_result;
 
             auto task = make_task(
-                [&](TaskContext& ctx) -> coro::CoroTask<void> {
+                [&](CoroScope& ctx) -> coro::CoroTask<void> {
                     ManifestIndexBuildInput midx_input;
                     midx_input.file_path = io_gz;
                     midx_input.index_dir = output_dir;

@@ -18,7 +18,7 @@
 
 namespace dftracer::utils {
 // Forward declaration
-class TaskContext;
+class CoroScope;
 }  // namespace dftracer::utils
 
 namespace dftracer::utils::utilities {
@@ -53,7 +53,7 @@ struct Parallelizable;
  *     }
  * };
  *
- * // Utility with dynamic emission (use context() to access TaskContext)
+ * // Utility with dynamic emission (use context() to access CoroScope)
  * class ParallelUtility : public Utility<std::string, int, tags::NeedsContext>
  * { int process(const std::string& input) override {
  *         // Access context via protected context() method
@@ -74,7 +74,7 @@ template <typename I, typename O, typename... Tags>
 class Utility {
    private:
     std::tuple<Tags...> tags_;
-    TaskContext* ctx_ = nullptr;  // Optional context reference
+    CoroScope* ctx_ = nullptr;    // Optional context reference
     std::string name_;            // User-provided name (or empty)
     std::string type_signature_;  // Auto-generated type representation
 
@@ -117,7 +117,7 @@ class Utility {
      * @brief Process input.
      *
      * Override this method to implement utility logic.
-     * If utility needs TaskContext (has NeedsContext tag), use context() to
+     * If utility needs CoroScope (has NeedsContext tag), use context() to
      * access it.
      *
      * @param input Input data to process
@@ -127,12 +127,12 @@ class Utility {
 
    protected:
     /**
-     * @brief Get TaskContext reference (only for utilities with NeedsContext
+     * @brief Get CoroScope reference (only for utilities with NeedsContext
      * tag).
      *
-     * Use this method to access TaskContext for dynamic task emission.
+     * Use this method to access CoroScope for dynamic task emission.
      *
-     * @return Reference to TaskContext
+     * @return Reference to CoroScope
      * @throws std::runtime_error if context not available
      *
      * Usage:
@@ -146,18 +146,18 @@ class Utility {
      * };
      * @endcode
      */
-    TaskContext& context() {
+    CoroScope& context() {
         // Compile-time check: Utility must have NeedsContext tag
         static_assert(
             has_tag<tags::NeedsContext>(),
-            "Utility must have tags::NeedsContext to access TaskContext! "
+            "Utility must have tags::NeedsContext to access CoroScope! "
             "Add tags::NeedsContext to your Utility class template "
             "parameters.");
 
         // Runtime check: Context must be set by executor
         if (!ctx_) {
             throw std::runtime_error(
-                "TaskContext not available. Utility has NeedsContext tag but "
+                "CoroScope not available. Utility has NeedsContext tag but "
                 "context was not set. Ensure utility is executed via "
                 "UtilityExecutor "
                 "or pipeline with proper executor.");
@@ -167,14 +167,14 @@ class Utility {
 
    private:
     /**
-     * @brief Set TaskContext reference.
+     * @brief Set CoroScope reference.
      *
-     * @param ctx TaskContext reference to store
+     * @param ctx CoroScope reference to store
      */
-    void set_context(TaskContext& ctx) { ctx_ = &ctx; }
+    void set_context(CoroScope& ctx) { ctx_ = &ctx; }
 
     /**
-     * @brief Clear TaskContext reference.
+     * @brief Clear CoroScope reference.
      */
     void clear_context() { ctx_ = nullptr; }
 

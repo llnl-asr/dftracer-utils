@@ -3,10 +3,11 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <doctest/doctest.h>
-#include <unistd.h>  // for getpid()
 
 #include <cstdint>
 #include <fstream>
+
+#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft;
@@ -44,7 +45,8 @@ TEST_SUITE("MetadataCollector") {
     TEST_CASE("MetadataCollector - Collect from plain trace file") {
         // Create temp directory
         std::string test_dir =
-            "/tmp/test_metadata_collector_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_metadata_collector")
+                .string();
         fs::create_directories(test_dir);
 
         SUBCASE("Small trace file") {
@@ -124,7 +126,8 @@ TEST_SUITE("MetadataCollector") {
     TEST_CASE("MetadataCollector - Extended fields for compressed files") {
         // Create temp directory
         std::string test_dir =
-            "/tmp/test_metadata_compressed_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_metadata_compressed")
+                .string();
         fs::create_directories(test_dir);
 
         SUBCASE("Compressed file with index - extended metadata") {
@@ -236,7 +239,8 @@ TEST_SUITE("MetadataCollector") {
 
         SUBCASE("Empty trace file") {
             std::string test_dir =
-                "/tmp/test_metadata_empty_" + std::to_string(getpid());
+                dft_utils_test::make_unique_test_path("test_metadata_empty")
+                    .string();
             fs::create_directories(test_dir);
 
             std::string empty_file = test_dir + "/empty.trace";

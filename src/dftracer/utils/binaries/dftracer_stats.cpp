@@ -4,9 +4,8 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
-#include <dftracer/utils/core/tasks/task_scope.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.h>
@@ -668,8 +667,6 @@ int main(int argc, char** argv) {
         auto pipeline_config = PipelineConfig()
                                    .with_name("DFTracer Stats Auto-Indexer")
                                    .with_compute_threads(executor_threads)
-                                   .with_io_threads(executor_threads)
-                                   .with_scheduler_threads(1)
                                    .with_watchdog(false);
 
         Pipeline pipeline(pipeline_config);
@@ -683,15 +680,20 @@ int main(int argc, char** argv) {
         build_template.dimensions = default_bloom_dimensions();
 
         auto index_task = make_task(
-            [&](TaskContext& ctx) -> coro::CoroTask<void> {
-                co_await ctx.scope([&](TaskScope& scope)
+            [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                co_await ctx.scope([&](CoroScope& scope)
                                        -> coro::CoroTask<void> {
+                    auto* indexed_count_ptr = &indexed_count;
+                    auto* failed_count_ptr = &failed_count;
                     for (std::size_t i = 0; i < files_needing_index.size();
                          ++i) {
-                        scope.spawn([&, i](TaskContext& fctx)
+                        const auto file_path = files_needing_index[i];
+                        scope.spawn([build_template, file_path,
+                                     indexed_count_ptr,
+                                     failed_count_ptr](CoroScope& fctx)
                                         -> coro::CoroTask<void> {
                             BloomIndexBuildInput build_input = build_template;
-                            build_input.file_path = files_needing_index[i];
+                            build_input.file_path = file_path;
 
                             auto utility =
                                 std::make_shared<BloomIndexBuilderUtility>();
@@ -707,12 +709,12 @@ int main(int argc, char** argv) {
                                 fctx, build_input);
 
                             if (result.success) {
-                                indexed_count++;
+                                (*indexed_count_ptr)++;
                             } else {
-                                failed_count++;
+                                (*failed_count_ptr)++;
                                 DFTRACER_UTILS_LOG_ERROR(
                                     "Auto-indexing failed for %s: %s",
-                                    files_needing_index[i].c_str(),
+                                    file_path.c_str(),
                                     result.error_message.c_str());
                             }
 

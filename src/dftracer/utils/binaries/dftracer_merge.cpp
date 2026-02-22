@@ -66,11 +66,6 @@ int main(int argc, char** argv) {
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
 
-    program.add_argument("--scheduler-threads")
-        .help("Number of scheduler threads (default: 1, typically not changed)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(1));
-
     program.add_argument("--index-dir")
         .help("Directory to store index files (default: system temp directory)")
         .default_value<std::string>("");
@@ -143,8 +138,6 @@ int main(int argc, char** argv) {
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    std::size_t scheduler_threads =
-        program.get<std::size_t>("--scheduler-threads");
     std::string index_dir = program.get<std::string>("--index-dir");
     std::size_t channel_capacity =
         program.get<std::size_t>("--channel-capacity");
@@ -230,7 +223,6 @@ int main(int argc, char** argv) {
     std::printf("  Channel capacity: %zu batches\n", channel_capacity);
     std::printf("  Batch size: %zu events\n", batch_size);
     std::printf("  Executor threads: %zu\n", executor_threads);
-    std::printf("  Scheduler threads: %zu\n", scheduler_threads);
     std::printf("==========================================\n\n");
 
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -248,7 +240,6 @@ int main(int argc, char** argv) {
         PipelineConfig()
             .with_name("DFTracer Merge")
             .with_compute_threads(executor_threads)
-            .with_scheduler_threads(scheduler_threads)
             .with_watchdog(!disable_watchdog)
             .with_global_timeout(std::chrono::seconds(global_timeout))
             .with_task_timeout(std::chrono::seconds(task_timeout))
@@ -266,7 +257,7 @@ int main(int argc, char** argv) {
         auto producer_task = make_task(
             [i, &input_files, &index_dir, checkpoint_size, batch_size,
              force_override, &channel,
-             &producer_results]([[maybe_unused]] TaskContext& ctx)
+             &producer_results]([[maybe_unused]] CoroScope& ctx)
                 -> coro::CoroTask<StreamingFileProducerOutput> {
                 auto guard = channel->producer_guard();
 
@@ -280,7 +271,7 @@ int main(int argc, char** argv) {
                         .with_batch_size(batch_size)
                         .with_force_rebuild(force_override);
 
-                auto result = producer.process(input);
+                auto result = co_await producer.process_async(ctx, input);
                 producer_results[i] = result;
 
                 co_return result;
@@ -292,14 +283,14 @@ int main(int argc, char** argv) {
     // Step 4: Create consumer task
     auto consumer_task = make_task(
         [&channel, &output_file, compress_output,
-         &consumer_result]([[maybe_unused]] TaskContext& ctx)
+         &consumer_result]([[maybe_unused]] CoroScope& ctx)
             -> coro::CoroTask<StreamingFileConsumerOutput> {
             StreamingFileConsumerUtility consumer(channel);
 
             auto input = StreamingFileConsumerInput::with_output(output_file)
                              .with_compression(compress_output);
 
-            consumer_result = consumer.process(input);
+            consumer_result = co_await consumer.process_async(ctx, input);
             co_return consumer_result;
         },
         "Consumer");

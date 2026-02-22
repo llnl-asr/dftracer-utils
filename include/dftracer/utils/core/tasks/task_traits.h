@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_TASK_TRAITS_H
 #define DFTRACER_UTILS_CORE_TASKS_TASK_TRAITS_H
 
+#include <dftracer/utils/core/coro/coroutine_traits.h>
+
 #include <any>
 #include <cstddef>
 #include <functional>
@@ -10,369 +12,174 @@
 
 namespace dftracer::utils {
 
-class TaskContext;
+class CoroScope;
 
-// Helper to detect function signature
 namespace detail {
 
-// Extract function traits
-// Primary template declaration with SFINAE support for generic lambdas
-template <typename Func, typename = void>
-struct function_traits;
+// ============================================================================
+// Step 1: Decompose callable signature (call_traits)
+//
+// Extracts return_type, args_tuple, and arity from any callable.
+// 6 member-function-pointer specializations (const/non-const × noexcept)
+// + 2 function-pointer specializations + callable-object delegation.
+// ============================================================================
+
+template <typename T, typename = void>
+struct call_traits {
+    static constexpr bool is_valid = false;
+};
+
+template <typename C, typename R, typename... Args>
+struct call_traits_base {
+    static constexpr bool is_valid = true;
+    using return_type = R;
+    using args_tuple = std::tuple<std::decay_t<Args>...>;
+    using raw_args_tuple = std::tuple<Args...>;
+    static constexpr std::size_t arity = sizeof...(Args);
+};
+
+// const member function (covers most lambdas)
+template <typename C, typename R, typename... Args>
+struct call_traits<R (C::*)(Args...) const> : call_traits_base<C, R, Args...> {
+};
+
+// non-const member function (mutable lambdas)
+template <typename C, typename R, typename... Args>
+struct call_traits<R (C::*)(Args...)> : call_traits_base<C, R, Args...> {};
+
+// const noexcept member function (GCC 14 treats noexcept as part of type)
+template <typename C, typename R, typename... Args>
+struct call_traits<R (C::*)(Args...) const noexcept>
+    : call_traits_base<C, R, Args...> {};
+
+// non-const noexcept member function
+template <typename C, typename R, typename... Args>
+struct call_traits<R (C::*)(Args...) noexcept>
+    : call_traits_base<C, R, Args...> {};
 
 // Function pointer
-template <typename R, typename Arg>
-struct function_traits<R (*)(Arg)> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-};
+template <typename R, typename... Args>
+struct call_traits<R (*)(Args...)> : call_traits_base<void, R, Args...> {};
 
-template <typename R, typename Arg>
-struct function_traits<R (*)(Arg, TaskContext&)> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
+// Function pointer (noexcept)
+template <typename R, typename... Args>
+struct call_traits<R (*)(Args...) noexcept>
+    : call_traits_base<void, R, Args...> {};
 
-template <typename R, typename Arg>
-struct function_traits<R (*)(TaskContext&, Arg)> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
+// Callable objects: delegate to operator()
+template <typename F>
+struct call_traits<F, std::void_t<decltype(&std::decay_t<F>::operator())>>
+    : call_traits<decltype(&std::decay_t<F>::operator())> {};
 
-// Lambda/functor (via operator())
-template <typename C, typename R, typename Arg>
-struct function_traits<R (C::*)(Arg) const> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = false;
+// ============================================================================
+// Step 2: Analyze args tuple to extract context/input
+//
+// Given a decayed args_tuple from call_traits, determines:
+// - has_context: whether CoroScope is a parameter
+// - input_type: the logical input type (void, T, or tuple<T1,T2,...>)
+// ============================================================================
 
-    template <typename RetType>
-    using as_std_function = std::function<RetType(Arg)>;
-};
+template <typename ArgsTuple>
+struct analyze_args;
 
-template <typename C, typename R, typename Arg>
-struct function_traits<R (C::*)(Arg, TaskContext&) const> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
-
-template <typename C, typename R, typename Arg>
-struct function_traits<R (C::*)(TaskContext&, Arg) const> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
-
-// Non-const member function
-template <typename C, typename R, typename Arg>
-struct function_traits<R (C::*)(Arg)> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-};
-
-template <typename C, typename R, typename Arg>
-struct function_traits<R (C::*)(Arg, TaskContext&)> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
-
-template <typename C, typename R, typename Arg>
-struct function_traits<R (C::*)(TaskContext&, Arg)> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
-
-// std::function
-template <typename R, typename Arg>
-struct function_traits<std::function<R(Arg)>> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-};
-
-template <typename R, typename Arg>
-struct function_traits<std::function<R(Arg, TaskContext&)>> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
-
-template <typename R, typename Arg>
-struct function_traits<std::function<R(TaskContext&, Arg)>> {
-    using input_type = std::decay_t<Arg>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
-
-// Void input specializations
-template <typename R>
-struct function_traits<R (*)()> {
+// () -> void input, no context
+template <>
+struct analyze_args<std::tuple<>> {
     using input_type = void;
-    using output_type = R;
     static constexpr bool has_context = false;
 };
 
-template <typename R>
-struct function_traits<R (*)(TaskContext&)> {
+// (CoroScope) -> void input, has context
+// Note: std::decay_t<CoroScope&> is CoroScope
+template <>
+struct analyze_args<std::tuple<CoroScope>> {
     using input_type = void;
-    using output_type = R;
     static constexpr bool has_context = true;
 };
 
-template <typename C, typename R>
-struct function_traits<R (C::*)() const> {
-    using input_type = void;
-    using output_type = R;
-    static constexpr bool has_context = false;
-};
-
-template <typename C, typename R>
-struct function_traits<R (C::*)()> {
-    using input_type = void;
-    using output_type = R;
-    static constexpr bool has_context = false;
-};
-
-template <typename C, typename R>
-struct function_traits<R (C::*)(TaskContext&) const> {
-    using input_type = void;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
-
-template <typename C, typename R>
-struct function_traits<R (C::*)(TaskContext&)> {
-    using input_type = void;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
-
-template <typename R>
-struct function_traits<std::function<R()>> {
-    using input_type = void;
-    using output_type = R;
-    static constexpr bool has_context = false;
-};
-
-template <typename R>
-struct function_traits<std::function<R(TaskContext&)>> {
-    using input_type = void;
-    using output_type = R;
-    static constexpr bool has_context = true;
-};
-
-// Multi-argument function specializations (for tuple-based combiners)
-// 2 arguments (without context)
-template <typename R, typename Arg1, typename Arg2>
-struct function_traits<R (*)(Arg1, Arg2)> {
-    using input_type = std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-    static constexpr std::size_t arity = 2;
-};
-
-template <typename C, typename R, typename Arg1, typename Arg2>
-struct function_traits<R (C::*)(Arg1, Arg2) const> {
-    using input_type = std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-    static constexpr std::size_t arity = 2;
-
-    template <typename RetType>
-    using as_std_function = std::function<RetType(Arg1, Arg2)>;
-};
-
-// 2 arguments (with context)
-template <typename R, typename Arg1, typename Arg2>
-struct function_traits<R (*)(TaskContext&, Arg1, Arg2)> {
-    using input_type = std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-    static constexpr std::size_t arity = 2;
-};
-
-template <typename C, typename R, typename Arg1, typename Arg2>
-struct function_traits<R (C::*)(TaskContext&, Arg1, Arg2) const> {
-    using input_type = std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-    static constexpr std::size_t arity = 2;
-};
-
-// 3 arguments (without context)
-template <typename R, typename Arg1, typename Arg2, typename Arg3>
-struct function_traits<R (*)(Arg1, Arg2, Arg3)> {
-    using input_type =
-        std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>, std::decay_t<Arg3>>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-    static constexpr std::size_t arity = 3;
-};
-
-template <typename C, typename R, typename Arg1, typename Arg2, typename Arg3>
-struct function_traits<R (C::*)(Arg1, Arg2, Arg3) const> {
-    using input_type =
-        std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>, std::decay_t<Arg3>>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-    static constexpr std::size_t arity = 3;
-
-    template <typename RetType>
-    using as_std_function = std::function<RetType(Arg1, Arg2, Arg3)>;
-};
-
-// 3 arguments (with context)
-template <typename R, typename Arg1, typename Arg2, typename Arg3>
-struct function_traits<R (*)(TaskContext&, Arg1, Arg2, Arg3)> {
-    using input_type =
-        std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>, std::decay_t<Arg3>>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-    static constexpr std::size_t arity = 3;
-};
-
-template <typename C, typename R, typename Arg1, typename Arg2, typename Arg3>
-struct function_traits<R (C::*)(TaskContext&, Arg1, Arg2, Arg3) const> {
-    using input_type =
-        std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>, std::decay_t<Arg3>>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-    static constexpr std::size_t arity = 3;
-};
-
-// 4 arguments (without context)
-template <typename R, typename Arg1, typename Arg2, typename Arg3,
-          typename Arg4>
-struct function_traits<R (*)(Arg1, Arg2, Arg3, Arg4)> {
-    using input_type = std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>,
-                                  std::decay_t<Arg3>, std::decay_t<Arg4>>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-    static constexpr std::size_t arity = 4;
-};
-
-template <typename C, typename R, typename Arg1, typename Arg2, typename Arg3,
-          typename Arg4>
-struct function_traits<R (C::*)(Arg1, Arg2, Arg3, Arg4) const> {
-    using input_type = std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>,
-                                  std::decay_t<Arg3>, std::decay_t<Arg4>>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-    static constexpr std::size_t arity = 4;
-
-    template <typename RetType>
-    using as_std_function = std::function<RetType(Arg1, Arg2, Arg3, Arg4)>;
-};
-
-// 4 arguments (with context)
-template <typename R, typename Arg1, typename Arg2, typename Arg3,
-          typename Arg4>
-struct function_traits<R (*)(TaskContext&, Arg1, Arg2, Arg3, Arg4)> {
-    using input_type = std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>,
-                                  std::decay_t<Arg3>, std::decay_t<Arg4>>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-    static constexpr std::size_t arity = 4;
-};
-
-template <typename C, typename R, typename Arg1, typename Arg2, typename Arg3,
-          typename Arg4>
-struct function_traits<R (C::*)(TaskContext&, Arg1, Arg2, Arg3, Arg4) const> {
-    using input_type = std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>,
-                                  std::decay_t<Arg3>, std::decay_t<Arg4>>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-    static constexpr std::size_t arity = 4;
-};
-
-// 5 arguments (without context)
-template <typename R, typename Arg1, typename Arg2, typename Arg3,
-          typename Arg4, typename Arg5>
-struct function_traits<R (*)(Arg1, Arg2, Arg3, Arg4, Arg5)> {
-    using input_type =
-        std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>, std::decay_t<Arg3>,
-                   std::decay_t<Arg4>, std::decay_t<Arg5>>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-    static constexpr std::size_t arity = 5;
-};
-
-template <typename C, typename R, typename Arg1, typename Arg2, typename Arg3,
-          typename Arg4, typename Arg5>
-struct function_traits<R (C::*)(Arg1, Arg2, Arg3, Arg4, Arg5) const> {
-    using input_type =
-        std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>, std::decay_t<Arg3>,
-                   std::decay_t<Arg4>, std::decay_t<Arg5>>;
-    using output_type = R;
-    static constexpr bool has_context = false;
-    static constexpr std::size_t arity = 5;
-
-    template <typename RetType>
-    using as_std_function =
-        std::function<RetType(Arg1, Arg2, Arg3, Arg4, Arg5)>;
-};
-
-// 5 arguments (with context)
-template <typename R, typename Arg1, typename Arg2, typename Arg3,
-          typename Arg4, typename Arg5>
-struct function_traits<R (*)(TaskContext&, Arg1, Arg2, Arg3, Arg4, Arg5)> {
-    using input_type =
-        std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>, std::decay_t<Arg3>,
-                   std::decay_t<Arg4>, std::decay_t<Arg5>>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-    static constexpr std::size_t arity = 5;
-};
-
-template <typename C, typename R, typename Arg1, typename Arg2, typename Arg3,
-          typename Arg4, typename Arg5>
-struct function_traits<R (C::*)(TaskContext&, Arg1, Arg2, Arg3, Arg4, Arg5)
-                           const> {
-    using input_type =
-        std::tuple<std::decay_t<Arg1>, std::decay_t<Arg2>, std::decay_t<Arg3>,
-                   std::decay_t<Arg4>, std::decay_t<Arg5>>;
-    using output_type = R;
-    static constexpr bool has_context = true;
-    static constexpr std::size_t arity = 5;
-};
-
-// Helper to detect if a type has a non-templated (unique) call operator
-template <typename T, typename = void>
-struct has_unique_call_operator : std::false_type {};
-
+// (T) -> T input, no context
+// This is less specialized than (CoroScope) above, so no ambiguity.
 template <typename T>
-struct has_unique_call_operator<
-    T, std::void_t<decltype(&std::decay_t<T>::operator())>> : std::true_type {};
-
-template <typename T>
-inline constexpr bool has_unique_call_operator_v =
-    has_unique_call_operator<T>::value;
-
-// Primary template for generic lambdas (auto parameters) - fallback
-// These require explicit type handling at the call site
-template <typename Func, typename>
-struct function_traits {
-    using input_type = std::any;   // Unknown input - use std::any
-    using output_type = std::any;  // Unknown output - use std::any
+struct analyze_args<std::tuple<T>> {
+    using input_type = T;
     static constexpr bool has_context = false;
-    static constexpr bool is_generic = true;
 };
 
-// Specialization for non-generic callables (lambdas with concrete types)
+// (CoroScope, T) -> T input, has context
+template <typename T>
+struct analyze_args<std::tuple<CoroScope, T>> {
+    using input_type = T;
+    static constexpr bool has_context = true;
+};
+
+// (CoroScope, T1, T2, ...) -> tuple<T1,T2,...> input, has context
+// More specialized than (T1, T2, Rest...) below due to CoroScope match.
+template <typename T1, typename T2, typename... Rest>
+struct analyze_args<std::tuple<CoroScope, T1, T2, Rest...>> {
+    using input_type = std::tuple<T1, T2, Rest...>;
+    static constexpr bool has_context = true;
+};
+
+// (T1, T2, ...) -> tuple<T1,T2,...> input, no context
+template <typename T1, typename T2, typename... Rest>
+struct analyze_args<std::tuple<T1, T2, Rest...>> {
+    using input_type = std::tuple<T1, T2, Rest...>;
+    static constexpr bool has_context = false;
+};
+
+// ============================================================================
+// Step 3: make_std_function_from_tuple
+//
+// Converts args_tuple back into std::function<RetType(Args...)>.
+// Used by with_combiner() to wrap lambdas as typed std::function.
+// ============================================================================
+
+template <typename RetType, typename ArgsTuple>
+struct make_std_function_from_tuple;
+
+template <typename RetType, typename... Args>
+struct make_std_function_from_tuple<RetType, std::tuple<Args...>> {
+    using type = std::function<RetType(Args...)>;
+};
+
+// ============================================================================
+// Step 4: Combined function_traits (public API)
+//
+// The single entry point for all type deduction. Provides:
+// - input_type, output_type, has_context, is_coroutine
+// - as_std_function<RetType> alias template for with_combiner
+// ============================================================================
+
 template <typename Func>
-struct function_traits<Func, std::enable_if_t<has_unique_call_operator_v<Func>>>
-    : function_traits<decltype(&std::decay_t<Func>::operator())> {
+struct function_traits {
+    using CT = call_traits<std::decay_t<Func>>;
+    static_assert(CT::is_valid,
+                  "make_task: callable must have a non-generic operator(). "
+                  "Use concrete parameter types, not auto.");
+
+    using raw_return = typename CT::return_type;
+    using AA = analyze_args<typename CT::args_tuple>;
+
+    static constexpr bool has_context = AA::has_context;
+    using input_type = typename AA::input_type;
+
+    static constexpr bool is_coroutine = coro::is_coro_task_v<raw_return>;
+    using output_type = coro::unwrap_coro_task_t<raw_return>;
+
+    static constexpr std::size_t arity = CT::arity;
     static constexpr bool is_generic = false;
+
+    // For with_combiner: builds std::function from raw args (preserving
+    // original qualifiers like const& -- NOT decayed)
+    template <typename RetType>
+    using as_std_function = typename make_std_function_from_tuple<
+        RetType, typename CT::raw_args_tuple>::type;
 };
 
-// Helper to check if a type is a tuple
+// ============================================================================
+// Tuple / vector helpers (unchanged from original)
+// ============================================================================
+
 template <typename T>
 struct is_tuple : std::false_type {};
 
@@ -382,7 +189,6 @@ struct is_tuple<std::tuple<Args...>> : std::true_type {};
 template <typename T>
 inline constexpr bool is_tuple_v = is_tuple<T>::value;
 
-// Helper to check if a type is a std::vector
 template <typename T>
 struct is_std_vector : std::false_type {};
 
@@ -392,7 +198,6 @@ struct is_std_vector<std::vector<T, Alloc>> : std::true_type {};
 template <typename T>
 inline constexpr bool is_std_vector_v = is_std_vector<T>::value;
 
-// Helper to get vector element type
 template <typename T>
 struct vector_element_type {
     using type = void;
@@ -406,7 +211,6 @@ struct vector_element_type<std::vector<T, Alloc>> {
 template <typename T>
 using vector_element_type_t = typename vector_element_type<T>::type;
 
-// Helper to convert vector<any> to vector<T>
 template <typename T>
 std::vector<T> vector_any_to_typed(const std::vector<std::any>& vec) {
     std::vector<T> result;
@@ -417,7 +221,6 @@ std::vector<T> vector_any_to_typed(const std::vector<std::any>& vec) {
     return result;
 }
 
-// Helper to convert tuple<any, any, ...> to tuple<T1, T2, ...>
 template <typename TargetTuple, typename AnyTuple, std::size_t... Is>
 TargetTuple convert_any_tuple_impl(const AnyTuple& any_tuple,
                                    std::index_sequence<Is...>) {
@@ -432,7 +235,6 @@ TargetTuple convert_any_tuple(const AnyTuple& any_tuple) {
         any_tuple, std::make_index_sequence<std::tuple_size_v<TargetTuple>>{});
 }
 
-// Helper to apply a tuple to a function
 template <typename Func, typename Tuple, std::size_t... Is>
 auto apply_tuple_impl(Func&& func, Tuple&& tuple, std::index_sequence<Is...>) {
     return std::forward<Func>(func)(
@@ -446,22 +248,20 @@ auto apply_tuple(Func&& func, Tuple&& tuple) {
         std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>{});
 }
 
-// Helper to apply a tuple to a function WITH TaskContext as first arg
 template <typename Func, typename Tuple, std::size_t... Is>
-auto apply_tuple_with_context_impl(Func&& func, TaskContext& ctx, Tuple&& tuple,
+auto apply_tuple_with_context_impl(Func&& func, CoroScope& ctx, Tuple&& tuple,
                                    std::index_sequence<Is...>) {
     return std::forward<Func>(func)(
         ctx, std::get<Is>(std::forward<Tuple>(tuple))...);
 }
 
 template <typename Func, typename Tuple>
-auto apply_tuple_with_context(Func&& func, TaskContext& ctx, Tuple&& tuple) {
+auto apply_tuple_with_context(Func&& func, CoroScope& ctx, Tuple&& tuple) {
     return apply_tuple_with_context_impl(
         std::forward<Func>(func), ctx, std::forward<Tuple>(tuple),
         std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>{});
 }
 
-// Helper to convert vector<any> to typed tuple
 template <typename TargetTuple, std::size_t... Is>
 TargetTuple vector_to_tuple_impl(const std::vector<std::any>& vec,
                                  std::index_sequence<Is...>) {

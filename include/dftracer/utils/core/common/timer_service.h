@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <coroutine>
 #include <functional>
 #include <memory>
@@ -46,6 +47,8 @@ class TimerService {
         cancellation_tokens_;
     mutable std::mutex tokens_mutex_;  // Protects cancellation_tokens_
     std::thread timer_thread_;
+    std::mutex wake_mutex_;
+    std::condition_variable wake_cv_;
     std::atomic<bool> running_{false};
     std::atomic<bool> has_new_timers_{false};
     std::atomic<TimerId> next_id_{1};
@@ -74,6 +77,8 @@ class TimerService {
             return;
         }
 
+        wake_cv_.notify_all();
+
         if (timer_thread_.joinable()) {
             timer_thread_.join();
         }
@@ -93,6 +98,7 @@ class TimerService {
         pending_timers_.enqueue(
             TimerRequest{id, expiry, std::move(callback), cancel_token});
         has_new_timers_.store(true, std::memory_order_release);
+        wake_cv_.notify_one();
 
         return id;
     }
@@ -103,6 +109,7 @@ class TimerService {
         if (it != cancellation_tokens_.end()) {
             it->second->store(true, std::memory_order_release);
         }
+        wake_cv_.notify_one();
     }
 
    private:
@@ -113,7 +120,11 @@ class TimerService {
             auto now = std::chrono::steady_clock::now();
 
             if (timer_heap_.empty()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                std::unique_lock<std::mutex> lock(wake_mutex_);
+                wake_cv_.wait(lock, [this] {
+                    return !running_.load(std::memory_order_acquire) ||
+                           has_new_timers_.load(std::memory_order_acquire);
+                });
                 continue;
             }
 
@@ -136,30 +147,22 @@ class TimerService {
                     }
                 }
             } else {
-                auto sleep_duration = next_timer.expiry - now;
-                if (sleep_duration > std::chrono::milliseconds(10)) {
-                    sleep_duration = std::chrono::milliseconds(10);
-                }
-                std::this_thread::sleep_for(sleep_duration);
+                std::unique_lock<std::mutex> lock(wake_mutex_);
+                wake_cv_.wait_until(lock, next_timer.expiry, [this] {
+                    return !running_.load(std::memory_order_acquire) ||
+                           has_new_timers_.load(std::memory_order_acquire);
+                });
             }
         }
     }
 
     void process_pending_timers() {
-        if (!has_new_timers_.load(std::memory_order_acquire)) {
-            return;
-        }
-
         TimerRequest req;
-        bool dequeued_any = false;
-        while (pending_timers_.try_dequeue(req)) {
-            timer_heap_.push(Timer{req.id, req.expiry, std::move(req.callback),
-                                   req.cancelled});
-            dequeued_any = true;
-        }
-
-        if (dequeued_any) {
-            has_new_timers_.store(false, std::memory_order_release);
+        while (has_new_timers_.exchange(false, std::memory_order_acq_rel)) {
+            while (pending_timers_.try_dequeue(req)) {
+                timer_heap_.push(Timer{req.id, req.expiry,
+                                       std::move(req.callback), req.cancelled});
+            }
         }
     }
 };

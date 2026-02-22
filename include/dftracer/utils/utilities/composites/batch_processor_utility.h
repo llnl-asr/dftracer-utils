@@ -1,9 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_BATCH_PROCESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_BATCH_PROCESSOR_UTILITY_H
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/core/utilities/utility_traits.h>
@@ -28,7 +26,7 @@ class BatchProcessorUtility
                                 utilities::tags::NeedsContext> {
    public:
     using ItemProcessorFn =
-        std::function<ItemOutput(TaskContext&, const ItemInput&)>;
+        std::function<ItemOutput(CoroScope&, const ItemInput&)>;
     using ComparatorFn =
         std::function<bool(const ItemOutput&, const ItemOutput&)>;
 
@@ -70,7 +68,7 @@ class BatchProcessorUtility
             "parameters.");
 
         // Create processor function from utility
-        processor_ = [utility](TaskContext&,
+        processor_ = [utility](CoroScope&,
                                const ItemInput& input) -> ItemOutput {
             return utility->process(input);
         };
@@ -100,31 +98,15 @@ class BatchProcessorUtility
             return {};
         }
 
-        // Get TaskContext for parallel execution
-        TaskContext& ctx = this->context();
+        // Get CoroScope for parallel execution
+        CoroScope& ctx = this->context();
 
-        // Spawn parallel tasks for each item
-        std::vector<TaskFuture<ItemOutput>> futures;
-        futures.reserve(items.size());
+        // Process each item sequentially
+        std::vector<ItemOutput> results;
+        results.reserve(items.size());
 
         for (const auto& item : items) {
-            auto task =
-                make_task([proc = processor_](
-                              TaskContext& task_ctx,
-                              ItemInput in) -> coro::CoroTask<ItemOutput> {
-                    co_return proc(task_ctx, in);
-                });
-
-            auto future = ctx.spawn<ItemOutput>(task, item);
-            futures.push_back(future);
-        }
-
-        // Wait for all tasks to complete
-        std::vector<ItemOutput> results;
-        results.reserve(futures.size());
-
-        for (auto& future : futures) {
-            results.push_back(future.get());
+            results.push_back(processor_(ctx, item));
         }
 
         // Sort if comparator provided

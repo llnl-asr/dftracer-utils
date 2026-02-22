@@ -6,8 +6,8 @@
 #include <dftracer/utils/core/task_graph/task_group.h>
 #include <dftracer/utils/core/task_graph/task_result.h>
 #include <dftracer/utils/core/task_graph/types.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 
 #include <cstddef>
 #include <functional>
@@ -43,8 +43,7 @@ std::vector<std::shared_ptr<Task>> make_fan_out(
         auto task_name = name_prefix + "_" + std::to_string(i);
         // Create task that calls mapper with index
         auto task = make_task(
-            [mapper = std::forward<Func>(mapper), i](TaskContext& ctx,
-                                                     auto input)
+            [mapper = std::forward<Func>(mapper), i](CoroScope& ctx, auto input)
                 -> decltype(mapper(ctx, std::declval<decltype(input)>(), i)) {
                 return mapper(ctx, std::move(input), i);
             },
@@ -225,11 +224,10 @@ class TaskGraph {
         for (std::size_t i = 0; i < count; ++i) {
             auto task_name = name_prefix + "_" + std::to_string(i);
             // Wrap the function to pass the index
-            auto task = make_task(
-                [func = func, i](TaskContext& ctx) mutable {
-                    return func(ctx, i);
-                },
-                task_name);
+            auto task =
+                make_task([func = func,
+                           i](CoroScope& ctx) mutable { return func(ctx, i); },
+                          task_name);
             register_task(task);
             group.add(task);
         }
@@ -258,7 +256,7 @@ class TaskGraph {
         for (std::size_t i = 0; i < count.count; ++i) {
             auto task_name = name_prefix + "_" + std::to_string(i);
             auto task = make_task(
-                [mapper = mapper, i](TaskContext& ctx, T input) mutable {
+                [mapper = mapper, i](CoroScope& ctx, T input) mutable {
                     return mapper(ctx, std::move(input), i);
                 },
                 task_name);
@@ -424,7 +422,7 @@ class TaskGraph {
                                      std::to_string(level) + "_G" +
                                      std::to_string(group_idx);
                     auto task = make_task(
-                        [op = op, init](TaskContext&, std::vector<T> items)
+                        [op = op, init](CoroScope&, std::vector<T> items)
                             -> coro::CoroTask<T> {
                             T acc = init;
                             for (const auto& item : items) {
@@ -495,7 +493,7 @@ class TaskGraph {
             std::vector<T> chunk(data.begin() + start, data.begin() + end);
 
             auto task = make_task(
-                [chunk = std::move(chunk)](TaskContext&)
+                [chunk = std::move(chunk)](CoroScope&)
                     -> coro::CoroTask<std::vector<T>> { co_return chunk; },
                 task_name);
 
@@ -545,7 +543,7 @@ class TaskGraph {
                                      std::to_string(level) + "_G" +
                                      std::to_string(group_idx);
                     auto task = make_task(
-                        [](TaskContext&, std::vector<std::vector<T>> chunks)
+                        [](CoroScope&, std::vector<std::vector<T>> chunks)
                             -> coro::CoroTask<std::vector<T>> {
                             std::vector<T> result;
                             for (auto& chunk : chunks) {

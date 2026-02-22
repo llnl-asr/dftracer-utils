@@ -1,7 +1,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/pipeline/error.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 
 #include <algorithm>
 #include <any>
@@ -21,6 +21,9 @@ std::shared_ptr<Task> Task::depends_on(std::shared_ptr<Task> parent) {
 
     // Add this task as child to parent
     parent->add_child(shared_from_this());
+
+    // Register as reader for smart value release
+    parent->result_.add_reader();
 
     return shared_from_this();
 }
@@ -46,7 +49,7 @@ std::shared_ptr<Task> Task::with_name(std::string name) {
     return shared_from_this();
 }
 
-coro::CoroTask<std::any> Task::execute(TaskContext& context,
+coro::CoroTask<std::any> Task::execute(CoroScope& context,
                                        const std::any& input) {
     try {
         std::any result = co_await func_(context, input);
@@ -58,34 +61,9 @@ coro::CoroTask<std::any> Task::execute(TaskContext& context,
     }
 }
 
-void Task::fulfill_promise(std::any result) {
-    if (!promise_) {
-        DFTRACER_UTILS_LOG_ERROR("Task '%s': promise is null!", name_.c_str());
-        throw std::runtime_error("Promise is null");
-    }
+void Task::set_result(std::any result) { result_.set_value(std::move(result)); }
 
-    try {
-        promise_->set_value(std::move(result));
-        completed_ = true;
-    } catch (const std::future_error& e) {
-        // Promise already set or no associated state
-        DFTRACER_UTILS_LOG_ERROR("Task '%s' promise error: %s (code: %d)",
-                                 name_.c_str(), e.what(), e.code().value());
-        throw;  // Re-throw to see the error
-    }
-}
-
-void Task::fulfill_promise_exception(std::exception_ptr ex) {
-    try {
-        promise_->set_exception(ex);
-        completed_ = true;
-    } catch (const std::future_error& e) {
-        // Promise already set - ignore
-        DFTRACER_UTILS_LOG_WARN(
-            "Task '%s' promise already fulfilled with exception",
-            name_.c_str());
-    }
-}
+void Task::set_exception(std::exception_ptr ex) { result_.set_exception(ex); }
 
 std::any Task::apply_combiner(const std::vector<std::any>& inputs) const {
     if (!has_custom_combiner_) {
@@ -114,7 +92,7 @@ std::shared_ptr<Task> Task::operator&(std::shared_ptr<Task> other) {
     // Create a combiner task that depends on both this and other
     // When a task has multiple parents, it receives a vector<any> as input
     auto combiner = make_task(
-        [](TaskContext&,
+        [](CoroScope&,
            const std::vector<std::any>& inputs) -> coro::CoroTask<std::any> {
             // inputs[0] is from first parent (this), inputs[1] is from second
             // (other)
@@ -147,7 +125,7 @@ std::shared_ptr<Task> Task::operator^(std::shared_ptr<Task> tap_task) {
                             "Tap task cannot be null");
     }
     auto passthrough = make_task(
-        [](TaskContext&, const std::any& input) -> coro::CoroTask<std::any> {
+        [](CoroScope&, const std::any& input) -> coro::CoroTask<std::any> {
             co_return input;
         },
         "TAP_passthrough");

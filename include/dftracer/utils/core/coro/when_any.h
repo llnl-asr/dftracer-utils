@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 
+#include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
 
 #include <atomic>
@@ -16,12 +17,6 @@
 
 // Timer service needed for TimeoutAwaitable
 #include <dftracer/utils/core/common/timer_service.h>
-
-namespace dftracer::utils {
-class Executor;
-void schedule_coroutine_resumption_helper(Executor* executor,
-                                          std::coroutine_handle<> handle);
-}  // namespace dftracer::utils
 
 namespace dftracer::utils::coro {
 
@@ -78,10 +73,14 @@ struct WhenAnySharedState {
     std::vector<Awaitable> awaitables;
     Executor* executor{nullptr};
 
-    // Double-check pattern flags to coordinate await_suspend and wrapper
-    // completion
-    std::atomic<bool> first_completed{false};  // Set when first task completes
-    std::atomic<bool> suspended{false};  // Set when await_suspend returns true
+    // Single-atomic coordination between await_suspend and wrapper
+    // completion.  Uses fetch_or(acq_rel) on a bitmask -- the total
+    // modification order on one atomic guarantees exactly one side sees the
+    // other's bit, eliminating the store-buffer (SB) reordering hazard that
+    // two independent atomics with seq_cst were guarding against.
+    static constexpr std::uint8_t BIT_SUSPENDED = 1;
+    static constexpr std::uint8_t BIT_COMPLETED = 2;
+    std::atomic<std::uint8_t> sync_state_{0};
 
     explicit WhenAnySharedState(std::vector<Awaitable> aws)
         : awaitables(std::move(aws)) {
@@ -99,14 +98,28 @@ struct WhenAnySharedState {
         }
     }
 
+    ~WhenAnySharedState() {
+        // Detach all awaitables to prevent their completion paths from
+        // resuming wrapper coroutine handles that are about to be destroyed.
+        // This is critical: losing wrappers are suspended at co_await on these
+        // awaitables, and destroying the wrappers would leave dangling handles
+        // in the awaitables' shared state.
+        for (auto& a : awaitables) {
+            if constexpr (requires { a.detach(); }) {
+                a.detach();
+            }
+        }
+        // Clear wrapper_tasks to break circular reference:
+        // wrappers hold shared_ptr<WhenAnySharedState> in their coroutine
+        // frames, and this state holds wrapper_tasks containing those wrappers.
+        wrapper_tasks.clear();
+    }
+
     // Called by the first wrapper to complete (winner of CAS)
     void on_first_complete() {
-        // Mark that first task completed
-        first_completed.store(true, std::memory_order_release);
-
-        // Check if await_suspend has decided to suspend
-        // If so, we're responsible for resumption
-        if (suspended.load(std::memory_order_acquire)) {
+        auto prev =
+            sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
+        if (prev & BIT_SUSPENDED) {
             if (awaiting_coroutine && !awaiting_coroutine.done()) {
                 if (executor) {
                     schedule_coroutine_resumption_helper(executor,
@@ -116,18 +129,13 @@ struct WhenAnySharedState {
                 }
             }
         }
-        // If not suspended yet, await_suspend will either:
-        // - See completed == true and return false (no resumption needed)
-        // - Set suspended = true, see first_completed = true, and schedule
     }
 
     // Called by await_suspend after deciding to suspend but before returning
     void mark_suspended_and_check_completion() {
-        suspended.store(true, std::memory_order_release);
-
-        // Double-check: a task might have completed between our check
-        // and setting suspended. If so, we need to schedule resumption.
-        if (first_completed.load(std::memory_order_acquire)) {
+        auto prev =
+            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
+        if (prev & BIT_COMPLETED) {
             if (awaiting_coroutine && !awaiting_coroutine.done()) {
                 if (executor) {
                     schedule_coroutine_resumption_helper(executor,

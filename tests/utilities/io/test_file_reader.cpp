@@ -3,6 +3,7 @@
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <dftracer/utils/utilities/io/file_reader_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <string>
@@ -10,10 +11,11 @@
 using namespace dftracer::utils::utilities::io;
 using namespace dftracer::utils::utilities::filesystem;
 using namespace dftracer::utils::utilities::text;
+using namespace dft_utils_test;
 
 TEST_CASE("FileReaderUtility - Basic Operations") {
     FileReaderUtility reader;
-    fs::path test_file = "test_file_reader.txt";
+    fs::path test_file = make_unique_test_path("test_file_reader.txt");
 
     SUBCASE("Read simple text file") {
         // Create test file
@@ -74,7 +76,7 @@ TEST_CASE("FileReaderUtility - Error Handling") {
     }
 
     SUBCASE("Directory instead of file") {
-        fs::path test_dir = "test_dir_reader";
+        fs::path test_dir = make_unique_test_path("test_dir_reader");
         fs::create_directory(test_dir);
 
         FileEntry entry{test_dir};
@@ -86,7 +88,7 @@ TEST_CASE("FileReaderUtility - Error Handling") {
 
 TEST_CASE("FileReaderUtility - Different File Sizes") {
     FileReaderUtility reader;
-    fs::path test_file = "test_file_sizes.txt";
+    fs::path test_file = make_unique_test_path("test_file_sizes.txt");
 
     SUBCASE("Single byte") {
         {
@@ -138,7 +140,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
 
 TEST_CASE("FileReaderUtility - Different Content Types") {
     FileReaderUtility reader;
-    fs::path test_file = "test_content_types.txt";
+    fs::path test_file = make_unique_test_path("test_content_types.txt");
 
     SUBCASE("Newlines only") {
         {
@@ -190,7 +192,8 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
 
 TEST_CASE("FileReaderUtility - Real World Scenarios") {
     FileReaderUtility reader;
-    fs::path test_file = "test_real_world.txt";
+    fs::path test_file =
+        make_unique_test_path("test_real_world_file_reader.txt");
 
     SUBCASE("Log file") {
         {
@@ -254,7 +257,7 @@ TEST_CASE("FileReaderUtility - Composition with DirectoryScanner") {
     DirectoryScannerUtility scanner;
 
     // Create test directory with files
-    fs::path test_dir = "test_composition_dir";
+    fs::path test_dir = make_unique_test_path("test_composition_dir");
     fs::create_directory(test_dir);
 
     {

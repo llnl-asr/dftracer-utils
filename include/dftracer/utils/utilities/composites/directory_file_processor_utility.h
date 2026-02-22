@@ -2,9 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DIRECTORY_FILE_PROCESSOR_UTILITY_H
 
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -23,7 +21,7 @@ namespace dftracer::utils::utilities::composites {
  *
  * This workflow utility:
  * 1. Scans a directory for files matching specified extensions
- * 2. Processes each file in parallel using TaskContext::emit()
+ * 2. Processes each file in parallel using CoroScope::emit()
  * 3. Aggregates results and waits for completion
  *
  * Template Parameters:
@@ -31,7 +29,7 @@ namespace dftracer::utils::utilities::composites {
  *
  * Usage:
  * @code
- * auto processor = [](TaskContext& ctx, const std::string& path) {
+ * auto processor = [](CoroScope& ctx, const std::string& path) {
  *     // Process file and return result
  *     return MyFileOutput{...};
  * };
@@ -47,7 +45,7 @@ class DirectoryFileProcessorUtility
                                 utilities::tags::NeedsContext> {
    public:
     using FileProcessorFn =
-        std::function<FileOutput(TaskContext&, const std::string&)>;
+        std::function<FileOutput(CoroScope&, const std::string&)>;
 
    private:
     FileProcessorFn processor_;
@@ -89,28 +87,13 @@ class DirectoryFileProcessorUtility
             files.push_back(entry.path.string());
         }
 
-        // Step 3: Get TaskContext for parallel execution
-        TaskContext& ctx = this->context();
+        // Step 3: Get CoroScope for parallel execution
+        CoroScope& ctx = this->context();
 
-        // Step 4: Spawn parallel tasks for each file
-        std::vector<TaskFuture<FileOutput>> futures;
-        futures.reserve(files.size());
-
-        for (const auto& file_path : files) {
-            auto task =
-                make_task([proc = processor_](
-                              TaskContext& task_ctx,
-                              std::string path) -> coro::CoroTask<FileOutput> {
-                    co_return proc(task_ctx, path);
-                });
-            auto future = ctx.spawn<FileOutput>(task, file_path);
-            futures.push_back(future);
-        }
-
-        // Step 5: Wait for all tasks to complete (synchronization point)
+        // Process each file sequentially
         output.results.reserve(files.size());
-        for (auto& future : futures) {
-            output.results.push_back(future.get());
+        for (const auto& file_path : files) {
+            output.results.push_back(processor_(ctx, file_path));
         }
 
         // Step 6: Finalize aggregated statistics

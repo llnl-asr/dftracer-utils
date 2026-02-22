@@ -2,8 +2,8 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -232,14 +232,14 @@ TEST_CASE("Task - then() creates dependent task") {
     std::vector<int> execution_order;
 
     auto task1 = make_task(
-        [&execution_order](TaskContext&) -> CoroTask<int> {
+        [&execution_order](CoroScope&) -> CoroTask<int> {
             execution_order.push_back(1);
             co_return 10;
         },
         "Task1");
 
     auto task2 = task1->then(
-        [&execution_order](TaskContext&, int x) -> CoroTask<int> {
+        [&execution_order](CoroScope&, int x) -> CoroTask<int> {
             execution_order.push_back(2);
             co_return x * 2;
         },
@@ -263,19 +263,19 @@ TEST_CASE("Task - operator> for chaining") {
     std::atomic<int> sum{0};
 
     auto task1 = make_task(
-        [&sum](TaskContext&) -> CoroTask<int> {
+        [&sum](CoroScope&) -> CoroTask<int> {
             sum += 1;
             co_return 5;
         },
         "Task1");
 
     // Chain using > operator
-    auto task2 = task1 > [&sum](TaskContext&, int x) -> CoroTask<int> {
+    auto task2 = task1 > [&sum](CoroScope&, int x) -> CoroTask<int> {
         sum += 10;
         co_return x + 10;
     };
 
-    auto task3 = task2 > [&sum](TaskContext&, int x) -> CoroTask<int> {
+    auto task3 = task2 > [&sum](CoroScope&, int x) -> CoroTask<int> {
         sum += 100;
         co_return x * 2;
     };
@@ -296,10 +296,10 @@ TEST_CASE("Task - operator> for chaining") {
 
 TEST_CASE("Task - operator<< reverse composition") {
     auto task1 =
-        make_task([](TaskContext&) -> CoroTask<int> { co_return 8; }, "Task1");
+        make_task([](CoroScope&) -> CoroTask<int> { co_return 8; }, "Task1");
 
     // Reverse composition: func < task
-    auto task2 = [](TaskContext&, int x) -> CoroTask<std::string> {
+    auto task2 = [](CoroScope&, int x) -> CoroTask<std::string> {
         co_return std::to_string(x * 5);
     } < task1;
 
@@ -319,11 +319,11 @@ TEST_CASE("Task - operator<< reverse composition") {
 TEST_CASE("Task - tap() for logging without transformation") {
     std::vector<int> log;
 
-    auto task1 = make_task([](TaskContext&) -> CoroTask<int> { co_return 123; },
-                           "Source");
+    auto task1 =
+        make_task([](CoroScope&) -> CoroTask<int> { co_return 123; }, "Source");
 
     auto task2 = task1->tap(
-        [&log](TaskContext&, const std::any& input) -> CoroTask<void> {
+        [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
             int value = std::any_cast<int>(input);
             log.push_back(value);
             co_return;
@@ -331,8 +331,7 @@ TEST_CASE("Task - tap() for logging without transformation") {
         "Logger");
 
     auto task3 = task2->then(
-        [](TaskContext&, int x) -> CoroTask<int> { co_return x * 2; },
-        "Doubler");
+        [](CoroScope&, int x) -> CoroTask<int> { co_return x * 2; }, "Doubler");
 
     auto config = PipelineConfig().with_name("TaskTap").with_compute_threads(2);
     Pipeline pipeline(config);
@@ -352,32 +351,30 @@ TEST_CASE("Task - Complex chaining with tap and then") {
     std::vector<std::string> log;
 
     auto task1 =
-        make_task([](TaskContext&) -> CoroTask<int> { co_return 3; }, "Start");
+        make_task([](CoroScope&) -> CoroTask<int> { co_return 3; }, "Start");
 
     auto pipeline_task =
         task1
             ->tap(
-                [&log](TaskContext&, const std::any& input) -> CoroTask<void> {
+                [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
                     int val = std::any_cast<int>(input);
                     log.push_back("tap1: " + std::to_string(val));
                     co_return;
                 },
                 "Log1")
-            ->then(
-                [](TaskContext&, int x) -> CoroTask<int> { co_return x + 7; },
-                "Add7")
+            ->then([](CoroScope&, int x) -> CoroTask<int> { co_return x + 7; },
+                   "Add7")
             ->tap(
-                [&log](TaskContext&, const std::any& input) -> CoroTask<void> {
+                [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
                     int val = std::any_cast<int>(input);
                     log.push_back("tap2: " + std::to_string(val));
                     co_return;
                 },
                 "Log2")
-            ->then(
-                [](TaskContext&, int x) -> CoroTask<int> { co_return x * 10; },
-                "Multiply10")
+            ->then([](CoroScope&, int x) -> CoroTask<int> { co_return x * 10; },
+                   "Multiply10")
             ->tap(
-                [&log](TaskContext&, const std::any& input) -> CoroTask<void> {
+                [&log](CoroScope&, const std::any& input) -> CoroTask<void> {
                     int val = std::any_cast<int>(input);
                     log.push_back("tap3: " + std::to_string(val));
                     co_return;
@@ -409,7 +406,7 @@ TEST_CASE("Mixed - CoroTask combinators within Task") {
     std::atomic<int> checkpoint{0};
 
     auto task = make_task(
-        [&checkpoint](TaskContext&) -> CoroTask<int> {
+        [&checkpoint](CoroScope&) -> CoroTask<int> {
             checkpoint = 1;
 
             // Use CoroTask combinators inside a Task
@@ -442,7 +439,7 @@ TEST_CASE("Mixed - Task chaining with internal CoroTask operations") {
     std::vector<std::string> log;
 
     auto task1 = make_task(
-        [&log](TaskContext&) -> CoroTask<int> {
+        [&log](CoroScope&) -> CoroTask<int> {
             log.push_back("task1_start");
 
             auto inner = []() -> CoroTask<int> { co_return 10; };
@@ -455,7 +452,7 @@ TEST_CASE("Mixed - Task chaining with internal CoroTask operations") {
         "Task1");
 
     auto task2 = task1->then(
-        [&log](TaskContext&, int x) -> CoroTask<int> {
+        [&log](CoroScope&, int x) -> CoroTask<int> {
             log.push_back("task2_start");
 
             auto inner = [x]() -> CoroTask<int> { co_return x * 2; };
@@ -560,28 +557,28 @@ TEST_CASE("Stress - Task DAG with combinators") {
     std::atomic<int> completed{0};
 
     auto task1 = make_task(
-        [&completed](TaskContext&) -> CoroTask<int> {
+        [&completed](CoroScope&) -> CoroTask<int> {
             completed++;
             co_return 10;
         },
         "Task1");
 
     auto task2 = task1->then(
-        [&completed](TaskContext&, int x) -> CoroTask<int> {
+        [&completed](CoroScope&, int x) -> CoroTask<int> {
             completed++;
             co_return x + 5;
         },
         "Task2");
 
     auto task3 = task1->then(
-        [&completed](TaskContext&, int x) -> CoroTask<int> {
+        [&completed](CoroScope&, int x) -> CoroTask<int> {
             completed++;
             co_return x * 2;
         },
         "Task3");
 
     auto task4 = make_task(
-        [&completed](TaskContext&, int a, int b) -> CoroTask<int> {
+        [&completed](CoroScope&, int a, int b) -> CoroTask<int> {
             completed++;
             co_return a + b;
         },
@@ -665,10 +662,10 @@ TEST_CASE("CoroTask<void> - operator& with value task") {
 
 TEST_CASE("Task - operator& parallel composition") {
     auto task1 =
-        make_task([](TaskContext&) -> CoroTask<int> { co_return 20; }, "Task1");
+        make_task([](CoroScope&) -> CoroTask<int> { co_return 20; }, "Task1");
 
     auto task2 =
-        make_task([](TaskContext&) -> CoroTask<int> { co_return 22; }, "Task2");
+        make_task([](CoroScope&) -> CoroTask<int> { co_return 22; }, "Task2");
 
     // Use operator& to create combiner
     auto combined = task1 & task2;

@@ -2,29 +2,28 @@
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
-#include <dftracer/utils/core/tasks/task_scope.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
 
 using namespace dftracer::utils;
 
-TEST_CASE("TaskScope - Simple spawn test") {
+TEST_CASE("CoroScope - Simple spawn test") {
     Executor executor(2);
     Scheduler scheduler(&executor);
 
     std::atomic<int> counter{0};
 
     auto task = make_task(
-        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+        [&](CoroScope& ctx) -> coro::CoroTask<void> {
             fprintf(stderr, "Main task: before ctx.scope()\n");
-            co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
                 fprintf(stderr, "Scope lambda: spawning tasks\n");
                 // Spawn 3 simple tasks
                 for (int i = 0; i < 3; ++i) {
-                    scope.spawn([&](TaskContext&) -> coro::CoroTask<void> {
+                    scope.spawn([&](CoroScope&) -> coro::CoroTask<void> {
                         fprintf(stderr, "Spawned task executing\n");
                         ++counter;
                         co_return;

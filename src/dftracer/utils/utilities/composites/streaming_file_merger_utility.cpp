@@ -9,11 +9,13 @@
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
 #include <fstream>
+#include <utility>
 
 namespace dftracer::utils::utilities::composites {
 
-StreamingFileProducerOutput StreamingFileProducerUtility::process(
-    const StreamingFileProducerInput& input) {
+coro::CoroTask<StreamingFileProducerOutput>
+StreamingFileProducerUtility::process_async(
+    [[maybe_unused]] CoroScope& ctx, const StreamingFileProducerInput& input) {
     StreamingFileProducerOutput result;
     result.file_path = input.file_path;
 
@@ -35,7 +37,7 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
             if (!index_result.success) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to build index for %s",
                                          input.file_path.c_str());
-                return result;
+                co_return result;
             }
         }
 
@@ -71,7 +73,9 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
                     result.events_sent++;
 
                     if (batch.size() >= input.batch_size) {
-                        channel_->send_blocking(std::move(batch));
+                        if (!co_await channel_->send(std::move(batch))) {
+                            co_return result;
+                        }
                         batch = StreamingMergeBatchUtility{};
                     }
                 }
@@ -79,7 +83,9 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
         }
 
         if (!batch.empty()) {
-            channel_->send_blocking(std::move(batch));
+            if (!co_await channel_->send(std::move(batch))) {
+                co_return result;
+            }
         }
 
         result.input_hash = hasher.get_hash();
@@ -94,11 +100,12 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
         result.success = false;
     }
 
-    return result;
+    co_return result;
 }
 
-StreamingFileConsumerOutput StreamingFileConsumerUtility::process(
-    const StreamingFileConsumerInput& input) {
+coro::CoroTask<StreamingFileConsumerOutput>
+StreamingFileConsumerUtility::process_async(
+    CoroScope& ctx, const StreamingFileConsumerInput& input) {
     StreamingFileConsumerOutput result;
     result.output_path = input.output_file;
 
@@ -111,10 +118,11 @@ StreamingFileConsumerOutput StreamingFileConsumerUtility::process(
         StreamingMergeBatchUtility batch;
         bool first = true;
 
-        while (channel_->receive(batch)) {
-            result.output_hash += batch.batch_hash;
+        while (auto next = co_await ctx.receive(channel_)) {
+            auto& current = *next;
+            result.output_hash += current.batch_hash;
 
-            for (auto& content : batch.contents) {
+            for (auto& content : current.contents) {
                 if (!first) {
                     io::RawData newline_data{std::vector<unsigned char>{'\n'}};
                     writer.process(newline_data);
@@ -164,7 +172,7 @@ StreamingFileConsumerOutput StreamingFileConsumerUtility::process(
         result.success = false;
     }
 
-    return result;
+    co_return result;
 }
 
 }  // namespace dftracer::utils::utilities::composites

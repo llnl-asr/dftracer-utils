@@ -2,15 +2,17 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/io/streaming_file_reader_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <string>
 
 using namespace dftracer::utils::utilities::io;
+using namespace dft_utils_test;
 
 TEST_CASE("StreamingFileReaderUtility - Basic Operations") {
     StreamingFileReaderUtility reader;
-    fs::path test_file = "test_streaming_reader.txt";
+    fs::path test_file = make_unique_test_path("test_streaming_reader.txt");
 
     SUBCASE("Read file in chunks") {
         // Create test file
@@ -105,7 +107,7 @@ TEST_CASE("StreamingFileReaderUtility - Error Handling") {
     }
 
     SUBCASE("Directory instead of file") {
-        fs::path test_dir = "test_streaming_dir";
+        fs::path test_dir = make_unique_test_path("test_streaming_dir");
         fs::create_directory(test_dir);
 
         StreamReadInput input{test_dir, 1024};
@@ -117,7 +119,7 @@ TEST_CASE("StreamingFileReaderUtility - Error Handling") {
 
 TEST_CASE("StreamingFileReaderUtility - Chunk Boundaries") {
     StreamingFileReaderUtility reader;
-    fs::path test_file = "test_chunk_boundaries.txt";
+    fs::path test_file = make_unique_test_path("test_chunk_boundaries.txt");
 
     SUBCASE("Exact chunk size boundary") {
         {
@@ -171,7 +173,7 @@ TEST_CASE("StreamingFileReaderUtility - Chunk Boundaries") {
 
 TEST_CASE("StreamingFileReaderUtility - Data Integrity") {
     StreamingFileReaderUtility reader;
-    fs::path test_file = "test_data_integrity.txt";
+    fs::path test_file = make_unique_test_path("test_data_integrity.txt");
 
     SUBCASE("Verify complete data") {
         std::string original_data;
@@ -226,7 +228,7 @@ TEST_CASE("StreamingFileReaderUtility - Data Integrity") {
 
 TEST_CASE("StreamingFileReaderUtility - Large Files") {
     StreamingFileReaderUtility reader;
-    fs::path test_file = "test_large_streaming.txt";
+    fs::path test_file = make_unique_test_path("test_large_streaming.txt");
 
     SUBCASE("1MB file") {
         {
@@ -260,7 +262,7 @@ TEST_CASE("StreamingFileReaderUtility - Large Files") {
 
 TEST_CASE("StreamingFileReaderUtility - Special Characters") {
     StreamingFileReaderUtility reader;
-    fs::path test_file = "test_special_chars.txt";
+    fs::path test_file = make_unique_test_path("test_special_chars.txt");
 
     SUBCASE("Null bytes in data") {
         {
@@ -307,7 +309,7 @@ TEST_CASE("StreamingFileReaderUtility - Special Characters") {
 
 TEST_CASE("StreamingFileReaderUtility - Multiple Iterations") {
     StreamingFileReaderUtility reader;
-    fs::path test_file = "test_multi_iter.txt";
+    fs::path test_file = make_unique_test_path("test_multi_iter.txt");
 
     {
         std::ofstream ofs(test_file);
@@ -342,7 +344,7 @@ TEST_CASE("StreamingFileReaderUtility - Multiple Iterations") {
 
 TEST_CASE("StreamingFileReaderUtility - Default Chunk Size") {
     StreamingFileReaderUtility reader;
-    fs::path test_file = "test_default_chunk.txt";
+    fs::path test_file = make_unique_test_path("test_default_chunk.txt");
 
     {
         std::ofstream ofs(test_file);

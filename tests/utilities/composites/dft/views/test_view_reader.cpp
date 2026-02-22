@@ -145,7 +145,7 @@ TEST_SUITE("ViewReaderUtility") {
         std::string plain = create_view_test_trace(env.get_dir());
         auto [gz_path, idx_path] = compress_and_index(plain);
 
-        // IO view — references file_001 and file_002
+        // IO view -- references file_001 and file_002
         ViewReaderInput input;
         input.with_file_path(gz_path)
             .with_idx_path(idx_path)
@@ -167,7 +167,7 @@ TEST_SUITE("ViewReaderUtility") {
         // IO events reference file_001 and file_002
         CHECK(fh_count == 2);
 
-        // Now check compute view — no fhash references
+        // Now check compute view -- no fhash references
         ViewReaderInput compute_input;
         compute_input.with_file_path(gz_path)
             .with_idx_path(idx_path)
@@ -215,7 +215,7 @@ TEST_SUITE("ViewReaderUtility") {
         // DataLoader references shash=script_x
         CHECK(sh_count == 1);
 
-        // IO view — no shash references
+        // IO view -- no shash references
         ViewReaderInput io_input;
         io_input.with_file_path(gz_path)
             .with_idx_path(idx_path)
@@ -333,7 +333,7 @@ TEST_SUITE("ViewReaderUtility") {
         pred.with_min_duration(100000.0);
         // Need at least one bloom dim or the predicate won't match anything
         // since matches_predicate checks bloom dims first
-        // Actually no — if dim_sets is empty, the bloom loop is skipped and
+        // Actually no -- if dim_sets is empty, the bloom loop is skipped and
         // we proceed to time/duration checks
         view.with_predicate(std::move(pred));
         view.with_include_metadata(false);

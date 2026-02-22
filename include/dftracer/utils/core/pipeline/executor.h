@@ -1,18 +1,17 @@
 #ifndef DFTRACER_UTILS_CORE_PIPELINE_EXECUTOR_H
 #define DFTRACER_UTILS_CORE_PIPELINE_EXECUTOR_H
 
-#include <blockingconcurrentqueue.h>
 #include <concurrentqueue.h>
 #include <dftracer/utils/core/common/timer_service.h>
 #include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/task_item.h>
 
+#include <any>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -27,18 +26,8 @@
 namespace dftracer::utils {
 
 class Task;
-class TaskContext;
+class CoroScope;
 class Scheduler;
-class IOExecutor;  // Forward declaration
-
-/**
- * Task submission hint for queue selection
- */
-enum class SubmissionHint {
-    AUTO,          // Let executor decide (default)
-    FORCE_SHARED,  // Force submission to shared queue
-    FORCE_LOCAL    // Force submission to local queue (if possible)
-};
 
 /**
  * Task information for progress tracking
@@ -109,7 +98,6 @@ struct ExecutorProgress {
     std::size_t tasks_failed;
 
     // Queue depths
-    std::size_t shared_queue_depth;
     std::vector<std::size_t> worker_queue_depths;
 
     // Task tree (root tasks with their children)
@@ -124,11 +112,6 @@ struct ExecutorProgress {
         std::size_t local_queue_depth;
     };
     std::vector<WorkerStatus> workers;
-
-    // Performance metrics
-    double avg_queue_wait_ms;
-    double avg_execution_time_ms;
-    std::size_t total_tasks_stolen;
 
     // Errors
     // task_id, error_msg
@@ -154,15 +137,15 @@ class Executor {
     // Worker context for per-thread state
     struct WorkerContext {
         std::size_t worker_id;
-        std::deque<TaskItem> local_queue;  // Worker's private queue
-        mutable std::mutex queue_mutex;    // Protects local queue
-        std::condition_variable cv;        // For waking up worker
+        // queue_mutex + cv: used for worker sleep/wake protocol.
+        // Workers sleep on cv; wake_one_worker/wake_all_workers
+        // lock+unlock this mutex before notifying to prevent lost wakeups.
+        mutable std::mutex queue_mutex;
+        std::condition_variable cv;
 
         // Health monitoring for watchdog
-        std::atomic<bool> is_alive{true};
         std::atomic<bool> is_idle{false};
         std::atomic<uint64_t> tasks_executed{0};
-        std::atomic<uint64_t> tasks_stolen{0};
         std::chrono::steady_clock::time_point last_activity;
 
         // Current task info (for debugging/watchdog)
@@ -176,12 +159,6 @@ class Executor {
         explicit WorkerContext(std::size_t id) : worker_id(id) {}
     };
 
-    // Work queues
-    moodycamel::ConcurrentQueue<TaskItem>
-        shared_queue_;        // Fast non-blocking queue for CPU tasks
-    moodycamel::BlockingConcurrentQueue<TaskItem>
-        io_slow_path_queue_;  // Blocking queue for I/O tasks
-
     // Per-worker contexts
     std::vector<std::unique_ptr<WorkerContext>> workers_;
     std::atomic<std::size_t> next_worker_{0};  // For round-robin submission
@@ -190,7 +167,6 @@ class Executor {
     std::size_t num_threads_;
 
     CompletionCallback completion_callback_;
-    std::mutex callback_mutex_;
 
     // Reference to scheduler for dynamic task context
     Scheduler* scheduler_{nullptr};
@@ -199,7 +175,6 @@ class Executor {
     std::atomic<std::size_t> tasks_completed_{0};
     std::atomic<std::size_t> tasks_started_{0};
     std::atomic<std::size_t> total_tasks_submitted_{0};
-    std::atomic<std::size_t> total_tasks_stolen_{0};
 
     std::chrono::steady_clock::time_point last_activity_time_;
     mutable std::mutex activity_mutex_;
@@ -217,20 +192,14 @@ class Executor {
     std::unordered_map<TaskIndex, TaskInfo> task_registry_;
     mutable std::shared_mutex registry_mutex_;
 
-    struct SuspendedCoro {
-        std::unique_ptr<coro::CoroTask<void>> coro;
-        TaskIndex task_id;
-        std::shared_ptr<Task> task;  // The task that is suspended
-    };
-    std::unordered_map<TaskIndex, SuspendedCoro>
-        suspended_coros_;  // Key: awaited task ID, Value: suspended task info
-    mutable std::mutex suspended_coros_mutex_;
+    // Global run queue (coroutine handles only).
+    // Primary submission path for all task execution.
+    moodycamel::ConcurrentQueue<std::coroutine_handle<>> run_queue_;
+    std::atomic<std::uint64_t> work_signal_{0};
 
-    // Queue for pending coroutine resumptions (for when_all, etc.)
-    moodycamel::ConcurrentQueue<std::coroutine_handle<>> pending_resumptions_;
-
-    // I/O executor (optional, created by Pipeline based on config)
-    std::unique_ptr<IOExecutor> io_executor_;
+    // Deferred destruction queue for released Coro handles.
+    // FinalAwaiter pushes here; worker loop drains periodically.
+    moodycamel::ConcurrentQueue<std::coroutine_handle<>> destroy_queue_;
 
    public:
     /**
@@ -275,7 +244,7 @@ class Executor {
     void set_completion_callback(CompletionCallback callback);
 
     /**
-     * Set scheduler reference (for TaskContext)
+     * Set scheduler reference (for CoroScope)
      */
     void set_scheduler(Scheduler* scheduler) { scheduler_ = scheduler; }
 
@@ -294,6 +263,11 @@ class Executor {
      */
     std::size_t get_num_threads() const { return num_threads_; }
 
+    /**
+     * Get the executor running on the current worker thread (nullptr
+     * if the calling thread is not a worker).  Thread-local.
+     */
+    static Executor* current() noexcept;
     /**
      * Request graceful shutdown
      * Stops accepting new tasks and waits for current tasks to complete
@@ -314,68 +288,9 @@ class Executor {
     bool is_responsive() const;
 
     /**
-     * Submit a task with tracking context
-     * @param item Task to submit
-     * @param parent_task_id Parent task ID (-1 for root tasks)
-     * @param hint Submission hint for queue selection
-     */
-    void submit_with_context(const TaskItem& item,
-                             TaskIndex parent_task_id = -1,
-                             SubmissionHint hint = SubmissionHint::AUTO);
-
-    /**
      * Get full progress report
      */
     ExecutorProgress get_progress() const;
-
-    /**
-     * Get progress for a specific task and its subtree
-     */
-    std::optional<TaskProgress> get_task_progress(TaskIndex task_id) const;
-
-    // ========================================================================
-    // I/O Executor Management (called by Pipeline, not by user)
-    // ========================================================================
-
-    /**
-     * Create and attach I/O executor (called by Pipeline during construction)
-     *
-     * This is called by Pipeline when config.is_io_executor_enabled() is true.
-     * Users never call this directly - it's part of internal initialization.
-     *
-     * @param num_io_threads Number of I/O threads (typically 2-4)
-     */
-    void create_io_executor(std::size_t num_io_threads);
-
-    /**
-     * Check if I/O executor is attached
-     * @return true if async I/O is available
-     */
-    bool has_io_executor() const { return io_executor_ != nullptr; }
-
-    /**
-     * Get I/O executor (for internal use by TaskContext)
-     * @return Pointer to IOExecutor, or nullptr if not enabled
-     */
-    IOExecutor* get_io_executor() { return io_executor_.get(); }
-    const IOExecutor* get_io_executor() const { return io_executor_.get(); }
-
-    /**
-     * Store a suspended coroutine for async operations
-     * @param awaited_task_id The ID of the task being awaited (map key)
-     * @param coro The coroutine to store (ownership transferred)
-     * @param suspended_task The task that is suspended
-     */
-    void store_suspended_coro(TaskIndex awaited_task_id,
-                              std::unique_ptr<coro::CoroTask<void>> coro,
-                              std::shared_ptr<Task> suspended_task);
-
-    /**
-     * Resume a suspended coroutine (called by completion callback)
-     * @param task_id Task ID whose coroutine should be resumed
-     * @return true if coroutine was found and resumed, false otherwise
-     */
-    bool resume_suspended_coro(TaskIndex task_id);
 
     /**
      * Schedule a coroutine handle to be resumed on the executor's thread pool
@@ -388,38 +303,39 @@ class Executor {
      */
     void schedule_coroutine_resumption(std::coroutine_handle<> handle);
 
+    /**
+     * Enqueue a coroutine handle for execution on the thread pool.
+     * This is the primary submission method for goroutines -- all
+     * lightweight work funnels through here.
+     * Cost: ~20ns (lock-free queue push + atomic signal).
+     * @param handle The coroutine handle to resume
+     */
+    void enqueue(std::coroutine_handle<> handle);
+
+    /**
+     * Submit a Task for execution via a Coro (Phase 3 path).
+     * Creates a run_task() Coro, registers in task_registry_,
+     * and enqueues the released handle to run_queue_.
+     * @param task The DAG task to execute
+     * @param input Task input
+     * @param parent_task_id Parent task ID for tracking (-1 for root)
+     */
+    void submit_task(std::shared_ptr<Task> task,
+                     std::shared_ptr<std::any> input,
+                     TaskIndex parent_task_id = -1);
+
+    /**
+     * Schedule a completed Coro handle for deferred destruction.
+     * Called from CoroPromise::FinalAwaiter for released handles.
+     * @param handle The coroutine handle at final_suspend
+     */
+    void schedule_destroy(std::coroutine_handle<> handle);
+
    private:
     /**
-     * Try to steal and execute one task from the queue (internal use)
-     * Returns true if a task was executed
-     */
-    bool try_steal_one_task();
-
-    /**
-     * Worker thread main loop (new version with per-worker context)
+     * Worker thread main loop
      */
     void worker_thread(WorkerContext* context);
-
-    /**
-     * Execute a single task (coroutine)
-     */
-    coro::CoroTask<void> execute_task(WorkerContext* context, TaskItem& item);
-
-    /**
-     * Drive a coroutine to completion or suspension
-     * If it suspends for async work, store it for later resumption
-     */
-    void drive_coroutine(coro::CoroTask<void> coro, std::shared_ptr<Task> task);
-
-    /**
-     * Try to pop from worker's local queue
-     */
-    bool try_pop_local(WorkerContext* context, TaskItem& item);
-
-    /**
-     * Try to steal from other workers
-     */
-    bool try_steal_from_others(WorkerContext* thief, TaskItem& item);
 
     /**
      * Update task location in registry
@@ -443,13 +359,48 @@ class Executor {
      */
     void mark_activity();
 
-    template <typename T>
-    friend class TaskFuture;
+    /**
+     * Signal workers that new global work is available.
+     */
+    void signal_global_work();
+
+    /**
+     * Wake one worker thread.
+     */
+    void wake_one_worker();
+
+    /**
+     * Wake all worker threads.
+     */
+    void wake_all_workers();
+
+    /**
+     * Create a Coro that executes a Task with full bookkeeping.
+     * The returned Coro is at initial_suspend -- caller must
+     * set executor on promise and enqueue via release().
+     */
+    coro::Coro run_task(std::shared_ptr<Task> task,
+                        std::shared_ptr<std::any> input);
+
+    /**
+     * Drain the destroy queue (called from worker loop).
+     */
+    void drain_destroy_queue();
+
     friend class Scheduler;
+    friend struct coro::CoroPromise;
 };
 
 void* get_current_worker_context();
 void set_current_worker_context(void* context);
+
+/// Push a coroutine handle onto the current worker's thread-local
+/// destroy list.  The worker drains this list after each resume(),
+/// guaranteeing the frame is fully suspended before destruction.
+void schedule_thread_local_destroy(std::coroutine_handle<> h);
+
+/// Drain the current thread's pending-destroy list.
+void drain_thread_local_destroys();
 
 }  // namespace dftracer::utils
 

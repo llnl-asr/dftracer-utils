@@ -10,7 +10,6 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
-#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -200,16 +199,11 @@ TestEnvironment::TestEnvironment(std::size_t lines, Format format)
     : num_lines(lines), format_(format) {
     // @note: enable this for debugging
     // DFTRACER_UTILS_LOGGER_INIT();
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(100000, 999999);
-
-    fs::path temp_base = fs::temp_directory_path();
-    fs::path test_path =
-        temp_base / ("dftracer_test_" + std::to_string(dis(gen)));
+    fs::path test_path = make_unique_test_path("dftracer_test");
 
     try {
-        if (fs::create_directories(test_path)) {
+        if (fs::create_directories(test_path) ||
+            (fs::exists(test_path) && fs::is_directory(test_path))) {
             test_dir = test_path.string();
         }
     } catch (const std::exception& e) {
@@ -443,6 +437,16 @@ const char* test_environment_get_dir(test_environment_handle_t env) {
     if (!env) return nullptr;
     auto* cpp_env = reinterpret_cast<dft_utils_test::TestEnvironment*>(env);
     return cpp_env->get_dir().c_str();
+}
+
+char* test_make_unique_test_path(const char* name) {
+    if (!name) return nullptr;
+    std::string path = dft_utils_test::make_unique_test_path(name).string();
+    char* result = static_cast<char*>(malloc(path.length() + 1));
+    if (result) {
+        std::memcpy(result, path.c_str(), path.length() + 1);
+    }
+    return result;
 }
 
 char* test_environment_create_test_gzip_file(test_environment_handle_t env) {

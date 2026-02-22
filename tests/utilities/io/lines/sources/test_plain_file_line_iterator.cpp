@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/io/lines/sources/plain_file_line_iterator.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <string>
@@ -9,9 +10,10 @@
 
 using namespace dftracer::utils::utilities::io::lines;
 using namespace dftracer::utils::utilities::io::lines::sources;
+using namespace dft_utils_test;
 
 TEST_CASE("PlainFileLineIterator - Basic Operations") {
-    fs::path test_file = "test_plain_line_iter.txt";
+    fs::path test_file = make_unique_test_path("test_plain_line_iter.txt");
 
     SUBCASE("Read simple file") {
         {
@@ -74,7 +76,7 @@ TEST_CASE("PlainFileLineIterator - Basic Operations") {
 }
 
 TEST_CASE("PlainFileLineIterator - Line Range") {
-    fs::path test_file = "test_line_range.txt";
+    fs::path test_file = make_unique_test_path("test_line_range.txt");
 
     {
         std::ofstream ofs(test_file);
@@ -148,7 +150,7 @@ TEST_CASE("PlainFileLineIterator - Error Handling") {
     }
 
     SUBCASE("Invalid line range") {
-        fs::path test_file = "test_invalid_range.txt";
+        fs::path test_file = make_unique_test_path("test_invalid_range.txt");
         {
             std::ofstream ofs(test_file);
             ofs << "Line 1\n";
@@ -166,7 +168,7 @@ TEST_CASE("PlainFileLineIterator - Error Handling") {
     }
 
     SUBCASE("Call next() when no more lines") {
-        fs::path test_file = "test_no_more_lines.txt";
+        fs::path test_file = make_unique_test_path("test_no_more_lines.txt");
         {
             std::ofstream ofs(test_file);
             ofs << "Only one line\n";
@@ -183,7 +185,7 @@ TEST_CASE("PlainFileLineIterator - Error Handling") {
 }
 
 TEST_CASE("PlainFileLineIterator - Special Cases") {
-    fs::path test_file = "test_special_cases.txt";
+    fs::path test_file = make_unique_test_path("test_special_cases.txt");
 
     SUBCASE("Lines without trailing newline") {
         {
@@ -270,7 +272,7 @@ TEST_CASE("PlainFileLineIterator - Special Cases") {
 }
 
 TEST_CASE("PlainFileLineIterator - STL Iterator Interface") {
-    fs::path test_file = "test_stl_iter.txt";
+    fs::path test_file = make_unique_test_path("test_stl_iter.txt");
 
     {
         std::ofstream ofs(test_file);
@@ -297,7 +299,7 @@ TEST_CASE("PlainFileLineIterator - STL Iterator Interface") {
 }
 
 TEST_CASE("PlainFileLineIterator - Current Position") {
-    fs::path test_file = "test_position.txt";
+    fs::path test_file = make_unique_test_path("test_position.txt");
 
     {
         std::ofstream ofs(test_file);
@@ -342,7 +344,7 @@ TEST_CASE("PlainFileLineIterator - Current Position") {
 }
 
 TEST_CASE("PlainFileLineIterator - File Path") {
-    fs::path test_file = "test_file_path.txt";
+    fs::path test_file = make_unique_test_path("test_file_path.txt");
 
     {
         std::ofstream ofs(test_file);
@@ -356,7 +358,7 @@ TEST_CASE("PlainFileLineIterator - File Path") {
 }
 
 TEST_CASE("PlainFileLineIterator - Different Line Endings") {
-    fs::path test_file = "test_line_endings.txt";
+    fs::path test_file = make_unique_test_path("test_line_endings.txt");
 
     SUBCASE("Unix line endings (LF)") {
         {
@@ -397,7 +399,8 @@ TEST_CASE("PlainFileLineIterator - Different Line Endings") {
 }
 
 TEST_CASE("PlainFileLineIterator - Real World Scenarios") {
-    fs::path test_file = "test_real_world.txt";
+    fs::path test_file =
+        make_unique_test_path("test_real_world_line_iterator.txt");
 
     SUBCASE("CSV file") {
         {

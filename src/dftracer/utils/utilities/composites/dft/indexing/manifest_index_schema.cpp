@@ -110,7 +110,7 @@ int ManifestIndexDatabase::get_or_create_file_info(const std::string& file_path,
             if (stored_hash == file_hash) {
                 return id;
             }
-            // Hash changed — delete old entry (cascade deletes
+            // Hash changed -- delete old entry (cascade deletes
             // related data)
             SqliteStmt del(db_, "DELETE FROM file_info WHERE id = ?;");
             del.bind_int(1, id);

@@ -3,8 +3,8 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
@@ -13,7 +13,6 @@
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <fstream>
@@ -68,15 +67,13 @@ static void build_midx(const std::string& trace_file,
     auto pipeline_config = PipelineConfig()
                                .with_name("PlannerTestMidxBuild")
                                .with_compute_threads(2)
-                               .with_io_threads(2)
-                               .with_scheduler_threads(1)
                                .with_watchdog(false);
 
     Pipeline pipeline(pipeline_config);
     ManifestIndexBuildOutput result;
 
     auto task = make_task(
-        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+        [&](CoroScope& ctx) -> coro::CoroTask<void> {
             auto utility = std::make_shared<ManifestIndexBuilderUtility>();
             behaviors::BehaviorChain<ManifestIndexBuildInput,
                                      ManifestIndexBuildOutput>
@@ -133,7 +130,8 @@ TEST_SUITE("ReorganizationPlanner") {
 
     TEST_CASE("Plan with single group") {
         std::string test_dir =
-            "/tmp/test_planner_single_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_planner_single")
+                .string();
         fs::create_directories(test_dir);
 
         std::string trace_file = create_planner_test_trace(test_dir);
@@ -204,7 +202,8 @@ TEST_SUITE("ReorganizationPlanner") {
 
     TEST_CASE("Plan with multiple groups") {
         std::string test_dir =
-            "/tmp/test_planner_multi_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_planner_multi")
+                .string();
         fs::create_directories(test_dir);
 
         std::string trace_file = create_planner_test_trace(test_dir);
@@ -247,7 +246,7 @@ TEST_SUITE("ReorganizationPlanner") {
 
     TEST_CASE("Metadata in all groups") {
         std::string test_dir =
-            "/tmp/test_planner_meta_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_planner_meta").string();
         fs::create_directories(test_dir);
 
         std::string trace_file = create_planner_test_trace(test_dir);
@@ -282,7 +281,7 @@ TEST_SUITE("ReorganizationPlanner") {
 
     TEST_CASE("Provenance insert and query") {
         std::string test_dir =
-            "/tmp/test_planner_prov_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_planner_prov").string();
         fs::create_directories(test_dir);
         std::string midx_path = test_dir + "/test_prov.pfw.gz.midx";
 

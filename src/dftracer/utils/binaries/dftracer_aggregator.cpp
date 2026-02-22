@@ -4,9 +4,8 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
-#include <dftracer/utils/core/tasks/task_scope.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregators.h>
 #include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
@@ -89,11 +88,6 @@ int main(int argc, char** argv) {
         .scan<'d', std::size_t>()
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
-
-    program.add_argument("--scheduler-threads")
-        .help("Number of scheduler threads (default: 1)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(1));
 
     program.add_argument("--index-dir")
         .help("Directory to store index files (default: system temp directory)")
@@ -181,8 +175,6 @@ int main(int argc, char** argv) {
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    std::size_t scheduler_threads =
-        program.get<std::size_t>("--scheduler-threads");
     std::string index_dir = program.get<std::string>("--index-dir");
     bool compress_output = program.get<bool>("--compress");
     int compression_level = program.get<int>("--compression-level");
@@ -300,7 +292,6 @@ int main(int argc, char** argv) {
     std::printf("  Checkpoint size: %zu bytes (%.2f MB)\n", checkpoint_size,
                 static_cast<double>(checkpoint_size) / (1024.0 * 1024.0));
     std::printf("  Executor threads: %zu\n", executor_threads);
-    std::printf("  Scheduler threads: %zu\n", scheduler_threads);
 
     if (!group_keys.empty()) {
         std::printf("  Extra group keys: ");
@@ -376,8 +367,6 @@ int main(int argc, char** argv) {
     auto pipeline_config = PipelineConfig()
                                .with_name("DFTracer Aggregator")
                                .with_compute_threads(executor_threads)
-                               .with_io_threads(2)
-                               .with_scheduler_threads(scheduler_threads)
                                .with_watchdog(false);
 
     Pipeline pipeline(pipeline_config);
@@ -389,21 +378,25 @@ int main(int argc, char** argv) {
 
     // Streaming aggregation: file producers → chunk workers → merger
     auto streaming_task = make_task(
-        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+        [&](CoroScope& ctx) -> coro::CoroTask<void> {
             auto chunk_chan = coro::make_channel<ChunkAggregatorInput>(0);
             auto result_chan = coro::make_channel<ChunkAggregationOutput>(8);
 
-            co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
                 // Pre-register all file producers to prevent
                 // premature channel closure
-                for (std::size_t i = 0; i < input_files.size(); ++i) {
-                    chunk_chan->register_producer();
-                }
+                chunk_chan->register_producers(input_files.size());
 
                 // File producers: one per input file
                 for (const auto& file_path : input_files) {
-                    scope.spawn([&, file_path](TaskContext& /*fctx*/)
+                    auto* global_chunk_idx_ptr = &global_chunk_idx;
+                    scope.spawn([file_path, chunk_chan, index_dir,
+                                 checkpoint_size, force_rebuild, agg_config,
+                                 chunk_size_mb, batch_size_mb,
+                                 global_chunk_idx_ptr](CoroScope& /*fctx*/)
                                     -> coro::CoroTask<void> {
+                        [[maybe_unused]] auto producer_guard =
+                            chunk_chan->adopt_producer();
                         // Build index
                         std::string idx_path =
                             composites::dft::internal::determine_index_path(
@@ -431,7 +424,6 @@ int main(int argc, char** argv) {
                         if (!metadata.success) {
                             DFTRACER_UTILS_LOG_WARN("Skipping file: %s",
                                                     file_path.c_str());
-                            chunk_chan->release_producer();
                             co_return;
                         }
 
@@ -444,7 +436,7 @@ int main(int argc, char** argv) {
                                 .with_target_chunk_size(chunk_size_mb)
                                 .with_batch_size(batch_size_mb * 1024 * 1024));
 
-                        int start_idx = global_chunk_idx.fetch_add(
+                        int start_idx = global_chunk_idx_ptr->fetch_add(
                             static_cast<int>(file_chunks.size()));
                         for (int i = 0;
                              i < static_cast<int>(file_chunks.size()); ++i) {
@@ -452,38 +444,44 @@ int main(int argc, char** argv) {
                         }
 
                         for (auto& chunk : file_chunks) {
-                            chunk_chan->send_blocking(std::move(chunk));
+                            if (!co_await chunk_chan->send(std::move(chunk))) {
+                                co_return;
+                            }
                         }
 
-                        chunk_chan->release_producer();
                         co_return;
                     });
                 }
 
                 // Pre-register all chunk workers as producers
                 // on result_chan
-                for (std::size_t w = 0; w < executor_threads; ++w) {
-                    result_chan->register_producer();
-                }
+                result_chan->register_producers(executor_threads);
 
                 // Chunk workers: parallel aggregation
                 for (std::size_t w = 0; w < executor_threads; ++w) {
-                    scope.spawn([&](TaskContext& wctx) -> coro::CoroTask<void> {
-                        while (auto input =
-                                   co_await wctx.receive_async(chunk_chan)) {
+                    (void)w;
+                    scope.spawn([chunk_chan, result_chan](
+                                    CoroScope& wctx) -> coro::CoroTask<void> {
+                        [[maybe_unused]] auto producer_guard =
+                            result_chan->adopt_producer();
+                        while (auto input = co_await wctx.receive(chunk_chan)) {
                             ChunkAggregatorUtility agg;
-                            result_chan->send_blocking(agg.process(*input));
+                            auto output = agg.process(*input);
+                            if (!co_await result_chan->send(
+                                    std::move(output))) {
+                                co_return;
+                            }
                         }
-                        result_chan->release_producer();
                         co_return;
                     });
                 }
 
                 // Streaming merger: incremental merge
-                scope.spawn([&](TaskContext& mctx) -> coro::CoroTask<void> {
-                    while (auto output =
-                               co_await mctx.receive_async(result_chan)) {
-                        merger.merge_chunk(std::move(*output));
+                auto* merger_ptr = &merger;
+                scope.spawn([result_chan, merger_ptr](
+                                CoroScope& mctx) -> coro::CoroTask<void> {
+                    while (auto output = co_await mctx.receive(result_chan)) {
+                        merger_ptr->merge_chunk(std::move(*output));
                     }
                     co_return;
                 });
@@ -500,7 +498,7 @@ int main(int argc, char** argv) {
     EventAggregatorUtilityOutput agg_results;
 
     auto post_task = make_task(
-        [&](TaskContext& /*ctx*/) -> coro::CoroTask<bool> {
+        [&](CoroScope& /*ctx*/) -> coro::CoroTask<bool> {
             agg_results = merger.finalize();
 
             // Resolve associations

@@ -1,9 +1,8 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
-#include <dftracer/utils/core/tasks/task_future.h>
 #include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
@@ -38,7 +37,7 @@ ManifestIndexBuildOutput ManifestIndexBuilderUtility::process(
                     return output;
                 }
             } catch (...) {
-                // Database corrupt or unreadable — rebuild
+                // Database corrupt or unreadable -- rebuild
             }
         }
 
@@ -69,12 +68,11 @@ ManifestIndexBuildOutput ManifestIndexBuilderUtility::process(
         }
 
         // 5. Parallel chunk indexing with manifest collection
-        TaskContext& ctx = context();
 
         std::size_t file_size = metadata.uncompressed_size;
         std::size_t num_ckpts = metadata.num_checkpoints;
 
-        // Only need manifest data — disable bloom dimensions
+        // Only need manifest data -- disable bloom dimensions
         ChunkIndexerConfig indexer_config;
         indexer_config.build_manifest = true;
         indexer_config.index_name = false;
@@ -114,25 +112,13 @@ ManifestIndexBuildOutput ManifestIndexBuilderUtility::process(
             }
         }
 
-        // Spawn parallel tasks
-        std::vector<TaskFuture<ChunkIndexerOutput>> futures;
-        futures.reserve(chunk_inputs.size());
+        // Process each chunk inline (process() is synchronous)
+        std::vector<ChunkIndexerOutput> results;
+        results.reserve(chunk_inputs.size());
 
         for (auto& ci : chunk_inputs) {
-            auto task = make_task(
-                [](TaskContext& /*tctx*/, ChunkIndexerInput chunk_input)
-                    -> coro::CoroTask<ChunkIndexerOutput> {
-                    ChunkIndexerUtility idx;
-                    co_return idx.process(chunk_input);
-                });
-            futures.push_back(ctx.spawn<ChunkIndexerOutput>(task, ci));
-        }
-
-        // 6. Collect results
-        std::vector<ChunkIndexerOutput> results;
-        results.reserve(futures.size());
-        for (auto& future : futures) {
-            results.push_back(future.get());
+            ChunkIndexerUtility idx;
+            results.push_back(idx.process(ci));
         }
 
         // 7. Persist to .midx

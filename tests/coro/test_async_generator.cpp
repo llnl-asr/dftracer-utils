@@ -160,11 +160,9 @@ TEST_CASE("AsyncGenerator - Large async sequence") {
     auto gen = async_range(0, N);
 
     auto task = [](AsyncGenerator<int> g) -> CoroTask<int> {
-        int count = 0;
         int sum = 0;
         while (auto value = co_await g.next()) {
             sum += *value;
-            ++count;
         }
         co_return sum;
     }(std::move(gen));

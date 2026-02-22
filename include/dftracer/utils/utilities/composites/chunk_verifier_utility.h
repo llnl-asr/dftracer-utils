@@ -1,9 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_CHUNK_VERIFIER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_CHUNK_VERIFIER_UTILITY_H
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 
 #include <algorithm>
@@ -101,7 +99,7 @@ class ChunkVerifierUtility
     using InputHashFn =
         std::function<std::uint64_t(const std::vector<MetadataType>&)>;
     using EventCollectorFn =
-        std::function<std::vector<EventType>(TaskContext&, const ChunkType&)>;
+        std::function<std::vector<EventType>(CoroScope&, const ChunkType&)>;
     using EventHashFn =
         std::function<std::uint64_t(const std::vector<EventType>&)>;
 
@@ -137,29 +135,13 @@ class ChunkVerifierUtility
         // Step 1: Compute input hash
         std::uint64_t input_hash = input_hasher_(input.metadata);
 
-        // Step 2: Get TaskContext for parallel event collection
-        TaskContext& ctx = this->context();
+        // Step 2: Get CoroScope for parallel event collection
+        CoroScope& ctx = this->context();
 
-        // Step 3: Collect events from all chunks in parallel
-        std::vector<TaskFuture<std::vector<EventType>>> futures;
-        futures.reserve(input.chunks.size());
-
-        for (const auto& chunk : input.chunks) {
-            auto task = make_task(
-                [collector = event_collector_](
-                    TaskContext& task_ctx,
-                    ChunkType c) -> coro::CoroTask<std::vector<EventType>> {
-                    co_return collector(task_ctx, c);
-                });
-            // Spawn with typed future (no std::any wrapping needed!)
-            auto future = ctx.spawn<std::vector<EventType>>(task, chunk);
-            futures.push_back(future);
-        }
-
-        // Step 4: Gather all events
+        // Collect events from all chunks sequentially
         std::vector<EventType> output_events;
-        for (auto& future : futures) {
-            auto events = future.get();
+        for (const auto& chunk : input.chunks) {
+            auto events = event_collector_(ctx, chunk);
             output_events.insert(output_events.end(), events.begin(),
                                  events.end());
         }

@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
-#include <dftracer/utils/core/tasks/task_context.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
 #include <dftracer/utils/core/utilities/utility_traits.h>
 #include <dftracer/utils/utilities/composites/batch_processor_utility.h>
@@ -38,7 +38,7 @@ TEST_SUITE("BatchProcessor") {
     TEST_CASE("BatchProcessor - Basic Processing with Function") {
         SUBCASE("Process strings with lambda") {
             // Create batch processor with a lambda
-            auto processor = [](TaskContext&, const std::string& s) {
+            auto processor = [](CoroScope&, const std::string& s) {
                 return s + "_processed";
             };
 
@@ -73,7 +73,7 @@ TEST_SUITE("BatchProcessor") {
         }
 
         SUBCASE("Process integers with transformation") {
-            auto processor = [](TaskContext&, const int& n) { return n * 2; };
+            auto processor = [](CoroScope&, const int& n) { return n * 2; };
 
             auto batch =
                 std::make_shared<BatchProcessorUtility<int, int>>(processor);
@@ -105,7 +105,7 @@ TEST_SUITE("BatchProcessor") {
         }
 
         SUBCASE("Empty input") {
-            auto processor = [](TaskContext&, const int& n) { return n * 2; };
+            auto processor = [](CoroScope&, const int& n) { return n * 2; };
 
             auto batch =
                 std::make_shared<BatchProcessorUtility<int, int>>(processor);
@@ -191,9 +191,7 @@ TEST_SUITE("BatchProcessor") {
 
     TEST_CASE("BatchProcessor - With Comparator") {
         SUBCASE("Sort strings alphabetically") {
-            auto processor = [](TaskContext&, const std::string& s) {
-                return s;
-            };
+            auto processor = [](CoroScope&, const std::string& s) { return s; };
 
             auto comparator = [](const std::string& a, const std::string& b) {
                 return a < b;
@@ -225,7 +223,7 @@ TEST_SUITE("BatchProcessor") {
         }
 
         SUBCASE("Sort integers descending") {
-            auto processor = [](TaskContext&, const int& n) {
+            auto processor = [](CoroScope&, const int& n) {
                 return n * n;  // Square the numbers
             };
 
@@ -262,7 +260,7 @@ TEST_SUITE("BatchProcessor") {
     TEST_CASE("BatchProcessor - Parallel Execution") {
         SUBCASE("Verify parallel processing results") {
             // Processor that doubles the value
-            auto processor = [](TaskContext&, const int& n) {
+            auto processor = [](CoroScope&, const int& n) {
                 // Simulate some work
                 return n * 2;
             };
@@ -296,7 +294,7 @@ TEST_SUITE("BatchProcessor") {
 
         SUBCASE("Large batch processing") {
             // Process a large number of items
-            auto processor = [](TaskContext&, const int& n) { return n * n; };
+            auto processor = [](CoroScope&, const int& n) { return n * n; };
 
             auto batch =
                 std::make_shared<BatchProcessorUtility<int, int>>(processor);

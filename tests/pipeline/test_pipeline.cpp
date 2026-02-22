@@ -6,8 +6,8 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
 #include <dftracer/utils/core/pipeline/watchdog.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 #include <doctest/doctest.h>
 
 #include <any>
@@ -487,10 +487,14 @@ TEST_CASE("Scheduler - Graceful shutdown") {
         }
     });
 
-    // Wait for tasks to actually start (more reliable than fixed sleep)
-    for (int i = 0; i < 100 && !tasks_started.load(); ++i) {
+    // Wait for tasks to actually start (bounded wait to avoid hanging forever)
+    auto start_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (!tasks_started.load() &&
+           std::chrono::steady_clock::now() < start_deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    REQUIRE(tasks_started.load());
 
     // Request shutdown
     scheduler.request_shutdown();
@@ -527,10 +531,14 @@ TEST_CASE("Scheduler - Shutdown during execution") {
         }
     });
 
-    // Wait for task to start
-    while (!task_running.load()) {
+    // Wait for task to start (bounded wait to avoid hanging forever)
+    auto running_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (!task_running.load() &&
+           std::chrono::steady_clock::now() < running_deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+    REQUIRE(task_running.load());
 
     // Request shutdown while task is running
     scheduler.request_shutdown();
@@ -1498,7 +1506,7 @@ TEST_CASE("Combiner - with_combiner validation error") {
     bool threw_error = false;
     try {
         scheduler.schedule(root);
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        child->wait();
 
         // The error should be stored in the future - trying to get() should
         // throw
@@ -1560,8 +1568,7 @@ TEST_CASE("DAG - Diamond pattern") {
     bottom->depends_on(right);
 
     scheduler.schedule(root);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    bottom->wait();
 
     CHECK(execution_order.size() == 4);
     CHECK(execution_order[0] == 0);  // Root first
@@ -1600,8 +1607,7 @@ TEST_CASE("DAG - Multiple branches converging") {
     }
 
     scheduler.schedule(root);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    final_task->wait();
 
     CHECK(final_count.load() == 1);
 }
@@ -1652,8 +1658,9 @@ TEST_CASE("DAG - Wide and deep structure") {
     }
 
     scheduler.schedule(root);
-
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    for (const auto& task : level3) {
+        task->wait();
+    }
 
     CHECK(completed.load() == 16);  // 4 + 8 + 4
 }
@@ -1666,21 +1673,24 @@ TEST_CASE("Dynamic Tasks - Task submits child task at runtime") {
     Scheduler scheduler(&executor);
 
     std::atomic<int> total_tasks{0};
+    auto* total_tasks_ptr = &total_tasks;
 
     auto parent_task = make_task(
-        [&](TaskContext& ctx) {
-            ++total_tasks;
+        [total_tasks_ptr](CoroScope& ctx) -> coro::CoroTask<void> {
+            ++(*total_tasks_ptr);
 
             // Dynamically create and submit a child task
-            auto child = make_task([&]() { ++total_tasks; }, "DynamicChild");
-
-            ctx.spawn(child);
+            ctx.spawn([total_tasks_ptr](CoroScope&) -> coro::CoroTask<void> {
+                ++(*total_tasks_ptr);
+                co_return;
+            });
+            co_await ctx.join_all();
+            co_return;
         },
         "ParentTask");
 
     scheduler.schedule(parent_task);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    parent_task->wait();
 
     CHECK(total_tasks.load() == 2);
 
@@ -1693,29 +1703,28 @@ TEST_CASE("Dynamic Tasks - Multiple dynamic children") {
     Scheduler scheduler(&executor);
 
     std::atomic<int> total_tasks{0};
+    auto* total_tasks_ptr = &total_tasks;
 
     auto parent_task = make_task(
-        [&](TaskContext& ctx) {
-            ++total_tasks;
+        [total_tasks_ptr](CoroScope& ctx) -> coro::CoroTask<void> {
+            ++(*total_tasks_ptr);
 
             // Create 5 dynamic children
             for (int i = 0; i < 5; ++i) {
-                auto child = make_task(
-                    [&]() {
-                        ++total_tasks;
-                        std::this_thread::sleep_for(
-                            std::chrono::milliseconds(20));
-                    },
-                    "DynamicChild_" + std::to_string(i));
-
-                ctx.spawn(child);
+                ctx.spawn([total_tasks_ptr](
+                              CoroScope&) -> coro::CoroTask<void> {
+                    ++(*total_tasks_ptr);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                    co_return;
+                });
             }
+            co_await ctx.join_all();
+            co_return;
         },
         "ParentTask");
 
     scheduler.schedule(parent_task);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    parent_task->wait();
 
     CHECK(total_tasks.load() == 6);  // 1 parent + 5 children
 }
@@ -1724,28 +1733,20 @@ TEST_CASE("Dynamic Tasks - Intra-task parallelism with result aggregation") {
     Scheduler scheduler(&executor);
 
     std::atomic<int> final_result{0};
+    auto* final_result_ptr = &final_result;
 
     auto parent_task = make_task(
-        [&](TaskContext& ctx) -> coro::CoroTask<void> {
-            // Spawn multiple parallel child tasks
-            std::vector<std::shared_ptr<Task>> children;
-
+        [final_result_ptr](CoroScope& ctx) -> coro::CoroTask<void> {
             // Create 5 child tasks that compute values in parallel
             for (int i = 0; i < 5; ++i) {
-                auto child = make_task(
-                    [i, &final_result]() -> int {
-                        // Simulate some work
-                        std::this_thread::sleep_for(
-                            std::chrono::milliseconds(10));
-                        int value = (i + 1) * 10;  // Returns 10, 20, 30, 40, 50
-                        final_result.fetch_add(value);
-                        return value;
-                    },
-                    "ChildTask_" + std::to_string(i));
-
-                // Spawn (future is tracked internally by ctx)
-                ctx.spawn(child);
-                children.push_back(child);
+                ctx.spawn([i, final_result_ptr](
+                              CoroScope&) -> coro::CoroTask<void> {
+                    // Simulate some work
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    int value = (i + 1) * 10;  // Returns 10, 20, 30, 40, 50
+                    final_result_ptr->fetch_add(value);
+                    co_return;
+                });
             }
 
             // Wait for all spawned tasks using join_all
@@ -1755,8 +1756,7 @@ TEST_CASE("Dynamic Tasks - Intra-task parallelism with result aggregation") {
         "ParentTaskWithAggregation");
 
     scheduler.schedule(parent_task);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    parent_task->wait();
 
     // Should have computed: 10 + 20 + 30 + 40 + 50 = 150
     CHECK(final_result.load() == 150);
@@ -1766,39 +1766,35 @@ TEST_CASE("Dynamic Tasks - Nested intra-task parallelism") {
     Scheduler scheduler(&executor);
 
     std::atomic<int> total_sum{0};
+    auto* total_sum_ptr = &total_sum;
 
     auto parent_task = make_task(
-        [&](TaskContext& ctx) -> coro::CoroTask<void> {
+        [total_sum_ptr](CoroScope& ctx) -> coro::CoroTask<void> {
             // Create 3 level-1 children, each spawning their own children
             for (int i = 0; i < 3; ++i) {
-                auto level1_child = make_task(
-                    [i, &total_sum](
-                        TaskContext& ctx_inner) -> coro::CoroTask<void> {
-                        // Each level-1 child spawns 2 level-2 children
-                        for (int j = 0; j < 2; ++j) {
-                            auto level2_child = make_task(
-                                [i, j, &total_sum]() -> int {
-                                    std::this_thread::sleep_for(
-                                        std::chrono::milliseconds(5));
-                                    int value =
-                                        (i + 1) * 10 +
-                                        j;  // e.g., 10, 11, 20, 21, 30, 31
-                                    total_sum.fetch_add(value);
-                                    return value;
-                                },
-                                "Level2_" + std::to_string(i) + "_" +
-                                    std::to_string(j));
-
-                            ctx_inner.spawn(level2_child);
-                        }
-
-                        // Wait for all level-2 children
-                        co_await ctx_inner.join_all();
-                        co_return;
-                    },
-                    "Level1_" + std::to_string(i));
-
-                ctx.spawn(level1_child);
+                ctx.spawn([i, total_sum_ptr](
+                              CoroScope& level1_ctx) -> coro::CoroTask<void> {
+                    // Use a child scope for level-2 children
+                    co_await level1_ctx.scope(
+                        [i, total_sum_ptr](
+                            CoroScope& level2_scope) -> coro::CoroTask<void> {
+                            // Each level-1 child spawns 2 level-2 children
+                            for (int j = 0; j < 2; ++j) {
+                                level2_scope.spawn(
+                                    [i, j, total_sum_ptr](
+                                        CoroScope&) -> coro::CoroTask<void> {
+                                        std::this_thread::sleep_for(
+                                            std::chrono::milliseconds(5));
+                                        int value = (i + 1) * 10 + j;
+                                        total_sum_ptr->fetch_add(value);
+                                        co_return;
+                                    });
+                            }
+                            co_await level2_scope.join();
+                            co_return;
+                        });
+                    co_return;
+                });
             }
 
             // Wait for all level-1 children
@@ -1808,8 +1804,7 @@ TEST_CASE("Dynamic Tasks - Nested intra-task parallelism") {
         "RootTaskWithNested");
 
     scheduler.schedule(parent_task);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    parent_task->wait();
 
     // Should compute: (10+11) + (20+21) + (30+31) = 21 + 41 + 61 = 123
     CHECK(total_sum.load() == 123);
@@ -1820,27 +1815,23 @@ TEST_CASE(
     Scheduler scheduler(&executor);
 
     auto parent_task = make_task(
-        [](TaskContext& ctx) -> coro::CoroTask<int> {
+        [](CoroScope& ctx) -> coro::CoroTask<int> {
             // Spawn 3 children that return values
-            std::vector<TaskFuture<std::any>> futures;
+            std::vector<coro::SpawnFuture<int>> futures;
 
             for (int i = 0; i < 3; ++i) {
-                auto child = make_task(
-                    [i]() -> int {
+                futures.push_back(
+                    ctx.spawn([i](CoroScope&) -> coro::CoroTask<int> {
                         std::this_thread::sleep_for(
                             std::chrono::milliseconds(10));
-                        return (i + 1) * 10;  // Returns 10, 20, 30
-                    },
-                    "Child_" + std::to_string(i));
-
-                futures.push_back(ctx.spawn(child));
+                        co_return (i + 1) * 10;  // Returns 10, 20, 30
+                    }));
             }
 
             // Collect results by awaiting each future
             int sum = 0;
             for (auto& future : futures) {
-                // co_await returns std::any, so we cast to int
-                int value = std::any_cast<int>(co_await future);
+                int value = co_await future;
                 sum += value;
             }
 
@@ -1863,50 +1854,41 @@ TEST_CASE(
     Scheduler scheduler(&executor);
 
     auto parent_task = make_task(
-        [](TaskContext& ctx) -> coro::CoroTask<int> {
+        [](CoroScope& ctx) -> coro::CoroTask<int> {
             // Spawn 3 child COROUTINES (not simple tasks)
-            std::vector<TaskFuture<std::any>> futures;
+            std::vector<coro::SpawnFuture<int>> futures;
 
             for (int i = 0; i < 3; ++i) {
-                // Each child is a coroutine that spawns its own sub-tasks
-                auto child_coro = make_task(
-                    [i](TaskContext& child_ctx) -> coro::CoroTask<int> {
+                futures.push_back(
+                    ctx.spawn([i](CoroScope& child_ctx) -> coro::CoroTask<int> {
                         // Child coroutine spawns 2 sub-tasks
-                        std::vector<TaskFuture<std::any>> sub_futures;
+                        std::vector<coro::SpawnFuture<int>> sub_futures;
 
                         for (int j = 0; j < 2; ++j) {
-                            auto sub_task = make_task(
-                                [i, j]() -> int {
+                            sub_futures.push_back(child_ctx.spawn(
+                                [i, j](CoroScope&) -> coro::CoroTask<int> {
                                     std::this_thread::sleep_for(
                                         std::chrono::milliseconds(5));
                                     // e.g., 10, 11, 20, 21, 30, 31
-                                    return (i + 1) * 10 + j;
-                                },
-                                "SubTask_" + std::to_string(i) + "_" +
-                                    std::to_string(j));
-
-                            sub_futures.push_back(child_ctx.spawn(sub_task));
+                                    co_return (i + 1) * 10 + j;
+                                }));
                         }
 
                         // Child coroutine awaits its sub-tasks and computes sum
                         int child_sum = 0;
                         for (auto& sub_future : sub_futures) {
-                            int sub_value =
-                                std::any_cast<int>(co_await sub_future);
+                            int sub_value = co_await sub_future;
                             child_sum += sub_value;
                         }
 
                         co_return child_sum;  // Returns sum of 2 sub-tasks
-                    },
-                    "ChildCoro_" + std::to_string(i));
-
-                futures.push_back(ctx.spawn(child_coro));
+                    }));
             }
 
             // Parent awaits all child coroutines and aggregates results
             int total_sum = 0;
             for (auto& future : futures) {
-                int child_result = std::any_cast<int>(co_await future);
+                int child_result = co_await future;
                 total_sum += child_result;
             }
 
@@ -1931,9 +1913,8 @@ TEST_CASE(
 // Cancellation Tests
 // ============================================================================
 
-// Helper functions to avoid GCC ICE with nested make_task in coroutine lambdas
 namespace {
-coro::CoroTask<std::string> fast_task_func(TaskContext& task_ctx) {
+coro::CoroTask<std::string> fast_task_func(CoroScope& task_ctx) {
     if (task_ctx.is_cancellation_requested()) {
         co_return "fast_cancelled";
     }
@@ -1941,7 +1922,7 @@ coro::CoroTask<std::string> fast_task_func(TaskContext& task_ctx) {
     co_return "fast_completed";
 }
 
-coro::CoroTask<std::string> slow_task1_func(TaskContext& task_ctx) {
+coro::CoroTask<std::string> slow_task1_func(CoroScope& task_ctx) {
     for (int i = 0; i < 10; ++i) {
         if (task_ctx.is_cancellation_requested()) {
             co_return "slow1_cancelled";
@@ -1951,7 +1932,7 @@ coro::CoroTask<std::string> slow_task1_func(TaskContext& task_ctx) {
     co_return "slow1_completed";
 }
 
-coro::CoroTask<std::string> slow_task2_func(TaskContext& task_ctx) {
+coro::CoroTask<std::string> slow_task2_func(CoroScope& task_ctx) {
     for (int i = 0; i < 10; ++i) {
         if (task_ctx.is_cancellation_requested()) {
             co_return "slow2_cancelled";
@@ -1963,27 +1944,21 @@ coro::CoroTask<std::string> slow_task2_func(TaskContext& task_ctx) {
 
 // gcc11_bandaid: Extract coroutine to named function to avoid ICE in
 // build_special_member_call
-coro::CoroTask<std::string> when_any_cancellation_parent_func(
-    TaskContext& ctx, std::shared_ptr<Task> fast_task,
-    std::shared_ptr<Task> slow_task1, std::shared_ptr<Task> slow_task2) {
-    // Spawn all tasks
-    auto future1 = ctx.spawn(fast_task);
-    auto future2 = ctx.spawn(slow_task1);
-    auto future3 = ctx.spawn(slow_task2);
+coro::CoroTask<std::string> when_any_cancellation_parent_func(CoroScope& ctx) {
+    // Spawn tasks and collect SpawnFutures directly
+    std::vector<coro::SpawnFuture<std::string>> futures;
+    futures.push_back(ctx.spawn(fast_task_func));
+    futures.push_back(ctx.spawn(slow_task1_func));
+    futures.push_back(ctx.spawn(slow_task2_func));
 
-    // Race them with when_any
-    std::vector<TaskFuture<std::string>> futures;
-    futures.push_back(std::move(future1));
-    futures.push_back(std::move(future2));
-    futures.push_back(std::move(future3));
     auto result = co_await coro::when_any(std::move(futures));
 
     // The fast task should win
     CHECK(result.index == 0);
-    auto winner_result = std::any_cast<std::string>(result.result);
+    auto winner_result = result.result;
     CHECK(winner_result == "fast_completed");
 
-    // Cancel remaining tasks
+    // Cancel remaining tasks (no-op without cancellation tokens)
     result.cancel_remaining();
 
     co_return winner_result;
@@ -1994,16 +1969,8 @@ TEST_CASE("Cancellation - when_any with cancellation of remaining tasks") {
     Executor executor(4);
     Scheduler scheduler(&executor);
 
-    // Create tasks outside the parent coroutine to avoid GCC ICE
-    auto fast_task = make_task(fast_task_func, "FastTask");
-    auto slow_task1 = make_task(slow_task1_func, "SlowTask1");
-    auto slow_task2 = make_task(slow_task2_func, "SlowTask2");
-
     auto parent_task = make_task(
-        [fast_task, slow_task1, slow_task2](TaskContext& ctx) {
-            return when_any_cancellation_parent_func(ctx, fast_task, slow_task1,
-                                                     slow_task2);
-        },
+        [](CoroScope& ctx) { return when_any_cancellation_parent_func(ctx); },
         "ParentWithCancellation");
 
     scheduler.schedule(parent_task);
@@ -2019,21 +1986,25 @@ TEST_CASE("Cancellation - when_any with cancellation of remaining tasks") {
 
 // gcc11_bandaid: Helper function to avoid ICE with nested make_task in
 // coroutine lambdas
-static coro::CoroTask<int> timer_service_basic_func(
-    TaskContext& ctx, std::shared_ptr<Task> fast_task,
-    std::shared_ptr<Task> slow_task) {
-    auto future1 = ctx.spawn(fast_task);
-    auto future2 = ctx.spawn(slow_task);
+static coro::CoroTask<int> timer_service_basic_func(CoroScope& ctx) {
+    auto future1 = ctx.spawn([](CoroScope&) -> coro::CoroTask<int> {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        co_return 99;
+    });
+    auto future2 = ctx.spawn([](CoroScope&) -> coro::CoroTask<int> {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        co_return 1;
+    });
 
     // Race them - fast task should win
-    std::vector<TaskFuture<int>> futures;
+    std::vector<coro::SpawnFuture<int>> futures;
     futures.push_back(std::move(future1));
     futures.push_back(std::move(future2));
     auto result = co_await coro::when_any(std::move(futures));
 
     // The fast task (index 0) should win
     CHECK(result.index == 0);
-    int winner = std::any_cast<int>(result.result);
+    int winner = result.result;
     CHECK(winner == 99);
 
     // Cancel the slow task
@@ -2046,26 +2017,7 @@ TEST_CASE("Timeout - TimerService basic functionality") {
     Executor executor(4);
     Scheduler scheduler(&executor);
 
-    // gcc11_bandaid: Create tasks outside coroutine lambda
-    auto fast_task = make_task(
-        []() -> coro::CoroTask<int> {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            co_return 99;
-        },
-        "FastTask");
-
-    auto slow_task = make_task(
-        []() -> coro::CoroTask<int> {
-            std::this_thread::sleep_for(std::chrono::seconds(2));
-            co_return 1;
-        },
-        "SlowTask");
-
-    auto parent_task = make_task(
-        [fast_task, slow_task](TaskContext& ctx) {
-            return timer_service_basic_func(ctx, fast_task, slow_task);
-        },
-        "ParentWithRace");
+    auto parent_task = make_task(timer_service_basic_func, "ParentWithRace");
 
     scheduler.schedule(parent_task);
     int result = parent_task->get<int>();
@@ -2075,20 +2027,24 @@ TEST_CASE("Timeout - TimerService basic functionality") {
 }
 
 // gcc11_bandaid: Helper function to avoid ICE
-static coro::CoroTask<std::string> fast_task_timeout_func(
-    TaskContext& ctx, std::shared_ptr<Task> fast_task,
-    std::shared_ptr<Task> timeout_task) {
-    auto future1 = ctx.spawn(fast_task);
-    auto future2 = ctx.spawn(timeout_task);
+static coro::CoroTask<std::string> fast_task_timeout_func(CoroScope& ctx) {
+    auto future1 = ctx.spawn([](CoroScope&) -> coro::CoroTask<std::string> {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        co_return "fast_completed";
+    });
+    auto future2 = ctx.spawn([](CoroScope&) -> coro::CoroTask<std::string> {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        co_return "timeout_expired";
+    });
 
-    std::vector<TaskFuture<std::string>> futures;
+    std::vector<coro::SpawnFuture<std::string>> futures;
     futures.push_back(std::move(future1));
     futures.push_back(std::move(future2));
     auto result = co_await coro::when_any(std::move(futures));
 
     // Fast task should win (index 0)
     CHECK(result.index == 0);
-    auto winner_result = std::any_cast<std::string>(result.result);
+    auto winner_result = result.result;
     CHECK(winner_result == "fast_completed");
 
     // Cancel the timeout
@@ -2101,26 +2057,7 @@ TEST_CASE("Timeout - Fast task completes before timeout") {
     Executor executor(4);
     Scheduler scheduler(&executor);
 
-    // gcc11_bandaid: Create tasks outside coroutine lambda
-    auto fast_task = make_task(
-        []() -> coro::CoroTask<std::string> {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            co_return "fast_completed";
-        },
-        "FastTask");
-
-    auto timeout_task = make_task(
-        []() -> coro::CoroTask<std::string> {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            co_return "timeout_expired";
-        },
-        "TimeoutTask");
-
-    auto parent_task = make_task(
-        [fast_task, timeout_task](TaskContext& ctx) {
-            return fast_task_timeout_func(ctx, fast_task, timeout_task);
-        },
-        "ParentFastTask");
+    auto parent_task = make_task(fast_task_timeout_func, "ParentFastTask");
 
     scheduler.schedule(parent_task);
     std::string result = parent_task->get<std::string>();
@@ -2130,16 +2067,22 @@ TEST_CASE("Timeout - Fast task completes before timeout") {
 }
 
 // gcc11_bandaid: Helper function to avoid ICE
-static coro::CoroTask<int> multi_timeout_func(TaskContext& ctx,
-                                              std::shared_ptr<Task> task1,
-                                              std::shared_ptr<Task> task2,
-                                              std::shared_ptr<Task> task3) {
-    auto future1 = ctx.spawn(task1);
-    auto future2 = ctx.spawn(task2);
-    auto future3 = ctx.spawn(task3);
+static coro::CoroTask<int> multi_timeout_func(CoroScope& ctx) {
+    auto future1 = ctx.spawn([](CoroScope&) -> coro::CoroTask<int> {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        co_return 1;
+    });
+    auto future2 = ctx.spawn([](CoroScope&) -> coro::CoroTask<int> {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        co_return 2;
+    });
+    auto future3 = ctx.spawn([](CoroScope&) -> coro::CoroTask<int> {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        co_return 3;
+    });
 
     // Race all 3 tasks - task1 should complete first
-    std::vector<TaskFuture<int>> futures;
+    std::vector<coro::SpawnFuture<int>> futures;
     futures.push_back(std::move(future1));
     futures.push_back(std::move(future2));
     futures.push_back(std::move(future3));
@@ -2147,7 +2090,7 @@ static coro::CoroTask<int> multi_timeout_func(TaskContext& ctx,
 
     // Task1 should win (index 0)
     CHECK(result.index == 0);
-    int winner = std::any_cast<int>(result.result);
+    int winner = result.result;
     CHECK(winner == 1);
 
     // Cancel remaining tasks
@@ -2160,34 +2103,7 @@ TEST_CASE("Timeout - Multiple tasks with different timeouts") {
     Executor executor(4);
     Scheduler scheduler(&executor);
 
-    // gcc11_bandaid: Create tasks outside coroutine lambda
-    // Use larger timing margins to avoid flaky tests on slow CI machines
-    auto task1 = make_task(
-        []() -> coro::CoroTask<int> {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            co_return 1;
-        },
-        "Task50ms");
-
-    auto task2 = make_task(
-        []() -> coro::CoroTask<int> {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            co_return 2;
-        },
-        "Task500ms");
-
-    auto task3 = make_task(
-        []() -> coro::CoroTask<int> {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            co_return 3;
-        },
-        "Task1000ms");
-
-    auto parent_task = make_task(
-        [task1, task2, task3](TaskContext& ctx) {
-            return multi_timeout_func(ctx, task1, task2, task3);
-        },
-        "ParentMultiTimeout");
+    auto parent_task = make_task(multi_timeout_func, "ParentMultiTimeout");
 
     scheduler.schedule(parent_task);
     int result = parent_task->get<int>();
@@ -2197,18 +2113,20 @@ TEST_CASE("Timeout - Multiple tasks with different timeouts") {
 }
 
 // gcc11_bandaid: Helper function to avoid ICE
-static coro::CoroTask<int> concurrent_operations_func(
-    TaskContext& ctx, std::vector<std::shared_ptr<Task>> tasks) {
-    std::vector<TaskFuture<std::any>> futures;
+static coro::CoroTask<int> concurrent_operations_func(CoroScope& ctx) {
+    std::vector<coro::SpawnFuture<int>> futures;
 
-    for (auto& task : tasks) {
-        futures.push_back(ctx.spawn(task));
+    for (int i = 0; i < 10; ++i) {
+        futures.push_back(ctx.spawn([i](CoroScope&) -> coro::CoroTask<int> {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50 + i * 10));
+            co_return i;
+        }));
     }
 
     // Wait for all tasks to complete
     int sum = 0;
     for (auto& future : futures) {
-        int value = std::any_cast<int>(co_await future);
+        int value = co_await future;
         sum += value;
     }
 
@@ -2220,24 +2138,8 @@ TEST_CASE("Timeout - TimerService handles multiple concurrent operations") {
     Executor executor(4);
     Scheduler scheduler(&executor);
 
-    // gcc11_bandaid: Create tasks outside coroutine lambda
-    std::vector<std::shared_ptr<Task>> tasks;
-    for (int i = 0; i < 10; ++i) {
-        auto delayed_task = make_task(
-            [i]() -> coro::CoroTask<int> {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(50 + i * 10));
-                co_return i;
-            },
-            "DelayedTask_" + std::to_string(i));
-        tasks.push_back(delayed_task);
-    }
-
-    auto parent_task = make_task(
-        [tasks](TaskContext& ctx) {
-            return concurrent_operations_func(ctx, tasks);
-        },
-        "ParentConcurrentOperations");
+    auto parent_task =
+        make_task(concurrent_operations_func, "ParentConcurrentOperations");
 
     scheduler.schedule(parent_task);
     int result = parent_task->get<int>();
@@ -2542,9 +2444,7 @@ TEST_CASE("ErrorPolicy - CONTINUE skips children of failed tasks") {
 // ============================================================================
 
 TEST_CASE("Scheduler - Multiple scheduling threads") {
-    auto config =
-        PipelineConfig().with_compute_threads(8).with_scheduler_threads(
-            4);  // 4 scheduling threads
+    auto config = PipelineConfig().with_compute_threads(8);
 
     Pipeline pipeline(config);
 
@@ -2583,9 +2483,7 @@ TEST_CASE("Scheduler - Multiple scheduling threads") {
 }
 
 TEST_CASE("Scheduler - Single scheduling thread handles complex DAG") {
-    auto config =
-        PipelineConfig().with_compute_threads(4).with_scheduler_threads(
-            1);  // Only 1 scheduling thread
+    auto config = PipelineConfig().with_compute_threads(4);
 
     Pipeline pipeline(config);
 
@@ -2640,45 +2538,22 @@ TEST_CASE("Scheduler - Single scheduling thread handles complex DAG") {
     CHECK(completed.load() == 9);
 }
 
-TEST_CASE("Scheduler - Scheduling threads configured via PipelineConfig") {
-    // Test that scheduler_threads configuration is properly applied
-
-    auto config1 = PipelineConfig().with_scheduler_threads(1);
-    Pipeline pipeline1(config1);
-
-    auto config2 = PipelineConfig().with_scheduler_threads(3);
-    Pipeline pipeline2(config2);
-
-    // Both should construct successfully
-    // Actual thread count is internal but configuration should not throw
-    CHECK_NOTHROW(pipeline1.validate());
-    CHECK_NOTHROW(pipeline2.validate());
-}
-
 TEST_CASE("PipelineConfig - with_compute_threads sets executor threads") {
     auto config = PipelineConfig().with_compute_threads(8);
 
     CHECK(config.executor_threads == 8);
 }
 
-TEST_CASE("PipelineConfig - with_scheduler_threads sets scheduler threads") {
-    auto config = PipelineConfig().with_scheduler_threads(4);
-
-    CHECK(config.scheduler_threads == 4);
-}
-
 TEST_CASE("PipelineConfig - Fluent API chaining") {
     auto config = PipelineConfig()
                       .with_name("TestPipeline")
                       .with_compute_threads(8)
-                      .with_scheduler_threads(2)
                       .with_error_policy(ErrorPolicy::CONTINUE)
                       .with_watchdog(true)
                       .with_global_timeout(std::chrono::seconds(60));
 
     CHECK(config.name == "TestPipeline");
     CHECK(config.executor_threads == 8);
-    CHECK(config.scheduler_threads == 2);
     CHECK(config.error_policy == ErrorPolicy::CONTINUE);
     CHECK(config.enable_watchdog == true);
     CHECK(config.global_timeout == std::chrono::seconds(60));

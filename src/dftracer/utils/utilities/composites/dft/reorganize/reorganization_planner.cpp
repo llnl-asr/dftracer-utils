@@ -191,7 +191,7 @@ ExtractionPlan ReorganizationPlannerUtility::process(
         // For each checkpoint, build extraction tasks.
         // When num_checkpoints is 0 (file smaller than
         // checkpoint size), treat as a single checkpoint
-        // at index 0 — matching manifest_index_builder
+        // at index 0 -- matching manifest_index_builder
         // behavior.
         for (std::size_t ckpt = 0; ckpt < eff_ckpts; ++ckpt) {
             // Compute byte range for this checkpoint using the

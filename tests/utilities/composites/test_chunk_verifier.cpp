@@ -7,7 +7,7 @@
 
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
-#include <dftracer/utils/core/tasks/task_context.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
 #include <dftracer/utils/utilities/composites/chunk_verifier_utility.h>
 #include <doctest/doctest.h>
@@ -62,7 +62,7 @@ TEST_SUITE("ChunkVerifier") {
 
             // Create event collector
             auto event_collector =
-                [](TaskContext&,
+                [](CoroScope&,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
                 printf("Collecting events from chunk %zu\n", chunk.id);
                 return chunk.data;
@@ -96,7 +96,6 @@ TEST_SUITE("ChunkVerifier") {
             auto pipeline_config =
                 PipelineConfig()
                     .with_compute_threads(4)  // 1 main + 3 chunks
-                    .with_scheduler_threads(1)
                     .with_watchdog(true)
                     .with_task_timeout(std::chrono::seconds(5));
 
@@ -144,7 +143,7 @@ TEST_SUITE("ChunkVerifier") {
                 return 12345;    // Fixed input hash
             };
 
-            auto event_collector = [](TaskContext&, const TestChunk& chunk)
+            auto event_collector = [](CoroScope&, const TestChunk& chunk)
                 -> std::vector<TestEvent> { return chunk.data; };
 
             auto event_hasher =
@@ -157,9 +156,7 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config =
-                PipelineConfig().with_compute_threads(4).with_scheduler_threads(
-                    1);
+            auto pipeline_config = PipelineConfig().with_compute_threads(4);
             Pipeline pipeline(pipeline_config);
 
             std::vector<TestChunk> chunks = {TestChunk(1, {1, 2, 3})};
@@ -198,7 +195,7 @@ TEST_SUITE("ChunkVerifier") {
 
             // Event collector that simulates work
             auto event_collector =
-                [](TaskContext&,
+                [](CoroScope&,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(10));  // Simulate work
@@ -218,9 +215,7 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config =
-                PipelineConfig().with_compute_threads(4).with_scheduler_threads(
-                    1);
+            auto pipeline_config = PipelineConfig().with_compute_threads(4);
             Pipeline pipeline(pipeline_config);
 
             // Create many chunks
@@ -260,7 +255,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_collector =
-                [](TaskContext&, const TestChunk&) -> std::vector<TestEvent> {
+                [](CoroScope&, const TestChunk&) -> std::vector<TestEvent> {
                 return {};
             };
 
@@ -273,9 +268,7 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config =
-                PipelineConfig().with_compute_threads(2).with_scheduler_threads(
-                    1);
+            auto pipeline_config = PipelineConfig().with_compute_threads(2);
             Pipeline pipeline(pipeline_config);
 
             std::vector<TestChunk> chunks;
@@ -307,7 +300,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_collector =
-                [](TaskContext& ctx,
+                [](CoroScope& ctx,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
                 (void)ctx;  // Not used in this simple test
                 printf("Collecting from chunk %zu\n", chunk.id);
@@ -330,11 +323,8 @@ TEST_SUITE("ChunkVerifier") {
             printf("Creating pipeline\n");
             {
                 // Need at least 2 threads: 1 for main task + 1 for subtasks
-                auto pipeline_config =
-                    PipelineConfig()
-                        .with_compute_threads(
-                            2)  // Increased from 1 to avoid deadlock
-                        .with_scheduler_threads(1);
+                auto pipeline_config = PipelineConfig().with_compute_threads(
+                    2);  // Increased from 1 to avoid deadlock
                 Pipeline pipeline(pipeline_config);
 
                 std::vector<TestChunk> chunks = {TestChunk(1, {10, 20, 30})};
@@ -376,7 +366,7 @@ TEST_SUITE("ChunkVerifier") {
                 return 100;
             };
 
-            auto event_collector = [](TaskContext&, const TestChunk& chunk)
+            auto event_collector = [](CoroScope&, const TestChunk& chunk)
                 -> std::vector<TestEvent> { return chunk.data; };
 
             auto event_hasher =
@@ -388,9 +378,7 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config =
-                PipelineConfig().with_compute_threads(2).with_scheduler_threads(
-                    1);
+            auto pipeline_config = PipelineConfig().with_compute_threads(2);
             Pipeline pipeline(pipeline_config);
 
             std::vector<TestChunk> chunks = {TestChunk(1, {1, 2}),

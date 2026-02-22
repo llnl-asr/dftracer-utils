@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_TYPED_TASK_H
 #define DFTRACER_UTILS_CORE_TASKS_TYPED_TASK_H
 
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 
 #include <iostream>
 #include <stdexcept>
@@ -20,7 +20,7 @@ namespace dftracer::utils {
  *
  *   class MyTask : public TypedTask<int, std::string> {
  *   public:
- *       std::string apply(TaskContext& ctx, const int& input) override {
+ *       std::string apply(CoroScope& ctx, const int& input) override {
  *           return "Result: " + std::to_string(input * 2);
  *       }
  *   };
@@ -38,7 +38,7 @@ class TypedTask : public Task {
      * Protected constructor - inherit from this class to create typed tasks
      */
     TypedTask()
-        : Task([this](TaskContext& ctx, const std::any& input) -> std::any {
+        : Task([this](CoroScope& ctx, const std::any& input) -> std::any {
               try {
                   if constexpr (std::is_void_v<I>) {
                       // No input case
@@ -73,16 +73,16 @@ class TypedTask : public Task {
      * Type-safe execution method - override this in your subclass
      *
      * Variants based on whether input/output are void:
-     * - O apply(TaskContext&, const I&)      - Has input and output
-     * - void apply(TaskContext&, const I&)   - Has input, no output
-     * - O apply(TaskContext&)                 - No input, has output
-     * - void apply(TaskContext&)              - No input or output
+     * - O apply(CoroScope&, const I&)      - Has input and output
+     * - void apply(CoroScope&, const I&)   - Has input, no output
+     * - O apply(CoroScope&)                 - No input, has output
+     * - void apply(CoroScope&)              - No input or output
      */
 
     // Version with input and output
     template <typename I_ = I, typename O_ = O>
     typename std::enable_if_t<!std::is_void_v<I_> && !std::is_void_v<O_>, O_>
-    apply(TaskContext& ctx, const I_& input) {
+    apply(CoroScope& ctx, const I_& input) {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         // Default implementation - should be overridden
@@ -92,7 +92,7 @@ class TypedTask : public Task {
     // Version with input, no output
     template <typename I_ = I, typename O_ = O>
     typename std::enable_if_t<!std::is_void_v<I_> && std::is_void_v<O_>, void>
-    apply(TaskContext& ctx, const I_& input) {
+    apply(CoroScope& ctx, const I_& input) {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
@@ -102,7 +102,7 @@ class TypedTask : public Task {
     // Version with output, no input
     template <typename I_ = I, typename O_ = O>
     typename std::enable_if_t<std::is_void_v<I_> && !std::is_void_v<O_>, O_>
-    apply(TaskContext& ctx) {
+    apply(CoroScope& ctx) {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
@@ -112,7 +112,7 @@ class TypedTask : public Task {
     // Version with no input or output
     template <typename I_ = I, typename O_ = O>
     typename std::enable_if_t<std::is_void_v<I_> && std::is_void_v<O_>, void>
-    apply(TaskContext& ctx) {
+    apply(CoroScope& ctx) {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");

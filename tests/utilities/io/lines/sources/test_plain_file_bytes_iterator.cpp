@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/io/lines/sources/plain_file_bytes_iterator.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <string>
@@ -9,9 +10,11 @@
 
 using namespace dftracer::utils::utilities::io::lines;
 using namespace dftracer::utils::utilities::io::lines::sources;
+using namespace dft_utils_test;
 
 TEST_SUITE("PlainFileBytesIterator") {
-    fs::path test_file = "test_plain_file_bytes_iterator.txt";
+    fs::path test_file =
+        make_unique_test_path("test_plain_file_bytes_iterator.txt");
 
     TEST_CASE("PlainFileBytesIterator - Basic Byte Range Operations") {
         SUBCASE("Read entire file via byte range") {

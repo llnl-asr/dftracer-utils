@@ -4,9 +4,8 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
-#include <dftracer/utils/core/tasks/task_scope.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
@@ -174,8 +173,6 @@ int main(int argc, char** argv) {
         auto pipeline_config = PipelineConfig()
                                    .with_name("Organize: Build MIDX")
                                    .with_compute_threads(executor_threads)
-                                   .with_io_threads(executor_threads)
-                                   .with_scheduler_threads(1)
                                    .with_watchdog(false);
 
         Pipeline pipeline(pipeline_config);
@@ -184,14 +181,19 @@ int main(int argc, char** argv) {
         std::atomic<std::size_t> skipped_count{0};
 
         auto build_task = make_task(
-            [&](TaskContext& ctx) -> coro::CoroTask<void> {
-                co_await ctx.scope([&](TaskScope& scope)
+            [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                co_await ctx.scope([&](CoroScope& scope)
                                        -> coro::CoroTask<void> {
+                    auto* built_count_ptr = &built_count;
+                    auto* skipped_count_ptr = &skipped_count;
                     for (std::size_t i = 0; i < files.size(); ++i) {
-                        scope.spawn([&, i](TaskContext& fctx)
+                        const auto file_path = files[i];
+                        scope.spawn([file_path, index_dir, checkpoint_size,
+                                     force_rebuild, built_count_ptr,
+                                     skipped_count_ptr](CoroScope& fctx)
                                         -> coro::CoroTask<void> {
                             ManifestIndexBuildInput input;
-                            input.file_path = files[i];
+                            input.file_path = file_path;
                             input.index_dir = index_dir;
                             input.checkpoint_size = checkpoint_size;
                             input.force_rebuild = force_rebuild;
@@ -211,9 +213,9 @@ int main(int argc, char** argv) {
                                 executor.execute_with_context(fctx, input);
 
                             if (result.was_skipped) {
-                                skipped_count++;
+                                (*skipped_count_ptr)++;
                             } else if (result.success) {
-                                built_count++;
+                                (*built_count_ptr)++;
                             } else {
                                 DFTRACER_UTILS_LOG_ERROR(
                                     "MIDX "
@@ -222,7 +224,7 @@ int main(int argc, char** argv) {
                                     " for "
                                     "%s: "
                                     "%s",
-                                    files[i].c_str(),
+                                    file_path.c_str(),
                                     result.error_message.c_str());
                             }
                             co_return;
@@ -447,8 +449,6 @@ int main(int argc, char** argv) {
         auto pipeline_config = PipelineConfig()
                                    .with_name("Organize: Build Sidecars")
                                    .with_compute_threads(executor_threads)
-                                   .with_io_threads(executor_threads)
-                                   .with_scheduler_threads(1)
                                    .with_watchdog(false);
 
         Pipeline pipeline(pipeline_config);
@@ -465,14 +465,14 @@ int main(int argc, char** argv) {
         }
 
         auto sidecar_task = make_task(
-            [&](TaskContext& ctx) -> coro::CoroTask<void> {
-                co_await ctx.scope([&](TaskScope& scope)
+            [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                co_await ctx.scope([&](CoroScope& scope)
                                        -> coro::CoroTask<void> {
                     for (std::size_t i = 0; i < output_files.size(); ++i) {
-                        scope.spawn([&, i](TaskContext& fctx)
+                        const auto out_file = output_files[i];
+                        scope.spawn([out_file, output_dir,
+                                     checkpoint_size](CoroScope& fctx)
                                         -> coro::CoroTask<void> {
-                            const auto& out_file = output_files[i];
-
                             ManifestIndexBuildInput midx_input;
                             midx_input.file_path = out_file;
                             midx_input.index_dir = output_dir;

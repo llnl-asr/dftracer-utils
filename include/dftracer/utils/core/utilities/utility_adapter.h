@@ -3,8 +3,8 @@
 
 #include <dftracer/utils/core/common/type_name.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/behaviors/default_behaviors.h>
 #include <dftracer/utils/core/utilities/tags/monitored.h>
@@ -52,7 +52,7 @@ namespace dftracer::utils::utilities {
  * std::shared_ptr<Task> task = use(utility);  // Calls as_task() implicitly
  *
  * // Dynamic submission from within a task
- * auto outer_task = make_task([&](TaskContext& ctx) {
+ * auto outer_task = make_task([&](CoroScope& ctx) {
  *     auto inner = use(utility).as_task();
  *     auto future = ctx.submit_task(inner, data);
  *     return future.get();
@@ -157,7 +157,7 @@ class UtilityAdapter {
     }
 
     /**
-     * @brief Check if utility needs TaskContext at compile time.
+     * @brief Check if utility needs CoroScope at compile time.
      */
     static constexpr bool needs_context() {
         using UtilityType = Utility<I, O, Tags...>;
@@ -175,7 +175,7 @@ class UtilityAdapter {
      * that have been added. The returned task can be used with the standard
      * Task API (depends_on, with_name, etc.) and scheduled via Scheduler.
      *
-     * The task automatically detects if the utility needs TaskContext and
+     * The task automatically detects if the utility needs CoroScope and
      * creates the appropriate function signature.
      *
      * @return Shared pointer to Task wrapping this utility
@@ -209,7 +209,7 @@ class UtilityAdapter {
         if constexpr (UtilityType::template has_tag<tags::NeedsContext>() ||
                       detail::has_process_with_context_v<ConcreteType, I, O>) {
             return make_task(
-                [executor](TaskContext& ctx, I input) -> O {
+                [executor](CoroScope& ctx, I input) -> O {
                     return executor->execute_with_context(ctx, input);
                 },
                 task_name);

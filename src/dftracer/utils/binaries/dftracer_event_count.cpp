@@ -48,11 +48,6 @@ int main(int argc, char** argv) {
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
 
-    program.add_argument("--scheduler-threads")
-        .help("Number of scheduler threads (default: 1)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(1));
-
     program.add_argument("--index-dir")
         .help("Directory to store index files (default: system temp directory)")
         .default_value<std::string>("");
@@ -71,8 +66,6 @@ int main(int argc, char** argv) {
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    std::size_t scheduler_threads =
-        program.get<std::size_t>("--scheduler-threads");
     std::string index_dir = program.get<std::string>("--index-dir");
 
     // Setup temp index directory
@@ -91,8 +84,7 @@ int main(int argc, char** argv) {
     // Create pipeline with configuration
     auto pipeline_config = PipelineConfig()
                                .with_name("DFTracer Event Count")
-                               .with_compute_threads(executor_threads)
-                               .with_scheduler_threads(scheduler_threads);
+                               .with_compute_threads(executor_threads);
 
     Pipeline pipeline(pipeline_config);
 
@@ -109,7 +101,7 @@ int main(int argc, char** argv) {
         utilities::composites::dft::IndexBuildUtilityOutput>;
 
     auto index_builder_processor = [checkpoint_size, force_rebuild, &index_dir](
-                                       TaskContext& /*ctx*/,
+                                       CoroScope& /*ctx*/,
                                        const std::string& file_path)
         -> utilities::composites::dft::IndexBuildUtilityOutput {
         std::string idx_path =
@@ -139,7 +131,7 @@ int main(int argc, char** argv) {
         utilities::composites::dft::MetadataCollectorUtilityOutput>;
 
     auto metadata_processor = [checkpoint_size, force_rebuild, &index_dir](
-                                  TaskContext& /*ctx*/,
+                                  CoroScope& /*ctx*/,
                                   const std::string& file_path)
         -> utilities::composites::dft::MetadataCollectorUtilityOutput {
         std::string idx_path =

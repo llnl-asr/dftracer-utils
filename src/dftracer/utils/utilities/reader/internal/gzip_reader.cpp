@@ -438,7 +438,7 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             }
 
             if (!found_start) {
-                // No suitable checkpoint found — start from beginning
+                // No suitable checkpoint found -- start from beginning
                 start_bytes = 0;
                 actual_start_line = 1;
             }

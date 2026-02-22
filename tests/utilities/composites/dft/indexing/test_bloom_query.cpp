@@ -5,9 +5,10 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <doctest/doctest.h>
-#include <unistd.h>
 
 #include <string>
+
+#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
@@ -109,7 +110,7 @@ static void populate_test_bidx(const std::string& bidx_path,
 TEST_SUITE("BloomQueryUtility") {
     TEST_CASE("BloomQuery - File-level skip for absent value") {
         std::string test_dir =
-            "/tmp/test_bloom_query_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_bloom_query").string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -133,7 +134,8 @@ TEST_SUITE("BloomQueryUtility") {
 
     TEST_CASE("BloomQuery - Chunk-level filtering") {
         std::string test_dir =
-            "/tmp/test_bloom_query_chunk_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_bloom_query_chunk")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -159,7 +161,8 @@ TEST_SUITE("BloomQueryUtility") {
 
     TEST_CASE("BloomQuery - Multi-dimension AND") {
         std::string test_dir =
-            "/tmp/test_bloom_query_and_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_bloom_query_and")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -186,7 +189,8 @@ TEST_SUITE("BloomQueryUtility") {
 
     TEST_CASE("BloomQuery - Empty predicates returns all") {
         std::string test_dir =
-            "/tmp/test_bloom_query_empty_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_bloom_query_empty")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -207,7 +211,8 @@ TEST_SUITE("BloomQueryUtility") {
 
     TEST_CASE("BloomQuery - Hash resolution (query by resolved value)") {
         std::string test_dir =
-            "/tmp/test_bloom_query_hash_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_bloom_query_hash")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -233,7 +238,8 @@ TEST_SUITE("BloomQueryUtility") {
 
     TEST_CASE("BloomQuery - OR within dimension") {
         std::string test_dir =
-            "/tmp/test_bloom_query_or_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_bloom_query_or")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";

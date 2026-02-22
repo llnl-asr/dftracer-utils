@@ -9,15 +9,11 @@
 #include <algorithm>
 #include <any>
 #include <exception>
-#include <tuple>
 #include <vector>
 
 namespace dftracer::utils {
 
-Scheduler::Scheduler(Executor* executor)
-    : executor_(executor),
-      num_scheduling_threads_(1),
-      metrics_start_time_(std::chrono::steady_clock::now()) {
+Scheduler::Scheduler(Executor* executor) : executor_(executor) {
     if (!executor_) {
         throw PipelineError(PipelineError::VALIDATION_ERROR,
                             "Executor cannot be null");
@@ -38,27 +34,21 @@ Scheduler::Scheduler(Executor* executor)
         }
     });
 
-    // Set scheduler reference in executor (for TaskContext)
+    // Set scheduler reference in executor (for CoroScope)
     executor_->set_scheduler(this);
 
     // Start executor to ensure workers are ready before scheduling begins
     if (!executor_->is_running()) {
         executor_->start();
     }
-
-    // Start scheduling thread
-    start_scheduling_thread();
 }
 
 Scheduler::Scheduler(Executor* executor, const PipelineConfig& config)
     : executor_(executor),
-      num_scheduling_threads_(
-          config.scheduler_threads > 0 ? config.scheduler_threads : 1),
       global_timeout_(config.global_timeout),
       default_task_timeout_(config.default_task_timeout),
       error_policy_(config.error_policy),
-      error_handler_(config.error_handler),
-      metrics_start_time_(std::chrono::steady_clock::now()) {
+      error_handler_(config.error_handler) {
     if (!executor_) {
         throw PipelineError(PipelineError::VALIDATION_ERROR,
                             "Executor cannot be null");
@@ -112,12 +102,8 @@ Scheduler::Scheduler(Executor* executor, const PipelineConfig& config)
             });
     }
 
-    // Start scheduling threads
-    start_scheduling_thread();
-
-    DFTRACER_UTILS_LOG_DEBUG(
-        "Scheduler created with %zu scheduling threads, watchdog: %s",
-        num_scheduling_threads_, watchdog_ ? "enabled" : "disabled");
+    DFTRACER_UTILS_LOG_DEBUG("Scheduler created with watchdog: %s",
+                             watchdog_ ? "enabled" : "disabled");
 }
 
 Scheduler::~Scheduler() {
@@ -126,8 +112,6 @@ Scheduler::~Scheduler() {
     if (executor_) {
         executor_->shutdown();
     }
-
-    stop_scheduling_thread();
 
     if (watchdog_) {
         watchdog_->stop();
@@ -181,8 +165,29 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
     // Increment pending count for source task
     ++pending_count_;
 
-    ready_queue_.enqueue(source);
-    has_ready_tasks_.store(true, std::memory_order_release);
+    // Submit source task directly to executor -- no scheduling thread needed.
+    try {
+        std::any src_input;
+        if (source->has_initial_input()) {
+            src_input = source->get_initial_input().value();
+        } else {
+            src_input = input;
+        }
+
+        if (watchdog_) {
+            std::chrono::milliseconds timeout = source->has_timeout()
+                                                    ? source->get_timeout()
+                                                    : default_task_timeout_;
+            watchdog_->register_task_start(source->get_id(), source, timeout);
+        }
+
+        submit_task_to_executor(source, src_input);
+    } catch (...) {
+        DFTRACER_UTILS_LOG_ERROR("Failed to prepare source task ID %d ('%s')",
+                                 source->get_id(), source->get_name().c_str());
+        source->set_exception(std::current_exception());
+        handle_task_error(source);
+    }
 
     // Wait for completion WITH TIMEOUT
     {
@@ -198,9 +203,12 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
             });
 
             if (!completed && !shutdown_requested_.load()) {
-                // Timeout occurred
+                // Timeout occurred -- release done_mutex_ before calling
+                // request_shutdown() so it can lock done_mutex_ to prevent
+                // lost notifications on ARM.
                 DFTRACER_UTILS_LOG_ERROR("Pipeline timed out after %lld ms",
                                          global_timeout_.count());
+                lock.unlock();
                 request_shutdown();
                 throw PipelineError(PipelineError::TIMEOUT_ERROR,
                                     "Pipeline execution timed out");
@@ -272,41 +280,21 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
 
     // Check if task failed
     bool task_failed = false;
-    try {
-        // Try to get the future
-        // if it has an exception, this will throw
-        auto future = task->get_future();
-        if (future.wait_for(std::chrono::seconds(0)) ==
-            std::future_status::ready) {
-            try {
-                future.get();
-            } catch (...) {
-                task_failed = true;
-                has_error_ = true;
-                handle_task_error(task);
-                // Note: Don't call request_shutdown() here
-                // let schedule() throw EXECUTION_ERROR instead of INTERRUPTED
-            }
-        }
-    } catch (...) {
+    if (task->result().has_exception()) {
         task_failed = true;
         has_error_ = true;
         handle_task_error(task);
     }
 
     // Don't schedule children if shutdown was requested OR if task failed with
-    // FAIL_FAST policy
+    // FAIL_FAST policy.  handle_task_error() already decremented
+    // pending_count_, so we must NOT decrement again here.
     if (shutdown_requested_.load() ||
         (task_failed && error_policy_ == ErrorPolicy::FAIL_FAST)) {
         DFTRACER_UTILS_LOG_DEBUG(
             "Skipping child scheduling for task '%s' due to shutdown or "
             "FAIL_FAST",
             task->get_name().c_str());
-        // Decrement pending count for this completed task
-        --pending_count_;
-        if (pending_count_ == 0) {
-            done_cv_.notify_all();
-        }
         return;
     }
 
@@ -314,26 +302,25 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
     // if task is destroyed during iteration
     auto children = task->get_children();
 
-    // Schedule children (add to ready queue)
-    // Note: Even if this task failed with CONTINUE/CUSTOM policy, we still
-    // process children normally. When a child becomes ready, we'll check if any
+    // Schedule ready children by submitting directly to executor.
+    // Even if this task failed with CONTINUE/CUSTOM policy, we still
+    // process children normally. When a child becomes ready, we check if any
     // parent failed and skip it at that point.
     for (const auto& child : children) {
         if (!child) {
             continue;  // Skip null children
         }
 
-        child->decrement_pending_parents();
+        // Atomic decrement returns previous value.  The child becomes
+        // ready exactly when prev == 1 (transition from 1 → 0).
+        int prev = child->decrement_pending_parents();
 
-        if (child->is_ready()) {
+        if (prev == 1) {
             // For CONTINUE/CUSTOM policy: skip children if any parent failed
             bool has_failed_parent = false;
-            if (error_policy_ != ErrorPolicy::FAIL_FAST && executor_) {
+            if (error_policy_ != ErrorPolicy::FAIL_FAST) {
                 for (const auto& parent : child->get_parents()) {
-                    auto parent_progress =
-                        executor_->get_task_progress(parent->get_id());
-                    if (parent_progress.has_value() &&
-                        parent_progress->state == "failed") {
+                    if (parent->result().has_exception()) {
                         has_failed_parent = true;
                         break;
                     }
@@ -354,9 +341,34 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
             // Increment pending count for this child
             ++pending_count_;
 
-            // Add to ready queue
-            ready_queue_.enqueue(child);
-            has_ready_tasks_.store(true, std::memory_order_release);
+            // Submit directly to executor -- fully event-driven, no
+            // scheduling thread.
+            try {
+                std::any input = prepare_input_for_task(child);
+
+                // Register with watchdog if available
+                if (watchdog_) {
+                    std::chrono::milliseconds timeout =
+                        child->has_timeout() ? child->get_timeout()
+                                             : default_task_timeout_;
+                    watchdog_->register_task_start(child->get_id(), child,
+                                                   timeout);
+                }
+
+                submit_task_to_executor(child, input);
+
+                DFTRACER_UTILS_LOG_DEBUG(
+                    "Directly submitted child task '%s' to executor",
+                    child->get_name().c_str());
+            } catch (...) {
+                DFTRACER_UTILS_LOG_ERROR(
+                    "Failed to prepare input for child task ID %d "
+                    "('%s')",
+                    child->get_id(), child->get_name().c_str());
+
+                child->set_exception(std::current_exception());
+                handle_task_error(child);
+            }
         }
     }
 
@@ -424,94 +436,6 @@ void Scheduler::reset() {
     has_error_ = false;
 }
 
-bool Scheduler::is_task_completed(TaskIndex task_id) const {
-    // Query executor's task registry for authoritative task state
-    auto progress = executor_->get_task_progress(task_id);
-    if (progress.has_value()) {
-        return progress->state == "completed";
-    }
-    return false;
-}
-
-void Scheduler::schedule_ready_children(std::shared_ptr<Task> completed_task) {
-    for (auto& child : completed_task->get_children()) {
-        // Decrement pending parents count
-        child->decrement_pending_parents();
-
-        // Check if child is now ready
-        if (child->is_ready() && !is_task_completed(child->get_id())) {
-            // For CONTINUE/CUSTOM policy: skip children if any parent failed
-            bool has_failed_parent = false;
-            if (error_policy_ != ErrorPolicy::FAIL_FAST && executor_) {
-                for (const auto& parent : child->get_parents()) {
-                    auto parent_progress =
-                        executor_->get_task_progress(parent->get_id());
-                    if (parent_progress.has_value() &&
-                        parent_progress->state == "failed") {
-                        has_failed_parent = true;
-                        break;
-                    }
-                }
-            }
-
-            if (has_failed_parent) {
-                DFTRACER_UTILS_LOG_WARN(
-                    "Skipping child task ID %d ('%s') because parent failed "
-                    "(CONTINUE policy)",
-                    child->get_id(), child->get_name().c_str());
-
-                // Mark child as failed too
-                child->fulfill_promise_exception(
-                    std::make_exception_ptr(PipelineError(
-                        PipelineError::EXECUTION_ERROR, "Parent task failed")));
-                --pending_count_;
-                continue;
-            }
-
-            DFTRACER_UTILS_LOG_DEBUG(
-                "Child task ID %d ('%s') is ready for execution",
-                child->get_id(), child->get_name().c_str());
-
-            try {
-                // Prepare input: use initial_input if set, otherwise from
-                // parents
-                std::any input;
-                if (child->has_initial_input()) {
-                    input = child->get_initial_input().value();
-                    DFTRACER_UTILS_LOG_DEBUG(
-                        "Using initial input for task ID %d", child->get_id());
-                } else {
-                    input = prepare_input_for_task(child);
-                }
-
-                // Submit to executor
-                submit_task_to_executor(child, input);
-            } catch (...) {
-                // Error during input preparation
-                // (e.g., combiner validation error)
-                DFTRACER_UTILS_LOG_ERROR(
-                    "Failed to prepare input for task ID %d ('%s')",
-                    child->get_id(), child->get_name().c_str());
-
-                // Store the exception in the task's promise
-                child->fulfill_promise_exception(std::current_exception());
-
-                // Handle the error (calls custom handler, checks error policy)
-                handle_task_error(child);
-            }
-        }
-    }
-}
-
-bool Scheduler::all_parents_completed(std::shared_ptr<Task> task) const {
-    for (const auto& parent : task->get_parents()) {
-        if (!is_task_completed(parent->get_id())) {
-            return false;
-        }
-    }
-    return true;
-}
-
 std::any Scheduler::prepare_input_for_task(std::shared_ptr<Task> task) {
     const auto& parents = task->get_parents();
 
@@ -525,8 +449,11 @@ std::any Scheduler::prepare_input_for_task(std::shared_ptr<Task> task) {
 
     if (parents.size() == 1 && !task->has_combiner()) {
         // Single parent without combiner
-        auto future = parents[0]->get_future();
-        return future.get();
+        // Parent is guaranteed complete (child only processed when all
+        // parents done). Use get_ready() -- non-blocking.
+        auto value = parents[0]->result().get_ready();
+        parents[0]->result().release_reader();
+        return value;
     }
 
     // Single parent with combiner OR multiple parents
@@ -535,8 +462,8 @@ std::any Scheduler::prepare_input_for_task(std::shared_ptr<Task> task) {
         std::vector<std::any> parent_outputs;
         parent_outputs.reserve(parents.size());
         for (const auto& parent : parents) {
-            auto future = parent->get_future();
-            parent_outputs.push_back(future.get());
+            parent_outputs.push_back(parent->result().get_ready());
+            parent->result().release_reader();
         }
         try {
             return task->apply_combiner(parent_outputs);
@@ -563,8 +490,8 @@ std::any Scheduler::prepare_input_for_task(std::shared_ptr<Task> task) {
     std::vector<std::any> parent_outputs;
     parent_outputs.reserve(parents.size());
     for (const auto& parent : parents) {
-        auto future = parent->get_future();
-        parent_outputs.push_back(future.get());
+        parent_outputs.push_back(parent->result().get_ready());
+        parent->result().release_reader();
     }
 
     // Return the vector - wrap_function will unpack it into the typed tuple
@@ -576,32 +503,21 @@ void Scheduler::submit_task_to_executor(std::shared_ptr<Task> task,
     DFTRACER_UTILS_LOG_DEBUG("Submitting task ID %ld ('%s') to executor",
                              task->get_id(), task->get_name().c_str());
 
-    // @Note: pending_count_ is incremented when task is added to ready queue,
+    // @Note: pending_count_ is incremented before this call,
     // not here, to avoid race condition with wait predicate
 
-    // Create task item
     auto input_ptr = std::make_shared<std::any>(std::move(input));
-    TaskItem item{task, input_ptr};
 
     // Determine parent task ID for tracking
-    // For dynamic tasks, we get the parent from the current context
-    // For regular pipeline tasks, the parents are tracked differently
     TaskIndex parent_id = -1;
-
-    // Check if this is a dynamic submission (called from TaskContext)
-    // The parent task ID would be available from the current task context
-    // We can get it from the thread-local executor context if we're in a task
     auto* worker_context =
         static_cast<Executor::WorkerContext*>(get_current_worker_context());
     if (worker_context) {
         parent_id = worker_context->current_task_id.load();
     }
 
-    // Use the new submit_with_context for better tracking
-    executor_->submit_with_context(item, parent_id);
-
-    // Track total scheduled
-    ++total_scheduled_;
+    // Submit via Coro-based path
+    executor_->submit_task(task, input_ptr, parent_id);
 }
 
 size_t Scheduler::count_reachable_tasks(std::shared_ptr<Task> source) {
@@ -664,13 +580,7 @@ void Scheduler::handle_task_error(std::shared_ptr<Task> task) {
     // Call custom error handler if provided
     if (error_handler_) {
         try {
-            auto future = task->get_future();
-            std::exception_ptr ex = nullptr;
-            try {
-                future.get();
-            } catch (...) {
-                ex = std::current_exception();
-            }
+            auto ex = task->result().get_exception();
             error_handler_(task, ex);
         } catch (...) {
             DFTRACER_UTILS_LOG_ERROR("%s", "Error handler threw exception");
@@ -756,15 +666,13 @@ void Scheduler::skip_task_and_descendants(std::shared_ptr<Task> task) {
         return;
     }
 
-    // Check if already processed using executor's registry
-    auto progress = executor_->get_task_progress(task->get_id());
-    if (progress.has_value() &&
-        (progress->state == "completed" || progress->state == "failed")) {
+    // Check if already processed -- direct Task check avoids registry lock
+    if (task->is_completed()) {
         return;  // Already handled
     }
 
-    // Fulfill promise with exception
-    task->fulfill_promise_exception(std::make_exception_ptr(
+    // Set exception on skipped task
+    task->set_exception(std::make_exception_ptr(
         PipelineError(PipelineError::EXECUTION_ERROR, "Parent task failed")));
 
     DFTRACER_UTILS_LOG_DEBUG("Skipped task ID %d ('%s') due to failed parent",
@@ -780,120 +688,6 @@ void Scheduler::skip_task_and_descendants(std::shared_ptr<Task> task) {
     }
 }
 
-void Scheduler::start_scheduling_thread() {
-    if (scheduling_running_.load()) {
-        return;
-    }
-
-    scheduling_running_ = true;
-
-    // Create multiple scheduling threads
-    scheduling_threads_.reserve(num_scheduling_threads_);
-    for (std::size_t i = 0; i < num_scheduling_threads_; ++i) {
-        scheduling_threads_.emplace_back(&Scheduler::scheduling_loop, this);
-    }
-
-    DFTRACER_UTILS_LOG_DEBUG("Started %zu scheduling threads",
-                             num_scheduling_threads_);
-}
-
-void Scheduler::stop_scheduling_thread() {
-    if (!scheduling_running_.load()) {
-        return;
-    }
-
-    scheduling_running_ = false;
-
-    // Join all scheduling threads
-    for (auto& thread : scheduling_threads_) {
-        if (thread.joinable()) {
-            thread.join();
-        }
-    }
-    scheduling_threads_.clear();
-
-    DFTRACER_UTILS_LOG_DEBUG("Stopped %zu scheduling threads",
-                             num_scheduling_threads_);
-}
-
-void Scheduler::scheduling_loop() {
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Scheduling loop started");
-
-    while (scheduling_running_.load()) {
-        if (!has_ready_tasks_.load(std::memory_order_acquire)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
-        }
-
-        if (!scheduling_running_.load() || shutdown_requested_.load()) {
-            break;
-        }
-
-        std::shared_ptr<Task> task;
-        while (ready_queue_.try_dequeue(task)) {
-            process_ready_task(task);
-        }
-
-        // Only clear the flag if queue is actually empty after processing.
-        // Use compare_exchange to avoid overwriting a concurrent set to true.
-        // If someone set it to true while we were processing, we'll see it
-        // on the next iteration.
-        bool expected = true;
-        if (!ready_queue_.try_dequeue(task)) {
-            // Queue is empty, try to clear the flag
-            has_ready_tasks_.compare_exchange_strong(expected, false,
-                                                     std::memory_order_acq_rel);
-        } else {
-            // Found another task, process it
-            process_ready_task(task);
-        }
-    }
-
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Scheduling loop ended");
-}
-
-void Scheduler::process_ready_task(std::shared_ptr<Task> task) {
-    if (!task) {
-        return;
-    }
-
-    // Check if all parents completed
-    if (!all_parents_completed(task)) {
-        return;  // Not ready yet
-    }
-
-    try {
-        // Prepare input from parents
-        std::any input = prepare_input_for_task(task);
-
-        // Register with watchdog if available
-        if (watchdog_) {
-            std::chrono::milliseconds timeout = task->has_timeout()
-                                                    ? task->get_timeout()
-                                                    : default_task_timeout_;
-
-            watchdog_->register_task_start(task->get_id(), task, timeout);
-        }
-
-        // Submit to executor
-        submit_task_to_executor(task, input);
-
-        DFTRACER_UTILS_LOG_DEBUG("Scheduler submitted task '%s' to executor",
-                                 task->get_name().c_str());
-    } catch (...) {
-        // Error during input preparation (e.g., combiner validation error)
-        DFTRACER_UTILS_LOG_ERROR(
-            "Failed to prepare input for task ID %d ('%s')", task->get_id(),
-            task->get_name().c_str());
-
-        // Store the exception in the task's promise
-        task->fulfill_promise_exception(std::current_exception());
-
-        // Handle the error (calls custom handler, checks error policy)
-        handle_task_error(task);
-    }
-}
-
 void Scheduler::request_shutdown() {
     if (shutdown_requested_.load()) {
         return;
@@ -905,7 +699,12 @@ void Scheduler::request_shutdown() {
     // Request executor shutdown
     executor_->request_shutdown();
 
-    // Wake up waiting threads
+    // Wake up waiting thread -- lock-then-unlock done_mutex_ before
+    // notifying to prevent lost notifications on ARM where release/acquire
+    // on separate variables doesn't provide total ordering.
+    {
+        std::lock_guard<std::mutex> lock(done_mutex_);
+    }
     done_cv_.notify_all();
 }
 
@@ -923,82 +722,19 @@ void Scheduler::set_default_task_timeout(std::chrono::milliseconds timeout) {
     }
 }
 
-SchedulerMetrics Scheduler::get_metrics() const {
-    SchedulerMetrics metrics;
-
-    // Get current time
-    auto now = std::chrono::steady_clock::now();
-
-    // Scheduling performance
-    metrics.ready_queue_depth = ready_queue_.size_approx();
-    metrics.total_scheduled = total_scheduled_.load();
-
-    // Count active scheduling threads
-    metrics.scheduling_threads_active = 0;
-    if (scheduling_running_.load()) {
-        // All scheduling threads are active when running
-        metrics.scheduling_threads_active = num_scheduling_threads_;
-    }
-
-    // Calculate average scheduling latency (simplified for now)
-    // TODO: Track actual latencies per task
-    metrics.avg_scheduling_latency_ms = 0.0;
-
-    // Pipeline state
-    metrics.total_pipeline_tasks = total_tasks_.load();
-    metrics.pending_tasks = pending_count_.load();
-
-    // Calculate elapsed time
-    if (running_.load() &&
-        execution_start_time_.time_since_epoch().count() > 0) {
-        metrics.pipeline_elapsed_time_ms =
-            std::chrono::duration<double, std::milli>(now -
-                                                      execution_start_time_)
-                .count();
-    } else {
-        metrics.pipeline_elapsed_time_ms = 0.0;
-    }
-
-    // Error tracking
-    if (executor_) {
-        auto executor_progress = executor_->get_progress();
-        metrics.recent_failures = executor_progress.recent_errors;
-    }
-
-    // @todo: Priority distribution (future enhancement)
-    // For now, all tasks are NORMAL priority
-    metrics.tasks_by_priority[TaskPriority::NORMAL] =
-        metrics.total_pipeline_tasks;
-
-    // Timing
-    metrics.start_time = execution_start_time_;
-    metrics.last_update = now;
-
-    return metrics;
-}
-
-ExecutorProgress Scheduler::get_executor_progress() const {
-    if (executor_) {
-        return executor_->get_progress();
-    }
-    return ExecutorProgress{};
-}
-
 // ============================================================================
 // Coroutine Support - Completion Callbacks
 // ============================================================================
 
 void Scheduler::register_task_completion_callback(
     TaskIndex task_id, std::function<void()> callback) {
-    // OPTIMIZED: Uses ShardedMutex for minimal contention
-    // Only locks the specific shard for this task_id
     completion_callbacks_.with_shard(task_id, [&](CallbackMap& callbacks) {
         callbacks[task_id].push_back(std::move(callback));
     });
 }
 
 void Scheduler::invoke_completion_callbacks(TaskIndex task_id) {
-    // OPTIMIZED: Only locks the specific shard for this task_id
+    // Only locks the specific shard for this task_id
     // Other tasks completing concurrently don't block
     completion_callbacks_.with_shard(task_id, [&](CallbackMap& callbacks) {
         if (auto it = callbacks.find(task_id); it != callbacks.end()) {

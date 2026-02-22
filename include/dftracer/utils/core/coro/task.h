@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_CORE_CORO_TASK_H
 
 #include <dftracer/utils/core/common/typedefs.h>
+#include <dftracer/utils/core/coro/yield.h>
 
 #include <atomic>
 #include <coroutine>
@@ -19,7 +20,7 @@ class Executor;
 namespace dftracer::utils::coro {
 
 struct PromiseBase {
-    bool awaiting_async_{false};
+    std::atomic<bool> awaiting_async_{false};
     std::coroutine_handle<> continuation_{nullptr};
     TaskIndex awaited_task_id_{-1};
     Scheduler* scheduler_{nullptr};
@@ -87,10 +88,17 @@ class CoroTask {
 
         void unhandled_exception() { exception_ = std::current_exception(); }
 
-        // gcc11_bandaid: https://stackoverflow.com/questions/67860049
+        // Pass YieldAwaitable through unmodified so it is not
+        // double-wrapped by YieldCheckAwaitable.
+        coro::YieldAwaitable await_transform(coro::YieldAwaitable y) noexcept {
+            return y;
+        }
+
+        // Wrap every other awaitable in a timeslice check.
         template <typename U>
-        U&& await_transform(U&& awaitable) noexcept {
-            return static_cast<U&&>(awaitable);
+        coro::detail::YieldCheckAwaitable<U&&> await_transform(
+            U&& awaitable) noexcept {
+            return {static_cast<U&&>(awaitable)};
         }
     };
 
@@ -228,7 +236,8 @@ class CoroTask {
      * If true, executor should NOT drive it synchronously
      */
     bool is_awaiting_async() const noexcept {
-        return coro_handle_ && coro_handle_.promise().awaiting_async_;
+        return coro_handle_ && coro_handle_.promise().awaiting_async_.load(
+                                   std::memory_order_acquire);
     }
 
     /**
@@ -236,7 +245,8 @@ class CoroTask {
      */
     void set_awaiting_async(bool value) noexcept {
         if (coro_handle_) {
-            coro_handle_.promise().awaiting_async_ = value;
+            coro_handle_.promise().awaiting_async_.store(
+                value, std::memory_order_release);
         }
     }
 
@@ -344,7 +354,7 @@ class CoroTask {
      * @return CoroTask<std::tuple<T, U>> with both results
      *
      * Note: In the current synchronous execution model, these run sequentially.
-     * For true parallel execution, use TaskContext::spawn().
+     * For true parallel execution, use CoroScope::spawn().
      *
      * Usage:
      * @code
@@ -424,10 +434,17 @@ class CoroTask<void> {
 
         void unhandled_exception() { exception_ = std::current_exception(); }
 
-        // gcc11_bandaid: https://stackoverflow.com/questions/67860049
+        // Pass YieldAwaitable through unmodified so it is not
+        // double-wrapped by YieldCheckAwaitable.
+        coro::YieldAwaitable await_transform(coro::YieldAwaitable y) noexcept {
+            return y;
+        }
+
+        // Wrap every other awaitable in a timeslice check.
         template <typename U>
-        U&& await_transform(U&& awaitable) noexcept {
-            return static_cast<U&&>(awaitable);
+        coro::detail::YieldCheckAwaitable<U&&> await_transform(
+            U&& awaitable) noexcept {
+            return {static_cast<U&&>(awaitable)};
         }
     };
 
@@ -518,7 +535,8 @@ class CoroTask<void> {
      * If true, executor should NOT drive it synchronously
      */
     bool is_awaiting_async() const noexcept {
-        return coro_handle_ && coro_handle_.promise().awaiting_async_;
+        return coro_handle_ && coro_handle_.promise().awaiting_async_.load(
+                                   std::memory_order_acquire);
     }
 
     /**
@@ -526,7 +544,8 @@ class CoroTask<void> {
      */
     void set_awaiting_async(bool value) noexcept {
         if (coro_handle_) {
-            coro_handle_.promise().awaiting_async_ = value;
+            coro_handle_.promise().awaiting_async_.store(
+                value, std::memory_order_release);
         }
     }
 
@@ -626,7 +645,7 @@ class CoroTask<void> {
      * @return CoroTask<U> with result from second task
      *
      * Note: Since both tasks are void, we return the result of the second task.
-     * For true parallel execution, use TaskContext::spawn().
+     * For true parallel execution, use CoroScope::spawn().
      *
      * Usage:
      * @code

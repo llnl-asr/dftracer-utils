@@ -120,7 +120,7 @@ StatisticsQueryOutput StatisticsQueryUtility::process(
             break;
 
         case StatisticsQueryType::DETAILED:
-            // Detailed queries bypass StatisticsQueryUtility entirely —
+            // Detailed queries bypass StatisticsQueryUtility entirely --
             // they use ChunkDetailScannerUtility for on-demand chunk scanning.
             break;
     }

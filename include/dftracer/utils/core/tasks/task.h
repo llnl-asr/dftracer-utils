@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/type_name.h>
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/tasks/task_result.h>
 #include <dftracer/utils/core/tasks/task_traits.h>
 
 #include <any>
@@ -11,7 +12,6 @@
 #include <chrono>
 #include <exception>
 #include <functional>
-#include <future>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -27,7 +27,7 @@
 
 namespace dftracer::utils {
 
-class TaskContext;
+class CoroScope;
 class Task;
 
 // Forward declaration for use in template methods
@@ -39,7 +39,7 @@ std::shared_ptr<Task> make_task(Func&& func, std::string name = "");
  *
  * Features:
  * - Fluent API for building DAG (.depends_on())
- * - Owns promise/future for result retrieval
+ * - Owns TaskResult for lightweight result retrieval
  * - Knows parents and children (DAG structure)
  * - Immutable after construction (blueprint pattern)
  * - Type validation during edge creation
@@ -50,8 +50,7 @@ class Task : public std::enable_shared_from_this<Task> {
     std::string name_;            // User-provided name (or empty)
     std::string type_signature_;  // Auto-generated type representation
 
-    std::function<coro::CoroTask<std::any>(TaskContext&, const std::any&)>
-        func_;
+    std::function<coro::CoroTask<std::any>(CoroScope&, const std::any&)> func_;
 
     std::type_index input_type_;
     std::type_index output_type_;
@@ -62,15 +61,11 @@ class Task : public std::enable_shared_from_this<Task> {
     std::atomic<int> pending_parents_count_{0};
 
     // Result management
-    std::shared_ptr<std::promise<std::any>> promise_;
-    std::shared_future<std::any> future_;
+    TaskResult result_;
 
     // Optional combiner for multiple parents
     std::function<std::any(const std::vector<std::any>&)> input_combiner_;
     bool has_custom_combiner_{false};
-
-    // Execution state
-    std::atomic<bool> completed_{false};
 
     // Optional initial input (for tasks without dependencies)
     std::optional<std::any> initial_input_;
@@ -80,16 +75,14 @@ class Task : public std::enable_shared_from_this<Task> {
 
    public:
     /**
-     * Constructor with function that takes input and TaskContext
+     * Constructor with function that takes input and CoroScope
      */
     template <typename Func>
     explicit Task(Func&& func, std::string name = "")
         : name_(std::move(name)),
           func_(wrap_function(std::forward<Func>(func))),
           input_type_(deduce_input_type<Func>()),
-          output_type_(deduce_output_type<Func>()),
-          promise_(std::make_shared<std::promise<std::any>>()),
-          future_(promise_->get_future().share()) {
+          output_type_(deduce_output_type<Func>()) {
         type_signature_ = generate_type_signature();
     }
 
@@ -187,28 +180,36 @@ class Task : public std::enable_shared_from_this<Task> {
     TaskIndex get_id() const { return reinterpret_cast<TaskIndex>(this); }
 
     /**
-     * Get future for this task's result
-     */
-    std::shared_future<std::any> get_future() const { return future_; }
-
-    /**
      * Get task result with automatic type casting
      * @tparam T The expected result type
      * @return The task result cast to type T
      * @throws std::bad_any_cast if the result cannot be cast to T
-     * @throws std::future_error if the task hasn't completed or threw an
-     * exception
      */
     template <typename T>
     T get() const {
-        return std::any_cast<T>(future_.get());
+        return std::any_cast<T>(result_.get());
     }
 
     /**
      * Wait for task to complete without retrieving the result
-     * This is useful for void tasks where you just want to wait for completion
+     * @param timeout Timeout duration (0 = wait forever)
+     * @return true if completed, false if timed out
      */
-    void wait() const { future_.wait(); }
+    bool wait(std::chrono::milliseconds timeout = std::chrono::milliseconds{
+                  0}) const {
+        return result_.wait(timeout);
+    }
+
+    /**
+     * Access the underlying TaskResult
+     */
+    const TaskResult& result() const { return result_; }
+    TaskResult& result() { return result_; }
+
+    /**
+     * Coroutine-friendly wait -- co_await task->when_ready()
+     */
+    TaskResult::WhenReadyAwaitable when_ready() { return result_.when_ready(); }
 
     /**
      * Get parent tasks (returns a copy for thread safety)
@@ -230,7 +231,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Check if task has completed
      */
-    bool is_completed() const { return completed_.load(); }
+    bool is_completed() const { return result_.is_ready(); }
 
     /**
      * Get input type
@@ -326,11 +327,11 @@ class Task : public std::enable_shared_from_this<Task> {
      *
      * Usage:
      * @code
-     * auto task1 = make_task([](TaskContext& ctx) -> CoroTask<int> {
+     * auto task1 = make_task([](CoroScope& ctx) -> CoroTask<int> {
      *     co_return 42;
      * });
      *
-     * auto task2 = task1->then([](TaskContext& ctx, int x) ->
+     * auto task2 = task1->then([](CoroScope& ctx, int x) ->
      * CoroTask<std::string> { co_return std::to_string(x * 2);
      * });
      * @endcode
@@ -354,11 +355,11 @@ class Task : public std::enable_shared_from_this<Task> {
      * Usage:
      * @code
      * auto pipeline = task1
-     *     ->tap([](TaskContext& ctx, int x) -> CoroTask<void> {
+     *     ->tap([](CoroScope& ctx, int x) -> CoroTask<void> {
      *         std::cout << "Value: " << x << "\n";
      *         co_return;
      *     }, "log")
-     *     ->then([](TaskContext& ctx, int x) -> CoroTask<int> {
+     *     ->then([](CoroScope& ctx, int x) -> CoroTask<int> {
      *         co_return x * 2;
      *     });
      * @endcode
@@ -370,7 +371,7 @@ class Task : public std::enable_shared_from_this<Task> {
         using TapInputType = typename Traits::input_type;
 
         auto wrapper = [captured_func = std::forward<Func>(func)](
-                           TaskContext& ctx,
+                           CoroScope& ctx,
                            TapInputType input) -> coro::CoroTask<TapInputType> {
             if constexpr (std::is_same_v<TapInputType, std::any>) {
                 co_await std::invoke(captured_func, ctx, input);
@@ -410,7 +411,7 @@ class Task : public std::enable_shared_from_this<Task> {
      *
      * Usage:
      * @code
-     * auto logger = make_task([](TaskContext& ctx, const std::any& x) ->
+     * auto logger = make_task([](CoroScope& ctx, const std::any& x) ->
      * CoroTask<void> { std::cout << "Value: " << std::any_cast<int>(x) << "\n";
      *     co_return;
      * });
@@ -426,8 +427,7 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Execute task function with given input
      */
-    coro::CoroTask<std::any> execute(TaskContext& context,
-                                     const std::any& input);
+    coro::CoroTask<std::any> execute(CoroScope& context, const std::any& input);
 
     /**
      * Apply custom combiner to parent outputs
@@ -435,10 +435,12 @@ class Task : public std::enable_shared_from_this<Task> {
     std::any apply_combiner(const std::vector<std::any>& inputs) const;
 
     /**
-     * Decrement pending parents count
+     * Decrement pending parents count and return previous value.
+     * Caller should check prev == 1 for the 0-transition (task became ready).
      */
-    void decrement_pending_parents() { --pending_parents_count_; }
-
+    int decrement_pending_parents() {
+        return pending_parents_count_.fetch_sub(1, std::memory_order_acq_rel);
+    }
     /**
      * Initialize pending parents count
      */
@@ -458,14 +460,14 @@ class Task : public std::enable_shared_from_this<Task> {
     bool validate_connection(std::type_index from, std::type_index to) const;
 
     /**
-     * Fulfill promise with result (called by Executor)
+     * Set result value (called by Executor on completion)
      */
-    void fulfill_promise(std::any result);
+    void set_result(std::any result);
 
     /**
-     * Fulfill promise with exception (called by Executor)
+     * Set exception (called by Executor on failure)
      */
-    void fulfill_promise_exception(std::exception_ptr ex);
+    void set_exception(std::exception_ptr ex);
 
     /**
      * Wrap different function signatures to common signature
@@ -473,7 +475,7 @@ class Task : public std::enable_shared_from_this<Task> {
      * ⭐ Returns function that produces CoroTask<std::any>
      */
     template <typename Func>
-    std::function<coro::CoroTask<std::any>(TaskContext&, const std::any&)>
+    std::function<coro::CoroTask<std::any>(CoroScope&, const std::any&)>
     wrap_function(Func&& func);
 
     /**
@@ -563,7 +565,7 @@ std::shared_ptr<Task> make_task(Func&& func, std::string name) {
  *
  * Usage:
  * @code
- * auto pipeline = task1 > [](TaskContext& ctx, int x) -> CoroTask<std::string>
+ * auto pipeline = task1 > [](CoroScope& ctx, int x) -> CoroTask<std::string>
  * { co_return std::to_string(x * 2);
  * };
  * @endcode
@@ -585,9 +587,9 @@ std::shared_ptr<Task> operator>(std::shared_ptr<Task> task, Func&& func) {
  *
  * Usage:
  * @code
- * auto pipeline = [](TaskContext& ctx, int x) -> CoroTask<std::string> {
+ * auto pipeline = [](CoroScope& ctx, int x) -> CoroTask<std::string> {
  *     co_return std::to_string(x * 2);
- * } < make_task([](TaskContext& ctx) -> CoroTask<int> {
+ * } < make_task([](CoroScope& ctx) -> CoroTask<int> {
  *     co_return 42;
  * });
  * @endcode
@@ -636,7 +638,7 @@ inline std::shared_ptr<Task> operator^(std::shared_ptr<Task> source,
 }  // namespace dftracer::utils
 
 // Include template implementations
-#include <dftracer/utils/core/tasks/task_future_impl.h>
+
 #include <dftracer/utils/core/tasks/task_impl.h>
 
 #endif  // DFTRACER_UTILS_CORE_TASKS_TASK_H

@@ -577,7 +577,7 @@ int main(int argc, char** argv) {
     std::vector<std::shared_ptr<Task>> rank_tasks;
     for (int rank = 0; rank < num_ranks; ++rank) {
         auto task = make_task(
-            [&, rank]([[maybe_unused]] TaskContext& ctx)
+            [&, rank]([[maybe_unused]] CoroScope& ctx)
                 -> coro::CoroTask<std::size_t> {
                 const std::string& path = generated_files[rank];
                 TraceWriter writer(path);

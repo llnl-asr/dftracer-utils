@@ -6,9 +6,10 @@
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <doctest/doctest.h>
-#include <unistd.h>
 
 #include <string>
+
+#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft::views;
@@ -89,7 +90,8 @@ static void populate_test_bidx(const std::string& bidx_path,
 TEST_SUITE("ViewBuilderUtility") {
     TEST_CASE("ViewBuilder - IO view filters to POSIX chunks") {
         std::string test_dir =
-            "/tmp/test_view_builder_io_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_view_builder_io")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -124,7 +126,8 @@ TEST_SUITE("ViewBuilderUtility") {
 
     TEST_CASE("ViewBuilder - Compute view filters to compute chunks") {
         std::string test_dir =
-            "/tmp/test_view_builder_compute_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_view_builder_compute")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -153,7 +156,8 @@ TEST_SUITE("ViewBuilderUtility") {
 
     TEST_CASE("ViewBuilder - File-level skip for absent values") {
         std::string test_dir =
-            "/tmp/test_view_builder_skip_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_view_builder_skip")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -186,7 +190,8 @@ TEST_SUITE("ViewBuilderUtility") {
 
     TEST_CASE("ViewBuilder - No bloom predicates returns all chunks") {
         std::string test_dir =
-            "/tmp/test_view_builder_nobl_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_view_builder_nobl")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";
@@ -242,7 +247,7 @@ TEST_SUITE("ViewBuilderUtility") {
     }
 
     TEST_CASE("ViewBuilder - Byte range computation") {
-        // No bidx so all chunks are returned — verify byte ranges
+        // No bidx so all chunks are returned -- verify byte ranges
         ViewDefinition view;
         view.with_name("byte_range_test");
 
@@ -297,7 +302,8 @@ TEST_SUITE("ViewBuilderUtility") {
 
     TEST_CASE("ViewBuilder - Dimension alias resolution") {
         std::string test_dir =
-            "/tmp/test_view_builder_alias_" + std::to_string(getpid());
+            dft_utils_test::make_unique_test_path("test_view_builder_alias")
+                .string();
         fs::create_directories(test_dir);
 
         std::string bidx_path = test_dir + "/test.pfw.gz.bidx";

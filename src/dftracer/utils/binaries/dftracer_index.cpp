@@ -3,9 +3,8 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/tasks/task_context.h>
-#include <dftracer/utils/core/tasks/task_scope.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.h>
@@ -68,11 +67,6 @@ int main(int argc, char** argv) {
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
 
-    program.add_argument("--scheduler-threads")
-        .help("Number of scheduler threads (default: 1)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(1));
-
     program.add_argument("--index-dir")
         .help("Directory to store index files (default: same as data files)")
         .default_value<std::string>("");
@@ -114,8 +108,6 @@ int main(int argc, char** argv) {
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    std::size_t scheduler_threads =
-        program.get<std::size_t>("--scheduler-threads");
     std::string index_dir = program.get<std::string>("--index-dir");
     std::size_t expected_entries =
         program.get<std::size_t>("--expected-entries");
@@ -194,8 +186,6 @@ int main(int argc, char** argv) {
     auto pipeline_config = PipelineConfig()
                                .with_name("DFTracer Bloom Indexer")
                                .with_compute_threads(executor_threads)
-                               .with_io_threads(executor_threads)
-                               .with_scheduler_threads(scheduler_threads)
                                .with_watchdog(false);
 
     Pipeline pipeline(pipeline_config);
@@ -217,13 +207,22 @@ int main(int argc, char** argv) {
     build_template.dimensions = all_dimensions;
 
     auto streaming_task = make_task(
-        [&](TaskContext& ctx) -> coro::CoroTask<void> {
-            co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+        [&](CoroScope& ctx) -> coro::CoroTask<void> {
+            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+                auto* total_events_ptr = &total_events;
+                auto* total_checkpoints_ptr = &total_checkpoints_processed;
+                auto* total_processed_ptr = &total_files_processed;
+                auto* total_skipped_ptr = &total_files_skipped;
                 for (std::size_t i = 0; i < input_files.size(); ++i) {
-                    scope.spawn([&,
-                                 i](TaskContext& fctx) -> coro::CoroTask<void> {
+                    const auto file_path = input_files[i];
+                    scope.spawn([build_template, file_path, build_manifest,
+                                 index_dir, checkpoint_size, batch_size_mb,
+                                 force_rebuild, total_events_ptr,
+                                 total_checkpoints_ptr, total_processed_ptr,
+                                 total_skipped_ptr](
+                                    CoroScope& fctx) -> coro::CoroTask<void> {
                         BloomIndexBuildInput build_input = build_template;
-                        build_input.file_path = input_files[i];
+                        build_input.file_path = file_path;
 
                         auto utility =
                             std::make_shared<BloomIndexBuilderUtility>();
@@ -239,19 +238,18 @@ int main(int argc, char** argv) {
                             executor.execute_with_context(fctx, build_input);
 
                         if (result.was_skipped) {
-                            total_files_skipped++;
+                            (*total_skipped_ptr)++;
                         } else if (result.success) {
-                            total_files_processed++;
-                            total_events += result.events_processed;
-                            total_checkpoints_processed +=
-                                result.chunks_processed;
+                            (*total_processed_ptr)++;
+                            (*total_events_ptr) += result.events_processed;
+                            (*total_checkpoints_ptr) += result.chunks_processed;
                         } else {
-                            total_files_skipped++;
+                            (*total_skipped_ptr)++;
                         }
 
                         if (build_manifest) {
                             ManifestIndexBuildInput manifest_input;
-                            manifest_input.file_path = input_files[i];
+                            manifest_input.file_path = file_path;
                             manifest_input.index_dir = index_dir;
                             manifest_input.checkpoint_size = checkpoint_size;
                             manifest_input.batch_size =
@@ -276,7 +274,7 @@ int main(int argc, char** argv) {
                                 DFTRACER_UTILS_LOG_ERROR(
                                     "Manifest index failed "
                                     "for %s: %s",
-                                    input_files[i].c_str(),
+                                    file_path.c_str(),
                                     m_result.error_message.c_str());
                             }
                         }

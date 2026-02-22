@@ -5,7 +5,6 @@
 #include <dftracer/utils/core/tasks/noop_task.h>
 #include <dftracer/utils/core/tasks/task.h>
 
-#include <algorithm>
 #include <any>
 #include <sstream>
 
@@ -25,8 +24,8 @@ Pipeline::Pipeline(const PipelineConfig& config)
 
     DFTRACER_UTILS_LOG_DEBUG(
         "Pipeline '%s' created with config: executor_threads=%zu, "
-        "scheduler_threads=%zu, watchdog=%s",
-        name_.c_str(), config.executor_threads, config.scheduler_threads,
+        "watchdog=%s",
+        name_.c_str(), config.executor_threads,
         config.enable_watchdog ? "enabled" : "disabled");
 }
 
@@ -227,8 +226,7 @@ PipelineOutput Pipeline::execute(const std::any& input) {
     if (destination_) {
         // Single destination
         try {
-            auto future = destination_->get_future();
-            output[destination_->get_id()] = future.get();
+            output[destination_->get_id()] = destination_->result().get();
         } catch (...) {
             // If error policy is FAIL_FAST, rethrow
             // Otherwise (CONTINUE/CUSTOM), skip failed destination
@@ -241,8 +239,7 @@ PipelineOutput Pipeline::execute(const std::any& input) {
         for (const auto& task : all_tasks_) {
             if (task->get_children().empty()) {
                 try {
-                    auto future = task->get_future();
-                    output[task->get_id()] = future.get();
+                    output[task->get_id()] = task->result().get();
                 } catch (...) {
                     // If error policy is FAIL_FAST, rethrow
                     // Otherwise (CONTINUE/CUSTOM), skip failed task

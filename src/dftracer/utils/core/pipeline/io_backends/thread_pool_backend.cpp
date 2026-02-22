@@ -18,6 +18,8 @@ ThreadPoolIOBackend::ThreadPoolIOBackend() {
 ThreadPoolIOBackend::~ThreadPoolIOBackend() {
     // Signal shutdown
     shutdown_requested_ = true;
+    task_wait_cv_.notify_all();
+    completion_wait_cv_.notify_all();
 
     // Join all threads
     for (auto& thread : worker_threads_) {
@@ -31,15 +33,21 @@ void ThreadPoolIOBackend::worker_loop() {
     while (!shutdown_requested_) {
         std::function<void()> task;
 
-        // Try to dequeue a task (non-blocking)
         if (task_queue_.try_dequeue(task)) {
             if (task) {
                 task();
             }
-        } else {
-            // No task available, brief sleep to avoid busy-waiting
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            continue;
         }
+
+        const std::uint64_t observed_signal =
+            task_signal_.load(std::memory_order_acquire);
+        std::unique_lock<std::mutex> lock(task_wait_mutex_);
+        task_wait_cv_.wait(lock, [this, observed_signal] {
+            return shutdown_requested_.load(std::memory_order_acquire) ||
+                   task_signal_.load(std::memory_order_acquire) !=
+                       observed_signal;
+        });
     }
 
     // Process remaining tasks before exiting
@@ -53,6 +61,8 @@ void ThreadPoolIOBackend::worker_loop() {
 
 void ThreadPoolIOBackend::enqueue_task(std::function<void()> task) {
     task_queue_.enqueue(std::move(task));
+    task_signal_.fetch_add(1, std::memory_order_acq_rel);
+    task_wait_cv_.notify_one();
 }
 
 void ThreadPoolIOBackend::complete_operation(std::uint64_t op_id,
@@ -73,6 +83,8 @@ void ThreadPoolIOBackend::complete_operation(std::uint64_t op_id,
     // Add to completed queue
     completed_ops_.enqueue(
         IOCompletion(pending_op.coro_handle, std::move(data), error, op_id));
+    completion_signal_.fetch_add(1, std::memory_order_acq_rel);
+    completion_wait_cv_.notify_one();
 }
 
 std::uint64_t ThreadPoolIOBackend::submit_read(int fd, std::size_t offset,
@@ -140,7 +152,7 @@ std::vector<IOCompletion> ThreadPoolIOBackend::wait_for_completions(
     std::vector<IOCompletion> completions;
     completions.reserve(max_batch);
 
-    auto start_time = std::chrono::steady_clock::now();
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
 
     while (completions.size() < max_batch) {
         IOCompletion completion;
@@ -156,13 +168,23 @@ std::vector<IOCompletion> ThreadPoolIOBackend::wait_for_completions(
             break;
         }
 
-        auto elapsed = std::chrono::steady_clock::now() - start_time;
-        if (elapsed >= timeout) {
+        if (timeout.count() <= 0) {
             break;
         }
 
-        // Brief sleep to avoid busy-waiting
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            break;
+        }
+
+        const std::uint64_t observed_signal =
+            completion_signal_.load(std::memory_order_acquire);
+        std::unique_lock<std::mutex> lock(completion_wait_mutex_);
+        completion_wait_cv_.wait_until(lock, deadline, [this, observed_signal] {
+            return shutdown_requested_.load(std::memory_order_acquire) ||
+                   completion_signal_.load(std::memory_order_acquire) !=
+                       observed_signal;
+        });
     }
 
     return completions;

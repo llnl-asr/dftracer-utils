@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/pipeline/io_backend.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -42,11 +43,17 @@ class ThreadPoolIOBackend : public IOBackend {
     std::vector<std::thread> worker_threads_;
     moodycamel::ConcurrentQueue<std::function<void()>> task_queue_;
     std::atomic<bool> shutdown_requested_{false};
+    std::mutex task_wait_mutex_;
+    std::condition_variable task_wait_cv_;
+    std::atomic<std::uint64_t> task_signal_{0};
 
     std::map<std::uint64_t, ThreadPoolPendingOperation> pending_ops_;
     mutable std::mutex pending_mutex_;
 
     moodycamel::ConcurrentQueue<IOCompletion> completed_ops_;
+    std::mutex completion_wait_mutex_;
+    std::condition_variable completion_wait_cv_;
+    std::atomic<std::uint64_t> completion_signal_{0};
 
     void worker_loop();
     void enqueue_task(std::function<void()> task);

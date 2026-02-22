@@ -138,6 +138,56 @@ TEST_CASE("Channel - Single producer, single consumer") {
     CHECK(sum_produced.load() == sum_consumed.load());
 }
 
+TEST_CASE("Channel - receive waits before first producer registration") {
+    Channel<int> channel(10);
+
+    std::atomic<bool> consumer_entered{false};
+    std::atomic<bool> consumer_done{false};
+    std::atomic<bool> receive_success{false};
+    std::atomic<int> received_value{-1};
+
+    std::thread consumer([&]() {
+        int value = 0;
+        consumer_entered.store(true, std::memory_order_release);
+        bool success = channel.receive(value);
+        receive_success.store(success, std::memory_order_release);
+        received_value.store(value, std::memory_order_release);
+        consumer_done.store(true, std::memory_order_release);
+    });
+
+    while (!consumer_entered.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    CHECK(consumer_done.load(std::memory_order_acquire) == false);
+
+    std::thread producer([&]() {
+        auto guard = channel.producer_guard();
+        CHECK(channel.num_producers() >= 1);
+        channel.send_blocking(123);
+    });
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!consumer_done.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+
+    const bool completed = consumer_done.load(std::memory_order_acquire);
+    if (!completed) {
+        channel.close();
+    }
+
+    producer.join();
+    consumer.join();
+
+    CHECK(completed == true);
+    CHECK(receive_success.load(std::memory_order_acquire) == true);
+    CHECK(received_value.load(std::memory_order_acquire) == 123);
+}
+
 TEST_CASE("Channel - Multiple producers, single consumer") {
     Channel<int> channel(100);
 
@@ -521,6 +571,128 @@ TEST_CASE("Channel - Rapid open/close cycles") {
 
         CHECK(count == 10);
     }
+}
+
+TEST_CASE("Channel - close wakes blocked receive") {
+    Channel<int> channel(10);
+
+    std::atomic<bool> receiver_entered{false};
+    std::atomic<bool> receive_done{false};
+    bool receive_result = true;
+
+    std::thread receiver([&]() {
+        int value = 0;
+        receiver_entered.store(true, std::memory_order_release);
+        receive_result = channel.receive(value);
+        receive_done.store(true, std::memory_order_release);
+    });
+
+    while (!receiver_entered.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    auto t0 = std::chrono::steady_clock::now();
+    channel.close();
+    receiver.join();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+
+    CHECK(receive_result == false);
+    CHECK(receive_done.load(std::memory_order_acquire) == true);
+    CHECK(channel.is_closed() == true);
+    CHECK(elapsed.count() < 50);
+}
+
+TEST_CASE("Channel - last producer release wakes blocked receive") {
+    Channel<int> channel(10);
+
+    auto guard =
+        std::make_unique<Channel<int>::ProducerGuard>(channel.producer_guard());
+
+    std::atomic<bool> receiver_entered{false};
+    bool receive_result = true;
+
+    std::thread receiver([&]() {
+        int value = 0;
+        receiver_entered.store(true, std::memory_order_release);
+        receive_result = channel.receive(value);
+    });
+
+    while (!receiver_entered.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    CHECK(channel.num_producers() == 1);
+
+    auto t0 = std::chrono::steady_clock::now();
+    guard.reset();
+    receiver.join();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+
+    CHECK(receive_result == false);
+    CHECK(channel.num_producers() == 0);
+    CHECK(channel.is_closed() == true);
+    CHECK(elapsed.count() < 50);
+}
+
+TEST_CASE("Channel - bounded send unblocks when consumer drains") {
+    Channel<int> channel(2);
+
+    CHECK(channel.send_blocking(1) == true);
+    CHECK(channel.send_blocking(2) == true);
+    CHECK(channel.full() == true);
+
+    std::atomic<bool> sender_entered{false};
+    std::atomic<bool> send_completed{false};
+    bool send_result = false;
+
+    std::thread sender([&]() {
+        sender_entered.store(true, std::memory_order_release);
+        send_result = channel.send_blocking(3);
+        send_completed.store(true, std::memory_order_release);
+    });
+
+    while (!sender_entered.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    CHECK(send_completed.load(std::memory_order_acquire) == false);
+
+    int value = 0;
+    auto t0 = std::chrono::steady_clock::now();
+    CHECK(channel.receive(value) == true);
+    CHECK(value == 1);
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!send_completed.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+
+    const bool completed = send_completed.load(std::memory_order_acquire);
+    if (!completed) {
+        channel.close();
+    }
+    sender.join();
+
+    CHECK(completed == true);
+    CHECK(send_result == true);
+    CHECK(elapsed.count() < 50);
+
+    CHECK(channel.receive(value) == true);
+    const int first_remaining = value;
+    CHECK(channel.receive(value) == true);
+    const int second_remaining = value;
+    CHECK((first_remaining == 2 || first_remaining == 3));
+    CHECK((second_remaining == 2 || second_remaining == 3));
+    CHECK(first_remaining != second_remaining);
 }
 
 // ============================================================================

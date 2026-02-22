@@ -4,10 +4,11 @@
 #include <blockingconcurrentqueue.h>
 
 #include <atomic>
-#include <chrono>
+#include <condition_variable>
 #include <coroutine>
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 
@@ -64,6 +65,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         /// Register a new producer slot.
         explicit ProducerGuard(Channel* ch) : channel_(ch) {
             if (channel_) {
+                channel_->had_producers_.store(true, std::memory_order_release);
                 channel_->num_producers_.fetch_add(1,
                                                    std::memory_order_relaxed);
             }
@@ -81,6 +83,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                 // Mark closed for consumers only if user hasn't closed already
                 if (!channel_->user_closed_.load(std::memory_order_acquire))
                     channel_->closed_.store(true, std::memory_order_release);
+                channel_->notify_all_waiters();
             }
         }
 
@@ -106,6 +109,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                             channel_->closed_.store(true,
                                                     std::memory_order_release);
                         }
+                        channel_->notify_all_waiters();
                     }
                 }
                 channel_ = other.channel_;
@@ -119,10 +123,26 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     moodycamel::BlockingConcurrentQueue<T> queue_;
 
     std::size_t capacity_;
+    mutable std::mutex state_mutex_;
+    std::condition_variable cv_readable_;
+    std::condition_variable cv_writable_;
     std::atomic<std::size_t> num_producers_{0};
+    std::atomic<bool> had_producers_{false};
     std::atomic<std::size_t> active_sends_{0};
     std::atomic<bool> user_closed_{false};
     std::atomic<bool> closed_{false};
+
+    void notify_all_waiters() {
+        cv_readable_.notify_all();
+        cv_writable_.notify_all();
+    }
+
+    void maybe_notify_terminal() {
+        if (num_producers_.load(std::memory_order_acquire) == 0 &&
+            active_sends_.load(std::memory_order_acquire) == 0) {
+            cv_readable_.notify_all();
+        }
+    }
 
    public:
     /**
@@ -167,6 +187,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      * Pre-register a single producer before the task actually starts
      */
     void register_producer() {
+        had_producers_.store(true, std::memory_order_release);
         num_producers_.fetch_add(1, std::memory_order_release);
     }
 
@@ -175,6 +196,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      */
     void register_producers(std::size_t n) {
         if (n > 0) {
+            had_producers_.store(true, std::memory_order_release);
             num_producers_.fetch_add(n, std::memory_order_release);
         }
     }
@@ -189,6 +211,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             if (!user_closed_.load(std::memory_order_acquire)) {
                 closed_.store(true, std::memory_order_release);
             }
+            notify_all_waiters();
         }
     }
 
@@ -204,16 +227,24 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         active_sends_.fetch_add(1, std::memory_order_acq_rel);
 
         // Wait for space if queue is at capacity
-        while (capacity_ != SIZE_MAX && queue_.size_approx() >= capacity_) {
+        if (capacity_ != SIZE_MAX) {
+            std::unique_lock<std::mutex> lock(state_mutex_);
+            cv_writable_.wait(lock, [this]() {
+                return queue_.size_approx() < capacity_ ||
+                       user_closed_.load(std::memory_order_acquire);
+            });
+
             if (user_closed_.load(std::memory_order_acquire)) {
                 active_sends_.fetch_sub(1, std::memory_order_acq_rel);
+                maybe_notify_terminal();
                 return false;
             }
-            std::this_thread::yield();
         }
 
         queue_.enqueue(std::move(item));
         active_sends_.fetch_sub(1, std::memory_order_acq_rel);
+        cv_readable_.notify_one();
+        maybe_notify_terminal();
         return true;
     }
 
@@ -228,6 +259,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         active_sends_.fetch_add(1, std::memory_order_acq_rel);
         bool ok = queue_.try_enqueue(std::move(item));
         active_sends_.fetch_sub(1, std::memory_order_acq_rel);
+        if (ok) {
+            cv_readable_.notify_one();
+        }
+        maybe_notify_terminal();
         return ok;
     }
 
@@ -240,36 +275,34 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      */
     bool receive(T& item) {
         for (;;) {
-            if (queue_.try_dequeue(item)) return true;
-
-            // Keep waiting while producers exist or sends are still in-flight.
-            // This avoids a race where producer count reaches zero slightly
-            // before the final enqueue becomes visible.
-            if (num_producers_.load(std::memory_order_acquire) > 0 ||
-                active_sends_.load(std::memory_order_acquire) > 0) {
-                if (queue_.wait_dequeue_timed(item,
-                                              std::chrono::milliseconds(1)))
-                    return true;
-                continue;
-            }
-
-            // No producers remain: final drain until we’re sure it’s empty.
-            // Try a few fast attempts and one short timed wait.
-            for (int i = 0; i < 128; ++i) {
-                if (queue_.try_dequeue(item)) return true;
-                std::this_thread::yield();
-            }
-            if (queue_.wait_dequeue_timed(item, std::chrono::microseconds(200)))
+            if (queue_.try_dequeue(item)) {
+                cv_writable_.notify_one();
                 return true;
-
-            // A sender may have become active during the final-drain checks.
-            if (active_sends_.load(std::memory_order_acquire) > 0) {
-                continue;
             }
 
-            // Double-check once more; if still nothing, we’re done.
-            if (!queue_.try_dequeue(item)) return false;
-            return true;
+            std::unique_lock<std::mutex> lock(state_mutex_);
+
+            if (queue_.try_dequeue(item)) {
+                lock.unlock();
+                cv_writable_.notify_one();
+                return true;
+            }
+
+            const bool no_producers =
+                num_producers_.load(std::memory_order_acquire) == 0;
+            const bool had_producers =
+                had_producers_.load(std::memory_order_acquire);
+            const bool no_active_sends =
+                active_sends_.load(std::memory_order_acquire) == 0;
+            const bool user_closed =
+                user_closed_.load(std::memory_order_acquire);
+
+            if ((user_closed || (had_producers && no_producers)) &&
+                no_active_sends) {
+                return false;
+            }
+
+            cv_readable_.wait(lock);
         }
     }
 
@@ -279,7 +312,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      * @param item Output parameter for received item
      * @return true if received, false if queue empty
      */
-    bool try_receive(T& item) { return queue_.try_dequeue(item); }
+    bool try_receive(T& item) {
+        const bool ok = queue_.try_dequeue(item);
+        if (ok) {
+            cv_writable_.notify_one();
+        }
+        return ok;
+    }
 
     /**
      * Close channel
@@ -288,6 +327,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     void close() {
         user_closed_.store(true, std::memory_order_release);
         closed_.store(true, std::memory_order_release);
+        notify_all_waiters();
     }
 
     /**

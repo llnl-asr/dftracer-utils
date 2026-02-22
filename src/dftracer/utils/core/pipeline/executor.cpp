@@ -73,11 +73,7 @@ void Executor::shutdown() {
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Shutting down executor");
     running_ = false;
-
-    // Wake up all workers
-    for (auto& worker : workers_) {
-        worker->cv.notify_all();
-    }
+    wake_all_workers();
 
     // Join all worker threads
     for (auto& worker : workers_) {
@@ -140,9 +136,15 @@ void Executor::worker_thread(WorkerContext* context) {
         // 5. No work available
         else {
             context->is_idle = true;
+            const std::uint64_t observed_signal =
+                work_signal_.load(std::memory_order_acquire);
             std::unique_lock<std::mutex> lock(context->queue_mutex);
-            context->cv.wait_for(lock, std::chrono::milliseconds(10),
-                                 [this] { return !running_.load(); });
+            context->cv.wait(lock, [this, context, observed_signal] {
+                return !running_.load(std::memory_order_acquire) ||
+                       !context->local_queue.empty() ||
+                       work_signal_.load(std::memory_order_acquire) !=
+                           observed_signal;
+            });
         }
     }
 
@@ -408,9 +410,29 @@ void Executor::schedule_coroutine_resumption(std::coroutine_handle<> handle) {
 
     // Enqueue the coroutine handle for resumption by a worker thread
     pending_resumptions_.enqueue(handle);
+    signal_global_work();
+}
 
-    // Optionally wake up one idle worker to process the resumption
-    // For now, workers will pick it up in their next iteration
+void Executor::signal_global_work() {
+    work_signal_.fetch_add(1, std::memory_order_acq_rel);
+    wake_all_workers();
+}
+
+void Executor::wake_one_worker() {
+    const std::size_t worker_count = workers_.size();
+    if (worker_count == 0) {
+        return;
+    }
+
+    const std::size_t worker_index =
+        next_worker_.fetch_add(1, std::memory_order_relaxed) % worker_count;
+    workers_[worker_index]->cv.notify_one();
+}
+
+void Executor::wake_all_workers() {
+    for (auto& worker : workers_) {
+        worker->cv.notify_all();
+    }
 }
 
 // Forward declaration for when_all.h (avoids circular dependency)
@@ -653,6 +675,7 @@ void Executor::submit_with_context(const TaskItem& item,
     if (hint == SubmissionHint::FORCE_SHARED || !worker_context) {
         // Submit to shared queue
         shared_queue_.enqueue(item);
+        signal_global_work();
         update_task_location(item.task->get_id(), TaskInfo::SHARED_QUEUE, -1);
     } else {
         // Submit to local queue of current worker
@@ -660,6 +683,7 @@ void Executor::submit_with_context(const TaskItem& item,
             std::lock_guard<std::mutex> lock(worker_context->queue_mutex);
             worker_context->local_queue.push_back(item);
         }
+        signal_global_work();
         worker_context->cv.notify_one();
         update_task_location(item.task->get_id(), TaskInfo::LOCAL_QUEUE,
                              worker_context->worker_id);

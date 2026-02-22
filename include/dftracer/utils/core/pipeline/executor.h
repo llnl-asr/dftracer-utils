@@ -228,6 +228,7 @@ class Executor {
 
     // Queue for pending coroutine resumptions (for when_all, etc.)
     moodycamel::ConcurrentQueue<std::coroutine_handle<>> pending_resumptions_;
+    std::atomic<std::uint64_t> work_signal_{0};
 
     // I/O executor (optional, created by Pipeline based on config)
     std::unique_ptr<IOExecutor> io_executor_;
@@ -442,6 +443,21 @@ class Executor {
      * Mark activity (task start or completion) for responsiveness tracking
      */
     void mark_activity();
+
+    /**
+     * Signal workers that new global work is available.
+     */
+    void signal_global_work();
+
+    /**
+     * Wake one worker thread.
+     */
+    void wake_one_worker();
+
+    /**
+     * Wake all worker threads.
+     */
+    void wake_all_workers();
 
     template <typename T>
     friend class TaskFuture;

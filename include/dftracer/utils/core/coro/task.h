@@ -19,7 +19,7 @@ class Executor;
 namespace dftracer::utils::coro {
 
 struct PromiseBase {
-    bool awaiting_async_{false};
+    std::atomic<bool> awaiting_async_{false};
     std::coroutine_handle<> continuation_{nullptr};
     TaskIndex awaited_task_id_{-1};
     Scheduler* scheduler_{nullptr};
@@ -228,7 +228,8 @@ class CoroTask {
      * If true, executor should NOT drive it synchronously
      */
     bool is_awaiting_async() const noexcept {
-        return coro_handle_ && coro_handle_.promise().awaiting_async_;
+        return coro_handle_ && coro_handle_.promise().awaiting_async_.load(
+                                   std::memory_order_acquire);
     }
 
     /**
@@ -236,7 +237,8 @@ class CoroTask {
      */
     void set_awaiting_async(bool value) noexcept {
         if (coro_handle_) {
-            coro_handle_.promise().awaiting_async_ = value;
+            coro_handle_.promise().awaiting_async_.store(
+                value, std::memory_order_release);
         }
     }
 
@@ -518,7 +520,8 @@ class CoroTask<void> {
      * If true, executor should NOT drive it synchronously
      */
     bool is_awaiting_async() const noexcept {
-        return coro_handle_ && coro_handle_.promise().awaiting_async_;
+        return coro_handle_ && coro_handle_.promise().awaiting_async_.load(
+                                   std::memory_order_acquire);
     }
 
     /**
@@ -526,7 +529,8 @@ class CoroTask<void> {
      */
     void set_awaiting_async(bool value) noexcept {
         if (coro_handle_) {
-            coro_handle_.promise().awaiting_async_ = value;
+            coro_handle_.promise().awaiting_async_.store(
+                value, std::memory_order_release);
         }
     }
 

@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/coro/resumption_helper.h>
 
 #include <atomic>
+#include <cassert>
 #include <condition_variable>
 #include <coroutine>
 #include <cstddef>
@@ -52,8 +53,6 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     struct ReceiveWaiterNode {
         std::coroutine_handle<> handle;
         std::optional<T>* result{nullptr};
-        bool* local_awaiting_async{nullptr};
-        bool* root_awaiting_async{nullptr};
         dftracer::utils::Executor* executor{nullptr};
         ReceiveWaiterNode* next{nullptr};
     };
@@ -158,7 +157,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
             {
                 std::lock_guard<std::mutex> lock(channel_->state_mutex_);
-                if (channel_->try_receive(item)) {
+                if (channel_->try_receive_locked(item)) {
                     result_ = std::optional<T>(std::move(item));
                     return true;
                 }
@@ -181,9 +180,6 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
             if constexpr (requires(Promise& p) { p.awaiting_async_ = true; }) {
                 h.promise().awaiting_async_ = true;
-                waiter_.local_awaiting_async = &h.promise().awaiting_async_;
-            } else {
-                waiter_.local_awaiting_async = nullptr;
             }
 
             if constexpr (requires(Promise& p) {
@@ -193,38 +189,41 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                 auto* root = h.promise().get_root_promise();
                 if (root) {
                     root->awaiting_async_ = true;
-                    waiter_.root_awaiting_async = &root->awaiting_async_;
                     waiter_.executor = root->get_executor();
                 } else {
-                    waiter_.root_awaiting_async = nullptr;
                     waiter_.executor = nullptr;
                 }
             } else {
-                waiter_.root_awaiting_async = nullptr;
                 waiter_.executor = nullptr;
             }
 
             T item;
             std::lock_guard<std::mutex> lock(channel_->state_mutex_);
 
-            if (channel_->try_receive(item)) {
+            if (channel_->try_receive_locked(item)) {
                 result_ = std::optional<T>(std::move(item));
-                if (waiter_.local_awaiting_async) {
-                    *(waiter_.local_awaiting_async) = false;
-                }
-                if (waiter_.root_awaiting_async) {
-                    *(waiter_.root_awaiting_async) = false;
+                h.promise().awaiting_async_ = false;
+                if constexpr (requires(Promise& p) {
+                                  p.get_root_promise();
+                                  p.get_root_promise()->awaiting_async_ = false;
+                              }) {
+                    if (auto* root = h.promise().get_root_promise()) {
+                        root->awaiting_async_ = false;
+                    }
                 }
                 return false;
             }
 
             if (channel_->is_terminal_locked()) {
                 result_ = std::nullopt;
-                if (waiter_.local_awaiting_async) {
-                    *(waiter_.local_awaiting_async) = false;
-                }
-                if (waiter_.root_awaiting_async) {
-                    *(waiter_.root_awaiting_async) = false;
+                h.promise().awaiting_async_ = false;
+                if constexpr (requires(Promise& p) {
+                                  p.get_root_promise();
+                                  p.get_root_promise()->awaiting_async_ = false;
+                              }) {
+                    if (auto* root = h.promise().get_root_promise()) {
+                        root->awaiting_async_ = false;
+                    }
                 }
                 return false;
             }
@@ -272,6 +271,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     moodycamel::ConcurrentQueue<T> queue_;
 
     std::size_t capacity_;
+    std::size_t available_slots_;
     mutable std::mutex state_mutex_;
     std::condition_variable cv_readable_;
     std::condition_variable cv_writable_;
@@ -299,7 +299,36 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     }
 
     void mark_item_consumed() {
-        pending_items_.fetch_sub(1, std::memory_order_acq_rel);
+        const std::size_t prev =
+            pending_items_.fetch_sub(1, std::memory_order_acq_rel);
+        assert(prev > 0 && "Channel pending_items underflow");
+        (void)prev;
+    }
+
+    void release_slot_if_bounded_locked() {
+        if (capacity_ != SIZE_MAX) {
+            ++available_slots_;
+        }
+    }
+
+    void release_slot_if_bounded() {
+        if (capacity_ == SIZE_MAX) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        release_slot_if_bounded_locked();
+        cv_writable_.notify_one();
+    }
+
+    bool try_receive_locked(T& item) {
+        const bool ok = queue_.try_dequeue(item);
+        if (ok) {
+            mark_item_consumed();
+            release_slot_if_bounded_locked();
+            cv_writable_.notify_one();
+        }
+        return ok;
     }
 
     void enqueue_receive_waiter_locked(ReceiveWaiterNode* node) {
@@ -310,6 +339,14 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             recv_waiters_head_ = node;
         }
         recv_waiters_tail_ = node;
+    }
+
+    void enqueue_receive_waiter_front_locked(ReceiveWaiterNode* node) {
+        node->next = recv_waiters_head_;
+        recv_waiters_head_ = node;
+        if (!recv_waiters_tail_) {
+            recv_waiters_tail_ = node;
+        }
     }
 
     ReceiveWaiterNode* pop_receive_waiter_locked() {
@@ -337,6 +374,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                 if (waiter->result) {
                     if (queue_.try_dequeue(item)) {
                         mark_item_consumed();
+                        release_slot_if_bounded_locked();
                         *(waiter->result) = std::optional<T>(std::move(item));
                     } else {
                         *(waiter->result) = std::nullopt;
@@ -386,7 +424,15 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     void notify_all_waiters() {
         cv_readable_.notify_all();
         cv_writable_.notify_all();
-        wake_all_receive_waiters_terminal();
+
+        bool terminal = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            terminal = is_terminal_locked();
+        }
+        if (terminal) {
+            wake_all_receive_waiters_terminal();
+        }
     }
 
     void maybe_notify_terminal() {
@@ -405,7 +451,8 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      */
     explicit Channel(std::size_t capacity = 0)
         : queue_(capacity == 0 ? 1024 : capacity),
-          capacity_(capacity == 0 ? SIZE_MAX : capacity) {}
+          capacity_(capacity == 0 ? SIZE_MAX : capacity),
+          available_slots_(capacity_ == SIZE_MAX ? SIZE_MAX : capacity_) {}
 
     ~Channel() { close(); }
 
@@ -480,17 +527,16 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         if (user_closed_.load(std::memory_order_acquire)) return false;
         active_sends_.fetch_add(1, std::memory_order_acq_rel);
 
-        if (try_handoff_to_receive_waiter(item)) {
-            active_sends_.fetch_sub(1, std::memory_order_acq_rel);
-            maybe_notify_terminal();
-            return true;
-        }
+        bool reserved_slot = false;
+        std::coroutine_handle<> resume_handle;
+        dftracer::utils::Executor* resume_executor = nullptr;
+        bool enqueued = false;
 
         // Wait for space if queue is at capacity
         if (capacity_ != SIZE_MAX) {
             std::unique_lock<std::mutex> lock(state_mutex_);
             cv_writable_.wait(lock, [this]() {
-                return queue_.size_approx() < capacity_ ||
+                return available_slots_ > 0 ||
                        user_closed_.load(std::memory_order_acquire);
             });
 
@@ -499,12 +545,52 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                 maybe_notify_terminal();
                 return false;
             }
+
+            --available_slots_;
+            reserved_slot = true;
         }
 
-        pending_items_.fetch_add(1, std::memory_order_acq_rel);
-        queue_.enqueue(std::move(item));
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (user_closed_.load(std::memory_order_acquire)) {
+                if (reserved_slot) {
+                    ++available_slots_;
+                }
+                active_sends_.fetch_sub(1, std::memory_order_acq_rel);
+                maybe_notify_terminal();
+                return false;
+            }
+
+            ReceiveWaiterNode* waiter = pop_receive_waiter_locked();
+            if (waiter) {
+                if (waiter->result) {
+                    *(waiter->result) = std::optional<T>(std::move(item));
+                }
+                resume_handle = waiter->handle;
+                resume_executor = waiter->executor;
+                if (reserved_slot) {
+                    ++available_slots_;
+                }
+            } else {
+                queue_.enqueue(std::move(item));
+                pending_items_.fetch_add(1, std::memory_order_acq_rel);
+                enqueued = true;
+            }
+        }
+
         active_sends_.fetch_sub(1, std::memory_order_acq_rel);
-        cv_readable_.notify_one();
+
+        if (resume_handle) {
+            if (resume_executor) {
+                dftracer::utils::schedule_coroutine_resumption_helper(
+                    resume_executor, resume_handle);
+            } else {
+                resume_handle.resume();
+            }
+        } else if (enqueued) {
+            cv_readable_.notify_one();
+        }
+
         maybe_notify_terminal();
         return true;
     }
@@ -519,23 +605,59 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         if (user_closed_.load(std::memory_order_acquire)) return false;
         active_sends_.fetch_add(1, std::memory_order_acq_rel);
 
-        if (try_handoff_to_receive_waiter(item)) {
-            active_sends_.fetch_sub(1, std::memory_order_acq_rel);
-            maybe_notify_terminal();
-            return true;
+        std::coroutine_handle<> resume_handle;
+        dftracer::utils::Executor* resume_executor = nullptr;
+        bool enqueued = false;
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (user_closed_.load(std::memory_order_acquire)) {
+                active_sends_.fetch_sub(1, std::memory_order_acq_rel);
+                maybe_notify_terminal();
+                return false;
+            }
+
+            ReceiveWaiterNode* waiter = pop_receive_waiter_locked();
+            if (waiter) {
+                if (waiter->result) {
+                    *(waiter->result) = std::optional<T>(std::move(item));
+                }
+                resume_handle = waiter->handle;
+                resume_executor = waiter->executor;
+            } else {
+                if (capacity_ != SIZE_MAX) {
+                    if (available_slots_ == 0) {
+                        active_sends_.fetch_sub(1, std::memory_order_acq_rel);
+                        maybe_notify_terminal();
+                        return false;
+                    }
+                    --available_slots_;
+                }
+
+                enqueued = queue_.try_enqueue(std::move(item));
+                if (enqueued) {
+                    pending_items_.fetch_add(1, std::memory_order_acq_rel);
+                } else if (capacity_ != SIZE_MAX) {
+                    ++available_slots_;
+                }
+            }
         }
 
-        pending_items_.fetch_add(1, std::memory_order_acq_rel);
-        bool ok = queue_.try_enqueue(std::move(item));
-        if (!ok) {
-            pending_items_.fetch_sub(1, std::memory_order_acq_rel);
-        }
         active_sends_.fetch_sub(1, std::memory_order_acq_rel);
-        if (ok) {
+
+        if (resume_handle) {
+            if (resume_executor) {
+                dftracer::utils::schedule_coroutine_resumption_helper(
+                    resume_executor, resume_handle);
+            } else {
+                resume_handle.resume();
+            }
+        } else if (enqueued) {
             cv_readable_.notify_one();
         }
+
         maybe_notify_terminal();
-        return ok;
+        return resume_handle || enqueued;
     }
 
     /**
@@ -549,6 +671,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         for (;;) {
             if (queue_.try_dequeue(item)) {
                 mark_item_consumed();
+                release_slot_if_bounded();
                 cv_writable_.notify_one();
                 return true;
             }
@@ -557,6 +680,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
             if (queue_.try_dequeue(item)) {
                 mark_item_consumed();
+                release_slot_if_bounded_locked();
                 lock.unlock();
                 cv_writable_.notify_one();
                 return true;
@@ -595,6 +719,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         const bool ok = queue_.try_dequeue(item);
         if (ok) {
             mark_item_consumed();
+            release_slot_if_bounded();
             cv_writable_.notify_one();
         }
         return ok;

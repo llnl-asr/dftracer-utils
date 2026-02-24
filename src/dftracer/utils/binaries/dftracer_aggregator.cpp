@@ -400,7 +400,11 @@ int main(int argc, char** argv) {
 
                 // File producers: one per input file
                 for (const auto& file_path : input_files) {
-                    scope.spawn([&, file_path](TaskContext& /*fctx*/)
+                    auto* global_chunk_idx_ptr = &global_chunk_idx;
+                    scope.spawn([file_path, chunk_chan, index_dir,
+                                 checkpoint_size, force_rebuild, agg_config,
+                                 chunk_size_mb, batch_size_mb,
+                                 global_chunk_idx_ptr](TaskContext& /*fctx*/)
                                     -> coro::CoroTask<void> {
                         [[maybe_unused]] auto producer_guard =
                             chunk_chan->adopt_producer();
@@ -443,7 +447,7 @@ int main(int argc, char** argv) {
                                 .with_target_chunk_size(chunk_size_mb)
                                 .with_batch_size(batch_size_mb * 1024 * 1024));
 
-                        int start_idx = global_chunk_idx.fetch_add(
+                        int start_idx = global_chunk_idx_ptr->fetch_add(
                             static_cast<int>(file_chunks.size()));
                         for (int i = 0;
                              i < static_cast<int>(file_chunks.size()); ++i) {
@@ -466,7 +470,9 @@ int main(int argc, char** argv) {
 
                 // Chunk workers: parallel aggregation
                 for (std::size_t w = 0; w < executor_threads; ++w) {
-                    scope.spawn([&](TaskContext& wctx) -> coro::CoroTask<void> {
+                    (void)w;
+                    scope.spawn([chunk_chan, result_chan](
+                                    TaskContext& wctx) -> coro::CoroTask<void> {
                         [[maybe_unused]] auto producer_guard =
                             result_chan->adopt_producer();
                         while (auto input = co_await wctx.receive(chunk_chan)) {
@@ -482,9 +488,11 @@ int main(int argc, char** argv) {
                 }
 
                 // Streaming merger: incremental merge
-                scope.spawn([&](TaskContext& mctx) -> coro::CoroTask<void> {
+                auto* merger_ptr = &merger;
+                scope.spawn([result_chan, merger_ptr](
+                                TaskContext& mctx) -> coro::CoroTask<void> {
                     while (auto output = co_await mctx.receive(result_chan)) {
-                        merger.merge_chunk(std::move(*output));
+                        merger_ptr->merge_chunk(std::move(*output));
                     }
                     co_return;
                 });

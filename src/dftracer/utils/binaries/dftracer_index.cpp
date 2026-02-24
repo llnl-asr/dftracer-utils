@@ -219,11 +219,20 @@ int main(int argc, char** argv) {
     auto streaming_task = make_task(
         [&](TaskContext& ctx) -> coro::CoroTask<void> {
             co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+                auto* total_events_ptr = &total_events;
+                auto* total_checkpoints_ptr = &total_checkpoints_processed;
+                auto* total_processed_ptr = &total_files_processed;
+                auto* total_skipped_ptr = &total_files_skipped;
                 for (std::size_t i = 0; i < input_files.size(); ++i) {
-                    scope.spawn([&,
-                                 i](TaskContext& fctx) -> coro::CoroTask<void> {
+                    const auto file_path = input_files[i];
+                    scope.spawn([build_template, file_path, build_manifest,
+                                 index_dir, checkpoint_size, batch_size_mb,
+                                 force_rebuild, total_events_ptr,
+                                 total_checkpoints_ptr, total_processed_ptr,
+                                 total_skipped_ptr](
+                                    TaskContext& fctx) -> coro::CoroTask<void> {
                         BloomIndexBuildInput build_input = build_template;
-                        build_input.file_path = input_files[i];
+                        build_input.file_path = file_path;
 
                         auto utility =
                             std::make_shared<BloomIndexBuilderUtility>();
@@ -239,19 +248,18 @@ int main(int argc, char** argv) {
                             executor.execute_with_context(fctx, build_input);
 
                         if (result.was_skipped) {
-                            total_files_skipped++;
+                            (*total_skipped_ptr)++;
                         } else if (result.success) {
-                            total_files_processed++;
-                            total_events += result.events_processed;
-                            total_checkpoints_processed +=
-                                result.chunks_processed;
+                            (*total_processed_ptr)++;
+                            (*total_events_ptr) += result.events_processed;
+                            (*total_checkpoints_ptr) += result.chunks_processed;
                         } else {
-                            total_files_skipped++;
+                            (*total_skipped_ptr)++;
                         }
 
                         if (build_manifest) {
                             ManifestIndexBuildInput manifest_input;
-                            manifest_input.file_path = input_files[i];
+                            manifest_input.file_path = file_path;
                             manifest_input.index_dir = index_dir;
                             manifest_input.checkpoint_size = checkpoint_size;
                             manifest_input.batch_size =
@@ -276,7 +284,7 @@ int main(int argc, char** argv) {
                                 DFTRACER_UTILS_LOG_ERROR(
                                     "Manifest index failed "
                                     "for %s: %s",
-                                    input_files[i].c_str(),
+                                    file_path.c_str(),
                                     m_result.error_message.c_str());
                             }
                         }

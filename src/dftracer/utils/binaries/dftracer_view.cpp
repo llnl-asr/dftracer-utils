@@ -342,12 +342,17 @@ int main(int argc, char** argv) {
             [&](TaskContext& ctx) -> coro::CoroTask<void> {
                 co_await ctx.scope([&](TaskScope& scope)
                                        -> coro::CoroTask<void> {
+                    auto* indexed_count_ptr = &indexed_count;
+                    auto* failed_count_ptr = &failed_count;
                     for (std::size_t i = 0; i < files_needing_index.size();
                          ++i) {
-                        scope.spawn([&, i](TaskContext& fctx)
+                        const auto file_path = files_needing_index[i];
+                        scope.spawn([build_template, file_path,
+                                     indexed_count_ptr,
+                                     failed_count_ptr](TaskContext& fctx)
                                         -> coro::CoroTask<void> {
                             BloomIndexBuildInput build_input = build_template;
-                            build_input.file_path = files_needing_index[i];
+                            build_input.file_path = file_path;
 
                             auto utility =
                                 std::make_shared<BloomIndexBuilderUtility>();
@@ -363,12 +368,12 @@ int main(int argc, char** argv) {
                                 fctx, build_input);
 
                             if (result.success) {
-                                indexed_count++;
+                                (*indexed_count_ptr)++;
                             } else {
-                                failed_count++;
+                                (*failed_count_ptr)++;
                                 DFTRACER_UTILS_LOG_ERROR(
                                     "Auto-indexing failed for %s: %s",
-                                    files_needing_index[i].c_str(),
+                                    file_path.c_str(),
                                     result.error_message.c_str());
                             }
 
@@ -421,11 +426,22 @@ int main(int argc, char** argv) {
     auto view_task = make_task(
         [&](TaskContext& ctx) -> coro::CoroTask<void> {
             co_await ctx.scope([&](TaskScope& scope) -> coro::CoroTask<void> {
+                auto* total_chunks_skipped_ptr = &total_chunks_skipped;
+                auto* total_events_matched_ptr = &total_events_matched;
+                auto* total_events_scanned_ptr = &total_events_scanned;
+                auto* total_chunks_scanned_ptr = &total_chunks_scanned;
+                auto* output_mutex_ptr = &output_mutex;
+                auto* all_events_ptr = &all_events;
                 for (std::size_t fi = 0; fi < files.size(); ++fi) {
-                    scope.spawn([&, fi](
+                    const auto file_path = files[fi];
+                    scope.spawn([file_path, index_dir, checkpoint_size, view,
+                                 stream_mode, out_file,
+                                 total_chunks_skipped_ptr,
+                                 total_events_matched_ptr,
+                                 total_events_scanned_ptr,
+                                 total_chunks_scanned_ptr, output_mutex_ptr,
+                                 all_events_ptr](
                                     TaskContext& fctx) -> coro::CoroTask<void> {
-                        const auto& file_path = files[fi];
-
                         // Resolve paths
                         std::string bidx_path =
                             determine_bloom_index_path(file_path, index_dir);
@@ -467,7 +483,7 @@ int main(int argc, char** argv) {
                             co_return;
                         }
 
-                        total_chunks_skipped +=
+                        (*total_chunks_skipped_ptr) +=
                             build_output.skipped_checkpoints;
 
                         if (!build_output.file_may_match) {
@@ -475,11 +491,27 @@ int main(int argc, char** argv) {
                         }
 
                         // Process each candidate chunk
-                        co_await fctx.scope([&](TaskScope& chunk_scope)
+                        co_await fctx.scope([file_path, idx_path,
+                                             checkpoint_size, view, stream_mode,
+                                             out_file, output_mutex_ptr,
+                                             all_events_ptr,
+                                             total_events_matched_ptr,
+                                             total_events_scanned_ptr,
+                                             total_chunks_scanned_ptr,
+                                             candidates =
+                                                 build_output.candidates](
+                                                TaskScope& chunk_scope)
                                                 -> coro::CoroTask<void> {
-                            for (const auto& candidate :
-                                 build_output.candidates) {
-                                chunk_scope.spawn([&, candidate](
+                            for (const auto& candidate : candidates) {
+                                chunk_scope.spawn([file_path, idx_path,
+                                                   checkpoint_size, view,
+                                                   stream_mode, out_file,
+                                                   output_mutex_ptr,
+                                                   all_events_ptr,
+                                                   total_events_matched_ptr,
+                                                   total_events_scanned_ptr,
+                                                   total_chunks_scanned_ptr,
+                                                   candidate](
                                                       TaskContext& /*cctx*/)
                                                       -> coro::CoroTask<void> {
                                     ViewReaderInput reader_input;
@@ -497,26 +529,32 @@ int main(int argc, char** argv) {
                                         reader.process(reader_input);
 
                                     if (read_output.success) {
-                                        total_events_matched +=
+                                        (*total_events_matched_ptr) +=
                                             read_output.events_matched;
-                                        total_events_scanned +=
+                                        (*total_events_scanned_ptr) +=
                                             read_output.events_scanned;
-                                        total_chunks_scanned++;
+                                        (*total_chunks_scanned_ptr)++;
 
                                         if (stream_mode) {
                                             std::lock_guard<std::mutex> lock(
-                                                output_mutex);
+                                                *output_mutex_ptr);
                                             for (const auto& event :
                                                  read_output.events) {
-                                                std::printf("%s\n",
-                                                            event.c_str());
+                                                if (out_file) {
+                                                    std::fprintf(out_file,
+                                                                 "%s\n",
+                                                                 event.c_str());
+                                                } else {
+                                                    std::printf("%s\n",
+                                                                event.c_str());
+                                                }
                                             }
                                         } else {
                                             std::lock_guard<std::mutex> lock(
-                                                output_mutex);
+                                                *output_mutex_ptr);
                                             for (auto& event :
                                                  read_output.events) {
-                                                all_events.push_back(
+                                                all_events_ptr->push_back(
                                                     std::move(event));
                                             }
                                         }

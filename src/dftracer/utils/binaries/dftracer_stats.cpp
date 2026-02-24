@@ -686,12 +686,17 @@ int main(int argc, char** argv) {
             [&](TaskContext& ctx) -> coro::CoroTask<void> {
                 co_await ctx.scope([&](TaskScope& scope)
                                        -> coro::CoroTask<void> {
+                    auto* indexed_count_ptr = &indexed_count;
+                    auto* failed_count_ptr = &failed_count;
                     for (std::size_t i = 0; i < files_needing_index.size();
                          ++i) {
-                        scope.spawn([&, i](TaskContext& fctx)
+                        const auto file_path = files_needing_index[i];
+                        scope.spawn([build_template, file_path,
+                                     indexed_count_ptr,
+                                     failed_count_ptr](TaskContext& fctx)
                                         -> coro::CoroTask<void> {
                             BloomIndexBuildInput build_input = build_template;
-                            build_input.file_path = files_needing_index[i];
+                            build_input.file_path = file_path;
 
                             auto utility =
                                 std::make_shared<BloomIndexBuilderUtility>();
@@ -707,12 +712,12 @@ int main(int argc, char** argv) {
                                 fctx, build_input);
 
                             if (result.success) {
-                                indexed_count++;
+                                (*indexed_count_ptr)++;
                             } else {
-                                failed_count++;
+                                (*failed_count_ptr)++;
                                 DFTRACER_UTILS_LOG_ERROR(
                                     "Auto-indexing failed for %s: %s",
-                                    files_needing_index[i].c_str(),
+                                    file_path.c_str(),
                                     result.error_message.c_str());
                             }
 

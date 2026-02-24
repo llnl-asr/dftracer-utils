@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -657,8 +658,16 @@ template <typename Func>
     requires std::is_invocable_r_v<coro::CoroTask<void>, Func, TaskScope&>
 inline coro::CoroTask<void> TaskContext::scope(Func&& scope_func) {
     TaskScope scope(this);
-    co_await scope_func(scope);
+    std::exception_ptr error;
+    try {
+        co_await scope_func(scope);
+    } catch (...) {
+        error = std::current_exception();
+    }
     co_await scope.join();
+    if (error) {
+        std::rethrow_exception(error);
+    }
     co_return;
 }
 

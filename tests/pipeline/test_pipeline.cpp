@@ -1506,7 +1506,7 @@ TEST_CASE("Combiner - with_combiner validation error") {
     bool threw_error = false;
     try {
         scheduler.schedule(root);
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        child->wait();
 
         // The error should be stored in the future - trying to get() should
         // throw
@@ -1568,8 +1568,7 @@ TEST_CASE("DAG - Diamond pattern") {
     bottom->depends_on(right);
 
     scheduler.schedule(root);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    bottom->wait();
 
     CHECK(execution_order.size() == 4);
     CHECK(execution_order[0] == 0);  // Root first
@@ -1608,8 +1607,7 @@ TEST_CASE("DAG - Multiple branches converging") {
     }
 
     scheduler.schedule(root);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    final_task->wait();
 
     CHECK(final_count.load() == 1);
 }
@@ -1660,8 +1658,9 @@ TEST_CASE("DAG - Wide and deep structure") {
     }
 
     scheduler.schedule(root);
-
-    std::this_thread::sleep_for(std::chrono::seconds(1));
+    for (const auto& task : level3) {
+        task->wait();
+    }
 
     CHECK(completed.load() == 16);  // 4 + 8 + 4
 }
@@ -1676,19 +1675,20 @@ TEST_CASE("Dynamic Tasks - Task submits child task at runtime") {
     std::atomic<int> total_tasks{0};
 
     auto parent_task = make_task(
-        [&](TaskContext& ctx) {
+        [&](TaskContext& ctx) -> coro::CoroTask<void> {
             ++total_tasks;
 
             // Dynamically create and submit a child task
             auto child = make_task([&]() { ++total_tasks; }, "DynamicChild");
 
             ctx.spawn(child);
+            co_await ctx.join_all();
+            co_return;
         },
         "ParentTask");
 
     scheduler.schedule(parent_task);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    parent_task->wait();
 
     CHECK(total_tasks.load() == 2);
 
@@ -1703,7 +1703,7 @@ TEST_CASE("Dynamic Tasks - Multiple dynamic children") {
     std::atomic<int> total_tasks{0};
 
     auto parent_task = make_task(
-        [&](TaskContext& ctx) {
+        [&](TaskContext& ctx) -> coro::CoroTask<void> {
             ++total_tasks;
 
             // Create 5 dynamic children
@@ -1718,12 +1718,13 @@ TEST_CASE("Dynamic Tasks - Multiple dynamic children") {
 
                 ctx.spawn(child);
             }
+            co_await ctx.join_all();
+            co_return;
         },
         "ParentTask");
 
     scheduler.schedule(parent_task);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    parent_task->wait();
 
     CHECK(total_tasks.load() == 6);  // 1 parent + 5 children
 }
@@ -1763,8 +1764,7 @@ TEST_CASE("Dynamic Tasks - Intra-task parallelism with result aggregation") {
         "ParentTaskWithAggregation");
 
     scheduler.schedule(parent_task);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    parent_task->wait();
 
     // Should have computed: 10 + 20 + 30 + 40 + 50 = 150
     CHECK(final_result.load() == 150);
@@ -1816,8 +1816,7 @@ TEST_CASE("Dynamic Tasks - Nested intra-task parallelism") {
         "RootTaskWithNested");
 
     scheduler.schedule(parent_task);
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    parent_task->wait();
 
     // Should compute: (10+11) + (20+21) + (30+31) = 21 + 41 + 61 = 123
     CHECK(total_sum.load() == 123);
@@ -2171,23 +2170,23 @@ TEST_CASE("Timeout - Multiple tasks with different timeouts") {
     // gcc11_bandaid: Create tasks outside coroutine lambda
     // Use larger timing margins to avoid flaky tests on slow CI machines
     auto task1 = make_task(
-        []() -> coro::CoroTask<int> {
+        []() -> int {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            co_return 1;
+            return 1;
         },
         "Task50ms");
 
     auto task2 = make_task(
-        []() -> coro::CoroTask<int> {
+        []() -> int {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            co_return 2;
+            return 2;
         },
         "Task500ms");
 
     auto task3 = make_task(
-        []() -> coro::CoroTask<int> {
+        []() -> int {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            co_return 3;
+            return 3;
         },
         "Task1000ms");
 

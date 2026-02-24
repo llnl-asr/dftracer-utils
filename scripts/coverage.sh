@@ -157,7 +157,7 @@ build_with_coverage() {
 run_tests() {
     log_info "Running tests..."
 
-    if ctest --test-dir "$BUILD_DIR" --output-on-failure; then
+    if ctest --test-dir "$BUILD_DIR" --output-on-failure --timeout 300; then
         log_success "All tests passed"
     else
         log_warning "Some tests failed, continuing with coverage analysis..."

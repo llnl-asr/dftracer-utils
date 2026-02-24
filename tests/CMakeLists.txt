@@ -82,8 +82,15 @@ foreach(test_file ${TEST_CPP_SOURCES})
 
   add_test(NAME ${bin_exec} COMMAND ${target_name})
 
+  # Default timeout for all tests (safety net against hangs in CI)
+  set(default_test_timeout 120)
+  if(DFTRACER_UTILS_ENABLE_TSAN)
+    set(default_test_timeout 300)
+  endif()
+  set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${default_test_timeout})
+
   # These thread-heavy tests contend heavily when run together on low-core CI.
-  # Keep their timeout and serialize only this pair via a shared lock.
+  # Give them extra timeout and serialize via a shared lock.
   if(bin_exec STREQUAL "pipeline/test_task_scope"
      OR bin_exec STREQUAL "coro/test_channel")
     set(heavy_thread_timeout 180)

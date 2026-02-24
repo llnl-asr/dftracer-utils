@@ -123,7 +123,7 @@ Use ``Channel<T>`` for streaming data between tasks. This pattern is useful when
 
                // Read and send batches
                 for (auto& batch : read_batches(input_files[i])) {
-                    co_await channel->send_async(std::move(batch));
+                    co_await channel->send(std::move(batch));
                 }
                co_return;
            },

@@ -216,7 +216,7 @@ class TaskScope {
                 coro::Generator<T> gen = func(ctx);
 
                 for (auto item : gen) {
-                    if (!co_await channel.send_async(std::move(item))) {
+                    if (!co_await channel.send(std::move(item))) {
                         co_return;
                     }
                 }
@@ -264,7 +264,7 @@ class TaskScope {
                 coro::Generator<T> gen = func(ctx);
 
                 for (auto item : gen) {
-                    if (!co_await channel->send_async(std::move(item))) {
+                    if (!co_await channel->send(std::move(item))) {
                         co_return;
                     }
                 }
@@ -315,7 +315,7 @@ class TaskScope {
                 coro::AsyncGenerator<T> gen = func(ctx);
 
                 while (auto item = co_await gen.next()) {
-                    if (!co_await channel.send_async(std::move(*item))) {
+                    if (!co_await channel.send(std::move(*item))) {
                         co_return;
                     }
                 }
@@ -361,7 +361,7 @@ class TaskScope {
                 coro::AsyncGenerator<T> gen = func(ctx);
 
                 while (auto item = co_await gen.next()) {
-                    if (!co_await channel->send_async(std::move(*item))) {
+                    if (!co_await channel->send(std::move(*item))) {
                         co_return;
                     }
                 }
@@ -391,7 +391,7 @@ class TaskScope {
      * scope.spawn_producers(channel, 4,
      *     [&](TaskContext& ctx, std::size_t idx) -> coro::CoroTask<void> {
      *         for (auto& item : get_items_for(idx))
-     *             co_await channel->send_async(std::move(item));
+     *             co_await channel->send(std::move(item));
      *         co_return;
      *     });
      * @endcode
@@ -563,7 +563,7 @@ class TaskScope {
                     auto guard = output->adopt_producer();
                     while (auto item = co_await input->receive()) {
                         auto result = co_await func(ctx, std::move(*item));
-                        if (!co_await output->send_async(std::move(result))) {
+                        if (!co_await output->send(std::move(result))) {
                             co_return;
                         }
                     }
@@ -595,7 +595,7 @@ class TaskScope {
                     auto guard = output.adopt_producer();
                     while (auto item = co_await input.receive()) {
                         auto result = co_await func(ctx, std::move(*item));
-                        if (!co_await output.send_async(std::move(result))) {
+                        if (!co_await output.send(std::move(result))) {
                             co_return;
                         }
                     }

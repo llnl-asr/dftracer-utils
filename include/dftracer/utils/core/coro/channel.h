@@ -31,7 +31,7 @@ namespace dftracer::utils::coro {
  * auto producer = make_task([&](TaskContext& ctx) -> CoroTask<void> {
  *     auto guard = channel->producer_guard();  // registers
  *     for (auto chunk : read_chunks())
- *         co_await channel->send_async(std::move(chunk));
+ *         co_await channel->send(std::move(chunk));
  *     // ~ProducerGuard auto-releases; channel closes when last exits
  * });
  * @endcode
@@ -984,11 +984,9 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
     ReceiveAwaitable receive() { return ReceiveAwaitable(this); }
 
-    SendAwaitable send_async(const T& item) {
-        return SendAwaitable(this, item);
-    }
+    SendAwaitable send(const T& item) { return SendAwaitable(this, item); }
 
-    SendAwaitable send_async(T&& item) {
+    SendAwaitable send(T&& item) {
         return SendAwaitable(this, std::move(item));
     }
 

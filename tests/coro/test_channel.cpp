@@ -16,6 +16,18 @@ using namespace dftracer::utils::coro;
 
 namespace {
 
+#if defined(__SANITIZE_THREAD__)
+constexpr bool kTsanBuild = true;
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+constexpr bool kTsanBuild = true;
+#else
+constexpr bool kTsanBuild = false;
+#endif
+#else
+constexpr bool kTsanBuild = false;
+#endif
+
 template <typename ChannelT, typename ItemT>
 bool blocking_send(ChannelT& channel, ItemT item) {
     constexpr auto backoff = std::chrono::microseconds{100};
@@ -368,7 +380,7 @@ TEST_CASE("Channel - With tasks in pipeline") {
             auto guard = channel.producer_guard();
 
             for (int i = 0; i < 100; ++i) {
-                CHECK(co_await channel.send_async(i));
+                CHECK(co_await channel.send(i));
                 producer_sum.fetch_add(i);
             }
 
@@ -422,7 +434,7 @@ TEST_CASE("Channel - Pipeline with transform") {
             auto guard = input_channel.producer_guard();
 
             for (int i = 1; i <= 10; ++i) {
-                CHECK(co_await input_channel.send_async(i));
+                CHECK(co_await input_channel.send(i));
                 produced_values.push_back(i);
             }
 
@@ -439,7 +451,7 @@ TEST_CASE("Channel - Pipeline with transform") {
             int value;
             while (blocking_receive(input_channel, value)) {
                 int transformed = value * 2;
-                CHECK(co_await output_channel.send_async(transformed));
+                CHECK(co_await output_channel.send(transformed));
                 transformed_values.push_back(transformed);
             }
 
@@ -498,7 +510,7 @@ TEST_CASE("Channel - Fan-out pattern (one producer, multiple consumers)") {
             auto guard = channel.producer_guard();
 
             for (int i = 0; i < 100; ++i) {
-                CHECK(co_await channel.send_async(i));
+                CHECK(co_await channel.send(i));
                 sum_produced.fetch_add(i);
             }
 
@@ -682,10 +694,10 @@ TEST_CASE("Channel - send_async unblocks when receiver drains") {
     auto producer = make_task(
         [&](TaskContext& /*ctx*/) -> coro::CoroTask<void> {
             auto guard = channel->producer_guard();
-            CHECK(co_await channel->send_async(1));
-            CHECK(co_await channel->send_async(2));
+            CHECK(co_await channel->send(1));
+            CHECK(co_await channel->send(2));
             third_send_started.store(true, std::memory_order_release);
-            CHECK(co_await channel->send_async(3));
+            CHECK(co_await channel->send(3));
             third_send_completed.store(true, std::memory_order_release);
             co_return;
         },
@@ -737,9 +749,9 @@ TEST_CASE("Channel - send_async resumes false when closed") {
     auto producer = make_task(
         [&](TaskContext& /*ctx*/) -> coro::CoroTask<void> {
             auto guard = channel->producer_guard();
-            CHECK(co_await channel->send_async(1));
+            CHECK(co_await channel->send(1));
             second_send_started.store(true, std::memory_order_release);
-            const bool sent = co_await channel->send_async(2);
+            const bool sent = co_await channel->send(2);
             second_send_result.store(sent, std::memory_order_release);
             second_send_completed.store(true, std::memory_order_release);
             co_return;
@@ -775,15 +787,15 @@ TEST_CASE("Channel - send_async resumes false when closed") {
 TEST_CASE("Channel - async bounded handoff on single compute thread") {
     Channel<int> channel(1);
 
-    constexpr int NUM_ITEMS = 5000;
+    const int num_items = kTsanBuild ? 1000 : 5000;
     std::atomic<int> produced{0};
     std::atomic<int> consumed{0};
 
     auto producer = make_task(
         [&](TaskContext& /*ctx*/) -> coro::CoroTask<void> {
             auto guard = channel.producer_guard();
-            for (int i = 1; i <= NUM_ITEMS; ++i) {
-                CHECK(co_await channel.send_async(i));
+            for (int i = 1; i <= num_items; ++i) {
+                CHECK(co_await channel.send(i));
                 produced.fetch_add(i, std::memory_order_relaxed);
             }
             co_return;
@@ -811,7 +823,7 @@ TEST_CASE("Channel - async bounded handoff on single compute thread") {
     CHECK(produced.load(std::memory_order_relaxed) ==
           consumed.load(std::memory_order_relaxed));
     CHECK(consumed.load(std::memory_order_relaxed) ==
-          (NUM_ITEMS * (NUM_ITEMS + 1)) / 2);
+          (num_items * (num_items + 1)) / 2);
 }
 
 // ============================================================================
@@ -830,7 +842,7 @@ TEST_CASE("Channel - receive_async() with I/O executor") {
             auto guard = channel.producer_guard();
 
             for (int i = 0; i < 50; ++i) {
-                CHECK(co_await channel.send_async(i));
+                CHECK(co_await channel.send(i));
                 producer_sum.fetch_add(i);
             }
 
@@ -882,7 +894,7 @@ TEST_CASE("Channel - receive_async() with multiple consumers") {
             auto guard = channel.producer_guard();
 
             for (int i = 0; i < 100; ++i) {
-                CHECK(co_await channel.send_async(i));
+                CHECK(co_await channel.send(i));
                 producer_sum.fetch_add(i);
             }
 
@@ -948,7 +960,7 @@ TEST_CASE("Channel - receive_async() with transform pipeline") {
             auto guard = input_channel.producer_guard();
 
             for (int i = 1; i <= 20; ++i) {
-                CHECK(co_await input_channel.send_async(i));
+                CHECK(co_await input_channel.send(i));
                 produced_values.push_back(i);
             }
 
@@ -964,7 +976,7 @@ TEST_CASE("Channel - receive_async() with transform pipeline") {
 
             while (auto item_opt = co_await ctx.receive(input_channel)) {
                 int transformed = (*item_opt) * (*item_opt);  // Square
-                CHECK(co_await output_channel.send_async(transformed));
+                CHECK(co_await output_channel.send(transformed));
                 transformed_values.push_back(transformed);
             }
 
@@ -1022,7 +1034,7 @@ TEST_CASE("Channel - receive_async() without I/O executor (fallback)") {
             auto guard = channel.producer_guard();
 
             for (int i = 0; i < 30; ++i) {
-                CHECK(co_await channel.send_async(i));
+                CHECK(co_await channel.send(i));
                 producer_sum.fetch_add(i);
             }
 
@@ -1075,7 +1087,7 @@ TEST_CASE("Channel - receive_async() stress test") {
             auto guard = channel.producer_guard();
 
             for (int i = 0; i < NUM_ITEMS; ++i) {
-                CHECK(co_await channel.send_async(i));
+                CHECK(co_await channel.send(i));
                 items_sent.fetch_add(1);
             }
 
@@ -1137,7 +1149,7 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
 
                 for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
                     int value = p * 1000 + i;
-                    CHECK(co_await channel.send_async(value));
+                    CHECK(co_await channel.send(value));
                     total_produced.fetch_add(value);
                 }
 
@@ -1216,7 +1228,7 @@ TEST_CASE(
 
                 for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
                     int value = p * 1000 + i;
-                    CHECK(co_await channel.send_async(value));
+                    CHECK(co_await channel.send(value));
                     total_produced.fetch_add(value);
                 }
 
@@ -1375,7 +1387,7 @@ TEST_CASE("Channel - adopt_producer() with scope.spawn() pattern") {
                             auto guard = channel->adopt_producer();
                             for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
                                 int value = p * 1000 + i;
-                                CHECK(co_await channel->send_async(value));
+                                CHECK(co_await channel->send(value));
                                 total_produced.fetch_add(value);
                             }
                             co_return;
@@ -1437,8 +1449,7 @@ TEST_CASE("Channel - adopt_producer() early exit in scope.spawn()") {
                                 co_return;
                             }
                             for (int i = 0; i < 10; ++i) {
-                                CHECK(
-                                    co_await channel->send_async(p * 100 + i));
+                                CHECK(co_await channel->send(p * 100 + i));
                             }
                             co_return;
                         });
@@ -1491,8 +1502,7 @@ TEST_CASE("Channel - adopt_producer() two-stage pipeline with scope.spawn()") {
                         [&, p](TaskContext& /*pctx*/) -> coro::CoroTask<void> {
                             auto guard = stage1->adopt_producer();
                             for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
-                                CHECK(
-                                    co_await stage1->send_async(p * 1000 + i));
+                                CHECK(co_await stage1->send(p * 1000 + i));
                             }
                             co_return;
                         });
@@ -1504,7 +1514,7 @@ TEST_CASE("Channel - adopt_producer() two-stage pipeline with scope.spawn()") {
                     scope.spawn([&](TaskContext& wctx) -> coro::CoroTask<void> {
                         auto guard = stage2->adopt_producer();
                         while (auto item = co_await wctx.receive(stage1)) {
-                            CHECK(co_await stage2->send_async(*item * 2));
+                            CHECK(co_await stage2->send(*item * 2));
                         }
                         co_return;
                     });

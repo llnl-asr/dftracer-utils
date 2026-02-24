@@ -451,8 +451,7 @@ int main(int argc, char** argv) {
                         }
 
                         for (auto& chunk : file_chunks) {
-                            if (!co_await chunk_chan->send_async(
-                                    std::move(chunk))) {
+                            if (!co_await chunk_chan->send(std::move(chunk))) {
                                 co_return;
                             }
                         }
@@ -473,7 +472,7 @@ int main(int argc, char** argv) {
                         while (auto input = co_await wctx.receive(chunk_chan)) {
                             ChunkAggregatorUtility agg;
                             auto output = agg.process(*input);
-                            if (!co_await result_chan->send_async(
+                            if (!co_await result_chan->send(
                                     std::move(output))) {
                                 co_return;
                             }

@@ -91,17 +91,40 @@ uninstall_hooks() {
 }
 
 run_pre_commit() {
-    echo "[pre-commit] running format"
-    make -C "$REPO_ROOT" format
+    # Collect staged C/C++ source files (Added, Copied, Modified, Renamed)
+    local staged_files
+    staged_files="$(git -C "$REPO_ROOT" diff --cached --name-only --diff-filter=ACMR -- src include tests \
+        | grep -E '\.(c|cpp|h|hpp)$' || true)"
 
-    if ! git -C "$REPO_ROOT" diff --quiet -- src include tests; then
-        echo "[pre-commit] formatting changed files. Stage them and re-run commit."
-        git -C "$REPO_ROOT" --no-pager diff -- src include tests
+    if [ -z "$staged_files" ]; then
+        echo "[pre-commit] no C/C++ source files staged, skipping format"
+        return 0
+    fi
+
+    # Hash staged files before formatting to detect actual changes
+    # (avoids false positives from pre-existing unstaged modifications)
+    local before_hash
+    before_hash="$(echo "$staged_files" | while IFS= read -r f; do
+        git -C "$REPO_ROOT" hash-object "$f" 2>/dev/null
+    done)"
+
+    echo "[pre-commit] formatting staged files"
+    echo "$staged_files" \
+        | xargs -I{} clang-format -i "$REPO_ROOT/{}"
+
+    local after_hash
+    after_hash="$(echo "$staged_files" | while IFS= read -r f; do
+        git -C "$REPO_ROOT" hash-object "$f" 2>/dev/null
+    done)"
+
+    if [ "$before_hash" != "$after_hash" ]; then
+        echo "[pre-commit] formatting changed staged files. Stage them and re-run commit."
         exit 1
     fi
 
-    echo "[pre-commit] checking format"
-    make -C "$REPO_ROOT" check-format
+    echo "[pre-commit] checking format of staged files"
+    echo "$staged_files" \
+        | xargs -I{} clang-format --dry-run -Werror "$REPO_ROOT/{}"
 }
 
 run_commit_msg() {

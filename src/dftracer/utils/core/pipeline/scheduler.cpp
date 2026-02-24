@@ -206,9 +206,12 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
             });
 
             if (!completed && !shutdown_requested_.load()) {
-                // Timeout occurred
+                // Timeout occurred — release done_mutex_ before calling
+                // request_shutdown() so it can lock done_mutex_ to prevent
+                // lost notifications on ARM.
                 DFTRACER_UTILS_LOG_ERROR("Pipeline timed out after %lld ms",
                                          global_timeout_.count());
+                lock.unlock();
                 request_shutdown();
                 throw PipelineError(PipelineError::TIMEOUT_ERROR,
                                     "Pipeline execution timed out");
@@ -928,17 +931,16 @@ void Scheduler::request_shutdown() {
     // Request executor shutdown
     executor_->request_shutdown();
 
-    // Wake up waiting threads — lock-then-unlock ready_mutex_ before
-    // notifying to prevent lost notifications.
-    // NOTE: We intentionally do NOT lock done_mutex_ here because
-    // request_shutdown() can be called from schedule()'s timeout path
-    // which already holds done_mutex_, and std::mutex is not recursive.
-    // The done_cv_ wakeup relies on shutdown_requested_ being set above,
-    // which the predicate will see on its next check.
+    // Wake up waiting threads — lock-then-unlock each mutex before
+    // notifying to prevent lost notifications on ARM where release/acquire
+    // on separate variables doesn't provide total ordering.
     {
         std::lock_guard<std::mutex> lock(ready_mutex_);
     }
     ready_cv_.notify_all();
+    {
+        std::lock_guard<std::mutex> lock(done_mutex_);
+    }
     done_cv_.notify_all();
 }
 

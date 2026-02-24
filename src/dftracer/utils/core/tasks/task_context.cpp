@@ -14,12 +14,14 @@ struct JoinAllAwaitable {
     std::vector<TaskFuture<std::any>>& futures;
     TaskContext* context;
     std::shared_ptr<std::atomic<size_t>> completed_count;
+    std::shared_ptr<std::atomic<bool>> resume_triggered;
     TaskIndex join_id;
 
     JoinAllAwaitable(std::vector<TaskFuture<std::any>>& futs, TaskContext* ctx)
         : futures(futs),
           context(ctx),
           completed_count(std::make_shared<std::atomic<size_t>>(0)),
+          resume_triggered(std::make_shared<std::atomic<bool>>(false)),
           join_id(generate_unique_join_id()) {}
 
     static TaskIndex generate_unique_join_id() {
@@ -28,8 +30,9 @@ struct JoinAllAwaitable {
     }
 
     bool await_ready() {
-        return std::all_of(futures.begin(), futures.end(),
-                           [](auto& f) { return f.await_ready(); });
+        return std::all_of(futures.begin(), futures.end(), [](auto& f) {
+            return f.get_task()->is_completed();
+        });
     }
 
     template <typename Promise>
@@ -50,27 +53,68 @@ struct JoinAllAwaitable {
             return h;
         }
 
+        auto resume_flag = resume_triggered;
+
         for (auto& future : futures) {
-            if (future.await_ready()) {
-                size_t old =
-                    completed_count->fetch_add(1, std::memory_order_acq_rel);
-                if (old + 1 == total) {
-                    return h;
-                }
+            if (future.get_task()->is_completed()) {
+                completed_count->fetch_add(1, std::memory_order_acq_rel);
                 continue;
             }
 
             TaskIndex task_id = future.get_task_id();
             auto count_ptr = completed_count;
 
+            // Per-future guard ensures each future increments count
+            // at most once, even if both callback and re-check fire
+            auto counted = std::make_shared<std::atomic<bool>>(false);
+
             scheduler->register_task_completion_callback(
-                task_id, [h, executor, count_ptr, total]() {
+                task_id,
+                [h, executor, count_ptr, total, counted, resume_flag]() {
+                    bool expected = false;
+                    if (!counted->compare_exchange_strong(
+                            expected, true, std::memory_order_acq_rel,
+                            std::memory_order_relaxed)) {
+                        return;
+                    }
                     size_t old =
                         count_ptr->fetch_add(1, std::memory_order_acq_rel);
                     if (old + 1 == total) {
-                        executor->schedule_coroutine_resumption(h);
+                        bool exp = false;
+                        if (resume_flag->compare_exchange_strong(
+                                exp, true, std::memory_order_acq_rel,
+                                std::memory_order_relaxed)) {
+                            executor->schedule_coroutine_resumption(h);
+                        }
                     }
                 });
+
+            // Re-check: close the race where task completes
+            // between is_completed() check and callback registration.
+            // Uses authoritative Task::is_completed() (not the
+            // future's cached completed_ flag which is never set
+            // for JoinAllAwaitable futures).
+            if (future.get_task()->is_completed()) {
+                bool expected = false;
+                if (counted->compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel,
+                        std::memory_order_relaxed)) {
+                    completed_count->fetch_add(1, std::memory_order_acq_rel);
+                }
+            }
+        }
+
+        // Check if all futures completed during setup
+        if (completed_count->load(std::memory_order_acquire) == total) {
+            bool expected = false;
+            if (resume_flag->compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel,
+                    std::memory_order_relaxed)) {
+                return h;
+            }
+            // Another path (callback) already triggered resume via
+            // schedule_coroutine_resumption — fall through to
+            // noop_coroutine
         }
 
         if constexpr (std::is_base_of_v<coro::PromiseBase, Promise>) {

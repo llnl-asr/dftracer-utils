@@ -47,13 +47,18 @@ void Executor::start() {
 
     timer_service_.start();
 
-    // Create worker contexts and start threads
+    // Create all worker contexts first so workers_ is stable before any
+    // worker thread can try to iterate/steal from it.
     for (std::size_t i = 0; i < num_threads_; ++i) {
         auto worker = std::make_unique<WorkerContext>(i);
         worker->last_activity = std::chrono::steady_clock::now();
+        workers_.push_back(std::move(worker));
+    }
+
+    // Start worker threads after all contexts are in place.
+    for (auto& worker : workers_) {
         worker->thread =
             std::thread(&Executor::worker_thread, this, worker.get());
-        workers_.push_back(std::move(worker));
     }
 
     DFTRACER_UTILS_LOG_DEBUG("Executor started with %zu worker threads",

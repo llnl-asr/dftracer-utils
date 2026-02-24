@@ -29,6 +29,7 @@ struct WhenAllVectorState {
     std::vector<Awaitable> awaitables_;
     std::vector<typename Awaitable::result_type> results_;
     std::exception_ptr exception_;
+    std::atomic<bool> has_exception_{false};
     std::atomic<std::size_t> completed_count_{0};
     std::coroutine_handle<> awaiting_coroutine_;
     std::vector<CoroTask<void>> wrapper_coros_;
@@ -73,7 +74,10 @@ struct WhenAllVectorState {
     }
 
     void on_exception(std::exception_ptr e) {
-        if (!exception_) {
+        bool expected = false;
+        if (has_exception_.compare_exchange_strong(expected, true,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_relaxed)) {
             exception_ = e;
         }
         on_one_complete();
@@ -154,13 +158,14 @@ class WhenAllVectorAwaitable {
             return false;  // Don't suspend
         }
 
-        // We will suspend - mark it and double-check for completion
-        state_->mark_suspended_and_check_completion();
-
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
             root->awaiting_async_ = true;
         }
+
+        // We will suspend - mark it and double-check for completion.
+        // Do this last: completion may schedule/resume and destroy this frame.
+        state_->mark_suspended_and_check_completion();
 
         return true;
     }
@@ -241,6 +246,7 @@ template <typename Awaitable>
 struct WhenAllVectorState<Awaitable> {
     std::vector<Awaitable> awaitables_;
     std::exception_ptr exception_;
+    std::atomic<bool> has_exception_{false};
     std::atomic<std::size_t> completed_count_{0};
     std::coroutine_handle<> awaiting_coroutine_;
     std::vector<CoroTask<void>> wrapper_coros_;
@@ -283,7 +289,10 @@ struct WhenAllVectorState<Awaitable> {
     }
 
     void on_exception(std::exception_ptr ex) {
-        if (!exception_) {
+        bool expected = false;
+        if (has_exception_.compare_exchange_strong(expected, true,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_relaxed)) {
             exception_ = ex;
         }
         on_one_complete();
@@ -350,13 +359,14 @@ class WhenAllVectorAwaitable<Awaitable> {
             return false;  // Don't suspend
         }
 
-        // We will suspend - mark it and double-check for completion
-        state_->mark_suspended_and_check_completion();
-
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
             root->awaiting_async_ = true;
         }
+
+        // We will suspend - mark it and double-check for completion.
+        // Do this last: completion may schedule/resume and destroy this frame.
+        state_->mark_suspended_and_check_completion();
 
         return true;
     }

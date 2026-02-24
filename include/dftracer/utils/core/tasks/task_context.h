@@ -250,7 +250,7 @@ class TaskContext {
      * @code
      * // Async receive in a task
      * auto consumer = make_task([&](TaskContext& ctx) -> coro::CoroTask<void> {
-     *     while (auto item = co_await ctx.receive_async(channel)) {
+     *     while (auto item = co_await ctx.receive(channel)) {
      *         process(*item);
      *     }
      *     co_return;
@@ -258,16 +258,16 @@ class TaskContext {
      * @endcode
      */
     template <typename T>
-    auto receive_async(coro::Channel<T>& channel) {
-        return channel.receive_async();
+    auto receive(coro::Channel<T>& channel) {
+        return channel.receive();
     }
 
     /**
      * Async receive from channel (shared_ptr version)
      */
     template <typename T>
-    auto receive_async(std::shared_ptr<coro::Channel<T>> channel) {
-        return channel->receive_async();
+    auto receive(std::shared_ptr<coro::Channel<T>> channel) {
+        return channel->receive();
     }
 
     // ========================================================================

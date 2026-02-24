@@ -22,7 +22,7 @@ namespace dftracer::utils::utilities::composites {
  * StreamingMergeBatchUtility batch;
  * batch.add(json_content, event_id);
  * if (batch.size() >= 1000) {
- *     channel->send_blocking(std::move(batch));
+ *     co_await channel->send_async(std::move(batch));
  *     batch = StreamingMergeBatchUtility{};
  * }
  * @endcode

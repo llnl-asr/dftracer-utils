@@ -9,6 +9,7 @@
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
 #include <string>
 
 namespace dftracer::utils {
@@ -19,12 +20,13 @@ inline std::string dftracer_utils_macro_get_time() {
             .count() %
         1000;
     auto dftracer_utils_ts_t = std::time(0);
-    auto now = std::localtime(&dftracer_utils_ts_t);
+    std::tm now;
+    localtime_r(&dftracer_utils_ts_t, &now);
     char dftracer_utils_ts_time_str[256];
     snprintf(dftracer_utils_ts_time_str, sizeof(dftracer_utils_ts_time_str),
-             "%04d-%02d-%02d %02d:%02d:%02d.%03" PRId64, now->tm_year + 1900,
-             now->tm_mon + 1, now->tm_mday, now->tm_hour, now->tm_min,
-             now->tm_sec, static_cast<std::int64_t>(dftracer_utils_ts_millis));
+             "%04d-%02d-%02d %02d:%02d:%02d.%03" PRId64, now.tm_year + 1900,
+             now.tm_mon + 1, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec,
+             static_cast<std::int64_t>(dftracer_utils_ts_millis));
     return dftracer_utils_ts_time_str;
 }
 }  // namespace dftracer::utils

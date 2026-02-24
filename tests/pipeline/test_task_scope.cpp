@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -257,6 +258,37 @@ TEST_CASE("TaskScope - Regression test for hang fix") {
     CHECK(sum.load() == 15);
 
     executor.shutdown();
+}
+
+TEST_CASE("TaskScope - spawn_producer unwinds registration on spawn failure") {
+    TaskContext ctx(nullptr, 0, nullptr);
+    TaskScope scope(&ctx);
+    coro::Channel<int> channel(4);
+
+    CHECK_THROWS_AS(
+        scope.spawn_producer(
+            channel, [](TaskContext&) -> coro::Generator<int> { co_yield 1; }),
+        std::runtime_error);
+
+    CHECK(channel.num_producers() == 0);
+    CHECK(channel.is_closed() == true);
+}
+
+TEST_CASE("TaskScope - spawn_transforms unwinds bulk registration on failure") {
+    TaskContext ctx(nullptr, 0, nullptr);
+    TaskScope scope(&ctx);
+    coro::Channel<int> input(4);
+    coro::Channel<int> output(4);
+
+    CHECK_THROWS_AS(scope.spawn_transforms(
+                        input, output, 3,
+                        [](TaskContext&, int value) -> coro::CoroTask<int> {
+                            co_return value;
+                        }),
+                    std::runtime_error);
+
+    CHECK(output.num_producers() == 0);
+    CHECK(output.is_closed() == true);
 }
 
 //============================================================================

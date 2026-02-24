@@ -8,9 +8,43 @@
 #include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
+#include <chrono>
 #include <fstream>
+#include <thread>
 
 namespace dftracer::utils::utilities::composites {
+
+namespace {
+
+bool blocking_send_batch(coro::Channel<StreamingMergeBatchUtility>& channel,
+                         StreamingMergeBatchUtility batch) {
+    constexpr auto backoff = std::chrono::microseconds{10};
+    while (true) {
+        if (channel.try_send(batch)) {
+            return true;
+        }
+        if (channel.is_closed()) {
+            return false;
+        }
+        std::this_thread::sleep_for(backoff);
+    }
+}
+
+bool blocking_receive_batch(coro::Channel<StreamingMergeBatchUtility>& channel,
+                            StreamingMergeBatchUtility& batch) {
+    constexpr auto backoff = std::chrono::microseconds{10};
+    while (true) {
+        if (channel.try_receive(batch)) {
+            return true;
+        }
+        if (channel.is_closed_and_done()) {
+            return false;
+        }
+        std::this_thread::sleep_for(backoff);
+    }
+}
+
+}  // namespace
 
 StreamingFileProducerOutput StreamingFileProducerUtility::process(
     const StreamingFileProducerInput& input) {
@@ -71,7 +105,9 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
                     result.events_sent++;
 
                     if (batch.size() >= input.batch_size) {
-                        channel_->send_blocking(std::move(batch));
+                        if (!blocking_send_batch(*channel_, std::move(batch))) {
+                            return result;
+                        }
                         batch = StreamingMergeBatchUtility{};
                     }
                 }
@@ -79,7 +115,9 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
         }
 
         if (!batch.empty()) {
-            channel_->send_blocking(std::move(batch));
+            if (!blocking_send_batch(*channel_, std::move(batch))) {
+                return result;
+            }
         }
 
         result.input_hash = hasher.get_hash();
@@ -111,7 +149,7 @@ StreamingFileConsumerOutput StreamingFileConsumerUtility::process(
         StreamingMergeBatchUtility batch;
         bool first = true;
 
-        while (channel_->receive(batch)) {
+        while (blocking_receive_batch(*channel_, batch)) {
             result.output_hash += batch.batch_hash;
 
             for (auto& content : batch.contents) {

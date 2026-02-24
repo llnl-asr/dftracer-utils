@@ -451,7 +451,10 @@ int main(int argc, char** argv) {
                         }
 
                         for (auto& chunk : file_chunks) {
-                            chunk_chan->send_blocking(std::move(chunk));
+                            if (!co_await chunk_chan->send_async(
+                                    std::move(chunk))) {
+                                co_return;
+                            }
                         }
 
                         co_return;
@@ -467,10 +470,13 @@ int main(int argc, char** argv) {
                     scope.spawn([&](TaskContext& wctx) -> coro::CoroTask<void> {
                         [[maybe_unused]] auto producer_guard =
                             result_chan->adopt_producer();
-                        while (auto input =
-                                   co_await wctx.receive_async(chunk_chan)) {
+                        while (auto input = co_await wctx.receive(chunk_chan)) {
                             ChunkAggregatorUtility agg;
-                            result_chan->send_blocking(agg.process(*input));
+                            auto output = agg.process(*input);
+                            if (!co_await result_chan->send_async(
+                                    std::move(output))) {
+                                co_return;
+                            }
                         }
                         co_return;
                     });
@@ -478,8 +484,7 @@ int main(int argc, char** argv) {
 
                 // Streaming merger: incremental merge
                 scope.spawn([&](TaskContext& mctx) -> coro::CoroTask<void> {
-                    while (auto output =
-                               co_await mctx.receive_async(result_chan)) {
+                    while (auto output = co_await mctx.receive(result_chan)) {
                         merger.merge_chunk(std::move(*output));
                     }
                     co_return;

@@ -79,6 +79,27 @@
         "DFTRACER_UTILS_TESTS": "ON",
         "DFTRACER_UTILS_DEBUG": "ON"
       }
+    },
+    {
+      "name": "asan",
+      "displayName": "Address Sanitizer (Debug)",
+      "description": "Debug build with Address Sanitizer enabled",
+      "inherits": "debug",
+      "cacheVariables": {
+        "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_ENABLE_ASAN": "ON"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "Thread Sanitizer (Debug)",
+      "description": "Debug build with Thread Sanitizer enabled",
+      "inherits": "debug",
+      "cacheVariables": {
+        "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_ENABLE_TSAN": "ON",
+        "DFTRACER_UTILS_COVERAGE": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -123,6 +144,18 @@
       "displayName": "Tests Build",
       "configurePreset": "tests",
       "jobs": 0
+    },
+    {
+      "name": "asan",
+      "displayName": "ASAN Build",
+      "configurePreset": "asan",
+      "jobs": 0
+    },
+    {
+      "name": "tsan",
+      "displayName": "TSAN Build",
+      "configurePreset": "tsan",
+      "jobs": 0
     }
   ],
   "testPresets": [
@@ -130,6 +163,28 @@
       "name": "tests",
       "displayName": "Run Tests",
       "configurePreset": "tests",
+      "execution": {
+        "jobs": 0
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "Run ASAN Tests",
+      "configurePreset": "asan",
+      "execution": {
+        "jobs": 0
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "Run TSAN Tests",
+      "configurePreset": "tsan",
       "execution": {
         "jobs": 0
       },

@@ -122,9 +122,9 @@ Use ``Channel<T>`` for streaming data between tasks. This pattern is useful when
                auto guard = channel->producer_guard();
 
                // Read and send batches
-               for (auto& batch : read_batches(input_files[i])) {
-                   channel->send_blocking(std::move(batch));
-               }
+                for (auto& batch : read_batches(input_files[i])) {
+                    co_await channel->send_async(std::move(batch));
+                }
                co_return;
            },
            "Producer-" + std::to_string(i));
@@ -134,9 +134,8 @@ Use ``Channel<T>`` for streaming data between tasks. This pattern is useful when
    // Single consumer task
    auto consumer = make_task(
        [&channel, &output_file](TaskContext& ctx) -> coro::CoroTask<void> {
-           Batch batch;
-           while (channel->receive(batch)) {
-               write_batch(output_file, batch);
+           while (auto batch = co_await channel->receive()) {
+               write_batch(output_file, *batch);
            }
            co_return;
        },

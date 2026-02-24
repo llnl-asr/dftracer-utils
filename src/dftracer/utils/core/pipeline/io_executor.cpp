@@ -71,6 +71,11 @@ void IOExecutor::shutdown() {
         return;  // Already stopped
     }
 
+    // Enqueue poison-pill sentinels to unblock each I/O thread
+    for (std::size_t i = 0; i < num_io_threads_; ++i) {
+        io_request_queue_.enqueue(IORequest{});
+    }
+
     // Join I/O threads
     for (auto& thread : io_threads_) {
         if (thread.joinable()) {
@@ -117,15 +122,18 @@ bool IOExecutor::try_pop_fast_path(std::size_t worker_id, TaskItem& item) {
 // ============================================================================
 
 void IOExecutor::io_thread_loop(std::size_t thread_id) {
-    // I/O thread main loop
-    while (running_.load()) {
-        // Try to dequeue I/O request (blocking with timeout)
+    // I/O thread main loop — blocks until work arrives.
+    // Shutdown enqueues a poison pill (null io_func) per thread to unblock.
+    while (true) {
         IORequest request;
-        if (io_request_queue_.wait_dequeue_timed(
-                request, std::chrono::milliseconds(10))) {
-            // Execute the I/O request
-            execute_io_request(thread_id, request);
+        io_request_queue_.wait_dequeue(request);
+
+        // Null io_func is the shutdown sentinel
+        if (!request.io_func) {
+            break;
         }
+
+        execute_io_request(thread_id, request);
     }
 }
 

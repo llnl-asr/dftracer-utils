@@ -53,11 +53,11 @@ struct WhenAllVectorState {
             completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count == total_) {
             // Mark all tasks as completed
-            all_completed_.store(true, std::memory_order_release);
+            all_completed_.store(true, std::memory_order_seq_cst);
 
             // Check if await_suspend has decided to suspend
             // If so, we're responsible for resumption
-            if (suspended_.load(std::memory_order_acquire)) {
+            if (suspended_.load(std::memory_order_seq_cst)) {
                 if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
                     if (executor_) {
                         schedule_coroutine_resumption_helper(
@@ -85,11 +85,11 @@ struct WhenAllVectorState {
 
     // Called by await_suspend after deciding to suspend but before returning
     void mark_suspended_and_check_completion() {
-        suspended_.store(true, std::memory_order_release);
+        suspended_.store(true, std::memory_order_seq_cst);
 
         // Double-check: all tasks might have completed between our count check
         // and setting suspended_. If so, we need to schedule resumption.
-        if (all_completed_.load(std::memory_order_acquire)) {
+        if (all_completed_.load(std::memory_order_seq_cst)) {
             if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
                 if (executor_) {
                     schedule_coroutine_resumption_helper(executor_,
@@ -268,11 +268,11 @@ struct WhenAllVectorState<Awaitable> {
             completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
         if (count == total_) {
             // Mark all tasks as completed
-            all_completed_.store(true, std::memory_order_release);
+            all_completed_.store(true, std::memory_order_seq_cst);
 
             // Check if await_suspend has decided to suspend
             // If so, we're responsible for resumption
-            if (suspended_.load(std::memory_order_acquire)) {
+            if (suspended_.load(std::memory_order_seq_cst)) {
                 if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
                     if (executor_) {
                         schedule_coroutine_resumption_helper(
@@ -300,11 +300,11 @@ struct WhenAllVectorState<Awaitable> {
 
     // Called by await_suspend after deciding to suspend but before returning
     void mark_suspended_and_check_completion() {
-        suspended_.store(true, std::memory_order_release);
+        suspended_.store(true, std::memory_order_seq_cst);
 
         // Double-check: all tasks might have completed between our count check
         // and setting suspended_. If so, we need to schedule resumption.
-        if (all_completed_.load(std::memory_order_acquire)) {
+        if (all_completed_.load(std::memory_order_seq_cst)) {
             if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
                 if (executor_) {
                     schedule_coroutine_resumption_helper(executor_,

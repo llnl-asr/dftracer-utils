@@ -33,14 +33,29 @@ std::coroutine_handle<> TaskFuture<T>::await_suspend(
     }
 
     auto* executor = scheduler_->get_executor();
-    scheduler_->register_task_completion_callback(
-        task_id_, [awaiting, executor]() {
-            if (executor) {
-                executor->schedule_coroutine_resumption(awaiting);
-            } else {
-                awaiting.resume();
-            }
-        });
+    auto complete_and_resume = [awaiting, executor,
+                                completed = completed_]() mutable {
+        bool expected = false;
+        if (!completed->compare_exchange_strong(expected, true,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_relaxed)) {
+            return;
+        }
+        if (executor) {
+            executor->schedule_coroutine_resumption(awaiting);
+        } else {
+            awaiting.resume();
+        }
+    };
+
+    scheduler_->register_task_completion_callback(task_id_,
+                                                  complete_and_resume);
+
+    // Close the race where task completion happens between is_completed() check
+    // and callback registration.
+    if (task_->is_completed()) {
+        complete_and_resume();
+    }
 
     return std::noop_coroutine();
 }
@@ -85,14 +100,29 @@ std::coroutine_handle<> TaskFuture<void>::await_suspend(
     }
 
     auto* executor = scheduler_->get_executor();
-    scheduler_->register_task_completion_callback(
-        task_id_, [awaiting, executor]() {
-            if (executor) {
-                executor->schedule_coroutine_resumption(awaiting);
-            } else {
-                awaiting.resume();
-            }
-        });
+    auto complete_and_resume = [awaiting, executor,
+                                completed = completed_]() mutable {
+        bool expected = false;
+        if (!completed->compare_exchange_strong(expected, true,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_relaxed)) {
+            return;
+        }
+        if (executor) {
+            executor->schedule_coroutine_resumption(awaiting);
+        } else {
+            awaiting.resume();
+        }
+    };
+
+    scheduler_->register_task_completion_callback(task_id_,
+                                                  complete_and_resume);
+
+    // Close the race where task completion happens between is_completed() check
+    // and callback registration.
+    if (task_->is_completed()) {
+        complete_and_resume();
+    }
 
     return std::noop_coroutine();
 }

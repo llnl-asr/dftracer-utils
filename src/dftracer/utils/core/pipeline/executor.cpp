@@ -113,6 +113,17 @@ void Executor::worker_thread(WorkerContext* context) {
         TaskItem task;
         std::coroutine_handle<> pending_resume;
 
+        // Snapshot the work signal BEFORE checking any queues.
+        // This ensures that any signal increment (from enqueue +
+        // signal_global_work) that happens AFTER this load will be detected by
+        // the wait predicate below, even if the actual queue check sees the
+        // queue as empty. Loading it inside the else branch (after queue
+        // checks) creates a race: work can arrive between the queue check and
+        // the signal load, causing the worker to sleep with the updated signal
+        // value while work sits in the queue.
+        const std::uint64_t observed_signal =
+            work_signal_.load(std::memory_order_acquire);
+
         // Priority order:
         // 0. Pending coroutine resumptions (highest priority for
         // responsiveness)
@@ -141,8 +152,6 @@ void Executor::worker_thread(WorkerContext* context) {
         // 5. No work available
         else {
             context->is_idle = true;
-            const std::uint64_t observed_signal =
-                work_signal_.load(std::memory_order_acquire);
             std::unique_lock<std::mutex> lock(context->queue_mutex);
             context->cv.wait(lock, [this, context, observed_signal] {
                 return !running_.load(std::memory_order_acquire) ||

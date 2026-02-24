@@ -184,6 +184,12 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
     ready_queue_.enqueue(source);
     has_ready_tasks_.store(true, std::memory_order_release);
     ready_signal_.fetch_add(1, std::memory_order_acq_rel);
+    // Lock-then-unlock ready_mutex_ before notifying to prevent lost
+    // notifications. This ensures the scheduling thread is either before its
+    // predicate check (and will see the updated atomics) or inside cv.wait
+    // (and will receive the notification).
+    ready_mutex_.lock();
+    ready_mutex_.unlock();
     ready_cv_.notify_one();
 
     // Wait for completion WITH TIMEOUT
@@ -307,6 +313,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
         // Decrement pending count for this completed task
         --pending_count_;
         if (pending_count_ == 0) {
+            std::lock_guard<std::mutex> lock(done_mutex_);
             done_cv_.notify_all();
         }
         return;
@@ -360,6 +367,8 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
             ready_queue_.enqueue(child);
             has_ready_tasks_.store(true, std::memory_order_release);
             ready_signal_.fetch_add(1, std::memory_order_acq_rel);
+            ready_mutex_.lock();
+            ready_mutex_.unlock();
             ready_cv_.notify_one();
         }
     }
@@ -807,6 +816,9 @@ void Scheduler::stop_scheduling_thread() {
     }
 
     scheduling_running_ = false;
+    {
+        std::lock_guard<std::mutex> lock(ready_mutex_);
+    }
     ready_cv_.notify_all();
 
     // Join all scheduling threads
@@ -916,7 +928,16 @@ void Scheduler::request_shutdown() {
     // Request executor shutdown
     executor_->request_shutdown();
 
-    // Wake up waiting threads
+    // Wake up waiting threads — lock-then-unlock ready_mutex_ before
+    // notifying to prevent lost notifications.
+    // NOTE: We intentionally do NOT lock done_mutex_ here because
+    // request_shutdown() can be called from schedule()'s timeout path
+    // which already holds done_mutex_, and std::mutex is not recursive.
+    // The done_cv_ wakeup relies on shutdown_requested_ being set above,
+    // which the predicate will see on its next check.
+    {
+        std::lock_guard<std::mutex> lock(ready_mutex_);
+    }
     ready_cv_.notify_all();
     done_cv_.notify_all();
 }

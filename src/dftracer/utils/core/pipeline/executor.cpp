@@ -440,11 +440,23 @@ void Executor::wake_one_worker() {
 
     const std::size_t worker_index =
         next_worker_.fetch_add(1, std::memory_order_relaxed) % worker_count;
+    // Lock-then-unlock the worker's mutex before notifying.
+    // This ensures the worker is either before its predicate check (and will
+    // see the updated atomic state) or inside cv.wait (and will receive the
+    // notification). Without this, a notification sent between predicate
+    // evaluation and cv.wait entry is lost, causing the worker to hang.
+    workers_[worker_index]->queue_mutex.lock();
+    workers_[worker_index]->queue_mutex.unlock();
     workers_[worker_index]->cv.notify_one();
 }
 
 void Executor::wake_all_workers() {
     for (auto& worker : workers_) {
+        // Lock-then-unlock ensures the worker is either before its predicate
+        // check or inside cv.wait before the notification is sent.
+        // See wake_one_worker() for detailed rationale.
+        worker->queue_mutex.lock();
+        worker->queue_mutex.unlock();
         worker->cv.notify_all();
     }
 }
@@ -694,7 +706,6 @@ void Executor::submit_with_context(const TaskItem& item,
             worker_context->local_queue.push_back(item);
         }
         signal_global_work();
-        worker_context->cv.notify_one();
         update_task_location(item.task->get_id(), TaskInfo::LOCAL_QUEUE,
                              worker_context->worker_id);
     }

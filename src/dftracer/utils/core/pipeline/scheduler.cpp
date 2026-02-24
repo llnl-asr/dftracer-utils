@@ -183,6 +183,8 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
 
     ready_queue_.enqueue(source);
     has_ready_tasks_.store(true, std::memory_order_release);
+    ready_signal_.fetch_add(1, std::memory_order_acq_rel);
+    ready_cv_.notify_one();
 
     // Wait for completion WITH TIMEOUT
     {
@@ -357,6 +359,8 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
             // Add to ready queue
             ready_queue_.enqueue(child);
             has_ready_tasks_.store(true, std::memory_order_release);
+            ready_signal_.fetch_add(1, std::memory_order_acq_rel);
+            ready_cv_.notify_one();
         }
     }
 
@@ -803,6 +807,7 @@ void Scheduler::stop_scheduling_thread() {
     }
 
     scheduling_running_ = false;
+    ready_cv_.notify_all();
 
     // Join all scheduling threads
     for (auto& thread : scheduling_threads_) {
@@ -818,14 +823,24 @@ void Scheduler::stop_scheduling_thread() {
 
 void Scheduler::scheduling_loop() {
     DFTRACER_UTILS_LOG_DEBUG("%s", "Scheduling loop started");
+    std::uint64_t seen_signal = ready_signal_.load(std::memory_order_acquire);
 
-    while (scheduling_running_.load()) {
-        if (!has_ready_tasks_.load(std::memory_order_acquire)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
+    while (true) {
+        {
+            std::unique_lock<std::mutex> lock(ready_mutex_);
+            ready_cv_.wait(lock, [this, &seen_signal]() {
+                return !scheduling_running_.load(std::memory_order_acquire) ||
+                       shutdown_requested_.load(std::memory_order_acquire) ||
+                       has_ready_tasks_.load(std::memory_order_acquire) ||
+                       ready_signal_.load(std::memory_order_acquire) !=
+                           seen_signal;
+            });
         }
 
-        if (!scheduling_running_.load() || shutdown_requested_.load()) {
+        seen_signal = ready_signal_.load(std::memory_order_acquire);
+
+        if (!scheduling_running_.load(std::memory_order_acquire) ||
+            shutdown_requested_.load(std::memory_order_acquire)) {
             break;
         }
 
@@ -902,6 +917,7 @@ void Scheduler::request_shutdown() {
     executor_->request_shutdown();
 
     // Wake up waiting threads
+    ready_cv_.notify_all();
     done_cv_.notify_all();
 }
 

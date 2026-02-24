@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <coroutine>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -90,6 +91,9 @@ class Scheduler {
     // Task queue for scheduling (tasks that became ready) - lock-free MPMC
     moodycamel::ConcurrentQueue<std::shared_ptr<Task>> ready_queue_;
     std::atomic<bool> has_ready_tasks_{false};
+    std::atomic<std::uint64_t> ready_signal_{0};
+    mutable std::mutex ready_mutex_;
+    std::condition_variable ready_cv_;
 
     // Watchdog integration
     std::unique_ptr<Watchdog> watchdog_;

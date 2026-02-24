@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -42,12 +43,8 @@ inline void maybe_io_delay_ms(int ms) {
 static void wait_for_task_completion_with_deadline(
     const std::shared_ptr<Task>& task,
     std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (!task->is_completed()) {
-        REQUIRE(std::chrono::steady_clock::now() <= deadline);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    REQUIRE(task->is_completed());
+    auto future = task->get_future();
+    REQUIRE(future.wait_for(timeout) == std::future_status::ready);
 }
 
 }  // namespace

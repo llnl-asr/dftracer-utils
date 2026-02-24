@@ -2,7 +2,8 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_STREAMING_FILE_MERGER_UTILITY_H
 
 #include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/utilities/utilities.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/tasks/task_context.h>
 #include <dftracer/utils/utilities/composites/dft/event_hasher_utility.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
 #include <dftracer/utils/utilities/composites/file_merger_utility.h>
@@ -109,9 +110,7 @@ struct StreamingFileProducerOutput {
  * auto result = producer.process(input);
  * @endcode
  */
-class StreamingFileProducerUtility
-    : public utilities::Utility<StreamingFileProducerInput,
-                                StreamingFileProducerOutput> {
+class StreamingFileProducerUtility {
    private:
     std::shared_ptr<coro::Channel<StreamingMergeBatchUtility>> channel_;
 
@@ -120,8 +119,8 @@ class StreamingFileProducerUtility
         std::shared_ptr<coro::Channel<StreamingMergeBatchUtility>> channel)
         : channel_(std::move(channel)) {}
 
-    StreamingFileProducerOutput process(
-        const StreamingFileProducerInput& input) override;
+    coro::CoroTask<StreamingFileProducerOutput> process_async(
+        TaskContext& ctx, const StreamingFileProducerInput& input);
 };
 
 /**
@@ -165,9 +164,7 @@ struct StreamingFileConsumerOutput {
  * auto result = consumer.process(input);
  * @endcode
  */
-class StreamingFileConsumerUtility
-    : public utilities::Utility<StreamingFileConsumerInput,
-                                StreamingFileConsumerOutput> {
+class StreamingFileConsumerUtility {
    private:
     std::shared_ptr<coro::Channel<StreamingMergeBatchUtility>> channel_;
 
@@ -176,8 +173,8 @@ class StreamingFileConsumerUtility
         std::shared_ptr<coro::Channel<StreamingMergeBatchUtility>> channel)
         : channel_(std::move(channel)) {}
 
-    StreamingFileConsumerOutput process(
-        const StreamingFileConsumerInput& input) override;
+    coro::CoroTask<StreamingFileConsumerOutput> process_async(
+        TaskContext& ctx, const StreamingFileConsumerInput& input);
 };
 
 }  // namespace dftracer::utils::utilities::composites

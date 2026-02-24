@@ -8,45 +8,14 @@
 #include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
-#include <chrono>
 #include <fstream>
-#include <thread>
+#include <utility>
 
 namespace dftracer::utils::utilities::composites {
 
-namespace {
-
-bool blocking_send_batch(coro::Channel<StreamingMergeBatchUtility>& channel,
-                         StreamingMergeBatchUtility batch) {
-    constexpr auto backoff = std::chrono::microseconds{10};
-    while (true) {
-        if (channel.try_send(batch)) {
-            return true;
-        }
-        if (channel.is_closed()) {
-            return false;
-        }
-        std::this_thread::sleep_for(backoff);
-    }
-}
-
-bool blocking_receive_batch(coro::Channel<StreamingMergeBatchUtility>& channel,
-                            StreamingMergeBatchUtility& batch) {
-    constexpr auto backoff = std::chrono::microseconds{10};
-    while (true) {
-        if (channel.try_receive(batch)) {
-            return true;
-        }
-        if (channel.is_closed_and_done()) {
-            return false;
-        }
-        std::this_thread::sleep_for(backoff);
-    }
-}
-
-}  // namespace
-
-StreamingFileProducerOutput StreamingFileProducerUtility::process(
+coro::CoroTask<StreamingFileProducerOutput>
+StreamingFileProducerUtility::process_async(
+    [[maybe_unused]] TaskContext& ctx,
     const StreamingFileProducerInput& input) {
     StreamingFileProducerOutput result;
     result.file_path = input.file_path;
@@ -69,7 +38,7 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
             if (!index_result.success) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to build index for %s",
                                          input.file_path.c_str());
-                return result;
+                co_return result;
             }
         }
 
@@ -105,8 +74,8 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
                     result.events_sent++;
 
                     if (batch.size() >= input.batch_size) {
-                        if (!blocking_send_batch(*channel_, std::move(batch))) {
-                            return result;
+                        if (!co_await channel_->send(std::move(batch))) {
+                            co_return result;
                         }
                         batch = StreamingMergeBatchUtility{};
                     }
@@ -115,8 +84,8 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
         }
 
         if (!batch.empty()) {
-            if (!blocking_send_batch(*channel_, std::move(batch))) {
-                return result;
+            if (!co_await channel_->send(std::move(batch))) {
+                co_return result;
             }
         }
 
@@ -132,11 +101,12 @@ StreamingFileProducerOutput StreamingFileProducerUtility::process(
         result.success = false;
     }
 
-    return result;
+    co_return result;
 }
 
-StreamingFileConsumerOutput StreamingFileConsumerUtility::process(
-    const StreamingFileConsumerInput& input) {
+coro::CoroTask<StreamingFileConsumerOutput>
+StreamingFileConsumerUtility::process_async(
+    TaskContext& ctx, const StreamingFileConsumerInput& input) {
     StreamingFileConsumerOutput result;
     result.output_path = input.output_file;
 
@@ -149,10 +119,11 @@ StreamingFileConsumerOutput StreamingFileConsumerUtility::process(
         StreamingMergeBatchUtility batch;
         bool first = true;
 
-        while (blocking_receive_batch(*channel_, batch)) {
-            result.output_hash += batch.batch_hash;
+        while (auto next = co_await ctx.receive(channel_)) {
+            auto& current = *next;
+            result.output_hash += current.batch_hash;
 
-            for (auto& content : batch.contents) {
+            for (auto& content : current.contents) {
                 if (!first) {
                     io::RawData newline_data{std::vector<unsigned char>{'\n'}};
                     writer.process(newline_data);
@@ -202,7 +173,7 @@ StreamingFileConsumerOutput StreamingFileConsumerUtility::process(
         result.success = false;
     }
 
-    return result;
+    co_return result;
 }
 
 }  // namespace dftracer::utils::utilities::composites

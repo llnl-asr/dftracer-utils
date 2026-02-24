@@ -6,10 +6,12 @@
 #include <any>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <coroutine>
 #include <exception>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <thread>
 
@@ -43,6 +45,8 @@ class TaskFuture {
 
     std::shared_ptr<std::atomic<bool>> completed_;
     std::shared_ptr<std::atomic<bool>> cancellation_token_;
+    std::shared_ptr<std::mutex> wait_mutex_;
+    std::shared_ptr<std::condition_variable> wait_cv_;
 
     // Allow conversion constructors to access private members
     template <typename U>
@@ -68,7 +72,9 @@ class TaskFuture {
           task_id_(task_id),
           scheduler_(scheduler),
           completed_(std::make_shared<std::atomic<bool>>(false)),
-          cancellation_token_(cancellation_token) {}
+          cancellation_token_(cancellation_token),
+          wait_mutex_(std::make_shared<std::mutex>()),
+          wait_cv_(std::make_shared<std::condition_variable>()) {}
 
     /**
      * Default constructor (invalid future)
@@ -78,7 +84,9 @@ class TaskFuture {
           task_id_(0),
           scheduler_(nullptr),
           completed_(std::make_shared<std::atomic<bool>>(false)),
-          cancellation_token_(nullptr) {}
+          cancellation_token_(nullptr),
+          wait_mutex_(std::make_shared<std::mutex>()),
+          wait_cv_(std::make_shared<std::condition_variable>()) {}
 
     /**
      * Implicit conversion constructor from TaskFuture<std::any>
@@ -98,7 +106,9 @@ class TaskFuture {
           task_id_(any_future.get_task_id()),
           scheduler_(any_future.get_scheduler()),
           completed_(any_future.get_completed_flag()),
-          cancellation_token_(any_future.get_cancellation_token()) {}
+          cancellation_token_(any_future.get_cancellation_token()),
+          wait_mutex_(any_future.wait_mutex_),
+          wait_cv_(any_future.wait_cv_) {}
 
     /**
      * Implicit conversion constructor from any TaskFuture<U> to
@@ -117,7 +127,9 @@ class TaskFuture {
           task_id_(typed_future.get_task_id()),
           scheduler_(typed_future.get_scheduler()),
           completed_(typed_future.get_completed_flag()),
-          cancellation_token_(typed_future.get_cancellation_token()) {}
+          cancellation_token_(typed_future.get_cancellation_token()),
+          wait_mutex_(typed_future.wait_mutex_),
+          wait_cv_(typed_future.wait_cv_) {}
 
     // Copyable (shared ownership semantics)
     TaskFuture(const TaskFuture&) = default;
@@ -167,6 +179,7 @@ class TaskFuture {
      */
     void mark_completed() {
         completed_->store(true, std::memory_order_release);
+        wait_cv_->notify_all();
     }
 
     // ========================================================================
@@ -186,9 +199,11 @@ class TaskFuture {
      * Blocking wait - waits for task completion without retrieving result
      */
     void wait() const {
-        while (!completed_->load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-        }
+        if (completed_->load(std::memory_order_acquire)) return;
+        std::unique_lock<std::mutex> lock(*wait_mutex_);
+        wait_cv_->wait(lock, [this]() {
+            return completed_->load(std::memory_order_acquire);
+        });
     }
 
     /**
@@ -200,14 +215,14 @@ class TaskFuture {
     template <class Rep, class Period>
     std::future_status wait_for(
         const std::chrono::duration<Rep, Period>& timeout_duration) const {
-        auto start = std::chrono::steady_clock::now();
-        while (!completed_->load(std::memory_order_acquire)) {
-            if (std::chrono::steady_clock::now() - start >= timeout_duration) {
-                return std::future_status::timeout;
-            }
-            std::this_thread::yield();
+        if (completed_->load(std::memory_order_acquire)) {
+            return std::future_status::ready;
         }
-        return std::future_status::ready;
+        std::unique_lock<std::mutex> lock(*wait_mutex_);
+        bool done = wait_cv_->wait_for(lock, timeout_duration, [this]() {
+            return completed_->load(std::memory_order_acquire);
+        });
+        return done ? std::future_status::ready : std::future_status::timeout;
     }
 
     /**
@@ -219,13 +234,14 @@ class TaskFuture {
     template <class Clock, class Duration>
     std::future_status wait_until(
         const std::chrono::time_point<Clock, Duration>& timeout_time) const {
-        while (!completed_->load(std::memory_order_acquire)) {
-            if (Clock::now() >= timeout_time) {
-                return std::future_status::timeout;
-            }
-            std::this_thread::yield();
+        if (completed_->load(std::memory_order_acquire)) {
+            return std::future_status::ready;
         }
-        return std::future_status::ready;
+        std::unique_lock<std::mutex> lock(*wait_mutex_);
+        bool done = wait_cv_->wait_until(lock, timeout_time, [this]() {
+            return completed_->load(std::memory_order_acquire);
+        });
+        return done ? std::future_status::ready : std::future_status::timeout;
     }
 
     /**
@@ -302,6 +318,8 @@ class TaskFuture<void> {
 
     std::shared_ptr<std::atomic<bool>> completed_;
     std::shared_ptr<std::atomic<bool>> cancellation_token_;
+    std::shared_ptr<std::mutex> wait_mutex_;
+    std::shared_ptr<std::condition_variable> wait_cv_;
 
     // Allow conversion constructors to access private members
     template <typename U>
@@ -318,14 +336,18 @@ class TaskFuture<void> {
           task_id_(task_id),
           scheduler_(scheduler),
           completed_(std::make_shared<std::atomic<bool>>(false)),
-          cancellation_token_(cancellation_token) {}
+          cancellation_token_(cancellation_token),
+          wait_mutex_(std::make_shared<std::mutex>()),
+          wait_cv_(std::make_shared<std::condition_variable>()) {}
 
     TaskFuture()
         : task_(nullptr),
           task_id_(0),
           scheduler_(nullptr),
           completed_(std::make_shared<std::atomic<bool>>(false)),
-          cancellation_token_(nullptr) {}
+          cancellation_token_(nullptr),
+          wait_mutex_(std::make_shared<std::mutex>()),
+          wait_cv_(std::make_shared<std::condition_variable>()) {}
 
     /**
      * Implicit conversion constructor from TaskFuture<std::any>
@@ -340,7 +362,9 @@ class TaskFuture<void> {
           task_id_(any_future.get_task_id()),
           scheduler_(any_future.get_scheduler()),
           completed_(any_future.get_completed_flag()),
-          cancellation_token_(any_future.get_cancellation_token()) {}
+          cancellation_token_(any_future.get_cancellation_token()),
+          wait_mutex_(any_future.wait_mutex_),
+          wait_cv_(any_future.wait_cv_) {}
 
     /**
      * Implicit conversion constructor from any TaskFuture<T>
@@ -360,7 +384,9 @@ class TaskFuture<void> {
           task_id_(typed_future.get_task_id()),
           scheduler_(typed_future.get_scheduler()),
           completed_(typed_future.get_completed_flag()),
-          cancellation_token_(typed_future.get_cancellation_token()) {}
+          cancellation_token_(typed_future.get_cancellation_token()),
+          wait_mutex_(typed_future.wait_mutex_),
+          wait_cv_(typed_future.wait_cv_) {}
 
     TaskFuture(const TaskFuture&) = default;
     TaskFuture& operator=(const TaskFuture&) = default;
@@ -379,39 +405,43 @@ class TaskFuture<void> {
 
     void mark_completed() {
         completed_->store(true, std::memory_order_release);
+        wait_cv_->notify_all();
     }
 
     void get();
 
     void wait() const {
-        while (!completed_->load(std::memory_order_acquire)) {
-            std::this_thread::yield();
-        }
+        if (completed_->load(std::memory_order_acquire)) return;
+        std::unique_lock<std::mutex> lock(*wait_mutex_);
+        wait_cv_->wait(lock, [this]() {
+            return completed_->load(std::memory_order_acquire);
+        });
     }
 
     template <class Rep, class Period>
     std::future_status wait_for(
         const std::chrono::duration<Rep, Period>& timeout_duration) const {
-        auto start = std::chrono::steady_clock::now();
-        while (!completed_->load(std::memory_order_acquire)) {
-            if (std::chrono::steady_clock::now() - start >= timeout_duration) {
-                return std::future_status::timeout;
-            }
-            std::this_thread::yield();
+        if (completed_->load(std::memory_order_acquire)) {
+            return std::future_status::ready;
         }
-        return std::future_status::ready;
+        std::unique_lock<std::mutex> lock(*wait_mutex_);
+        bool done = wait_cv_->wait_for(lock, timeout_duration, [this]() {
+            return completed_->load(std::memory_order_acquire);
+        });
+        return done ? std::future_status::ready : std::future_status::timeout;
     }
 
     template <class Clock, class Duration>
     std::future_status wait_until(
         const std::chrono::time_point<Clock, Duration>& timeout_time) const {
-        while (!completed_->load(std::memory_order_acquire)) {
-            if (Clock::now() >= timeout_time) {
-                return std::future_status::timeout;
-            }
-            std::this_thread::yield();
+        if (completed_->load(std::memory_order_acquire)) {
+            return std::future_status::ready;
         }
-        return std::future_status::ready;
+        std::unique_lock<std::mutex> lock(*wait_mutex_);
+        bool done = wait_cv_->wait_until(lock, timeout_time, [this]() {
+            return completed_->load(std::memory_order_acquire);
+        });
+        return done ? std::future_status::ready : std::future_status::timeout;
     }
 
     bool is_ready() const noexcept {

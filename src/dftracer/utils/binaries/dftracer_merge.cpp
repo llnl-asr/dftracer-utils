@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
                         .with_batch_size(batch_size)
                         .with_force_rebuild(force_override);
 
-                auto result = producer.process(input);
+                auto result = co_await producer.process_async(ctx, input);
                 producer_results[i] = result;
 
                 co_return result;
@@ -299,7 +299,7 @@ int main(int argc, char** argv) {
             auto input = StreamingFileConsumerInput::with_output(output_file)
                              .with_compression(compress_output);
 
-            consumer_result = consumer.process(input);
+            consumer_result = co_await consumer.process_async(ctx, input);
             co_return consumer_result;
         },
         "Consumer");

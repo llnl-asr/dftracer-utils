@@ -86,8 +86,12 @@ foreach(test_file ${TEST_CPP_SOURCES})
   # Keep their timeout and serialize only this pair via a shared lock.
   if(bin_exec STREQUAL "pipeline/test_task_scope"
      OR bin_exec STREQUAL "coro/test_channel")
+    set(heavy_thread_timeout 180)
+    if(DFTRACER_UTILS_ENABLE_TSAN)
+      set(heavy_thread_timeout 600)
+    endif()
     set_tests_properties(${bin_exec} PROPERTIES
-                                           TIMEOUT 180
+                                           TIMEOUT ${heavy_thread_timeout}
                                            RESOURCE_LOCK heavy_threading)
   endif()
 endforeach()

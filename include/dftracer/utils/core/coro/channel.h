@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <utility>
 
 #include "dftracer/utils/core/coro/resumption_helper.h"
 
@@ -350,7 +351,10 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         bool suspended_{false};
 
        public:
-        SendAwaitable(Channel* channel, T item)
+        SendAwaitable(Channel* channel, const T& item)
+            : channel_(channel), item_(item) {}
+
+        SendAwaitable(Channel* channel, T&& item)
             : channel_(channel), item_(std::move(item)) {}
 
         SendAwaitable(const SendAwaitable&) = delete;
@@ -895,7 +899,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      * @param item Item to send
      * @return true if sent, false if queue full or closed
      */
-    bool try_send(T item) {
+    bool try_send(const T& item) { return try_send_impl(item); }
+
+    bool try_send(T&& item) { return try_send_impl(std::move(item)); }
+
+   private:
+    template <typename U>
+    bool try_send_impl(U&& item) {
         if (user_closed_.load(std::memory_order_acquire)) return false;
         active_sends_.fetch_add(1, std::memory_order_acq_rel);
 
@@ -914,7 +924,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
             ReceiveWaiterNode* waiter = pop_receive_waiter_locked();
             if (waiter) {
                 if (waiter->result) {
-                    *(waiter->result) = std::optional<T>(std::move(item));
+                    *(waiter->result) = std::optional<T>(std::forward<U>(item));
                 }
                 resume_handle = waiter->handle;
                 resume_executor = waiter->executor;
@@ -929,7 +939,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
                 }
 
                 pending_items_.fetch_add(1, std::memory_order_acq_rel);
-                enqueued = queue_.try_enqueue(std::move(item));
+                enqueued = queue_.try_enqueue(std::forward<U>(item));
                 if (enqueued) {
                 } else if (capacity_ != SIZE_MAX) {
                     pending_items_.fetch_sub(1, std::memory_order_acq_rel);
@@ -953,6 +963,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         return resume_handle || enqueued;
     }
 
+   public:
     /**
      * Try to receive without blocking
      *
@@ -973,7 +984,11 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
     ReceiveAwaitable receive() { return ReceiveAwaitable(this); }
 
-    SendAwaitable send_async(T item) {
+    SendAwaitable send_async(const T& item) {
+        return SendAwaitable(this, item);
+    }
+
+    SendAwaitable send_async(T&& item) {
         return SendAwaitable(this, std::move(item));
     }
 

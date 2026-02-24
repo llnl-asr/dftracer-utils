@@ -20,6 +20,25 @@ using namespace dftracer::utils;
 
 namespace {
 
+#if defined(__SANITIZE_THREAD__)
+constexpr bool kTsanBuild = true;
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+constexpr bool kTsanBuild = true;
+#else
+constexpr bool kTsanBuild = false;
+#endif
+#else
+constexpr bool kTsanBuild = false;
+#endif
+
+inline void maybe_io_delay_ms(int ms) {
+    if (kTsanBuild) {
+        return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
 static void wait_for_task_completion_with_deadline(
     const std::shared_ptr<Task>& task,
     std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
@@ -366,8 +385,7 @@ TEST_CASE("TaskScope - spawn_async_producer with AsyncGenerator and I/O") {
                         for (int i = 1; i <= 10; ++i) {
                             // Async I/O operation
                             int value = co_await inner_ctx.spawn_io([i]() {
-                                std::this_thread::sleep_for(
-                                    std::chrono::milliseconds(1));
+                                maybe_io_delay_ms(1);
                                 return i;
                             });
                             co_yield value;
@@ -420,8 +438,7 @@ TEST_CASE("TaskScope - spawn_async_producer with AsyncGenerator") {
                         for (int i = 0; i < 5; ++i) {
                             // Simulate async I/O using spawn_io
                             auto value = co_await inner_ctx.spawn_io([i]() {
-                                std::this_thread::sleep_for(
-                                    std::chrono::milliseconds(5));
+                                maybe_io_delay_ms(5);
                                 return i * 10;  // 0, 10, 20, 30, 40
                             });
                             co_yield value;
@@ -472,8 +489,7 @@ TEST_CASE("TaskScope - AsyncGenerator with multiple async producers") {
                             for (int i = 0; i < 5; ++i) {
                                 // Async delay
                                 co_await inner_ctx.spawn_io([p, i]() {
-                                    std::this_thread::sleep_for(
-                                        std::chrono::milliseconds(2));
+                                    maybe_io_delay_ms(2);
                                     return p * 100 + i;
                                 });
                                 co_yield p * 100 + i;
@@ -560,8 +576,7 @@ TEST_CASE("TaskScope - AsyncGenerator produces correct sum") {
                         for (int i = 1; i <= 5; ++i) {
                             // Simulate async operation with small delay
                             auto val = co_await inner_ctx.spawn_io([i]() {
-                                std::this_thread::sleep_for(
-                                    std::chrono::milliseconds(1));
+                                maybe_io_delay_ms(1);
                                 return i;
                             });
                             co_yield val;
@@ -630,8 +645,7 @@ TEST_CASE(
                         for (int i = 1; i <= 5; ++i) {
                             // Simulate async operation
                             auto val = co_await inner_ctx.spawn_io([i]() {
-                                std::this_thread::sleep_for(
-                                    std::chrono::milliseconds(1));
+                                maybe_io_delay_ms(1);
                                 return i;
                             });
                             co_yield val;
@@ -679,16 +693,14 @@ TEST_CASE("TaskScope - AsyncGenerator with complex async operations") {
                         for (int i = 1; i <= 5; ++i) {
                             // First async I/O
                             auto raw = co_await inner_ctx.spawn_io([i]() {
-                                std::this_thread::sleep_for(
-                                    std::chrono::milliseconds(2));
+                                maybe_io_delay_ms(2);
                                 return i * 2;  // 2, 4, 6, 8, 10
                             });
 
                             // Second async I/O (processing)
                             auto processed =
                                 co_await inner_ctx.spawn_io([raw]() {
-                                    std::this_thread::sleep_for(
-                                        std::chrono::milliseconds(2));
+                                    maybe_io_delay_ms(2);
                                     return raw + 1;  // 3, 5, 7, 9, 11
                                 });
 
@@ -736,8 +748,7 @@ TEST_CASE("TaskScope - AsyncGenerator with multiple async consumers") {
                     [](TaskContext& inner_ctx) -> coro::AsyncGenerator<int> {
                         for (int i = 0; i < 20; ++i) {
                             co_await inner_ctx.spawn_io([i]() {
-                                std::this_thread::sleep_for(
-                                    std::chrono::milliseconds(1));
+                                maybe_io_delay_ms(1);
                                 return i;
                             });
                             co_yield i;
@@ -749,10 +760,8 @@ TEST_CASE("TaskScope - AsyncGenerator with multiple async consumers") {
                                       [&](TaskContext& consumer_ctx,
                                           int) -> coro::CoroTask<void> {
                                           // Consumer also does async I/O
-                                          co_await consumer_ctx.spawn_io([]() {
-                                              std::this_thread::sleep_for(
-                                                  std::chrono::milliseconds(2));
-                                          });
+                                          co_await consumer_ctx.spawn_io(
+                                              []() { maybe_io_delay_ms(2); });
                                           items_processed++;
                                           co_return;
                                       });

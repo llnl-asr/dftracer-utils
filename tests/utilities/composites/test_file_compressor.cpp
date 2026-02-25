@@ -39,7 +39,7 @@ TEST_SUITE("FileCompressor") {
             auto input = FileCompressionUtilityInput::from_file(test_file)
                              .with_compression_level(6);
 
-            auto result = compressor.process(input);
+            auto result = compressor.process(input).get();
 
             CHECK(result.success == true);
             CHECK(result.input_path == test_file);
@@ -67,7 +67,7 @@ TEST_SUITE("FileCompressor") {
                 FileCompressionUtilityInput::from_file(test_file).with_output(
                     custom_output);
 
-            auto result = compressor.process(input);
+            auto result = compressor.process(input).get();
 
             CHECK(result.success == true);
             CHECK(result.output_path == custom_output);
@@ -97,12 +97,12 @@ TEST_SUITE("FileCompressor") {
             auto input1 = FileCompressionUtilityInput::from_file(test_file)
                               .with_output(level1_output)
                               .with_compression_level(1);
-            auto result1 = compressor.process(input1);
+            auto result1 = compressor.process(input1).get();
 
             auto input9 = FileCompressionUtilityInput::from_file(test_file)
                               .with_output(level9_output)
                               .with_compression_level(9);
-            auto result9 = compressor.process(input9);
+            auto result9 = compressor.process(input9).get();
 
             CHECK(result1.success == true);
             CHECK(result9.success == true);
@@ -139,12 +139,12 @@ TEST_SUITE("FileCompressor") {
             auto input_small = FileCompressionUtilityInput::from_file(test_file)
                                    .with_output(small_output)
                                    .with_chunk_size(1024);
-            auto result_small = compressor.process(input_small);
+            auto result_small = compressor.process(input_small).get();
 
             auto input_large = FileCompressionUtilityInput::from_file(test_file)
                                    .with_output(large_output)
                                    .with_chunk_size(64 * 1024);
-            auto result_large = compressor.process(input_large);
+            auto result_large = compressor.process(input_large).get();
 
             CHECK(result_small.success == true);
             CHECK(result_large.success == true);
@@ -172,7 +172,7 @@ TEST_SUITE("FileCompressor") {
 
             std::string non_existent = (test_dir / "non_existent.txt").string();
             auto input = FileCompressionUtilityInput::from_file(non_existent);
-            auto result = compressor.process(input);
+            auto result = compressor.process(input).get();
 
             CHECK(result.success == false);
             CHECK(result.error_message.find("does not exist") !=
@@ -190,7 +190,7 @@ TEST_SUITE("FileCompressor") {
             FileCompressorUtility compressor;
 
             auto input = FileCompressionUtilityInput::from_file(test_file);
-            auto result = compressor.process(input);
+            auto result = compressor.process(input).get();
 
             INFO("Compression error: ", result.error_message);
             CHECK(result.success == true);
@@ -210,7 +210,7 @@ TEST_SUITE("FileCompressor") {
 
             auto input = FileCompressionUtilityInput::from_file(test_file)
                              .with_compression_level(100);
-            auto result = compressor.process(input);
+            auto result = compressor.process(input).get();
 
             if (result.success) {
                 CHECK(fs::exists(test_file + ".gz"));
@@ -242,7 +242,7 @@ TEST_SUITE("FileCompressor") {
             FileCompressorUtility compressor;
 
             auto input = FileCompressionUtilityInput::from_file(test_file);
-            auto result = compressor.process(input);
+            auto result = compressor.process(input).get();
 
             INFO("Compression error: ", result.error_message);
             CHECK(result.success == true);

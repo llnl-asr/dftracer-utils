@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/sqlite/async.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
@@ -12,7 +13,7 @@
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
-ManifestIndexBuildOutput ManifestIndexBuilderUtility::process(
+coro::CoroTask<ManifestIndexBuildOutput> ManifestIndexBuilderUtility::process(
     const ManifestIndexBuildInput& input) {
     ManifestIndexBuildOutput output;
     output.file_path = input.file_path;
@@ -25,19 +26,25 @@ ManifestIndexBuildOutput ManifestIndexBuilderUtility::process(
 
         // 2. Check if already indexed
         if (!input.force_rebuild && fs::exists(midx_path)) {
-            try {
-                ManifestIndexDatabase midx(midx_path);
-                midx.init_schema();
-                int fid = midx.get_file_info_id(input.file_path);
-                if (fid >= 0) {
-                    DFTRACER_UTILS_LOG_INFO("Skipping already-indexed file: %s",
-                                            input.file_path.c_str());
-                    output.success = true;
-                    output.was_skipped = true;
-                    return output;
+            bool skip = co_await dftracer::utils::sqlite::run([&] {
+                try {
+                    ManifestIndexDatabase midx(midx_path);
+                    midx.init_schema();
+                    int fid = midx.get_file_info_id(input.file_path);
+                    if (fid >= 0) {
+                        return true;
+                    }
+                } catch (...) {
+                    // Database corrupt or unreadable -- rebuild
                 }
-            } catch (...) {
-                // Database corrupt or unreadable -- rebuild
+                return false;
+            });
+            if (skip) {
+                DFTRACER_UTILS_LOG_INFO("Skipping already-indexed file: %s",
+                                        input.file_path.c_str());
+                output.success = true;
+                output.was_skipped = true;
+                co_return output;
             }
         }
 
@@ -49,7 +56,7 @@ ManifestIndexBuildOutput ManifestIndexBuilderUtility::process(
                 .with_checkpoint_size(input.checkpoint_size)
                 .with_force_rebuild(input.force_rebuild)
                 .with_index(idx_path);
-        composites::dft::IndexBuilderUtility{}.process(idx_input);
+        co_await composites::dft::IndexBuilderUtility{}.process(idx_input);
 
         // 4. Collect metadata
         auto meta_input =
@@ -59,12 +66,13 @@ ManifestIndexBuildOutput ManifestIndexBuilderUtility::process(
                 .with_force_rebuild(false)
                 .with_index(idx_path);
         auto metadata =
-            composites::dft::MetadataCollectorUtility{}.process(meta_input);
+            co_await composites::dft::MetadataCollectorUtility{}.process(
+                meta_input);
 
         if (!metadata.success) {
             output.error_message =
                 "Failed to collect metadata for " + input.file_path;
-            return output;
+            co_return output;
         }
 
         // 5. Parallel chunk indexing with manifest collection
@@ -118,67 +126,70 @@ ManifestIndexBuildOutput ManifestIndexBuilderUtility::process(
 
         for (auto& ci : chunk_inputs) {
             ChunkIndexerUtility idx;
-            results.push_back(idx.process(ci));
+            results.push_back(co_await idx.process(ci));
         }
 
         // 7. Persist to .midx
-        ManifestIndexDatabase midx(midx_path);
-        midx.init_schema();
+        co_await dftracer::utils::sqlite::run([&] {
+            ManifestIndexDatabase midx(midx_path);
+            midx.init_schema();
 
-        std::uint64_t file_hash = 0;
-        if (fs::exists(input.file_path)) {
-            file_hash =
-                static_cast<std::uint64_t>(fs::file_size(input.file_path));
-        }
-        int fid = midx.get_or_create_file_info(input.file_path, file_hash);
-
-        midx.begin_transaction();
-        try {
-            std::size_t total_events = 0;
-
-            for (auto& r : results) {
-                if (!r.success) continue;
-
-                total_events += r.events_processed;
-
-                for (const auto& g : r.event_line_groups) {
-                    queries::insert_event_range(midx.db(), fid,
-                                                r.checkpoint_idx, g.cat, g.name,
-                                                g.line_numbers);
-                }
-
-                for (const auto& g : r.metadata_line_groups) {
-                    queries::insert_metadata_lines(midx.db(), fid,
-                                                   r.checkpoint_idx,
-                                                   g.meta_type, g.line_numbers);
-                }
+            std::uint64_t file_hash = 0;
+            if (fs::exists(input.file_path)) {
+                file_hash =
+                    static_cast<std::uint64_t>(fs::file_size(input.file_path));
             }
+            int fid = midx.get_or_create_file_info(input.file_path, file_hash);
 
-            midx.commit_transaction();
+            midx.begin_transaction();
+            try {
+                std::size_t total_events = 0;
 
-            output.success = true;
-            output.events_processed = total_events;
-            output.chunks_processed = results.size();
+                for (auto& r : results) {
+                    if (!r.success) continue;
 
-            DFTRACER_UTILS_LOG_INFO(
-                "Persisted manifest index for %s "
-                "(%zu chunks)",
-                input.file_path.c_str(), results.size());
-        } catch (const std::exception& e) {
-            output.error_message =
-                std::string("Failed to persist manifest index: ") + e.what();
-            DFTRACER_UTILS_LOG_ERROR(
-                "Failed to persist manifest index for "
-                "%s: %s",
-                input.file_path.c_str(), e.what());
-        }
+                    total_events += r.events_processed;
+
+                    for (const auto& g : r.event_line_groups) {
+                        queries::insert_event_range(midx.db(), fid,
+                                                    r.checkpoint_idx, g.cat,
+                                                    g.name, g.line_numbers);
+                    }
+
+                    for (const auto& g : r.metadata_line_groups) {
+                        queries::insert_metadata_lines(
+                            midx.db(), fid, r.checkpoint_idx, g.meta_type,
+                            g.line_numbers);
+                    }
+                }
+
+                midx.commit_transaction();
+
+                output.success = true;
+                output.events_processed = total_events;
+                output.chunks_processed = results.size();
+
+                DFTRACER_UTILS_LOG_INFO(
+                    "Persisted manifest index for %s "
+                    "(%zu chunks)",
+                    input.file_path.c_str(), results.size());
+            } catch (const std::exception& e) {
+                output.error_message =
+                    std::string("Failed to persist manifest index: ") +
+                    e.what();
+                DFTRACER_UTILS_LOG_ERROR(
+                    "Failed to persist manifest index for "
+                    "%s: %s",
+                    input.file_path.c_str(), e.what());
+            }
+        });
     } catch (const std::exception& e) {
         output.error_message = e.what();
         DFTRACER_UTILS_LOG_ERROR("ManifestIndexBuilder failed for %s: %s",
                                  input.file_path.c_str(), e.what());
     }
 
-    return output;
+    co_return output;
 }
 
 }  // namespace

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_EVENT_ID_EXTRACTOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_EVENT_ID_EXTRACTOR_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 
 #include <cstddef>
@@ -63,7 +64,7 @@ using EventIdExtractionOutput = EventId;
 class EventIdExtractor : public utilities::Utility<EventIdExtractionInput,
                                                    EventIdExtractionOutput> {
    public:
-    EventIdExtractionOutput process(
+    coro::CoroTask<EventIdExtractionOutput> process(
         const EventIdExtractionInput& input) override;
 };
 

@@ -95,7 +95,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::io_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
         // Should match: read, write, pread64, fwrite (4 I/O events)
@@ -126,7 +126,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::compute_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
 
@@ -154,7 +154,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::io_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
 
@@ -175,7 +175,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_byte_range(0, std::numeric_limits<std::size_t>::max())
             .with_view(ViewDefinition::compute_view());
 
-        auto compute_output = reader.process(compute_input);
+        auto compute_output = reader.process(compute_input).get();
         CHECK(compute_output.success);
 
         int compute_fh_count = 0;
@@ -202,7 +202,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::compute_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
 
@@ -223,7 +223,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_byte_range(0, std::numeric_limits<std::size_t>::max())
             .with_view(ViewDefinition::io_view());
 
-        auto io_output = reader.process(io_input);
+        auto io_output = reader.process(io_input).get();
         int io_sh_count = 0;
         for (const auto& ev : io_output.events) {
             if (ev.find("\"name\":\"SH\"") != std::string::npos) {
@@ -246,7 +246,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::compute_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
 
@@ -275,7 +275,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(io_view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
 
@@ -307,7 +307,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
 
@@ -346,7 +346,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
 
@@ -378,7 +378,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
         // Events in this time range: forward (ts=1100000), backward
@@ -413,7 +413,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
         // Pred1 matches: read (1 event)
@@ -443,7 +443,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input);
+        auto output = reader.process(input).get();
 
         CHECK(output.success);
         CHECK(output.events_matched == 0);

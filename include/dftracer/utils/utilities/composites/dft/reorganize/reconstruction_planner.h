@@ -44,7 +44,7 @@ class ReconstructionPlannerUtility
    public:
     ReconstructionPlannerUtility() = default;
 
-    ReconstructionPlan process(
+    coro::CoroTask<ReconstructionPlan> process(
         const ReconstructionPlannerInput& input) override;
 };
 

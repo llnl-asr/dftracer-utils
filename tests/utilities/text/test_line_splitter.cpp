@@ -3,14 +3,14 @@
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils::utilities::text;
-using namespace dftracer::utils::utilities::io::lines;
+using namespace dftracer::utils::utilities::fileio::lines;
 
 TEST_CASE("LineSplitterUtility - Basic functionality") {
     auto splitter = std::make_shared<LineSplitterUtility>();
 
     SUBCASE("Split simple multi-line text") {
         Text input{"Line 1\nLine 2\nLine 3"};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         REQUIRE(output.lines.size() == 3);
         CHECK(output.lines[0].content == "Line 1");
@@ -23,7 +23,7 @@ TEST_CASE("LineSplitterUtility - Basic functionality") {
 
     SUBCASE("Split text with empty lines") {
         Text input{"Line 1\n\nLine 3\n\nLine 5"};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         REQUIRE(output.lines.size() == 5);
         CHECK(output.lines[0].content == "Line 1");
@@ -37,7 +37,7 @@ TEST_CASE("LineSplitterUtility - Basic functionality") {
 
     SUBCASE("Split single line") {
         Text input{"Single line without newline"};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         REQUIRE(output.lines.size() == 1);
         CHECK(output.lines[0].content == "Single line without newline");
@@ -46,14 +46,14 @@ TEST_CASE("LineSplitterUtility - Basic functionality") {
 
     SUBCASE("Split empty text") {
         Text input{""};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         CHECK(output.lines.empty());
     }
 
     SUBCASE("Split text ending with newline") {
         Text input{"Line 1\nLine 2\n"};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         // std::getline doesn't include the last empty line after trailing \n
         REQUIRE(output.lines.size() == 2);
@@ -63,7 +63,7 @@ TEST_CASE("LineSplitterUtility - Basic functionality") {
 
     SUBCASE("Split text with Windows line endings (\\r\\n)") {
         Text input{"Line 1\r\nLine 2\r\nLine 3"};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         REQUIRE(output.lines.size() == 3);
         // \r will be included in the content since we split on \n
@@ -74,7 +74,7 @@ TEST_CASE("LineSplitterUtility - Basic functionality") {
 
     SUBCASE("Split text with only newlines") {
         Text input{"\n\n\n"};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         REQUIRE(output.lines.size() == 3);
         for (const auto& line : output.lines) {
@@ -92,7 +92,7 @@ TEST_CASE("LineSplitterUtility - Basic functionality") {
         }
 
         Text input{long_text};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         REQUIRE(output.lines.size() == 100);
         for (int i = 0; i < 100; ++i) {
@@ -108,7 +108,7 @@ TEST_CASE("LineSplitterUtility - Line numbering") {
 
     SUBCASE("Verify 1-indexed line numbers") {
         Text input{"First\nSecond\nThird"};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         CHECK(output.lines[0].line_number == 1);
         CHECK(output.lines[1].line_number == 2);
@@ -117,7 +117,7 @@ TEST_CASE("LineSplitterUtility - Line numbering") {
 
     SUBCASE("Line numbers are sequential") {
         Text input{"A\nB\nC\nD\nE"};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         for (std::size_t i = 0; i < output.lines.size(); ++i) {
             CHECK(output.lines[i].line_number == i + 1);
@@ -131,7 +131,7 @@ TEST_CASE("LineSplitterUtility - Edge cases") {
     SUBCASE("Very long single line") {
         std::string very_long_line(10000, 'x');
         Text input{very_long_line};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         REQUIRE(output.lines.size() == 1);
         CHECK(output.lines[0].content == very_long_line);
@@ -141,7 +141,7 @@ TEST_CASE("LineSplitterUtility - Edge cases") {
     SUBCASE("Text with special characters") {
         Text input{
             "Line with\ttab\nLine with special: @#$%\nLine with émoji 🎉"};
-        Lines output = splitter->process(input);
+        Lines output = splitter->process(input).get();
 
         REQUIRE(output.lines.size() == 3);
         CHECK(output.lines[0].content == "Line with\ttab");

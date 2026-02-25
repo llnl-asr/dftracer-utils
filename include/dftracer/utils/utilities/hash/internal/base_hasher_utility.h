@@ -111,9 +111,9 @@ class BaseHasherUtility : public utilities::Utility<std::string, Hash> {
      * @param input String chunk to add to the hash
      * @return Current hash (updated after processing this chunk)
      */
-    Hash process(const std::string& input) override {
+    coro::CoroTask<Hash> process(const std::string& input) override {
         update(input);
-        return get_hash();
+        co_return get_hash();
     }
 
     /**
@@ -122,9 +122,9 @@ class BaseHasherUtility : public utilities::Utility<std::string, Hash> {
      * @param input C-string to hash
      * @return Current hash (updated after processing this value)
      */
-    Hash process(const char* input) {
+    coro::CoroTask<Hash> process(const char* input) {
         update(input);
-        return get_hash();
+        co_return get_hash();
     }
 
     /**

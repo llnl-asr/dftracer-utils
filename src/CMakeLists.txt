@@ -41,10 +41,45 @@ set(DFTRACER_UTILS_CORE_SOURCES
     # Coro
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/coro.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/yield.cpp
+    # Async I/O
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_awaitable.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_thread_pool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/thread_pool_backend.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_backend_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_backend_sync.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_completion_thread.cpp
     # Tasks
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task_result.cpp
+    # SQLite
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/database.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/statement.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/vfs.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/async.cpp
 )
+
+# Conditionally add io_uring backend sources
+if(DFTRACER_UTILS_HAVE_IO_URING)
+  list(APPEND DFTRACER_UTILS_CORE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_uring_backend.cpp
+  )
+endif()
+
+# Linux: add epoll+threadpool backend
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(APPEND DFTRACER_UTILS_CORE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/epoll_thread_pool_backend.cpp
+  )
+endif()
+
+# macOS/BSD: add kqueue+threadpool backend
+if(DFTRACER_UTILS_HAVE_KQUEUE)
+  list(APPEND DFTRACER_UTILS_CORE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/kqueue_thread_pool_backend.cpp
+  )
+endif()
 
 # -----------------------------------------
 # Utilities library sources
@@ -304,6 +339,12 @@ foreach(variant shared static)
     if(COVERAGE_LINK_OPTIONS)
       target_link_libraries(dftracer_utils_core_${variant}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+
+    # io_uring compile definition
+    if(DFTRACER_UTILS_HAVE_IO_URING)
+      target_compile_definitions(dftracer_utils_core_${variant}
+                                PRIVATE DFTRACER_UTILS_HAVE_IO_URING)
     endif()
   endif()
 endforeach()

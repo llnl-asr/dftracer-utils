@@ -5,7 +5,8 @@
 
 namespace dftracer::utils::utilities::composites::dft {
 
-EventHashOutput EventHasher::process(const EventHashInput& input) {
+coro::CoroTask<EventHashOutput> EventHasher::process(
+    const EventHashInput& input) {
     hash::HasherUtility hasher;
 
     // Sort events by id, pid, tid for consistent hashing
@@ -21,7 +22,7 @@ EventHashOutput EventHasher::process(const EventHashInput& input) {
         hasher.process(event.id, event.pid, event.tid);
     }
 
-    return hasher.get_hash().value;
+    co_return hasher.get_hash().value;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft

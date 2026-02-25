@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -20,10 +21,10 @@ class StringUppercaseUtility
     : public utilities::Utility<std::string, std::string,
                                 utilities::tags::Parallelizable> {
    public:
-    std::string process(const std::string& input) override {
+    coro::CoroTask<std::string> process(const std::string& input) override {
         std::string result = input;
         std::transform(result.begin(), result.end(), result.begin(), ::toupper);
-        return result;
+        co_return result;
     }
 };
 
@@ -31,7 +32,9 @@ class StringUppercaseUtility
 class IntSquareUtility
     : public utilities::Utility<int, int, utilities::tags::Parallelizable> {
    public:
-    int process(const int& input) override { return input * input; }
+    coro::CoroTask<int> process(const int& input) override {
+        co_return input* input;
+    }
 };
 
 TEST_SUITE("BatchProcessor") {
@@ -46,7 +49,7 @@ TEST_SUITE("BatchProcessor") {
                 BatchProcessorUtility<std::string, std::string>>(processor);
 
             // Set up executor and scheduler
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             // Use the adapter to convert utility to task
@@ -78,7 +81,7 @@ TEST_SUITE("BatchProcessor") {
             auto batch =
                 std::make_shared<BatchProcessorUtility<int, int>>(processor);
 
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             auto batch_task = use(batch).as_task();
@@ -110,7 +113,7 @@ TEST_SUITE("BatchProcessor") {
             auto batch =
                 std::make_shared<BatchProcessorUtility<int, int>>(processor);
 
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             auto batch_task = use(batch).as_task();
@@ -132,7 +135,7 @@ TEST_SUITE("BatchProcessor") {
             auto batch = std::make_shared<
                 BatchProcessorUtility<std::string, std::string>>(utility);
 
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             auto batch_task = use(batch).as_task();
@@ -162,7 +165,7 @@ TEST_SUITE("BatchProcessor") {
             auto batch =
                 std::make_shared<BatchProcessorUtility<int, int>>(utility);
 
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             auto batch_task = use(batch).as_task();
@@ -201,7 +204,7 @@ TEST_SUITE("BatchProcessor") {
                 BatchProcessorUtility<std::string, std::string>>(processor);
             batch->with_comparator(comparator);
 
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             auto batch_task = use(batch).as_task();
@@ -235,7 +238,7 @@ TEST_SUITE("BatchProcessor") {
                 std::make_shared<BatchProcessorUtility<int, int>>(processor);
             batch->with_comparator(comparator);
 
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             auto batch_task = use(batch).as_task();
@@ -269,7 +272,7 @@ TEST_SUITE("BatchProcessor") {
                 std::make_shared<BatchProcessorUtility<int, int>>(processor);
 
             // Use 4 threads
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             auto batch_task = use(batch).as_task();
@@ -299,7 +302,8 @@ TEST_SUITE("BatchProcessor") {
             auto batch =
                 std::make_shared<BatchProcessorUtility<int, int>>(processor);
 
-            Executor executor(8);  // Use more threads
+            Executor executor(
+                ExecutorConfig{.num_threads = 8});  // Use more threads
             Scheduler scheduler(&executor);
 
             auto batch_task = use(batch).as_task();

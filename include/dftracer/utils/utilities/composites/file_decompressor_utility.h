@@ -2,11 +2,12 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_FILE_DECOMPRESSOR_UTILITY_H
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
-#include <dftracer/utils/utilities/io/streaming_file_reader_utility.h>
-#include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
+#include <dftracer/utils/utilities/fileio/streaming_file_reader_utility.h>
+#include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 
 #include <string>
 
@@ -201,7 +202,7 @@ class FileDecompressorUtility
      * @param input Decompression configuration
      * @return Decompression result with statistics
      */
-    FileDecompressionUtilityOutput process(
+    coro::CoroTask<FileDecompressionUtilityOutput> process(
         const FileDecompressionUtilityInput& input) override {
         FileDecompressionUtilityOutput result;
         result.input_path = input.input_path;
@@ -212,38 +213,39 @@ class FileDecompressorUtility
             if (!fs::exists(input.input_path)) {
                 result.error_message =
                     "Input file does not exist: " + input.input_path;
-                return result;
+                co_return result;
             }
 
             // Get compressed file size
             result.compressed_size = fs::file_size(input.input_path);
 
             // Step 1: Create streaming reader
-            io::StreamingFileReaderUtility reader;
+            fileio::StreamingFileReaderUtility reader;
 
             // Step 2: Create streaming decompressor with specified format
             compression::zlib::StreamingDecompressorUtility decompressor(
                 input.format);
 
             // Step 3: Create streaming writer
-            io::StreamingFileWriterUtility writer(input.output_path);
+            fileio::StreamingFileWriterUtility writer(input.output_path);
 
             // Step 4: Read compressed file as chunks
-            io::StreamReadInput read_input{input.input_path, input.chunk_size};
-            io::ChunkRange chunks = reader.process(read_input);
+            fileio::StreamReadInput read_input{input.input_path,
+                                               input.chunk_size};
+            fileio::ChunkRange chunks = co_await reader.process(read_input);
 
             // Step 5: Decompress chunks and write
             for (const auto& chunk : chunks) {
                 // Convert chunk to CompressedData
-                io::CompressedData compressed_chunk{chunk.data};
+                fileio::CompressedData compressed_chunk{chunk.data};
 
                 // Decompress chunk (may produce multiple output chunks)
-                std::vector<io::RawData> decompressed_chunks =
-                    decompressor.process(compressed_chunk);
+                std::vector<fileio::RawData> decompressed_chunks =
+                    co_await decompressor.process(compressed_chunk);
 
                 // Write all decompressed chunks
                 for (const auto& decompressed : decompressed_chunks) {
-                    writer.process(decompressed);
+                    co_await writer.process(decompressed);
                 }
             }
 
@@ -268,7 +270,7 @@ class FileDecompressorUtility
             }
         }
 
-        return result;
+        co_return result;
     }
 };
 

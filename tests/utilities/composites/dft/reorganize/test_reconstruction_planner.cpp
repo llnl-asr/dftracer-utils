@@ -22,7 +22,7 @@ TEST_SUITE("ReconstructionPlanner") {
         ReconstructionPlannerInput input;
         // reorganized_files is empty by default
 
-        auto plan = planner.process(input);
+        auto plan = planner.process(input).get();
 
         CHECK(plan.files.empty());
         CHECK(plan.total_segments == 0);
@@ -78,7 +78,7 @@ TEST_SUITE("ReconstructionPlanner") {
         input.reorganized_files = {reorg_file};
         // index_dir empty => midx is next to file
 
-        auto plan = planner.process(input);
+        auto plan = planner.process(input).get();
 
         // Verify plan
         REQUIRE(plan.files.size() == 1);
@@ -182,7 +182,7 @@ TEST_SUITE("ReconstructionPlanner") {
         ReconstructionPlannerInput input;
         input.reorganized_files = {io_file, compute_file};
 
-        auto plan = planner.process(input);
+        auto plan = planner.process(input).get();
 
         // Should have 1 original file entry
         REQUIRE(plan.files.size() == 1);
@@ -230,7 +230,7 @@ TEST_SUITE("ReconstructionPlanner") {
         ReconstructionPlannerInput input;
         input.reorganized_files = {reorg_file};
 
-        auto plan = planner.process(input);
+        auto plan = planner.process(input).get();
 
         CHECK(plan.files.empty());
         CHECK(plan.total_segments == 0);

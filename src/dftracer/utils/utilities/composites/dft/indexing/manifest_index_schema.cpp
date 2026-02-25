@@ -1,12 +1,12 @@
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
+using dftracer::utils::sqlite::SqliteStmt;
 using indexer::internal::IndexerError;
-using indexer::internal::SqliteStmt;
 
 static const char* MANIFEST_INDEX_SCHEMA = R"(
     PRAGMA journal_mode=WAL;

@@ -3,14 +3,15 @@
 
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
 #include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <dftracer/utils/utilities/composites/line_batch_processor_utility.h>
-#include <dftracer/utils/utilities/io/lines/streaming_line_reader.h>
-#include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
+#include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
+#include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 
 #include <atomic>
 #include <fstream>
@@ -93,7 +94,7 @@ class FileMergeValidatorUtility
     static std::atomic<int> file_counter_;
 
    public:
-    FileMergeValidatorUtilityOutput process(
+    coro::CoroTask<FileMergeValidatorUtilityOutput> process(
         const FileMergeValidatorUtilityInput& input) override;
 
     static int get_next_counter() { return file_counter_.fetch_add(1); }
@@ -152,7 +153,7 @@ class FileMergerUtility : public utilities::Utility<FileMergerUtilityInput,
     bool compress_output_file(const std::string& file_path);
 
    public:
-    FileMergerUtilityOutput process(
+    coro::CoroTask<FileMergerUtilityOutput> process(
         const FileMergerUtilityInput& input) override;
 };
 

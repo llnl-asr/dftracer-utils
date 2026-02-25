@@ -1,6 +1,6 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/indexer/internal/gzip/queries/queries.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
 
 #include <cstring>
 

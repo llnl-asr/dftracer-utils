@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/sqlite/async.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
@@ -15,7 +16,7 @@
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
-BloomIndexBuildOutput BloomIndexBuilderUtility::process(
+coro::CoroTask<BloomIndexBuildOutput> BloomIndexBuilderUtility::process(
     const BloomIndexBuildInput& input) {
     BloomIndexBuildOutput output;
     output.file_path = input.file_path;
@@ -28,33 +29,34 @@ BloomIndexBuildOutput BloomIndexBuilderUtility::process(
 
         // 2. Check if already indexed with correct dimensions
         if (!input.force_rebuild && fs::exists(bidx_path)) {
-            try {
-                BloomIndexDatabase bidx(bidx_path);
-                bidx.init_schema();
-                int fid = bidx.get_file_info_id(input.file_path);
-                if (fid >= 0) {
-                    auto existing_dims =
-                        queries::query_index_dimensions(bidx.db(), fid);
-                    std::unordered_set<std::string> existing_set(
-                        existing_dims.begin(), existing_dims.end());
-                    bool needs_indexing = false;
-                    for (const auto& dim : input.dimensions) {
-                        if (existing_set.find(dim) == existing_set.end()) {
-                            needs_indexing = true;
-                            break;
+            bool skip = co_await dftracer::utils::sqlite::run([&] {
+                try {
+                    BloomIndexDatabase bidx(bidx_path);
+                    bidx.init_schema();
+                    int fid = bidx.get_file_info_id(input.file_path);
+                    if (fid >= 0) {
+                        auto existing_dims =
+                            queries::query_index_dimensions(bidx.db(), fid);
+                        std::unordered_set<std::string> existing_set(
+                            existing_dims.begin(), existing_dims.end());
+                        for (const auto& dim : input.dimensions) {
+                            if (existing_set.find(dim) == existing_set.end()) {
+                                return false;
+                            }
                         }
+                        return true;
                     }
-                    if (!needs_indexing) {
-                        DFTRACER_UTILS_LOG_INFO(
-                            "Skipping already-indexed file: %s",
-                            input.file_path.c_str());
-                        output.success = true;
-                        output.was_skipped = true;
-                        return output;
-                    }
+                } catch (...) {
+                    // Database corrupt or unreadable -- rebuild
                 }
-            } catch (...) {
-                // Database corrupt or unreadable -- rebuild
+                return false;
+            });
+            if (skip) {
+                DFTRACER_UTILS_LOG_INFO("Skipping already-indexed file: %s",
+                                        input.file_path.c_str());
+                output.success = true;
+                output.was_skipped = true;
+                co_return output;
             }
         }
 
@@ -66,7 +68,7 @@ BloomIndexBuildOutput BloomIndexBuilderUtility::process(
                 .with_checkpoint_size(input.checkpoint_size)
                 .with_force_rebuild(input.force_rebuild)
                 .with_index(idx_path);
-        composites::dft::IndexBuilderUtility{}.process(idx_input);
+        co_await composites::dft::IndexBuilderUtility{}.process(idx_input);
 
         // 4. Collect metadata
         auto meta_input =
@@ -76,12 +78,13 @@ BloomIndexBuildOutput BloomIndexBuilderUtility::process(
                 .with_force_rebuild(false)
                 .with_index(idx_path);
         auto metadata =
-            composites::dft::MetadataCollectorUtility{}.process(meta_input);
+            co_await composites::dft::MetadataCollectorUtility{}.process(
+                meta_input);
 
         if (!metadata.success) {
             output.error_message =
                 "Failed to collect metadata for " + input.file_path;
-            return output;
+            co_return output;
         }
 
         // 5. Parallel chunk indexing
@@ -124,102 +127,106 @@ BloomIndexBuildOutput BloomIndexBuilderUtility::process(
 
         for (auto& ci : chunk_inputs) {
             ChunkIndexerUtility idx;
-            results.push_back(idx.process(ci));
+            results.push_back(co_await idx.process(ci));
         }
 
         // 7. Persist to .bidx
-        BloomIndexDatabase bidx(bidx_path);
-        bidx.init_schema();
+        co_await dftracer::utils::sqlite::run([&] {
+            BloomIndexDatabase bidx(bidx_path);
+            bidx.init_schema();
 
-        std::uint64_t file_hash = 0;
-        if (fs::exists(input.file_path)) {
-            file_hash =
-                static_cast<std::uint64_t>(fs::file_size(input.file_path));
-        }
-        int fid = bidx.get_or_create_file_info(input.file_path, file_hash);
+            std::uint64_t file_hash = 0;
+            if (fs::exists(input.file_path)) {
+                file_hash =
+                    static_cast<std::uint64_t>(fs::file_size(input.file_path));
+            }
+            int fid = bidx.get_or_create_file_info(input.file_path, file_hash);
 
-        bidx.begin_transaction();
-        try {
-            std::unordered_map<std::string, BloomFilter> file_blooms;
-            HashResolutions all_hr;
-            std::size_t total_events = 0;
+            bidx.begin_transaction();
+            try {
+                std::unordered_map<std::string, BloomFilter> file_blooms;
+                HashResolutions all_hr;
+                std::size_t total_events = 0;
 
-            for (auto& r : results) {
-                if (!r.success) continue;
+                for (auto& r : results) {
+                    if (!r.success) continue;
 
-                total_events += r.events_processed;
+                    total_events += r.events_processed;
 
-                // Chunk bloom filters
-                for (auto& [dim, bloom] : r.bloom_filters) {
-                    auto blob = bloom.serialize();
-                    queries::insert_chunk_bloom_filter(
-                        bidx.db(), fid, r.checkpoint_idx, dim, blob.data(),
-                        static_cast<int>(blob.size()), bloom.num_entries());
+                    // Chunk bloom filters
+                    for (auto& [dim, bloom] : r.bloom_filters) {
+                        auto blob = bloom.serialize();
+                        queries::insert_chunk_bloom_filter(
+                            bidx.db(), fid, r.checkpoint_idx, dim, blob.data(),
+                            static_cast<int>(blob.size()), bloom.num_entries());
 
-                    auto it = file_blooms.find(dim);
-                    if (it == file_blooms.end()) {
-                        file_blooms.emplace(dim, std::move(bloom));
-                    } else {
-                        it->second.merge_from(bloom);
+                        auto it = file_blooms.find(dim);
+                        if (it == file_blooms.end()) {
+                            file_blooms.emplace(dim, std::move(bloom));
+                        } else {
+                            it->second.merge_from(bloom);
+                        }
+                    }
+
+                    // Chunk statistics
+                    queries::insert_chunk_statistics(
+                        bidx.db(), fid, r.checkpoint_idx, r.statistics);
+
+                    // Hash resolutions
+                    for (auto& [dim, resolutions] : r.hash_resolutions) {
+                        for (auto& [hash, resolved] : resolutions) {
+                            all_hr[dim][hash] = resolved;
+                        }
                     }
                 }
 
-                // Chunk statistics
-                queries::insert_chunk_statistics(
-                    bidx.db(), fid, r.checkpoint_idx, r.statistics);
+                // File-level bloom filters
+                for (auto& [dim, bloom] : file_blooms) {
+                    auto blob = bloom.serialize();
+                    queries::insert_file_bloom_filter(
+                        bidx.db(), fid, dim, blob.data(),
+                        static_cast<int>(blob.size()), bloom.num_entries());
+                }
 
                 // Hash resolutions
-                for (auto& [dim, resolutions] : r.hash_resolutions) {
-                    for (auto& [hash, resolved] : resolutions) {
-                        all_hr[dim][hash] = resolved;
+                for (const auto& [dim, resolutions] : all_hr) {
+                    for (const auto& [hash, resolved] : resolutions) {
+                        queries::insert_hash_resolution(bidx.db(), fid, dim,
+                                                        hash, resolved);
                     }
                 }
-            }
 
-            // File-level bloom filters
-            for (auto& [dim, bloom] : file_blooms) {
-                auto blob = bloom.serialize();
-                queries::insert_file_bloom_filter(
-                    bidx.db(), fid, dim, blob.data(),
-                    static_cast<int>(blob.size()), bloom.num_entries());
-            }
-
-            // Hash resolutions
-            for (const auto& [dim, resolutions] : all_hr) {
-                for (const auto& [hash, resolved] : resolutions) {
-                    queries::insert_hash_resolution(bidx.db(), fid, dim, hash,
-                                                    resolved);
+                // Index dimensions
+                for (const auto& dim : input.dimensions) {
+                    queries::insert_index_dimension(bidx.db(), fid, dim);
                 }
+
+                bidx.commit_transaction();
+
+                output.success = true;
+                output.events_processed = total_events;
+                output.chunks_processed = results.size();
+
+                DFTRACER_UTILS_LOG_INFO(
+                    "Persisted bloom index for %s "
+                    "(%zu chunks, %zu dimensions)",
+                    input.file_path.c_str(), results.size(),
+                    input.dimensions.size());
+            } catch (const std::exception& e) {
+                output.error_message =
+                    std::string("Failed to persist bloom index: ") + e.what();
+                DFTRACER_UTILS_LOG_ERROR(
+                    "Failed to persist bloom index for %s: %s",
+                    input.file_path.c_str(), e.what());
             }
-
-            // Index dimensions
-            for (const auto& dim : input.dimensions) {
-                queries::insert_index_dimension(bidx.db(), fid, dim);
-            }
-
-            bidx.commit_transaction();
-
-            output.success = true;
-            output.events_processed = total_events;
-            output.chunks_processed = results.size();
-
-            DFTRACER_UTILS_LOG_INFO(
-                "Persisted bloom index for %s (%zu chunks, %zu dimensions)",
-                input.file_path.c_str(), results.size(),
-                input.dimensions.size());
-        } catch (const std::exception& e) {
-            output.error_message =
-                std::string("Failed to persist bloom index: ") + e.what();
-            DFTRACER_UTILS_LOG_ERROR("Failed to persist bloom index for %s: %s",
-                                     input.file_path.c_str(), e.what());
-        }
+        });
     } catch (const std::exception& e) {
         output.error_message = e.what();
         DFTRACER_UTILS_LOG_ERROR("BloomIndexBuilder failed for %s: %s",
                                  input.file_path.c_str(), e.what());
     }
 
-    return output;
+    co_return output;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

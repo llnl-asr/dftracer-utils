@@ -2,11 +2,12 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_FILE_COMPRESSOR_UTILITY_H
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
-#include <dftracer/utils/utilities/io/streaming_file_reader_utility.h>
-#include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
+#include <dftracer/utils/utilities/fileio/streaming_file_reader_utility.h>
+#include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 
 #include <string>
 
@@ -145,7 +146,7 @@ class FileCompressorUtility
      * @param input Compression configuration
      * @return Compression result with statistics
      */
-    FileCompressionUtilityOutput process(
+    coro::CoroTask<FileCompressionUtilityOutput> process(
         const FileCompressionUtilityInput& input) override {
         FileCompressionUtilityOutput result{
             input.input_path,
@@ -161,40 +162,42 @@ class FileCompressorUtility
             if (!fs::exists(input.input_path)) {
                 result.error_message =
                     "Input file does not exist: " + input.input_path;
-                return result;
+                co_return result;
             }
 
             // Get original file size
             result.original_size = fs::file_size(input.input_path);
 
             // Step 1: Create streaming reader
-            auto reader = std::make_shared<io::StreamingFileReaderUtility>();
+            auto reader =
+                std::make_shared<fileio::StreamingFileReaderUtility>();
 
             // Step 2: Create manual streaming compressor with specified format
             compression::zlib::ManualStreamingCompressorUtility compressor(
                 input.compression_level, input.format);
 
             // Step 3: Create streaming writer
-            io::StreamingFileWriterUtility writer(input.output_path);
+            fileio::StreamingFileWriterUtility writer(input.output_path);
 
             // Step 4: Read and compress chunks
-            io::StreamReadInput read_input{input.input_path, input.chunk_size};
-            io::ChunkRange chunks = reader->process(read_input);
+            fileio::StreamReadInput read_input{input.input_path,
+                                               input.chunk_size};
+            fileio::ChunkRange chunks = co_await reader->process(read_input);
 
             for (const auto& chunk : chunks) {
                 auto compressed_chunks =
-                    compressor.process(io::RawData{chunk.data});
+                    co_await compressor.process(fileio::RawData{chunk.data});
                 for (const auto& compressed : compressed_chunks) {
-                    io::RawData raw_chunk{compressed.data};
-                    writer.process(raw_chunk);
+                    fileio::RawData raw_chunk{compressed.data};
+                    co_await writer.process(raw_chunk);
                 }
             }
 
             // Step 5: Finalize compression and write remaining data
             auto final_chunks = compressor.finalize();
             for (const auto& compressed : final_chunks) {
-                io::RawData raw_chunk{compressed.data};
-                writer.process(raw_chunk);
+                fileio::RawData raw_chunk{compressed.data};
+                co_await writer.process(raw_chunk);
             }
 
             // Step 6: Close writer
@@ -218,7 +221,7 @@ class FileCompressorUtility
             }
         }
 
-        return result;
+        co_return result;
     }
 };
 

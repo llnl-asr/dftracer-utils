@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
@@ -90,7 +91,7 @@ class IndexBuilderUtility : public utilities::Utility<IndexBuildUtilityInput,
    public:
     IndexBuilderUtility() = default;
 
-    IndexBuildUtilityOutput process(
+    coro::CoroTask<IndexBuildUtilityOutput> process(
         const IndexBuildUtilityInput& input) override {
         IndexBuildUtilityOutput output;
         output.file_path = input.file_path;
@@ -126,7 +127,7 @@ class IndexBuilderUtility : public utilities::Utility<IndexBuildUtilityInput,
                 auto indexer = dftracer::utils::utilities::indexer::internal::
                     IndexerFactory::create(input.file_path, final_idx_path,
                                            input.checkpoint_size, true);
-                indexer->build();
+                co_await indexer->build_async();
                 output.was_built = true;
             } else {
                 // Check if existing index needs rebuild
@@ -141,7 +142,7 @@ class IndexBuilderUtility : public utilities::Utility<IndexBuildUtilityInput,
                         internal::IndexerFactory::create(
                             input.file_path, final_idx_path,
                             input.checkpoint_size, true);
-                    new_indexer->build();
+                    co_await new_indexer->build_async();
                     output.was_built = true;
                 }
             }
@@ -153,7 +154,7 @@ class IndexBuilderUtility : public utilities::Utility<IndexBuildUtilityInput,
             output.success = false;
         }
 
-        return output;
+        co_return output;
     }
 };
 

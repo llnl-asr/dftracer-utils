@@ -1,19 +1,20 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
+#include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
-#include <dftracer/utils/utilities/io/lines/streaming_line_reader.h>
 
 #include <atomic>
 
 namespace dftracer::utils::utilities::composites::dft {
 
-using namespace io::lines;
+using namespace fileio::lines;
 
-MetadataCollectorUtilityOutput MetadataCollectorUtility::process(
-    const MetadataCollectorUtilityInput& input) {
+coro::CoroTask<MetadataCollectorUtilityOutput>
+MetadataCollectorUtility::process(const MetadataCollectorUtilityInput& input) {
     MetadataCollectorUtilityOutput meta;
     meta.file_path = input.file_path;
     meta.success = false;
@@ -32,19 +33,20 @@ MetadataCollectorUtilityOutput MetadataCollectorUtility::process(
                 modified_input.idx_path = file_path + ".idx";
             }
             meta.idx_path = modified_input.idx_path;
-            return process_compressed(modified_input);
+            co_return co_await process_compressed(modified_input);
         } else {
             // Plain text file
-            return process_plain(input);
+            co_return co_await process_plain(input);
         }
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to collect metadata for %s: %s",
                                  input.file_path.c_str(), e.what());
-        return meta;
+        co_return meta;
     }
 }
 
-MetadataCollectorUtilityOutput MetadataCollectorUtility::process_compressed(
+coro::CoroTask<MetadataCollectorUtilityOutput>
+MetadataCollectorUtility::process_compressed(
     const MetadataCollectorUtilityInput& input) {
     MetadataCollectorUtilityOutput meta;
     meta.file_path = input.file_path;
@@ -73,7 +75,7 @@ MetadataCollectorUtilityOutput MetadataCollectorUtility::process_compressed(
             indexer = dftracer::utils::utilities::indexer::internal::
                 IndexerFactory::create(input.file_path, input.idx_path,
                                        input.checkpoint_size, true);
-            indexer->build();
+            co_await indexer->build_async();
             meta.has_index = true;
         } else {
             indexer = dftracer::utils::utilities::indexer::internal::
@@ -87,7 +89,7 @@ MetadataCollectorUtilityOutput MetadataCollectorUtility::process_compressed(
                 indexer = dftracer::utils::utilities::indexer::internal::
                     IndexerFactory::create(input.file_path, input.idx_path,
                                            input.checkpoint_size, true);
-                indexer->build();
+                co_await indexer->build_async();
             }
         }
 
@@ -104,7 +106,7 @@ MetadataCollectorUtilityOutput MetadataCollectorUtility::process_compressed(
             DFTRACER_UTILS_LOG_DEBUG("File %s has no lines",
                                      input.file_path.c_str());
             meta.success = true;
-            return meta;
+            co_return meta;
         }
 
         std::size_t file_size_bytes = fs::file_size(input.file_path);
@@ -140,10 +142,11 @@ MetadataCollectorUtilityOutput MetadataCollectorUtility::process_compressed(
         meta.success = false;
     }
 
-    return meta;
+    co_return meta;
 }
 
-MetadataCollectorUtilityOutput MetadataCollectorUtility::process_plain(
+coro::CoroTask<MetadataCollectorUtilityOutput>
+MetadataCollectorUtility::process_plain(
     const MetadataCollectorUtilityInput& input) {
     MetadataCollectorUtilityOutput meta;
     meta.file_path = input.file_path;
@@ -158,16 +161,14 @@ MetadataCollectorUtilityOutput MetadataCollectorUtility::process_plain(
         meta.uncompressed_size = file_size;
         meta.compressed_size = file_size;  // No compression for plain files
 
-        // For plain files, we need to read sequentially since we can't seek
-        // But we can still validate JSON in parallel by batching lines
-        auto line_range = StreamingLineReader::read_plain(input.file_path);
+        auto line_gen = StreamingLineReader::read_plain_async(input.file_path);
 
         std::size_t total_lines = 0;
         std::size_t total_bytes = 0;
         std::size_t valid_events = 0;
 
-        while (line_range.has_next()) {
-            Line line = line_range.next();
+        while (auto line_opt = co_await line_gen.next()) {
+            const auto& line = *line_opt;
             total_lines++;
             const char* trimmed;
             std::size_t trimmed_length;
@@ -201,7 +202,7 @@ MetadataCollectorUtilityOutput MetadataCollectorUtility::process_plain(
         meta.success = false;
     }
 
-    return meta;
+    co_return meta;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft

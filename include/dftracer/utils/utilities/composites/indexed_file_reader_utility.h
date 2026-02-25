@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_INDEXED_FILE_READER_UTILITY_H
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
@@ -44,7 +45,7 @@ class IndexedFileReaderUtility
      * @param input Index configuration
      * @return Shared pointer to Reader ready for use
      */
-    std::shared_ptr<reader::internal::Reader> process(
+    coro::CoroTask<std::shared_ptr<reader::internal::Reader>> process(
         const IndexedReadInput& input) override {
         // Validate input
         if (!fs::exists(input.file_path)) {
@@ -64,7 +65,7 @@ class IndexedFileReaderUtility
             auto indexer = dftracer::utils::utilities::indexer::internal::
                 IndexerFactory::create(input.file_path, input.idx_path,
                                        input.checkpoint_size, true);
-            indexer->build();
+            co_await indexer->build_async();
         } else {
             // Check if existing index needs rebuild
             auto indexer = dftracer::utils::utilities::indexer::internal::
@@ -78,13 +79,13 @@ class IndexedFileReaderUtility
                     dftracer::utils::utilities::indexer::internal::
                         IndexerFactory::create(input.file_path, input.idx_path,
                                                input.checkpoint_size, true);
-                new_indexer->build();
+                co_await new_indexer->build_async();
             }
         }
 
         // Step 2: Create and return Reader
-        return reader::internal::ReaderFactory::create(input.file_path,
-                                                       input.idx_path);
+        co_return reader::internal::ReaderFactory::create(input.file_path,
+                                                          input.idx_path);
     }
 };
 

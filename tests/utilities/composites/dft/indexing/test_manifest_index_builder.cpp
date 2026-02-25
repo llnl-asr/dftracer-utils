@@ -79,7 +79,7 @@ TEST_SUITE("ManifestIndexBuilder") {
                                            utilities::tags::NeedsContext>
                     executor(utility, std::move(chain));
 
-                result = executor.execute_with_context(ctx, input);
+                result = co_await executor.execute_with_context(ctx, input);
                 co_return;
             },
             "BuildManifest");
@@ -158,7 +158,7 @@ TEST_SUITE("ManifestIndexBuilder") {
                                                ManifestIndexBuildOutput,
                                                utilities::tags::NeedsContext>
                         executor(utility, std::move(chain));
-                    result = executor.execute_with_context(ctx, input);
+                    result = co_await executor.execute_with_context(ctx, input);
                     co_return;
                 },
                 "Build1");
@@ -184,7 +184,7 @@ TEST_SUITE("ManifestIndexBuilder") {
                                                ManifestIndexBuildOutput,
                                                utilities::tags::NeedsContext>
                         executor(utility, std::move(chain));
-                    result = executor.execute_with_context(ctx, input);
+                    result = co_await executor.execute_with_context(ctx, input);
                     co_return;
                 },
                 "Build2");

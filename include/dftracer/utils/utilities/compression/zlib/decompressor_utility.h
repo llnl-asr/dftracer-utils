@@ -3,7 +3,7 @@
 
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
-#include <dftracer/utils/utilities/io/types/types.h>
+#include <dftracer/utils/utilities/fileio/types/types.h>
 #include <zlib.h>
 
 #include <stdexcept>
@@ -12,8 +12,8 @@
 namespace dftracer::utils::utilities::compression::zlib {
 
 // Use I/O types for compression
-using io::CompressedData;
-using io::RawData;
+using fileio::CompressedData;
+using fileio::RawData;
 
 /**
  * @brief Utility that decompresses zlib-compressed data.
@@ -55,9 +55,9 @@ class DecompressorUtility
      * @return RawData with decompressed bytes
      * @throws std::runtime_error if decompression fails
      */
-    RawData process(const CompressedData& input) override {
+    coro::CoroTask<RawData> process(const CompressedData& input) override {
         if (input.data.empty()) {
-            return RawData(std::vector<unsigned char>{});
+            co_return RawData(std::vector<unsigned char>{});
         }
 
         uLong src_len = static_cast<uLong>(input.data.size());
@@ -102,7 +102,7 @@ class DecompressorUtility
         // Resize to actual decompressed size
         decompressed.resize(dest_len);
 
-        return RawData(std::move(decompressed));
+        co_return RawData(std::move(decompressed));
     }
 };
 

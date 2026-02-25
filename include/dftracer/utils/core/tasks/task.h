@@ -56,7 +56,7 @@ class Task : public std::enable_shared_from_this<Task> {
     std::type_index output_type_;
 
     // DAG structure
-    std::vector<std::shared_ptr<Task>> parents_;
+    std::vector<std::weak_ptr<Task>> parents_;
     std::vector<std::shared_ptr<Task>> children_;
     std::atomic<int> pending_parents_count_{0};
 
@@ -214,7 +214,16 @@ class Task : public std::enable_shared_from_this<Task> {
     /**
      * Get parent tasks (returns a copy for thread safety)
      */
-    std::vector<std::shared_ptr<Task>> get_parents() const { return parents_; }
+    std::vector<std::shared_ptr<Task>> get_parents() const {
+        std::vector<std::shared_ptr<Task>> result;
+        result.reserve(parents_.size());
+        for (const auto& weak_parent : parents_) {
+            if (auto locked = weak_parent.lock()) {
+                result.push_back(std::move(locked));
+            }
+        }
+        return result;
+    }
 
     /**
      * Get child tasks (returns a copy for thread safety)

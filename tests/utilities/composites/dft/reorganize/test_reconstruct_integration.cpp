@@ -109,7 +109,7 @@ static void build_midx(const std::string& trace_file,
                                        ManifestIndexBuildOutput,
                                        utilities::tags::NeedsContext>
                 executor(utility, std::move(chain));
-            result = executor.execute_with_context(ctx, input);
+            result = co_await executor.execute_with_context(ctx, input);
             co_return;
         },
         "BuildMidx");
@@ -184,7 +184,7 @@ static void execute_extraction(const ExtractionPlan& plan,
         auto reader_input =
             IndexedReadInput::from_file(src.file_path).with_index(idx_path);
         IndexedFileReaderUtility reader_utility;
-        auto reader = reader_utility.process(reader_input);
+        auto reader = reader_utility.process(reader_input).get();
 
         // Compute byte range
         std::uint64_t start_byte = tasks[0]->start_byte;
@@ -279,7 +279,7 @@ TEST_SUITE("ReconstructIntegration") {
         planner_input.groups = {{"io", "cat=POSIX"}, {"compute", "cat=APP"}};
         planner_input.index_dir = input_dir;
 
-        auto plan = planner.process(planner_input);
+        auto plan = planner.process(planner_input).get();
         REQUIRE(plan.tasks.size() > 0);
 
         // Step 3: Execute extraction
@@ -307,8 +307,10 @@ TEST_SUITE("ReconstructIntegration") {
                 continue;
             }
             FileCompressorUtility compressor;
-            auto comp_result = compressor.process(
-                FileCompressionUtilityInput::from_file(pfw_path));
+            auto comp_result =
+                compressor
+                    .process(FileCompressionUtilityInput::from_file(pfw_path))
+                    .get();
             REQUIRE(comp_result.success);
             std::string gz_path = pfw_path + ".gz";
             REQUIRE(fs::exists(gz_path));
@@ -390,7 +392,7 @@ TEST_SUITE("ReconstructIntegration") {
         recon_input.reorganized_files = reorg_files;
         recon_input.index_dir = reorg_dir;
 
-        auto recon_plan = recon_planner.process(recon_input);
+        auto recon_plan = recon_planner.process(recon_input).get();
 
         // Step 8: Verify reconstruction plan
         CHECK(recon_plan.files.size() == 1);
@@ -435,13 +437,13 @@ TEST_SUITE("ReconstructIntegration") {
             auto meta_input =
                 MetadataCollectorUtilityInput::from_file(reorg_file)
                     .with_index(idx_path);
-            auto meta = meta_collector.process(meta_input);
+            auto meta = meta_collector.process(meta_input).get();
             REQUIRE(meta.success);
 
             auto reader_input =
                 IndexedReadInput::from_file(reorg_file).with_index(idx_path);
             IndexedFileReaderUtility reader_utility;
-            auto reader = reader_utility.process(reader_input);
+            auto reader = reader_utility.process(reader_input).get();
 
             auto stream = reader->stream(
                 reader::internal::StreamConfig()

@@ -63,7 +63,7 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
 
     SUBCASE("Scan empty directory") {
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
         CHECK(result.empty());
     }
 
@@ -73,7 +73,7 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
         fixture.create_file("file3.dat", "content3");
 
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         CHECK(result.size() == 3);
 
@@ -92,7 +92,7 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
         fixture.create_file("subdir1/file2.txt", "content");
 
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         // Should find: file1.txt, subdir1, subdir2
         // Should NOT find: subdir1/file2.txt
@@ -113,7 +113,7 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
         fs::path nonexistent = fixture.test_root / "nonexistent";
         DirectoryScannerUtilityInput input{nonexistent, false};
 
-        CHECK_THROWS_AS(scanner->process(input), fs::filesystem_error);
+        CHECK_THROWS_AS(scanner->process(input).get(), fs::filesystem_error);
     }
 
     SUBCASE("Error - path is not a directory") {
@@ -121,7 +121,7 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
         fs::path file_path = fixture.get_path("regular_file.txt");
         DirectoryScannerUtilityInput input{file_path, false};
 
-        CHECK_THROWS_AS(scanner->process(input), fs::filesystem_error);
+        CHECK_THROWS_AS(scanner->process(input).get(), fs::filesystem_error);
     }
 }
 
@@ -137,7 +137,7 @@ TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
         fixture.create_file("subdir2/file4.txt");
 
         DirectoryScannerUtilityInput input{fixture.test_root, true};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         // Should find:
         // - file1.txt
@@ -165,7 +165,7 @@ TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
         fixture.create_file("level1/shallow_file.txt");
 
         DirectoryScannerUtilityInput input{fixture.test_root, true};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         // Should find all files and directories
         int file_count = 0;
@@ -185,11 +185,11 @@ TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
 
         // Non-recursive scan
         DirectoryScannerUtilityInput non_recursive{fixture.test_root, false};
-        auto non_recursive_result = scanner->process(non_recursive);
+        auto non_recursive_result = scanner->process(non_recursive).get();
 
         // Recursive scan
         DirectoryScannerUtilityInput recursive{fixture.test_root, true};
-        auto recursive_result = scanner->process(recursive);
+        auto recursive_result = scanner->process(recursive).get();
 
         // Non-recursive should find less than recursive
         CHECK(non_recursive_result.size() < recursive_result.size());
@@ -212,7 +212,7 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Metadata") {
         fixture.create_file("test_file.txt", content);
 
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         REQUIRE(result.size() == 1);
         const auto& entry = result[0];
@@ -227,7 +227,7 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Metadata") {
         fixture.create_directory("test_dir");
 
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         REQUIRE(result.size() == 1);
         const auto& entry = result[0];
@@ -243,7 +243,7 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Metadata") {
         fixture.create_file("large.txt", std::string(1000, 'z'));
 
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         CHECK(result.size() == 3);
 
@@ -300,7 +300,7 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
         fixture.create_file("empty2.txt", "");
 
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         CHECK(result.size() == 2);
         for (const auto& entry : result) {
@@ -314,7 +314,7 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
         fixture.create_file("visible_file");
 
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         // Should find both files
         CHECK(result.size() == 2);
@@ -326,7 +326,7 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
         fixture.create_file("file_with_underscores.txt");
 
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         CHECK(result.size() == 3);
     }
@@ -338,7 +338,7 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
         }
 
         DirectoryScannerUtilityInput input{fixture.test_root, false};
-        auto result = scanner->process(input);
+        auto result = scanner->process(input).get();
 
         CHECK(result.size() == num_files);
     }

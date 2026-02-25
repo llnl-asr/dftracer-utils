@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DIRECTORY_FILE_PROCESSOR_UTILITY_H
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/types.h>
@@ -66,7 +67,7 @@ class DirectoryFileProcessorUtility
      * @param input Directory configuration
      * @return Aggregated results from all file processing
      */
-    BatchFileProcessOutput<FileOutput> process(
+    coro::CoroTask<BatchFileProcessOutput<FileOutput>> process(
         const DirectoryProcessInput& input) override {
         BatchFileProcessOutput<FileOutput> output;
 
@@ -74,10 +75,10 @@ class DirectoryFileProcessorUtility
         filesystem::PatternDirectoryScannerUtilityInput pattern_input{
             input.directory_path, input.extensions, input.recursive};
         std::vector<filesystem::FileEntry> matched_entries =
-            scanner_.process(pattern_input);
+            co_await scanner_.process(pattern_input);
 
         if (matched_entries.empty()) {
-            return output;  // No files found
+            co_return output;  // No files found
         }
 
         // Step 2: Extract file paths
@@ -99,7 +100,7 @@ class DirectoryFileProcessorUtility
         // Step 6: Finalize aggregated statistics
         output.finalize();
 
-        return output;
+        co_return output;
     }
 };
 

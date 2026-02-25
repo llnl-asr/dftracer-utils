@@ -36,7 +36,8 @@ class ChunkDetailScannerUtility
    public:
     ChunkDetailScannerUtility() = default;
 
-    ChunkDetailScanOutput process(const ChunkDetailScanInput& input) override;
+    coro::CoroTask<ChunkDetailScanOutput> process(
+        const ChunkDetailScanInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::statistics

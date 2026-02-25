@@ -57,7 +57,8 @@ class TarByteStream : public TarStream {
             current_position_);
     }
 
-    std::size_t read(char *buffer, std::size_t buffer_size) override {
+    coro::CoroTask<std::size_t> read_async(char *buffer,
+                                           std::size_t buffer_size) override {
 #ifdef __GNUC__
         __builtin_prefetch(buffer, 1, 3);
 #endif
@@ -69,7 +70,7 @@ class TarByteStream : public TarStream {
 
         if (is_at_target_end()) {
             is_finished_ = true;
-            return 0;
+            co_return 0;
         }
 
         std::size_t total_bytes_read = 0;
@@ -102,8 +103,8 @@ class TarByteStream : public TarStream {
                 }
             }
 
-            std::size_t bytes_read =
-                current_file_stream_->read(buffer + total_bytes_read, max_read);
+            std::size_t bytes_read = co_await current_file_stream_->read_async(
+                buffer + total_bytes_read, max_read);
 
             DFTRACER_UTILS_LOG_DEBUG(
                 "TarByteStream::stream - read %zu bytes from file %s (offset "
@@ -143,13 +144,13 @@ class TarByteStream : public TarStream {
             "%zu)",
             total_bytes_read, current_position_, target_end_bytes_);
 
-        return total_bytes_read;
+        co_return total_bytes_read;
     }
 
     // Zero-copy read - stub for now
-    span_view<const char> read() override {
+    coro::CoroTask<span_view<const char>> read_async() override {
         // TODO: Implement zero-copy read for TarByteStream
-        return {};
+        co_return {};
     }
 
     void reset() override {

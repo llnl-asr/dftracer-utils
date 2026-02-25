@@ -12,6 +12,7 @@
 #include <dftracer/utils/call_tree/mpi/serialization.h>
 #include <dftracer/utils/core/common/format_detector.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
@@ -324,16 +325,17 @@ class FilteredLineProcessor
           filtered_count_(filtered_count),
           reader_() {}
 
-    bool process(const char* data, std::size_t length) override {
+    coro::CoroTask<bool> process(const char* data,
+                                 std::size_t length) override {
         if (length == 0) {
-            return true;
+            co_return true;
         }
 
         std::string line(data, length);
 
         // Skip brackets
         if (line == "[" || line == "]") {
-            return true;
+            co_return true;
         }
 
         // Remove trailing comma
@@ -344,13 +346,13 @@ class FilteredLineProcessor
         // Quick PID check
         yyjson_doc* doc = yyjson_read(line.c_str(), line.length(), 0);
         if (!doc) {
-            return true;
+            co_return true;
         }
 
         yyjson_val* root = yyjson_doc_get_root(doc);
         if (!root) {
             yyjson_doc_free(doc);
-            return true;
+            co_return true;
         }
 
         yyjson_val* pid_val = yyjson_obj_get(root, "pid");
@@ -368,7 +370,7 @@ class FilteredLineProcessor
         }
 
         yyjson_doc_free(doc);
-        return true;
+        co_return true;
     }
 
    private:

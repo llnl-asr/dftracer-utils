@@ -1,10 +1,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_EXTRACTOR_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/chunk_manifest.h>
-#include <dftracer/utils/utilities/io/types/types.h>
+#include <dftracer/utils/utilities/fileio/types/types.h>
 
 #include <cstddef>
 #include <string>
@@ -16,7 +17,7 @@ namespace dftracer::utils::utilities::composites::dft {
  * @brief Input for DFTracer chunk extraction.
  *
  * Accepts DFTracerChunkManifest with line tracking, but converts to
- * byte-based io::ChunkManifest for extraction.
+ * byte-based fileio::ChunkManifest for extraction.
  */
 struct ChunkExtractorUtilityInput {
     int chunk_index;  // Application-level: which output chunk number
@@ -50,12 +51,12 @@ struct ChunkExtractorUtilityInput {
         return *this;
     }
 
-    // Convert to byte-based io::ChunkManifest for extraction
-    io::ChunkManifest to_io_manifest() const {
-        io::ChunkManifest io_manifest;
+    // Convert to byte-based fileio::ChunkManifest for extraction
+    fileio::ChunkManifest to_io_manifest() const {
+        fileio::ChunkManifest io_manifest;
         io_manifest.total_size_mb = manifest.total_size_mb;
         for (const auto& dft_spec : manifest.specs) {
-            io::ChunkSpec io_spec;
+            fileio::ChunkSpec io_spec;
             io_spec.file_path = dft_spec.file_path;
             io_spec.idx_path = dft_spec.idx_path;
             io_spec.size_mb = dft_spec.size_mb;
@@ -130,11 +131,11 @@ class ChunkExtractorUtility
                                 ChunkExtractorUtilityOutput,
                                 utilities::tags::Parallelizable> {
    public:
-    ChunkExtractorUtilityOutput process(
+    coro::CoroTask<ChunkExtractorUtilityOutput> process(
         const ChunkExtractorUtilityInput& input) override;
 
    private:
-    ChunkExtractorUtilityOutput extract_and_write(
+    coro::CoroTask<ChunkExtractorUtilityOutput> extract_and_write(
         const ChunkExtractorUtilityInput& input);
     bool compress_output(const std::string& input_path,
                          const std::string& output_path);

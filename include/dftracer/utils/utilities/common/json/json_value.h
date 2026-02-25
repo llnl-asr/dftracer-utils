@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_JSON_JSON_VALUE_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_JSON_JSON_VALUE_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/text/shared.h>
 #include <yyjson.h>
@@ -179,14 +180,17 @@ using JsonParserOutput = JsonValue;
 class JsonParserUtility
     : public utilities::Utility<JsonParserInput, JsonParserOutput> {
    public:
-    JsonParserOutput process(const JsonParserInput& input) override {
-        return JsonValue(input);
+    coro::CoroTask<JsonParserOutput> process(
+        const JsonParserInput& input) override {
+        co_return JsonValue(input);
     }
 };
 
 struct StringJsonParserInput {
     utilities::text::Text content;
 
+    static coro::CoroTask<StringJsonParserInput> from_file_async(
+        const std::string& file_path);
     static StringJsonParserInput from_file(const std::string& file_path);
     static StringJsonParserInput from_string(const std::string& json_str);
 };
@@ -198,7 +202,8 @@ class StringJsonParserUtility
     std::shared_ptr<yyjson_doc> owned_doc_;
 
    public:
-    JsonParserOutput process(const StringJsonParserInput& input) override;
+    coro::CoroTask<JsonParserOutput> process(
+        const StringJsonParserInput& input) override;
     void reset();
 };
 

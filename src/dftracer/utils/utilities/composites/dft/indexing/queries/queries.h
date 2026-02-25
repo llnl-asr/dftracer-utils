@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_QUERIES_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_QUERIES_H
 
+#include <dftracer/utils/core/sqlite/database.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/database.h>
 
 #include <cstdint>
 #include <optional>
@@ -12,7 +12,7 @@
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
-using indexer::internal::SqliteDatabase;
+using dftracer::utils::sqlite::SqliteDatabase;
 
 // --- Insert operations ---
 

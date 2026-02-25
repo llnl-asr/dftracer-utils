@@ -47,7 +47,7 @@ TEST_SUITE("FileDecompressor") {
             FileCompressorUtility compressor;
             auto compress_input =
                 FileCompressionUtilityInput::from_file(original_file);
-            auto compress_result = compressor.process(compress_input);
+            auto compress_result = compressor.process(compress_input).get();
             REQUIRE(compress_result.success == true);
 
             fs::remove(original_file);
@@ -55,7 +55,8 @@ TEST_SUITE("FileDecompressor") {
             FileDecompressorUtility decompressor;
             auto decompress_input =
                 FileDecompressionUtilityInput::from_file(compressed_file);
-            auto decompress_result = decompressor.process(decompress_input);
+            auto decompress_result =
+                decompressor.process(decompress_input).get();
 
             CHECK(decompress_result.success == true);
             CHECK(decompress_result.input_path == compressed_file);
@@ -84,14 +85,14 @@ TEST_SUITE("FileDecompressor") {
             FileCompressorUtility compressor;
             auto compress_input =
                 FileCompressionUtilityInput::from_file(original_file);
-            compressor.process(compress_input);
+            compressor.process(compress_input).get();
             fs::remove(original_file);
 
             FileDecompressorUtility decompressor;
             auto decompress_input =
                 FileDecompressionUtilityInput::from_file(compressed_file)
                     .with_output(custom_output);
-            auto result = decompressor.process(decompress_input);
+            auto result = decompressor.process(decompress_input).get();
 
             CHECK(result.success == true);
             CHECK(result.output_path == custom_output);
@@ -123,15 +124,21 @@ TEST_SUITE("FileDecompressor") {
             ofs.close();
 
             FileCompressorUtility compressor;
-            auto compress_result = compressor.process(
-                FileCompressionUtilityInput::from_file(original_file));
+            auto compress_result =
+                compressor
+                    .process(
+                        FileCompressionUtilityInput::from_file(original_file))
+                    .get();
             REQUIRE(compress_result.success == true);
 
             fs::remove(original_file);
 
             FileDecompressorUtility decompressor;
-            auto decompress_result = decompressor.process(
-                FileDecompressionUtilityInput::from_file(compressed_file));
+            auto decompress_result =
+                decompressor
+                    .process(FileDecompressionUtilityInput::from_file(
+                        compressed_file))
+                    .get();
             REQUIRE(decompress_result.success == true);
 
             std::string decompressed_content = read_file_content(original_file);
@@ -156,17 +163,23 @@ TEST_SUITE("FileDecompressor") {
             auto original_size = fs::file_size(original_file);
 
             FileCompressorUtility compressor;
-            auto compress_result = compressor.process(
-                FileCompressionUtilityInput::from_file(original_file)
-                    .with_chunk_size(1024));
+            auto compress_result =
+                compressor
+                    .process(
+                        FileCompressionUtilityInput::from_file(original_file)
+                            .with_chunk_size(1024))
+                    .get();
             REQUIRE(compress_result.success == true);
 
             fs::remove(original_file);
 
             FileDecompressorUtility decompressor;
-            auto decompress_result = decompressor.process(
-                FileDecompressionUtilityInput::from_file(compressed_file)
-                    .with_chunk_size(4096));
+            auto decompress_result =
+                decompressor
+                    .process(FileDecompressionUtilityInput::from_file(
+                                 compressed_file)
+                                 .with_chunk_size(4096))
+                    .get();
             REQUIRE(decompress_result.success == true);
 
             CHECK(fs::file_size(original_file) == original_size);
@@ -184,7 +197,7 @@ TEST_SUITE("FileDecompressor") {
 
             std::string non_existent = (test_dir / "non_existent.gz").string();
             auto input = FileDecompressionUtilityInput::from_file(non_existent);
-            auto result = decompressor.process(input);
+            auto result = decompressor.process(input).get();
 
             CHECK(result.success == false);
             CHECK(result.error_message.find("does not exist") !=
@@ -200,7 +213,7 @@ TEST_SUITE("FileDecompressor") {
 
             FileDecompressorUtility decompressor;
             auto input = FileDecompressionUtilityInput::from_file(corrupt_file);
-            auto result = decompressor.process(input);
+            auto result = decompressor.process(input).get();
 
             CHECK(result.success == false);
             bool has_decompression_error =
@@ -220,15 +233,20 @@ TEST_SUITE("FileDecompressor") {
             ofs.close();
 
             FileCompressorUtility compressor;
-            auto compress_result = compressor.process(
-                FileCompressionUtilityInput::from_file(empty_file));
+            auto compress_result =
+                compressor
+                    .process(FileCompressionUtilityInput::from_file(empty_file))
+                    .get();
             REQUIRE(compress_result.success == true);
 
             fs::remove(empty_file);
 
             FileDecompressorUtility decompressor;
-            auto decompress_result = decompressor.process(
-                FileDecompressionUtilityInput::from_file(compressed_file));
+            auto decompress_result =
+                decompressor
+                    .process(FileDecompressionUtilityInput::from_file(
+                        compressed_file))
+                    .get();
 
             CHECK(decompress_result.success == true);
             CHECK(decompress_result.decompressed_size == 0);
@@ -258,16 +276,22 @@ TEST_SUITE("FileDecompressor") {
             ofs.close();
 
             FileCompressorUtility compressor;
-            auto compress_result = compressor.process(
-                FileCompressionUtilityInput::from_file(binary_file));
+            auto compress_result =
+                compressor
+                    .process(
+                        FileCompressionUtilityInput::from_file(binary_file))
+                    .get();
             INFO("Compression error: ", compress_result.error_message);
             REQUIRE(compress_result.success == true);
 
             fs::remove(binary_file);
 
             FileDecompressorUtility decompressor;
-            auto decompress_result = decompressor.process(
-                FileDecompressionUtilityInput::from_file(compressed_file));
+            auto decompress_result =
+                decompressor
+                    .process(FileDecompressionUtilityInput::from_file(
+                        compressed_file))
+                    .get();
             INFO("Decompression error: ", decompress_result.error_message);
             REQUIRE(decompress_result.success == true);
 

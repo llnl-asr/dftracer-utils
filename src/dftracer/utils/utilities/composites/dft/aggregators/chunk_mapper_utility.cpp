@@ -5,13 +5,13 @@
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
-FileChunkMapperOutput FileChunkMapperUtility::process(
+coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
     const FileChunkMapperInput& input) {
     const auto& meta = input.metadata;
     if (!meta.success) {
         DFTRACER_UTILS_LOG_WARN("Skipping unsuccessful file: %s",
                                 meta.file_path.c_str());
-        return {};
+        co_return {};
     }
 
     std::size_t target_chunk_bytes = input.target_chunk_size_mb * 1024 * 1024;
@@ -53,10 +53,11 @@ FileChunkMapperOutput FileChunkMapperUtility::process(
         chunks.push_back(std::move(chunk));
     }
 
-    return chunks;
+    co_return chunks;
 }
 
-ChunkMapperOutput ChunkMapperUtility::process(const ChunkMapperInput& input) {
+coro::CoroTask<ChunkMapperOutput> ChunkMapperUtility::process(
+    const ChunkMapperInput& input) {
     ChunkMapperOutput all_chunks;
     int global_chunk_index = 0;
 
@@ -77,7 +78,7 @@ ChunkMapperOutput ChunkMapperUtility::process(const ChunkMapperInput& input) {
                 .with_batch_size(input.batch_size)
                 .with_start_chunk_index(global_chunk_index);
 
-        auto file_chunks = file_mapper.process(file_input);
+        auto file_chunks = co_await file_mapper.process(file_input);
         global_chunk_index += static_cast<int>(file_chunks.size());
 
         all_chunks.insert(all_chunks.end(),
@@ -93,7 +94,7 @@ ChunkMapperOutput ChunkMapperUtility::process(const ChunkMapperInput& input) {
             : static_cast<double>(all_chunks.size()) /
                   static_cast<double>(input.metadata.size()));
 
-    return all_chunks;
+    co_return all_chunks;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

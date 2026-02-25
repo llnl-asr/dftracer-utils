@@ -1,14 +1,19 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_GZIP_QUERIES_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_GZIP_QUERIES_H
 
+#include <dftracer/utils/core/sqlite/database.h>
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/database.h>
+#include <dftracer/utils/utilities/indexer/internal/error.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
 
 namespace dftracer::utils::utilities::indexer::internal::gzip {
+
+using dftracer::utils::sqlite::SqliteDatabase;
+using dftracer::utils::sqlite::SqliteStmt;
 
 void insert_file_record(const SqliteDatabase &db,
                         const std::string &gz_path_logical_path,

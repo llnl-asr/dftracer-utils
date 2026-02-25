@@ -123,7 +123,7 @@ TEST_SUITE("BloomQueryUtility") {
             .with_predicate("name", {"nonexistent_operation"});
 
         BloomQueryUtility query;
-        auto output = query.process(input);
+        auto output = query.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.file_may_match == false);
@@ -148,7 +148,7 @@ TEST_SUITE("BloomQueryUtility") {
             .with_predicate("name", {"read"});
 
         BloomQueryUtility query;
-        auto output = query.process(input);
+        auto output = query.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.file_may_match == true);
@@ -176,7 +176,7 @@ TEST_SUITE("BloomQueryUtility") {
             .with_predicate("cat", {"storage"});
 
         BloomQueryUtility query;
-        auto output = query.process(input);
+        auto output = query.process(input).get();
 
         CHECK(output.success == true);
         // "open" is in checkpoint 1, "storage" is in checkpoint 1
@@ -201,7 +201,7 @@ TEST_SUITE("BloomQueryUtility") {
         input.with_bidx_path(bidx_path).with_file_path(file_path);
 
         BloomQueryUtility query;
-        auto output = query.process(input);
+        auto output = query.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.file_may_match == true);
@@ -226,7 +226,7 @@ TEST_SUITE("BloomQueryUtility") {
             .with_predicate("fhash", {"./data/file.h5"});
 
         BloomQueryUtility query;
-        auto output = query.process(input);
+        auto output = query.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.file_may_match == true);
@@ -252,7 +252,7 @@ TEST_SUITE("BloomQueryUtility") {
             .with_predicate("name", {"read", "open"});
 
         BloomQueryUtility query;
-        auto output = query.process(input);
+        auto output = query.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.file_may_match == true);

@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
@@ -12,6 +13,8 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer::internal;
+
+static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program);
 
 int main(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
@@ -60,6 +63,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    return run_event_count(program).get();
+}
+
+static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
     // Parse arguments
     std::string log_dir = program.get<std::string>("--directory");
     bool force_rebuild = program.get<bool>("--force");
@@ -113,7 +120,9 @@ int main(int argc, char** argv) {
                 .with_checkpoint_size(checkpoint_size)
                 .with_force_rebuild(force_rebuild)
                 .with_index(idx_path);
-        return utilities::composites::dft::IndexBuilderUtility{}.process(input);
+        return utilities::composites::dft::IndexBuilderUtility{}
+            .process(input)
+            .get();
     };
 
     auto index_workflow =
@@ -144,8 +153,9 @@ int main(int argc, char** argv) {
                              .with_force_rebuild(force_rebuild)
                              .with_index(idx_path);
 
-        return utilities::composites::dft::MetadataCollectorUtility{}.process(
-            input);
+        return utilities::composites::dft::MetadataCollectorUtility{}
+            .process(input)
+            .get();
     };
 
     auto metadata_workflow =
@@ -231,5 +241,5 @@ int main(int argc, char** argv) {
         fs::remove_all(temp_index_dir);
     }
 
-    return 0;
+    co_return 0;
 }

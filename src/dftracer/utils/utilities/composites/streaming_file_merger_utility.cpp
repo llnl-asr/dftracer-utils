@@ -4,8 +4,8 @@
 #include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <dftracer/utils/utilities/composites/streaming_file_merger_utility.h>
-#include <dftracer/utils/utilities/io/lines/streaming_line_reader.h>
-#include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
+#include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
+#include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
 #include <fstream>
@@ -32,7 +32,7 @@ StreamingFileProducerUtility::process_async(
                     .with_force_rebuild(input.force_rebuild);
 
             dft::IndexBuilderUtility index_builder;
-            auto index_result = index_builder.process(index_input);
+            auto index_result = co_await index_builder.process(index_input);
 
             if (!index_result.success) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to build index for %s",
@@ -45,16 +45,17 @@ StreamingFileProducerUtility::process_async(
         dft::IncrementalEventHasher hasher;
 
         auto reader_config =
-            io::lines::StreamingLineReaderConfig()
+            fileio::lines::StreamingLineReaderConfig()
                 .with_file(input.file_path)
                 .with_index(is_compressed ? input.index_path : "");
 
-        io::lines::LineRange line_range =
-            io::lines::StreamingLineReader::read(reader_config);
+        auto line_gen =
+            fileio::lines::StreamingLineReader::read_async(reader_config);
 
         StreamingMergeBatchUtility batch;
 
-        for (const auto& line : line_range) {
+        while (auto line_opt = co_await line_gen.next()) {
+            const auto& line = *line_opt;
             const char* trimmed;
             std::size_t trimmed_length;
 
@@ -65,7 +66,7 @@ StreamingFileProducerUtility::process_async(
 
                 auto extract_input =
                     dft::EventIdExtractionInput::from_json(content);
-                auto event_id = event_extractor.process(extract_input);
+                auto event_id = co_await event_extractor.process(extract_input);
 
                 if (event_id.is_valid()) {
                     hasher.update(event_id);
@@ -110,10 +111,11 @@ StreamingFileConsumerUtility::process_async(
     result.output_path = input.output_file;
 
     try {
-        io::StreamingFileWriterUtility writer(input.output_file, false, true);
+        fileio::StreamingFileWriterUtility writer(input.output_file, false,
+                                                  true);
 
-        io::RawData array_open(std::vector<unsigned char>{'[', '\n'});
-        writer.process(array_open);
+        fileio::RawData array_open(std::vector<unsigned char>{'[', '\n'});
+        co_await writer.process(array_open);
 
         StreamingMergeBatchUtility batch;
         bool first = true;
@@ -124,12 +126,13 @@ StreamingFileConsumerUtility::process_async(
 
             for (auto& content : current.contents) {
                 if (!first) {
-                    io::RawData newline_data{std::vector<unsigned char>{'\n'}};
-                    writer.process(newline_data);
+                    fileio::RawData newline_data{
+                        std::vector<unsigned char>{'\n'}};
+                    co_await writer.process(newline_data);
                 }
 
-                io::RawData event_data(std::move(content));
-                writer.process(event_data);
+                fileio::RawData event_data(std::move(content));
+                co_await writer.process(event_data);
 
                 first = false;
                 result.total_events++;
@@ -137,12 +140,12 @@ StreamingFileConsumerUtility::process_async(
         }
 
         if (result.total_events > 0) {
-            io::RawData newline_data{std::vector<unsigned char>{'\n'}};
-            writer.process(newline_data);
+            fileio::RawData newline_data{std::vector<unsigned char>{'\n'}};
+            co_await writer.process(newline_data);
         }
 
-        io::RawData array_close(std::vector<unsigned char>{']', '\n'});
-        writer.process(array_close);
+        fileio::RawData array_close(std::vector<unsigned char>{']', '\n'});
+        co_await writer.process(array_close);
 
         writer.close();
 
@@ -153,7 +156,7 @@ StreamingFileConsumerUtility::process_async(
                     .with_compression_level(6);
 
             FileCompressorUtility compressor;
-            auto compress_result = compressor.process(compress_input);
+            auto compress_result = co_await compressor.process(compress_input);
 
             if (compress_result.success) {
                 fs::remove(input.output_file);

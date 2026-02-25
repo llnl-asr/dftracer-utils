@@ -113,7 +113,8 @@ class ChunkAggregatorUtility
    public:
     ChunkAggregatorUtility() = default;
 
-    ChunkAggregationOutput process(const ChunkAggregatorInput& input) override;
+    coro::CoroTask<ChunkAggregationOutput> process(
+        const ChunkAggregatorInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

@@ -79,17 +79,21 @@ set(UTILITIES_TEST_SOURCES
     hash/test_std_hasher.cpp
 
     # I/O
-    io/test_binary_file_reader.cpp
-    io/test_file_reader.cpp
-    io/test_streaming_file_reader.cpp
-    io/test_streaming_file_writer.cpp
+    fileio/test_binary_file_reader.cpp
+    fileio/test_file_reader.cpp
+    fileio/test_streaming_file_reader.cpp
+    fileio/test_streaming_file_writer.cpp
 
     # I/O Lines
-    io/lines/test_streaming_line_reader.cpp
-    io/lines/sources/test_indexed_file_line_iterator.cpp
-    io/lines/sources/test_indexed_file_bytes_iterator.cpp
-    io/lines/sources/test_plain_file_line_iterator.cpp
-    io/lines/sources/test_plain_file_bytes_iterator.cpp
+    fileio/lines/test_streaming_line_reader.cpp
+    fileio/lines/sources/test_indexed_file_line_iterator.cpp
+    fileio/lines/sources/test_indexed_file_bytes_iterator.cpp
+    fileio/lines/sources/test_plain_file_line_iterator.cpp
+    fileio/lines/sources/test_plain_file_bytes_iterator.cpp
+    fileio/lines/sources/test_async_indexed_file_line_generator.cpp
+    fileio/lines/sources/test_async_plain_file_line_generator.cpp
+    fileio/lines/sources/test_async_indexed_file_bytes_generator.cpp
+    fileio/lines/sources/test_async_plain_file_bytes_generator.cpp
 
     # Text
     text/test_line_filter.cpp
@@ -111,6 +115,7 @@ foreach(test_file ${UTILITIES_TEST_SOURCES})
   target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
   target_link_libraries(${target_name} PRIVATE doctest::doctest dftracer_utils testing_utilities)
   target_set_warnings(${target_name})
+  target_enable_coroutine(${target_name})
 
   # Set output directory to preserve folder structure
   get_filename_component(bin_dir ${bin_exec} DIRECTORY)

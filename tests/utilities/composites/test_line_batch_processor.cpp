@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/utilities/composites/line_batch_processor_utility.h>
+#include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
-#include <dftracer/utils/utilities/io/lines/line_types.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -13,7 +13,7 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::composites;
-using namespace dftracer::utils::utilities::io::lines;
+using namespace dftracer::utils::utilities::fileio::lines;
 using namespace dft_utils_test;
 
 // Test data structure for processed lines
@@ -51,7 +51,7 @@ TEST_SUITE("LineBatchProcessor") {
             LineReadInput input;
             input.file_path = txt_path;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.size() == 10);
             CHECK(results[0].line_number == 1);
@@ -87,7 +87,7 @@ TEST_SUITE("LineBatchProcessor") {
             input.file_path = gz_path;
             input.idx_path = idx_path;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.size() == 15);
             CHECK(results[0].line_number == 1);
@@ -126,7 +126,7 @@ TEST_SUITE("LineBatchProcessor") {
             LineReadInput input;
             input.file_path = txt_path;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.size() == 10);  // Only even lines
             for (const auto& result : results) {
@@ -167,7 +167,7 @@ TEST_SUITE("LineBatchProcessor") {
             LineReadInput input;
             input.file_path = txt_path;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.size() == 3);  // Only JSON lines
             CHECK(results[0].find(R"("id": 1)") != std::string::npos);
@@ -204,7 +204,7 @@ TEST_SUITE("LineBatchProcessor") {
             input.start_line = 5;
             input.end_line = 10;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.size() == 6);  // Lines 5-10 inclusive
             CHECK(results[0].find("Line 5") != std::string::npos);
@@ -240,7 +240,7 @@ TEST_SUITE("LineBatchProcessor") {
             input.start_line = 10;
             input.end_line = 15;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.size() == 6);  // Lines 10-15
             CHECK(results[0].line_number == 10);
@@ -279,7 +279,7 @@ TEST_SUITE("LineBatchProcessor") {
             LineReadInput input;
             input.file_path = txt_path;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.size() == 4);  // Lines with numbers
             CHECK(results[0] == 42.0);
@@ -335,7 +335,7 @@ TEST_SUITE("LineBatchProcessor") {
             LineReadInput input;
             input.file_path = txt_path;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.size() == 4);  // Data rows only
             CHECK(results[0].name == "Alice");
@@ -367,7 +367,7 @@ TEST_SUITE("LineBatchProcessor") {
             LineReadInput input;
             input.file_path = txt_path;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.empty());
 
@@ -397,7 +397,7 @@ TEST_SUITE("LineBatchProcessor") {
             LineReadInput input;
             input.file_path = txt_path;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.empty());
 
@@ -424,7 +424,7 @@ TEST_SUITE("LineBatchProcessor") {
             LineReadInput input;
             input.file_path = txt_path;
 
-            auto results = batch.process(input);
+            auto results = batch.process(input).get();
 
             CHECK(results.size() == 1);
             CHECK(results[0] == "Single line content");

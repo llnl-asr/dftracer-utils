@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_EVENT_COLLECTOR_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_EVENT_COLLECTOR_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
@@ -50,7 +51,7 @@ class EventCollectorFromMetadataUtility
     : public utilities::Utility<EventCollectorFromMetadataCollectorUtilityInput,
                                 EventCollectorUtilityOutput> {
    public:
-    EventCollectorUtilityOutput process(
+    coro::CoroTask<EventCollectorUtilityOutput> process(
         const EventCollectorFromMetadataCollectorUtilityInput& input) override;
 };
 

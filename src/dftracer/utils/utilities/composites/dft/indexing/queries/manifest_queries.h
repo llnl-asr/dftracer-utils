@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_MANIFEST_QUERIES_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_MANIFEST_QUERIES_H
 
-#include <dftracer/utils/utilities/indexer/internal/sqlite/database.h>
+#include <dftracer/utils/core/sqlite/database.h>
 
 #include <cstdint>
 #include <string>
@@ -9,7 +9,7 @@
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
-using indexer::internal::SqliteDatabase;
+using dftracer::utils::sqlite::SqliteDatabase;
 
 // --- Packed line numbers helpers ---
 

@@ -57,7 +57,8 @@ class StatisticsQueryUtility
    public:
     StatisticsQueryUtility() = default;
 
-    StatisticsQueryOutput process(const StatisticsQueryInput& input) override;
+    coro::CoroTask<StatisticsQueryOutput> process(
+        const StatisticsQueryInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::statistics

@@ -58,13 +58,13 @@ class MultiLineStream : public ReaderStream {
 
     ~MultiLineStream() override { reset(); }
 
-    span_view<const char> read() override {
+    coro::CoroTask<span_view<const char>> read_async() override {
         if (!underlying_stream_) {
-            return {};
+            co_return {};
         }
 
         if (is_finished_) {
-            return {};
+            co_return {};
         }
 
         output_buffer_.clear();
@@ -72,7 +72,7 @@ class MultiLineStream : public ReaderStream {
 
         // Read and accumulate multiple lines into output_buffer_
         while (!reached_end_of_range() && !reached_max_lines(max_lines)) {
-            if (!refill_if_needed()) {
+            if (!co_await refill_if_needed()) {
                 break;
             }
 
@@ -88,16 +88,17 @@ class MultiLineStream : public ReaderStream {
         update_finish_state();
 
         if (output_buffer_.empty()) {
-            return {};
+            co_return {};
         }
 
-        return span_view<const char>(output_buffer_.data(),
-                                     output_buffer_.size());
+        co_return span_view<const char>(output_buffer_.data(),
+                                        output_buffer_.size());
     }
 
-    std::size_t read(char* buffer, std::size_t buffer_size) override {
+    coro::CoroTask<std::size_t> read_async(char* buffer,
+                                           std::size_t buffer_size) override {
         if (!underlying_stream_) {
-            return 0;
+            co_return 0;
         }
 
         // Check if we have unconsumed data from previous read
@@ -107,18 +108,18 @@ class MultiLineStream : public ReaderStream {
             std::memcpy(buffer, output_buffer_.data() + output_buf_pos_,
                         copy_size);
             output_buf_pos_ += copy_size;
-            return copy_size;
+            co_return copy_size;
         }
 
         // Buffer exhausted
         if (is_finished_) {
-            return 0;
+            co_return 0;
         }
 
         // Get new chunk via zero-copy read
-        auto span = read();
+        auto span = co_await read_async();
         if (span.empty()) {
-            return 0;
+            co_return 0;
         }
 
         // Reset position for new buffer
@@ -129,7 +130,7 @@ class MultiLineStream : public ReaderStream {
         std::memcpy(buffer, span.data(), copy_size);
         output_buf_pos_ = copy_size;
 
-        return copy_size;
+        co_return copy_size;
     }
 
     bool done() const override {
@@ -187,18 +188,18 @@ class MultiLineStream : public ReaderStream {
                (end_line_ == 0 || current_line_ <= end_line_);
     }
 
-    bool refill_if_needed() {
+    coro::CoroTask<bool> refill_if_needed() {
         if (span_pos_ < current_span_.size()) {
-            return true;
+            co_return true;
         }
 
         if (underlying_stream_->done()) {
-            return false;
+            co_return false;
         }
 
-        current_span_ = underlying_stream_->read();
+        current_span_ = co_await underlying_stream_->read_async();
         span_pos_ = 0;
-        return !current_span_.empty();
+        co_return !current_span_.empty();
     }
 
     const char* find_next_newline() const {

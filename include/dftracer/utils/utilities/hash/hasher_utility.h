@@ -75,9 +75,9 @@ class HasherUtility : public internal::BaseHasherUtility {
     }
 
     // Override process to delegate properly
-    Hash process(const std::string& input) override {
+    coro::CoroTask<Hash> process(const std::string& input) override {
         update(input);
-        return get_hash();
+        co_return get_hash();
     }
 
    private:

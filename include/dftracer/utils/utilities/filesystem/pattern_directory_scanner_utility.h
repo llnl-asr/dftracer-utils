@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILESYSTEM_PATTERN_DIRECTORY_SCANNER_H
 #define DFTRACER_UTILS_UTILITIES_FILESYSTEM_PATTERN_DIRECTORY_SCANNER_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
@@ -77,11 +78,12 @@ class PatternDirectoryScannerUtility
      * @param input Directory path, patterns, and recursive flag
      * @return Vector of file entries matching patterns
      */
-    std::vector<FileEntry> process(
+    coro::CoroTask<std::vector<FileEntry>> process(
         const PatternDirectoryScannerUtilityInput& input) override {
         // Step 1: Use base DirectoryScanner
         DirectoryScannerUtilityInput dir_input{input.path, input.recursive};
-        std::vector<FileEntry> all_entries = base_scanner_.process(dir_input);
+        std::vector<FileEntry> all_entries =
+            co_await base_scanner_.process(dir_input);
 
         // Step 2: Filter by patterns
         std::vector<FileEntry> matched_entries;
@@ -98,7 +100,7 @@ class PatternDirectoryScannerUtility
             }
         }
 
-        return matched_entries;
+        co_return matched_entries;
     }
 
    private:

@@ -1,9 +1,9 @@
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
-using indexer::internal::SqliteStmt;
+using dftracer::utils::sqlite::SqliteStmt;
 
 std::optional<std::string> query_resolved_by_hash(
     const SqliteDatabase& db, const std::string& dimension,

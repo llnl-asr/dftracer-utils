@@ -1,13 +1,14 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/composites/dft/event_collector_utility.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_line_generator.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <yyjson.h>
 
 #include <algorithm>
-#include <fstream>
 
 namespace dftracer::utils::utilities::composites::dft {
 
@@ -23,7 +24,8 @@ class EventIdCollector : public reader::internal::LineProcessor {
                               bool should_trim_commas = false)
         : events(event_list), trim_commas(should_trim_commas) {}
 
-    bool process(const char* data, std::size_t length) override {
+    coro::CoroTask<bool> process(const char* data,
+                                 std::size_t length) override {
         const char* trimmed;
         std::size_t trimmed_length;
 
@@ -34,16 +36,16 @@ class EventIdCollector : public reader::internal::LineProcessor {
                                                           trimmed_length);
 
         if (!valid || trimmed_length <= 8) {
-            return true;
+            co_return true;
         }
 
         yyjson_doc* doc = yyjson_read(trimmed, trimmed_length, 0);
-        if (!doc) return true;
+        if (!doc) co_return true;
 
         yyjson_val* root = yyjson_doc_get_root(doc);
         if (!yyjson_is_obj(root)) {
             yyjson_doc_free(doc);
-            return true;
+            co_return true;
         }
 
         EventId event;
@@ -67,11 +69,12 @@ class EventIdCollector : public reader::internal::LineProcessor {
         }
 
         yyjson_doc_free(doc);
-        return true;
+        co_return true;
     }
 };
 
-EventCollectorUtilityOutput EventCollectorFromMetadataUtility::process(
+coro::CoroTask<EventCollectorUtilityOutput>
+EventCollectorFromMetadataUtility::process(
     const EventCollectorFromMetadataCollectorUtilityInput& input) {
     std::vector<EventId> events;
 
@@ -96,24 +99,15 @@ EventCollectorUtilityOutput EventCollectorFromMetadataUtility::process(
                                          file.file_path.c_str());
                 continue;
             }
-            reader->read_lines_with_processor(file.start_line, file.end_line,
-                                              collector);
+            co_await reader->read_lines_with_processor_async(
+                file.start_line, file.end_line, collector);
         } else {
-            // Plain text file
-            std::ifstream infile(file.file_path);
-            if (!infile.is_open()) {
-                DFTRACER_UTILS_LOG_WARN("Cannot open file: %s",
-                                        file.file_path.c_str());
-                continue;
-            }
-
-            std::string line;
-            std::size_t current_line = 0;
-            while (std::getline(infile, line)) {
-                current_line++;
-                if (current_line < file.start_line) continue;
-                if (current_line > file.end_line) break;
-                collector.process(line.c_str(), line.length());
+            // Plain text file — async line generator
+            auto line_gen = fileio::lines::sources::async_plain_file_lines(
+                file.file_path, file.start_line, file.end_line);
+            while (auto line_opt = co_await line_gen.next()) {
+                co_await collector.process(line_opt->content.data(),
+                                           line_opt->content.length());
             }
         }
 
@@ -133,7 +127,7 @@ EventCollectorUtilityOutput EventCollectorFromMetadataUtility::process(
         "files",
         events.size(), input.metadata.size());
 
-    return events;
+    co_return events;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft

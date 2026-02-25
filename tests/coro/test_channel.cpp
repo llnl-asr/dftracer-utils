@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/coro/channel.h>
+#include <dftracer/utils/core/coro/yield.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
@@ -706,14 +707,12 @@ TEST_CASE("Channel - send_async unblocks when receiver drains") {
     auto consumer = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
             while (!third_send_started.load(std::memory_order_acquire)) {
-                co_await ctx.spawn_io([]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                });
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                co_await coro::yield();
             }
 
-            co_await ctx.spawn_io([]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            });
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            co_await coro::yield();
 
             CHECK(third_send_completed.load(std::memory_order_acquire) ==
                   false);
@@ -757,11 +756,10 @@ TEST_CASE("Channel - send_async resumes false when closed") {
         "AsyncSendCloseProducer");
 
     auto closer = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
+        [&](CoroScope& /* ctx */) -> coro::CoroTask<void> {
             while (!second_send_started.load(std::memory_order_acquire)) {
-                co_await ctx.spawn_io([]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                });
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                co_await coro::yield();
             }
             channel->close();
             co_return;

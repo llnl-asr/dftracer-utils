@@ -233,6 +233,8 @@ void test_data_range_reading(void) {
     TEST_ASSERT_TRUE(total_bytes <= 50);
 
     // check that we got some JSON content
+    output = realloc(output, total_bytes + 1);
+    TEST_ASSERT_NOT_NULL(output);
     output[total_bytes] = '\0';  // Null terminate for strstr
     char* json_start = strstr(output, "{");
     TEST_ASSERT_NOT_NULL(json_start);

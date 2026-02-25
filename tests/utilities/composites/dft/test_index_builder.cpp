@@ -27,7 +27,7 @@ TEST_SUITE("IndexBuilder") {
 
             // Build index
             IndexBuilderUtility builder;
-            auto output = builder.process(input);
+            auto output = builder.process(input).get();
 
             // Verify
             CHECK(output.file_path == gz_file);
@@ -48,12 +48,12 @@ TEST_SUITE("IndexBuilder") {
                 IndexBuildUtilityInput::from_file(gz_file).with_index(idx_path);
 
             IndexBuilderUtility builder;
-            auto output1 = builder.process(input1);
+            auto output1 = builder.process(input1).get();
             CHECK(output1.success == true);
             CHECK(output1.was_built == true);
 
             // Build again without force - should use existing
-            auto output2 = builder.process(input1);
+            auto output2 = builder.process(input1).get();
             CHECK(output2.success == true);
             CHECK(output2.was_built == false);  // Should not rebuild
         }
@@ -72,12 +72,12 @@ TEST_SUITE("IndexBuilder") {
                          .with_force_rebuild(true);
 
         IndexBuilderUtility builder;
-        auto output1 = builder.process(input);
+        auto output1 = builder.process(input).get();
         CHECK(output1.success == true);
         CHECK(output1.was_built == true);
 
         // Build again with force
-        auto output2 = builder.process(input);
+        auto output2 = builder.process(input).get();
         CHECK(output2.success == true);
         CHECK(output2.was_built == true);  // Should rebuild with force
     }
@@ -86,7 +86,7 @@ TEST_SUITE("IndexBuilder") {
         auto input = IndexBuildUtilityInput::from_file("/non/existent/file.gz");
 
         IndexBuilderUtility builder;
-        auto output = builder.process(input);
+        auto output = builder.process(input).get();
 
         CHECK(output.success == false);
         CHECK(output.was_built == false);

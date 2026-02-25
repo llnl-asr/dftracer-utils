@@ -1,6 +1,8 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.h>
@@ -10,6 +12,8 @@
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <argparse/argparse.hpp>
@@ -70,66 +74,11 @@ std::string output_filename(const std::string& original_path) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_reconstruct",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Reconstruct original trace files from "
-        "reorganized files using provenance "
-        "tracking in .midx sidecars.");
-
-    program.add_argument("-d", "--directory")
-        .help(
-            "Directory containing reorganized "
-            "files")
-        .required();
-
-    program.add_argument("-o", "--output")
-        .help("Output directory (required)")
-        .required();
-
-    program.add_argument("--index-dir")
-        .help("Directory for sidecar files")
-        .default_value<std::string>("");
-
-    program.add_argument("--checkpoint-size")
-        .help("Checkpoint size for indexing")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(
-            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
-
-    program.add_argument("--no-compress")
-        .help("Write plain .pfw instead of .pfw.gz")
-        .flag();
-
-    program.add_argument("--executor-threads")
-        .help("Worker threads")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(std::thread::hardware_concurrency()));
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
-        std::cerr << program;
-        return 1;
-    }
-
-    std::string directory = program.get<std::string>("--directory");
-    std::string output_dir = program.get<std::string>("--output");
-    std::string index_dir = program.get<std::string>("--index-dir");
-    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
-    bool no_compress = program.get<bool>("--no-compress");
-
-    if (index_dir.empty()) {
-        index_dir = directory;
-    }
-
-    fs::create_directories(output_dir);
-
+static coro::CoroTask<int> run_reconstruct(const std::string& directory,
+                                           const std::string& output_dir,
+                                           const std::string& index_dir,
+                                           std::size_t checkpoint_size,
+                                           bool no_compress) {
     // Step 1: Scan for reorganized files
     std::printf(
         "========================================"
@@ -144,7 +93,7 @@ int main(int argc, char** argv) {
         filesystem::PatternDirectoryScannerUtility scanner;
         filesystem::PatternDirectoryScannerUtilityInput scan_input{
             directory, {".pfw", ".pfw.gz"}, false};
-        auto matched = scanner.process(scan_input);
+        auto matched = co_await scanner.process(scan_input);
         for (const auto& entry : matched) {
             reorg_files.push_back(entry.path.string());
         }
@@ -152,7 +101,7 @@ int main(int argc, char** argv) {
 
     if (reorg_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("%s", "No reorganized files found.");
-        return 1;
+        co_return 1;
     }
 
     std::printf("  Input directory: %s\n", directory.c_str());
@@ -175,17 +124,17 @@ int main(int argc, char** argv) {
 
     ReconstructionPlan plan;
     try {
-        plan = planner.process(planner_input);
+        plan = co_await planner.process(planner_input);
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Planning failed: %s", e.what());
-        return 1;
+        co_return 1;
     }
 
     if (plan.files.empty()) {
         std::printf(
             "No files with provenance found. "
             "Nothing to reconstruct.\n");
-        return 0;
+        co_return 0;
     }
 
     std::printf(
@@ -249,7 +198,7 @@ int main(int argc, char** argv) {
         auto meta_input = MetadataCollectorUtilityInput::from_file(reorg_file)
                               .with_index(idx_path)
                               .with_checkpoint_size(checkpoint_size);
-        auto meta = meta_collector.process(meta_input);
+        auto meta = co_await meta_collector.process(meta_input);
         if (!meta.success) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Failed to get metadata for %s: "
@@ -265,7 +214,7 @@ int main(int argc, char** argv) {
         IndexedFileReaderUtility reader_utility;
         std::shared_ptr<reader::internal::Reader> reader;
         try {
-            reader = reader_utility.process(reader_input);
+            reader = co_await reader_utility.process(reader_input);
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Failed to create reader for %s: "
@@ -285,7 +234,7 @@ int main(int argc, char** argv) {
 
         int line_number = 0;
         while (!stream->done()) {
-            auto chunk = stream->read();
+            auto chunk = co_await stream->read_async();
             if (chunk.empty()) break;
 
             const char* data = chunk.data();
@@ -329,12 +278,14 @@ int main(int argc, char** argv) {
         std::string fname = output_filename(orig_path);
         std::string out_pfw = output_dir + "/" + fname;
 
-        FILE* f = std::fopen(out_pfw.c_str(), "w");
-        if (!f) {
+        ssize_t open_result = co_await io::open(
+            out_pfw.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (open_result < 0) {
             DFTRACER_UTILS_LOG_ERROR("Failed to open output: %s",
                                      out_pfw.c_str());
             continue;
         }
+        int fd = static_cast<int>(open_result);
 
         std::size_t lines_written = 0;
         auto buf_it = buffers.find(orig_path);
@@ -342,14 +293,14 @@ int main(int argc, char** argv) {
             // Write in checkpoint order
             for (const auto& [ckpt, lines] : buf_it->second) {
                 for (const auto& line : lines) {
-                    std::fwrite(line.data(), 1, line.size(), f);
-                    std::fputc('\n', f);
+                    co_await io::write(fd, line.data(), line.size());
+                    co_await io::write(fd, "\n", 1);
                     lines_written++;
                 }
             }
         }
 
-        std::fclose(f);
+        co_await io::close(fd);
         std::printf("  %s: %zu lines\n", fname.c_str(), lines_written);
         files_written++;
     }
@@ -368,7 +319,7 @@ int main(int argc, char** argv) {
             }
 
             FileCompressorUtility compressor;
-            auto comp_result = compressor.process(
+            auto comp_result = co_await compressor.process(
                 FileCompressionUtilityInput::from_file(out_pfw));
 
             if (comp_result.success) {
@@ -395,8 +346,8 @@ int main(int argc, char** argv) {
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     std::printf(
-        "\n======================================="
-        "===\n");
+        "\n========================================"
+        "==\n");
     std::printf("Reconstruction Complete\n");
     std::printf(
         "========================================"
@@ -429,5 +380,69 @@ int main(int argc, char** argv) {
         "========================================"
         "==\n");
 
-    return 0;
+    co_return 0;
+}
+
+int main(int argc, char** argv) {
+    DFTRACER_UTILS_LOGGER_INIT();
+
+    argparse::ArgumentParser program("dftracer_reconstruct",
+                                     DFTRACER_UTILS_PACKAGE_VERSION);
+    program.add_description(
+        "Reconstruct original trace files from "
+        "reorganized files using provenance "
+        "tracking in .midx sidecars.");
+
+    program.add_argument("-d", "--directory")
+        .help(
+            "Directory containing reorganized "
+            "files")
+        .required();
+
+    program.add_argument("-o", "--output")
+        .help("Output directory (required)")
+        .required();
+
+    program.add_argument("--index-dir")
+        .help("Directory for sidecar files")
+        .default_value<std::string>("");
+
+    program.add_argument("--checkpoint-size")
+        .help("Checkpoint size for indexing")
+        .scan<'d', std::size_t>()
+        .default_value(static_cast<std::size_t>(
+            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
+
+    program.add_argument("--no-compress")
+        .help("Write plain .pfw instead of .pfw.gz")
+        .flag();
+
+    program.add_argument("--executor-threads")
+        .help("Worker threads")
+        .scan<'d', std::size_t>()
+        .default_value(
+            static_cast<std::size_t>(std::thread::hardware_concurrency()));
+
+    try {
+        program.parse_args(argc, argv);
+    } catch (const std::exception& err) {
+        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
+        std::cerr << program;
+        return 1;
+    }
+
+    std::string directory = program.get<std::string>("--directory");
+    std::string output_dir = program.get<std::string>("--output");
+    std::string index_dir = program.get<std::string>("--index-dir");
+    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
+    bool no_compress = program.get<bool>("--no-compress");
+
+    if (index_dir.empty()) {
+        index_dir = directory;
+    }
+
+    fs::create_directories(output_dir);
+    return run_reconstruct(directory, output_dir, index_dir, checkpoint_size,
+                           no_compress)
+        .get();
 }

@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_resolver_utility.h>
 
 #include <cstdint>
@@ -8,7 +9,7 @@
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
-AssociationResolverOutput AssociationResolverUtility::process(
+coro::CoroTask<AssociationResolverOutput> AssociationResolverUtility::process(
     const AssociationResolverInput& input) {
     DFTRACER_UTILS_LOG_INFO(
         "Resolving associations globally from %zu trackers...",
@@ -21,7 +22,7 @@ AssociationResolverOutput AssociationResolverUtility::process(
                                    input.config.boundary_events.empty())) {
         DFTRACER_UTILS_LOG_INFO(
             "No associations to resolve (trackers or config disabled)");
-        return output;
+        co_return output;
     }
 
     AssociationTracker global_tracker;
@@ -97,7 +98,7 @@ AssociationResolverOutput AssociationResolverUtility::process(
 
     output.root_pids = root_pids;
     output.success = true;
-    return output;
+    co_return output;
 }
 
 void AssociationResolverUtility::compute_trace_metadata(

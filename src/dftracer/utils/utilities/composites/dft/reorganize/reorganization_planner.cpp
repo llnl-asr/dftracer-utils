@@ -75,7 +75,7 @@ std::vector<PredicateGroup> parse_group_specs(
     return groups;
 }
 
-ExtractionPlan ReorganizationPlannerUtility::process(
+coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
     const ReorganizationPlannerInput& input) {
     ExtractionPlan plan;
     plan.groups = input.groups;
@@ -131,7 +131,7 @@ ExtractionPlan ReorganizationPlannerUtility::process(
         if (input.checkpoint_size > 0) {
             idx_input.with_checkpoint_size(input.checkpoint_size);
         }
-        auto idx_result = idx_builder.process(idx_input);
+        auto idx_result = co_await idx_builder.process(idx_input);
         if (!idx_result.success) {
             throw std::runtime_error("Failed to build index for: " + file_path);
         }
@@ -144,7 +144,7 @@ ExtractionPlan ReorganizationPlannerUtility::process(
         if (input.checkpoint_size > 0) {
             meta_input.with_checkpoint_size(input.checkpoint_size);
         }
-        auto meta = metadata_collector.process(meta_input);
+        auto meta = co_await metadata_collector.process(meta_input);
         if (!meta.success) {
             throw std::runtime_error("Failed to collect metadata for: " +
                                      file_path);
@@ -269,7 +269,7 @@ ExtractionPlan ReorganizationPlannerUtility::process(
         }
     }
 
-    return plan;
+    co_return plan;
 }
 
 }  // namespace

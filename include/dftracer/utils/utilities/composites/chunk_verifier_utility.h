@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_CHUNK_VERIFIER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_CHUNK_VERIFIER_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 
@@ -129,7 +130,7 @@ class ChunkVerifierUtility
      * @param input Verification input with chunks and metadata
      * @return Verification result with pass/fail and hashes
      */
-    ChunkVerificationUtilityOutput process(
+    coro::CoroTask<ChunkVerificationUtilityOutput> process(
         const ChunkVerificationUtilityInput<ChunkType, MetadataType>& input)
         override {
         // Step 1: Compute input hash
@@ -154,10 +155,10 @@ class ChunkVerifierUtility
 
         // Step 7: Compare hashes
         if (input_hash == output_hash) {
-            return ChunkVerificationUtilityOutput::success(input_hash,
-                                                           output_hash);
+            co_return ChunkVerificationUtilityOutput::success(input_hash,
+                                                              output_hash);
         } else {
-            return ChunkVerificationUtilityOutput::failure(
+            co_return ChunkVerificationUtilityOutput::failure(
                 input_hash, output_hash,
                 "Hash mismatch: input and output events differ");
         }

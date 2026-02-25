@@ -2,6 +2,8 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_LINE_PROCESSOR_H
 
 #ifdef __cplusplus
+#include <dftracer/utils/core/coro/task.h>
+
 #include <cstddef>
 
 namespace dftracer::utils::utilities::reader::internal {
@@ -20,7 +22,8 @@ class LineProcessor {
      * @param length Length of the line data in bytes
      * @return true to continue processing, false to stop early
      */
-    virtual bool process(const char* data, std::size_t length) = 0;
+    virtual coro::CoroTask<bool> process(const char* data,
+                                         std::size_t length) = 0;
 
     /**
      * Called before processing begins.
@@ -52,10 +55,11 @@ class CLineProcessor : public LineProcessor {
                    void* user_data)
         : callback_(callback), user_data_(user_data) {}
 
-    bool process(const char* data, std::size_t length) override {
+    coro::CoroTask<bool> process(const char* data,
+                                 std::size_t length) override {
         // Convert C++ call to C callback
         int result = callback_(data, length, user_data_);
-        return result != 0;  // Non-zero means continue
+        co_return result != 0;  // Non-zero means continue
     }
 };
 

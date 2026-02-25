@@ -18,26 +18,27 @@ class PyLazyJSONLineProcessor
 
     ~PyLazyJSONLineProcessor() { Py_XDECREF(result_list); }
 
-    bool process(const char* data, std::size_t length) override {
-        if (!result_list) return false;
+    dftracer::utils::coro::CoroTask<bool> process(const char* data,
+                                                  std::size_t length) override {
+        if (!result_list) co_return false;
 
         const char* trimmed;
         std::size_t trimmed_length;
         if (!dftracer::utils::json_trim_and_validate(data, length, trimmed,
                                                      trimmed_length)) {
-            return true;
+            co_return true;
         }
 
         PyObject* json_obj = JSON_from_data(trimmed, trimmed_length);
         if (!json_obj) {
             PyErr_Clear();
-            return true;
+            co_return true;
         }
 
         int result = PyList_Append(result_list, json_obj);
         Py_DECREF(json_obj);
 
-        return result == 0;
+        co_return result == 0;
     }
 
     PyObject* get_result() {

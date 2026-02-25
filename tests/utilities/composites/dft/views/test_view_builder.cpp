@@ -106,7 +106,7 @@ TEST_SUITE("ViewBuilderUtility") {
             .with_num_checkpoints(4);
 
         ViewBuilderUtility builder;
-        auto output = builder.process(input);
+        auto output = builder.process(input).get();
 
         CHECK(output.success);
         CHECK(output.file_may_match);
@@ -142,7 +142,7 @@ TEST_SUITE("ViewBuilderUtility") {
             .with_num_checkpoints(4);
 
         ViewBuilderUtility builder;
-        auto output = builder.process(input);
+        auto output = builder.process(input).get();
 
         CHECK(output.success);
         CHECK(output.file_may_match);
@@ -178,7 +178,7 @@ TEST_SUITE("ViewBuilderUtility") {
             .with_num_checkpoints(4);
 
         ViewBuilderUtility builder;
-        auto output = builder.process(input);
+        auto output = builder.process(input).get();
 
         CHECK(output.success);
         CHECK_FALSE(output.file_may_match);
@@ -213,7 +213,7 @@ TEST_SUITE("ViewBuilderUtility") {
             .with_num_checkpoints(4);
 
         ViewBuilderUtility builder;
-        auto output = builder.process(input);
+        auto output = builder.process(input).get();
 
         CHECK(output.success);
         CHECK(output.file_may_match);
@@ -238,7 +238,7 @@ TEST_SUITE("ViewBuilderUtility") {
             .with_num_checkpoints(3);
 
         ViewBuilderUtility builder;
-        auto output = builder.process(input);
+        auto output = builder.process(input).get();
 
         CHECK(output.success);
         CHECK(output.file_may_match);
@@ -259,7 +259,7 @@ TEST_SUITE("ViewBuilderUtility") {
             .with_num_checkpoints(3);
 
         ViewBuilderUtility builder;
-        auto output = builder.process(input);
+        auto output = builder.process(input).get();
 
         CHECK(output.success);
         REQUIRE(output.candidates.size() == 3);
@@ -291,7 +291,7 @@ TEST_SUITE("ViewBuilderUtility") {
             .with_num_checkpoints(0);
 
         ViewBuilderUtility builder;
-        auto output = builder.process(input);
+        auto output = builder.process(input).get();
 
         CHECK(output.success);
         CHECK(output.total_checkpoints == 1);
@@ -345,7 +345,7 @@ TEST_SUITE("ViewBuilderUtility") {
             .with_num_checkpoints(1);
 
         ViewBuilderUtility builder;
-        auto output = builder.process(input);
+        auto output = builder.process(input).get();
 
         CHECK(output.success);
         CHECK(output.file_may_match);

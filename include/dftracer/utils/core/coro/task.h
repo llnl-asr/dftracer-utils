@@ -95,10 +95,20 @@ class CoroTask {
         }
 
         // Wrap every other awaitable in a timeslice check.
+        // Movable rvalue awaitables are moved into the wrapper so
+        // the temporary does not dangle across a suspension.
+        // Lvalue awaitables and non-movable rvalues stay as refs.
         template <typename U>
-        coro::detail::YieldCheckAwaitable<U&&> await_transform(
-            U&& awaitable) noexcept {
-            return {static_cast<U&&>(awaitable)};
+        auto await_transform(U&& awaitable) noexcept {
+            if constexpr (std::is_lvalue_reference_v<U>) {
+                return coro::detail::YieldCheckAwaitable<U>{awaitable};
+            } else if constexpr (std::is_move_constructible_v<U>) {
+                return coro::detail::YieldCheckAwaitable<U>{
+                    std::move(awaitable)};
+            } else {
+                return coro::detail::YieldCheckAwaitable<U&&>{
+                    static_cast<U&&>(awaitable)};
+            }
         }
     };
 
@@ -208,12 +218,10 @@ class CoroTask {
      * @throws Exception if coroutine threw
      */
     T get() {
-        // Resume until done
+        SyncScope sync;
         while (coro_handle_ && !coro_handle_.done()) {
             coro_handle_.resume();
         }
-
-        // Extract result using await_resume logic
         return await_resume();
     }
 
@@ -441,10 +449,20 @@ class CoroTask<void> {
         }
 
         // Wrap every other awaitable in a timeslice check.
+        // Movable rvalue awaitables are moved into the wrapper so
+        // the temporary does not dangle across a suspension.
+        // Lvalue awaitables and non-movable rvalues stay as refs.
         template <typename U>
-        coro::detail::YieldCheckAwaitable<U&&> await_transform(
-            U&& awaitable) noexcept {
-            return {static_cast<U&&>(awaitable)};
+        auto await_transform(U&& awaitable) noexcept {
+            if constexpr (std::is_lvalue_reference_v<U>) {
+                return coro::detail::YieldCheckAwaitable<U>{awaitable};
+            } else if constexpr (std::is_move_constructible_v<U>) {
+                return coro::detail::YieldCheckAwaitable<U>{
+                    std::move(awaitable)};
+            } else {
+                return coro::detail::YieldCheckAwaitable<U&&>{
+                    static_cast<U&&>(awaitable)};
+            }
         }
     };
 
@@ -516,6 +534,7 @@ class CoroTask<void> {
     }
 
     void get() {
+        SyncScope sync;
         while (coro_handle_ && !coro_handle_.done()) {
             coro_handle_.resume();
         }

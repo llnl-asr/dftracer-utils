@@ -42,7 +42,8 @@ struct ViewReaderOutput {
 class ViewReaderUtility
     : public Utility<ViewReaderInput, ViewReaderOutput, tags::Parallelizable> {
    public:
-    ViewReaderOutput process(const ViewReaderInput& input) override;
+    coro::CoroTask<ViewReaderOutput> process(
+        const ViewReaderInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::views

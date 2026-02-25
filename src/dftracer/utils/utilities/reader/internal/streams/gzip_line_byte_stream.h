@@ -44,17 +44,17 @@ class GzipLineByteStream : public GzipStream {
                     dftracer::utils::utilities::indexer::internal::Indexer
                         &indexer) override {
         GzipStream::initialize(gz_path, start_bytes, end_bytes, indexer);
-        actual_start_bytes_ = find_line_start(start_bytes);
+        actual_start_bytes_ = find_line_start(start_bytes).get();
         current_position_ = actual_start_bytes_;
     }
 
-    std::size_t find_line_start(std::size_t target_start) {
+    coro::CoroTask<std::size_t> find_line_start(std::size_t target_start) {
         std::size_t current_pos = checkpoint_.uc_offset;
         std::size_t actual_start = target_start;
 
         // If target is at the start of the file, no adjustment needed
         if (target_start <= current_pos) {
-            return target_start;
+            co_return target_start;
         }
 
         std::size_t search_start = (target_start >= LINE_SEARCH_LOOKBACK)
@@ -70,8 +70,8 @@ class GzipLineByteStream : public GzipStream {
         alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char
             search_buffer[SEARCH_BUFFER_SIZE];
         std::size_t search_bytes;
-        if (inflater_.read(file_handle_, search_buffer,
-                           sizeof(search_buffer) - 1, search_bytes)) {
+        if (co_await inflater_.read(fd_, file_offset_, search_buffer,
+                                    sizeof(search_buffer) - 1, search_bytes)) {
             std::size_t relative_target = target_start - current_pos;
             if (relative_target < search_bytes) {
                 // Always use backward search to find line start
@@ -92,11 +92,11 @@ class GzipLineByteStream : public GzipStream {
             skip(actual_start);
         }
 
-        return actual_start;
+        co_return actual_start;
     }
 
-    std::size_t read(char *output_buffer,
-                     std::size_t output_buffer_size) override {
+    coro::CoroTask<std::size_t> read_async(
+        char *output_buffer, std::size_t output_buffer_size) override {
 #ifdef __GNUC__
         __builtin_prefetch(output_buffer, 1, 3);
 #endif
@@ -112,13 +112,13 @@ class GzipLineByteStream : public GzipStream {
                 "Copied %zu bytes from existing buffer (pos %zu/%zu)",
                 copy_size, buffer_pos_, valid_bytes_);
 
-            return copy_size;
+            co_return copy_size;
         }
 
         // Buffer exhausted, get new chunk via zero-copy read
-        auto span = read();
+        auto span = co_await read_async();
         if (span.empty()) {
-            return 0;
+            co_return 0;
         }
 
         // Update our tracking of the buffer state
@@ -134,11 +134,11 @@ class GzipLineByteStream : public GzipStream {
             "%zu)",
             copy_size, valid_bytes_);
 
-        return copy_size;
+        co_return copy_size;
     }
 
    private:
-    std::size_t read_line_aligned_data() {
+    coro::CoroTask<std::size_t> read_line_aligned_data() {
         if (!decompression_initialized_) {
             throw ReaderError(ReaderError::INITIALIZATION_ERROR,
                               "Streaming session not properly initialized");
@@ -150,7 +150,7 @@ class GzipLineByteStream : public GzipStream {
                 "target_end_bytes=%zu",
                 current_position_, target_end_bytes_);
             is_finished_ = true;
-            return 0;
+            co_return 0;
         }
 
         // Copy partial line buffer to internal buffer (if exists)
@@ -176,14 +176,15 @@ class GzipLineByteStream : public GzipStream {
 
         std::size_t bytes_read = 0;
         if (bytes_to_read > 0) {
-            bool status = inflater_.read(file_handle_,
-                                         reinterpret_cast<unsigned char *>(
-                                             buffer_.data() + partial_size),
-                                         bytes_to_read, bytes_read);
+            bool status =
+                co_await inflater_.read(fd_, file_offset_,
+                                        reinterpret_cast<unsigned char *>(
+                                            buffer_.data() + partial_size),
+                                        bytes_to_read, bytes_read);
 
             if (!status || bytes_read == 0) {
                 is_finished_ = true;
-                return 0;
+                co_return 0;
             }
         }
 
@@ -210,7 +211,7 @@ class GzipLineByteStream : public GzipStream {
                 "%s",
                 "No complete line found in current buffer, will read more data "
                 "on next call");
-            return 0;
+            co_return 0;
         }
 
         bytes_returned_ += adjusted_size;
@@ -219,24 +220,25 @@ class GzipLineByteStream : public GzipStream {
             "Returning %zu bytes, total bytes_returned=%zu", adjusted_size,
             bytes_returned_);
 
-        return adjusted_size;
+        co_return adjusted_size;
     }
 
     // Zero-copy read - returns span to internal buffer
-    dftracer::utils::span_view<const char> read() override {
+    coro::CoroTask<dftracer::utils::span_view<const char>> read_async()
+        override {
         if (is_finished_) {
-            return {};
+            co_return {};
         }
 
         // Read line-aligned data into buffer_
-        valid_bytes_ = read_line_aligned_data();
+        valid_bytes_ = co_await read_line_aligned_data();
 
         if (valid_bytes_ == 0) {
-            return {};
+            co_return {};
         }
 
         // Return span view to the data in buffer_
-        return span_view<const char>(buffer_.data(), valid_bytes_);
+        co_return span_view<const char>(buffer_.data(), valid_bytes_);
     }
 
     void reset() override {

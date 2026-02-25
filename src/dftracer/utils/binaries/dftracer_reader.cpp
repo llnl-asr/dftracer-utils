@@ -2,6 +2,8 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/composites/composites.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
@@ -10,15 +12,162 @@
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <argparse/argparse.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::reader::internal;
+
+static coro::CoroTask<int> run_reader(const std::string &gz_path,
+                                      const std::string &idx_path,
+                                      std::size_t checkpoint_size,
+                                      bool force_rebuild, bool check_rebuild,
+                                      const std::string &read_mode,
+                                      std::size_t read_buffer_size,
+                                      int64_t start, int64_t end) {
+    // Create indexer first
+    std::shared_ptr<Indexer> indexer;
+    try {
+        // check if idx file exists
+        if (!fs::exists(idx_path)) {
+            if (check_rebuild) {
+                DFTRACER_UTILS_LOG_ERROR(
+                    "Index file '%s' does not exist, cannot check",
+                    idx_path.c_str());
+                co_return 1;
+            }
+            DFTRACER_UTILS_LOG_DEBUG("Index file '%s' does not exist",
+                                     idx_path.c_str());
+            DFTRACER_UTILS_LOG_DEBUG("%s", "Will create new index file");
+            force_rebuild = true;
+        }
+
+        // Use IndexerFactory to create appropriate indexer
+        indexer = IndexerFactory::create(gz_path, idx_path, checkpoint_size,
+                                         force_rebuild);
+
+        if (check_rebuild) {
+            if (!indexer->need_rebuild()) {
+                DFTRACER_UTILS_LOG_DEBUG(
+                    "%s", "Index is up to date, no rebuild needed");
+                co_return 0;
+            }
+        }
+
+        if (force_rebuild) {
+            if (fs::exists(idx_path)) {
+                DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
+                                         idx_path.c_str());
+                fs::remove(idx_path);
+            }
+            // Recreate indexer after removing old index
+            indexer = IndexerFactory::create(gz_path, idx_path, checkpoint_size,
+                                             true);
+            DFTRACER_UTILS_LOG_INFO("Building index for file: %s",
+                                    gz_path.c_str());
+            co_await indexer->build_async();
+        }
+    } catch (const std::runtime_error &e) {
+        DFTRACER_UTILS_LOG_ERROR("Indexer error: %s", e.what());
+        co_return 1;
+    }
+
+    // read operations
+    try {
+        // Use ReaderFactory to create appropriate reader, sharing
+        // ownership of indexer
+        auto reader = ReaderFactory::create(indexer);
+
+        if (read_mode.find("bytes") == std::string::npos) {
+            std::size_t start_line =
+                (start == -1) ? 1 : static_cast<std::size_t>(start);
+            std::size_t end_line = static_cast<std::size_t>(end);
+            if (end == -1) {
+                end_line = reader->get_num_lines();
+            }
+
+            DFTRACER_UTILS_LOG_DEBUG("Reading lines from %zu to %zu",
+                                     start_line, end_line);
+
+            auto stream =
+                reader->stream(StreamConfig()
+                                   .stream_type(StreamType::MULTI_LINES)
+                                   .range_type(RangeType::LINE_RANGE)
+                                   .from(start_line)
+                                   .to(end_line)
+                                   .buffer_size(read_buffer_size));
+
+#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED
+            std::size_t line_count = 0;
+#endif
+
+            while (!stream->done()) {
+                auto chunk = co_await stream->read_async();
+                if (chunk.empty()) break;
+                co_await io::write(STDOUT_FILENO, chunk.data(), chunk.size());
+#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED
+                line_count += std::count(chunk.begin(), chunk.end(), '\n');
+#endif
+            }
+
+            DFTRACER_UTILS_LOG_DEBUG("Successfully read %zu lines from range",
+                                     line_count);
+        } else {
+            std::size_t start_bytes_ =
+                (start == -1) ? 0 : static_cast<std::size_t>(start);
+            std::size_t end_bytes_ =
+                end == -1 ? std::numeric_limits<std::size_t>::max()
+                          : static_cast<size_t>(end);
+
+            auto max_bytes = reader->get_max_bytes();
+            if (end_bytes_ > max_bytes) {
+                end_bytes_ = max_bytes;
+            }
+            DFTRACER_UTILS_LOG_DEBUG("%s",
+                                     "Performing byte range read operation");
+            DFTRACER_UTILS_LOG_DEBUG("Using read buffer size: %zu bytes",
+                                     read_buffer_size);
+
+            StreamType stream_type = (read_mode == "bytes")
+                                         ? StreamType::BYTES
+                                         : StreamType::MULTI_LINES_BYTES;
+
+            auto stream = reader->stream(StreamConfig()
+                                             .stream_type(stream_type)
+                                             .range_type(RangeType::BYTE_RANGE)
+                                             .from(start_bytes_)
+                                             .to(end_bytes_)
+                                             .buffer_size(read_buffer_size));
+
+#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
+            std::size_t total_bytes = 0;
+#endif
+
+            while (!stream->done()) {
+                auto chunk = co_await stream->read_async();
+                if (chunk.empty()) break;
+                co_await io::write(STDOUT_FILENO, chunk.data(), chunk.size());
+#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
+                total_bytes += chunk.size();
+#endif
+            }
+
+            DFTRACER_UTILS_LOG_DEBUG("Successfully read %zu bytes from range",
+                                     total_bytes);
+        }
+        fsync(STDOUT_FILENO);
+    } catch (const std::runtime_error &e) {
+        DFTRACER_UTILS_LOG_ERROR("Reader error: %s", e.what());
+        co_return 1;
+    }
+
+    co_return 0;
+}
 
 int main(int argc, char **argv) {
     DFTRACER_UTILS_LOGGER_INIT();
@@ -103,13 +252,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    FILE *test_file = fopen(gz_path.c_str(), "rb");
-    if (!test_file) {
+    int test_fd = ::open(gz_path.c_str(), O_RDONLY);
+    if (test_fd < 0) {
         DFTRACER_UTILS_LOG_ERROR("File '%s' does not exist or cannot be opened",
                                  gz_path.c_str());
         return 1;
     }
-    fclose(test_file);
+    ::close(test_fd);
 
     std::string idx_path;
     if (!index_path.empty()) {
@@ -128,141 +277,7 @@ int main(int argc, char **argv) {
                                                              : "UNKNOWN");
 #endif
 
-    // Create indexer first
-    std::shared_ptr<Indexer> indexer;
-    try {
-        // check if idx file exists
-        if (!fs::exists(idx_path)) {
-            if (check_rebuild) {
-                DFTRACER_UTILS_LOG_ERROR(
-                    "Index file '%s' does not exist, cannot check",
-                    idx_path.c_str());
-                return 1;
-            }
-            DFTRACER_UTILS_LOG_DEBUG("Index file '%s' does not exist",
-                                     idx_path.c_str());
-            DFTRACER_UTILS_LOG_DEBUG("%s", "Will create new index file");
-            force_rebuild = true;
-        }
-
-        // Use IndexerFactory to create appropriate indexer
-        indexer = IndexerFactory::create(gz_path, idx_path, checkpoint_size,
-                                         force_rebuild);
-
-        if (check_rebuild) {
-            if (!indexer->need_rebuild()) {
-                DFTRACER_UTILS_LOG_DEBUG(
-                    "%s", "Index is up to date, no rebuild needed");
-                return 0;
-            }
-        }
-
-        if (force_rebuild) {
-            if (fs::exists(idx_path)) {
-                DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
-                                         idx_path.c_str());
-                fs::remove(idx_path);
-            }
-            // Recreate indexer after removing old index
-            indexer = IndexerFactory::create(gz_path, idx_path, checkpoint_size,
-                                             true);
-            DFTRACER_UTILS_LOG_INFO("Building index for file: %s",
-                                    gz_path.c_str());
-            indexer->build();
-        }
-    } catch (const std::runtime_error &e) {
-        DFTRACER_UTILS_LOG_ERROR("Indexer error: %s", e.what());
-        return 1;
-    }
-
-    // read operations
-    try {
-        // Use ReaderFactory to create appropriate reader, sharing
-        // ownership of indexer
-        auto reader = ReaderFactory::create(indexer);
-
-        if (read_mode.find("bytes") == std::string::npos) {
-            std::size_t start_line =
-                (start == -1) ? 1 : static_cast<std::size_t>(start);
-            std::size_t end_line = static_cast<std::size_t>(end);
-            if (end == -1) {
-                end_line = reader->get_num_lines();
-            }
-
-            DFTRACER_UTILS_LOG_DEBUG("Reading lines from %zu to %zu",
-                                     start_line, end_line);
-
-            auto stream =
-                reader->stream(StreamConfig()
-                                   .stream_type(StreamType::MULTI_LINES)
-                                   .range_type(RangeType::LINE_RANGE)
-                                   .from(start_line)
-                                   .to(end_line)
-                                   .buffer_size(read_buffer_size));
-
-#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED
-            std::size_t line_count = 0;
-#endif
-
-            while (!stream->done()) {
-                auto chunk = stream->read();
-                if (chunk.empty()) break;
-                std::fwrite(chunk.data(), 1, chunk.size(), stdout);
-#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED
-                line_count += std::count(chunk.begin(), chunk.end(), '\n');
-#endif
-            }
-
-            DFTRACER_UTILS_LOG_DEBUG("Successfully read %zu lines from range",
-                                     line_count);
-        } else {
-            std::size_t start_bytes_ =
-                (start == -1) ? 0 : static_cast<std::size_t>(start);
-            std::size_t end_bytes_ =
-                end == -1 ? std::numeric_limits<std::size_t>::max()
-                          : static_cast<size_t>(end);
-
-            auto max_bytes = reader->get_max_bytes();
-            if (end_bytes_ > max_bytes) {
-                end_bytes_ = max_bytes;
-            }
-            DFTRACER_UTILS_LOG_DEBUG("%s",
-                                     "Performing byte range read operation");
-            DFTRACER_UTILS_LOG_DEBUG("Using read buffer size: %zu bytes",
-                                     read_buffer_size);
-
-            StreamType stream_type = (read_mode == "bytes")
-                                         ? StreamType::BYTES
-                                         : StreamType::MULTI_LINES_BYTES;
-
-            auto stream = reader->stream(StreamConfig()
-                                             .stream_type(stream_type)
-                                             .range_type(RangeType::BYTE_RANGE)
-                                             .from(start_bytes_)
-                                             .to(end_bytes_)
-                                             .buffer_size(read_buffer_size));
-
-#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
-            std::size_t total_bytes = 0;
-#endif
-
-            while (!stream->done()) {
-                auto chunk = stream->read();
-                if (chunk.empty()) break;
-                std::fwrite(chunk.data(), 1, chunk.size(), stdout);
-#if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
-                total_bytes += chunk.size();
-#endif
-            }
-
-            DFTRACER_UTILS_LOG_DEBUG("Successfully read %zu bytes from range",
-                                     total_bytes);
-        }
-        fflush(stdout);
-    } catch (const std::runtime_error &e) {
-        DFTRACER_UTILS_LOG_ERROR("Reader error: %s", e.what());
-        return 1;
-    }
-
-    return 0;
+    return run_reader(gz_path, idx_path, checkpoint_size, force_rebuild,
+                      check_rebuild, read_mode, read_buffer_size, start, end)
+        .get();
 }

@@ -12,9 +12,9 @@
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
+#include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
 
 #include <argparse/argparse.hpp>
 #include <cstdint>
@@ -28,7 +28,7 @@ using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 namespace compression = dftracer::utils::utilities::compression;
-namespace io = dftracer::utils::utilities::io;
+namespace util_io = dftracer::utils::utilities::fileio;
 
 // ---------------------------------------------------------------------------
 // TraceWriter – compresses via ManualStreamingCompressorUtility and writes
@@ -45,24 +45,24 @@ class TraceWriter {
     TraceWriter& operator=(const TraceWriter&) = delete;
 
     void write(const std::string& s) {
-        io::RawData raw(s);
-        auto compressed_chunks = compressor_.process(raw);
+        util_io::RawData raw(s);
+        auto compressed_chunks = compressor_.process(raw).get();
         for (const auto& chunk : compressed_chunks) {
-            writer_.process(io::RawData(chunk.data));
+            writer_.process(util_io::RawData(chunk.data));
         }
     }
 
     void close() {
         auto final_chunks = compressor_.finalize();
         for (const auto& chunk : final_chunks) {
-            writer_.process(io::RawData(chunk.data));
+            writer_.process(util_io::RawData(chunk.data));
         }
         writer_.close();
     }
 
    private:
     compression::zlib::ManualStreamingCompressorUtility compressor_;
-    io::StreamingFileWriterUtility writer_;
+    util_io::StreamingFileWriterUtility writer_;
 };
 
 // ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ class TraceWriter {
 static std::string make_hash(const std::string& name) {
     hash::HasherUtility hasher;
     hasher.reset();
-    auto h = hasher.process(name);
+    auto h = hasher.process(name).get();
     char buf[17];
     std::snprintf(buf, sizeof(buf), "%016llx",
                   static_cast<unsigned long long>(h.value));
@@ -195,9 +195,9 @@ struct QuerySpec {
     std::unordered_map<std::string, std::vector<std::string>> predicates;
 };
 
-static int run_verify(const std::vector<std::string>& file_paths,
-                      const std::vector<QuerySpec>& queries,
-                      std::size_t ckpt_size) {
+static coro::CoroTask<int> run_verify(
+    const std::vector<std::string>& file_paths,
+    const std::vector<QuerySpec>& queries, std::size_t ckpt_size) {
     // Extra dimensions: arbitrary dot-paths into args
     std::vector<std::string> extra_dims = {"ret", "count", "offset", "epoch",
                                            "step"};
@@ -226,14 +226,14 @@ static int run_verify(const std::vector<std::string>& file_paths,
                              .with_checkpoint_size(ckpt_size)
                              .with_force_rebuild(true)
                              .with_index(idx_path);
-        IndexBuilderUtility{}.process(idx_input);
+        co_await IndexBuilderUtility{}.process(idx_input);
 
         // 2. Collect metadata
         auto meta_input = MetadataCollectorUtilityInput::from_file(abs_path)
                               .with_checkpoint_size(ckpt_size)
                               .with_force_rebuild(false)
                               .with_index(idx_path);
-        auto metadata = MetadataCollectorUtility{}.process(meta_input);
+        auto metadata = co_await MetadataCollectorUtility{}.process(meta_input);
 
         if (!metadata.success) {
             std::fprintf(stderr, "  WARN: metadata failed for %s\n",
@@ -293,7 +293,7 @@ static int run_verify(const std::vector<std::string>& file_paths,
                     .with_batch_size(4 * 1024 * 1024);
 
                 ChunkIndexerUtility idx_util;
-                auto output = idx_util.process(ci);
+                auto output = co_await idx_util.process(ci);
                 total_events += output.events_processed;
 
                 for (auto& [dim, bloom] : output.bloom_filters) {
@@ -374,7 +374,7 @@ static int run_verify(const std::vector<std::string>& file_paths,
                 }
 
                 BloomQueryUtility query_util;
-                auto result = query_util.process(input);
+                auto result = co_await query_util.process(input);
 
                 total_chunks += result.total_checkpoints;
                 if (result.file_may_match) {
@@ -395,7 +395,7 @@ static int run_verify(const std::vector<std::string>& file_paths,
     }
 
     std::printf("==========================================\n");
-    return 0;
+    co_return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,7 +1133,7 @@ int main(int argc, char** argv) {
         test_queries.push_back({"name=pwrite AND cat=APP (impossible)",
                                 {{"name", {"pwrite"}}, {"cat", {"APP"}}}});
 
-        return run_verify(generated_files, test_queries, checkpoint_size);
+        return run_verify(generated_files, test_queries, checkpoint_size).get();
     }
 
     return 0;

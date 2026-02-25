@@ -43,7 +43,8 @@ class BloomIndexBuilderUtility
    public:
     BloomIndexBuilderUtility() = default;
 
-    BloomIndexBuildOutput process(const BloomIndexBuildInput& input) override;
+    coro::CoroTask<BloomIndexBuildOutput> process(
+        const BloomIndexBuildInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

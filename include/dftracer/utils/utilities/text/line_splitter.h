@@ -11,8 +11,8 @@
 namespace dftracer::utils::utilities::text {
 
 // Import line types for convenience
-using io::lines::Line;
-using io::lines::Lines;
+using fileio::lines::Line;
+using fileio::lines::Lines;
 
 /**
  * @brief Utility that splits text into individual lines.
@@ -58,9 +58,9 @@ class LineSplitterUtility
      * @param input Text to split
      * @return Lines with line numbers
      */
-    Lines process(const Text& input) override {
+    coro::CoroTask<Lines> process(const Text& input) override {
         if (input.empty()) {
-            return Lines{};
+            co_return Lines{};
         }
 
         // Build string storage first
@@ -73,7 +73,7 @@ class LineSplitterUtility
         }
 
         // Use the Lines constructor that takes ownership and creates views
-        return Lines{std::move(string_storage)};
+        co_return Lines{std::move(string_storage)};
     }
 };
 

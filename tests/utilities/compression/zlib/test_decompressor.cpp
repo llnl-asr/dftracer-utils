@@ -7,7 +7,7 @@
 #include <string>
 
 using namespace dftracer::utils::utilities::compression::zlib;
-using namespace dftracer::utils::utilities::io;
+using namespace dftracer::utils::utilities::fileio;
 
 TEST_CASE("DecompressorUtility - Basic Operations") {
     auto compressor = std::make_shared<CompressorUtility>();
@@ -16,8 +16,8 @@ TEST_CASE("DecompressorUtility - Basic Operations") {
     SUBCASE("Decompress simple compressed data") {
         std::string original_text = "Hello, World!";
         RawData input(original_text);
-        CompressedData compressed = compressor->process(input);
-        RawData decompressed = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(input).get();
+        RawData decompressed = decompressor->process(compressed).get();
 
         CHECK(input == decompressed);
         CHECK(input.to_string() == decompressed.to_string());
@@ -25,7 +25,7 @@ TEST_CASE("DecompressorUtility - Basic Operations") {
 
     SUBCASE("Decompress empty data") {
         CompressedData empty({}, 0);
-        RawData decompressed = decompressor->process(empty);
+        RawData decompressed = decompressor->process(empty).get();
 
         CHECK(decompressed.empty());
         CHECK(decompressed.size() == 0);
@@ -36,8 +36,8 @@ TEST_CASE("DecompressorUtility - Basic Operations") {
             "The quick brown fox jumps over the lazy dog.";
         RawData original(original_text);
 
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(original.to_string() == restored.to_string());
@@ -51,8 +51,8 @@ TEST_CASE("Decompressor Utility - Different Data Sizes") {
     SUBCASE("Very small data") {
         std::string text = "x";
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
     }
@@ -60,8 +60,8 @@ TEST_CASE("Decompressor Utility - Different Data Sizes") {
     SUBCASE("Medium data") {
         std::string text(1024, 'a');  // 1KB
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(restored.size() == 1024);
@@ -70,8 +70,8 @@ TEST_CASE("Decompressor Utility - Different Data Sizes") {
     SUBCASE("Large data") {
         std::string text(100000, 'b');  // 100KB
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(restored.size() == 100000);
@@ -87,8 +87,8 @@ TEST_CASE("DecompressorUtility - Different Compression Levels") {
 
         std::string text(1000, 'a');
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
     }
@@ -99,8 +99,8 @@ TEST_CASE("DecompressorUtility - Different Compression Levels") {
 
         std::string text(1000, 'a');
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
     }
@@ -111,8 +111,8 @@ TEST_CASE("DecompressorUtility - Different Compression Levels") {
 
         std::string text(1000, 'a');
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
     }
@@ -126,8 +126,8 @@ TEST_CASE("DecompressorUtility - Different Data Types") {
         std::vector<unsigned char> binary_data = {0x00, 0x01, 0x02, 0xFF, 0xFE,
                                                   0xFD, 0x00, 0x01, 0x02};
         RawData original(binary_data);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(original.data == restored.data);
@@ -136,8 +136,8 @@ TEST_CASE("DecompressorUtility - Different Data Types") {
     SUBCASE("Text with newlines") {
         std::string text = "Line 1\nLine 2\nLine 3\n";
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(text == restored.to_string());
@@ -146,8 +146,8 @@ TEST_CASE("DecompressorUtility - Different Data Types") {
     SUBCASE("Text with special characters") {
         std::string text = "Hello\n\tWorld!\r\n\0Special";
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
     }
@@ -155,8 +155,8 @@ TEST_CASE("DecompressorUtility - Different Data Types") {
     SUBCASE("Unicode data") {
         std::string text = "Hello, 世界! 🌍";
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(text == restored.to_string());
@@ -165,8 +165,8 @@ TEST_CASE("DecompressorUtility - Different Data Types") {
     SUBCASE("Repetitive data") {
         std::string text(10000, 'x');
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(restored.size() == 10000);
@@ -176,8 +176,8 @@ TEST_CASE("DecompressorUtility - Different Data Types") {
         std::string text =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(text == restored.to_string());
@@ -192,21 +192,23 @@ TEST_CASE("DecompressorUtility - Error Handling") {
         std::vector<unsigned char> corrupted = {0x00, 0x01, 0x02, 0x03};
         CompressedData invalid(corrupted, 100);
 
-        CHECK_THROWS_AS(decompressor->process(invalid), std::runtime_error);
+        CHECK_THROWS_AS(decompressor->process(invalid).get(),
+                        std::runtime_error);
     }
 
     SUBCASE("Truncated compressed data") {
         auto compressor = std::make_shared<CompressorUtility>();
         std::string text = "This is a test string";
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
+        CompressedData compressed = compressor->process(original).get();
 
         // Truncate the compressed data
         std::vector<unsigned char> truncated(compressed.data.begin(),
                                              compressed.data.begin() + 5);
         CompressedData invalid(truncated, text.size());
 
-        CHECK_THROWS_AS(decompressor->process(invalid), std::runtime_error);
+        CHECK_THROWS_AS(decompressor->process(invalid).get(),
+                        std::runtime_error);
     }
 }
 
@@ -217,10 +219,10 @@ TEST_CASE("DecompressorUtility - Consistency") {
     SUBCASE("Multiple decompression of same data") {
         std::string text = "Test data for consistency";
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
+        CompressedData compressed = compressor->process(original).get();
 
-        RawData restored1 = decompressor->process(compressed);
-        RawData restored2 = decompressor->process(compressed);
+        RawData restored1 = decompressor->process(compressed).get();
+        RawData restored2 = decompressor->process(compressed).get();
 
         CHECK(restored1 == restored2);
         CHECK(restored1 == original);
@@ -233,8 +235,8 @@ TEST_CASE("DecompressorUtility - Consistency") {
 
         for (const auto& text : test_strings) {
             RawData original(text);
-            CompressedData compressed = compressor->process(original);
-            RawData restored = decompressor->process(compressed);
+            CompressedData compressed = compressor->process(original).get();
+            RawData restored = decompressor->process(compressed).get();
 
             CHECK(original == restored);
             CHECK(text == restored.to_string());
@@ -249,25 +251,25 @@ TEST_CASE("DecompressorUtility - Metadata Handling") {
     SUBCASE("Original size is used correctly") {
         std::string text(1000, 'a');
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
+        CompressedData compressed = compressor->process(original).get();
 
         // Verify original_size is set correctly
         CHECK(compressed.original_size == 1000);
 
-        RawData restored = decompressor->process(compressed);
+        RawData restored = decompressor->process(compressed).get();
         CHECK(restored.size() == compressed.original_size);
     }
 
     SUBCASE("Decompression without original_size hint") {
         std::string text = "Test without size hint";
         RawData original(text);
-        CompressedData compressed = compressor->process(original);
+        CompressedData compressed = compressor->process(original).get();
 
         // Clear the original_size hint
         compressed.original_size = 0;
 
         // Should still decompress correctly (with automatic resize)
-        RawData restored = decompressor->process(compressed);
+        RawData restored = decompressor->process(compressed).get();
         CHECK(original == restored);
     }
 }
@@ -279,8 +281,8 @@ TEST_CASE("DecompressorUtility - Edge Cases") {
     SUBCASE("All zeros") {
         std::vector<unsigned char> zeros(1000, 0);
         RawData original(zeros);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(restored.data == zeros);
@@ -289,8 +291,8 @@ TEST_CASE("DecompressorUtility - Edge Cases") {
     SUBCASE("All ones") {
         std::vector<unsigned char> ones(1000, 0xFF);
         RawData original(ones);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(restored.data == ones);
@@ -302,8 +304,8 @@ TEST_CASE("DecompressorUtility - Edge Cases") {
             pattern.push_back(i % 2 ? 0xFF : 0x00);
         }
         RawData original(pattern);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(restored.data == pattern);
@@ -312,8 +314,8 @@ TEST_CASE("DecompressorUtility - Edge Cases") {
     SUBCASE("Single byte") {
         std::vector<unsigned char> single = {0x42};
         RawData original(single);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(restored.data == single);
@@ -329,8 +331,8 @@ TEST_CASE("DecompressorUtility - Performance Characteristics") {
         std::string text(1024 * 1024, 'a');
         RawData original(text);
 
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         // Should compress to < 1% of original
@@ -341,8 +343,8 @@ TEST_CASE("DecompressorUtility - Performance Characteristics") {
         for (int i = 0; i < 100; ++i) {
             std::string text = "Test " + std::to_string(i);
             RawData original(text);
-            CompressedData compressed = compressor->process(original);
-            RawData restored = decompressor->process(compressed);
+            CompressedData compressed = compressor->process(original).get();
+            RawData restored = decompressor->process(compressed).get();
 
             CHECK(original == restored);
         }
@@ -362,8 +364,8 @@ TEST_CASE("DecompressorUtility - Real World Scenarios") {
             }
         })";
         RawData original(json);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(json == restored.to_string());
@@ -376,8 +378,8 @@ TEST_CASE("DecompressorUtility - Real World Scenarios") {
                    std::to_string(i) + "\n";
         }
         RawData original(log);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(log == restored.to_string());
@@ -390,8 +392,8 @@ TEST_CASE("DecompressorUtility - Real World Scenarios") {
                    std::to_string(i * 100) + "\n";
         }
         RawData original(csv);
-        CompressedData compressed = compressor->process(original);
-        RawData restored = decompressor->process(compressed);
+        CompressedData compressed = compressor->process(original).get();
+        RawData restored = decompressor->process(compressed).get();
 
         CHECK(original == restored);
         CHECK(csv == restored.to_string());

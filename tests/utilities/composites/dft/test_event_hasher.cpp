@@ -13,7 +13,7 @@ TEST_SUITE("EventHasher") {
         auto input = EventHashInput::from_events(events);
 
         EventHasher hasher;
-        auto hash = hasher.process(input);
+        auto hash = hasher.process(input).get();
 
         // Should get a non-zero hash
         CHECK(hash != 0);
@@ -28,7 +28,7 @@ TEST_SUITE("EventHasher") {
         auto input = EventHashInput::from_events(events);
 
         EventHasher hasher;
-        auto hash = hasher.process(input);
+        auto hash = hasher.process(input).get();
 
         CHECK(hash != 0);
     }
@@ -44,8 +44,8 @@ TEST_SUITE("EventHasher") {
         events2.push_back(EventId(20, 2001, 3001));
 
         EventHasher hasher;
-        auto hash1 = hasher.process(EventHashInput::from_events(events1));
-        auto hash2 = hasher.process(EventHashInput::from_events(events2));
+        auto hash1 = hasher.process(EventHashInput::from_events(events1)).get();
+        auto hash2 = hasher.process(EventHashInput::from_events(events2)).get();
 
         CHECK(hash1 == hash2);
     }
@@ -61,8 +61,8 @@ TEST_SUITE("EventHasher") {
         events2.push_back(EventId(1, 1000, 2000));
 
         EventHasher hasher;
-        auto hash1 = hasher.process(EventHashInput::from_events(events1));
-        auto hash2 = hasher.process(EventHashInput::from_events(events2));
+        auto hash1 = hasher.process(EventHashInput::from_events(events1)).get();
+        auto hash2 = hasher.process(EventHashInput::from_events(events2)).get();
 
         CHECK(hash1 != hash2);
     }
@@ -73,7 +73,7 @@ TEST_SUITE("EventHasher") {
         auto input = EventHashInput::from_events(events);
 
         EventHasher hasher;
-        auto hash = hasher.process(input);
+        auto hash = hasher.process(input).get();
 
         // Should still produce a hash (likely 0 or seed value)
         CHECK(hash >= 0);

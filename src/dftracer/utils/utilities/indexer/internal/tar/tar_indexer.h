@@ -3,9 +3,10 @@
 
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/sqlite/database.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/database.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +14,8 @@
 #include <vector>
 
 namespace dftracer::utils::utilities::indexer::internal::tar {
+
+using dftracer::utils::sqlite::SqliteDatabase;
 
 class TarIndexer : public Indexer {
    public:
@@ -28,7 +31,7 @@ class TarIndexer : public Indexer {
     TarIndexer(TarIndexer &&other) noexcept;
     TarIndexer &operator=(TarIndexer &&other) noexcept;
 
-    void build() const override;
+    dftracer::utils::coro::CoroTask<void> build_async() const override;
     bool need_rebuild() const override;
     bool exists() const override;
 

@@ -38,7 +38,7 @@ TEST_SUITE("ChunkExtractor") {
 
         // Process
         ChunkExtractorUtility extractor;
-        auto output = extractor.process(input);
+        auto output = extractor.process(input).get();
 
         // Verify basic properties
         CHECK(output.chunk_index == 0);

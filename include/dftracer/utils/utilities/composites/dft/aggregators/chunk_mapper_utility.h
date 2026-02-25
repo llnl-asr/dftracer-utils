@@ -59,7 +59,8 @@ using FileChunkMapperOutput = std::vector<ChunkAggregatorInput>;
 class FileChunkMapperUtility
     : public utilities::Utility<FileChunkMapperInput, FileChunkMapperOutput> {
    public:
-    FileChunkMapperOutput process(const FileChunkMapperInput& input) override;
+    coro::CoroTask<FileChunkMapperOutput> process(
+        const FileChunkMapperInput& input) override;
 };
 
 struct ChunkMapperInput {
@@ -105,7 +106,8 @@ using ChunkMapperOutput = std::vector<ChunkAggregatorInput>;
 class ChunkMapperUtility
     : public utilities::Utility<ChunkMapperInput, ChunkMapperOutput> {
    public:
-    ChunkMapperOutput process(const ChunkMapperInput& input) override;
+    coro::CoroTask<ChunkMapperOutput> process(
+        const ChunkMapperInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

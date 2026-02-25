@@ -53,7 +53,8 @@ class ReorganizationPlannerUtility
    public:
     ReorganizationPlannerUtility() = default;
 
-    ExtractionPlan process(const ReorganizationPlannerInput& input) override;
+    coro::CoroTask<ExtractionPlan> process(
+        const ReorganizationPlannerInput& input) override;
 };
 
 std::vector<PredicateGroup> parse_group_specs(

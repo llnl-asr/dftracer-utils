@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_UTILITY_H
 
 #include <dftracer/utils/core/common/archive_format.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
@@ -120,13 +121,13 @@ class MetadataCollectorUtility
    public:
     MetadataCollectorUtility() = default;
 
-    MetadataCollectorUtilityOutput process(
+    coro::CoroTask<MetadataCollectorUtilityOutput> process(
         const MetadataCollectorUtilityInput& input) override;
 
    private:
-    MetadataCollectorUtilityOutput process_compressed(
+    coro::CoroTask<MetadataCollectorUtilityOutput> process_compressed(
         const MetadataCollectorUtilityInput& input);
-    MetadataCollectorUtilityOutput process_plain(
+    coro::CoroTask<MetadataCollectorUtilityOutput> process_plain(
         const MetadataCollectorUtilityInput& input);
 };
 

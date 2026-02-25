@@ -17,6 +17,9 @@ bool timeslice_exceeded() noexcept {
     if (tls_timeslice_duration.count() == 0) {
         return false;  // Yielding disabled
     }
+    if (!Executor::current()) {
+        return false;  // Not on a worker thread
+    }
     auto elapsed = Clock::now() - tls_timeslice_start;
     return elapsed >=
            std::chrono::duration_cast<Clock::duration>(tls_timeslice_duration);
@@ -24,6 +27,19 @@ bool timeslice_exceeded() noexcept {
 
 void set_timeslice_duration(std::chrono::microseconds duration) noexcept {
     tls_timeslice_duration = duration;
+}
+
+std::chrono::microseconds get_timeslice_duration() noexcept {
+    return tls_timeslice_duration;
+}
+
+void* suppress_executor() noexcept {
+    auto* old = Executor::set_current(nullptr);
+    return static_cast<void*>(old);
+}
+
+void restore_executor(void* saved) noexcept {
+    Executor::set_current(static_cast<Executor*>(saved));
 }
 
 void yield_to_executor(std::coroutine_handle<> h) noexcept {

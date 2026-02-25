@@ -107,6 +107,14 @@ function(target_set_warnings TARGET_NAME)
                                          # maybe-uninitialized variables
                 # -Wuseless-cast          # Warn about useless casts
       )
+
+      # GCC 14+ has false-positive -Wnull-dereference, -Warray-bounds,
+      # and -Wstringop-overflow in libstdc++ (streambuf, exception_ptr,
+      # vector copy). Disable for affected versions.
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14")
+        target_compile_options(${TARGET_NAME} PRIVATE -Wno-null-dereference
+                              -Wno-array-bounds -Wno-stringop-overflow)
+      endif()
     endif()
 
     # Clang-specific warnings (includes AppleClang)

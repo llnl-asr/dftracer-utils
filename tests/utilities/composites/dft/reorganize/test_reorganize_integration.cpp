@@ -106,7 +106,7 @@ static void build_midx_for_file(const std::string& trace_file,
                                        ManifestIndexBuildOutput,
                                        utilities::tags::NeedsContext>
                 executor(utility, std::move(chain));
-            result = executor.execute_with_context(ctx, input);
+            result = co_await executor.execute_with_context(ctx, input);
             co_return;
         },
         "BuildMidx");
@@ -182,7 +182,7 @@ static void execute_extraction(const ExtractionPlan& plan,
         auto reader_input =
             IndexedReadInput::from_file(src.file_path).with_index(idx_path);
         IndexedFileReaderUtility reader_utility;
-        auto reader = reader_utility.process(reader_input);
+        auto reader = reader_utility.process(reader_input).get();
 
         // Compute byte range
         std::uint64_t start_byte = tasks[0]->start_byte;
@@ -251,7 +251,7 @@ TEST_SUITE("ReorganizeIntegration") {
         planner_input.groups = {{"io", "cat=POSIX"}, {"compute", "cat=APP"}};
         planner_input.index_dir = input_dir;
 
-        auto plan = planner.process(planner_input);
+        auto plan = planner.process(planner_input).get();
         REQUIRE(plan.tasks.size() > 0);
 
         // Step 3: Execute extraction
@@ -342,7 +342,7 @@ TEST_SUITE("ReorganizeIntegration") {
         planner_input.groups = {{"io", "cat=POSIX"}};
         planner_input.index_dir = input_dir;
 
-        auto plan = planner.process(planner_input);
+        auto plan = planner.process(planner_input).get();
 
         // Extract io group
         std::string io_pfw = output_dir + "/io.pfw";
@@ -368,7 +368,8 @@ TEST_SUITE("ReorganizeIntegration") {
         // Compress
         FileCompressorUtility compressor;
         auto comp_result =
-            compressor.process(FileCompressionUtilityInput::from_file(io_pfw));
+            compressor.process(FileCompressionUtilityInput::from_file(io_pfw))
+                .get();
         CHECK(comp_result.success);
 
         std::string io_gz = io_pfw + ".gz";
@@ -405,7 +406,7 @@ TEST_SUITE("ReorganizeIntegration") {
                                                utilities::tags::NeedsContext>
                         executor(utility, std::move(chain));
                     midx_result =
-                        executor.execute_with_context(ctx, midx_input);
+                        co_await executor.execute_with_context(ctx, midx_input);
                     co_return;
                 },
                 "BuildOutputMidx");

@@ -27,7 +27,7 @@ TEST_SUITE("FileMerger") {
 
             // Process
             FileMergeValidatorUtility merger;
-            auto output = merger.process(input);
+            auto output = merger.process(input).get();
 
             // Verify
             CHECK(output.success == true);
@@ -69,7 +69,7 @@ TEST_SUITE("FileMerger") {
 
             // Process
             FileMergeValidatorUtility merger;
-            auto output = merger.process(input);
+            auto output = merger.process(input).get();
 
             // Verify
             CHECK(output.success == true);
@@ -93,7 +93,7 @@ TEST_SUITE("FileMerger") {
                              .with_output(temp_output);
 
             FileMergeValidatorUtility merger;
-            auto output = merger.process(input);
+            auto output = merger.process(input).get();
 
             if (output.success) {
                 merge_results.push_back(output);
@@ -111,7 +111,7 @@ TEST_SUITE("FileMerger") {
 
             // Process
             FileMergerUtility merger;
-            auto output = merger.process(merger_input);
+            auto output = merger.process(merger_input).get();
 
             // Verify
             CHECK(output.success == true);
@@ -186,7 +186,7 @@ TEST_SUITE("FileMerger") {
 
             // Process
             FileMergerUtility merger;
-            auto output = merger.process(merger_input);
+            auto output = merger.process(merger_input).get();
 
             // Verify
             CHECK(output.success == true);
@@ -206,7 +206,7 @@ TEST_SUITE("FileMerger") {
                              .with_output(env.get_dir() + "/output.json");
 
             FileMergeValidatorUtility merger;
-            auto output = merger.process(input);
+            auto output = merger.process(input).get();
 
             CHECK(output.success == false);
             CHECK(output.valid_events == 0);
@@ -225,7 +225,7 @@ TEST_SUITE("FileMerger") {
                     env.get_dir() + "/output.json");
 
             FileMergeValidatorUtility merger;
-            auto output = merger.process(input);
+            auto output = merger.process(input).get();
 
             // json_trim_and_validate is designed to be fast, not comprehensive
             // It only filters out obviously invalid cases (empty, single

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_MANIFEST_INDEX_BUILDER_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_MANIFEST_INDEX_BUILDER_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
@@ -37,7 +38,7 @@ class ManifestIndexBuilderUtility
    public:
     ManifestIndexBuilderUtility() = default;
 
-    ManifestIndexBuildOutput process(
+    coro::CoroTask<ManifestIndexBuildOutput> process(
         const ManifestIndexBuildInput& input) override;
 };
 

@@ -58,7 +58,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Process
             MetadataCollectorUtility collector;
-            auto output = collector.process(input);
+            auto output = collector.process(input).get();
 
             // Verify output
             CHECK(output.success == true);
@@ -80,7 +80,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Process
             MetadataCollectorUtility collector;
-            auto output = collector.process(input);
+            auto output = collector.process(input).get();
 
             // Verify
             CHECK(output.success == true);
@@ -97,7 +97,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Process
             MetadataCollectorUtility collector;
-            auto output = collector.process(input);
+            auto output = collector.process(input).get();
 
             // Verify extended metadata fields
             CHECK(output.success == true);
@@ -150,7 +150,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Process
             MetadataCollectorUtility collector;
-            auto output = collector.process(input);
+            auto output = collector.process(input).get();
 
             // Verify basic fields
             CHECK(output.success == true);
@@ -191,7 +191,7 @@ TEST_SUITE("MetadataCollector") {
                                  .with_force_rebuild(true);
 
                 MetadataCollectorUtility collector;
-                auto output = collector.process(input);
+                auto output = collector.process(input).get();
 
                 CHECK(output.success == true);
                 CHECK(output.has_index == true);
@@ -206,7 +206,7 @@ TEST_SUITE("MetadataCollector") {
                                  .with_force_rebuild(false);
 
                 MetadataCollectorUtility collector;
-                auto output = collector.process(input);
+                auto output = collector.process(input).get();
 
                 CHECK(output.success == true);
                 CHECK(output.has_index == true);
@@ -228,7 +228,7 @@ TEST_SUITE("MetadataCollector") {
             MetadataCollectorUtility collector;
             MetadataCollectorUtilityOutput output;
             try {
-                output = collector.process(input);
+                output = collector.process(input).get();
             } catch (...) {
                 // noop
             }
@@ -250,7 +250,7 @@ TEST_SUITE("MetadataCollector") {
             auto input = MetadataCollectorUtilityInput::from_file(empty_file);
 
             MetadataCollectorUtility collector;
-            auto output = collector.process(input);
+            auto output = collector.process(input).get();
 
             // Empty file should still succeed but with 0 events
             CHECK(output.file_path == empty_file);

@@ -52,6 +52,8 @@ dft_reader_stream_t dft_reader_stream(dft_reader_handle_t reader,
 #ifdef __cplusplus
 }  // extern "C"
 
+#include <dftracer/utils/core/coro/task.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -85,22 +87,47 @@ class Reader {
                                         1.1);  // 10% buffer
     }
 
-    // Raw byte reading operations
-    virtual std::size_t read(std::size_t start_bytes, std::size_t end_bytes,
-                             char *buffer, std::size_t buffer_size) = 0;
-    virtual std::size_t read_line_bytes(std::size_t start_bytes,
-                                        std::size_t end_bytes, char *buffer,
-                                        std::size_t buffer_size) = 0;
+    // Async reading operations (coroutine)
+    virtual coro::CoroTask<std::size_t> read_async(std::size_t start_bytes,
+                                                   std::size_t end_bytes,
+                                                   char *buffer,
+                                                   std::size_t buffer_size) = 0;
+    virtual coro::CoroTask<std::size_t> read_line_bytes_async(
+        std::size_t start_bytes, std::size_t end_bytes, char *buffer,
+        std::size_t buffer_size) = 0;
+    virtual coro::CoroTask<std::string> read_lines_async(
+        std::size_t start_line, std::size_t end_line) = 0;
+    virtual coro::CoroTask<void> read_lines_with_processor_async(
+        std::size_t start_line, std::size_t end_line,
+        LineProcessor &processor) = 0;
+    virtual coro::CoroTask<void> read_line_bytes_with_processor_async(
+        std::size_t start_bytes, std::size_t end_bytes,
+        LineProcessor &processor) = 0;
 
-    // Line-based reading operations
-    virtual std::string read_lines(std::size_t start_line,
-                                   std::size_t end_line) = 0;
-    virtual void read_lines_with_processor(std::size_t start_line,
-                                           std::size_t end_line,
-                                           LineProcessor &processor) = 0;
-    virtual void read_line_bytes_with_processor(std::size_t start_bytes,
-                                                std::size_t end_bytes,
-                                                LineProcessor &processor) = 0;
+    // Synchronous reading operations (old API)
+    std::size_t read(std::size_t start_bytes, std::size_t end_bytes,
+                     char *buffer, std::size_t buffer_size) {
+        return read_async(start_bytes, end_bytes, buffer, buffer_size).get();
+    }
+    std::size_t read_line_bytes(std::size_t start_bytes, std::size_t end_bytes,
+                                char *buffer, std::size_t buffer_size) {
+        return read_line_bytes_async(start_bytes, end_bytes, buffer,
+                                     buffer_size)
+            .get();
+    }
+    std::string read_lines(std::size_t start_line, std::size_t end_line) {
+        return read_lines_async(start_line, end_line).get();
+    }
+    void read_lines_with_processor(std::size_t start_line, std::size_t end_line,
+                                   LineProcessor &processor) {
+        read_lines_with_processor_async(start_line, end_line, processor).get();
+    }
+    void read_line_bytes_with_processor(std::size_t start_bytes,
+                                        std::size_t end_bytes,
+                                        LineProcessor &processor) {
+        read_line_bytes_with_processor_async(start_bytes, end_bytes, processor)
+            .get();
+    }
 
     // Stream creation
     /**

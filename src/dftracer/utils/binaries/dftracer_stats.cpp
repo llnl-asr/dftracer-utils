@@ -472,85 +472,7 @@ static void print_text_detailed(
     std::printf("\n");
 }
 
-int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_stats",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Display statistics for DFTracer trace files from pre-built bloom "
-        "index (.bidx) databases. Auto-builds indices if missing. "
-        "Zero-cost reads: only SQLite metadata, no decompression.");
-
-    program.add_argument("--files")
-        .help("Trace files to inspect (.pfw, .pfw.gz)")
-        .nargs(argparse::nargs_pattern::any)
-        .default_value<std::vector<std::string>>({});
-
-    program.add_argument("-d", "--directory")
-        .help("Directory containing trace files")
-        .default_value<std::string>("");
-
-    program.add_argument("--index-dir")
-        .help("Directory where .bidx index files are stored")
-        .default_value<std::string>("");
-
-    program.add_argument("--json").help("Output in JSON format").flag();
-
-    program.add_argument("--report")
-        .help(
-            "Report type: summary, categories, names, pid_tids, time_range, "
-            "duration, top-names, top-categories, detailed")
-        .default_value<std::string>("summary");
-
-    program.add_argument("--top-n")
-        .help("Number of results for top-N queries (default: 10)")
-        .scan<'d', std::uint64_t>()
-        .default_value(static_cast<std::uint64_t>(10));
-
-    program.add_argument("--no-auto-index")
-        .help("Disable automatic bloom index building for files missing .bidx")
-        .flag();
-
-    program.add_argument("--checkpoint-size")
-        .help("Checkpoint size for auto-indexing in bytes (default: " +
-              std::to_string(
-                  indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE) +
-              ")")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(
-            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
-
-    program.add_argument("--executor-threads")
-        .help("Number of worker threads for auto-indexing")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(std::thread::hardware_concurrency()));
-
-    program.add_argument("--query")
-        .help(
-            "Inline query for event filtering (e.g., "
-            "cat=POSIX,name=read|write). Uses bloom pre-filtering + exact "
-            "match for --report detailed.")
-        .nargs(argparse::nargs_pattern::any)
-        .default_value<std::vector<std::string>>({});
-
-    program.add_argument("--group-by")
-        .help(
-            "Group detailed statistics by dimension(s): name, cat, pid, "
-            "tid, fhash, hhash, pid_tid. Multiple values create composite "
-            "keys.")
-        .nargs(argparse::nargs_pattern::at_least_one)
-        .default_value<std::vector<std::string>>({});
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
-        std::cerr << program;
-        return 1;
-    }
-
+static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
     std::string directory = program.get<std::string>("--directory");
     std::string index_dir = program.get<std::string>("--index-dir");
     bool json_output = program.get<bool>("--json");
@@ -601,7 +523,7 @@ int main(int argc, char** argv) {
                 "Invalid --group-by dimension: %s. Valid: name, cat, pid, "
                 "tid, fhash, hhash, pid_tid",
                 dim.c_str());
-            return 1;
+            co_return 1;
         }
     }
 
@@ -611,13 +533,13 @@ int main(int argc, char** argv) {
         if (!fs::exists(directory)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      directory.c_str());
-            return 1;
+            co_return 1;
         }
 
         PatternDirectoryScannerUtility scanner;
         PatternDirectoryScannerUtilityInput scan_input{
             directory, {".pfw", ".pfw.gz"}, false};
-        auto matched = scanner.process(scan_input);
+        auto matched = co_await scanner.process(scan_input);
 
         for (const auto& entry : matched) {
             files.push_back(entry.path.string());
@@ -626,7 +548,7 @@ int main(int argc, char** argv) {
         if (files.empty()) {
             DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
                                      directory.c_str());
-            return 1;
+            co_return 1;
         }
     } else {
         files = program.get<std::vector<std::string>>("--files");
@@ -635,7 +557,7 @@ int main(int argc, char** argv) {
             DFTRACER_UTILS_LOG_ERROR(
                 "%s", "No files or directory specified. Use --help for usage.");
             std::cerr << program;
-            return 1;
+            co_return 1;
         }
     }
 
@@ -658,7 +580,7 @@ int main(int argc, char** argv) {
             for (const auto& f : files_needing_index) {
                 std::fprintf(stderr, "  Missing index: %s\n", f.c_str());
             }
-            return 1;
+            co_return 1;
         }
 
         std::printf("Auto-building bloom index for %zu file(s)...\n",
@@ -705,8 +627,9 @@ int main(int argc, char** argv) {
                                 utilities::tags::NeedsContext>
                                 executor(utility, std::move(chain));
 
-                            auto result = executor.execute_with_context(
-                                fctx, build_input);
+                            auto result =
+                                co_await executor.execute_with_context(
+                                    fctx, build_input);
 
                             if (result.success) {
                                 (*indexed_count_ptr)++;
@@ -770,7 +693,8 @@ int main(int argc, char** argv) {
                     .with_checkpoint_size(checkpoint_size)
                     .with_force_rebuild(false)
                     .with_index(idx_path);
-            auto metadata = MetadataCollectorUtility{}.process(meta_input);
+            auto metadata =
+                co_await MetadataCollectorUtility{}.process(meta_input);
 
             if (!metadata.success) {
                 DFTRACER_UTILS_LOG_ERROR(
@@ -797,7 +721,7 @@ int main(int argc, char** argv) {
                     bq_input.predicates = predicates;
 
                     BloomQueryUtility bloom_query;
-                    auto bq_output = bloom_query.process(bq_input);
+                    auto bq_output = co_await bloom_query.process(bq_input);
 
                     if (bq_output.success) {
                         candidate_checkpoints = bq_output.candidate_checkpoints;
@@ -853,7 +777,7 @@ int main(int argc, char** argv) {
                 scan_input.filter_categories = filter_cats;
                 scan_input.group_by = group_by;
 
-                auto scan_output = scanner.process(scan_input);
+                auto scan_output = co_await scanner.process(scan_input);
                 if (scan_output.success) {
                     file_detailed.merge(scan_output.stats);
                 }
@@ -968,7 +892,7 @@ int main(int argc, char** argv) {
             std::printf("==========================================\n");
         }
 
-        return 0;
+        co_return 0;
     }
 
     // Aggregate statistics per file
@@ -983,7 +907,7 @@ int main(int argc, char** argv) {
         agg_input.file_path = file_path;
         agg_input.index_dir = index_dir;
 
-        all_stats.push_back(aggregator.process(agg_input));
+        all_stats.push_back(co_await aggregator.process(agg_input));
     }
 
     // Query and output per file
@@ -1009,7 +933,7 @@ int main(int argc, char** argv) {
         qi.query_type = report_type;
         qi.top_n = top_n;
 
-        auto output = query_util.process(qi);
+        auto output = co_await query_util.process(qi);
 
         if (json_output) {
             std::printf("%s%s", output.to_json().c_str(),
@@ -1070,5 +994,87 @@ int main(int argc, char** argv) {
         std::printf("==========================================\n");
     }
 
-    return 0;
+    co_return 0;
+}
+
+int main(int argc, char** argv) {
+    DFTRACER_UTILS_LOGGER_INIT();
+
+    argparse::ArgumentParser program("dftracer_stats",
+                                     DFTRACER_UTILS_PACKAGE_VERSION);
+    program.add_description(
+        "Display statistics for DFTracer trace files from pre-built bloom "
+        "index (.bidx) databases. Auto-builds indices if missing. "
+        "Zero-cost reads: only SQLite metadata, no decompression.");
+
+    program.add_argument("--files")
+        .help("Trace files to inspect (.pfw, .pfw.gz)")
+        .nargs(argparse::nargs_pattern::any)
+        .default_value<std::vector<std::string>>({});
+
+    program.add_argument("-d", "--directory")
+        .help("Directory containing trace files")
+        .default_value<std::string>("");
+
+    program.add_argument("--index-dir")
+        .help("Directory where .bidx index files are stored")
+        .default_value<std::string>("");
+
+    program.add_argument("--json").help("Output in JSON format").flag();
+
+    program.add_argument("--report")
+        .help(
+            "Report type: summary, categories, names, pid_tids, time_range, "
+            "duration, top-names, top-categories, detailed")
+        .default_value<std::string>("summary");
+
+    program.add_argument("--top-n")
+        .help("Number of results for top-N queries (default: 10)")
+        .scan<'d', std::uint64_t>()
+        .default_value(static_cast<std::uint64_t>(10));
+
+    program.add_argument("--no-auto-index")
+        .help("Disable automatic bloom index building for files missing .bidx")
+        .flag();
+
+    program.add_argument("--checkpoint-size")
+        .help("Checkpoint size for auto-indexing in bytes (default: " +
+              std::to_string(
+                  indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE) +
+              ")")
+        .scan<'d', std::size_t>()
+        .default_value(static_cast<std::size_t>(
+            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
+
+    program.add_argument("--executor-threads")
+        .help("Number of worker threads for auto-indexing")
+        .scan<'d', std::size_t>()
+        .default_value(
+            static_cast<std::size_t>(std::thread::hardware_concurrency()));
+
+    program.add_argument("--query")
+        .help(
+            "Inline query for event filtering (e.g., "
+            "cat=POSIX,name=read|write). Uses bloom pre-filtering + exact "
+            "match for --report detailed.")
+        .nargs(argparse::nargs_pattern::any)
+        .default_value<std::vector<std::string>>({});
+
+    program.add_argument("--group-by")
+        .help(
+            "Group detailed statistics by dimension(s): name, cat, pid, "
+            "tid, fhash, hhash, pid_tid. Multiple values create composite "
+            "keys.")
+        .nargs(argparse::nargs_pattern::at_least_one)
+        .default_value<std::vector<std::string>>({});
+
+    try {
+        program.parse_args(argc, argv);
+    } catch (const std::exception& err) {
+        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
+        std::cerr << program;
+        return 1;
+    }
+
+    return run_stats(program).get();
 }

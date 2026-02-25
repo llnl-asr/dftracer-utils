@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_BATCH_PROCESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_BATCH_PROCESSOR_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utilities.h>
@@ -70,7 +71,8 @@ class BatchProcessorUtility
         // Create processor function from utility
         processor_ = [utility](CoroScope&,
                                const ItemInput& input) -> ItemOutput {
-            return utility->process(input);
+            // std::function cannot store coroutine lambdas
+            return utility->process(input).get();
         };
     }
 
@@ -92,10 +94,10 @@ class BatchProcessorUtility
      * @param items List of items to process
      * @return Vector of results (sorted if comparator was set)
      */
-    std::vector<ItemOutput> process(
+    coro::CoroTask<std::vector<ItemOutput>> process(
         const std::vector<ItemInput>& items) override {
         if (items.empty()) {
-            return {};
+            co_return {};
         }
 
         // Get CoroScope for parallel execution
@@ -114,7 +116,7 @@ class BatchProcessorUtility
             std::sort(results.begin(), results.end(), comparator_.value());
         }
 
-        return results;
+        co_return results;
     }
 };
 

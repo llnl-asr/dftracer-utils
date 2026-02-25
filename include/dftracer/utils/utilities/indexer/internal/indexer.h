@@ -32,6 +32,7 @@ void dft_indexer_destroy(dft_indexer_handle_t indexer);
 }
 
 #include <dftracer/utils/core/common/archive_format.h>
+#include <dftracer/utils/core/coro/task.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -52,7 +53,8 @@ class Indexer {
     virtual ~Indexer() = default;
 
     // Core indexer operations
-    virtual void build() const = 0;
+    virtual coro::CoroTask<void> build_async() const = 0;
+    void build() const { build_async().get(); }
     virtual bool need_rebuild() const = 0;
     virtual bool exists() const = 0;
 

@@ -1,11 +1,11 @@
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
+using dftracer::utils::sqlite::SqliteStmt;
 using indexer::internal::IndexerError;
-using indexer::internal::SqliteStmt;
 
 void insert_provenance_info(const SqliteDatabase& db, const std::string& key,
                             const std::string& value) {

@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/sqlite/async.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/chunk_aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
@@ -127,7 +128,7 @@ void ChunkAggregatorUtility::process_event(
     }
 }
 
-ChunkAggregationOutput ChunkAggregatorUtility::process(
+coro::CoroTask<ChunkAggregationOutput> ChunkAggregatorUtility::process(
     const ChunkAggregatorInput& input) {
     ChunkAggregationOutput output;
     output.chunk_index = input.chunk_index;
@@ -143,23 +144,20 @@ ChunkAggregationOutput ChunkAggregatorUtility::process(
     }
 
     // --- Bloom Filter Chunk Skipping ---
-    // If bloom_predicates are provided, query bloom index to determine
-    // if this chunk should be processed
     if (!input.bloom_predicates.empty() && !input.bidx_path.empty()) {
         using namespace dftracer::utils::utilities::composites::dft::indexing;
 
-        try {
-            BloomIndexDatabase bidx(input.bidx_path);
-            int file_info_id = bidx.get_file_info_id(input.file_path);
-            if (file_info_id >= 0) {
-                // Get indexed dimensions
+        auto bloom_check = [&input]() -> bool {
+            try {
+                BloomIndexDatabase bidx(input.bidx_path);
+                int file_info_id = bidx.get_file_info_id(input.file_path);
+                if (file_info_id < 0) return false;
+
                 auto indexed_dims =
                     queries::query_index_dimensions(bidx.db(), file_info_id);
                 std::unordered_set<std::string> indexed_set(
                     indexed_dims.begin(), indexed_dims.end());
 
-                // Build effective predicates (filter to indexed dimensions
-                // only)
                 std::unordered_map<std::string, std::vector<std::string>>
                     effective_predicates;
                 for (const auto& [dimension, values] : input.bloom_predicates) {
@@ -168,74 +166,61 @@ ChunkAggregationOutput ChunkAggregatorUtility::process(
                     }
                 }
 
-                if (!effective_predicates.empty()) {
-                    // Calculate checkpoint range for this chunk.
-                    // Aggregation chunks can span multiple checkpoints
-                    // (e.g. 64MB chunk / 4MB checkpoint = 16 checkpoints).
-                    std::size_t checkpoint_size = input.checkpoint_size;
-                    if (checkpoint_size == 0) {
-                        checkpoint_size = 4 * 1024 * 1024;  // Default 4MB
-                    }
-                    std::uint64_t start_ckpt =
-                        input.start_byte / checkpoint_size;
-                    std::uint64_t end_ckpt =
-                        (input.end_byte > input.start_byte)
-                            ? (input.end_byte - 1) / checkpoint_size
-                            : start_ckpt;
+                if (effective_predicates.empty()) return false;
 
-                    // Check if any predicate dimension indicates this chunk
-                    // might contain matching events
-                    bool chunk_may_match = false;
+                std::size_t checkpoint_size = input.checkpoint_size;
+                if (checkpoint_size == 0) {
+                    checkpoint_size = 4 * 1024 * 1024;
+                }
+                std::uint64_t start_ckpt = input.start_byte / checkpoint_size;
+                std::uint64_t end_ckpt =
+                    (input.end_byte > input.start_byte)
+                        ? (input.end_byte - 1) / checkpoint_size
+                        : start_ckpt;
 
-                    for (const auto& [dimension, values] :
-                         effective_predicates) {
-                        auto chunk_blooms = queries::query_chunk_bloom_filters(
-                            bidx.db(), file_info_id, dimension);
+                bool chunk_may_match = false;
+                for (const auto& [dimension, values] : effective_predicates) {
+                    auto chunk_blooms = queries::query_chunk_bloom_filters(
+                        bidx.db(), file_info_id, dimension);
 
-                        for (const auto& cb : chunk_blooms) {
-                            if (cb.checkpoint_idx < start_ckpt ||
-                                cb.checkpoint_idx > end_ckpt) {
-                                continue;
-                            }
-
-                            auto bloom = BloomFilter::from_blob(
-                                cb.bloom_data.data(), cb.bloom_data.size());
-
-                            // OR within dimension: at least one value must
-                            // possibly match
-                            for (const auto& val : values) {
-                                if (bloom.possibly_contains(val)) {
-                                    chunk_may_match = true;
-                                    break;
-                                }
-                            }
-
-                            if (chunk_may_match) {
+                    for (const auto& cb : chunk_blooms) {
+                        if (cb.checkpoint_idx < start_ckpt ||
+                            cb.checkpoint_idx > end_ckpt) {
+                            continue;
+                        }
+                        auto bloom = BloomFilter::from_blob(
+                            cb.bloom_data.data(), cb.bloom_data.size());
+                        for (const auto& val : values) {
+                            if (bloom.possibly_contains(val)) {
+                                chunk_may_match = true;
                                 break;
                             }
                         }
-
-                        if (chunk_may_match) {
-                            break;
-                        }
+                        if (chunk_may_match) break;
                     }
-
-                    if (!chunk_may_match) {
-                        // Skip this chunk - bloom filter indicates no match
-                        DFTRACER_UTILS_LOG_INFO(
-                            "Skipping chunk %d: no bloom filter match "
-                            "for predicates",
-                            input.chunk_index);
-                        output.success = true;
-                        output.aggregations.clear();
-                        return output;
-                    }
+                    if (chunk_may_match) break;
                 }
+
+                return !chunk_may_match;  // true = skip
+            } catch (const std::exception& e) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "Chunk %d: bloom index error: %s, "
+                    "processing chunk normally",
+                    input.chunk_index, e.what());
+                return false;  // don't skip on error
             }
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN(
-                "Chunk %d: bloom index error: %s, processing chunk normally",
-                input.chunk_index, e.what());
+        };
+
+        bool should_skip = co_await sqlite::run(bloom_check);
+
+        if (should_skip) {
+            DFTRACER_UTILS_LOG_INFO(
+                "Skipping chunk %d: no bloom filter match "
+                "for predicates",
+                input.chunk_index);
+            output.success = true;
+            output.aggregations.clear();
+            co_return output;
         }
     }
     // --- End Bloom Filter Chunk Skipping ---
@@ -246,12 +231,12 @@ ChunkAggregationOutput ChunkAggregatorUtility::process(
             .with_index(input.idx_path);
 
     utilities::composites::IndexedFileReaderUtility reader_utility;
-    auto reader = reader_utility.process(reader_input);
+    auto reader = co_await reader_utility.process(reader_input);
 
     if (!reader) {
         DFTRACER_UTILS_LOG_ERROR("Chunk %d: Failed to create reader for %s",
                                  input.chunk_index, input.file_path.c_str());
-        return output;
+        co_return output;
     }
 
     auto stream = reader->stream(
@@ -266,7 +251,7 @@ ChunkAggregationOutput ChunkAggregatorUtility::process(
     if (!stream) {
         DFTRACER_UTILS_LOG_ERROR("Chunk %d: Failed to create stream for %s",
                                  input.chunk_index, input.file_path.c_str());
-        return output;
+        co_return output;
     }
 
     std::unordered_map<AggregationKey, AggregationMetrics, AggregationKeyHash>
@@ -280,7 +265,7 @@ ChunkAggregationOutput ChunkAggregatorUtility::process(
     }
 
     while (!stream->done()) {
-        auto chunk = stream->read();
+        auto chunk = co_await stream->read_async();
 
         if (chunk.empty()) {
             break;
@@ -329,7 +314,7 @@ ChunkAggregationOutput ChunkAggregatorUtility::process(
     }
     output.success = true;
 
-    return output;
+    co_return output;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

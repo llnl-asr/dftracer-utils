@@ -11,8 +11,8 @@
 namespace dftracer::utils::utilities::text {
 
 // Import line types for convenience
-using io::lines::Line;
-using io::lines::Lines;
+using fileio::lines::Line;
+using fileio::lines::Lines;
 
 /**
  * @brief Utility that filters lines based on a predicate function.
@@ -72,17 +72,18 @@ class LineFilterUtility
      * @param input Line with predicate function
      * @return Optional line (has_value if predicate returns true)
      */
-    std::optional<Line> process(const FilterableLine& input) override {
+    coro::CoroTask<std::optional<Line>> process(
+        const FilterableLine& input) override {
         if (!input.predicate) {
             // No predicate = pass through
-            return input.line;
+            co_return input.line;
         }
 
         if (input.predicate(input.line)) {
-            return input.line;
+            co_return input.line;
         }
 
-        return std::nullopt;
+        co_return std::nullopt;
     }
 };
 
@@ -115,10 +116,10 @@ class MultiLinesFilterUtility
      * @param input Lines to filter
      * @return Filtered lines (only those passing predicate)
      */
-    Lines process(const Lines& input) override {
+    coro::CoroTask<Lines> process(const Lines& input) override {
         if (!predicate_) {
             // No predicate = pass through all
-            return input;
+            co_return input;
         }
 
         std::vector<Line> filtered;
@@ -130,7 +131,7 @@ class MultiLinesFilterUtility
             }
         }
 
-        return Lines{std::move(filtered)};
+        co_return Lines{std::move(filtered)};
     }
 };
 

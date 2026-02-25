@@ -13,10 +13,11 @@ class StringLineProcessor : public LineProcessor {
    public:
     explicit StringLineProcessor(std::string& result) : result_(result) {}
 
-    bool process(const char* data, std::size_t length) override {
+    coro::CoroTask<bool> process(const char* data,
+                                 std::size_t length) override {
         result_.append(data, length);
         result_.append(1, '\n');
-        return true;
+        co_return true;
     }
 
     void begin(std::size_t start_line, std::size_t end_line) override {

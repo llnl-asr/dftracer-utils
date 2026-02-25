@@ -1,12 +1,13 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/perfetto_trace_writer_utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
+#include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
-#include <dftracer/utils/utilities/io/streaming_file_writer_utility.h>
+#include <fcntl.h>
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <limits>
 #include <string>
 
@@ -27,7 +28,8 @@ std::uint64_t PerfettoTraceWriterUtility::generate_synthetic_tid(
         key_str += ":" + k + "=" + v;
     }
 
-    std::size_t hash = hasher.process(key_str).value;
+    // CPU-bound hash — .get() intentional
+    std::size_t hash = hasher.process(key_str).get().value;
     return 1000000000ULL + (hash % 1000000ULL);
 }
 
@@ -214,7 +216,7 @@ void PerfettoTraceWriterUtility::append_event_args(
     }
 }
 
-bool PerfettoTraceWriterUtility::process(
+coro::CoroTask<bool> PerfettoTraceWriterUtility::process(
     const PerfettoTraceWriterInput& input) {
     const auto& aggregations = input.resolver_output.aggregations.aggregations;
     const auto& root_pids = input.resolver_output.root_pids;
@@ -385,39 +387,41 @@ bool PerfettoTraceWriterUtility::process(
                 input.compression_level,
                 compression::zlib::CompressionFormat::GZIP);
 
-            io::StreamingFileWriterUtility writer(input.output_path);
+            fileio::StreamingFileWriterUtility writer(input.output_path);
 
-            io::RawData raw_data;
+            fileio::RawData raw_data;
             raw_data.data.assign(buffer.begin(), buffer.end());
-            auto compressed_chunks = compressor.process(raw_data);
+            auto compressed_chunks = co_await compressor.process(raw_data);
 
             for (const auto& chunk : compressed_chunks) {
-                io::RawData raw_chunk{chunk.data};
-                writer.process(raw_chunk);
+                fileio::RawData raw_chunk{chunk.data};
+                co_await writer.process(raw_chunk);
             }
 
             auto final_chunks = compressor.finalize();
             for (const auto& chunk : final_chunks) {
-                io::RawData raw_chunk{chunk.data};
-                writer.process(raw_chunk);
+                fileio::RawData raw_chunk{chunk.data};
+                co_await writer.process(raw_chunk);
             }
 
             writer.close();
         } else {
-            FILE* fp = std::fopen(input.output_path.c_str(), "w");
-            if (!fp) {
+            ssize_t fd = co_await ::dftracer::utils::io::open(
+                input.output_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to open output file: %s",
                                          input.output_path.c_str());
-                return false;
+                co_return false;
             }
-            std::fwrite(buffer.data(), 1, buffer.size(), fp);
-            std::fclose(fp);
+            co_await ::dftracer::utils::io::write(
+                static_cast<int>(fd), buffer.data(), buffer.size(), 0);
+            co_await ::dftracer::utils::io::close(static_cast<int>(fd));
         }
 
-        return true;
+        co_return true;
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Failed to write output: %s", e.what());
-        return false;
+        co_return false;
     }
 }
 

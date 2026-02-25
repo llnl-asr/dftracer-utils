@@ -53,7 +53,7 @@ class GzipByteStream : public GzipStream {
             current_position_);
     }
 
-    span_view<const char> read() override {
+    coro::CoroTask<span_view<const char>> read_async() override {
         if (!decompression_initialized_) {
             throw ReaderError(ReaderError::INITIALIZATION_ERROR,
                               "Streaming session not properly initialized");
@@ -61,7 +61,7 @@ class GzipByteStream : public GzipStream {
 
         if (is_at_target_end()) {
             is_finished_ = true;
-            return {};
+            co_return {};
         }
 
         size_t max_read = target_end_bytes_ - current_position_;
@@ -73,9 +73,10 @@ class GzipByteStream : public GzipStream {
             "current_position_=%zu",
             read_size, current_position_);
 
-        bool result = inflater_.read(
-            file_handle_, reinterpret_cast<unsigned char *>(buffer_.data()),
-            read_size, bytes_read);
+        bool result = co_await inflater_.read(
+            fd_, file_offset_,
+            reinterpret_cast<unsigned char *>(buffer_.data()), read_size,
+            bytes_read);
 
         DFTRACER_UTILS_LOG_DEBUG(
             "GzipByteStream::read (zero-copy) - read result: result=%d, "
@@ -88,7 +89,7 @@ class GzipByteStream : public GzipStream {
                                      "marking as finished due to read "
                                      "failure or 0 bytes");
             is_finished_ = true;
-            return {};
+            co_return {};
         }
 
         current_position_ += bytes_read;
@@ -97,10 +98,11 @@ class GzipByteStream : public GzipStream {
             "Streamed (zero-copy) %zu bytes (position: %zu / %zu)", bytes_read,
             current_position_, target_end_bytes_);
 
-        return span_view<const char>(buffer_.data(), bytes_read);
+        co_return span_view<const char>(buffer_.data(), bytes_read);
     }
 
-    std::size_t read(char *buffer, std::size_t buffer_size) override {
+    coro::CoroTask<std::size_t> read_async(char *buffer,
+                                           std::size_t buffer_size) override {
 #ifdef __GNUC__
         __builtin_prefetch(buffer, 1, 3);
 #endif
@@ -116,13 +118,13 @@ class GzipByteStream : public GzipStream {
                 "Copied %zu bytes from existing buffer (pos %zu/%zu)",
                 copy_size, buffer_pos_, valid_bytes_);
 
-            return copy_size;
+            co_return copy_size;
         }
 
         // Buffer exhausted, get new chunk via zero-copy read
-        auto span = read();
+        auto span = co_await read_async();
         if (span.empty()) {
-            return 0;
+            co_return 0;
         }
 
         // Update our tracking of the buffer state
@@ -138,7 +140,7 @@ class GzipByteStream : public GzipStream {
             "%zu)",
             copy_size, valid_bytes_);
 
-        return copy_size;
+        co_return copy_size;
     }
 };
 

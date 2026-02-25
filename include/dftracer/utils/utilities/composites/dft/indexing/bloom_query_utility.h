@@ -67,7 +67,8 @@ class BloomQueryUtility
    public:
     BloomQueryUtility() = default;
 
-    BloomQueryOutput process(const BloomQueryInput& input) override;
+    coro::CoroTask<BloomQueryOutput> process(
+        const BloomQueryInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

@@ -1,0 +1,92 @@
+#pragma once
+#ifdef DFTRACER_UTILS_HAVE_IO_URING
+
+#include <dftracer/utils/core/io/io.h>
+#include <dftracer/utils/core/io/io_backend.h>
+#include <sys/stat.h>
+
+#include <cstddef>
+#include <mutex>
+#include <string>
+
+#include "io_completion_thread.h"
+#include "io_uring_wrapper.h"
+
+namespace dftracer::utils {
+class Executor;
+}
+
+namespace dftracer::utils::io {
+
+/// io_uring request. Stored in the SQE's user_data so we can
+/// recover the IoAwaitable pointer on completion.
+struct IoUringRequest {
+    IoAwaitable* awaitable = nullptr;
+};
+
+/// io_uring I/O backend using raw syscalls (no liburing dependency).
+/// Uses a dedicated completion thread that blocks on wait_cqe and
+/// enqueues completed coroutine handles back to the executor.
+class IoUringBackend : public IoBackend {
+   public:
+    explicit IoUringBackend(Executor& executor, unsigned ring_entries = 256,
+                            unsigned batch_threshold = 16);
+
+    /// Probe whether io_uring actually works on this kernel at runtime.
+    /// Returns true if io_uring_setup succeeds.
+    bool probe();
+
+    void start() override;
+    void stop() override;
+
+    IoAwaitable submit_read(int fd, void* buf, std::size_t len,
+                            off_t offset) override;
+    IoAwaitable submit_write(int fd, const void* buf, std::size_t len,
+                             off_t offset) override;
+    IoAwaitable submit_open(const char* path, int flags, mode_t mode) override;
+    IoAwaitable submit_close(int fd) override;
+    IoAwaitable submit_fsync(int fd) override;
+    IoAwaitable submit_ftruncate(int fd, off_t length) override;
+    IoAwaitable submit_fstat(int fd, struct stat* buf) override;
+
+    std::size_t poll(int timeout_ms) override;
+    int flush() override;
+    std::string name() const override { return "io_uring"; }
+
+    /// Static callback for SubmitContext::submit.
+    static void submit_fn(SubmitContext* ctx, IoAwaitable* awaitable);
+
+   private:
+    /// Completion loop run by the completion thread.
+    void completion_loop();
+
+    /// Flush pending SQEs if threshold reached. Called under submit_mutex_.
+    void maybe_flush_locked();
+
+    Executor& executor_;
+    unsigned ring_entries_;
+    unsigned batch_threshold_;
+    uring::Ring ring_;
+    IoCompletionThread completion_thread_;
+    std::mutex submit_mutex_;
+};
+
+/// SubmitContext subclass for io_uring. Carries the operation
+/// details needed to prepare an SQE on await_suspend.
+struct IoUringSubmitCtx : SubmitContext {
+    enum class Op { READ, WRITE, OPEN, CLOSE, FSYNC, FTRUNCATE, FSTAT };
+    Op op = Op::READ;
+    int fd = -1;
+    void* buf = nullptr;
+    std::size_t len = 0;
+    off_t offset = 0;
+    const char* path = nullptr;
+    int flags = 0;
+    mode_t mode = 0;
+    struct stat* stat_buf = nullptr;
+    IoUringBackend* backend = nullptr;
+};
+
+}  // namespace dftracer::utils::io
+
+#endif  // DFTRACER_UTILS_HAVE_IO_URING

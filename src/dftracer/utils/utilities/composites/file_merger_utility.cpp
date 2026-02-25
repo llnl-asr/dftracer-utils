@@ -1,6 +1,7 @@
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/file_merger_utility.h>
+#include <dftracer/utils/utilities/fileio/file_reader_utility.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
-#include <dftracer/utils/utilities/io/file_reader_utility.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <dftracer/utils/utilities/text/shared.h>
 
@@ -16,7 +17,8 @@ namespace dftracer::utils::utilities::composites {
 
 std::atomic<int> FileMergeValidatorUtility::file_counter_{0};
 
-FileMergeValidatorUtilityOutput FileMergeValidatorUtility::process(
+coro::CoroTask<FileMergeValidatorUtilityOutput>
+FileMergeValidatorUtility::process(
     const FileMergeValidatorUtilityInput& input) {
     FileMergeValidatorUtilityOutput result;
     result.file_path = input.file_path;
@@ -37,18 +39,18 @@ FileMergeValidatorUtilityOutput FileMergeValidatorUtility::process(
                     .with_force_rebuild(input.force_rebuild);
 
             dft::IndexBuilderUtility index_builder;
-            auto index_result = index_builder.process(index_input);
+            auto index_result = co_await index_builder.process(index_input);
 
             if (!index_result.success) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to build index for %s",
                                          input.file_path.c_str());
-                return result;
+                co_return result;
             }
         }
 
         // Step 2: Create line processor function that validates JSON
-        auto json_validator =
-            [](const io::lines::Line& line) -> std::optional<ValidatedEvent> {
+        auto json_validator = [](const fileio::lines::Line& line)
+            -> std::optional<ValidatedEvent> {
             const char* trimmed;
             std::size_t trimmed_length;
             if (json_trim_and_validate(line.content.data(), line.content.size(),
@@ -66,26 +68,27 @@ FileMergeValidatorUtilityOutput FileMergeValidatorUtility::process(
         // Step 3: Process lines using LineBatchProcessor
         LineBatchProcessorUtility<ValidatedEvent> processor(json_validator);
 
-        io::lines::LineReadInput read_input;
+        fileio::lines::LineReadInput read_input;
         read_input.file_path = input.file_path;
         if (is_compressed) {
             read_input.idx_path = input.index_path;
         }
 
-        auto validated_events = processor.process(read_input);
+        auto validated_events = co_await processor.process(read_input);
 
         // Step 4: Write validated events to output using StreamingFileWriter
-        io::StreamingFileWriterUtility writer(input.output_path, false, true);
+        fileio::StreamingFileWriterUtility writer(input.output_path, false,
+                                                  true);
 
         bool first = true;
         for (const auto& event : validated_events) {
             if (!first) {
-                io::RawData newline_data{std::vector<unsigned char>{'\n'}};
-                writer.process(newline_data);
+                fileio::RawData newline_data{std::vector<unsigned char>{'\n'}};
+                co_await writer.process(newline_data);
             }
 
-            io::RawData event_data(event.content);
-            writer.process(event_data);
+            fileio::RawData event_data(event.content);
+            co_await writer.process(event_data);
 
             first = false;
             result.valid_events++;
@@ -93,8 +96,8 @@ FileMergeValidatorUtilityOutput FileMergeValidatorUtility::process(
 
         // Add trailing newline to ensure proper NDJSON format
         if (!validated_events.empty()) {
-            io::RawData newline_data{std::vector<unsigned char>{'\n'}};
-            writer.process(newline_data);
+            fileio::RawData newline_data{std::vector<unsigned char>{'\n'}};
+            co_await writer.process(newline_data);
         }
 
         result.lines_processed = validated_events.size();
@@ -127,14 +130,14 @@ FileMergeValidatorUtilityOutput FileMergeValidatorUtility::process(
         result.success = false;
     }
 
-    return result;
+    co_return result;
 }
 
 // ============================================================================
 // FileMergerUtility Implementation
 // ============================================================================
 
-FileMergerUtilityOutput FileMergerUtility::process(
+coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
     const FileMergerUtilityInput& input) {
     FileMergerUtilityOutput output;
     output.output_path = input.output_file;
@@ -144,10 +147,11 @@ FileMergerUtilityOutput FileMergerUtility::process(
 
     try {
         // Step 1: Use StreamingFileWriter to write the combined JSON array
-        io::StreamingFileWriterUtility writer(input.output_file, false, true);
+        fileio::StreamingFileWriterUtility writer(input.output_file, false,
+                                                  true);
 
-        io::RawData array_open(std::vector<unsigned char>{'[', '\n'});
-        writer.process(array_open);
+        fileio::RawData array_open(std::vector<unsigned char>{'[', '\n'});
+        co_await writer.process(array_open);
 
         DFTRACER_UTILS_LOG_DEBUG("Processing %zu file results",
                                  input.file_results.size());
@@ -159,14 +163,14 @@ FileMergerUtilityOutput FileMergerUtility::process(
             if (result.success && !result.output_path.empty()) {
                 // Use FileReader utility to read the temp file
                 utilities::filesystem::FileEntry file_entry{result.output_path};
-                utilities::io::FileReaderUtility file_reader;
+                utilities::fileio::FileReaderUtility file_reader;
                 utilities::text::Text content_text =
-                    file_reader.process(file_entry);
+                    co_await file_reader.process(file_entry);
 
                 if (!content_text.content.empty()) {
                     const std::string& content = content_text.content;
                     auto event_extractor_func =
-                        [&event_extractor](const io::lines::Line& line)
+                        [&event_extractor](const fileio::lines::Line& line)
                         -> std::optional<utilities::composites::dft::EventId> {
                         // Skip empty lines
                         if (line.content.empty()) {
@@ -179,7 +183,7 @@ FileMergerUtilityOutput FileMergerUtility::process(
                             auto extract_input = utilities::composites::dft::
                                 EventIdExtractionInput::from_json(json_line);
                             auto event_id =
-                                event_extractor.process(extract_input);
+                                event_extractor.process(extract_input).get();
 
                             if (event_id.is_valid()) {
                                 return event_id;
@@ -192,10 +196,11 @@ FileMergerUtilityOutput FileMergerUtility::process(
                         utilities::composites::dft::EventId>
                         line_processor(event_extractor_func);
 
-                    io::lines::LineReadInput line_input;
+                    fileio::lines::LineReadInput line_input;
                     line_input.file_path = result.output_path;
 
-                    auto extracted_events = line_processor.process(line_input);
+                    auto extracted_events =
+                        co_await line_processor.process(line_input);
 
                     DFTRACER_UTILS_LOG_DEBUG(
                         "Collected %zu events from temp file %s",
@@ -208,8 +213,8 @@ FileMergerUtilityOutput FileMergerUtility::process(
                     // NDJSON + ])
                     std::vector<unsigned char> content_bytes(content.begin(),
                                                              content.end());
-                    io::RawData content_data(content_bytes);
-                    writer.process(content_data);
+                    fileio::RawData content_data(content_bytes);
+                    co_await writer.process(content_data);
 
                     output.files_combined++;
                     output.total_events += result.valid_events;
@@ -219,8 +224,9 @@ FileMergerUtilityOutput FileMergerUtility::process(
         }  // end for loop
 
         // Write JSON array closing bracket
-        io::RawData array_close(std::vector<unsigned char>{'\n', ']', '\n'});
-        writer.process(array_close);
+        fileio::RawData array_close(
+            std::vector<unsigned char>{'\n', ']', '\n'});
+        co_await writer.process(array_close);
 
         writer.close();
 
@@ -232,7 +238,7 @@ FileMergerUtilityOutput FileMergerUtility::process(
                     .with_compression_level(6);
 
             FileCompressorUtility compressor;
-            auto compress_result = compressor.process(compress_input);
+            auto compress_result = co_await compressor.process(compress_input);
 
             if (compress_result.success) {
                 fs::remove(input.output_file);
@@ -252,7 +258,7 @@ FileMergerUtilityOutput FileMergerUtility::process(
         output.success = false;
     }
 
-    return output;
+    co_return output;
 }
 
 }  // namespace dftracer::utils::utilities::composites

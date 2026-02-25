@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_BEHAVIORS_UTILITY_EXECUTOR_H
 #define DFTRACER_UTILS_UTILITIES_BEHAVIORS_UTILITY_EXECUTOR_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/core/utilities/utility_traits.h>
@@ -58,9 +59,11 @@ class UtilityExecutor {
      * @return Output result
      * @throws Any exception from utility or behaviors
      */
-    O execute(const I& input) {
-        return behavior_chain_.process(
-            input, [this](const I& inp) { return utility_->process(inp); });
+    coro::CoroTask<O> execute(const I& input) {
+        co_return co_await behavior_chain_.process(
+            input, [this](const I& inp) -> coro::CoroTask<O> {
+                return utility_->process(inp);
+            });
     }
 
     /**
@@ -73,19 +76,19 @@ class UtilityExecutor {
      * @return Output result
      * @throws Any exception from utility or behaviors
      */
-    O execute_with_context(CoroScope& ctx, const I& input) {
-        return behavior_chain_.process(input, [this, &ctx](const I& inp) {
-            utility_->set_context(ctx);
-
-            try {
-                O result = utility_->process(inp);
-                utility_->clear_context();
-                return result;
-            } catch (...) {
-                utility_->clear_context();
-                throw;
-            }
-        });
+    coro::CoroTask<O> execute_with_context(CoroScope& ctx, const I& input) {
+        co_return co_await behavior_chain_.process(
+            input, [this, &ctx](const I& inp) -> coro::CoroTask<O> {
+                utility_->set_context(ctx);
+                try {
+                    O result = co_await utility_->process(inp);
+                    utility_->clear_context();
+                    co_return result;
+                } catch (...) {
+                    utility_->clear_context();
+                    throw;
+                }
+            });
     }
 
     /**

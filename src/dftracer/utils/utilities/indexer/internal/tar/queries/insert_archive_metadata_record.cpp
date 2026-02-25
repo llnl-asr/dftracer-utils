@@ -1,4 +1,4 @@
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/queries/queries.h>
 
 namespace dftracer::utils::utilities::indexer::internal::tar {

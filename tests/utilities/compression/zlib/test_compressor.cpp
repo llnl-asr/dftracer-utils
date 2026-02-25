@@ -6,14 +6,14 @@
 #include <string>
 
 using namespace dftracer::utils::utilities::compression::zlib;
-using namespace dftracer::utils::utilities::io;
+using namespace dftracer::utils::utilities::fileio;
 
 TEST_CASE("CompressorUtility - Basic Operations") {
     auto compressor = std::make_shared<CompressorUtility>();
 
     SUBCASE("Compress simple string") {
         RawData input("Hello, World!");
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK_FALSE(output.data.empty());
         CHECK(output.original_size == input.size());
@@ -22,7 +22,7 @@ TEST_CASE("CompressorUtility - Basic Operations") {
 
     SUBCASE("Compress empty data") {
         RawData input(std::vector<unsigned char>{});
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK(output.data.empty());
         CHECK(output.original_size == 0);
@@ -40,7 +40,7 @@ TEST_CASE("CompressorUtility - Compression Levels") {
 
         std::string test_data(1000, 'a');  // Highly repetitive
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK(compressor->get_compression_level() == 0);
         CHECK_FALSE(output.data.empty());
@@ -53,7 +53,7 @@ TEST_CASE("CompressorUtility - Compression Levels") {
 
         std::string test_data(1000, 'a');
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK(compressor->get_compression_level() == 1);
         CHECK(output.size() < input.size());
@@ -65,7 +65,7 @@ TEST_CASE("CompressorUtility - Compression Levels") {
 
         std::string test_data(1000, 'a');
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK(compressor->get_compression_level() == 9);
         CHECK(output.size() < input.size());
@@ -93,7 +93,7 @@ TEST_CASE("CompressorUtility - Compression Effectiveness") {
     SUBCASE("Highly repetitive data") {
         std::string test_data(10000, 'a');
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         // Should compress very well
         CHECK(output.compression_ratio() < 0.1);  // Less than 10% of original
@@ -104,7 +104,7 @@ TEST_CASE("CompressorUtility - Compression Effectiveness") {
         std::string test_data =
             "aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ";
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         // Random data compresses poorly or not at all
         CHECK(output.size() > 0);
@@ -118,7 +118,7 @@ TEST_CASE("CompressorUtility - Compression Effectiveness") {
             test_data += test_data;
         }
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         // Text should compress reasonably well
         CHECK(output.size() < input.size());
@@ -131,7 +131,7 @@ TEST_CASE("CompressorUtility - Data Sizes") {
 
     SUBCASE("Very small data") {
         RawData input("x");
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK_FALSE(output.data.empty());
         CHECK(output.original_size == 1);
@@ -141,7 +141,7 @@ TEST_CASE("CompressorUtility - Data Sizes") {
     SUBCASE("Medium data") {
         std::string test_data(1024, 'a');  // 1KB
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK(output.original_size == 1024);
         CHECK(output.size() < 1024);
@@ -150,7 +150,7 @@ TEST_CASE("CompressorUtility - Data Sizes") {
     SUBCASE("Large data") {
         std::string test_data(1024 * 1024, 'b');  // 1MB
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK(output.original_size == 1024 * 1024);
         CHECK(output.size() < 1024 * 1024);
@@ -164,7 +164,7 @@ TEST_CASE("CompressorUtility - Metadata") {
     SUBCASE("Original size is preserved") {
         std::string test_data(500, 'x');
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK(output.original_size == 500);
         CHECK(output.original_size == input.size());
@@ -173,7 +173,7 @@ TEST_CASE("CompressorUtility - Metadata") {
     SUBCASE("Compression ratio calculation") {
         std::string test_data(1000, 'y');
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         double ratio = output.compression_ratio();
         double expected = static_cast<double>(output.size()) / 1000.0;
@@ -184,7 +184,7 @@ TEST_CASE("CompressorUtility - Metadata") {
     SUBCASE("Space savings calculation") {
         std::string test_data(1000, 'z');
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         double savings = output.space_savings();
         double expected = (1.0 - output.compression_ratio()) * 100.0;
@@ -200,7 +200,7 @@ TEST_CASE("CompressorUtility - Different Data Types") {
         std::vector<unsigned char> binary_data = {0x00, 0x01, 0x02, 0xFF, 0xFE,
                                                   0xFD, 0x00, 0x01, 0x02};
         RawData input(binary_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK_FALSE(output.data.empty());
         CHECK(output.original_size == binary_data.size());
@@ -209,7 +209,7 @@ TEST_CASE("CompressorUtility - Different Data Types") {
     SUBCASE("String with special characters") {
         std::string test_data = "Hello\n\tWorld!\r\n\0Special";
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK_FALSE(output.data.empty());
         CHECK(output.original_size == test_data.size());
@@ -218,7 +218,7 @@ TEST_CASE("CompressorUtility - Different Data Types") {
     SUBCASE("Unicode data") {
         std::string test_data = "Hello, 世界! 🌍";
         RawData input(test_data);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK_FALSE(output.data.empty());
         CHECK(output.original_size == test_data.size());
@@ -233,8 +233,8 @@ TEST_CASE("CompressorUtility - Consistency") {
         RawData input1(test_data);
         RawData input2(test_data);
 
-        CompressedData output1 = compressor->process(input1);
-        CompressedData output2 = compressor->process(input2);
+        CompressedData output1 = compressor->process(input1).get();
+        CompressedData output2 = compressor->process(input2).get();
 
         CHECK(output1 == output2);
         CHECK(output1.data == output2.data);
@@ -247,11 +247,11 @@ TEST_CASE("CompressorUtility - Consistency") {
 
         auto compressor1 = std::make_shared<CompressorUtility>();
         compressor1->set_compression_level(1);
-        CompressedData output1 = compressor1->process(input);
+        CompressedData output1 = compressor1->process(input).get();
 
         auto compressor9 = std::make_shared<CompressorUtility>();
         compressor9->set_compression_level(9);
-        CompressedData output9 = compressor9->process(input);
+        CompressedData output9 = compressor9->process(input).get();
 
         // Different levels should produce different compressed sizes
         // (Level 9 should generally be smaller or equal)
@@ -265,7 +265,7 @@ TEST_CASE("CompressorUtility - Edge Cases") {
     SUBCASE("All zeros") {
         std::vector<unsigned char> zeros(1000, 0);
         RawData input(zeros);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         // Should compress extremely well
         CHECK(output.compression_ratio() < 0.05);
@@ -274,7 +274,7 @@ TEST_CASE("CompressorUtility - Edge Cases") {
     SUBCASE("All ones") {
         std::vector<unsigned char> ones(1000, 0xFF);
         RawData input(ones);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         // Should compress extremely well
         CHECK(output.compression_ratio() < 0.05);
@@ -286,7 +286,7 @@ TEST_CASE("CompressorUtility - Edge Cases") {
             pattern.push_back(i % 2 ? 0xFF : 0x00);
         }
         RawData input(pattern);
-        CompressedData output = compressor->process(input);
+        CompressedData output = compressor->process(input).get();
 
         CHECK(output.size() < input.size());
     }

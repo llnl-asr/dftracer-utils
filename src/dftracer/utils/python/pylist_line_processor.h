@@ -23,14 +23,15 @@ class PyListLineProcessor
 
     ~PyListLineProcessor() { Py_XDECREF(py_list_); }
 
-    bool process(const char* data, std::size_t length) override {
+    dftracer::utils::coro::CoroTask<bool> process(const char* data,
+                                                  std::size_t length) override {
         PyObject* py_line = PyUnicode_FromStringAndSize(data, length);
         if (!py_line) {
-            return false;
+            co_return false;
         }
         int result = PyList_Append(py_list_, py_line);
         Py_DECREF(py_line);
-        return result == 0;
+        co_return result == 0;
     }
 
     PyObject* get_result() {

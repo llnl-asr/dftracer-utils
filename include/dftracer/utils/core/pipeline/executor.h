@@ -6,6 +6,7 @@
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/io/io_backend.h>
 
 #include <any>
 #include <atomic>
@@ -23,11 +24,25 @@
 #include <unordered_set>
 #include <vector>
 
+namespace dftracer::utils::io {
+class IoThreadPool;
+}  // namespace dftracer::utils::io
+
 namespace dftracer::utils {
 
 class Task;
 class CoroScope;
 class Scheduler;
+
+struct ExecutorConfig {
+    std::size_t num_threads = 0;  // 0 = hardware_concurrency
+    std::chrono::seconds idle_timeout{5};
+    std::chrono::seconds deadlock_timeout{10};
+    std::size_t io_pool_size = 4;
+    io::IoBackendType io_backend_type = io::IoBackendType::AUTO;
+    unsigned io_batch_threshold = 16;
+    std::size_t sqlite_pool_size = 2;
+};
 
 /**
  * Task information for progress tracking
@@ -201,17 +216,23 @@ class Executor {
     // FinalAwaiter pushes here; worker loop drains periodically.
     moodycamel::ConcurrentQueue<std::coroutine_handle<>> destroy_queue_;
 
+    // I/O backend (owned by executor, created by factory)
+    std::unique_ptr<io::IoBackend> io_backend_;
+
+    // Dedicated thread pool for SQLite async operations
+    std::unique_ptr<io::IoThreadPool> sqlite_pool_;
+
+    // Configuration (stored from ExecutorConfig)
+    std::size_t io_pool_size_ = 4;
+    io::IoBackendType io_backend_type_ = io::IoBackendType::AUTO;
+    unsigned io_batch_threshold_ = 16;
+    std::size_t sqlite_pool_size_ = 2;
+
    public:
     /**
      * Constructor
-     * @param num_threads Number of worker threads (0 = hardware_concurrency)
-     * @param idle_timeout Timeout for idle executor with pending tasks
-     * @param deadlock_timeout Timeout for potential deadlock detection
      */
-    explicit Executor(
-        std::size_t num_threads = 0,
-        std::chrono::seconds idle_timeout = std::chrono::seconds(5),
-        std::chrono::seconds deadlock_timeout = std::chrono::seconds(10));
+    explicit Executor(const ExecutorConfig& config = {});
 
     ~Executor();
 
@@ -264,10 +285,33 @@ class Executor {
     std::size_t get_num_threads() const { return num_threads_; }
 
     /**
+     * Check if an I/O backend is available
+     */
+    bool has_io_backend() const noexcept { return io_backend_ != nullptr; }
+
+    /**
+     * Get the I/O backend (must check has_io_backend() first)
+     */
+    io::IoBackend& io_backend() { return *io_backend_; }
+    const io::IoBackend& io_backend() const { return *io_backend_; }
+
+    /**
+     * Get the dedicated SQLite thread pool (nullptr if not started).
+     */
+    io::IoThreadPool* sqlite_pool() noexcept;
+
+    /**
      * Get the executor running on the current worker thread (nullptr
      * if the calling thread is not a worker).  Thread-local.
      */
     static Executor* current() noexcept;
+
+    /**
+     * Set the current-thread executor TLS, returning the old value.
+     * Used by CoroTask::get() to suppress async I/O submission
+     * when driving a coroutine synchronously.
+     */
+    static Executor* set_current(Executor* e) noexcept;
     /**
      * Request graceful shutdown
      * Stops accepting new tasks and waits for current tasks to complete

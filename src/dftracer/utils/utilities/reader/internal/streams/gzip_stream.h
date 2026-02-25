@@ -7,16 +7,15 @@
 #include <dftracer/utils/utilities/reader/internal/error.h>
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
 #include <dftracer/utils/utilities/reader/internal/streams/stream.h>
-
-#ifdef __linux__
 #include <fcntl.h>
-#endif
+#include <unistd.h>
 
 namespace dftracer::utils::utilities::reader::internal {
 
 class GzipStream : public StreamBase {
    protected:
-    FILE *file_handle_;
+    int fd_ = -1;
+    mutable off_t file_offset_ = 0;
     mutable ReaderInflater inflater_;
     std::size_t current_position_;
     std::size_t target_end_bytes_;
@@ -35,7 +34,8 @@ class GzipStream : public StreamBase {
    public:
     GzipStream()
         : StreamBase(),
-          file_handle_(nullptr),
+          fd_(-1),
+          file_offset_(0),
           current_position_(0),
           target_end_bytes_(0),
           max_file_bytes_(0),
@@ -57,8 +57,9 @@ class GzipStream : public StreamBase {
 
     bool done() const override { return is_finished_; }
 
-    span_view<const char> read() override = 0;
-    std::size_t read(char *buffer, std::size_t buffer_size) override = 0;
+    coro::CoroTask<span_view<const char>> read_async() override = 0;
+    coro::CoroTask<std::size_t> read_async(
+        char *buffer, std::size_t buffer_size) override = 0;
 
     void reset() override {
         current_gz_path_.clear();
@@ -68,10 +69,11 @@ class GzipStream : public StreamBase {
         max_file_bytes_ = 0;
         is_active_ = false;
         is_finished_ = false;
-        if (file_handle_) {
-            std::fclose(file_handle_);
-            file_handle_ = nullptr;
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
         }
+        file_offset_ = 0;
         inflater_.reset();
         checkpoint_ =
             dftracer::utils::utilities::indexer::internal::IndexerCheckpoint();
@@ -79,23 +81,16 @@ class GzipStream : public StreamBase {
     }
 
    protected:
-    FILE *open_file(const std::string &path) {
-        FILE *file = std::fopen(path.c_str(), "rb");
-        if (!file) {
+    int open_file(const std::string &path) {
+        int fd = ::open(path.c_str(), O_RDONLY);
+        if (fd < 0) {
             throw ReaderError(ReaderError::FILE_IO_ERROR,
                               "Failed to open file: " + path);
         }
-
-        // Optimize file I/O with larger buffer
-        setvbuf(file, nullptr, _IOFBF, constants::reader::FILE_IO_BUFFER_SIZE);
-
 #ifdef __linux__
-        // Hint to kernel about sequential access
-        int fd = fileno(file);
         posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
 #endif
-
-        return file;
+        return fd;
     }
 
     void initialize(const std::string &gz_path, std::size_t start_bytes,
@@ -112,16 +107,18 @@ class GzipStream : public StreamBase {
         is_active_ = true;
         is_finished_ = false;
 
-        file_handle_ = open_file(gz_path);
+        fd_ = open_file(gz_path);
+        file_offset_ = 0;
 
         use_checkpoint_ = try_initialize_with_checkpoint(start_bytes, indexer);
 
         if (!use_checkpoint_) {
             checkpoint_ = dftracer::utils::utilities::indexer::internal::
                 IndexerCheckpoint();
-            if (!inflater_.initialize(
-                    file_handle_, 0,
-                    constants::indexer::ZLIB_GZIP_WINDOW_BITS)) {
+            if (!inflater_
+                     .initialize(fd_, file_offset_, 0,
+                                 constants::indexer::ZLIB_GZIP_WINDOW_BITS)
+                     .get()) {
                 throw ReaderError(ReaderError::COMPRESSION_ERROR,
                                   "Failed to initialize inflater");
             }
@@ -164,7 +161,9 @@ class GzipStream : public StreamBase {
     void skip(std::size_t target_position) {
         std::size_t current_pos = checkpoint_.uc_offset;
         if (target_position > current_pos) {
-            inflater_.skip_bytes(file_handle_, target_position - current_pos);
+            inflater_
+                .skip_bytes(fd_, file_offset_, target_position - current_pos)
+                .get();
         }
     }
 
@@ -180,9 +179,10 @@ class GzipStream : public StreamBase {
                                   "Failed to reinitialize from checkpoint");
             }
         } else {
-            if (!inflater_.initialize(
-                    file_handle_, 0,
-                    constants::indexer::ZLIB_GZIP_WINDOW_BITS)) {
+            if (!inflater_
+                     .initialize(fd_, file_offset_, 0,
+                                 constants::indexer::ZLIB_GZIP_WINDOW_BITS)
+                     .get()) {
                 throw ReaderError(ReaderError::COMPRESSION_ERROR,
                                   "Failed to initialize inflater");
             }
@@ -191,7 +191,8 @@ class GzipStream : public StreamBase {
 
    private:
     bool inflate_init_from_checkpoint() const {
-        return inflater_.restore_from_checkpoint(file_handle_, checkpoint_);
+        return inflater_.restore_from_checkpoint(fd_, file_offset_, checkpoint_)
+            .get();
     }
 };
 

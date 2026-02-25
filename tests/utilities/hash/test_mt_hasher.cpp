@@ -93,8 +93,8 @@ TEST_CASE("MTHasherUtility - Hash Correctness") {
         mt_hasher->reset();
         direct_hasher->reset();
 
-        Hash mt_hash = mt_hasher->process("test data");
-        Hash direct_hash = direct_hasher->process("test data");
+        Hash mt_hash = mt_hasher->process("test data").get();
+        Hash direct_hash = direct_hasher->process("test data").get();
 
         CHECK(mt_hash == direct_hash);
     }

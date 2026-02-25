@@ -1,8 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_STREAMING_DECOMPRESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_STREAMING_DECOMPRESSOR_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/compression/zlib/types.h>
-#include <dftracer/utils/utilities/io/types/types.h>
+#include <dftracer/utils/utilities/fileio/types/types.h>
 #include <zlib.h>
 
 #include <cstring>
@@ -31,7 +32,8 @@ namespace dftracer::utils::utilities::compression::zlib {
  * @endcode
  */
 class StreamingDecompressorUtility
-    : public utilities::Utility<io::CompressedData, std::vector<io::RawData>> {
+    : public utilities::Utility<fileio::CompressedData,
+                                std::vector<fileio::RawData>> {
    private:
     z_stream stream_;
     bool initialized_ = false;
@@ -64,16 +66,17 @@ class StreamingDecompressorUtility
      * @param chunk Compressed input chunk
      * @return Vector of decompressed output chunks
      */
-    std::vector<io::RawData> process(const io::CompressedData& chunk) {
+    coro::CoroTask<std::vector<fileio::RawData>> process(
+        const fileio::CompressedData& chunk) override {
         if (!initialized_) {
             initialize();
         }
 
         if (chunk.empty()) {
-            return {};
+            co_return {};
         }
 
-        std::vector<io::RawData> output_chunks;
+        std::vector<fileio::RawData> output_chunks;
 
         stream_.avail_in = static_cast<uInt>(chunk.size());
         stream_.next_in = const_cast<Bytef*>(chunk.data.data());
@@ -99,7 +102,7 @@ class StreamingDecompressorUtility
                     output_buffer_.begin() + decompressed_size);
 
                 output_chunks.push_back(
-                    io::RawData{std::move(decompressed_data)});
+                    fileio::RawData{std::move(decompressed_data)});
             }
 
             if (ret == Z_STREAM_END) {
@@ -109,7 +112,7 @@ class StreamingDecompressorUtility
         } while (stream_.avail_out == 0);
 
         total_in_ += chunk.size();
-        return output_chunks;
+        co_return output_chunks;
     }
 
     std::size_t total_bytes_in() const { return total_in_; }

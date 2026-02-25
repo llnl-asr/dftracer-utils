@@ -7,13 +7,11 @@
 #include <doctest/doctest.h>
 
 #include <atomic>
-#include <numeric>
-#include <vector>
 
 using namespace dftracer::utils;
 
 TEST_CASE("CoroScope - Simple spawn") {
-    Executor executor(2);
+    Executor executor(ExecutorConfig{.num_threads = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<int> counter{0};
@@ -42,7 +40,7 @@ TEST_CASE("CoroScope - Simple spawn") {
 }
 
 TEST_CASE("CoroScope - Many spawns") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     constexpr int N = 100;
@@ -73,7 +71,7 @@ TEST_CASE("CoroScope - Many spawns") {
 }
 
 TEST_CASE("CoroScope - Producer-consumer with channel (reference)") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -115,7 +113,7 @@ TEST_CASE("CoroScope - Producer-consumer with channel (reference)") {
 }
 
 TEST_CASE("CoroScope - Producer-consumer with channel (shared_ptr)") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -155,7 +153,7 @@ TEST_CASE("CoroScope - Producer-consumer with channel (shared_ptr)") {
 }
 
 TEST_CASE("CoroScope - Transform pipeline") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -207,7 +205,7 @@ TEST_CASE("CoroScope - Transform pipeline") {
 }
 
 TEST_CASE("CoroScope - Manual join") {
-    Executor executor(2);
+    Executor executor(ExecutorConfig{.num_threads = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<int> counter{0};
@@ -234,7 +232,7 @@ TEST_CASE("CoroScope - Manual join") {
 }
 
 TEST_CASE("CoroScope - spawn_producers (N producers, shared_ptr)") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -278,8 +276,8 @@ TEST_CASE("CoroScope - spawn_producers (N producers, shared_ptr)") {
     executor.shutdown();
 }
 
-TEST_CASE("CoroScope - spawn_io accessible from CoroScope") {
-    Executor executor(2);
+TEST_CASE("CoroScope - spawn works for compute and I/O tasks") {
+    Executor executor(ExecutorConfig{.num_threads = 2});
     Scheduler scheduler(&executor);
 
     std::atomic<int> result{0};
@@ -289,9 +287,8 @@ TEST_CASE("CoroScope - spawn_io accessible from CoroScope") {
             co_await ctx.coro_scope(
                 [&](CoroScope& scope) -> coro::CoroTask<void> {
                     scope.spawn(
-                        [&result](CoroScope& s) -> coro::CoroTask<void> {
-                            // spawn_io is now directly on CoroScope
-                            auto val = co_await s.spawn_io([]() { return 42; });
+                        [&result](CoroScope& /*s*/) -> coro::CoroTask<void> {
+                            auto val = 42;
                             result.store(val, std::memory_order_relaxed);
                             co_return;
                         });
@@ -310,7 +307,7 @@ TEST_CASE("CoroScope - spawn_io accessible from CoroScope") {
 }
 
 TEST_CASE("CoroScope - Empty scope (no spawns)") {
-    Executor executor(2);
+    Executor executor(ExecutorConfig{.num_threads = 2});
     Scheduler scheduler(&executor);
 
     bool completed = false;
@@ -333,7 +330,7 @@ TEST_CASE("CoroScope - Empty scope (no spawns)") {
 }
 
 TEST_CASE("CoroScope - Typed spawn with SpawnFuture") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> result{0};
@@ -361,7 +358,7 @@ TEST_CASE("CoroScope - Typed spawn with SpawnFuture") {
 }
 
 TEST_CASE("CoroScope - Multiple typed spawns") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> result{0};

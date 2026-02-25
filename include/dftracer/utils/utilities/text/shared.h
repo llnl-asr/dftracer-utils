@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_TEXT_SHARED_H
 #define DFTRACER_UTILS_UTILITIES_TEXT_SHARED_H
 
+#include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/hash/hash.h>
-#include <dftracer/utils/utilities/io/lines/line_types.h>
 
 #include <functional>
 #include <optional>
@@ -29,13 +29,13 @@ struct Text {
  * @brief A line with a predicate function for filtering.
  */
 struct FilterableLine {
-    io::lines::Line line;
-    std::function<bool(const io::lines::Line&)> predicate;
+    fileio::lines::Line line;
+    std::function<bool(const fileio::lines::Line&)> predicate;
 
     FilterableLine() = default;
 
-    FilterableLine(io::lines::Line l,
-                   std::function<bool(const io::lines::Line&)> pred)
+    FilterableLine(fileio::lines::Line l,
+                   std::function<bool(const fileio::lines::Line&)> pred)
         : line(std::move(l)), predicate(std::move(pred)) {}
 
     // Note: Cannot easily define equality for std::function, so filtering

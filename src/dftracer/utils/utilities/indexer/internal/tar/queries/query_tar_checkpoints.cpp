@@ -1,5 +1,5 @@
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/queries/queries.h>
 
 #include <cstring>

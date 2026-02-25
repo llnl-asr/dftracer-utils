@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 
+#include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
 
@@ -67,7 +68,9 @@ struct WhenAnySharedState {
     std::exception_ptr exception;
     std::coroutine_handle<> awaiting_coroutine;
     std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
-    std::vector<coro::CoroTask<void>> wrapper_tasks;
+    // Wrappers are fire-and-forget Coro instances managed by the
+    // executor's FinalAwaiter lifecycle.  No wrapper_tasks vector is
+    // needed -- the executor owns the frames after release().
     std::atomic<std::size_t> wrappers_done{0};
     std::size_t total_wrappers{0};
     std::vector<Awaitable> awaitables;
@@ -86,7 +89,6 @@ struct WhenAnySharedState {
         : awaitables(std::move(aws)) {
         total_wrappers = awaitables.size();
         cancellation_tokens.reserve(awaitables.size());
-        wrapper_tasks.reserve(awaitables.size());
 
         for (auto& awaitable : awaitables) {
             if constexpr (requires { awaitable.get_cancellation_token(); }) {
@@ -100,19 +102,15 @@ struct WhenAnySharedState {
 
     ~WhenAnySharedState() {
         // Detach all awaitables to prevent their completion paths from
-        // resuming wrapper coroutine handles that are about to be destroyed.
-        // This is critical: losing wrappers are suspended at co_await on these
-        // awaitables, and destroying the wrappers would leave dangling handles
-        // in the awaitables' shared state.
+        // resuming wrapper coroutine handles.  Wrappers are managed by
+        // the executor (released Coro instances) so we do not destroy
+        // them here -- detach() schedules stale handles for deferred
+        // destruction via the executor's destroy_queue.
         for (auto& a : awaitables) {
             if constexpr (requires { a.detach(); }) {
                 a.detach();
             }
         }
-        // Clear wrapper_tasks to break circular reference:
-        // wrappers hold shared_ptr<WhenAnySharedState> in their coroutine
-        // frames, and this state holds wrapper_tasks containing those wrappers.
-        wrapper_tasks.clear();
     }
 
     // Called by the first wrapper to complete (winner of CAS)
@@ -154,8 +152,8 @@ struct WhenAnySharedState {
  * Usage:
  * @code
  * auto result = co_await when_any({
- *     ctx.spawn_io([&]() { return read_fast_storage(); }),
- *     ctx.spawn_io([&]() { return read_slow_storage(); }),
+ *     io::async_read(fd1, buf1, len1),
+ *     io::async_read(fd2, buf2, len2),
  *     timeout(5s)
  * });
  *
@@ -245,6 +243,18 @@ class WhenAnyAwaitable {
     }
 
     result_type await_resume() {
+        // Detach awaitables so that completing spawned tasks don't
+        // try to resume wrapper Coro handles that may already have
+        // been destroyed by the executor.  detach() now schedules
+        // any stale waiter handles for deferred destruction, which
+        // prevents the race between SpawnFuture::complete() and
+        // frame cleanup.
+        for (auto& a : state_->awaitables) {
+            if constexpr (requires { a.detach(); }) {
+                a.detach();
+            }
+        }
+        state_->awaitables.clear();
         if (state_->exception) {
             std::rethrow_exception(state_->exception);
         }
@@ -253,8 +263,14 @@ class WhenAnyAwaitable {
 
    private:
     void launch_wrapper(std::size_t i) {
+        // Create a fire-and-forget Coro wrapper.  After release(),
+        // the executor owns the frame and FinalAwaiter will schedule
+        // deferred destruction when the wrapper completes.  This
+        // eliminates the circular reference (SharedState no longer
+        // owns wrapper frames) and the race where wrapper_tasks.clear()
+        // could destroy a frame that was enqueued for resumption.
         auto wrapper = [](std::shared_ptr<SharedState> state,
-                          std::size_t index) -> coro::CoroTask<void> {
+                          std::size_t index) -> coro::Coro {
             try {
                 if (state->completed.load(std::memory_order_acquire)) {
                     state->wrappers_done.fetch_add(1,
@@ -267,7 +283,6 @@ class WhenAnyAwaitable {
                 bool expected = false;
                 if (state->completed.compare_exchange_strong(
                         expected, true, std::memory_order_acq_rel)) {
-                    // We're the first to complete - store result
                     state->result.index = index;
                     state->result.result = std::move(result);
 
@@ -281,7 +296,6 @@ class WhenAnyAwaitable {
                         }
                     }
 
-                    // Use double-check pattern for resumption
                     state->on_first_complete();
                 }
 
@@ -296,13 +310,11 @@ class WhenAnyAwaitable {
                 bool expected = false;
                 if (state->completed.compare_exchange_strong(
                         expected, true, std::memory_order_acq_rel)) {
-                    // We're the first to complete (with exception)
                     try {
                         state->exception = std::current_exception();
                     } catch (...) {
                     }
 
-                    // Use double-check pattern for resumption
                     state->on_first_complete();
                 }
 
@@ -311,8 +323,17 @@ class WhenAnyAwaitable {
             co_return;
         }(state_, i);
 
-        wrapper.resume();
-        state_->wrapper_tasks.push_back(std::move(wrapper));
+        // Set executor on the Coro's promise so FinalAwaiter can
+        // schedule deferred destruction via the worker's TLS list.
+        wrapper.handle().promise().executor = state_->executor;
+        // Release ownership: the executor manages the frame from
+        // now on.  FinalAwaiter will see released==true and schedule
+        // deferred destruction when the wrapper completes.
+        auto h = wrapper.release();
+        // Resume past initial_suspend.  The wrapper will either:
+        // (a) suspend at co_await SpawnFuture (most common), or
+        // (b) run to completion if SpawnFuture was already ready.
+        h.resume();
     }
 };
 
@@ -325,9 +346,9 @@ class WhenAnyAwaitable {
  * Usage:
  * @code
  * auto result = co_await when_any({
- *     ctx.spawn_io([&]() { return read_cache(); }),
- *     ctx.spawn_io([&]() { return read_disk(); }),
- *     ctx.spawn_io([&]() { return read_network(); })
+ *     io::async_read(cache_fd, buf, len),
+ *     io::async_read(disk_fd, buf, len),
+ *     io::async_read(net_fd, buf, len)
  * });
  *
  * switch (result.index) {
@@ -407,7 +428,7 @@ auto when_any(Awaitable&& first, Rest&&... rest) {
  *
  * @code
  * auto result = co_await when_any({
- *     ctx.spawn_io([&]() { return read_file(); }),
+ *     io::async_read(fd, buf, len),
  *     timeout(std::chrono::seconds(5))
  * });
  *

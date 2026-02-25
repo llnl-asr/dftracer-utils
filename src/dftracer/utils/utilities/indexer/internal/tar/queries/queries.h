@@ -1,8 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_TAR_QUERIES_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_TAR_QUERIES_H
 
+#include <dftracer/utils/core/sqlite/database.h>
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/database.h>
+#include <dftracer/utils/utilities/indexer/internal/error.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/tar_indexer.h>
 
 #include <cstddef>
@@ -10,6 +12,9 @@
 #include <ctime>
 
 namespace dftracer::utils::utilities::indexer::internal::tar {
+
+using dftracer::utils::sqlite::SqliteDatabase;
+using dftracer::utils::sqlite::SqliteStmt;
 
 // File and archive management
 void insert_file_record(const SqliteDatabase &db,

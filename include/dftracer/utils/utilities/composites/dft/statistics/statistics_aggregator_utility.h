@@ -21,7 +21,8 @@ class StatisticsAggregatorUtility
    public:
     StatisticsAggregatorUtility() = default;
 
-    TraceStatistics process(const StatisticsAggregatorInput& input) override;
+    coro::CoroTask<TraceStatistics> process(
+        const StatisticsAggregatorInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::statistics

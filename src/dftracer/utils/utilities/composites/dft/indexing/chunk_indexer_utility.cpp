@@ -67,7 +67,7 @@ std::vector<std::string> get_target_dimensions(
 
 }  // namespace
 
-ChunkIndexerOutput ChunkIndexerUtility::process(
+coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
     const ChunkIndexerInput& input) {
     ChunkIndexerOutput output;
     output.checkpoint_idx = input.checkpoint_idx;
@@ -116,7 +116,7 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
             output.statistics = existing->statistics;
             output.events_processed = existing->events_processed;
             output.success = true;
-            return output;
+            co_return output;
         }
 
         DFTRACER_UTILS_LOG_INFO(
@@ -154,14 +154,14 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
                 .with_index(input.idx_path);
 
         composites::IndexedFileReaderUtility reader_utility;
-        reader = reader_utility.process(reader_input);
+        reader = co_await reader_utility.process(reader_input);
 
         if (!reader) {
             DFTRACER_UTILS_LOG_ERROR(
                 "ChunkIndexer: Failed to create reader for %s checkpoint %llu",
                 input.file_path.c_str(),
                 static_cast<unsigned long long>(input.checkpoint_idx));
-            return output;
+            co_return output;
         }
     }
 
@@ -176,7 +176,7 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
     if (!need_rescan) {
         // Nothing to do - all dimensions already indexed
         output.success = true;
-        return output;
+        co_return output;
     }
 
     auto stream = reader->stream(
@@ -192,7 +192,7 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
             "ChunkIndexer: Failed to create stream for %s checkpoint %llu",
             input.file_path.c_str(),
             static_cast<unsigned long long>(input.checkpoint_idx));
-        return output;
+        co_return output;
     }
 
     std::uint32_t line_number = 0;
@@ -201,7 +201,7 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
     std::map<std::string, std::vector<std::uint32_t>> metadata_lines;
 
     while (!stream->done()) {
-        auto chunk = stream->read();
+        auto chunk = co_await stream->read_async();
 
         if (chunk.empty()) {
             break;
@@ -400,7 +400,7 @@ ChunkIndexerOutput ChunkIndexerUtility::process(
     }
 
     output.success = true;
-    return output;
+    co_return output;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

@@ -22,7 +22,7 @@ TEST_SUITE("EventCollector") {
         // First collect metadata
         auto meta_input = MetadataCollectorUtilityInput::from_file(test_file);
         MetadataCollectorUtility meta_collector;
-        auto meta_output = meta_collector.process(meta_input);
+        auto meta_output = meta_collector.process(meta_input).get();
 
         // Now collect events from metadata
         std::vector<MetadataCollectorUtilityOutput> metadata_vec = {
@@ -32,7 +32,7 @@ TEST_SUITE("EventCollector") {
                 metadata_vec);
 
         EventCollectorFromMetadataUtility collector;
-        auto event_ids = collector.process(input);
+        auto event_ids = collector.process(input).get();
 
         // Verify we got events
         CHECK(event_ids.size() > 0);

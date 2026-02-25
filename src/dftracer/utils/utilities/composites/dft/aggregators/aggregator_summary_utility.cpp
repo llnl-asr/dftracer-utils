@@ -7,7 +7,8 @@
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
-void AggregatorSummaryUtility::process(const AggregatorSummaryInput& input) {
+coro::CoroTask<void> AggregatorSummaryUtility::process(
+    const AggregatorSummaryInput& input) {
     const auto& aggregations = input.aggregations;
 
     std::printf("=== Aggregation Summary ===\n");
@@ -32,6 +33,7 @@ void AggregatorSummaryUtility::process(const AggregatorSummaryInput& input) {
     }
 
     std::printf("\n");
+    co_return;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

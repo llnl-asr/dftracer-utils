@@ -28,7 +28,7 @@ namespace dftracer::utils {
 /// It replaces both CoroScope and CoroScope with a unified API:
 /// - spawn() for fire-and-forget void coroutines
 /// - spawn() returning SpawnFuture<T> for typed results
-/// - spawn_io() for offloading blocking I/O
+/// - io::async_read/write/open/close for async I/O
 /// - receive() for channel consumption
 /// - Cancellation support
 ///
@@ -144,12 +144,25 @@ class CoroScope {
             // can safely outlive the parent scope (e.g., when_any completes
             // while slow tasks are still running). Shares cancellation.
             CoroScope child_scope(exec, std::move(cancel_token));
-            auto task = f(child_scope);
-            // Propagate executor to the CoroTask's PromiseBase
-            // so channel send/receive can schedule resumptions.
-            // CoroPromise is not a PromiseBase, so we must do this manually.
-            task.handle().promise().set_executor(exec);
-            co_await std::move(task);
+            std::exception_ptr err;
+            try {
+                auto task = f(child_scope);
+                // Propagate executor to the CoroTask's PromiseBase
+                // so channel send/receive can schedule resumptions.
+                // CoroPromise is not a PromiseBase, so we must do this
+                // manually.
+                task.handle().promise().set_executor(exec);
+                co_await std::move(task);
+            } catch (...) {
+                err = std::current_exception();
+            }
+            // Always join child scope to wait for any sub-spawned
+            // coroutines.  Without this, the child scope's JoinHandle
+            // would be destroyed while FinalAwaiters still reference it.
+            co_await child_scope.join();
+            if (err) {
+                std::rethrow_exception(err);
+            }
         };
         auto c = make_coro(std::forward<Func>(func), executor_,
                            cancellation_requested_);
@@ -184,8 +197,8 @@ class CoroScope {
             [](auto f, Executor* exec,
                std::shared_ptr<std::atomic<bool>> cancel_token,
                std::shared_ptr<coro::SharedState<R>> st) -> coro::Coro {
+            CoroScope child_scope(exec, std::move(cancel_token));
             try {
-                CoroScope child_scope(exec, std::move(cancel_token));
                 auto task = f(child_scope);
                 task.handle().promise().set_executor(exec);
                 R result = co_await std::move(task);
@@ -193,38 +206,16 @@ class CoroScope {
             } catch (...) {
                 st->complete_with_exception(std::current_exception());
             }
+            // Always join child scope to wait for any sub-spawned
+            // coroutines.  Without this, the child scope's JoinHandle
+            // would be destroyed while FinalAwaiters still reference it.
+            co_await child_scope.join();
         };
 
         auto c = make_coro(std::forward<Func>(func), executor_,
                            cancellation_requested_, state);
         enqueue_coro(c);
         return coro::SpawnFuture<R>(std::move(state));
-    }
-
-    // ====================================================================
-    // Blocking I/O Operations
-    // ====================================================================
-
-    /// Execute a blocking function inline on the current worker thread.
-    ///
-    /// This is a simple coroutine wrapper -- the function runs synchronously.
-    /// Use for I/O-bound operations that would otherwise block the caller.
-    ///
-    /// Future: may release the worker's logical slot so the pool can grow
-    /// if all workers are blocked (dynamic worker growth).
-    template <typename Func>
-    coro::CoroTask<std::invoke_result_t<Func>> blocking(Func&& func) {
-        co_return func();
-    }
-
-    /// Spawn I/O operation (backward-compatible alias for blocking()).
-    ///
-    /// Executes the function inline on the current worker thread.
-    /// Previously offloaded to a dedicated I/O thread pool (IOExecutor),
-    /// now always runs inline.
-    template <typename Func>
-    coro::CoroTask<std::invoke_result_t<Func>> spawn_io(Func&& func) {
-        co_return func();
     }
 
     // ====================================================================

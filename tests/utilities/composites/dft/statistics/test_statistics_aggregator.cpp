@@ -64,7 +64,7 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         input.file_path = file_path;
         input.bidx_path = bidx_path;
 
-        auto result = aggregator.process(input);
+        auto result = aggregator.process(input).get();
 
         CHECK(result.success == true);
         CHECK(result.num_chunks == 3);
@@ -104,7 +104,7 @@ TEST_SUITE("StatisticsAggregatorUtility") {
             dft_utils_test::make_unique_test_path("nonexistent").string() +
             ".bidx";
 
-        auto result = aggregator.process(input);
+        auto result = aggregator.process(input).get();
 
         CHECK(result.success == false);
         CHECK(result.error_message.find("not found") != std::string::npos);
@@ -125,7 +125,7 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         input.file_path = "/fake/other_file.pfw.gz";
         input.bidx_path = bidx_path;
 
-        auto result = aggregator.process(input);
+        auto result = aggregator.process(input).get();
 
         CHECK(result.success == false);
         CHECK(result.error_message.find("not found") != std::string::npos);
@@ -152,7 +152,7 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         input.file_path = file_path;
         input.bidx_path = bidx_path;
 
-        auto result = aggregator.process(input);
+        auto result = aggregator.process(input).get();
 
         CHECK(result.success == true);
         CHECK(result.num_chunks == 0);
@@ -200,7 +200,7 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         input.file_path = file_path;
         input.bidx_path = bidx_path;
 
-        auto result = aggregator.process(input);
+        auto result = aggregator.process(input).get();
 
         CHECK(result.success == true);
         // Combined: {10, 20, 30, 40, 50}, mean=30, sample_variance=250

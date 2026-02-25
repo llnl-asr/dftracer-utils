@@ -1,5 +1,6 @@
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
-#include <dftracer/utils/utilities/io/file_reader_utility.h>
+#include <dftracer/utils/utilities/fileio/file_reader_utility.h>
 
 #include <cstring>
 
@@ -50,15 +51,18 @@ JsonValue JsonValue::at(std::string_view path) const {
     return at(path_str.c_str());
 }
 
-StringJsonParserInput StringJsonParserInput::from_file(
+coro::CoroTask<StringJsonParserInput> StringJsonParserInput::from_file_async(
     const std::string& file_path) {
     StringJsonParserInput input;
-
-    utilities::io::FileReaderUtility file_reader;
+    utilities::fileio::FileReaderUtility file_reader;
     utilities::filesystem::FileEntry file_entry{file_path};
-    input.content = file_reader.process(file_entry);
+    input.content = co_await file_reader.process(file_entry);
+    co_return input;
+}
 
-    return input;
+StringJsonParserInput StringJsonParserInput::from_file(
+    const std::string& file_path) {
+    return from_file_async(file_path).get();
 }
 
 StringJsonParserInput StringJsonParserInput::from_string(
@@ -68,7 +72,7 @@ StringJsonParserInput StringJsonParserInput::from_string(
     return input;
 }
 
-JsonParserOutput StringJsonParserUtility::process(
+coro::CoroTask<JsonParserOutput> StringJsonParserUtility::process(
     const StringJsonParserInput& input) {
     content_ = input.content;
 
@@ -83,7 +87,7 @@ JsonParserOutput StringJsonParserUtility::process(
         });
     }
 
-    return JsonValue(json_object);
+    co_return JsonValue(json_object);
 }
 
 void StringJsonParserUtility::reset() {

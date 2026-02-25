@@ -208,7 +208,8 @@ static void collect_referenced_hashes(
     }
 }
 
-ViewReaderOutput ViewReaderUtility::process(const ViewReaderInput& input) {
+coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
+    const ViewReaderInput& input) {
     ViewReaderOutput output;
 
     // Build predicate filters
@@ -229,7 +230,7 @@ ViewReaderOutput ViewReaderUtility::process(const ViewReaderInput& input) {
                             .with_checkpoint_size(input.checkpoint_size)
                             .with_index(input.idx_path);
     composites::IndexedFileReaderUtility reader_utility;
-    auto reader = reader_utility.process(reader_input);
+    auto reader = co_await reader_utility.process(reader_input);
 
     auto stream = reader->stream(
         reader::internal::StreamConfig()
@@ -240,7 +241,7 @@ ViewReaderOutput ViewReaderUtility::process(const ViewReaderInput& input) {
             .to(input.end_byte));
 
     while (!stream->done()) {
-        auto chunk = stream->read();
+        auto chunk = co_await stream->read_async();
         if (chunk.empty()) break;
 
         const char* data = chunk.data();
@@ -320,7 +321,7 @@ ViewReaderOutput ViewReaderUtility::process(const ViewReaderInput& input) {
     // Pending metadata that was never referenced gets dropped
 
     output.success = true;
-    return output;
+    co_return output;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::views

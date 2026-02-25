@@ -106,7 +106,7 @@ struct WhenAllVectorState {
  * @code
  * CoroTask<Data> read_ops;
  * for (int i = 0; i < 16000; i++) {
- *     read_ops.push_back(ctx.blocking([i]() { return read_chunk(i); }));
+ *     read_ops.push_back(io::async_read(fds[i], bufs[i], lens[i]));
  * }
  * auto results = co_await when_all(read_ops);  // Vector<Data>
  * @endcode

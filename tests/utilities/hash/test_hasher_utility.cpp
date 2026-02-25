@@ -111,7 +111,7 @@ TEST_CASE("HasherUtility - process() interface") {
 
     SUBCASE("process() with string") {
         hasher->reset();
-        Hash result = hasher->process(std::string("test"));
+        Hash result = hasher->process(std::string("test")).get();
 
         CHECK(result.value != 0);
         CHECK(result == hasher->get_hash());

@@ -82,7 +82,7 @@ static std::string build_group_key(const std::vector<std::string>& group_by,
     return key;
 }
 
-ChunkDetailScanOutput ChunkDetailScannerUtility::process(
+coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
     const ChunkDetailScanInput& input) {
     ChunkDetailScanOutput output;
     output.success = false;
@@ -107,7 +107,7 @@ ChunkDetailScanOutput ChunkDetailScannerUtility::process(
                             .with_index(input.idx_path);
 
     composites::IndexedFileReaderUtility reader_utility;
-    auto reader = reader_utility.process(reader_input);
+    auto reader = co_await reader_utility.process(reader_input);
 
     if (!reader) {
         DFTRACER_UTILS_LOG_ERROR(
@@ -115,7 +115,7 @@ ChunkDetailScanOutput ChunkDetailScannerUtility::process(
             "%llu",
             input.file_path.c_str(),
             static_cast<unsigned long long>(input.checkpoint_idx));
-        return output;
+        co_return output;
     }
 
     auto stream = reader->stream(
@@ -132,11 +132,11 @@ ChunkDetailScanOutput ChunkDetailScannerUtility::process(
             "%llu",
             input.file_path.c_str(),
             static_cast<unsigned long long>(input.checkpoint_idx));
-        return output;
+        co_return output;
     }
 
     while (!stream->done()) {
-        auto chunk = stream->read();
+        auto chunk = co_await stream->read_async();
 
         if (chunk.empty()) {
             break;
@@ -260,7 +260,7 @@ ChunkDetailScanOutput ChunkDetailScannerUtility::process(
 
     output.stats.chunks_scanned = 1;
     output.success = true;
-    return output;
+    co_return output;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::statistics

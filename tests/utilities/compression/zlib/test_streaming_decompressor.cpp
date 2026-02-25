@@ -7,7 +7,7 @@
 #include <string>
 
 using namespace dftracer::utils::utilities::compression::zlib;
-using namespace dftracer::utils::utilities::io;
+using namespace dftracer::utils::utilities::fileio;
 
 // Helper function to compress data using ManualStreamingCompressorUtility
 static CompressedData compress_with_streaming(
@@ -17,7 +17,7 @@ static CompressedData compress_with_streaming(
     RawData input(text);
 
     // Feed data in chunks
-    auto chunks = compressor.process(input);
+    auto chunks = compressor.process(input).get();
     auto final_chunks = compressor.finalize();
 
     // Combine all chunks into a single CompressedData
@@ -39,7 +39,7 @@ static CompressedData compress_binary_with_streaming(
     ManualStreamingCompressorUtility compressor(level, format);
     RawData input(data);
 
-    auto chunks = compressor.process(input);
+    auto chunks = compressor.process(input).get();
     auto final_chunks = compressor.finalize();
 
     std::vector<unsigned char> all_data;
@@ -62,7 +62,7 @@ TEST_CASE("StreamingDecompressorUtility - Basic Operations") {
 
         // Now decompress using streaming decompressor with ZLIB format
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed_chunks = decompressor.process(compressed);
+        auto decompressed_chunks = decompressor.process(compressed).get();
 
         // Reconstruct original text
         std::string result;
@@ -78,7 +78,7 @@ TEST_CASE("StreamingDecompressorUtility - Basic Operations") {
         StreamingDecompressorUtility decompressor;
 
         CompressedData empty({}, 0);
-        auto decompressed_chunks = decompressor.process(empty);
+        auto decompressed_chunks = decompressor.process(empty).get();
 
         CHECK(decompressed_chunks.empty());
     }
@@ -92,7 +92,7 @@ TEST_CASE("StreamingDecompressorUtility - Round Trip") {
             original, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed_chunks = decompressor.process(compressed);
+        auto decompressed_chunks = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed_chunks) {
@@ -109,7 +109,7 @@ TEST_CASE("StreamingDecompressorUtility - Round Trip") {
             original, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed_chunks = decompressor.process(compressed);
+        auto decompressed_chunks = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed_chunks) {
@@ -128,7 +128,7 @@ TEST_CASE("StreamingDecompressorUtility - Round Trip") {
             original, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed_chunks = decompressor.process(compressed);
+        auto decompressed_chunks = decompressor.process(compressed).get();
 
         std::vector<unsigned char> result;
         for (const auto& chunk : decompressed_chunks) {
@@ -146,7 +146,7 @@ TEST_CASE("StreamingDecompressorUtility - Different Data Sizes") {
             text, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed) {
@@ -162,7 +162,7 @@ TEST_CASE("StreamingDecompressorUtility - Different Data Sizes") {
             text, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::size_t total_size = 0;
         for (const auto& chunk : decompressed) {
@@ -178,7 +178,7 @@ TEST_CASE("StreamingDecompressorUtility - Different Data Sizes") {
             text, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::size_t total_size = 0;
         for (const auto& chunk : decompressed) {
@@ -197,7 +197,7 @@ TEST_CASE("StreamingDecompressorUtility - Different Compression Levels") {
             compress_with_streaming(original, 1, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed) {
@@ -212,7 +212,7 @@ TEST_CASE("StreamingDecompressorUtility - Different Compression Levels") {
             compress_with_streaming(original, 9, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed) {
@@ -231,7 +231,8 @@ TEST_CASE("StreamingDecompressorUtility - Error Handling") {
         std::vector<unsigned char> invalid = {0x00, 0x01, 0x02, 0x03};
         CompressedData bad_data(invalid, 100);
 
-        CHECK_THROWS_AS(decompressor.process(bad_data), std::runtime_error);
+        CHECK_THROWS_AS(decompressor.process(bad_data).get(),
+                        std::runtime_error);
     }
 }
 
@@ -243,7 +244,7 @@ TEST_CASE("StreamingDecompressorUtility - Metadata") {
             original, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        decompressor.process(compressed);
+        decompressor.process(compressed).get();
 
         CHECK(decompressor.total_bytes_in() == compressed.size());
         CHECK(decompressor.total_bytes_out() == original.size());
@@ -262,7 +263,7 @@ TEST_CASE("StreamingDecompressorUtility - Real World Scenarios") {
             log_data, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed) {
@@ -283,7 +284,7 @@ TEST_CASE("StreamingDecompressorUtility - Real World Scenarios") {
             csv_data, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed) {
@@ -306,7 +307,7 @@ TEST_CASE("StreamingDecompressorUtility - Real World Scenarios") {
             json_data, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed) {
@@ -325,7 +326,7 @@ TEST_CASE("StreamingDecompressorUtility - Edge Cases") {
             zeros, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::vector<unsigned char> result;
         for (const auto& chunk : decompressed) {
@@ -342,7 +343,7 @@ TEST_CASE("StreamingDecompressorUtility - Edge Cases") {
             original, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed) {
@@ -362,7 +363,7 @@ TEST_CASE("StreamingDecompressorUtility - Large Data") {
             original, Z_DEFAULT_COMPRESSION, CompressionFormat::ZLIB);
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed = decompressor.process(compressed);
+        auto decompressed = decompressor.process(compressed).get();
 
         std::size_t total_decompressed = 0;
         for (const auto& chunk : decompressed) {
@@ -385,7 +386,7 @@ TEST_CASE("StreamingDecompressorUtility - Multiple Formats") {
 
         // Decompress with ZLIB format
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        auto decompressed_chunks = decompressor.process(compressed);
+        auto decompressed_chunks = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed_chunks) {
@@ -403,7 +404,7 @@ TEST_CASE("StreamingDecompressorUtility - Multiple Formats") {
 
         // Decompress with GZIP format
         StreamingDecompressorUtility decompressor(DecompressionFormat::GZIP);
-        auto decompressed_chunks = decompressor.process(compressed);
+        auto decompressed_chunks = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed_chunks) {
@@ -422,7 +423,7 @@ TEST_CASE("StreamingDecompressorUtility - Multiple Formats") {
         // Decompress with DEFLATE_RAW format
         StreamingDecompressorUtility decompressor(
             DecompressionFormat::DEFLATE_RAW);
-        auto decompressed_chunks = decompressor.process(compressed);
+        auto decompressed_chunks = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed_chunks) {
@@ -440,7 +441,7 @@ TEST_CASE("StreamingDecompressorUtility - Multiple Formats") {
 
         // Decompress with AUTO format detection
         StreamingDecompressorUtility decompressor(DecompressionFormat::AUTO);
-        auto decompressed_chunks = decompressor.process(compressed);
+        auto decompressed_chunks = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed_chunks) {
@@ -458,7 +459,7 @@ TEST_CASE("StreamingDecompressorUtility - Multiple Formats") {
 
         // Decompress with AUTO format detection
         StreamingDecompressorUtility decompressor(DecompressionFormat::AUTO);
-        auto decompressed_chunks = decompressor.process(compressed);
+        auto decompressed_chunks = decompressor.process(compressed).get();
 
         std::string result;
         for (const auto& chunk : decompressed_chunks) {

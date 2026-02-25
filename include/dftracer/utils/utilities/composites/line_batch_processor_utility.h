@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_LINE_BATCH_PROCESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_LINE_BATCH_PROCESSOR_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/types.h>
-#include <dftracer/utils/utilities/io/lines/line_range.h>
-#include <dftracer/utils/utilities/io/lines/line_types.h>
-#include <dftracer/utils/utilities/io/lines/streaming_line_reader.h>
+#include <dftracer/utils/utilities/fileio/lines/line_types.h>
+#include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
 
 #include <functional>
 #include <optional>
@@ -13,7 +13,7 @@
 
 namespace dftracer::utils::utilities::composites {
 
-using LineBatchProcessUtilityInput = io::lines::LineReadInput;
+using LineBatchProcessUtilityInput = fileio::lines::LineReadInput;
 template <typename LineOutput>
 using LineBatchProcessUtilityOutput = std::vector<LineOutput>;
 
@@ -49,7 +49,7 @@ class LineBatchProcessorUtility
                                 LineBatchProcessUtilityOutput<LineOutput>> {
    public:
     using LineProcessorFn =
-        std::function<std::optional<LineOutput>(const io::lines::Line&)>;
+        std::function<std::optional<LineOutput>(const fileio::lines::Line&)>;
 
    private:
     LineProcessorFn processor_;
@@ -69,50 +69,39 @@ class LineBatchProcessorUtility
      * @param input Line batch configuration
      * @return Vector of processed line results
      */
-    LineBatchProcessUtilityOutput<LineOutput> process(
+    coro::CoroTask<LineBatchProcessUtilityOutput<LineOutput>> process(
         const LineBatchProcessUtilityInput& input) override {
         LineBatchProcessUtilityOutput<LineOutput> results;
 
-        io::lines::LineRange range;
-
-        if (!input.idx_path.empty()) {
-            // Indexed file (compressed)
-            auto iter_config =
-                io::lines::sources::IndexedFileLineIteratorConfig().with_file(
-                    input.file_path, input.idx_path);
-            if (input.start_line > 0 && input.end_line > 0) {
-                iter_config.with_line_range(input.start_line, input.end_line);
-            }
-            range = io::lines::StreamingLineReader::read_indexed(iter_config);
-        } else {
-            // Plain text file
-            if (input.start_line > 0 && input.end_line > 0) {
-                range = io::lines::StreamingLineReader::read_plain(
-                    input.file_path, input.start_line, input.end_line);
+        auto gen = [&]() {
+            if (!input.idx_path.empty()) {
+                auto iter_config =
+                    fileio::lines::sources::IndexedFileLineIteratorConfig()
+                        .with_file(input.file_path, input.idx_path);
+                if (input.start_line > 0 && input.end_line > 0) {
+                    iter_config.with_line_range(input.start_line,
+                                                input.end_line);
+                }
+                return fileio::lines::StreamingLineReader::read_indexed_async(
+                    iter_config);
             } else {
-                range =
-                    io::lines::StreamingLineReader::read_plain(input.file_path);
+                return fileio::lines::StreamingLineReader::read_plain_async(
+                    input.file_path, input.start_line, input.end_line);
             }
-        }
+        }();
 
-        // Process each line lazily
-        while (range.has_next()) {
-            io::lines::Line line = range.next();
-
-            // Apply processor function
-            auto result = processor_(line);
-
-            // Collect non-null results
+        while (auto line_opt = co_await gen.next()) {
+            auto result = processor_(*line_opt);
             if (result.has_value()) {
                 results.push_back(std::move(result.value()));
             }
         }
 
-        return results;
+        co_return results;
     }
 };
 
-using SimpleLineBatchProcessUtilityInput = io::lines::LineReadInput;
+using SimpleLineBatchProcessUtilityInput = fileio::lines::LineReadInput;
 template <typename LineOutput>
 using SimpleLineBatchProcessUtilityOutput = std::vector<LineOutput>;
 
@@ -128,7 +117,7 @@ class SimpleLineBatchProcessorUtility
           SimpleLineBatchProcessUtilityOutput<LineOutput>> {
    public:
     using SimpleLineProcessorFn =
-        std::function<LineOutput(const io::lines::Line&)>;
+        std::function<LineOutput(const fileio::lines::Line&)>;
 
    private:
     SimpleLineProcessorFn processor_;
@@ -137,37 +126,32 @@ class SimpleLineBatchProcessorUtility
     explicit SimpleLineBatchProcessorUtility(SimpleLineProcessorFn processor)
         : processor_(std::move(processor)) {}
 
-    SimpleLineBatchProcessUtilityOutput<LineOutput> process(
+    coro::CoroTask<SimpleLineBatchProcessUtilityOutput<LineOutput>> process(
         const SimpleLineBatchProcessUtilityInput& input) override {
         SimpleLineBatchProcessUtilityOutput<LineOutput> results;
 
-        // Use StreamingLineReader
-        io::lines::LineRange range;
-
-        if (!input.idx_path.empty()) {
-            auto iter_config =
-                io::lines::sources::IndexedFileLineIteratorConfig().with_file(
-                    input.file_path, input.idx_path);
-            if (input.start_line > 0 && input.end_line > 0) {
-                iter_config.with_line_range(input.start_line, input.end_line);
-            }
-            range = io::lines::StreamingLineReader::read_indexed(iter_config);
-        } else {
-            if (input.start_line > 0 && input.end_line > 0) {
-                range = io::lines::StreamingLineReader::read_plain(
-                    input.file_path, input.start_line, input.end_line);
+        auto gen = [&]() {
+            if (!input.idx_path.empty()) {
+                auto iter_config =
+                    fileio::lines::sources::IndexedFileLineIteratorConfig()
+                        .with_file(input.file_path, input.idx_path);
+                if (input.start_line > 0 && input.end_line > 0) {
+                    iter_config.with_line_range(input.start_line,
+                                                input.end_line);
+                }
+                return fileio::lines::StreamingLineReader::read_indexed_async(
+                    iter_config);
             } else {
-                range =
-                    io::lines::StreamingLineReader::read_plain(input.file_path);
+                return fileio::lines::StreamingLineReader::read_plain_async(
+                    input.file_path, input.start_line, input.end_line);
             }
+        }();
+
+        while (auto line_opt = co_await gen.next()) {
+            results.push_back(processor_(*line_opt));
         }
 
-        // Process all lines
-        while (range.has_next()) {
-            results.push_back(processor_(range.next()));
-        }
-
-        return results;
+        co_return results;
     }
 };
 

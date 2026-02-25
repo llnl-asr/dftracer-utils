@@ -1,12 +1,12 @@
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
 
 #include <cstring>
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
-using indexer::internal::SqliteStmt;
+using dftracer::utils::sqlite::SqliteStmt;
 
 std::optional<FileBloomResult> query_file_bloom_filter(
     const SqliteDatabase& db, int file_info_id, const std::string& dimension) {

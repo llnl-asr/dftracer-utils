@@ -3,6 +3,7 @@
 
 #ifdef __cplusplus
 #include <dftracer/utils/core/common/span.h>
+#include <dftracer/utils/core/coro/task.h>
 
 #include <cstddef>
 
@@ -32,7 +33,7 @@ class ReaderStream {
     virtual ~ReaderStream() = default;
 
     /**
-     * @brief Read next chunk as zero-copy view.
+     * @brief Read next chunk as zero-copy view (coroutine).
      *
      * Returns view into internal buffer
      *
@@ -40,19 +41,17 @@ class ReaderStream {
      *   - Next call to read() or read(buffer, size)
      *   - Calling reset() or destructor
      *
-     * USAGE:
-     *   while (!stream->done()) {
-     *     auto chunk = stream->read();
-     *     if (chunk.empty()) break;
-     *     process(chunk);  // Process before next read()
-     *   }
-     *
      * @return View to next chunk (empty span if done)
      */
-    virtual span_view<const char> read() = 0;
+    virtual coro::CoroTask<span_view<const char>> read_async() = 0;
 
     /**
-     * @brief Read next chunk of data into buffer (copy).
+     * @brief Read next chunk as zero-copy view (sync wrapper).
+     */
+    span_view<const char> read() { return read_async().get(); }
+
+    /**
+     * @brief Read next chunk of data into buffer (coroutine).
      *
      * Reads incrementally from the stream. Each call returns the next
      * available chunk up to buffer_size bytes.
@@ -61,7 +60,15 @@ class ReaderStream {
      * @param buffer_size Maximum bytes to read
      * @return Number of bytes actually read (0 if finished)
      */
-    virtual std::size_t read(char* buffer, std::size_t buffer_size) = 0;
+    virtual coro::CoroTask<std::size_t> read_async(char* buffer,
+                                                   std::size_t buffer_size) = 0;
+
+    /**
+     * @brief Read next chunk of data into buffer (sync wrapper).
+     */
+    std::size_t read(char* buffer, std::size_t buffer_size) {
+        return read_async(buffer, buffer_size).get();
+    }
 
     /**
      * @brief Check if stream is done (no more data available).

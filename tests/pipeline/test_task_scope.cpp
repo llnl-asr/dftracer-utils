@@ -10,30 +10,28 @@
 
 #include <atomic>
 #include <chrono>
-#include <future>
 #include <memory>
 #include <stdexcept>
 #include <thread>
-#include <vector>
 
 using namespace dftracer::utils;
 
 namespace {
 
 #if defined(__SANITIZE_THREAD__)
-constexpr bool kTsanBuild = true;
+constexpr bool TSAN_BUILD = true;
 #elif defined(__has_feature)
 #if __has_feature(thread_sanitizer)
-constexpr bool kTsanBuild = true;
+constexpr bool TSAN_BUILD = true;
 #else
-constexpr bool kTsanBuild = false;
+constexpr bool TSAN_BUILD = false;
 #endif
 #else
-constexpr bool kTsanBuild = false;
+constexpr bool TSAN_BUILD = false;
 #endif
 
 inline void maybe_io_delay_ms(int ms) {
-    if (kTsanBuild) {
+    if (TSAN_BUILD) {
         return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -174,7 +172,7 @@ static coro::CoroTask<void> scope_producer_multi_consumer_count_helper(
 // ============================================================================
 
 TEST_CASE("CoroScope - Basic construction and spawning") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> task_count{0};
@@ -200,7 +198,7 @@ TEST_CASE("CoroScope - Basic construction and spawning") {
 }
 
 TEST_CASE("CoroScope - Automatic join via ctx.scope()") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -226,7 +224,7 @@ TEST_CASE("CoroScope - Automatic join via ctx.scope()") {
 }
 
 TEST_CASE("CoroScope - More threads than tasks") {
-    Executor executor(12);
+    Executor executor(ExecutorConfig{.num_threads = 12});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -251,7 +249,7 @@ TEST_CASE("CoroScope - More threads than tasks") {
 }
 
 TEST_CASE("CoroScope - Regression test for hang fix") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -279,7 +277,7 @@ TEST_CASE("CoroScope - spawn_producer unwinds registration on spawn failure") {
     // CoroScope with nullptr executor will segfault on spawn,
     // so we test that the channel registration is cleaned up.
     // Using an executor that gets shut down immediately to force failure.
-    Executor executor(1);
+    Executor executor(ExecutorConfig{.num_threads = 1});
     executor.shutdown();
     CoroScope scope(&executor);
     coro::Channel<int> channel(4);
@@ -294,7 +292,7 @@ TEST_CASE("CoroScope - spawn_producer unwinds registration on spawn failure") {
 }
 
 TEST_CASE("CoroScope - spawn_transforms unwinds bulk registration on failure") {
-    Executor executor(1);
+    Executor executor(ExecutorConfig{.num_threads = 1});
     executor.shutdown();
     CoroScope scope(&executor);
     coro::Channel<int> input(4);
@@ -316,7 +314,7 @@ TEST_CASE("CoroScope - spawn_transforms unwinds bulk registration on failure") {
 // ============================================================================
 
 TEST_CASE("CoroScope - spawn_producer with synchronous Generator") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> items_received{0};
@@ -343,7 +341,7 @@ TEST_CASE("CoroScope - spawn_producer with synchronous Generator") {
 }
 
 TEST_CASE("CoroScope - spawn_consumers with multiple consumers") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> items_processed{0};
@@ -369,7 +367,7 @@ TEST_CASE("CoroScope - spawn_consumers with multiple consumers") {
 }
 
 TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator and I/O") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -380,18 +378,16 @@ TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator and I/O") {
                 auto channel = coro::make_channel<int>(10);
 
                 // Async producer with I/O operations
-                scope.spawn_async_producer(
-                    channel,
-                    [](CoroScope& inner_ctx) -> coro::AsyncGenerator<int> {
-                        for (int i = 1; i <= 10; ++i) {
-                            // Async I/O operation
-                            int value = co_await inner_ctx.spawn_io([i]() {
-                                maybe_io_delay_ms(1);
-                                return i;
-                            });
-                            co_yield value;
-                        }
-                    });
+                scope.spawn_async_producer(channel,
+                                           [](CoroScope& /* inner_ctx */)
+                                               -> coro::AsyncGenerator<int> {
+                                               for (int i = 1; i <= 10; ++i) {
+                                                   // Inline I/O operation
+                                                   maybe_io_delay_ms(1);
+                                                   int value = i;
+                                                   co_yield value;
+                                               }
+                                           });
 
                 // Consumer
                 scope.spawn_consumers(
@@ -422,7 +418,7 @@ TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator and I/O") {
 // ============================================================================
 
 TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> items_received{0};
@@ -435,13 +431,12 @@ TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator") {
                 // Spawn async producer with AsyncGenerator
                 scope.spawn_async_producer(
                     channel,
-                    [](CoroScope& inner_ctx) -> coro::AsyncGenerator<int> {
+                    [](CoroScope& /* inner_ctx */)
+                        -> coro::AsyncGenerator<int> {
                         for (int i = 0; i < 5; ++i) {
-                            // Simulate async I/O using spawn_io
-                            auto value = co_await inner_ctx.spawn_io([i]() {
-                                maybe_io_delay_ms(5);
-                                return i * 10;  // 0, 10, 20, 30, 40
-                            });
+                            // Inline I/O operation
+                            maybe_io_delay_ms(5);
+                            auto value = i * 10;  // 0, 10, 20, 30, 40
                             co_yield value;
                         }
                     });
@@ -471,7 +466,7 @@ TEST_CASE("CoroScope - spawn_async_producer with AsyncGenerator") {
 }
 
 TEST_CASE("CoroScope - AsyncGenerator with multiple async producers") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> total_items{0};
@@ -485,13 +480,11 @@ TEST_CASE("CoroScope - AsyncGenerator with multiple async producers") {
                 for (int p = 0; p < 2; ++p) {
                     scope.spawn_async_producer(
                         channel,
-                        [p](CoroScope& inner_ctx) -> coro::AsyncGenerator<int> {
+                        [p](CoroScope& /* inner_ctx */)
+                            -> coro::AsyncGenerator<int> {
                             for (int i = 0; i < 5; ++i) {
-                                // Async delay
-                                co_await inner_ctx.spawn_io([p, i]() {
-                                    maybe_io_delay_ms(2);
-                                    return p * 100 + i;
-                                });
+                                // Inline I/O delay
+                                maybe_io_delay_ms(2);
                                 co_yield p * 100 + i;
                             }
                         });
@@ -520,7 +513,7 @@ TEST_CASE("CoroScope - AsyncGenerator with multiple async producers") {
 }
 
 TEST_CASE("CoroScope - Generator produces correct sum") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sync_result{0};
@@ -560,7 +553,7 @@ TEST_CASE("CoroScope - Generator produces correct sum") {
 }
 
 TEST_CASE("CoroScope - AsyncGenerator produces correct sum") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> async_result{0};
@@ -570,18 +563,16 @@ TEST_CASE("CoroScope - AsyncGenerator produces correct sum") {
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
                 auto channel = coro::make_channel<int>(10);
 
-                scope.spawn_async_producer(
-                    channel,
-                    [](CoroScope& inner_ctx) -> coro::AsyncGenerator<int> {
-                        for (int i = 1; i <= 5; ++i) {
-                            // Simulate async operation with small delay
-                            auto val = co_await inner_ctx.spawn_io([i]() {
-                                maybe_io_delay_ms(1);
-                                return i;
-                            });
-                            co_yield val;
-                        }
-                    });
+                scope.spawn_async_producer(channel,
+                                           [](CoroScope& /* inner_ctx */)
+                                               -> coro::AsyncGenerator<int> {
+                                               for (int i = 1; i <= 5; ++i) {
+                                                   // Inline I/O operation
+                                                   maybe_io_delay_ms(1);
+                                                   auto val = i;
+                                                   co_yield val;
+                                               }
+                                           });
 
                 scope.spawn_consumers(
                     channel, 1,
@@ -607,7 +598,7 @@ TEST_CASE("CoroScope - AsyncGenerator produces correct sum") {
 
 TEST_CASE(
     "CoroScope - Sequential sync and async generators in same coroutine") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sync_result{0};
@@ -639,18 +630,16 @@ TEST_CASE(
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
                 auto channel = coro::make_channel<int>(10);
 
-                scope.spawn_async_producer(
-                    channel,
-                    [](CoroScope& inner_ctx) -> coro::AsyncGenerator<int> {
-                        for (int i = 1; i <= 5; ++i) {
-                            // Simulate async operation
-                            auto val = co_await inner_ctx.spawn_io([i]() {
-                                maybe_io_delay_ms(1);
-                                return i;
-                            });
-                            co_yield val;
-                        }
-                    });
+                scope.spawn_async_producer(channel,
+                                           [](CoroScope& /* inner_ctx */)
+                                               -> coro::AsyncGenerator<int> {
+                                               for (int i = 1; i <= 5; ++i) {
+                                                   // Inline I/O operation
+                                                   maybe_io_delay_ms(1);
+                                                   auto val = i;
+                                                   co_yield val;
+                                               }
+                                           });
 
                 scope.spawn_consumers(
                     channel, 1,
@@ -676,7 +665,7 @@ TEST_CASE(
 }
 
 TEST_CASE("CoroScope - AsyncGenerator with complex async operations") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -689,20 +678,16 @@ TEST_CASE("CoroScope - AsyncGenerator with complex async operations") {
                 // Producer with nested async operations
                 scope.spawn_async_producer(
                     channel,
-                    [](CoroScope& inner_ctx) -> coro::AsyncGenerator<int> {
+                    [](CoroScope& /* inner_ctx */)
+                        -> coro::AsyncGenerator<int> {
                         for (int i = 1; i <= 5; ++i) {
-                            // First async I/O
-                            auto raw = co_await inner_ctx.spawn_io([i]() {
-                                maybe_io_delay_ms(2);
-                                return i * 2;  // 2, 4, 6, 8, 10
-                            });
+                            // First I/O operation
+                            maybe_io_delay_ms(2);
+                            auto raw = i * 2;  // 2, 4, 6, 8, 10
 
-                            // Second async I/O (processing)
-                            auto processed =
-                                co_await inner_ctx.spawn_io([raw]() {
-                                    maybe_io_delay_ms(2);
-                                    return raw + 1;  // 3, 5, 7, 9, 11
-                                });
+                            // Second I/O operation (processing)
+                            maybe_io_delay_ms(2);
+                            auto processed = raw + 1;  // 3, 5, 7, 9, 11
 
                             co_yield processed;
                         }
@@ -732,7 +717,7 @@ TEST_CASE("CoroScope - AsyncGenerator with complex async operations") {
 }
 
 TEST_CASE("CoroScope - AsyncGenerator with multiple async consumers") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> items_processed{0};
@@ -743,28 +728,24 @@ TEST_CASE("CoroScope - AsyncGenerator with multiple async consumers") {
                 auto channel = coro::make_channel<int>(30);
 
                 // Async producer
-                scope.spawn_async_producer(
-                    channel,
-                    [](CoroScope& inner_ctx) -> coro::AsyncGenerator<int> {
-                        for (int i = 0; i < 20; ++i) {
-                            co_await inner_ctx.spawn_io([i]() {
-                                maybe_io_delay_ms(1);
-                                return i;
-                            });
-                            co_yield i;
-                        }
-                    });
+                scope.spawn_async_producer(channel,
+                                           [](CoroScope& /* inner_ctx */)
+                                               -> coro::AsyncGenerator<int> {
+                                               for (int i = 0; i < 20; ++i) {
+                                                   maybe_io_delay_ms(1);
+                                                   co_yield i;
+                                               }
+                                           });
 
                 // Multiple async consumers (4 consumers)
-                scope.spawn_consumers(
-                    channel, 4,
-                    [&](CoroScope& consumer_ctx, int) -> coro::CoroTask<void> {
-                        // Consumer also does async I/O
-                        co_await consumer_ctx.spawn_io(
-                            []() { maybe_io_delay_ms(2); });
-                        items_processed++;
-                        co_return;
-                    });
+                scope.spawn_consumers(channel, 4,
+                                      [&](CoroScope& /* consumer_ctx */,
+                                          int) -> coro::CoroTask<void> {
+                                          // Consumer does inline I/O delay
+                                          maybe_io_delay_ms(2);
+                                          items_processed++;
+                                          co_return;
+                                      });
                 co_return;
             });
 

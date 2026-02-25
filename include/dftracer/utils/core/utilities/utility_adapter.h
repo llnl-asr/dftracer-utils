@@ -209,13 +209,16 @@ class UtilityAdapter {
         if constexpr (UtilityType::template has_tag<tags::NeedsContext>() ||
                       detail::has_process_with_context_v<ConcreteType, I, O>) {
             return make_task(
-                [executor](CoroScope& ctx, I input) -> O {
-                    return executor->execute_with_context(ctx, input);
+                [executor](CoroScope& ctx, I input) -> coro::CoroTask<O> {
+                    co_return co_await executor->execute_with_context(ctx,
+                                                                      input);
                 },
                 task_name);
         } else {
             return make_task(
-                [executor](I input) -> O { return executor->execute(input); },
+                [executor](I input) -> coro::CoroTask<O> {
+                    co_return co_await executor->execute(input);
+                },
                 task_name);
         }
     }

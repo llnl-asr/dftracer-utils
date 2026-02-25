@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -19,6 +20,8 @@
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <argparse/argparse.hpp>
 #include <atomic>
@@ -37,115 +40,13 @@ using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
 
-int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+namespace {
 
-    argparse::ArgumentParser program("dftracer_organize",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Reorganize DFTracer trace files by routing "
-        "events to predicate-based groups. Creates "
-        "separate output files per group with "
-        "provenance tracking.");
-
-    program.add_argument("--files")
-        .help("Input trace files (.pfw, .pfw.gz)")
-        .nargs(argparse::nargs_pattern::any)
-        .default_value<std::vector<std::string>>({});
-
-    program.add_argument("-d", "--directory")
-        .help("Directory containing trace files")
-        .default_value<std::string>("");
-
-    program.add_argument("-o", "--output")
-        .help("Output directory (required)")
-        .required();
-
-    program.add_argument("--groups")
-        .help(
-            "Predicate groups: \"io:cat=POSIX\" "
-            "\"compute:cat=APP\"")
-        .nargs(argparse::nargs_pattern::at_least_one)
-        .required();
-
-    program.add_argument("--checkpoint-size")
-        .help("Checkpoint size for indexing in bytes")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(
-            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
-
-    program.add_argument("--index-dir")
-        .help("Directory for sidecar files")
-        .default_value<std::string>("");
-
-    program.add_argument("-f", "--force")
-        .help("Force rebuild of indices")
-        .flag();
-
-    program.add_argument("--no-compress")
-        .help("Write plain .pfw instead of .pfw.gz")
-        .flag();
-
-    program.add_argument("--executor-threads")
-        .help("Worker threads")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(std::thread::hardware_concurrency()));
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
-        std::cerr << program;
-        return 1;
-    }
-
-    std::string directory = program.get<std::string>("--directory");
-    std::string output_dir = program.get<std::string>("--output");
-    std::string index_dir = program.get<std::string>("--index-dir");
-    auto group_specs = program.get<std::vector<std::string>>("--groups");
-    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
-    bool force_rebuild = program.get<bool>("--force");
-    bool no_compress = program.get<bool>("--no-compress");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
-
-    // Create output directory
-    fs::create_directories(output_dir);
-
-    // Parse group specs
-    auto groups = parse_group_specs(group_specs);
-    if (groups.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("%s", "No groups specified.");
-        return 1;
-    }
-
-    // Collect input files
-    std::vector<std::string> files;
-    if (!directory.empty()) {
-        if (!fs::exists(directory)) {
-            DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
-                                     directory.c_str());
-            return 1;
-        }
-        filesystem::PatternDirectoryScannerUtility scanner;
-        filesystem::PatternDirectoryScannerUtilityInput scan_input{
-            directory, {".pfw", ".pfw.gz"}, false};
-        auto matched = scanner.process(scan_input);
-        for (const auto& entry : matched) {
-            files.push_back(entry.path.string());
-        }
-    } else {
-        files = program.get<std::vector<std::string>>("--files");
-    }
-
-    if (files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("%s",
-                                 "No input files. "
-                                 "Use --files or --directory.");
-        return 1;
-    }
-
+coro::CoroTask<int> run_organize(
+    const std::string& /*directory*/, const std::string& output_dir,
+    const std::string& index_dir, const std::vector<std::string>& files,
+    const std::vector<PredicateGroup>& groups, std::size_t checkpoint_size,
+    bool force_rebuild, bool no_compress, std::size_t executor_threads) {
     std::printf(
         "========================================"
         "==\n");
@@ -210,7 +111,8 @@ int main(int argc, char** argv) {
                                 executor(utility, std::move(chain));
 
                             auto result =
-                                executor.execute_with_context(fctx, input);
+                                co_await executor.execute_with_context(fctx,
+                                                                       input);
 
                             if (result.was_skipped) {
                                 (*skipped_count_ptr)++;
@@ -255,10 +157,10 @@ int main(int argc, char** argv) {
 
     ExtractionPlan plan;
     try {
-        plan = planner.process(planner_input);
+        plan = co_await planner.process(planner_input);
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Planning failed: %s", e.what());
-        return 1;
+        co_return 1;
     }
 
     std::printf("  Groups: %zu\n", plan.groups.size());
@@ -268,7 +170,7 @@ int main(int argc, char** argv) {
 
     if (plan.tasks.empty()) {
         std::printf("No events to extract.\n");
-        return 0;
+        co_return 0;
     }
 
     // Step 3: Extract and route lines
@@ -277,17 +179,19 @@ int main(int argc, char** argv) {
         "lines...\n");
 
     // Open per-group output files
-    std::map<std::string, FILE*> group_files;
+    std::map<std::string, int> group_fds;
     std::map<std::string, std::string> group_pfw_paths;
     for (const auto& g : plan.groups) {
         std::string pfw_path = output_dir + "/" + g.name + ".pfw";
-        FILE* f = std::fopen(pfw_path.c_str(), "w");
-        if (!f) {
+        ssize_t open_result = co_await io::open(
+            pfw_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (open_result < 0) {
             DFTRACER_UTILS_LOG_ERROR("Failed to open output: %s",
                                      pfw_path.c_str());
-            return 1;
+            co_return 1;
         }
-        group_files[g.name] = f;
+        int fd = static_cast<int>(open_result);
+        group_fds[g.name] = fd;
         group_pfw_paths[g.name] = pfw_path;
     }
 
@@ -340,7 +244,7 @@ int main(int argc, char** argv) {
         IndexedFileReaderUtility reader_utility;
         std::shared_ptr<reader::internal::Reader> reader;
         try {
-            reader = reader_utility.process(reader_input);
+            reader = co_await reader_utility.process(reader_input);
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Failed to create reader "
@@ -363,7 +267,7 @@ int main(int argc, char** argv) {
 
         std::uint32_t line_number = 0;
         while (!stream->done()) {
-            auto chunk = stream->read();
+            auto chunk = co_await stream->read_async();
             if (chunk.empty()) break;
 
             const char* data = chunk.data();
@@ -380,10 +284,11 @@ int main(int argc, char** argv) {
                 auto it = line_routing.find(line_number);
                 if (it != line_routing.end()) {
                     for (const auto& gname : it->second) {
-                        auto fit = group_files.find(gname);
-                        if (fit != group_files.end()) {
-                            std::fwrite(line_start, 1, line_len, fit->second);
-                            std::fputc('\n', fit->second);
+                        auto fit = group_fds.find(gname);
+                        if (fit != group_fds.end()) {
+                            co_await io::write(fit->second, line_start,
+                                               line_len);
+                            co_await io::write(fit->second, "\n", 1);
                             lines_written++;
                         }
                     }
@@ -398,8 +303,8 @@ int main(int argc, char** argv) {
     }
 
     // Close all output files
-    for (auto& [gname, f] : group_files) {
-        std::fclose(f);
+    for (auto& [gname, fd] : group_fds) {
+        co_await io::close(fd);
     }
 
     std::printf("  Checkpoints processed: %zu\n", checkpoints_processed.load());
@@ -419,7 +324,7 @@ int main(int argc, char** argv) {
 
             FileCompressorUtility compressor;
             auto comp_input = FileCompressionUtilityInput::from_file(pfw_path);
-            auto comp_result = compressor.process(comp_input);
+            auto comp_result = co_await compressor.process(comp_input);
 
             if (comp_result.success) {
                 // Remove plain .pfw after
@@ -490,8 +395,9 @@ int main(int argc, char** argv) {
                                 utilities::tags::NeedsContext>
                                 m_executor(m_util, std::move(m_chain));
 
-                            auto m_result = m_executor.execute_with_context(
-                                fctx, midx_input);
+                            auto m_result =
+                                co_await m_executor.execute_with_context(
+                                    fctx, midx_input);
 
                             if (m_result.success) {
                                 std::printf(
@@ -609,8 +515,8 @@ int main(int argc, char** argv) {
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     std::printf(
-        "\n======================================="
-        "===\n");
+        "\n========================================"
+        "==\n");
     std::printf("Reorganization Complete\n");
     std::printf(
         "========================================"
@@ -640,5 +546,122 @@ int main(int argc, char** argv) {
         "========================================"
         "==\n");
 
-    return 0;
+    co_return 0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    DFTRACER_UTILS_LOGGER_INIT();
+
+    argparse::ArgumentParser program("dftracer_organize",
+                                     DFTRACER_UTILS_PACKAGE_VERSION);
+    program.add_description(
+        "Reorganize DFTracer trace files by routing "
+        "events to predicate-based groups. Creates "
+        "separate output files per group with "
+        "provenance tracking.");
+
+    program.add_argument("--files")
+        .help("Input trace files (.pfw, .pfw.gz)")
+        .nargs(argparse::nargs_pattern::any)
+        .default_value<std::vector<std::string>>({});
+
+    program.add_argument("-d", "--directory")
+        .help("Directory containing trace files")
+        .default_value<std::string>("");
+
+    program.add_argument("-o", "--output")
+        .help("Output directory (required)")
+        .required();
+
+    program.add_argument("--groups")
+        .help(
+            "Predicate groups: \"io:cat=POSIX\" "
+            "\"compute:cat=APP\"")
+        .nargs(argparse::nargs_pattern::at_least_one)
+        .required();
+
+    program.add_argument("--checkpoint-size")
+        .help("Checkpoint size for indexing in bytes")
+        .scan<'d', std::size_t>()
+        .default_value(static_cast<std::size_t>(
+            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
+
+    program.add_argument("--index-dir")
+        .help("Directory for sidecar files")
+        .default_value<std::string>("");
+
+    program.add_argument("-f", "--force")
+        .help("Force rebuild of indices")
+        .flag();
+
+    program.add_argument("--no-compress")
+        .help("Write plain .pfw instead of .pfw.gz")
+        .flag();
+
+    program.add_argument("--executor-threads")
+        .help("Worker threads")
+        .scan<'d', std::size_t>()
+        .default_value(
+            static_cast<std::size_t>(std::thread::hardware_concurrency()));
+
+    try {
+        program.parse_args(argc, argv);
+    } catch (const std::exception& err) {
+        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
+        std::cerr << program;
+        return 1;
+    }
+
+    std::string directory = program.get<std::string>("--directory");
+    std::string output_dir = program.get<std::string>("--output");
+    std::string index_dir = program.get<std::string>("--index-dir");
+    auto group_specs = program.get<std::vector<std::string>>("--groups");
+    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
+    bool force_rebuild = program.get<bool>("--force");
+    bool no_compress = program.get<bool>("--no-compress");
+    std::size_t executor_threads =
+        program.get<std::size_t>("--executor-threads");
+
+    // Create output directory
+    fs::create_directories(output_dir);
+
+    // Parse group specs
+    auto groups = parse_group_specs(group_specs);
+    if (groups.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("%s", "No groups specified.");
+        return 1;
+    }
+
+    // Collect input files
+    std::vector<std::string> files;
+    if (!directory.empty()) {
+        if (!fs::exists(directory)) {
+            DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
+                                     directory.c_str());
+            return 1;
+        }
+        filesystem::PatternDirectoryScannerUtility scanner;
+        filesystem::PatternDirectoryScannerUtilityInput scan_input{
+            directory, {".pfw", ".pfw.gz"}, false};
+        auto matched = scanner.process(scan_input).get();
+        for (const auto& entry : matched) {
+            files.push_back(entry.path.string());
+        }
+    } else {
+        files = program.get<std::vector<std::string>>("--files");
+    }
+
+    if (files.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("%s",
+                                 "No input files. "
+                                 "Use --files or --directory.");
+        return 1;
+    }
+
+    return run_organize(directory, output_dir, index_dir, files, groups,
+                        checkpoint_size, force_rebuild, no_compress,
+                        executor_threads)
+        .get();
 }

@@ -18,9 +18,9 @@ namespace dftracer::utils::coro {
  * AsyncGenerator<Data> read_files(CoroScope& ctx) {
  *     for (int i = 0; i < 100; i++) {
  *         // Async I/O operation
- *         auto data = co_await ctx.spawn_io([i]() {
- *             return read_file(i);
- *         });
+ *         auto data = co_await io::async_read(fd, buf, len);
+ *         // Or inline I/O:
+ *         auto data = read_file(i);
  *         co_yield data;
  *     }
  * }

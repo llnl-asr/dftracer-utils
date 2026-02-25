@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/timer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
@@ -150,8 +151,10 @@ void GzipReader::reset() {
     stream_cache_.clear();
 }
 
-std::size_t GzipReader::read(std::size_t start_bytes, std::size_t end_bytes,
-                             char *buffer, std::size_t buffer_size) {
+coro::CoroTask<std::size_t> GzipReader::read_async(std::size_t start_bytes,
+                                                   std::size_t end_bytes,
+                                                   char *buffer,
+                                                   std::size_t buffer_size) {
     check_reader_state(is_open, indexer.get());
     validate_parameters(buffer, buffer_size, start_bytes, end_bytes,
                         indexer.get()->get_max_bytes());
@@ -178,18 +181,19 @@ std::size_t GzipReader::read(std::size_t start_bytes, std::size_t end_bytes,
             "%s", "GzipReader::read - reusing cached byte stream");
     }
 
-    std::size_t result = stream_cache_.get()->read(buffer, buffer_size);
+    std::size_t result =
+        co_await stream_cache_.get()->read_async(buffer, buffer_size);
     DFTRACER_UTILS_LOG_DEBUG("GzipReader::read - returned %zu bytes", result);
 
     // Update position for next potential read
     stream_cache_.update_position(start_bytes + result);
 
-    return result;
+    co_return result;
 }
 
-std::size_t GzipReader::read_line_bytes(std::size_t start_bytes,
-                                        std::size_t end_bytes, char *buffer,
-                                        std::size_t buffer_size) {
+coro::CoroTask<std::size_t> GzipReader::read_line_bytes_async(
+    std::size_t start_bytes, std::size_t end_bytes, char *buffer,
+    std::size_t buffer_size) {
     check_reader_state(is_open, indexer.get());
 
     if (end_bytes > indexer.get()->get_max_bytes()) {
@@ -212,16 +216,17 @@ std::size_t GzipReader::read_line_bytes(std::size_t start_bytes,
                              start_bytes, end_bytes);
     }
 
-    std::size_t result = stream_cache_.get()->read(buffer, buffer_size);
+    std::size_t result =
+        co_await stream_cache_.get()->read_async(buffer, buffer_size);
 
     // Update position for next potential read
     stream_cache_.update_position(start_bytes + result);
 
-    return result;
+    co_return result;
 }
 
-std::string GzipReader::read_lines(std::size_t start_line,
-                                   std::size_t end_line) {
+coro::CoroTask<std::string> GzipReader::read_lines_async(std::size_t start_line,
+                                                         std::size_t end_line) {
     check_reader_state(is_open, indexer.get());
 
     if (start_line == 0 || end_line == 0) {
@@ -258,19 +263,18 @@ std::string GzipReader::read_lines(std::size_t start_line,
     std::vector<char> buffer(default_buffer_size);
 
     while (!stream_cache_.get()->done()) {
-        std::size_t bytes_read =
-            stream_cache_.get()->read(buffer.data(), buffer.size());
+        std::size_t bytes_read = co_await stream_cache_.get()->read_async(
+            buffer.data(), buffer.size());
         if (bytes_read == 0) break;
 
         result.append(buffer.data(), bytes_read);
     }
 
-    return result;
+    co_return result;
 }
 
-void GzipReader::read_lines_with_processor(std::size_t start_line,
-                                           std::size_t end_line,
-                                           LineProcessor &processor) {
+coro::CoroTask<void> GzipReader::read_lines_with_processor_async(
+    std::size_t start_line, std::size_t end_line, LineProcessor &processor) {
     check_reader_state(is_open, indexer.get());
 
     if (start_line == 0 || end_line == 0) {
@@ -300,7 +304,7 @@ void GzipReader::read_lines_with_processor(std::size_t start_line,
 
     while (!line_stream->done()) {
         std::size_t bytes_read =
-            line_stream->read(buffer.data(), buffer.size());
+            co_await line_stream->read_async(buffer.data(), buffer.size());
         if (bytes_read == 0) break;
 
         // LineStream returns one complete line with \n
@@ -310,18 +314,17 @@ void GzipReader::read_lines_with_processor(std::size_t start_line,
             line_length--;
         }
 
-        if (!processor.process(buffer.data(), line_length)) {
+        if (!co_await processor.process(buffer.data(), line_length)) {
             processor.end();
-            return;
+            co_return;
         }
     }
 
     processor.end();
 }
 
-void GzipReader::read_line_bytes_with_processor(std::size_t start_bytes,
-                                                std::size_t end_bytes,
-                                                LineProcessor &processor) {
+coro::CoroTask<void> GzipReader::read_line_bytes_with_processor_async(
+    std::size_t start_bytes, std::size_t end_bytes, LineProcessor &processor) {
     check_reader_state(is_open, indexer.get());
 
     if (end_bytes > indexer.get()->get_max_bytes()) {
@@ -329,7 +332,7 @@ void GzipReader::read_line_bytes_with_processor(std::size_t start_bytes,
     }
 
     if (start_bytes >= end_bytes) {
-        return;
+        co_return;
     }
 
     processor.begin(start_bytes, end_bytes);
@@ -344,9 +347,9 @@ void GzipReader::read_line_bytes_with_processor(std::size_t start_bytes,
 
     while (!lines_stream->done()) {
         std::size_t bytes_read =
-            lines_stream->read(buffer.data(), buffer.size());
+            co_await lines_stream->read_async(buffer.data(), buffer.size());
         if (bytes_read == 0) break;
-        processor.process(buffer.data(), bytes_read);
+        co_await processor.process(buffer.data(), bytes_read);
     }
 
     processor.end();

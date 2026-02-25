@@ -1,9 +1,9 @@
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
-using indexer::internal::SqliteStmt;
+using dftracer::utils::sqlite::SqliteStmt;
 
 std::vector<std::string> query_index_dimensions(const SqliteDatabase& db,
                                                 int file_info_id) {

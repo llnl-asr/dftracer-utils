@@ -1,84 +1,80 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint_size.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
 
 // GZIP header parsing utilities
-static bool read_gzip_magic(FILE* f) {
+static bool read_gzip_magic(int fd) {
     unsigned char h[3];
-    if (std::fseek(f, 0, SEEK_SET) != 0) return false;
-    if (std::fread(h, 1, 3, f) != 3) return false;
-    return h[0] == 0x1F && h[1] == 0x8B && h[2] == 0x08;  // GZIP magic bytes
+    if (::pread(fd, h, 3, 0) != 3) return false;
+    return h[0] == 0x1F && h[1] == 0x8B && h[2] == 0x08;
 }
 
 // Read GZIP ISIZE from last 4 bytes (uncompressed size modulo 2^32)
-static bool read_isize_last4(FILE* f, uint32_t& out) {
-    if (std::fseek(f, -4, SEEK_END) != 0) return false;
+static bool read_isize_last4(int fd, uint32_t& out) {
+    off_t end = ::lseek(fd, -4, SEEK_END);
+    if (end < 0) return false;
     unsigned char b[4]{};
-    if (std::fread(b, 1, 4, f) != 4) return false;
+    if (::pread(fd, b, 4, end) != 4) return false;
     out = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) |
           ((uint32_t)b[3] << 24);
     return true;
 }
 
 // Check if GZIP file contains multiple members (concatenated archives)
-static bool likely_multiple_members(FILE* f) {
-    if (std::fseek(f, 10, SEEK_SET) != 0) return false;
+static bool likely_multiple_members(int fd) {
     constexpr std::size_t BUF = 64 * 1024;
     unsigned char buf[BUF];
+    off_t offset = 10;
     while (true) {
-        std::size_t n = std::fread(buf, 1, BUF, f);
-        if (!n) break;
-        for (std::size_t i = 0; i + 2 < n; ++i)
+        ssize_t n = ::pread(fd, buf, BUF, offset);
+        if (n <= 0) break;
+        for (ssize_t i = 0; i + 2 < n; ++i)
             if (buf[i] == 0x1F && buf[i + 1] == 0x8B && buf[i + 2] == 0x08)
                 return true;
-        if (n < BUF) break;
+        offset += n;
+        if (static_cast<std::size_t>(n) < BUF) break;
     }
     return false;
 }
 // Extract filename from GZIP header (if present)
-static std::string read_gzip_fname(FILE* f) {
-    if (std::fseek(f, 0, SEEK_SET) != 0) return {};
+static std::string read_gzip_fname(int fd) {
     unsigned char fixed[10];
-    if (std::fread(fixed, 1, 10, f) != 10) return {};
+    if (::pread(fd, fixed, 10, 0) != 10) return {};
     if (!(fixed[0] == 0x1F && fixed[1] == 0x8B && fixed[2] == 0x08)) return {};
     unsigned char flg = fixed[3];
-    long pos = 10;
-    auto skip = [&](long n) {
-        pos += n;
-        return std::fseek(f, pos, SEEK_SET) == 0;
-    };
+    off_t pos = 10;
     if (flg & 0x04) {
         unsigned char x[2];
-        if (std::fread(x, 1, 2, f) != 2) return {};
+        if (::pread(fd, x, 2, pos) != 2) return {};
         auto xlen =
             static_cast<std::uint16_t>(static_cast<std::uint16_t>(x[0]) |
                                        (static_cast<std::uint16_t>(x[1]) << 8));
-        pos += 2;
-        if (!skip(xlen)) return {};
+        pos += 2 + xlen;
     }
     std::string name;
     if (flg & 0x08) {
-        int c;
-        while ((c = std::fgetc(f)) != EOF && c != 0) {
-            name.push_back((char)c);
+        unsigned char c;
+        while (::pread(fd, &c, 1, pos) == 1 && c != 0) {
+            name.push_back(static_cast<char>(c));
             ++pos;
         }
         ++pos;
     } else {
         if (flg & 0x10) {
-            int c;
-            while ((c = std::fgetc(f)) != EOF && c != 0) {
+            unsigned char c;
+            while (::pread(fd, &c, 1, pos) == 1 && c != 0) {
                 ++pos;
             }
             ++pos;
         }
         if (flg & 0x02) {
-            if (!skip(2)) return {};
+            pos += 2;
         }
     }
     return name;
@@ -173,14 +169,14 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
         return std::min(S, align_down(max_chk, window));
     }
 
-    if (FILE* f = std::fopen(path.c_str(), "rb")) {
-        if (read_gzip_magic(f)) {
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd >= 0) {
+        if (read_gzip_magic(fd)) {
             uint32_t isize = 0;
-            bool has_isize = read_isize_last4(f, isize);
+            bool has_isize = read_isize_last4(fd, isize);
             bool multi = false;
             if (has_isize) {
-                std::fseek(f, 0, SEEK_SET);
-                multi = likely_multiple_members(f);
+                multi = likely_multiple_members(fd);
             }
             if (has_isize && !multi && isize > 0) {
                 U = (std::size_t)isize;
@@ -188,8 +184,7 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
                     U = 0;  // suspect 32-bit wrap
             }
             if (U == 0) {
-                std::fseek(f, 0, SEEK_SET);
-                std::string fname = read_gzip_fname(f);
+                std::string fname = read_gzip_fname(fd);
                 double ratio = guess_text_ratio_from_ext(fname);
                 U = std::max<std::size_t>(
                     comp_bytes, (std::size_t)((long double)comp_bytes * ratio));
@@ -198,7 +193,7 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
             // uncompressed file
             U = comp_bytes;
         }
-        std::fclose(f);
+        ::close(fd);
     } else {
         // fallback estimate
         U = std::max<std::size_t>(comp_bytes, comp_bytes * 6);

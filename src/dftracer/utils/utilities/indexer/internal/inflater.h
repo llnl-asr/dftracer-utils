@@ -4,6 +4,9 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/inflater.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/io/io.h>
+#include <fcntl.h>
 
 namespace dftracer::utils::utilities::indexer::internal {
 
@@ -31,32 +34,26 @@ class IndexerInflater : public Inflater {
     /**
      * Initialize for indexing with auto-detection or specified window bits
      */
-    bool initialize(FILE* file, std::uint64_t file_offset = 0,
-                    int window_bits = 0) {
+    coro::CoroTask<bool> initialize(int fd, std::uint64_t file_offset = 0,
+                                    int window_bits = 0) {
         if (window_bits == 0) {
-            window_bits = detect_stream_type(file, file_offset);
+            window_bits = co_await detect_stream_type(fd, file_offset);
         }
 
         if (!initialize_stream(window_bits)) {
-            return false;
-        }
-
-        // Seek to starting position
-        if (fseeko(file, static_cast<off_t>(file_offset), SEEK_SET) != 0) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to seek to offset %llu",
-                                     file_offset);
-            return false;
+            co_return false;
         }
 
         total_input_bytes_ = 0;
-        return true;
+        co_return true;
     }
 
     /**
      * Read and analyze data for indexing purposes.
      * Uses Z_BLOCK to detect deflate boundaries and counts lines.
      */
-    bool read(FILE* file, IndexerInflaterResult& result) {
+    coro::CoroTask<bool> read(int fd, off_t& offset,
+                              IndexerInflaterResult& result) {
         result = {0, 0, false, 0};
 
         stream.next_out = out_buffer;
@@ -65,19 +62,21 @@ class IndexerInflater : public Inflater {
         while (stream.avail_out > 0) {
             // Read input if needed
             if (stream.avail_in == 0) {
-                std::size_t n = ::fread(in_buffer, 1, sizeof(in_buffer), file);
+                ssize_t n = co_await ::dftracer::utils::io::read(
+                    fd, in_buffer, sizeof(in_buffer), offset);
                 if (n == 0) {
-                    if (std::ferror(file)) {
-                        DFTRACER_UTILS_LOG_DEBUG(
-                            "File read error during indexing: %s",
-                            std::strerror(errno));
-                        return false;  // Return error
-                    }
-                    break;             // EOF
+                    break;  // EOF
                 }
+                if (n < 0) {
+                    DFTRACER_UTILS_LOG_DEBUG(
+                        "File read error during indexing: %s",
+                        std::strerror(-static_cast<int>(n)));
+                    co_return false;  // Return error
+                }
+                offset += n;
                 stream.next_in = in_buffer;
                 stream.avail_in = static_cast<uInt>(n);
-                total_input_bytes_ += n;
+                total_input_bytes_ += static_cast<std::size_t>(n);
             }
 
             int ret = inflate(&stream, Z_BLOCK);
@@ -89,7 +88,7 @@ class IndexerInflater : public Inflater {
                 DFTRACER_UTILS_LOG_DEBUG(
                     "Inflate error during indexing: %d (%s)", ret,
                     stream.msg ? stream.msg : "no message");
-                return false;
+                co_return false;
             }
 
             // Check for proper block boundary (end of header or non-last
@@ -104,7 +103,7 @@ class IndexerInflater : public Inflater {
         result.lines_found = count_lines(out_buffer, result.bytes_read);
         result.input_bytes_consumed = total_input_bytes_ - stream.avail_in;
 
-        return true;
+        co_return true;
     }
 
     /**

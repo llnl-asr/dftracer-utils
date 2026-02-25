@@ -34,7 +34,7 @@ TEST_SUITE("IndexedFileReader") {
                                          .with_checkpoint_size(1024);
 
             // Process should create index and return reader
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
 
             CHECK(reader != nullptr);
             CHECK(fs::exists(idx_path));  // Index should be created
@@ -73,7 +73,7 @@ TEST_SUITE("IndexedFileReader") {
                                          .with_index(idx_path)
                                          .with_checkpoint_size(1024);
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
 
             CHECK(reader != nullptr);
             CHECK(fs::exists(idx_path));
@@ -105,7 +105,7 @@ TEST_SUITE("IndexedFileReader") {
                                          .with_checkpoint_size(1024)
                                          .with_force_rebuild(true);
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
 
             CHECK(reader != nullptr);
             CHECK(fs::exists(idx_path));
@@ -128,7 +128,7 @@ TEST_SUITE("IndexedFileReader") {
                                          .with_index(idx_path)
                                          .with_checkpoint_size(2048);
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
 
             CHECK(reader != nullptr);
             CHECK(fs::exists(idx_path));
@@ -149,7 +149,7 @@ TEST_SUITE("IndexedFileReader") {
                              .with_checkpoint_size(512)
                              .with_force_rebuild(false);
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
 
             CHECK(reader != nullptr);
             CHECK(reader->get_num_lines() > 0);
@@ -165,7 +165,7 @@ TEST_SUITE("IndexedFileReader") {
             // Use constructor directly
             IndexedReadInput input(gz_path, idx_path, 1024, false);
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
 
             CHECK(reader != nullptr);
             CHECK(fs::exists(idx_path));
@@ -179,7 +179,8 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file("non_existent.gz")
                     .with_index("non_existent.gz.idx");
 
-            CHECK_THROWS_AS(reader_utility.process(input), std::runtime_error);
+            CHECK_THROWS_AS(reader_utility.process(input).get(),
+                            std::runtime_error);
         }
 
         SUBCASE("Invalid file path") {
@@ -188,7 +189,8 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file("/invalid/path/file.gz")
                     .with_index("/invalid/path/file.gz.idx");
 
-            CHECK_THROWS_AS(reader_utility.process(input), std::runtime_error);
+            CHECK_THROWS_AS(reader_utility.process(input).get(),
+                            std::runtime_error);
         }
 
         SUBCASE("Empty file path") {
@@ -196,7 +198,8 @@ TEST_SUITE("IndexedFileReader") {
             IndexedReadInput input =
                 IndexedReadInput::from_file("").with_index("file.gz.idx");
 
-            CHECK_THROWS_AS(reader_utility.process(input), std::runtime_error);
+            CHECK_THROWS_AS(reader_utility.process(input).get(),
+                            std::runtime_error);
         }
     }
 
@@ -210,7 +213,7 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file(gz_path).with_index(gz_path +
                                                                 ".idx");
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
 
             CHECK(reader != nullptr);
             CHECK(reader->get_num_lines() == 15);
@@ -257,7 +260,7 @@ TEST_SUITE("IndexedFileReader") {
             IndexedReadInput input =
                 IndexedReadInput::from_file(gz_path).with_index(idx_path);
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
 
             CHECK(reader != nullptr);
             // Note: We can't easily verify rebuild happened without checking
@@ -281,7 +284,7 @@ TEST_SUITE("IndexedFileReader") {
             IndexedReadInput input =
                 IndexedReadInput::from_file(gz_path).with_index(idx_path);
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
 
             CHECK(reader != nullptr);
             auto final_mtime = fs::last_write_time(idx_path);
@@ -299,7 +302,7 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file(gz_path).with_index(gz_path +
                                                                 ".idx");
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
             REQUIRE(reader != nullptr);
 
             // Create line stream to read specific lines
@@ -330,7 +333,7 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file(gz_path).with_index(gz_path +
                                                                 ".idx");
 
-            auto reader = reader_utility.process(input);
+            auto reader = reader_utility.process(input).get();
             REQUIRE(reader != nullptr);
 
             CHECK(reader->get_num_lines() == 10);

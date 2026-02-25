@@ -26,7 +26,7 @@ using namespace dftracer::utils;
 // ============================================================================
 
 TEST_CASE("Scheduler - Basic construction and destruction") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     // Should construct and destruct cleanly
@@ -37,7 +37,7 @@ TEST_CASE("Scheduler - Basic construction and destruction") {
 }
 
 TEST_CASE("Scheduler - Construction with config") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
 
     auto config = PipelineConfig::default_config();
     Scheduler scheduler(&executor, config);
@@ -50,7 +50,7 @@ TEST_CASE("Scheduler - Construction with config") {
 }
 
 TEST_CASE("Scheduler - Sequential config") {
-    Executor executor(1);
+    Executor executor(ExecutorConfig{.num_threads = 1});
 
     auto config = PipelineConfig::sequential();
     Scheduler scheduler(&executor, config);
@@ -63,7 +63,7 @@ TEST_CASE("Scheduler - Sequential config") {
 }
 
 TEST_CASE("Scheduler - Parallel config") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
 
     auto config = PipelineConfig::parallel(4);
     Scheduler scheduler(&executor, config);
@@ -148,7 +148,7 @@ TEST_CASE("PipelineConfig - Static factory methods") {
 // ============================================================================
 
 TEST_CASE("Scheduler - Schedule simple task") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> counter{0};
@@ -173,7 +173,7 @@ TEST_CASE("Scheduler - Schedule simple task") {
 }
 
 TEST_CASE("Scheduler - Task dependencies") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::vector<int> execution_order;
@@ -216,7 +216,7 @@ TEST_CASE("Scheduler - Task dependencies") {
 // ============================================================================
 
 TEST_CASE("Scheduler - Threading with multiple workers") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> active_count{0};
@@ -274,7 +274,7 @@ TEST_CASE("Scheduler - Threading with multiple workers") {
     executor.shutdown();
 }
 TEST_CASE("Scheduler - Single threaded execution") {
-    Executor executor(1);
+    Executor executor(ExecutorConfig{.num_threads = 1});
     auto config = PipelineConfig::sequential();
     Scheduler scheduler(&executor, config);
 
@@ -337,7 +337,7 @@ TEST_CASE("Scheduler - Global timeout triggers") {
 
     // Create executor and scheduler in a scope so they cleanup properly
     {
-        Executor executor(4);
+        Executor executor(ExecutorConfig{.num_threads = 4});
         Scheduler scheduler(&executor, config);
 
         // Create a task that spins/blocks longer than timeout
@@ -392,7 +392,7 @@ TEST_CASE("Scheduler - Global timeout triggers") {
 }
 
 TEST_CASE("Scheduler - No timeout with zero value") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     auto config =
         PipelineConfig()
             .with_compute_threads(4)
@@ -450,7 +450,7 @@ TEST_CASE("Watchdog - Construction with parameters") {
 // ============================================================================
 
 TEST_CASE("Scheduler - Graceful shutdown") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> completed{0};
@@ -507,7 +507,7 @@ TEST_CASE("Scheduler - Graceful shutdown") {
     CHECK(tasks_started.load());  // Root task should have started
 }
 TEST_CASE("Scheduler - Shutdown during execution") {
-    Executor executor(2);
+    Executor executor(ExecutorConfig{.num_threads = 2});
     auto config = PipelineConfig().with_compute_threads(2).with_watchdog(false);
 
     Scheduler scheduler(&executor, config);
@@ -552,7 +552,7 @@ TEST_CASE("Scheduler - Shutdown during execution") {
 // ============================================================================
 
 TEST_CASE("Integration - Scheduler with Watchdog and Timeout") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     // Increase timeout to 2 seconds to account for CI overhead and scheduling
     // delays
     auto config = PipelineConfig::with_timeouts(4, std::chrono::seconds(5),
@@ -592,7 +592,7 @@ TEST_CASE("Integration - Scheduler with Watchdog and Timeout") {
     CHECK(completed.load() == 10);
 }
 TEST_CASE("Integration - Full pipeline with all features") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     auto config = PipelineConfig()
                       .with_compute_threads(4)
                       .with_watchdog(true)
@@ -678,7 +678,7 @@ TEST_CASE("Error - Executor unresponsive error message") {
 // ============================================================================
 
 TEST_CASE("Error Scenario - Task throws exception") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     auto throwing_task = make_task(
@@ -695,7 +695,7 @@ TEST_CASE("Error Scenario - Task throws exception") {
 }
 
 TEST_CASE("Error Scenario - Task throws exception in chain") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> completed_count{0};
@@ -727,7 +727,7 @@ TEST_CASE("Error Scenario - Task throws exception in chain") {
 }
 
 TEST_CASE("Error Scenario - Type mismatch between tasks") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     // Task returns int
@@ -761,7 +761,7 @@ TEST_CASE("Error Scenario - Type mismatch between tasks") {
     CHECK(caught_type_error);
 }
 TEST_CASE("Error Policy - FAIL_FAST stops on first error") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> tasks_started{0};
@@ -809,7 +809,7 @@ TEST_CASE("Error Policy - FAIL_FAST stops on first error") {
 }
 
 TEST_CASE("Error Policy - CONTINUE continues on error") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> tasks_completed{0};
@@ -868,7 +868,7 @@ TEST_CASE("Error Scenario - Per-task timeout") {
                       .with_watchdog_interval(std::chrono::seconds(1));
 
     {
-        Executor executor(4);
+        Executor executor(ExecutorConfig{.num_threads = 4});
         Scheduler scheduler(&executor, config);
 
         // Create task with specific timeout
@@ -917,7 +917,7 @@ TEST_CASE("Error Scenario - Per-task timeout") {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 TEST_CASE("Error Scenario - Validation error on null task") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     // Trying to schedule null task should throw validation error
@@ -934,7 +934,7 @@ TEST_CASE("Error Scenario - Graceful shutdown (INTERRUPTED)") {
     auto config = PipelineConfig().with_compute_threads(4).with_watchdog(false);
 
     {
-        Executor executor(4);
+        Executor executor(ExecutorConfig{.num_threads = 4});
         Scheduler scheduler(&executor, config);
 
         auto should_exit = std::make_shared<std::atomic<bool>>(false);
@@ -1300,7 +1300,7 @@ TEST_CASE("Pipeline - Progress callback") {
 // ============================================================================
 
 TEST_CASE("Combiner - Multiple parents dependency resolution") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> parent_count{0};
@@ -1342,7 +1342,7 @@ TEST_CASE("Combiner - Multiple parents dependency resolution") {
 }
 
 TEST_CASE("Combiner - Type-safe tuple-based multi-argument function") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> result{0};
@@ -1378,7 +1378,7 @@ TEST_CASE("Combiner - Type-safe tuple-based multi-argument function") {
 }
 
 TEST_CASE("Combiner - Three argument function") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -1414,7 +1414,7 @@ TEST_CASE("Combiner - Three argument function") {
 }
 
 TEST_CASE("Combiner - with_combiner using vector<any>") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> sum{0};
@@ -1450,7 +1450,7 @@ TEST_CASE("Combiner - with_combiner using vector<any>") {
     CHECK(sum.load() == 60);  // 10 + 20 + 30
 }
 TEST_CASE("Combiner - with_combiner using std::function with typed args") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> product{0};
@@ -1482,7 +1482,7 @@ TEST_CASE("Combiner - with_combiner using std::function with typed args") {
 }
 
 TEST_CASE("Combiner - with_combiner validation error") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     auto task1 = make_task([]() -> int { return 10; }, "Task1");
@@ -1528,7 +1528,7 @@ TEST_CASE("Combiner - with_combiner validation error") {
 // ============================================================================
 
 TEST_CASE("DAG - Diamond pattern") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::vector<int> execution_order;
@@ -1580,7 +1580,7 @@ TEST_CASE("DAG - Diamond pattern") {
 }
 
 TEST_CASE("DAG - Multiple branches converging") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> final_count{0};
@@ -1612,7 +1612,7 @@ TEST_CASE("DAG - Multiple branches converging") {
     CHECK(final_count.load() == 1);
 }
 TEST_CASE("DAG - Wide and deep structure") {
-    Executor executor(8);
+    Executor executor(ExecutorConfig{.num_threads = 8});
     Scheduler scheduler(&executor);
 
     std::atomic<int> completed{0};
@@ -1669,7 +1669,7 @@ TEST_CASE("DAG - Wide and deep structure") {
 // ============================================================================
 
 TEST_CASE("Dynamic Tasks - Task submits child task at runtime") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> total_tasks{0};
@@ -1699,7 +1699,7 @@ TEST_CASE("Dynamic Tasks - Task submits child task at runtime") {
 }
 
 TEST_CASE("Dynamic Tasks - Multiple dynamic children") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> total_tasks{0};
@@ -1729,7 +1729,7 @@ TEST_CASE("Dynamic Tasks - Multiple dynamic children") {
     CHECK(total_tasks.load() == 6);  // 1 parent + 5 children
 }
 TEST_CASE("Dynamic Tasks - Intra-task parallelism with result aggregation") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> final_result{0};
@@ -1762,7 +1762,7 @@ TEST_CASE("Dynamic Tasks - Intra-task parallelism with result aggregation") {
     CHECK(final_result.load() == 150);
 }
 TEST_CASE("Dynamic Tasks - Nested intra-task parallelism") {
-    Executor executor(8);
+    Executor executor(ExecutorConfig{.num_threads = 8});
     Scheduler scheduler(&executor);
 
     std::atomic<int> total_sum{0};
@@ -1811,7 +1811,7 @@ TEST_CASE("Dynamic Tasks - Nested intra-task parallelism") {
 }
 TEST_CASE(
     "Dynamic Tasks - Parent coroutine returns computed value from children") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     auto parent_task = make_task(
@@ -1850,7 +1850,7 @@ TEST_CASE(
 
 TEST_CASE(
     "Dynamic Tasks - Nested coroutines (parent spawns child coroutines)") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     auto parent_task = make_task(
@@ -1966,7 +1966,7 @@ coro::CoroTask<std::string> when_any_cancellation_parent_func(CoroScope& ctx) {
 }  // namespace
 
 TEST_CASE("Cancellation - when_any with cancellation of remaining tasks") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     auto parent_task = make_task(
@@ -2014,7 +2014,7 @@ static coro::CoroTask<int> timer_service_basic_func(CoroScope& ctx) {
 }
 
 TEST_CASE("Timeout - TimerService basic functionality") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     auto parent_task = make_task(timer_service_basic_func, "ParentWithRace");
@@ -2054,7 +2054,7 @@ static coro::CoroTask<std::string> fast_task_timeout_func(CoroScope& ctx) {
 }
 
 TEST_CASE("Timeout - Fast task completes before timeout") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     auto parent_task = make_task(fast_task_timeout_func, "ParentFastTask");
@@ -2100,7 +2100,7 @@ static coro::CoroTask<int> multi_timeout_func(CoroScope& ctx) {
 }
 
 TEST_CASE("Timeout - Multiple tasks with different timeouts") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     auto parent_task = make_task(multi_timeout_func, "ParentMultiTimeout");
@@ -2135,7 +2135,7 @@ static coro::CoroTask<int> concurrent_operations_func(CoroScope& ctx) {
 }
 
 TEST_CASE("Timeout - TimerService handles multiple concurrent operations") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     auto parent_task =
@@ -2153,7 +2153,7 @@ TEST_CASE("Timeout - TimerService handles multiple concurrent operations") {
 // ============================================================================
 
 TEST_CASE("Error Handler - Custom error handling") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<bool> error_handler_called{false};
@@ -2188,7 +2188,7 @@ TEST_CASE("Error Handler - Custom error handling") {
 }
 
 TEST_CASE("Error Handler - Multiple errors with CONTINUE policy") {
-    Executor executor(4);
+    Executor executor(ExecutorConfig{.num_threads = 4});
     Scheduler scheduler(&executor);
 
     std::atomic<int> error_count{0};

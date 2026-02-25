@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_ASSOCIATION_RESOLVER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_ASSOCIATION_RESOLVER_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
@@ -31,7 +32,7 @@ class AssociationResolverUtility
     : public utilities::Utility<AssociationResolverInput,
                                 AssociationResolverOutput> {
    public:
-    AssociationResolverOutput process(
+    coro::CoroTask<AssociationResolverOutput> process(
         const AssociationResolverInput& input) override;
 
    private:

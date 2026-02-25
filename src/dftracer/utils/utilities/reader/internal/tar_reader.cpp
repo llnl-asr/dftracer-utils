@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/queries/queries.h>
 #include <dftracer/utils/utilities/reader/internal/streams/tar_byte_stream.h>
@@ -122,18 +123,20 @@ std::vector<TarReader::TarFileInfo> TarReader::list_files() const {
 }
 
 // Reader interface - operates on concatenated logical view
-std::size_t TarReader::read(std::size_t start_bytes, std::size_t end_bytes,
-                            char *buffer, std::size_t buffer_size) {
-    return read_logical(start_bytes, end_bytes, buffer, buffer_size);
+coro::CoroTask<std::size_t> TarReader::read_async(std::size_t start_bytes,
+                                                  std::size_t end_bytes,
+                                                  char *buffer,
+                                                  std::size_t buffer_size) {
+    co_return read_logical(start_bytes, end_bytes, buffer, buffer_size);
 }
 
-std::size_t TarReader::read_line_bytes(std::size_t start_bytes,
-                                       std::size_t end_bytes, char *buffer,
-                                       std::size_t buffer_size) {
+coro::CoroTask<std::size_t> TarReader::read_line_bytes_async(
+    std::size_t start_bytes, std::size_t end_bytes, char *buffer,
+    std::size_t buffer_size) {
     build_logical_mapping();
 
     if (start_bytes >= cached_total_logical_bytes || buffer_size == 0) {
-        return 0;
+        co_return 0;
     }
 
     std::size_t actual_end = std::min(
@@ -147,7 +150,7 @@ std::size_t TarReader::read_line_bytes(std::size_t start_bytes,
                                           temp_buffer.data(), read_size);
 
     if (bytes_read == 0) {
-        return 0;
+        co_return 0;
     }
 
     // Find the first line start (if start_bytes is not at line beginning)
@@ -202,15 +205,15 @@ std::size_t TarReader::read_line_bytes(std::size_t start_bytes,
         }
     }
 
-    return output_pos;
+    co_return output_pos;
 }
 
-std::string TarReader::read_lines(std::size_t start_line,
-                                  std::size_t end_line) {
+coro::CoroTask<std::string> TarReader::read_lines_async(std::size_t start_line,
+                                                        std::size_t end_line) {
     build_logical_mapping();
 
     if (start_line < 1 || start_line > cached_total_logical_lines) {
-        return "";
+        co_return "";
     }
 
     std::size_t actual_end_line = std::min(
@@ -247,16 +250,15 @@ std::string TarReader::read_lines(std::size_t start_line,
         current_global_line += file_info.estimated_lines;
     }
 
-    return result;
+    co_return result;
 }
 
-void TarReader::read_lines_with_processor(std::size_t start_line,
-                                          std::size_t end_line,
-                                          LineProcessor &processor) {
+coro::CoroTask<void> TarReader::read_lines_with_processor_async(
+    std::size_t start_line, std::size_t end_line, LineProcessor &processor) {
     build_logical_mapping();
 
     if (start_line < 1 || start_line > cached_total_logical_lines) {
-        return;
+        co_return;
     }
 
     std::size_t actual_end_line = std::min(
@@ -289,13 +291,12 @@ void TarReader::read_lines_with_processor(std::size_t start_line,
     processor.end();
 }
 
-void TarReader::read_line_bytes_with_processor(std::size_t start_bytes,
-                                               std::size_t end_bytes,
-                                               LineProcessor &processor) {
+coro::CoroTask<void> TarReader::read_line_bytes_with_processor_async(
+    std::size_t start_bytes, std::size_t end_bytes, LineProcessor &processor) {
     build_logical_mapping();
 
     if (start_bytes >= cached_total_logical_bytes) {
-        return;
+        co_return;
     }
 
     std::size_t actual_end = std::min(
@@ -323,7 +324,8 @@ void TarReader::read_line_bytes_with_processor(std::size_t start_bytes,
         if (file_start < file_end) {
             std::string file_content =
                 read_file_content(file_info, file_start, file_end - file_start);
-            processor.process(file_content.c_str(), file_content.length());
+            co_await processor.process(file_content.c_str(),
+                                       file_content.length());
         }
     }
 
@@ -574,7 +576,8 @@ void TarReader::process_content_lines(const std::string &content,
 
     while (std::getline(stream, line) && current_line <= end_line) {
         if (current_line >= start_line) {
-            if (!processor.process(line.c_str(), line.length())) {
+            // Sync C API path — .get() intentional
+            if (!processor.process(line.c_str(), line.length()).get()) {
                 break;
             }
         }

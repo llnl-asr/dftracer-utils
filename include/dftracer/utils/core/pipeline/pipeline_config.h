@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_PIPELINE_PIPELINE_CONFIG_H
 #define DFTRACER_UTILS_CORE_PIPELINE_PIPELINE_CONFIG_H
 
+#include <dftracer/utils/core/io/io_backend.h>
+
 #include <chrono>
 #include <cstddef>
 #include <exception>
@@ -67,6 +69,11 @@ struct PipelineConfig {
         600};     // Executor deadlock timeout (10 minutes)
     std::chrono::microseconds timeslice_duration{
         10'000};  // Coroutine yield timeslice (10ms, 0 = disabled)
+    std::size_t io_thread_count = 4;   // I/O thread pool size
+    io::IoBackendType io_backend_type =
+        io::IoBackendType::AUTO;       // Backend selection
+    unsigned io_batch_threshold = 16;  // SQE batch threshold (0 = per-op)
+    std::size_t sqlite_pool_size = 2;  // SQLite async thread pool size
 
     /**
      * Set pipeline name
@@ -164,6 +171,40 @@ struct PipelineConfig {
      */
     PipelineConfig& with_timeslice(std::chrono::microseconds duration) {
         timeslice_duration = duration;
+        return *this;
+    }
+
+    /**
+     * Set I/O thread pool size (used by thread pool and epoll backends)
+     */
+    PipelineConfig& with_io_threads(std::size_t count) {
+        io_thread_count = count;
+        return *this;
+    }
+
+    /**
+     * Force a specific I/O backend (AUTO = runtime detection)
+     */
+    PipelineConfig& with_io_backend(io::IoBackendType type) {
+        io_backend_type = type;
+        return *this;
+    }
+
+    /**
+     * Set I/O batch threshold for batched SQE submission.
+     * When pending ops reach this count, they are flushed in one
+     * syscall. 0 = per-op submission (no batching).
+     */
+    PipelineConfig& with_io_batch_size(unsigned threshold) {
+        io_batch_threshold = threshold;
+        return *this;
+    }
+
+    /**
+     * Set SQLite async thread pool size (default 2)
+     */
+    PipelineConfig& with_sqlite_pool_size(std::size_t size) {
+        sqlite_pool_size = size;
         return *this;
     }
 

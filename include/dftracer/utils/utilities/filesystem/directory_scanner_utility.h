@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILESYSTEM_DIRECTORY_SCANNER_UTILITY_H
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
@@ -70,7 +71,7 @@ class DirectoryScannerUtility
      * @throws fs::filesystem_error if directory doesn't exist or is
      * inaccessible
      */
-    std::vector<FileEntry> process(
+    coro::CoroTask<std::vector<FileEntry>> process(
         const DirectoryScannerUtilityInput& input) override {
         std::vector<FileEntry> entries;
 
@@ -99,7 +100,7 @@ class DirectoryScannerUtility
             }
         }
 
-        return entries;
+        co_return entries;
     }
 };
 

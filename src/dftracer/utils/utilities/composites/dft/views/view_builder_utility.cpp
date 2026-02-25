@@ -35,7 +35,8 @@ ViewBuilderInput& ViewBuilderInput::with_num_checkpoints(std::size_t n) {
     return *this;
 }
 
-ViewBuilderOutput ViewBuilderUtility::process(const ViewBuilderInput& input) {
+coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
+    const ViewBuilderInput& input) {
     ViewBuilderOutput output;
 
     std::uint64_t total_checkpoints =
@@ -64,7 +65,7 @@ ViewBuilderOutput ViewBuilderUtility::process(const ViewBuilderInput& input) {
         bq_input.predicates = bloom_predicates;
 
         indexing::BloomQueryUtility bloom_query;
-        auto bq_output = bloom_query.process(bq_input);
+        auto bq_output = co_await bloom_query.process(bq_input);
 
         if (bq_output.success) {
             candidate_checkpoints = bq_output.candidate_checkpoints;
@@ -78,7 +79,7 @@ ViewBuilderOutput ViewBuilderUtility::process(const ViewBuilderInput& input) {
                 output.file_may_match = false;
                 output.skipped_checkpoints = total_checkpoints;
                 output.success = true;
-                return output;
+                co_return output;
             }
         } else {
             // Bloom query failed, fall back to scanning all chunks
@@ -117,7 +118,7 @@ ViewBuilderOutput ViewBuilderUtility::process(const ViewBuilderInput& input) {
     output.skipped_checkpoints =
         total_checkpoints - candidate_checkpoints.size();
     output.success = true;
-    return output;
+    co_return output;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::views

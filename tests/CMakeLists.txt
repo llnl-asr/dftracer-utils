@@ -38,6 +38,8 @@ set(TEST_CPP_SOURCES
     coro/test_async_generator.cpp
     coro/test_coro.cpp
     coro/test_yield.cpp
+    # Async I/O tests
+    io/test_async_io.cpp
     # Task Graph tests
     task_graph/test_task_graph.cpp
     # Reader tests

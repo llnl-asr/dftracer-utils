@@ -1,13 +1,13 @@
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
 
 #include <cstring>
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
+using dftracer::utils::sqlite::SqliteStmt;
 using indexer::internal::IndexerError;
-using indexer::internal::SqliteStmt;
 
 std::vector<unsigned char> pack_line_numbers(
     const std::vector<std::uint32_t>& lines) {

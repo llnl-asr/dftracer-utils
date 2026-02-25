@@ -13,7 +13,7 @@ class AggregatorSummaryUtility
     : public utilities::Utility<AggregatorSummaryInput,
                                 AggregatorSummaryOutput> {
    public:
-    void process(const AggregatorSummaryInput& input) override;
+    coro::CoroTask<void> process(const AggregatorSummaryInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

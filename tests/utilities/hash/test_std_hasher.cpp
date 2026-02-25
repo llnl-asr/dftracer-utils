@@ -92,7 +92,7 @@ TEST_CASE("StdHasherUtility - process() interface") {
 
     SUBCASE("process() returns hash") {
         hasher->reset();
-        Hash result = hasher->process(std::string("test"));
+        Hash result = hasher->process(std::string("test")).get();
 
         CHECK(result.value != 0);
         CHECK(result == hasher->get_hash());

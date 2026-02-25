@@ -1,10 +1,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_MANIFEST_MAPPER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_CHUNK_MANIFEST_MAPPER_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/dft/internal/chunk_manifest.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
-#include <dftracer/utils/utilities/io/types/types.h>
+#include <dftracer/utils/utilities/fileio/types/types.h>
 
 #include <cstddef>
 #include <vector>
@@ -71,7 +72,7 @@ class ChunkManifestMapperUtility
     : public utilities::Utility<ChunkManifestMapperUtilityInput,
                                 ChunkManifestMapperUtilityOutput> {
    public:
-    ChunkManifestMapperUtilityOutput process(
+    coro::CoroTask<ChunkManifestMapperUtilityOutput> process(
         const ChunkManifestMapperUtilityInput& input) override;
 };
 

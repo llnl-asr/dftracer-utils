@@ -44,7 +44,8 @@ struct ViewBuilderOutput {
 class ViewBuilderUtility : public Utility<ViewBuilderInput, ViewBuilderOutput,
                                           tags::Parallelizable> {
    public:
-    ViewBuilderOutput process(const ViewBuilderInput& input) override;
+    coro::CoroTask<ViewBuilderOutput> process(
+        const ViewBuilderInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::views

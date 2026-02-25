@@ -1,9 +1,11 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/sqlite/async.h>
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/indexer/internal/common/gzip_inflater.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <dftracer/utils/utilities/indexer/internal/sqlite/statement.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/queries/queries.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/tar_indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/tar_parser.h>
@@ -11,6 +13,7 @@
 #include <chrono>
 #include <fstream>
 #include <sstream>
+#include <utility>
 
 namespace dftracer::utils::utilities::indexer::internal::tar {
 
@@ -18,9 +21,9 @@ namespace dftracer::utils::utilities::indexer::internal::tar {
 extern const char *const &SQL_SCHEMA;
 
 // Forward declare helper functions
-static bool build_tar_index(const SqliteDatabase &db, int archive_id,
-                            const std::string &tar_gz_path,
-                            std::uint64_t ckpt_size);
+static dftracer::utils::coro::CoroTask<bool> build_tar_index(
+    const SqliteDatabase &db, int archive_id, const std::string &tar_gz_path,
+    std::uint64_t ckpt_size);
 static void init_tar_schema(const SqliteDatabase &db);
 
 TarIndexer::TarIndexer(const std::string &tar_gz_file_path,
@@ -118,17 +121,19 @@ void TarIndexer::close() {
     cached_checkpoints.clear();
 }
 
-void TarIndexer::build() const {
+dftracer::utils::coro::CoroTask<void> TarIndexer::build_async() const {
     if (!force_rebuild && !need_rebuild()) {
-        return;
+        co_return;
     }
 
-    init_tar_schema(db);
+    co_await dftracer::utils::sqlite::run([&] {
+        init_tar_schema(db);
 
-    int archive_id = find_archive_id(tar_gz_path_logical_path);
-    if (archive_id != -1) {
-        delete_archive_record(db, archive_id);
-    }
+        int aid = find_archive_id(tar_gz_path_logical_path);
+        if (aid != -1) {
+            delete_archive_record(db, aid);
+        }
+    });
 
     printf("Get modifcation time for %s\n", tar_gz_path.c_str());
     std::time_t mtime = get_file_modification_time(tar_gz_path);
@@ -139,16 +144,20 @@ void TarIndexer::build() const {
     // TODO: use determine_checkpoint_size like GZIP
     std::uint64_t final_ckpt_size = ckpt_size;
 
-    int file_id;
-    insert_file_record(db, tar_gz_path_logical_path, bytes, mtime, hash,
-                       file_id);
+    auto [file_id, archive_id] = co_await dftracer::utils::sqlite::run([&] {
+        int fid;
+        insert_file_record(db, tar_gz_path_logical_path, bytes, mtime, hash,
+                           fid);
 
-    std::string archive_name = fs::path(tar_gz_path).filename().string();
+        std::string archive_name = fs::path(tar_gz_path).filename().string();
+        int aid;
+        // Will update sizes later
+        insert_archive_record(db, fid, archive_name, 0, 0, aid);
+        return std::pair{fid, aid};
+    });
 
-    // Will update sizes later
-    insert_archive_record(db, file_id, archive_name, 0, 0, archive_id);
-
-    if (!build_tar_index(db, archive_id, tar_gz_path, final_ckpt_size)) {
+    if (!(co_await build_tar_index(db, archive_id, tar_gz_path,
+                                   final_ckpt_size))) {
         throw IndexerError(IndexerError::Type::BUILD_ERROR,
                            "Failed to build TAR index for " + tar_gz_path);
     }
@@ -162,6 +171,7 @@ void TarIndexer::build() const {
     cached_checkpoint_size = final_ckpt_size;
     cached_archive_name.clear();
     cached_checkpoints.clear();
+    co_return;
 }
 
 bool TarIndexer::need_rebuild() const {
@@ -340,18 +350,19 @@ static void init_tar_schema(const SqliteDatabase &db) {
     }
 }
 
-static bool build_tar_index(const SqliteDatabase &db, int archive_id,
-                            const std::string &tar_gz_path,
-                            std::uint64_t ckpt_size) {
-    FILE *fp = std::fopen(tar_gz_path.c_str(), "rb");
-    if (!fp) {
-        return false;
+static dftracer::utils::coro::CoroTask<bool> build_tar_index(
+    const SqliteDatabase &db, int archive_id, const std::string &tar_gz_path,
+    std::uint64_t ckpt_size) {
+    int fd = ::open(tar_gz_path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        co_return false;
     }
 
     GzipInflater inflater;
-    if (!inflater.initialize(fp)) {
-        std::fclose(fp);
-        return false;
+    off_t offset = 0;
+    if (!(co_await inflater.initialize(fd))) {
+        ::close(fd);
+        co_return false;
     }
 
     std::uint64_t total_lines = 0;
@@ -368,12 +379,12 @@ static bool build_tar_index(const SqliteDatabase &db, int archive_id,
         // std::size_t chunk_start_c = inflater.get_total_input_consumed();
 
         GzipInflaterResult result;
-        if (!inflater.read(fp, result)) {
+        if (!(co_await inflater.read(fd, offset, result))) {
             if (result.bytes_read == 0) {
-                break;     // EOF
+                break;        // EOF
             }
-            std::fclose(fp);
-            return false;  // Error
+            ::close(fd);
+            co_return false;  // Error
         }
 
         if (result.bytes_read == 0) {
@@ -397,31 +408,32 @@ static bool build_tar_index(const SqliteDatabase &db, int archive_id,
         // Continue anyway - might be a malformed TAR or not actually TAR.GZ
     }
 
-    // Insert TAR file entries into database
-    for (const auto &entry : tar_entries) {
-        if (entry.is_regular_file()) {
-            InsertTarFileData file_data;
-            file_data.file_name = entry.name;
-            file_data.file_size = entry.size;
-            file_data.file_mtime = entry.mtime;
-            file_data.typeflag = entry.typeflag;
-            file_data.data_offset = entry.data_offset;
-            file_data.uncompressed_offset = entry.uncompressed_offset;
-
-            insert_tar_file_record(db, archive_id, file_data);
-        }
-    }
-
-    DFTRACER_UTILS_LOG_DEBUG("Parsed %zu TAR file entries", tar_entries.size());
-
+    // Insert TAR file entries and metadata into database
     total_uc_size = current_uc_offset;
+    co_await dftracer::utils::sqlite::run([&] {
+        for (const auto &entry : tar_entries) {
+            if (entry.is_regular_file()) {
+                InsertTarFileData file_data;
+                file_data.file_name = entry.name;
+                file_data.file_size = entry.size;
+                file_data.file_mtime = entry.mtime;
+                file_data.typeflag = entry.typeflag;
+                file_data.data_offset = entry.data_offset;
+                file_data.uncompressed_offset = entry.uncompressed_offset;
 
-    // Insert metadata record
-    insert_archive_metadata_record(db, archive_id, ckpt_size, total_lines,
-                                   total_uc_size);
+                insert_tar_file_record(db, archive_id, file_data);
+            }
+        }
 
-    std::fclose(fp);
-    return true;
+        DFTRACER_UTILS_LOG_DEBUG("Parsed %zu TAR file entries",
+                                 tar_entries.size());
+
+        insert_archive_metadata_record(db, archive_id, ckpt_size, total_lines,
+                                       total_uc_size);
+    });
+
+    ::close(fd);
+    co_return true;
 }
 
 }  // namespace dftracer::utils::utilities::indexer::internal::tar

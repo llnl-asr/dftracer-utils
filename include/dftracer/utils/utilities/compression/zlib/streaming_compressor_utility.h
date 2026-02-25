@@ -1,10 +1,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_STREAMING_COMPRESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_STREAMING_COMPRESSOR_UTILITY_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/compression/zlib/internal/compressed_chunk_iterator.h>
 #include <dftracer/utils/utilities/compression/zlib/types.h>
-#include <dftracer/utils/utilities/io/types/types.h>
+#include <dftracer/utils/utilities/fileio/types/types.h>
 #include <zlib.h>
 
 #include <cstring>
@@ -15,7 +16,7 @@ namespace dftracer::utils::utilities::compression::zlib {
 
 class StreamingCompressorUtility;
 
-using StreamingDecompressorUtilityInput = io::ChunkRange;
+using StreamingDecompressorUtilityInput = fileio::ChunkRange;
 
 /**
  * @brief Range for compressed chunk iteration.
@@ -24,8 +25,8 @@ class StreamingCompressorUtilityOutput {
    private:
     internal::ChunkIterator input_begin_;
     internal::ChunkIterator input_end_;
-    int compression_level_;
-    CompressionFormat format_;
+    int compression_level_ = Z_DEFAULT_COMPRESSION;
+    CompressionFormat format_ = CompressionFormat::GZIP;
 
    private:
     friend class StreamingCompressorUtility;
@@ -40,6 +41,7 @@ class StreamingCompressorUtilityOutput {
           format_(format) {}
 
    public:
+    StreamingCompressorUtilityOutput() = default;
     internal::CompressedChunkIterator begin() const {
         return internal::CompressedChunkIterator{input_begin_, input_end_,
                                                  compression_level_, format_};
@@ -112,10 +114,10 @@ class StreamingCompressorUtility
      * @param input ChunkRange from StreamingFileReader
      * @return CompressedChunkRange for lazy iteration
      */
-    StreamingCompressorUtilityOutput process(
+    coro::CoroTask<StreamingCompressorUtilityOutput> process(
         const StreamingDecompressorUtilityInput& input) override {
-        return StreamingCompressorUtilityOutput{input.begin(), input.end(),
-                                                compression_level_};
+        co_return StreamingCompressorUtilityOutput{input.begin(), input.end(),
+                                                   compression_level_};
     }
 };
 
@@ -126,7 +128,8 @@ class StreamingCompressorUtility
  * use StreamingCompressor utility instead.
  */
 class ManualStreamingCompressorUtility
-    : public utilities::Utility<io::RawData, std::vector<io::CompressedData>> {
+    : public utilities::Utility<fileio::RawData,
+                                std::vector<fileio::CompressedData>> {
    private:
     z_stream stream_;
     bool initialized_ = false;
@@ -167,16 +170,17 @@ class ManualStreamingCompressorUtility
     ManualStreamingCompressorUtility& operator=(
         const ManualStreamingCompressorUtility&) = delete;
 
-    std::vector<io::CompressedData> process(const io::RawData& chunk) {
+    coro::CoroTask<std::vector<fileio::CompressedData>> process(
+        const fileio::RawData& chunk) override {
         if (!initialized_) {
             initialize();
         }
 
         if (chunk.empty()) {
-            return {};
+            co_return {};
         }
 
-        std::vector<io::CompressedData> output_chunks;
+        std::vector<fileio::CompressedData> output_chunks;
 
         stream_.avail_in = static_cast<uInt>(chunk.size());
         stream_.next_in = const_cast<Bytef*>(chunk.data.data());
@@ -199,13 +203,13 @@ class ManualStreamingCompressorUtility
                     output_buffer_.begin(),
                     output_buffer_.begin() + compressed_size);
 
-                output_chunks.push_back(io::CompressedData{
+                output_chunks.push_back(fileio::CompressedData{
                     std::move(compressed_data), chunk.size()});
             }
         }
 
         total_in_ += chunk.size();
-        return output_chunks;
+        co_return output_chunks;
     }
 
     /**
@@ -215,7 +219,7 @@ class ManualStreamingCompressorUtility
      *
      * @return Vector of final compressed chunks
      */
-    std::vector<io::CompressedData> finalize() {
+    std::vector<fileio::CompressedData> finalize() {
         if (finalized_) {
             return {};  // Already finalized
         }
@@ -224,7 +228,7 @@ class ManualStreamingCompressorUtility
             initialize();
         }
 
-        std::vector<io::CompressedData> output_chunks;
+        std::vector<fileio::CompressedData> output_chunks;
         int ret;
 
         do {
@@ -247,7 +251,7 @@ class ManualStreamingCompressorUtility
                     output_buffer_.begin() + compressed_size);
 
                 output_chunks.push_back(
-                    io::CompressedData{std::move(compressed_data), 0});
+                    fileio::CompressedData{std::move(compressed_data), 0});
             }
         } while (ret == Z_OK);
 

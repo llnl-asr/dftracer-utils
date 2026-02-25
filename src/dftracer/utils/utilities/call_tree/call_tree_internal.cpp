@@ -6,6 +6,7 @@
 #include <dftracer/utils/call_tree/internal/trace_reader.h>
 #include <dftracer/utils/core/common/format_detector.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <yyjson.h>
@@ -226,7 +227,8 @@ class TraceLineProcessor
           processed_(0),
           report_interval_(10000) {}
 
-    bool process(const char* data, std::size_t length) override {
+    coro::CoroTask<bool> process(const char* data,
+                                 std::size_t length) override {
         line_count_++;
 
         // Progress indicator
@@ -237,14 +239,14 @@ class TraceLineProcessor
 
         // Skip empty lines, brackets
         if (length == 0) {
-            return true;
+            co_return true;
         }
 
         std::string line(data, length);
 
         // Skip brackets
         if (line == "[" || line == "]") {
-            return true;
+            co_return true;
         }
 
         // Remove trailing comma
@@ -256,7 +258,7 @@ class TraceLineProcessor
             processed_++;
         }
 
-        return true;  // Continue processing
+        co_return true;  // Continue processing
     }
 
     void end() override {

@@ -62,7 +62,8 @@ class TarLineByteStream : public TarStream {
             current_position_);
     }
 
-    std::size_t read(char* buffer, std::size_t buffer_size) override {
+    coro::CoroTask<std::size_t> read_async(char* buffer,
+                                           std::size_t buffer_size) override {
 #ifdef __GNUC__
         __builtin_prefetch(buffer, 1, 3);
 #endif
@@ -75,7 +76,7 @@ class TarLineByteStream : public TarStream {
 
         if (is_at_target_end()) {
             is_finished_ = true;
-            return 0;
+            co_return 0;
         }
 
         std::size_t total_bytes_written = 0;
@@ -90,7 +91,7 @@ class TarLineByteStream : public TarStream {
             if (buffer_bytes < line_buffer_.size()) {
                 // Partial consumption of buffer
                 line_buffer_ = line_buffer_.substr(buffer_bytes);
-                return buffer_bytes;
+                co_return buffer_bytes;
             } else {
                 // Full consumption of buffer
                 line_buffer_.clear();
@@ -129,8 +130,8 @@ class TarLineByteStream : public TarStream {
                 }
             }
 
-            std::size_t bytes_read =
-                current_file_stream_->read(temp_buffer.data(), max_read);
+            std::size_t bytes_read = co_await current_file_stream_->read_async(
+                temp_buffer.data(), max_read);
 
             DFTRACER_UTILS_LOG_DEBUG(
                 "TarLineByteStream::stream - read %zu bytes from file %s "
@@ -182,13 +183,13 @@ class TarLineByteStream : public TarStream {
             "%zu / %zu)",
             total_bytes_written, current_position_, target_end_bytes_);
 
-        return total_bytes_written;
+        co_return total_bytes_written;
     }
 
     // Zero-copy read - stub for now
-    span_view<const char> read() override {
+    coro::CoroTask<span_view<const char>> read_async() override {
         // TODO: Implement zero-copy read for TarLineByteStream
-        return {};
+        co_return {};
     }
 
     void reset() override {

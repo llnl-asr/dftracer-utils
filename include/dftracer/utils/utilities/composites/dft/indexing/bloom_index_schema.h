@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_BLOOM_INDEX_SCHEMA_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_BLOOM_INDEX_SCHEMA_H
 
-#include <dftracer/utils/utilities/indexer/internal/sqlite/database.h>
+#include <dftracer/utils/core/sqlite/database.h>
 
 #include <cstdint>
 #include <string>
@@ -33,14 +33,14 @@ class BloomIndexDatabase {
 
     int get_file_info_id(const std::string& file_path) const;
 
-    indexer::internal::SqliteDatabase& db() { return db_; }
-    const indexer::internal::SqliteDatabase& db() const { return db_; }
+    dftracer::utils::sqlite::SqliteDatabase& db() { return db_; }
+    const dftracer::utils::sqlite::SqliteDatabase& db() const { return db_; }
 
     void begin_transaction();
     void commit_transaction();
 
    private:
-    indexer::internal::SqliteDatabase db_;
+    dftracer::utils::sqlite::SqliteDatabase db_;
 };
 
 /**

@@ -27,6 +27,34 @@ bool timeslice_exceeded() noexcept;
 /// Set the timeslice duration for the current thread.
 void set_timeslice_duration(std::chrono::microseconds duration) noexcept;
 
+/// Get the timeslice duration for the current thread.
+std::chrono::microseconds get_timeslice_duration() noexcept;
+
+/// Suppress (or restore) the current-thread executor context.
+/// Returns the previous value.  Used by SyncScope.
+void* suppress_executor() noexcept;
+void restore_executor(void* saved) noexcept;
+
+/// RAII guard that suppresses the executor context and timeslice
+/// for the current scope, forcing nested async I/O into the
+/// synchronous pread/pwrite fallback.  Used by CoroTask::get().
+struct SyncScope {
+    void* saved_exec_;
+    std::chrono::microseconds saved_ts_;
+
+    SyncScope() noexcept
+        : saved_exec_(suppress_executor()),
+          saved_ts_(get_timeslice_duration()) {
+        set_timeslice_duration(std::chrono::microseconds{0});
+    }
+    ~SyncScope() noexcept {
+        set_timeslice_duration(saved_ts_);
+        restore_executor(saved_exec_);
+    }
+    SyncScope(const SyncScope&) = delete;
+    SyncScope& operator=(const SyncScope&) = delete;
+};
+
 /// Re-enqueue a coroutine handle on the current worker's executor.
 /// No-op if not on a worker thread.  Resets the timeslice.
 void yield_to_executor(std::coroutine_handle<> h) noexcept;

@@ -8,7 +8,7 @@ dftracer-utils provides a collection of composable utilities for trace file proc
    :caption: Available Utilities:
 
    utilities/filesystem
-   utilities/io
+   utilities/fileio
    utilities/compression
    utilities/text
    utilities/composites

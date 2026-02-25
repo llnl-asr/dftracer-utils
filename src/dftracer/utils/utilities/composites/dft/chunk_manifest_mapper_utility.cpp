@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/chunk_manifest_mapper_utility.h>
 
 #include <algorithm>
@@ -5,7 +6,8 @@
 
 namespace dftracer::utils::utilities::composites::dft {
 
-ChunkManifestMapperUtilityOutput ChunkManifestMapperUtility::process(
+coro::CoroTask<ChunkManifestMapperUtilityOutput>
+ChunkManifestMapperUtility::process(
     const ChunkManifestMapperUtilityInput& input) {
     std::vector<internal::DFTracerChunkManifest> manifests;
 
@@ -100,7 +102,7 @@ ChunkManifestMapperUtilityOutput ChunkManifestMapperUtility::process(
         manifests.push_back(current_manifest);
     }
 
-    return manifests;
+    co_return manifests;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft

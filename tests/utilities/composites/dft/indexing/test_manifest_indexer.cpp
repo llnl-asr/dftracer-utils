@@ -76,7 +76,7 @@ TEST_SUITE("ManifestIndexer") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexerUtility indexer;
-        auto output = indexer.process(input);
+        auto output = indexer.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.events_processed == 5);
@@ -141,7 +141,7 @@ TEST_SUITE("ManifestIndexer") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexerUtility indexer;
-        auto output = indexer.process(input);
+        auto output = indexer.process(input).get();
 
         CHECK(output.success == true);
 
@@ -199,7 +199,7 @@ TEST_SUITE("ManifestIndexer") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexerUtility indexer;
-        auto output = indexer.process(input);
+        auto output = indexer.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.event_line_groups.empty());

@@ -50,7 +50,7 @@ const char* query_type_to_string(StatisticsQueryType t) {
 }
 }  // namespace
 
-StatisticsQueryOutput StatisticsQueryUtility::process(
+coro::CoroTask<StatisticsQueryOutput> StatisticsQueryUtility::process(
     const StatisticsQueryInput& input) {
     StatisticsQueryOutput output;
     const auto& stats = input.stats;
@@ -125,7 +125,7 @@ StatisticsQueryOutput StatisticsQueryUtility::process(
             break;
     }
 
-    return output;
+    co_return output;
 }
 
 std::string StatisticsQueryOutput::to_json() const {

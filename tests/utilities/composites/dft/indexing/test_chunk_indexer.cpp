@@ -78,7 +78,7 @@ TEST_SUITE("ChunkIndexerUtility") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexerUtility indexer;
-        auto output = indexer.process(input);
+        auto output = indexer.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.events_processed == 50);
@@ -148,7 +148,7 @@ TEST_SUITE("ChunkIndexerUtility") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexerUtility indexer;
-        auto output = indexer.process(input);
+        auto output = indexer.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.events_processed == 20);
@@ -205,7 +205,7 @@ TEST_SUITE("ChunkIndexerUtility") {
             .with_batch_size(4 * 1024 * 1024);
 
         ChunkIndexerUtility indexer;
-        auto output = indexer.process(input);
+        auto output = indexer.process(input).get();
 
         CHECK(output.success == true);
         CHECK(output.events_processed == 2);

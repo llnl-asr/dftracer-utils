@@ -14,10 +14,16 @@ Pipeline::Pipeline(const PipelineConfig& config)
     : name_(config.name),
       error_policy_(config.error_policy),
       error_handler_(config.error_handler) {
-    // Create executor with configured threads and responsiveness timeouts
-    executor_ = std::make_unique<Executor>(config.executor_threads,
-                                           config.executor_idle_timeout,
-                                           config.executor_deadlock_timeout);
+    // Create executor from pipeline config
+    ExecutorConfig exec_cfg;
+    exec_cfg.num_threads = config.executor_threads;
+    exec_cfg.idle_timeout = config.executor_idle_timeout;
+    exec_cfg.deadlock_timeout = config.executor_deadlock_timeout;
+    exec_cfg.io_pool_size = config.io_thread_count;
+    exec_cfg.io_backend_type = config.io_backend_type;
+    exec_cfg.io_batch_threshold = config.io_batch_threshold;
+    exec_cfg.sqlite_pool_size = config.sqlite_pool_size;
+    executor_ = std::make_unique<Executor>(exec_cfg);
 
     // Create scheduler with reference to executor and full config
     scheduler_ = std::make_unique<Scheduler>(executor_.get(), config);

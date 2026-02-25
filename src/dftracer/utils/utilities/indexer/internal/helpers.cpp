@@ -11,9 +11,10 @@
 #include <sys/types.h>
 #endif
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <chrono>
-#include <cstdio>
-#include <fstream>
 #include <functional>
 #include <iomanip>
 #include <sstream>
@@ -57,8 +58,8 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
     // Use much larger buffer for better I/O performance on large files
     constexpr size_t HASH_BUFFER_SIZE = 1024 * 1024;  // 1MB buffer
 
-    FILE *file = std::fopen(file_path.c_str(), "rb");
-    if (!file) {
+    int fd = ::open(file_path.c_str(), O_RDONLY);
+    if (fd < 0) {
         DFTRACER_UTILS_LOG_ERROR("Cannot open file for hash calculation: %s",
                                  file_path.c_str());
         return 0;
@@ -67,14 +68,13 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
     dftracer::utils::utilities::hash::HasherUtility hasher;
     std::vector<unsigned char> buffer(HASH_BUFFER_SIZE);
 
-    std::size_t bytes_read = 0;
-    while ((bytes_read = std::fread(buffer.data(), 1, buffer.size(), file)) >
-           0) {
+    ssize_t bytes_read = 0;
+    while ((bytes_read = ::read(fd, buffer.data(), buffer.size())) > 0) {
         std::string_view chunk(reinterpret_cast<const char *>(buffer.data()),
-                               bytes_read);
+                               static_cast<std::size_t>(bytes_read));
         hasher.update(chunk);
     }
-    std::fclose(file);
+    ::close(fd);
 
     return static_cast<std::uint64_t>(hasher.get_hash().value);
 }
@@ -90,14 +90,12 @@ std::uint64_t file_size_bytes(const std::string &path) {
 #endif
     }
 
-    FILE *fp = std::fopen(path.c_str(), "rb");
-    if (!fp) return 0;
-    if (fseeko(fp, 0, SEEK_END) != 0) {
-        std::fclose(fp);
-        return 0;
-    }
-    const auto pos = ftello(fp);
-    std::fclose(fp);
+    int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) return 0;
+    off_t pos = ::lseek(fd, 0, SEEK_END);
+    ::close(fd);
+    if (pos < 0) return 0;
+    return static_cast<std::uint64_t>(pos);
     if (pos < 0) return 0;
     return static_cast<std::uint64_t>(pos);
 }

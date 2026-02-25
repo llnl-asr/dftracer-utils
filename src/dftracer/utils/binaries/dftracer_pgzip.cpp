@@ -148,7 +148,7 @@ int main(int argc, char** argv) {
         auto input = FileCompressionUtilityInput::from_file(file_path,
                                                             compression_level);
         FileCompressorUtility compressor;
-        return compressor.process(input);
+        return compressor.process(input).get();
     };
 
     auto compress_workflow = std::make_shared<

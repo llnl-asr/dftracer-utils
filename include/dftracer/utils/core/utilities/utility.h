@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_CORE_UTILITIES_UTILITY_H
 
 #include <dftracer/utils/core/common/type_name.h>
+#include <dftracer/utils/core/coro/task.h>
 
 #include <sstream>
 #include <stdexcept>
@@ -123,7 +124,7 @@ class Utility {
      * @param input Input data to process
      * @return Processed output
      */
-    virtual O process([[maybe_unused]] const I& input) = 0;
+    virtual coro::CoroTask<O> process([[maybe_unused]] const I& input) = 0;
 
    protected:
     /**

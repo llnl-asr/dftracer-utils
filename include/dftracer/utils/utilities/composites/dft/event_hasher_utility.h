@@ -37,7 +37,8 @@ using EventHashOutput = std::uint64_t;
  */
 class EventHasher : public utilities::Utility<EventHashInput, EventHashOutput> {
    public:
-    EventHashOutput process(const EventHashInput& input) override;
+    coro::CoroTask<EventHashOutput> process(
+        const EventHashInput& input) override;
 };
 
 /**
@@ -76,9 +77,10 @@ class IncrementalEventHasher
         }
     }
 
-    std::size_t process(const IncrementalEventHashInput& input) override {
+    coro::CoroTask<std::size_t> process(
+        const IncrementalEventHashInput& input) override {
         update(input.events);
-        return hash_;
+        co_return hash_;
     }
 
     std::size_t get_hash() const { return hash_; }

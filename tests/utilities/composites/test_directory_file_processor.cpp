@@ -72,7 +72,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                     processor);
 
             // Set up executor and scheduler
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             // Create input for .txt files only
@@ -139,7 +139,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 std::make_shared<DirectoryFileProcessorUtility<std::string>>(
                     processor);
 
-            Executor executor(2);
+            Executor executor(ExecutorConfig{.num_threads = 2});
             Scheduler scheduler(&executor);
 
             DirectoryProcessInput input{
@@ -197,7 +197,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 std::make_shared<DirectoryFileProcessorUtility<std::string>>(
                     processor);
 
-            Executor executor(4);
+            Executor executor(ExecutorConfig{.num_threads = 4});
             Scheduler scheduler(&executor);
 
             DirectoryProcessInput input{
@@ -247,7 +247,7 @@ TEST_SUITE("DirectoryFileProcessor") {
             auto dir_processor =
                 std::make_shared<DirectoryFileProcessorUtility<int>>(processor);
 
-            Executor executor(1);
+            Executor executor(ExecutorConfig{.num_threads = 1});
             Scheduler scheduler(&executor);
 
             DirectoryProcessInput input{test_dir, {".txt"}, false};
@@ -284,7 +284,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 std::make_shared<DirectoryFileProcessorUtility<std::string>>(
                     processor);
 
-            Executor executor(2);
+            Executor executor(ExecutorConfig{.num_threads = 2});
             Scheduler scheduler(&executor);
 
             DirectoryProcessInput input{
@@ -326,7 +326,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 std::make_shared<DirectoryFileProcessorUtility<std::string>>(
                     processor);
 
-            Executor executor(3);
+            Executor executor(ExecutorConfig{.num_threads = 3});
             Scheduler scheduler(&executor);
 
             DirectoryProcessInput input{test_dir,

@@ -16,7 +16,7 @@
  * using namespace dftracer::utils::utilities::compression;
  *
  * auto compressor = std::make_shared<zlib::Compressor>();
- * io::RawData input("Hello, World!");
+ * fileio::RawData input("Hello, World!");
  * zlib::CompressedData output = compressor->process(input);
  * @endcode
  */

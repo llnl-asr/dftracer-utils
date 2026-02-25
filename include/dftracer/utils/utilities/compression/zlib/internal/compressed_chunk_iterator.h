@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_INTERNAL_COMPRESSED_CHUNK_ITERATOR_H
 
 #include <dftracer/utils/utilities/compression/zlib/types.h>
-#include <dftracer/utils/utilities/io/types/types.h>
+#include <dftracer/utils/utilities/fileio/types/types.h>
 #include <zlib.h>
 
 #include <cstring>
@@ -13,9 +13,9 @@
 
 namespace dftracer::utils::utilities::compression::zlib::internal {
 
-using io::ChunkIterator;
-using io::CompressedData;
-using io::RawData;
+using fileio::ChunkIterator;
+using fileio::CompressedData;
+using fileio::RawData;
 
 /**
  * @brief Lazy iterator that compresses chunks on-the-fly.

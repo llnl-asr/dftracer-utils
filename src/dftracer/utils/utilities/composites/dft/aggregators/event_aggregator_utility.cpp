@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator_utility.h>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
@@ -50,7 +51,7 @@ EventAggregatorUtilityOutput EventAggregatorUtility::finalize() {
     return std::move(state_);
 }
 
-EventAggregatorUtilityOutput EventAggregatorUtility::process(
+coro::CoroTask<EventAggregatorUtilityOutput> EventAggregatorUtility::process(
     const EventAggregatorUtilityInput& input) {
     DFTRACER_UTILS_LOG_INFO("Merging %zu chunk aggregations...",
                             input.chunk_outputs.size());
@@ -60,7 +61,7 @@ EventAggregatorUtilityOutput EventAggregatorUtility::process(
         merge_chunk(std::move(copy));
     }
 
-    return finalize();
+    co_return finalize();
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

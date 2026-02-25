@@ -4,6 +4,9 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/io/io.h>
+#include <fcntl.h>
 #include <zlib.h>
 
 #include <cstddef>
@@ -64,41 +67,38 @@ class Inflater {
         return inflatePrime(&stream, bits, value) == Z_OK;
     }
 
-    int detect_stream_type(FILE* file, std::uint64_t offset = 0) {
-        if (fseeko(file, static_cast<off_t>(offset), SEEK_SET) != 0) {
-            return constants::indexer::ZLIB_GZIP_WINDOW_BITS;  // Default to
-                                                               // GZIP
-        }
-
-        int first_byte = fgetc(file);
-        fseeko(file, static_cast<off_t>(offset), SEEK_SET);    // Seek back
-
-        if (first_byte == EOF) {
-            return constants::indexer::ZLIB_GZIP_WINDOW_BITS;  // Default to
-                                                               // GZIP
+    coro::CoroTask<int> detect_stream_type(int fd,
+                                           std::uint64_t file_offset = 0) {
+        unsigned char first_byte;
+        ssize_t n = co_await io::read(fd, &first_byte, 1,
+                                      static_cast<off_t>(file_offset));
+        if (n <= 0) {
+            co_return constants::indexer::ZLIB_GZIP_WINDOW_BITS;  // Default
+                                                                  // to GZIP
         }
 
         if (first_byte == 0x1f) {
-            return constants::indexer::ZLIB_GZIP_WINDOW_BITS;  // GZIP (15+16)
+            co_return constants::indexer::ZLIB_GZIP_WINDOW_BITS;  // GZIP
         } else if ((first_byte & 0xf) == 8) {
-            return 15;                                         // ZLIB
+            co_return 15;                                         // ZLIB
         } else {
-            return -15;                                        // RAW deflate
+            co_return -15;                                        // RAW deflate
         }
     }
 
-    bool read_input(FILE* file) {
-        std::size_t n = ::fread(in_buffer, 1, sizeof(in_buffer), file);
+    coro::CoroTask<bool> read_input(int fd, off_t& offset) {
+        ssize_t n = co_await io::read(fd, in_buffer, sizeof(in_buffer), offset);
         if (n > 0) {
+            offset += n;
             stream.next_in = in_buffer;
             stream.avail_in = static_cast<uInt>(n);
-            return true;
-        } else if (std::ferror(file)) {
+            co_return true;
+        } else if (n < 0) {
             DFTRACER_UTILS_LOG_DEBUG("Error reading from file: %s",
-                                     std::strerror(errno));
-            return false;
+                                     std::strerror(-static_cast<int>(n)));
+            co_return false;
         }
-        return true;  // EOF is not an error
+        co_return true;  // n == 0 -> EOF, not error
     }
 
     std::size_t get_output(unsigned char* buf, std::size_t len) {

@@ -211,7 +211,8 @@ class ChunkIndexerUtility
    public:
     ChunkIndexerUtility() = default;
 
-    ChunkIndexerOutput process(const ChunkIndexerInput& input) override;
+    coro::CoroTask<ChunkIndexerOutput> process(
+        const ChunkIndexerInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

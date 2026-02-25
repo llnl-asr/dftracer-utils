@@ -45,7 +45,8 @@ class PerfettoTraceWriterUtility
                            std::uint64_t real_tid = 0) const;
 
    public:
-    bool process(const PerfettoTraceWriterInput& input) override;
+    coro::CoroTask<bool> process(
+        const PerfettoTraceWriterInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

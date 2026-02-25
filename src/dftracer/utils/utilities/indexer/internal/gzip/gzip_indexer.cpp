@@ -2,6 +2,8 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/sqlite/async.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint_size.h>
 #include <dftracer/utils/utilities/indexer/internal/common/gzip_checkpointer.h>
 #include <dftracer/utils/utilities/indexer/internal/common/gzip_inflater.h>
@@ -9,6 +11,8 @@
 #include <dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/gzip/queries/queries.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <cstdio>
 
@@ -27,13 +31,14 @@ static void init_schema(const SqliteDatabase &db) {
     }
 }
 
-static bool process_chunks(FILE *fp, const SqliteDatabase &db, int file_id,
-                           std::uint64_t ckpt_size, std::uint64_t &total_lines,
-                           std::uint64_t &total_uc_size,
-                           std::uint64_t &tail_line_count) {
+static dftracer::utils::coro::CoroTask<bool> process_chunks(
+    int fd, const SqliteDatabase &db, int file_id, std::uint64_t ckpt_size,
+    std::uint64_t &total_lines, std::uint64_t &total_uc_size,
+    std::uint64_t &tail_line_count) {
     GzipInflater inflater;
-    if (!inflater.initialize(fp)) {
-        return false;
+    off_t offset = 0;
+    if (!(co_await inflater.initialize(fd))) {
+        co_return false;
     }
 
     std::uint64_t checkpoint_idx = 0;
@@ -44,11 +49,11 @@ static bool process_chunks(FILE *fp, const SqliteDatabase &db, int file_id,
 
     while (true) {
         GzipInflaterResult result;
-        if (!inflater.read(fp, result)) {
+        if (!(co_await inflater.read(fd, offset, result))) {
             if (result.bytes_read == 0) {
-                break;     // EOF
+                break;        // EOF
             }
-            return false;  // Error
+            co_return false;  // Error
         }
 
         if (result.bytes_read == 0) {
@@ -81,7 +86,9 @@ static bool process_chunks(FILE *fp, const SqliteDatabase &db, int file_id,
                         line_count_in_chunk,
                         first_line_in_chunk,
                         total_lines};  // 1-based: last line = total_lines
-                    insert_checkpoint_record(db, file_id, checkpoint_data);
+                    co_await dftracer::utils::sqlite::run([&] {
+                        insert_checkpoint_record(db, file_id, checkpoint_data);
+                    });
 
                     // Reset chunk counters for next chunk
                     line_count_in_chunk = 0;
@@ -94,7 +101,7 @@ static bool process_chunks(FILE *fp, const SqliteDatabase &db, int file_id,
 
     total_uc_size = current_uc_offset;
     tail_line_count = line_count_in_chunk;
-    return true;
+    co_return true;
 }
 
 // After all checkpoints are inserted, compute uc_size / c_size for each
@@ -154,29 +161,33 @@ static void finalize_checkpoints(const SqliteDatabase &db, int file_id,
     }
 }
 
-static bool build_index(const SqliteDatabase &db, int file_id,
-                        const std::string &gz_path, std::uint64_t ckpt_size) {
-    FILE *fp = std::fopen(gz_path.c_str(), "rb");
-    if (!fp) {
-        return false;
+static dftracer::utils::coro::CoroTask<bool> build_index(
+    const SqliteDatabase &db, int file_id, const std::string &gz_path,
+    std::uint64_t ckpt_size) {
+    int fd = ::open(gz_path.c_str(), O_RDONLY);
+    if (fd < 0) {
+        co_return false;
     }
 
     std::uint64_t total_lines = 0;
     std::uint64_t total_uc_size = 0;
     std::uint64_t tail_line_count = 0;
 
-    bool success = process_chunks(fp, db, file_id, ckpt_size, total_lines,
-                                  total_uc_size, tail_line_count);
-    std::fclose(fp);
+    bool success =
+        co_await process_chunks(fd, db, file_id, ckpt_size, total_lines,
+                                total_uc_size, tail_line_count);
+    ::close(fd);
 
     if (success) {
-        finalize_checkpoints(db, file_id, total_uc_size, total_lines,
-                             tail_line_count);
-        insert_file_metadata_record(db, file_id, ckpt_size, total_lines,
-                                    total_uc_size);
+        co_await dftracer::utils::sqlite::run([&] {
+            finalize_checkpoints(db, file_id, total_uc_size, total_lines,
+                                 tail_line_count);
+            insert_file_metadata_record(db, file_id, ckpt_size, total_lines,
+                                        total_uc_size);
+        });
     }
 
-    return success;
+    co_return success;
 }
 
 GzipIndexer::GzipIndexer(const std::string &gz_path_,
@@ -260,17 +271,19 @@ void GzipIndexer::close() {
     db.close();
 }
 
-void GzipIndexer::build() const {
+dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
     if (!force_rebuild && !need_rebuild()) {
-        return;
+        co_return;
     }
 
-    init_schema(db);
+    co_await dftracer::utils::sqlite::run([&] {
+        init_schema(db);
 
-    int file_id = find_file_id(gz_path_logical_path);
-    if (file_id != -1) {
-        delete_file_record(db, file_id);
-    }
+        int fid = find_file_id(gz_path_logical_path);
+        if (fid != -1) {
+            delete_file_record(db, fid);
+        }
+    });
 
     std::time_t mtime = get_file_modification_time(gz_path);
     auto hash = calculate_file_hash(gz_path);
@@ -278,15 +291,20 @@ void GzipIndexer::build() const {
     std::uint64_t final_ckpt_size =
         determine_checkpoint_size(ckpt_size, gz_path);
 
-    insert_file_record(db, gz_path_logical_path, bytes, mtime, hash, file_id);
+    int file_id = co_await dftracer::utils::sqlite::run([&] {
+        int fid;
+        insert_file_record(db, gz_path_logical_path, bytes, mtime, hash, fid);
+        return fid;
+    });
 
-    if (!build_index(db, file_id, gz_path, final_ckpt_size)) {
+    if (!(co_await build_index(db, file_id, gz_path, final_ckpt_size))) {
         throw IndexerError(IndexerError::Type::BUILD_ERROR,
                            "Failed to build index for " + gz_path);
     }
 
     cached_is_valid = true;
     cached_file_id = file_id;
+    co_return;
 }
 
 bool GzipIndexer::is_valid() const { return cached_is_valid; }

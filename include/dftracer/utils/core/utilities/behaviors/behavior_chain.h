@@ -1,8 +1,10 @@
 #ifndef DFTRACER_UTILS_CORE_UTILITIES_BEHAVIORS_BEHAVIOR_CHAIN_H
 #define DFTRACER_UTILS_CORE_UTILITIES_BEHAVIORS_BEHAVIOR_CHAIN_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior.h>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -113,37 +115,32 @@ class BehaviorChain {
     }
 
     /**
-     * @brief Execute the middleware chain.
+     * @brief Execute the async middleware chain.
      *
-     * Builds a middleware chain where each behavior can wrap execution.
-     * Behaviors are executed in forward order (first added, outermost wrapper).
-     *
-     * Example with [Monitor, Cache, Retry]:
-     * - Monitor wraps Cache wraps Retry wraps utility
-     * - Execution flow: Monitor → Cache (hit?) → Retry → utility
+     * Runs synchronous behavior hooks around an async core callable.
+     * Behaviors stay synchronous (they don't do I/O) -- only the core
+     * utility process() is async.
      *
      * @param input Input to process
-     * @param core Core function to execute
+     * @param core Async core function to execute
      * @return Final result after all middleware
      */
-    O process(const I& input, std::function<O(const I&)> core) {
-        // Build middleware chain from right to left
-        auto next = core;
-
-        // Wrap with each behavior in reverse order
-        // (so first behavior added becomes outermost wrapper)
-        for (auto it = behaviors_.rbegin(); it != behaviors_.rend(); ++it) {
-            auto& behavior = *it;
-            // Capture current next function
-            auto current_next = next;
-            // Wrap it with this behavior
-            next = [behavior, current_next](const I& inp) -> O {
-                return behavior->process(inp, current_next);
-            };
+    coro::CoroTask<O> process(const I& input,
+                              std::function<coro::CoroTask<O>(const I&)> core) {
+        before_process(input);
+        try {
+            O result = co_await core(input);
+            result = after_process(input, std::move(result));
+            co_return result;
+        } catch (const std::exception& e) {
+            auto error_result = on_error(input, e, 0);
+            if (auto* recovery = std::get_if<std::optional<O>>(&error_result)) {
+                if (recovery->has_value()) {
+                    co_return std::move(recovery->value());
+                }
+            }
+            throw;
         }
-
-        // Execute the fully wrapped chain
-        return next(input);
     }
 
     /**

@@ -21,7 +21,7 @@ using indexing::queries::query_provenance_sources;
 
 }  // namespace
 
-ReconstructionPlan ReconstructionPlannerUtility::process(
+coro::CoroTask<ReconstructionPlan> ReconstructionPlannerUtility::process(
     const ReconstructionPlannerInput& input) {
     ReconstructionPlan plan;
 
@@ -85,7 +85,7 @@ ReconstructionPlan ReconstructionPlannerUtility::process(
         }
     }
 
-    return plan;
+    co_return plan;
 }
 
 }  // namespace

@@ -6,8 +6,8 @@
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
 #include <dftracer/utils/utilities/composites/composites.h>
+#include <dftracer/utils/utilities/fileio/types/types.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/io/types/types.h>
 
 #include <argparse/argparse.hpp>
 #include <chrono>
@@ -261,8 +261,9 @@ int main(int argc, char** argv) {
                         .with_force_rebuild(force)
                         .with_index(idx_path);
 
-            co_return utilities::composites::dft::MetadataCollectorUtility{}
-                .process(meta_input);
+            co_return co_await utilities::composites::dft::
+                MetadataCollectorUtility{}
+                    .process(meta_input);
         },
         "ProcessFile");
 
@@ -281,7 +282,7 @@ int main(int argc, char** argv) {
                     from_metadata(all_metadata)
                         .with_target_size(static_cast<double>(chunk_size_mb));
 
-            auto manifests = mapper.process(mapper_input);
+            auto manifests = co_await mapper.process(mapper_input);
             DFTRACER_UTILS_LOG_INFO("Created %zu chunks", manifests.size());
             co_return manifests;
         },
@@ -363,7 +364,7 @@ int main(int argc, char** argv) {
                             from_metadata({meta});
                     utilities::composites::dft::
                         EventCollectorFromMetadataUtility collector;
-                    auto events = collector.process(collect_input);
+                    auto events = co_await collector.process(collect_input);
                     input_hasher.update(events);
                 }
 

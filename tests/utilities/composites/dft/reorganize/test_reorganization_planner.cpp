@@ -82,7 +82,7 @@ static void build_midx(const std::string& trace_file,
                                        ManifestIndexBuildOutput,
                                        utilities::tags::NeedsContext>
                 executor(utility, std::move(chain));
-            result = executor.execute_with_context(ctx, input);
+            result = co_await executor.execute_with_context(ctx, input);
             co_return;
         },
         "BuildMidx");
@@ -143,7 +143,7 @@ TEST_SUITE("ReorganizationPlanner") {
         input.groups = {{"io", "cat=POSIX"}};
         input.index_dir = test_dir;
 
-        auto plan = planner.process(input);
+        auto plan = planner.process(input).get();
 
         // Should have 2 groups: "io" + auto-created
         // "remainder"
@@ -215,7 +215,7 @@ TEST_SUITE("ReorganizationPlanner") {
         input.groups = {{"io", "cat=POSIX"}, {"compute", "cat=APP"}};
         input.index_dir = test_dir;
 
-        auto plan = planner.process(input);
+        auto plan = planner.process(input).get();
 
         // 3 groups: io, compute, remainder
         CHECK(plan.groups.size() == 3);
@@ -258,7 +258,7 @@ TEST_SUITE("ReorganizationPlanner") {
         input.groups = {{"io", "cat=POSIX"}, {"compute", "cat=APP"}};
         input.index_dir = test_dir;
 
-        auto plan = planner.process(input);
+        auto plan = planner.process(input).get();
 
         // Both io and compute tasks should contain
         // metadata lines 0 and 1

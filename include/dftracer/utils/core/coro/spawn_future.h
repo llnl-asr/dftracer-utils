@@ -161,12 +161,22 @@ class SpawnFuture {
 
     /// Detach waiter -- prevents completion from resuming a destroyed handle.
     /// Used by when_any to safely clean up losing wrappers.
-    /// After detach(), the spawned coroutine's complete() will see DONE
-    /// and will not attempt to resume any waiter.
+    /// If a waiter handle was registered (via await_suspend), it is
+    /// extracted and scheduled for deferred destruction since nobody
+    /// will resume it.
     void detach() noexcept {
         if (state_) {
-            state_->flag.exchange(SharedState<T>::DONE,
-                                  std::memory_order_acq_rel);
+            auto prev = state_->flag.exchange(SharedState<T>::DONE,
+                                              std::memory_order_acq_rel);
+            if (prev != SharedState<T>::EMPTY && prev != SharedState<T>::DONE &&
+                state_->executor) {
+                // A waiter handle was registered but will never be
+                // resumed.  Schedule it for deferred destruction to
+                // prevent a frame leak.
+                auto stale = std::coroutine_handle<>::from_address(
+                    reinterpret_cast<void*>(prev));
+                schedule_destroy_helper(state_->executor, stale);
+            }
         }
     }
 
@@ -208,8 +218,14 @@ class SpawnFuture<void> {
 
     void detach() noexcept {
         if (state_) {
-            state_->flag.exchange(SharedState<void>::DONE,
-                                  std::memory_order_acq_rel);
+            auto prev = state_->flag.exchange(SharedState<void>::DONE,
+                                              std::memory_order_acq_rel);
+            if (prev != SharedState<void>::EMPTY &&
+                prev != SharedState<void>::DONE && state_->executor) {
+                auto stale = std::coroutine_handle<>::from_address(
+                    reinterpret_cast<void*>(prev));
+                schedule_destroy_helper(state_->executor, stale);
+            }
         }
     }
 

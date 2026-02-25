@@ -6,7 +6,10 @@
 #include <dftracer/utils/core/common/inflater.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
+#include <fcntl.h>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -21,27 +24,23 @@ class ReaderInflater : public Inflater {
     /**
      * Initialize for reading from the beginning of a stream
      */
-    bool initialize(
-        FILE* file, std::uint64_t file_offset = 0,
+    coro::CoroTask<bool> initialize(
+        int /*fd*/, off_t& offset, std::uint64_t file_offset = 0,
         int window_bits = constants::indexer::ZLIB_GZIP_WINDOW_BITS) {
         if (!initialize_stream(window_bits)) {
-            return false;
+            co_return false;
         }
 
-        if (fseeko(file, static_cast<off_t>(file_offset), SEEK_SET) != 0) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to seek to offset %llu",
-                                     file_offset);
-            return false;
-        }
+        offset = static_cast<off_t>(file_offset);
 
-        return true;
+        co_return true;
     }
 
     /**
      * Restore inflater state from a checkpoint for random access
      */
-    bool restore_from_checkpoint(
-        FILE* file,
+    coro::CoroTask<bool> restore_from_checkpoint(
+        int fd, off_t& offset,
         const dftracer::utils::utilities::indexer::internal::IndexerCheckpoint&
             checkpoint) {
         DFTRACER_UTILS_LOG_DEBUG(
@@ -54,19 +53,14 @@ class ReaderInflater : public Inflater {
             seek_pos -= 1;
         }
 
-        if (fseeko(file, seek_pos, SEEK_SET) != 0) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Failed to seek to checkpoint position: %lld",
-                (long long)seek_pos);
-            return false;
-        }
+        offset = seek_pos;
 
         // Reset and initialize with RAW deflate mode
         reset();
         if (!initialize_stream(-15)) {
             DFTRACER_UTILS_LOG_ERROR(
                 "%s", "Failed to initialize inflater in raw mode");
-            return false;
+            co_return false;
         }
 
         // Decompress and set the dictionary
@@ -78,22 +72,25 @@ class ReaderInflater : public Inflater {
                                       &window_size)) {
             DFTRACER_UTILS_LOG_ERROR(
                 "%s", "Failed to decompress checkpoint dictionary");
-            return false;
+            co_return false;
         }
 
         if (!set_dictionary(window, window_size)) {
             DFTRACER_UTILS_LOG_ERROR("%s", "Failed to set dictionary");
-            return false;
+            co_return false;
         }
 
         // Handle partial byte if necessary
         if (checkpoint.bits != 0) {
-            int ch = fgetc(file);
-            if (ch == EOF) {
+            unsigned char ch;
+            ssize_t n =
+                co_await ::dftracer::utils::io::read(fd, &ch, 1, offset);
+            if (n <= 0) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "%s", "Failed to read byte at checkpoint position");
-                return false;
+                co_return false;
             }
+            offset += 1;
 
             int prime_value = ch >> (8 - checkpoint.bits);
             DFTRACER_UTILS_LOG_DEBUG(
@@ -102,35 +99,35 @@ class ReaderInflater : public Inflater {
 
             if (!prime(checkpoint.bits, prime_value)) {
                 DFTRACER_UTILS_LOG_ERROR("%s", "inflatePrime failed");
-                return false;
+                co_return false;
             }
         }
 
         // Prime with initial input
-        if (!read_input(file)) {
+        if (!co_await read_input(fd, offset)) {
             DFTRACER_UTILS_LOG_ERROR(
                 "%s",
                 "Failed to read initial input after checkpoint restoration");
-            return false;
+            co_return false;
         }
 
         DFTRACER_UTILS_LOG_DEBUG("%s", "Checkpoint restoration successful");
-        return true;
+        co_return true;
     }
 
     /**
      * Read data continuously (for stream operations)
      */
-    bool read(FILE* file, unsigned char* buf, std::size_t len,
-              std::size_t& bytes_out) {
+    coro::CoroTask<bool> read(int fd, off_t& offset, unsigned char* buf,
+                              std::size_t len, std::size_t& bytes_out) {
         stream.next_out = buf;
         stream.avail_out = static_cast<uInt>(len);
         bytes_out = 0;
 
         while (stream.avail_out > 0) {
             if (stream.avail_in == 0) {
-                if (!read_input(file)) {
-                    return false;
+                if (!co_await read_input(fd, offset)) {
+                    co_return false;
                 }
                 if (stream.avail_in == 0) {
                     break;  // EOF
@@ -152,22 +149,23 @@ class ReaderInflater : public Inflater {
                 DFTRACER_UTILS_LOG_DEBUG(
                     "Continuous read failed: %d (%s)", ret,
                     stream.msg ? stream.msg : "no message");
-                return false;
+                co_return false;
             }
         }
 
         bytes_out = len - stream.avail_out;
-        return true;
+        co_return true;
     }
 
     /**
      * Skip bytes efficiently by reading and discarding data
      */
-    bool skip_bytes(FILE* file, std::size_t bytes_to_skip) {
+    coro::CoroTask<bool> skip_bytes(int fd, off_t& offset,
+                                    std::size_t bytes_to_skip) {
         DFTRACER_UTILS_LOG_DEBUG(
             "ReaderInflater::skip_bytes - bytes_to_skip=%zu", bytes_to_skip);
 
-        if (bytes_to_skip == 0) return true;
+        if (bytes_to_skip == 0) co_return true;
 
         unsigned char skip_buffer[BUFFER_SIZE];
         std::size_t remaining_skip = bytes_to_skip;
@@ -177,11 +175,11 @@ class ReaderInflater : public Inflater {
             std::size_t to_skip = std::min(remaining_skip, sizeof(skip_buffer));
             std::size_t skipped;
 
-            if (!read(file, skip_buffer, to_skip, skipped)) {
+            if (!co_await read(fd, offset, skip_buffer, to_skip, skipped)) {
                 DFTRACER_UTILS_LOG_DEBUG(
                     "Skip failed at total_skipped=%zu, remaining=%zu",
                     total_skipped, remaining_skip);
-                return false;
+                co_return false;
             }
 
             if (skipped == 0) {
@@ -197,7 +195,7 @@ class ReaderInflater : public Inflater {
         DFTRACER_UTILS_LOG_DEBUG(
             "Skip completed: total_skipped=%zu, success=%s", total_skipped,
             remaining_skip == 0 ? "true" : "false");
-        return remaining_skip == 0;
+        co_return remaining_skip == 0;
     }
 
     /**

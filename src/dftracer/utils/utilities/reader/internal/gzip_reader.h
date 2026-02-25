@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_GZIP_READER_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_GZIP_READER_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -34,16 +35,19 @@ class GzipReader : public Reader {
     const std::string &get_idx_path() const override;
     void set_buffer_size(std::size_t size) override;
 
-    std::size_t read(std::size_t start_bytes, std::size_t end_bytes,
-                     char *buffer, std::size_t buffer_size) override;
-    std::size_t read_line_bytes(std::size_t start_bytes, std::size_t end_bytes,
-                                char *buffer, std::size_t buffer_size) override;
-    std::string read_lines(std::size_t start, std::size_t end) override;
-    void read_lines_with_processor(std::size_t start, std::size_t end,
-                                   LineProcessor &processor) override;
-    void read_line_bytes_with_processor(std::size_t start_bytes,
-                                        std::size_t end_bytes,
-                                        LineProcessor &processor) override;
+    coro::CoroTask<std::size_t> read_async(std::size_t start_bytes,
+                                           std::size_t end_bytes, char *buffer,
+                                           std::size_t buffer_size) override;
+    coro::CoroTask<std::size_t> read_line_bytes_async(
+        std::size_t start_bytes, std::size_t end_bytes, char *buffer,
+        std::size_t buffer_size) override;
+    coro::CoroTask<std::string> read_lines_async(std::size_t start,
+                                                 std::size_t end) override;
+    coro::CoroTask<void> read_lines_with_processor_async(
+        std::size_t start, std::size_t end, LineProcessor &processor) override;
+    coro::CoroTask<void> read_line_bytes_with_processor_async(
+        std::size_t start_bytes, std::size_t end_bytes,
+        LineProcessor &processor) override;
 
     std::unique_ptr<ReaderStream> stream(const StreamConfig &config) override;
 

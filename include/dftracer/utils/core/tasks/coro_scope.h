@@ -129,9 +129,9 @@ class CoroScope {
     /// The lambda receives CoroScope& and returns CoroTask<void>.
     /// Internally wrapped in a lightweight Coro and enqueued directly.
     ///
-    /// SAFETY: The captureless-lambda-with-parameters pattern ensures
+    /// The captureless-lambda-with-parameters pattern ensures
     /// coroutine parameters are copied into the coroutine frame,
-    /// avoiding the dangling-capture bug (see Discovery #1).
+    /// avoiding the dangling-capture bug.
     template <typename Func,
               typename R =
                   typename std::invoke_result_t<Func, CoroScope&>::value_type,

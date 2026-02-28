@@ -3,8 +3,10 @@
 
 #include <dftracer/utils/core/io/awaitable.h>
 #include <fcntl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/uio.h>
 
 #include <cstddef>
 #include <string>
@@ -33,15 +35,20 @@ class IoBackend {
     /// Stop the backend (join completion thread, drain pending ops)
     virtual void stop() = 0;
 
-    /// Submit an async read operation. Returns an IoAwaitable that
-    /// will be completed when the read finishes.
-    virtual IoAwaitable submit_read(int fd, void *buf, std::size_t len,
-                                    off_t offset) = 0;
+    /// Submit an async sequential read. Works on any fd type.
+    virtual IoAwaitable submit_read(int fd, void *buf, std::size_t len) = 0;
 
-    /// Submit an async write operation.
-    virtual IoAwaitable submit_write(int fd, const void *buf, std::size_t len,
+    /// Submit an async sequential write. Works on any fd type.
+    virtual IoAwaitable submit_write(int fd, const void *buf,
+                                     std::size_t len) = 0;
+
+    /// Submit an async positional read. Only seekable fds.
+    virtual IoAwaitable submit_pread(int fd, void *buf, std::size_t len,
                                      off_t offset) = 0;
 
+    /// Submit an async positional write. Only seekable fds.
+    virtual IoAwaitable submit_pwrite(int fd, const void *buf, std::size_t len,
+                                      off_t offset) = 0;
     /// Submit an async open operation.
     virtual IoAwaitable submit_open(const char *path, int flags,
                                     mode_t mode) = 0;
@@ -58,6 +65,29 @@ class IoBackend {
     /// Submit an async fstat operation.
     virtual IoAwaitable submit_fstat(int fd, struct stat *buf) = 0;
 
+    /// Scatter-gather sequential read. Works on any fd type.
+    virtual IoAwaitable submit_readv(int fd, const struct iovec *iov,
+                                     int iovcnt) = 0;
+
+    /// Scatter-gather sequential write. Works on any fd type.
+    virtual IoAwaitable submit_writev(int fd, const struct iovec *iov,
+                                      int iovcnt) = 0;
+
+    /// Scatter-gather positional read. Only seekable fds.
+    virtual IoAwaitable submit_preadv(int fd, const struct iovec *iov,
+                                      int iovcnt, off_t offset) = 0;
+
+    /// Scatter-gather positional write. Only seekable fds.
+    virtual IoAwaitable submit_pwritev(int fd, const struct iovec *iov,
+                                       int iovcnt, off_t offset) = 0;
+
+    /// Reposition file offset. Returns new offset.
+    virtual IoAwaitable submit_lseek(int fd, off_t offset, int whence) = 0;
+
+    /// Zero-copy transfer from in_fd to out_fd. Returns bytes sent.
+    virtual IoAwaitable submit_sendfile(int out_fd, int in_fd, off_t offset,
+                                        std::size_t count) = 0;
+
     /// Non-blocking poll for completions. Called by idle workers.
     /// Returns number of completions reaped.
     virtual std::size_t poll(int timeout_ms = 0) = 0;
@@ -67,6 +97,21 @@ class IoBackend {
     /// io_uring backend submits all pending SQEs in one syscall.
     /// Returns number of operations flushed.
     virtual int flush() { return 0; }
+
+    /// Accept a connection on a listening socket.
+    /// Returns the new client fd via IoAwaitable::result_.
+    virtual IoAwaitable submit_accept(int listen_fd, struct sockaddr *addr,
+                                      socklen_t *addrlen) = 0;
+
+    /// Receive data from a connected socket.
+    /// Returns bytes received via IoAwaitable::result_.
+    virtual IoAwaitable submit_recv(int fd, void *buf, std::size_t len,
+                                    int flags) = 0;
+
+    /// Send data to a connected socket.
+    /// Returns bytes sent via IoAwaitable::result_.
+    virtual IoAwaitable submit_send(int fd, const void *buf, std::size_t len,
+                                    int flags) = 0;
 
     /// Blocking read -- for contexts that cannot co_await (e.g., VFS).
     /// Submits through the normal async path and blocks until done.

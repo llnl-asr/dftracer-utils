@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +16,8 @@ namespace dftracer::utils::utilities::composites::dft::views {
 struct ViewReaderInput {
     std::string file_path;
     std::string idx_path;
-    std::size_t checkpoint_size = 0;
+    std::size_t checkpoint_size =
+        utilities::indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t start_byte = 0;
     std::size_t end_byte = 0;
     std::uint64_t checkpoint_idx = 0;

@@ -25,13 +25,6 @@ struct PredicateFilter {
     std::optional<double> max_duration_us;
 };
 
-static std::string resolve_bloom_dimension(const std::string& dim) {
-    if (dim == "host") return "hhash";
-    if (dim == "file") return "fhash";
-    if (dim == "script") return "shash";
-    return dim;
-}
-
 static PredicateFilter build_predicate_filter(const ViewPredicate& predicate) {
     PredicateFilter filter;
 
@@ -127,6 +120,34 @@ static bool matches_any_predicate(const JsonValue& json,
                                   const std::vector<PredicateFilter>& filters) {
     for (const auto& filter : filters) {
         if (matches_predicate(json, filter)) return true;
+    }
+    return false;
+}
+
+/// Check only pid/tid dimensions for metadata events (thread_name,
+/// process_name).  These events lack ts/dur/cat so a full predicate
+/// check is inappropriate, but they should still be scoped to the
+/// requested process/thread.
+static bool metadata_matches_identity(
+    const JsonValue& json, const std::vector<PredicateFilter>& filters) {
+    if (filters.empty()) return true;
+
+    for (const auto& filter : filters) {
+        bool all_match = true;
+        for (const auto& [dim, values] : filter.dim_sets) {
+            if (dim != "pid" && dim != "tid") continue;
+            std::string event_value;
+            if (dim == "pid") {
+                event_value = std::to_string(json["pid"].get<std::uint64_t>());
+            } else {
+                event_value = std::to_string(json["tid"].get<std::uint64_t>());
+            }
+            if (values.find(event_value) == values.end()) {
+                all_match = false;
+                break;
+            }
+        }
+        if (all_match) return true;
     }
     return false;
 }
@@ -227,8 +248,10 @@ coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
 
     // Create indexed reader
     auto reader_input = composites::IndexedReadInput::from_file(input.file_path)
-                            .with_checkpoint_size(input.checkpoint_size)
                             .with_index(input.idx_path);
+    if (input.checkpoint_size > 0) {
+        reader_input.with_checkpoint_size(input.checkpoint_size);
+    }
     composites::IndexedFileReaderUtility reader_utility;
     auto reader = co_await reader_utility.process(reader_input);
 
@@ -289,10 +312,13 @@ coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
                                 }
                             } else {
                                 // Non-hash metadata (thread_name, etc.)
-                                // → emit immediately
-                                output.events.emplace_back(line_start,
-                                                           line_len);
-                                output.events_matched++;
+                                // Only emit if pid/tid match the
+                                // predicate (or no pid/tid filter).
+                                if (metadata_matches_identity(json, filters)) {
+                                    output.events.emplace_back(line_start,
+                                                               line_len);
+                                    output.events_matched++;
+                                }
                             }
                         } else if (ph != "M") {
                             output.events_scanned++;

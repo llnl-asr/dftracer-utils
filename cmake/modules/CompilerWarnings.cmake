@@ -111,7 +111,7 @@ function(target_set_warnings TARGET_NAME)
       # GCC 14+ has false-positive -Wnull-dereference, -Warray-bounds,
       # and -Wstringop-overflow in libstdc++ (streambuf, exception_ptr,
       # vector copy). Disable for affected versions.
-      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14")
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "13")
         target_compile_options(${TARGET_NAME} PRIVATE -Wno-null-dereference
                               -Wno-array-bounds -Wno-stringop-overflow)
       endif()

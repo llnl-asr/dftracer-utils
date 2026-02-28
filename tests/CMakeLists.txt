@@ -54,6 +54,12 @@ set(TEST_CPP_SOURCES
     # Replay tests
     test_replay.cpp
     test_replay_binary.cpp
+    # Server unit tests
+    server/test_http_parser.cpp
+    server/test_http_response.cpp
+    server/test_http_request.cpp
+    server/test_query_params.cpp
+    server/test_trace_index.cpp
     )
 
 foreach(test_file ${TEST_CPP_SOURCES})
@@ -171,6 +177,56 @@ endforeach()
 
 add_subdirectory(utilities)
 
+# +++++++++++++++++++++++++++++++++++++++++
+# Binary Integration Tests
+# +++++++++++++++++++++++++++++++++++++++++
+
+set(TEST_BINARY_SOURCES
+    binaries/test_dftracer_server.cpp
+    )
+
+foreach(test_file ${TEST_BINARY_SOURCES})
+  string(REPLACE ".cpp" "" bin_exec ${test_file})
+  string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/" "" bin_exec ${bin_exec})
+  string(REPLACE "/" "_" target_name ${bin_exec})
+
+  add_executable(${target_name} ${test_file})
+  target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(${target_name} PRIVATE doctest::doctest testing_utilities)
+  target_set_warnings(${target_name})
+  target_enable_coroutine(${target_name})
+
+  get_filename_component(bin_dir ${bin_exec} DIRECTORY)
+  get_filename_component(bin_name ${bin_exec} NAME)
+
+  if(bin_dir)
+    set_target_properties(${target_name} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${bin_dir}")
+  endif()
+
+  set_target_properties(${target_name} PROPERTIES OUTPUT_NAME ${bin_name})
+
+  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${target_name} PRIVATE --coverage -fprofile-arcs
+                                               -ftest-coverage)
+    target_link_libraries(${target_name} PRIVATE --coverage)
+  endif()
+
+  add_test(NAME ${bin_exec} COMMAND ${target_name})
+
+  # Integration tests need more time (server startup + HTTP requests).
+  # macOS CI runners are slower; keep generous headroom.
+  set(integration_test_timeout 120)
+  if(DFTRACER_UTILS_ENABLE_TSAN)
+    set(integration_test_timeout 180)
+  endif()
+  set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${integration_test_timeout})
+
+  # Pass the server binary path so the test can find it
+  set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+    "DFTRACER_SERVER_PATH=$<TARGET_FILE:dftracer_server>")
+
+endforeach()
 # +++++++++++++++++++++++++++++++++++++++++
 # Python Tests (SKBUILD only)
 # +++++++++++++++++++++++++++++++++++++++++

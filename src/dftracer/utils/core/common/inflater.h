@@ -70,8 +70,8 @@ class Inflater {
     coro::CoroTask<int> detect_stream_type(int fd,
                                            std::uint64_t file_offset = 0) {
         unsigned char first_byte;
-        ssize_t n = co_await io::read(fd, &first_byte, 1,
-                                      static_cast<off_t>(file_offset));
+        ssize_t n = co_await io::pread(fd, &first_byte, 1,
+                                       static_cast<off_t>(file_offset));
         if (n <= 0) {
             co_return constants::indexer::ZLIB_GZIP_WINDOW_BITS;  // Default
                                                                   // to GZIP
@@ -87,7 +87,8 @@ class Inflater {
     }
 
     coro::CoroTask<bool> read_input(int fd, off_t& offset) {
-        ssize_t n = co_await io::read(fd, in_buffer, sizeof(in_buffer), offset);
+        ssize_t n =
+            co_await io::pread(fd, in_buffer, sizeof(in_buffer), offset);
         if (n > 0) {
             offset += n;
             stream.next_in = in_buffer;

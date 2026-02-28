@@ -6,7 +6,10 @@
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/sendfile.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -142,15 +145,28 @@ static IoAwaitable make_epoll_request(IoOp op, int fd, void* buf,
 }
 
 IoAwaitable EpollThreadPoolBackend::submit_read(int fd, void* buf,
-                                                std::size_t len, off_t offset) {
-    return make_epoll_request(IoOp::READ, fd, buf, len, offset, nullptr, 0, 0,
+                                                std::size_t len) {
+    return make_epoll_request(IoOp::READ, fd, buf, len, 0, nullptr, 0, 0,
                               &executor_, &pool_);
 }
 
 IoAwaitable EpollThreadPoolBackend::submit_write(int fd, const void* buf,
+                                                 std::size_t len) {
+    return make_epoll_request(IoOp::WRITE, fd, const_cast<void*>(buf), len, 0,
+                              nullptr, 0, 0, &executor_, &pool_);
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_pread(int fd, void* buf,
                                                  std::size_t len,
                                                  off_t offset) {
-    return make_epoll_request(IoOp::WRITE, fd, const_cast<void*>(buf), len,
+    return make_epoll_request(IoOp::PREAD, fd, buf, len, offset, nullptr, 0, 0,
+                              &executor_, &pool_);
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_pwrite(int fd, const void* buf,
+                                                  std::size_t len,
+                                                  off_t offset) {
+    return make_epoll_request(IoOp::PWRITE, fd, const_cast<void*>(buf), len,
                               offset, nullptr, 0, 0, &executor_, &pool_);
 }
 
@@ -183,6 +199,103 @@ IoAwaitable EpollThreadPoolBackend::submit_fstat(int fd, struct stat* buf) {
     return req_awaitable;
 }
 
+IoAwaitable EpollThreadPoolBackend::submit_accept(int listen_fd,
+                                                  struct sockaddr* addr,
+                                                  socklen_t* addrlen) {
+    auto req_awaitable =
+        make_epoll_request(IoOp::ACCEPT, listen_fd, nullptr, 0, 0, nullptr, 0,
+                           0, &executor_, &pool_);
+    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
+    req->addr = addr;
+    req->addrlen = addrlen;
+    return req_awaitable;
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_recv(int fd, void* buf,
+                                                std::size_t len, int flags) {
+    auto req_awaitable = make_epoll_request(IoOp::RECV, fd, buf, len, 0,
+                                            nullptr, 0, 0, &executor_, &pool_);
+    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
+    req->msg_flags = flags;
+    return req_awaitable;
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_send(int fd, const void* buf,
+                                                std::size_t len, int flags) {
+    auto req_awaitable =
+        make_epoll_request(IoOp::SEND, fd, const_cast<void*>(buf), len, 0,
+                           nullptr, 0, 0, &executor_, &pool_);
+    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
+    req->msg_flags = flags;
+    return req_awaitable;
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_readv(int fd,
+                                                 const struct iovec* iov,
+                                                 int iovcnt) {
+    auto req_awaitable = make_epoll_request(IoOp::READV, fd, nullptr, 0, 0,
+                                            nullptr, 0, 0, &executor_, &pool_);
+    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
+    req->iov = iov;
+    req->iovcnt = iovcnt;
+    return req_awaitable;
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_writev(int fd,
+                                                  const struct iovec* iov,
+                                                  int iovcnt) {
+    auto req_awaitable = make_epoll_request(IoOp::WRITEV, fd, nullptr, 0, 0,
+                                            nullptr, 0, 0, &executor_, &pool_);
+    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
+    req->iov = iov;
+    req->iovcnt = iovcnt;
+    return req_awaitable;
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_preadv(int fd,
+                                                  const struct iovec* iov,
+                                                  int iovcnt, off_t offset) {
+    auto req_awaitable =
+        make_epoll_request(IoOp::PREADV, fd, nullptr, 0, offset, nullptr, 0, 0,
+                           &executor_, &pool_);
+    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
+    req->iov = iov;
+    req->iovcnt = iovcnt;
+    return req_awaitable;
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_pwritev(int fd,
+                                                   const struct iovec* iov,
+                                                   int iovcnt, off_t offset) {
+    auto req_awaitable =
+        make_epoll_request(IoOp::PWRITEV, fd, nullptr, 0, offset, nullptr, 0, 0,
+                           &executor_, &pool_);
+    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
+    req->iov = iov;
+    req->iovcnt = iovcnt;
+    return req_awaitable;
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_lseek(int fd, off_t offset,
+                                                 int whence) {
+    auto req_awaitable = make_epoll_request(IoOp::LSEEK, fd, nullptr, 0, offset,
+                                            nullptr, 0, 0, &executor_, &pool_);
+    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
+    req->whence = whence;
+    return req_awaitable;
+}
+
+IoAwaitable EpollThreadPoolBackend::submit_sendfile(int out_fd, int in_fd,
+                                                    off_t offset,
+                                                    std::size_t count) {
+    auto req_awaitable =
+        make_epoll_request(IoOp::SENDFILE, in_fd, nullptr, count, offset,
+                           nullptr, 0, 0, &executor_, &pool_);
+    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
+    req->dest_fd = out_fd;
+    return req_awaitable;
+}
+
 void EpollThreadPoolBackend::submit_to_pool(SubmitContext* ctx,
                                             IoAwaitable* awaitable) {
     auto* req = static_cast<IoRequest*>(ctx);
@@ -194,9 +307,15 @@ void EpollThreadPoolBackend::execute_request(IoRequest* req) {
     ssize_t result = 0;
     switch (req->op) {
         case IoOp::READ:
-            result = ::pread(req->fd, req->buf, req->len, req->offset);
+            result = ::read(req->fd, req->buf, req->len);
             break;
         case IoOp::WRITE:
+            result = ::write(req->fd, req->buf, req->len);
+            break;
+        case IoOp::PREAD:
+            result = ::pread(req->fd, req->buf, req->len, req->offset);
+            break;
+        case IoOp::PWRITE:
             result = ::pwrite(req->fd, req->buf, req->len, req->offset);
             break;
         case IoOp::OPEN:
@@ -214,6 +333,36 @@ void EpollThreadPoolBackend::execute_request(IoRequest* req) {
         case IoOp::FSTAT:
             result = ::fstat(req->fd, req->stat_buf);
             break;
+        case IoOp::ACCEPT:
+            result = ::accept4(req->fd, req->addr, req->addrlen,
+                               SOCK_NONBLOCK | SOCK_CLOEXEC);
+            break;
+        case IoOp::RECV:
+            result = ::recv(req->fd, req->buf, req->len, req->msg_flags);
+            break;
+        case IoOp::SEND:
+            result = ::send(req->fd, req->buf, req->len, req->msg_flags);
+            break;
+        case IoOp::READV:
+            result = ::readv(req->fd, req->iov, req->iovcnt);
+            break;
+        case IoOp::WRITEV:
+            result = ::writev(req->fd, req->iov, req->iovcnt);
+            break;
+        case IoOp::PREADV:
+            result = ::preadv(req->fd, req->iov, req->iovcnt, req->offset);
+            break;
+        case IoOp::PWRITEV:
+            result = ::pwritev(req->fd, req->iov, req->iovcnt, req->offset);
+            break;
+        case IoOp::LSEEK:
+            result = ::lseek(req->fd, req->offset, req->whence);
+            break;
+        case IoOp::SENDFILE: {
+            off_t off = req->offset;
+            result = ::sendfile(req->dest_fd, req->fd, &off, req->len);
+            break;
+        }
     }
     if (result < 0) result = -errno;
 

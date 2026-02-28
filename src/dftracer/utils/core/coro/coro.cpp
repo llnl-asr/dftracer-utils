@@ -13,23 +13,23 @@ std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
     // field).  Reading through p after fetch_sub is UB if another
     // thread freed the containing scope.
     const bool was_released = p.released;
-    auto* const join_counter = p.join_counter;
-    auto* const join_cont = p.join_continuation;
+    auto* const jc = p.join_counter;
+    auto* const jcont = p.join_continuation;
 
     // Handle join group (JoinHandle integration).
-    if (join_counter) {
-        auto prev = join_counter->fetch_sub(1, std::memory_order_acq_rel);
-        if (prev == 1 && join_cont) {
+    if (jc) {
+        auto prev = jc->fetch_sub(1, std::memory_order_acq_rel);
+        if (prev == 1 && jcont) {
             // Last coro in join group -- atomically take the
             // continuation.  exchange(nullptr) ensures exactly one
             // side gets the handle (no double-resume).
             //
-            // We use the snapshotted join_cont pointer here.  This
+            // We use the snapshotted jcont pointer here.  This
             // is safe: we are the LAST decrement (prev==1), so the
             // joiner has not been resumed yet and the JoinHandle
             // memory is still alive.
             auto cont_addr =
-                join_cont->exchange(nullptr, std::memory_order_acq_rel);
+                jcont->exchange(nullptr, std::memory_order_acq_rel);
             if (cont_addr) {
                 // Defer destruction to AFTER resume() returns on
                 // this worker thread.

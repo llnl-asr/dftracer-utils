@@ -82,7 +82,7 @@ class GzipInflater : public Inflater {
         while (stream.avail_out > 0) {
             // Read input if needed
             if (stream.avail_in == 0) {
-                ssize_t n = co_await ::dftracer::utils::io::read(
+                ssize_t n = co_await ::dftracer::utils::io::pread(
                     fd, in_buffer, sizeof(in_buffer), offset);
                 if (n == 0) {
                     break;  // EOF

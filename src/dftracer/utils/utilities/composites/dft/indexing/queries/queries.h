@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -71,6 +72,15 @@ struct ChunkStatisticsResult {
 
 std::vector<ChunkStatisticsResult> query_chunk_statistics(
     const SqliteDatabase& db, int file_info_id);
+
+struct TimeBounds {
+    std::uint64_t min_timestamp_us = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t max_timestamp_us = 0;
+    bool valid = false;
+};
+
+/// Fast aggregate query: single-row SELECT MIN/MAX on chunk_statistics.
+TimeBounds query_time_bounds(const SqliteDatabase& db, int file_info_id);
 
 std::vector<std::string> query_hash_by_resolved(
     const SqliteDatabase& db, const std::string& dimension,

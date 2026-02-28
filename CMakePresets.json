@@ -101,6 +101,17 @@
         "DFTRACER_UTILS_COVERAGE": "OFF"
       }
     }
+    ,{
+      "name": "ubsan",
+      "displayName": "UndefinedBehavior Sanitizer (Debug)",
+      "description": "Debug build with UndefinedBehavior Sanitizer enabled",
+      "inherits": "debug",
+      "cacheVariables": {
+        "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_ENABLE_UBSAN": "ON",
+        "DFTRACER_UTILS_COVERAGE": "OFF"
+      }
+    }
   ],
   "buildPresets": [
     {
@@ -157,6 +168,12 @@
       "configurePreset": "tsan",
       "jobs": 0
     }
+    ,{
+      "name": "ubsan",
+      "displayName": "UBSAN Build",
+      "configurePreset": "ubsan",
+      "jobs": 0
+    }
   ],
   "testPresets": [
     {
@@ -185,6 +202,17 @@
       "name": "tsan",
       "displayName": "Run TSAN Tests",
       "configurePreset": "tsan",
+      "execution": {
+        "jobs": 0
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+    ,{
+      "name": "ubsan",
+      "displayName": "Run UBSAN Tests",
+      "configurePreset": "ubsan",
       "execution": {
         "jobs": 0
       },

@@ -60,7 +60,7 @@ static coro::CoroTask<int> run_tar(const std::string& archive_path,
             printf("  Index: %s\n", indexer->get_idx_path().c_str());
             printf("  Total size: %" PRIu64 " bytes\n",
                    static_cast<std::uint64_t>(indexer->get_max_bytes()));
-            printf("  Total lines: %zu\n", indexer->get_num_lines());
+            printf("  Total lines: %" PRIu64 "\n", indexer->get_num_lines());
             printf("  Checkpoints: %zu\n", indexer->get_checkpoints().size());
         }
 
@@ -78,7 +78,7 @@ static coro::CoroTask<int> run_tar(const std::string& archive_path,
                     if (file.typeflag == '5') {
                         printf(" (directory)");
                     } else {
-                        printf(" (%zu bytes)", file.file_size);
+                        printf(" (%" PRIu64 " bytes)", file.file_size);
                     }
                     printf("\n");
                 }

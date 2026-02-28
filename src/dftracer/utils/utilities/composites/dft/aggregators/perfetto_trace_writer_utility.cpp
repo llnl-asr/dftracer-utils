@@ -413,8 +413,8 @@ coro::CoroTask<bool> PerfettoTraceWriterUtility::process(
                                          input.output_path.c_str());
                 co_return false;
             }
-            co_await ::dftracer::utils::io::write(
-                static_cast<int>(fd), buffer.data(), buffer.size(), 0);
+            co_await ::dftracer::utils::io::write(static_cast<int>(fd),
+                                                  buffer.data(), buffer.size());
             co_await ::dftracer::utils::io::close(static_cast<int>(fd));
         }
 

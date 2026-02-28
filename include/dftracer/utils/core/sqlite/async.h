@@ -19,9 +19,16 @@ io::IoThreadPool *get_sqlite_pool();
 // Defined in async.cpp where IoThreadPool is visible.
 void sqlite_async_submit(io::IoThreadPool *pool, std::function<void()> fn);
 
-// Resumes the coroutine on the executor (if available) or inline.
+// Resumes the coroutine on the given executor, or inline if null.
+// The executor pointer must be captured at await_suspend time (on an
+// executor worker thread), NOT retrieved via TLS at resume time
+// (which may be on a non-executor pool thread).
 // Defined in async.cpp to avoid Executor header dependency.
-void sqlite_async_resume(std::coroutine_handle<> h);
+void sqlite_async_resume_on(void *executor, std::coroutine_handle<> h);
+
+// Returns an opaque pointer to Executor::current() for capture.
+// Defined in async.cpp to avoid Executor header dependency.
+void *get_current_executor_opaque();
 
 template <typename T>
 class SqliteAwaitable {
@@ -45,9 +52,12 @@ class SqliteAwaitable {
     void await_suspend(std::coroutine_handle<> h) {
         handle_ = h;
         auto *self = this;
-        sqlite_async_submit(pool_, [self] {
+        // Capture the executor while still on a worker thread.
+        // The lambda runs on the sqlite pool thread where TLS is unset.
+        void *exec = get_current_executor_opaque();
+        sqlite_async_submit(pool_, [self, exec] {
             self->result_ = self->fn_();
-            sqlite_async_resume(self->handle_);
+            sqlite_async_resume_on(exec, self->handle_);
         });
     }
 
@@ -75,9 +85,11 @@ class SqliteAwaitable<void> {
     void await_suspend(std::coroutine_handle<> h) {
         handle_ = h;
         auto *self = this;
-        sqlite_async_submit(pool_, [self] {
+        // Capture the executor while still on a worker thread.
+        void *exec = get_current_executor_opaque();
+        sqlite_async_submit(pool_, [self, exec] {
             self->fn_();
-            sqlite_async_resume(self->handle_);
+            sqlite_async_resume_on(exec, self->handle_);
         });
     }
 

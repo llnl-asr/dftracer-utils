@@ -171,6 +171,58 @@ inline void prep_fsync(struct io_uring_sqe* sqe, int fd, unsigned flags) {
     sqe->fsync_flags = flags;
 }
 
+inline void prep_accept(struct io_uring_sqe* sqe, int fd, struct sockaddr* addr,
+                        socklen_t* addrlen, int flags) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_ACCEPT;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(addr);
+    sqe->addr2 = reinterpret_cast<__u64>(addrlen);
+    sqe->accept_flags = static_cast<__u32>(flags);
+}
+
+inline void prep_recv(struct io_uring_sqe* sqe, int fd, void* buf, unsigned len,
+                      int flags) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_RECV;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(buf);
+    sqe->len = len;
+    sqe->msg_flags = static_cast<__u32>(flags);
+}
+
+inline void prep_send(struct io_uring_sqe* sqe, int fd, const void* buf,
+                      unsigned len, int flags) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_SEND;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(buf);
+    sqe->len = len;
+    sqe->msg_flags = static_cast<__u32>(flags);
+}
+
+inline void prep_readv(struct io_uring_sqe* sqe, int fd,
+                       const struct iovec* iov, unsigned nr_vecs,
+                       off_t offset) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_READV;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(iov);
+    sqe->len = nr_vecs;
+    sqe->off = static_cast<__u64>(offset);
+}
+
+inline void prep_writev(struct io_uring_sqe* sqe, int fd,
+                        const struct iovec* iov, unsigned nr_vecs,
+                        off_t offset) {
+    std::memset(sqe, 0, sizeof(*sqe));
+    sqe->opcode = IORING_OP_WRITEV;
+    sqe->fd = fd;
+    sqe->addr = reinterpret_cast<__u64>(iov);
+    sqe->len = nr_vecs;
+    sqe->off = static_cast<__u64>(offset);
+}
+
 inline void sqe_set_data(struct io_uring_sqe* sqe, void* data) {
     sqe->user_data = reinterpret_cast<__u64>(data);
 }

@@ -1,0 +1,61 @@
+#ifndef DFTRACER_UTILS_SERVER_TRACE_INDEX_H
+#define DFTRACER_UTILS_SERVER_TRACE_INDEX_H
+
+#include <dftracer/utils/core/coro/task.h>
+
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace dftracer::utils::server {
+
+/// Scans a directory for trace files and caches paths to their
+/// sidecar index files (.idx, .bidx). Used by API handlers to
+/// resolve file paths and check index availability.
+class TraceIndex {
+   public:
+    struct FileInfo {
+        std::string path;
+        std::string bidx_path;
+        std::string idx_path;
+        bool has_bloom_index = false;
+        bool has_checkpoint_index = false;
+        std::uint64_t min_timestamp_us = 0;
+        std::uint64_t max_timestamp_us = 0;
+    };
+
+    TraceIndex(const std::string& directory, const std::string& index_dir);
+
+    /// Scan directory and populate the file list.
+    coro::CoroTask<void> initialize();
+
+    std::size_t file_count() const { return files_.size(); }
+    const std::vector<FileInfo>& files() const { return files_; }
+
+    /// Find a file by its path. Returns nullptr if not found.
+    const FileInfo* find_file(const std::string& path) const;
+
+    /// Find a file by index. Returns nullptr if out of range.
+    const FileInfo* file_at(std::size_t index) const;
+
+    const std::string& directory() const { return directory_; }
+    const std::string& index_dir() const { return index_dir_; }
+
+    std::uint64_t global_min_timestamp_us() const { return global_min_ts_; }
+    std::uint64_t global_max_timestamp_us() const { return global_max_ts_; }
+
+   private:
+    std::string directory_;
+    std::string index_dir_;
+    std::vector<FileInfo> files_;
+    std::unordered_map<std::string, std::size_t> path_to_index_;
+    std::uint64_t global_min_ts_ = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t global_max_ts_ = 0;
+};
+
+}  // namespace dftracer::utils::server
+
+#endif  // DFTRACER_UTILS_SERVER_TRACE_INDEX_H

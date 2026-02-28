@@ -239,7 +239,8 @@ ViewDefinition ViewDefinition::dlio_view() {
 
 std::string resolve_bloom_dimension(const std::string& dim) {
     static const std::unordered_map<std::string, std::string> ALIASES = {
-        {"host", "hhash"}, {"file", "fhash"}, {"script", "shash"}};
+        {"host", "hhash"},   {"file", "fhash"},     {"script", "shash"},
+        {"category", "cat"}, {"process_id", "pid"}, {"thread_id", "tid"}};
     auto it = ALIASES.find(dim);
     return it != ALIASES.end() ? it->second : dim;
 }

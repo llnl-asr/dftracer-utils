@@ -51,7 +51,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
         // Read a chunk to find the next newline
         bool aligned = false;
         while (!aligned) {
-            ssize_t bytes_read = co_await ::dftracer::utils::io::read(
+            ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
                 fd, read_buffer.data(), read_buffer.size(), file_offset);
 
             if (bytes_read <= 0) {
@@ -85,7 +85,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
             break;
         }
 
-        ssize_t bytes_read = co_await ::dftracer::utils::io::read(
+        ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
             fd, read_buffer.data(), read_buffer.size(), file_offset);
 
         if (bytes_read <= 0) {

@@ -44,7 +44,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_lines(
     bool eof = false;
     while (!eof) {
         // Async read
-        ssize_t bytes_read = co_await ::dftracer::utils::io::read(
+        ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
             fd, read_buffer.data(), BUFFER_SIZE, file_offset);
 
         if (bytes_read <= 0) {

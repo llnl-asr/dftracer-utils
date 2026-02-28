@@ -140,6 +140,10 @@ inline std::string dftracer_utils_macro_get_time() {
     DFTRACER_UTILS_INTERNAL_TRACE_FORMAT(                             \
         __FILE__, __LINE__, __FUNCTION__, DFTRACER_UTILS_LOGGER_NAME, \
         CPP_LOGGER_TRACE, format, __VA_ARGS__)
+#define DFTRACER_UTILS_LOG_TRACE(format, ...)                         \
+    DFTRACER_UTILS_INTERNAL_TRACE_FORMAT(                             \
+        __FILE__, __LINE__, __FUNCTION__, DFTRACER_UTILS_LOGGER_NAME, \
+        CPP_LOGGER_TRACE, format, ##__VA_ARGS__)
 #else
 #define DFTRACER_UTILS_LOG_TRACE(...)
 #define DFTRACER_UTILS_LOG_TRACE_FORMAT(...)

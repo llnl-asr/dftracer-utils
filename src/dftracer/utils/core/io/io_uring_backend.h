@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 
 #include <cstddef>
 #include <mutex>
@@ -39,15 +40,34 @@ class IoUringBackend : public IoBackend {
     void start() override;
     void stop() override;
 
-    IoAwaitable submit_read(int fd, void* buf, std::size_t len,
-                            off_t offset) override;
-    IoAwaitable submit_write(int fd, const void* buf, std::size_t len,
+    IoAwaitable submit_read(int fd, void* buf, std::size_t len) override;
+    IoAwaitable submit_write(int fd, const void* buf, std::size_t len) override;
+    IoAwaitable submit_pread(int fd, void* buf, std::size_t len,
                              off_t offset) override;
+    IoAwaitable submit_pwrite(int fd, const void* buf, std::size_t len,
+                              off_t offset) override;
     IoAwaitable submit_open(const char* path, int flags, mode_t mode) override;
     IoAwaitable submit_close(int fd) override;
     IoAwaitable submit_fsync(int fd) override;
     IoAwaitable submit_ftruncate(int fd, off_t length) override;
     IoAwaitable submit_fstat(int fd, struct stat* buf) override;
+    IoAwaitable submit_accept(int listen_fd, struct sockaddr* addr,
+                              socklen_t* addrlen) override;
+    IoAwaitable submit_recv(int fd, void* buf, std::size_t len,
+                            int flags) override;
+    IoAwaitable submit_send(int fd, const void* buf, std::size_t len,
+                            int flags) override;
+    IoAwaitable submit_readv(int fd, const struct iovec* iov,
+                             int iovcnt) override;
+    IoAwaitable submit_writev(int fd, const struct iovec* iov,
+                              int iovcnt) override;
+    IoAwaitable submit_preadv(int fd, const struct iovec* iov, int iovcnt,
+                              off_t offset) override;
+    IoAwaitable submit_pwritev(int fd, const struct iovec* iov, int iovcnt,
+                               off_t offset) override;
+    IoAwaitable submit_lseek(int fd, off_t offset, int whence) override;
+    IoAwaitable submit_sendfile(int out_fd, int in_fd, off_t offset,
+                                std::size_t count) override;
 
     std::size_t poll(int timeout_ms) override;
     int flush() override;
@@ -74,7 +94,26 @@ class IoUringBackend : public IoBackend {
 /// SubmitContext subclass for io_uring. Carries the operation
 /// details needed to prepare an SQE on await_suspend.
 struct IoUringSubmitCtx : SubmitContext {
-    enum class Op { READ, WRITE, OPEN, CLOSE, FSYNC, FTRUNCATE, FSTAT };
+    enum class Op {
+        READ,
+        WRITE,
+        PREAD,
+        PWRITE,
+        OPEN,
+        CLOSE,
+        FSYNC,
+        FTRUNCATE,
+        FSTAT,
+        ACCEPT,
+        RECV,
+        SEND,
+        READV,
+        WRITEV,
+        PREADV,
+        PWRITEV,
+        LSEEK,
+        SENDFILE
+    };
     Op op = Op::READ;
     int fd = -1;
     void* buf = nullptr;
@@ -84,6 +123,14 @@ struct IoUringSubmitCtx : SubmitContext {
     int flags = 0;
     mode_t mode = 0;
     struct stat* stat_buf = nullptr;
+    struct sockaddr* addr = nullptr;
+    socklen_t* addrlen = nullptr;
+    int accept_flags = 0;
+    int msg_flags = 0;
+    const struct iovec* iov = nullptr;
+    int iovcnt = 0;
+    int whence = 0;
+    int dest_fd = -1;
     IoUringBackend* backend = nullptr;
 };
 

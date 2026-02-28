@@ -84,7 +84,7 @@ class ReaderInflater : public Inflater {
         if (checkpoint.bits != 0) {
             unsigned char ch;
             ssize_t n =
-                co_await ::dftracer::utils::io::read(fd, &ch, 1, offset);
+                co_await ::dftracer::utils::io::pread(fd, &ch, 1, offset);
             if (n <= 0) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "%s", "Failed to read byte at checkpoint position");

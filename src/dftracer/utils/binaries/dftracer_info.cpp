@@ -386,7 +386,6 @@ int main(int argc, char** argv) {
     pipeline.set_destination(task2_aggregate);
     pipeline.execute(files);
 
-    auto metadata_results = task1_collect_metadata->get<MetadataOutputList>();
     auto aggregation_result = task2_aggregate->get<AggregationOutput>();
 
     auto end_time = std::chrono::high_resolution_clock::now();

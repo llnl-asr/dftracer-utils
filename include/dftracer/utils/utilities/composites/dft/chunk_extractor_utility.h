@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/chunk_manifest.h>
+#include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/types/types.h>
 
 #include <cstddef>
@@ -25,8 +26,10 @@ struct ChunkExtractorUtilityInput {
     std::string output_dir;
     std::string app_name;
     bool compress = false;
+    bool compute_hash = true;
 
-    ChunkExtractorUtilityInput() : chunk_index(0), compress(false) {}
+    ChunkExtractorUtilityInput()
+        : chunk_index(0), compress(false), compute_hash(true) {}
 
     static ChunkExtractorUtilityInput from_manifest(
         int index, internal::DFTracerChunkManifest m) {
@@ -51,6 +54,11 @@ struct ChunkExtractorUtilityInput {
         return *this;
     }
 
+    ChunkExtractorUtilityInput& with_compute_hash(bool enabled) {
+        compute_hash = enabled;
+        return *this;
+    }
+
     // Convert to byte-based fileio::ChunkManifest for extraction
     fileio::ChunkManifest to_io_manifest() const {
         fileio::ChunkManifest io_manifest;
@@ -70,7 +78,7 @@ struct ChunkExtractorUtilityInput {
     bool operator==(const ChunkExtractorUtilityInput& other) const {
         return chunk_index == other.chunk_index && manifest == other.manifest &&
                output_dir == other.output_dir && app_name == other.app_name &&
-               compress == other.compress;
+               compress == other.compress && compute_hash == other.compute_hash;
     }
 };
 
@@ -137,8 +145,17 @@ class ChunkExtractorUtility
    private:
     coro::CoroTask<ChunkExtractorUtilityOutput> extract_and_write(
         const ChunkExtractorUtilityInput& input);
-    bool compress_output(const std::string& input_path,
-                         const std::string& output_path);
+
+    // Write raw bytes to fd, or compress-then-write when compressor != nullptr.
+    coro::CoroTask<void> write_data(
+        int fd, const char* data, std::size_t len,
+        compression::zlib::ManualStreamingCompressorUtility* compressor);
+
+    // Flush accumulated buffer to fd (optionally through compressor).
+    // Clears buffer after flushing.
+    coro::CoroTask<void> flush_buffer(
+        int fd, std::vector<char>& buffer,
+        compression::zlib::ManualStreamingCompressorUtility* compressor);
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft

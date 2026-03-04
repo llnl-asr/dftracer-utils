@@ -43,6 +43,10 @@ struct StreamingMergeBatchUtility {
         batch_hash += hasher.get_hash().value;
     }
 
+    void add_unchecked(std::string content) {
+        contents.push_back(std::move(content));
+    }
+
     std::size_t size() const { return contents.size(); }
     bool empty() const { return contents.empty(); }
     void clear() {
@@ -56,10 +60,8 @@ struct StreamingMergeBatchUtility {
  */
 struct StreamingFileProducerInput {
     std::string file_path;
-    std::string index_path;
-    std::size_t checkpoint_size{constants::indexer::DEFAULT_CHECKPOINT_SIZE};
     std::size_t batch_size{1000};
-    bool force_rebuild{false};
+    bool verify{false};
 
     static StreamingFileProducerInput from_file(const std::string& path) {
         StreamingFileProducerInput input;
@@ -67,23 +69,13 @@ struct StreamingFileProducerInput {
         return input;
     }
 
-    StreamingFileProducerInput& with_index(const std::string& idx_path) {
-        index_path = idx_path;
-        return *this;
-    }
-
-    StreamingFileProducerInput& with_checkpoint_size(std::size_t size) {
-        checkpoint_size = size;
-        return *this;
-    }
-
     StreamingFileProducerInput& with_batch_size(std::size_t size) {
         batch_size = size;
         return *this;
     }
 
-    StreamingFileProducerInput& with_force_rebuild(bool force) {
-        force_rebuild = force;
+    StreamingFileProducerInput& with_verify(bool v) {
+        verify = v;
         return *this;
     }
 };

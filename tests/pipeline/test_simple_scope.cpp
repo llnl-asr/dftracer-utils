@@ -22,12 +22,14 @@ TEST_CASE("CoroScope - Simple spawn test") {
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
                 fprintf(stderr, "Scope lambda: spawning tasks\n");
                 // Spawn 3 simple tasks
+                auto* counter_ptr = &counter;
                 for (int i = 0; i < 3; ++i) {
-                    scope.spawn([&](CoroScope&) -> coro::CoroTask<void> {
-                        fprintf(stderr, "Spawned task executing\n");
-                        ++counter;
-                        co_return;
-                    });
+                    scope.spawn(
+                        [counter_ptr](CoroScope&) -> coro::CoroTask<void> {
+                            fprintf(stderr, "Spawned task executing\n");
+                            ++(*counter_ptr);
+                            co_return;
+                        });
                 }
                 fprintf(stderr, "Scope lambda: returning\n");
                 co_return;

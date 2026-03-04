@@ -321,7 +321,8 @@ int main(int argc, char** argv) {
         for (const auto& file_path : file_paths) {
             auto input = MetadataCollectorUtilityInput::from_file(file_path)
                              .with_checkpoint_size(checkpoint_size)
-                             .with_force_rebuild(force_rebuild);
+                             .with_force_rebuild(force_rebuild)
+                             .with_count_lines(true);
 
             if (!index_dir.empty()) {
                 input.with_index(

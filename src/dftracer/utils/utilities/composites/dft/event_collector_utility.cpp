@@ -85,6 +85,11 @@ EventCollectorFromMetadataUtility::process(
             continue;
         }
 
+        // Skip files with no valid line range (e.g., empty files)
+        if (file.start_line == 0 || file.end_line == 0) {
+            continue;
+        }
+
 #if DFTRACER_UTILS_LOGGER_DEBUG_ENABLED == 1
         std::size_t events_before = events.size();
 #endif

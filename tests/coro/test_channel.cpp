@@ -1374,9 +1374,11 @@ TEST_CASE("Channel - adopt_producer() with scope.spawn() pattern") {
                 }
 
                 // Consumer coroutine
-                scope.spawn([&](CoroScope& cctx) -> coro::CoroTask<void> {
+                auto* total_consumed_ptr = &total_consumed;
+                scope.spawn([total_consumed_ptr,
+                             channel](CoroScope& cctx) -> coro::CoroTask<void> {
                     while (auto item = co_await cctx.receive(channel)) {
-                        total_consumed.fetch_add(*item);
+                        total_consumed_ptr->fetch_add(*item);
                     }
                     co_return;
                 });
@@ -1434,9 +1436,11 @@ TEST_CASE("Channel - adopt_producer() early exit in scope.spawn()") {
                 }
 
                 // Consumer
-                scope.spawn([&](CoroScope& cctx) -> coro::CoroTask<void> {
+                auto* total_consumed_ptr = &total_consumed;
+                scope.spawn([total_consumed_ptr,
+                             channel](CoroScope& cctx) -> coro::CoroTask<void> {
                     while (auto item = co_await cctx.receive(channel)) {
-                        total_consumed.fetch_add(1);
+                        total_consumed_ptr->fetch_add(1);
                     }
                     co_return;
                 });
@@ -1487,20 +1491,26 @@ TEST_CASE("Channel - adopt_producer() two-stage pipeline with scope.spawn()") {
 
                 // Stage 2: workers read stage1, write stage2
                 stage2->register_producers(NUM_WORKERS);
+                auto* stage1_ptr = &stage1;
+                auto* stage2_ptr = &stage2;
                 for (int w = 0; w < NUM_WORKERS; ++w) {
-                    scope.spawn([&](CoroScope& wctx) -> coro::CoroTask<void> {
-                        auto guard = stage2->adopt_producer();
-                        while (auto item = co_await wctx.receive(stage1)) {
-                            CHECK(co_await stage2->send(*item * 2));
+                    scope.spawn([stage1_ptr, stage2_ptr](
+                                    CoroScope& wctx) -> coro::CoroTask<void> {
+                        auto guard = (*stage2_ptr)->adopt_producer();
+                        while (auto item =
+                                   co_await wctx.receive(**stage1_ptr)) {
+                            CHECK(co_await (*stage2_ptr)->send(*item * 2));
                         }
                         co_return;
                     });
                 }
 
                 // Final consumer
-                scope.spawn([&](CoroScope& cctx) -> coro::CoroTask<void> {
-                    while (auto item = co_await cctx.receive(stage2)) {
-                        total_consumed.fetch_add(1);
+                auto* total_consumed_ptr = &total_consumed;
+                scope.spawn([total_consumed_ptr, stage2_ptr](
+                                CoroScope& cctx) -> coro::CoroTask<void> {
+                    while (auto item = co_await cctx.receive(**stage2_ptr)) {
+                        total_consumed_ptr->fetch_add(1);
                     }
                     co_return;
                 });

@@ -3,11 +3,14 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/task_graph/task_graph.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
 #include <dftracer/utils/utilities/composites/composites.h>
+#include <dftracer/utils/utilities/composites/dft/chunk_extractor_utility.h>
 #include <dftracer/utils/utilities/fileio/types/types.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <unistd.h>
 
 #include <argparse/argparse.hpp>
 #include <chrono>
@@ -15,7 +18,6 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::task_graph;
-using EventId = utilities::composites::dft::EventId;
 using Metadata = utilities::composites::dft::MetadataCollectorUtilityOutput;
 using ChunkManifest =
     utilities::composites::dft::internal::DFTracerChunkManifest;
@@ -161,7 +163,8 @@ int main(int argc, char** argv) {
     std::string temp_index_dir;
     if (index_dir.empty()) {
         temp_index_dir = fs::temp_directory_path() /
-                         ("dftracer_idx_" + std::to_string(std::time(nullptr)));
+                         ("dftracer_idx_" + std::to_string(std::time(nullptr)) +
+                          "_" + std::to_string(getpid()));
         fs::create_directories(temp_index_dir);
         index_dir = temp_index_dir;
         DFTRACER_UTILS_LOG_INFO("Created temporary index directory: %s",
@@ -232,11 +235,12 @@ int main(int argc, char** argv) {
 
     DFTRACER_UTILS_LOG_INFO("%s", "Creating file processing tasks...");
 
+    auto* input_files_ptr = &input_files;
     auto file_metadata = graph.parallel<Metadata>(
         input_files.size(),
-        [&input_files, checkpoint_size, force, &index_dir](
+        [input_files_ptr, checkpoint_size, force, index_dir, verify](
             CoroScope&, std::size_t idx) -> coro::CoroTask<Metadata> {
-            const auto& file_path = input_files[idx];
+            const auto& file_path = (*input_files_ptr)[idx];
 
             // Determine index path
             std::string idx_path =
@@ -259,7 +263,8 @@ int main(int argc, char** argv) {
                     from_file(file_path)
                         .with_checkpoint_size(checkpoint_size)
                         .with_force_rebuild(force)
-                        .with_index(idx_path);
+                        .with_index(idx_path)
+                        .with_count_lines(verify);
 
             co_return co_await utilities::composites::dft::
                 MetadataCollectorUtility{}
@@ -292,43 +297,54 @@ int main(int argc, char** argv) {
 
     using ExtractChunksOutput = std::vector<ExtractResult>;
 
-    auto extractor_workflow =
-        std::make_shared<utilities::composites::dft::ChunkExtractorUtility>();
+    auto* app_name_ptr = &app_name;
+    auto* output_dir_ptr = &output_dir;
 
-    auto chunk_extractor =
-        std::make_shared<utilities::composites::BatchProcessorUtility<
-            ExtractInput, ExtractResult>>(extractor_workflow);
-
-    chunk_extractor->with_comparator(
-        [](const ExtractResult& a, const ExtractResult& b) {
-            return a.chunk_index < b.chunk_index;
-        });
-
-    auto task_extract_chunks = utilities::use(chunk_extractor).as_task();
-    task_extract_chunks->with_name("ExtractChunks");
-
-    // Combiner: transform manifests to extraction inputs
-    task_extract_chunks->with_combiner(
-        [&app_name, &output_dir,
-         compress](const std::vector<ChunkManifest>& manifests) {
-            DFTRACER_UTILS_LOG_INFO("Preparing %zu extraction inputs...",
+    auto task_extract_chunks = make_task(
+        [app_name_ptr, output_dir_ptr, compress, verify](
+            CoroScope& scope, std::vector<ChunkManifest> manifests)
+            -> coro::CoroTask<ExtractChunksOutput> {
+            DFTRACER_UTILS_LOG_INFO("Extracting %zu chunks in parallel...",
                                     manifests.size());
 
-            std::vector<ExtractInput> inputs;
-            inputs.reserve(manifests.size());
+            // Spawn all chunk extractions in parallel
+            std::vector<coro::SpawnFuture<ExtractResult>> futures;
+            futures.reserve(manifests.size());
 
             for (std::size_t i = 0; i < manifests.size(); ++i) {
                 auto input = ExtractInput::from_manifest(
                                  static_cast<int>(i + 1), manifests[i])
-                                 .with_output_dir(output_dir)
-                                 .with_app_name(app_name)
-                                 .with_compression(compress);
-                inputs.push_back(input);
-            }
-            return inputs;
-        });
+                                 .with_output_dir(*output_dir_ptr)
+                                 .with_app_name(*app_name_ptr)
+                                 .with_compression(compress)
+                                 .with_compute_hash(verify);
 
-    // Connect extraction task to graph
+                futures.push_back(scope.spawn(
+                    [input = std::move(input)](
+                        CoroScope&) -> coro::CoroTask<ExtractResult> {
+                        utilities::composites::dft::ChunkExtractorUtility
+                            extractor;
+                        co_return co_await extractor.process(input);
+                    }));
+            }
+
+            // Collect results
+            ExtractChunksOutput results;
+            results.reserve(futures.size());
+            for (auto& future : futures) {
+                results.push_back(co_await future);
+            }
+
+            // Sort by chunk index
+            std::sort(results.begin(), results.end(),
+                      [](const ExtractResult& a, const ExtractResult& b) {
+                          return a.chunk_index < b.chunk_index;
+                      });
+
+            co_return results;
+        },
+        "ExtractChunks");
+
     task_extract_chunks->depends_on(manifests_group.task());
     graph.add(task_extract_chunks);
 
@@ -339,43 +355,61 @@ int main(int argc, char** argv) {
     if (verify) {
         DFTRACER_UTILS_LOG_INFO("%s", "Configuring verification...");
 
-        using IncrementalHasher =
-            utilities::composites::dft::IncrementalEventHasher;
+        struct VerifyInput {
+            ExtractChunksOutput chunks;
+            std::vector<Metadata> all_metadata;
+        };
 
-        // Verification task: combine hashes from extraction results
+        // Verification task receives both extraction results and metadata.
+        // Both are passed via combiner so the scheduler keeps parent
+        // results alive until this task consumes them.
         task_verify_chunks = make_task(
-            [&file_metadata](CoroScope&, const ExtractChunksOutput& chunks)
+            [](CoroScope&, const VerifyInput& input)
                 -> coro::CoroTask<
                     utilities::composites::ChunkVerificationUtilityOutput> {
                 // Sum output hashes from extraction results
                 std::size_t output_hash = 0;
-                for (const auto& chunk : chunks) {
+                for (const auto& chunk : input.chunks) {
                     output_hash += chunk.event_hash;
                 }
 
-                // Hash input events incrementally from metadata
-                IncrementalHasher input_hasher;
-                for (const auto& task : file_metadata.tasks()) {
-                    auto meta = task->get<Metadata>();
+                // Sum input hashes from metadata (computed during collection)
+                std::size_t input_hash = 0;
+                for (const auto& meta : input.all_metadata) {
                     if (!meta.success) continue;
-
-                    auto collect_input = utilities::composites::dft::
-                        EventCollectorFromMetadataCollectorUtilityInput::
-                            from_metadata({meta});
-                    utilities::composites::dft::
-                        EventCollectorFromMetadataUtility collector;
-                    auto events = co_await collector.process(collect_input);
-                    input_hasher.update(events);
+                    input_hash += meta.event_hash;
                 }
 
                 co_return utilities::composites::
                     ChunkVerificationUtilityOutput::success(
-                        static_cast<std::uint64_t>(input_hasher.get_hash()),
+                        static_cast<std::uint64_t>(input_hash),
                         static_cast<std::uint64_t>(output_hash));
             },
             "VerifyChunks");
 
+        // Depend on both extract results and metadata tasks.
+        // The combiner collects parent outputs into the typed struct.
         task_verify_chunks->depends_on(task_extract_chunks);
+        for (const auto& meta_task : file_metadata.tasks()) {
+            task_verify_chunks->depends_on(meta_task);
+        }
+
+        task_verify_chunks->with_combiner(
+            [](const std::vector<std::any>& inputs) -> std::any {
+                // inputs[0] = ExtractChunksOutput (from extract task)
+                // inputs[1..N] = Metadata (from each metadata task)
+                auto chunks = std::any_cast<ExtractChunksOutput>(inputs[0]);
+
+                std::vector<Metadata> all_metadata;
+                all_metadata.reserve(inputs.size() - 1);
+                for (std::size_t i = 1; i < inputs.size(); ++i) {
+                    all_metadata.push_back(std::any_cast<Metadata>(inputs[i]));
+                }
+
+                VerifyInput vi{std::move(chunks), std::move(all_metadata)};
+                return std::make_any<VerifyInput>(std::move(vi));
+            });
+
         graph.add(task_verify_chunks);
         final_task = task_verify_chunks;
     }
@@ -387,62 +421,60 @@ int main(int argc, char** argv) {
     pipeline.set_destination(final_task);
     pipeline.execute();
 
-    // Get results
-    auto extraction_results = task_extract_chunks->get<ExtractChunksOutput>();
-
+    // Get results from the destination task only (intermediate task values
+    // are released after pipeline execution)
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
-
-    std::size_t successful_chunks = 0;
-    std::size_t total_events = 0;
-
-    for (const auto& result : extraction_results) {
-        if (result.success) {
-            successful_chunks++;
-            total_events += result.events;
-        } else {
-            DFTRACER_UTILS_LOG_ERROR("Failed to create chunk %d",
-                                     result.chunk_index);
-        }
-    }
-
-    std::size_t successful_files = 0;
-    double total_size_mb = 0;
-    for (const auto& task : file_metadata.tasks()) {
-        auto meta = task->get<Metadata>();
-        if (meta.success) {
-            successful_files++;
-            total_size_mb += meta.size_mb;
-        }
-    }
 
     std::printf("\n");
     std::printf("==========================================\n");
     std::printf("Split Results\n");
     std::printf("==========================================\n");
     std::printf("  Execution time: %.2f seconds\n", duration.count() / 1000.0);
-    std::printf("  Input: %zu files, %.2f MB\n", successful_files,
-                total_size_mb);
-    std::printf("  Output: %zu/%zu chunks, %zu events\n", successful_chunks,
-                extraction_results.size(), total_events);
+    std::printf("  Input: %zu files\n", input_files.size());
 
-    // Optional verification phase
+    int exit_code = 0;
+
     if (verify && task_verify_chunks) {
         auto verify_result =
             task_verify_chunks
                 ->get<utilities::composites::ChunkVerificationUtilityOutput>();
+
         if (verify_result.input_hash == verify_result.output_hash) {
             std::printf(
-                "  \u2713 Verification: PASSED - all events present in "
-                "output\n");
+                "  Verification: PASSED - all events present in output\n");
         } else {
-            std::printf(
-                "  \u2717 Verification: FAILED - event mismatch detected\n");
+            std::printf("  Verification: FAILED - event mismatch detected\n");
+            exit_code = 1;
         }
         std::printf("    Input hash:  0x%016" PRIx64 "\n",
                     verify_result.input_hash);
         std::printf("    Output hash: 0x%016" PRIx64 "\n",
                     verify_result.output_hash);
+    } else {
+        // Without verification: extract task IS the destination, safe to read
+        auto extraction_results =
+            task_extract_chunks->get<ExtractChunksOutput>();
+
+        std::size_t successful_chunks = 0;
+        std::size_t total_events = 0;
+
+        for (const auto& result : extraction_results) {
+            if (result.success) {
+                successful_chunks++;
+                total_events += result.events;
+            } else {
+                DFTRACER_UTILS_LOG_ERROR("Failed to create chunk %d",
+                                         result.chunk_index);
+            }
+        }
+
+        std::printf("  Output: %zu/%zu chunks, %zu events\n", successful_chunks,
+                    extraction_results.size(), total_events);
+
+        if (successful_chunks != extraction_results.size()) {
+            exit_code = 1;
+        }
     }
 
     std::printf("==========================================\n");
@@ -454,5 +486,5 @@ int main(int argc, char** argv) {
         fs::remove_all(temp_index_dir);
     }
 
-    return successful_chunks == extraction_results.size() ? 0 : 1;
+    return exit_code;
 }

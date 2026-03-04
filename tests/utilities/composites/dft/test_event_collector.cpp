@@ -20,7 +20,8 @@ TEST_SUITE("EventCollector") {
         std::string test_file = env.create_dft_test_file(10);
 
         // First collect metadata
-        auto meta_input = MetadataCollectorUtilityInput::from_file(test_file);
+        auto meta_input = MetadataCollectorUtilityInput::from_file(test_file)
+                              .with_count_lines(true);
         MetadataCollectorUtility meta_collector;
         auto meta_output = meta_collector.process(meta_input).get();
 

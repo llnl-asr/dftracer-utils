@@ -731,3 +731,68 @@ TEST_CASE("TaskGraph - partition empty data") {
     CHECK(chunk0.empty());
     CHECK(chunk1.empty());
 }
+
+TEST_CASE("TaskGraph - reduce single element with type conversion") {
+    auto graph = TaskGraph::builder("ReduceSingleTypeConvert");
+
+    // Single parallel task producing a string
+    auto workers = graph.parallel<std::string>(
+        1,
+        [](CoroScope&, std::size_t) -> coro::CoroTask<std::string> {
+            co_return std::string("42");
+        },
+        "Worker");
+
+    CHECK(workers.size() == 1);
+
+    // Reduce: string -> int (type conversion must happen even with 1 input)
+    auto reduced = graph.reduce<int>(
+        workers, split_every{2},
+        [](CoroScope&, std::vector<std::string> items) -> coro::CoroTask<int> {
+            int sum = 0;
+            for (const auto& s : items) sum += std::stoi(s);
+            co_return sum;
+        },
+        "ParseAndSum");
+
+    CHECK(reduced.size() == 1);
+    // The reduce task must be a DIFFERENT task from the worker
+    CHECK(reduced.task() != workers.task());
+
+    Pipeline pipeline(PipelineConfig::parallel(2));
+    pipeline.set_source(workers.tasks());
+    pipeline.execute();
+
+    auto result = reduced.task()->get<int>();
+    CHECK(result == 42);
+}
+
+TEST_CASE("TaskGraph - reduce single element same type") {
+    auto graph = TaskGraph::builder("ReduceSingleSameType");
+
+    auto workers = graph.parallel<int>(
+        1, [](CoroScope&, std::size_t) -> coro::CoroTask<int> { co_return 99; },
+        "Worker");
+
+    CHECK(workers.size() == 1);
+
+    auto reduced = graph.reduce<int>(
+        workers, split_every{2},
+        [](CoroScope&, std::vector<int> items) -> coro::CoroTask<int> {
+            int sum = 0;
+            for (int x : items) sum += x;
+            co_return sum;
+        },
+        "Sum");
+
+    CHECK(reduced.size() == 1);
+    // Even with same type, reduce should create a new task
+    CHECK(reduced.task() != workers.task());
+
+    Pipeline pipeline(PipelineConfig::parallel(2));
+    pipeline.set_source(workers.tasks());
+    pipeline.execute();
+
+    auto result = reduced.task()->get<int>();
+    CHECK(result == 99);
+}

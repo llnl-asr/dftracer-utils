@@ -21,6 +21,7 @@ struct MetadataCollectorUtilityInput {
     std::size_t checkpoint_size = dftracer::utils::utilities::indexer::
         internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
+    bool count_lines = false;
 
     MetadataCollectorUtilityInput() = default;
 
@@ -28,11 +29,12 @@ struct MetadataCollectorUtilityInput {
         std::string fpath, std::string ipath = "",
         std::size_t ckpt = dftracer::utils::utilities::indexer::internal::
             Indexer::DEFAULT_CHECKPOINT_SIZE,
-        bool force = false)
+        bool force = false, bool count = false)
         : file_path(std::move(fpath)),
           idx_path(std::move(ipath)),
           checkpoint_size(ckpt),
-          force_rebuild(force) {}
+          force_rebuild(force),
+          count_lines(count) {}
 
     static MetadataCollectorUtilityInput from_file(std::string path) {
         MetadataCollectorUtilityInput input;
@@ -55,10 +57,16 @@ struct MetadataCollectorUtilityInput {
         return *this;
     }
 
+    MetadataCollectorUtilityInput& with_count_lines(bool count) {
+        count_lines = count;
+        return *this;
+    }
+
     bool operator==(const MetadataCollectorUtilityInput& other) const {
         return file_path == other.file_path && idx_path == other.idx_path &&
                checkpoint_size == other.checkpoint_size &&
-               force_rebuild == other.force_rebuild;
+               force_rebuild == other.force_rebuild &&
+               count_lines == other.count_lines;
     }
 };
 
@@ -85,6 +93,7 @@ struct MetadataCollectorUtilityOutput {
     std::size_t num_checkpoints = 0;
     ArchiveFormat format = ArchiveFormat::UNKNOWN;
     std::string error_message;
+    std::size_t event_hash = 0;
 
     MetadataCollectorUtilityOutput() = default;
 
@@ -101,7 +110,7 @@ struct MetadataCollectorUtilityOutput {
                num_lines == other.num_lines &&
                checkpoint_size == other.checkpoint_size &&
                num_checkpoints == other.num_checkpoints &&
-               format == other.format;
+               format == other.format && event_hash == other.event_hash;
     }
 };
 

@@ -7,6 +7,7 @@
 #include <dftracer/utils/core/utilities/utility_adapter.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/utilities.h>
+#include <unistd.h>
 
 #include <argparse/argparse.hpp>
 #include <chrono>
@@ -79,7 +80,8 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
     std::string temp_index_dir;
     if (index_dir.empty()) {
         temp_index_dir = fs::temp_directory_path() /
-                         ("dftracer_idx_" + std::to_string(std::time(nullptr)));
+                         ("dftracer_idx_" + std::to_string(std::time(nullptr)) +
+                          "_" + std::to_string(getpid()));
         fs::create_directories(temp_index_dir);
         index_dir = temp_index_dir;
         DFTRACER_UTILS_LOG_INFO("Created temporary index directory: %s",
@@ -151,7 +153,8 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
                          from_file(file_path)
                              .with_checkpoint_size(checkpoint_size)
                              .with_force_rebuild(force_rebuild)
-                             .with_index(idx_path);
+                             .with_index(idx_path)
+                             .with_count_lines(true);
 
         return utilities::composites::dft::MetadataCollectorUtility{}
             .process(input)
@@ -215,23 +218,13 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
     pipeline.execute(index_dir_input);
 
     auto total_events = task3_aggregate_counts->get<AggregateOutput>();
-    auto metadata_results =
-        task2_collect_metadata->get<MetadataCollectOutput>();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     std::printf("%zu\n", total_events);
 
-    std::size_t successful_files = 0;
-    for (const auto& meta : metadata_results.results) {
-        if (meta.success) {
-            successful_files++;
-        }
-    }
-
-    DFTRACER_UTILS_LOG_DEBUG("Processed %zu files in %.2f ms", successful_files,
-                             duration.count());
+    DFTRACER_UTILS_LOG_DEBUG("Completed in %.2f ms", duration.count());
     DFTRACER_UTILS_LOG_DEBUG("Total valid events found: %zu", total_events);
 
     // Cleanup temporary index directory if created

@@ -5,23 +5,16 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/utilities.h>
 
 #include <argparse/argparse.hpp>
 #include <chrono>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::composites;
 
 int main(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
-
-    auto default_checkpoint_size_str =
-        std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE) + " B (" +
-        std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE / (1024 * 1024)) +
-        " MB)";
 
     argparse::ArgumentParser program("dftracer_merge",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -51,13 +44,6 @@ int main(int argc, char** argv) {
         .help("Process only .pfw.gz files")
         .flag();
 
-    program.add_argument("--checkpoint-size")
-        .help("Checkpoint size for indexing in bytes (default: " +
-              default_checkpoint_size_str + ")")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(Indexer::DEFAULT_CHECKPOINT_SIZE));
-
     program.add_argument("--executor-threads")
         .help(
             "Number of executor threads for parallel processing (default: "
@@ -65,10 +51,6 @@ int main(int argc, char** argv) {
         .scan<'d', std::size_t>()
         .default_value(
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
-
-    program.add_argument("--index-dir")
-        .help("Directory to store index files (default: system temp directory)")
-        .default_value<std::string>("");
 
     program.add_argument("--verify")
         .help("Verify merged output by comparing input/output hashes")
@@ -135,10 +117,8 @@ int main(int argc, char** argv) {
     [[maybe_unused]] bool verbose = program.get<bool>("--verbose");
     bool gzip_only = program.get<bool>("--gzip-only");
     bool verify = program.get<bool>("--verify");
-    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    std::string index_dir = program.get<std::string>("--index-dir");
     std::size_t channel_capacity =
         program.get<std::size_t>("--channel-capacity");
     std::size_t batch_size = program.get<std::size_t>("--batch-size");
@@ -152,16 +132,6 @@ int main(int argc, char** argv) {
 
     input_dir = fs::absolute(input_dir).string();
     output_file = fs::absolute(output_file).string();
-
-    std::string temp_index_dir;
-    if (index_dir.empty()) {
-        temp_index_dir = fs::temp_directory_path() /
-                         ("dftracer_idx_" + std::to_string(std::time(nullptr)));
-        fs::create_directories(temp_index_dir);
-        index_dir = temp_index_dir;
-        DFTRACER_UTILS_LOG_INFO("Created temporary index directory: %s",
-                                index_dir.c_str());
-    }
 
     if (output_file.size() < 4 ||
         output_file.substr(output_file.size() - 4) != ".pfw") {
@@ -254,25 +224,23 @@ int main(int argc, char** argv) {
     // Step 3: Create producer tasks
     std::vector<std::shared_ptr<Task>> producer_tasks;
     for (std::size_t i = 0; i < input_files.size(); ++i) {
+        auto* input_files_ptr = &input_files;
+        auto* producer_results_ptr = &producer_results;
         auto producer_task = make_task(
-            [i, &input_files, &index_dir, checkpoint_size, batch_size,
-             force_override, &channel,
-             &producer_results]([[maybe_unused]] CoroScope& ctx)
+            [i, input_files_ptr, batch_size, verify, channel,
+             producer_results_ptr]([[maybe_unused]] CoroScope& ctx)
                 -> coro::CoroTask<StreamingFileProducerOutput> {
                 auto guard = channel->producer_guard();
 
                 StreamingFileProducerUtility producer(channel);
 
                 auto input =
-                    StreamingFileProducerInput::from_file(input_files[i])
-                        .with_index(dft::internal::determine_index_path(
-                            input_files[i], index_dir))
-                        .with_checkpoint_size(checkpoint_size)
+                    StreamingFileProducerInput::from_file((*input_files_ptr)[i])
                         .with_batch_size(batch_size)
-                        .with_force_rebuild(force_override);
+                        .with_verify(verify);
 
                 auto result = co_await producer.process_async(ctx, input);
-                producer_results[i] = result;
+                (*producer_results_ptr)[i] = result;
 
                 co_return result;
             },
@@ -281,17 +249,18 @@ int main(int argc, char** argv) {
     }
 
     // Step 4: Create consumer task
+    auto* consumer_result_ptr = &consumer_result;
     auto consumer_task = make_task(
-        [&channel, &output_file, compress_output,
-         &consumer_result]([[maybe_unused]] CoroScope& ctx)
+        [channel, output_file, compress_output,
+         consumer_result_ptr]([[maybe_unused]] CoroScope& ctx)
             -> coro::CoroTask<StreamingFileConsumerOutput> {
             StreamingFileConsumerUtility consumer(channel);
 
             auto input = StreamingFileConsumerInput::with_output(output_file)
                              .with_compression(compress_output);
 
-            consumer_result = co_await consumer.process_async(ctx, input);
-            co_return consumer_result;
+            *consumer_result_ptr = co_await consumer.process_async(ctx, input);
+            co_return *consumer_result_ptr;
         },
         "Consumer");
 
@@ -306,12 +275,6 @@ int main(int argc, char** argv) {
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
-
-    if (!temp_index_dir.empty() && fs::exists(temp_index_dir)) {
-        DFTRACER_UTILS_LOG_INFO("Cleaning up temporary index directory: %s",
-                                temp_index_dir.c_str());
-        fs::remove_all(temp_index_dir);
-    }
 
     std::size_t input_hash = 0;
     std::size_t successful_files = 0;

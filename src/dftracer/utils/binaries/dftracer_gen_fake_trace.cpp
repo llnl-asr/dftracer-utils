@@ -48,14 +48,14 @@ class TraceWriter {
         util_io::RawData raw(s);
         auto compressed_chunks = compressor_.process(raw).get();
         for (const auto& chunk : compressed_chunks) {
-            writer_.process(util_io::RawData(chunk.data));
+            writer_.process(util_io::RawData(chunk.data)).get();
         }
     }
 
     void close() {
         auto final_chunks = compressor_.finalize();
         for (const auto& chunk : final_chunks) {
-            writer_.process(util_io::RawData(chunk.data));
+            writer_.process(util_io::RawData(chunk.data)).get();
         }
         writer_.close();
     }
@@ -202,8 +202,8 @@ static coro::CoroTask<int> run_verify(
     std::vector<std::string> extra_dims = {"ret", "count", "offset", "epoch",
                                            "step"};
 
-    std::vector<std::string> all_dimensions = {"name",  "cat",   "pid",  "tid",
-                                               "hhash", "fhash", "shash"};
+    std::vector<std::string> all_dimensions = {"name",  "cat",   "pid", "tid",
+                                               "hhash", "fhash", "sref"};
     for (const auto& dim : extra_dims) {
         all_dimensions.push_back(dim);
     }
@@ -574,19 +574,39 @@ int main(int argc, char** argv) {
         "DFTracer Fake Trace Generator");
     Pipeline pipeline(pipeline_config);
 
+    auto* generated_files_ptr = &generated_files;
+    auto* host_hashes_ptr = &host_hashes;
+    auto* host_names_ptr = &host_names;
+    auto* train_file_names_ptr = &train_file_names;
+    auto* train_file_hashes_ptr = &train_file_hashes;
+    auto* val_file_names_ptr = &val_file_names;
+    auto* val_file_hashes_ptr = &val_file_hashes;
+    auto* ckpt_file_name_ptr = &ckpt_file_name;
+    auto* ckref_ptr = &ckpt_file_hash;
+    auto* script_name_ptr = &script_name;
+    auto* sref_ptr = &script_hash;
+    auto* rank_event_counts_ptr = &rank_event_counts;
     std::vector<std::shared_ptr<Task>> rank_tasks;
     for (int rank = 0; rank < num_ranks; ++rank) {
         auto task = make_task(
-            [&, rank]([[maybe_unused]] CoroScope& ctx)
+            [rank, base_seed, num_ranks, num_hosts, num_train_files,
+             num_val_files, num_epochs, steps_per_epoch, checkpoint_every,
+             validation_every, step_dur_us, generated_files_ptr,
+             host_hashes_ptr, host_names_ptr, train_file_names_ptr,
+             train_file_hashes_ptr, val_file_names_ptr, val_file_hashes_ptr,
+             ckpt_file_name_ptr, ckref_ptr, script_name_ptr, sref_ptr,
+             rank_event_counts_ptr]([[maybe_unused]] CoroScope& ctx)
                 -> coro::CoroTask<std::size_t> {
-                const std::string& path = generated_files[rank];
+                const std::string& path = (*generated_files_ptr)[rank];
                 TraceWriter writer(path);
+                const std::string& sref = *sref_ptr;
+                const std::string& ckref = *ckref_ptr;
 
                 std::mt19937_64 rng(
                     base_seed + static_cast<std::uint64_t>(rank) * 10000ULL);
 
                 const int host_idx = rank % num_hosts;
-                const std::string& my_hhash = host_hashes[host_idx];
+                const std::string& my_hhash = (*host_hashes_ptr)[host_idx];
                 const std::uint64_t pid =
                     1000 + static_cast<std::uint64_t>(rank);
                 const std::uint64_t tid_main = pid * 10;
@@ -604,20 +624,23 @@ int main(int argc, char** argv) {
                 // -------------------------------------------------------------------
                 // Metadata header
                 // -------------------------------------------------------------------
-                emit_metadata(writer, "HH", my_hhash, host_names[host_idx],
-                              my_hhash);
+                emit_metadata(writer, "HH", my_hhash,
+                              (*host_names_ptr)[host_idx], my_hhash);
 
                 for (int si : my_train_shards) {
-                    emit_metadata(writer, "FH", my_hhash, train_file_names[si],
-                                  train_file_hashes[si]);
+                    emit_metadata(writer, "FH", my_hhash,
+                                  (*train_file_names_ptr)[si],
+                                  (*train_file_hashes_ptr)[si]);
                 }
                 for (int vi = 0; vi < num_val_files; ++vi) {
-                    emit_metadata(writer, "FH", my_hhash, val_file_names[vi],
-                                  val_file_hashes[vi]);
+                    emit_metadata(writer, "FH", my_hhash,
+                                  (*val_file_names_ptr)[vi],
+                                  (*val_file_hashes_ptr)[vi]);
                 }
-                emit_metadata(writer, "FH", my_hhash, ckpt_file_name,
-                              ckpt_file_hash);
-                emit_metadata(writer, "SH", my_hhash, script_name, script_hash);
+                emit_metadata(writer, "FH", my_hhash, *ckpt_file_name_ptr,
+                              *ckref_ptr);
+                emit_metadata(writer, "SH", my_hhash, *script_name_ptr,
+                              *sref_ptr);
 
                 std::size_t rank_events = 0;
                 std::uint64_t ts = 1000000000ULL;  // 1 second in us
@@ -635,7 +658,7 @@ int main(int argc, char** argv) {
                             my_train_shards[step % static_cast<int>(
                                                        my_train_shards.size())];
                         const std::string& data_fhash =
-                            train_file_hashes[shard_idx];
+                            (*train_file_hashes_ptr)[shard_idx];
                         std::uint64_t io_size = jitter(rng, 4096);
 
                         // open
@@ -649,7 +672,7 @@ int main(int argc, char** argv) {
                             a.dur = jitter(rng, 5);
                             a.hhash = my_hhash;
                             a.fhash = data_fhash;
-                            a.cmd_hash = script_hash;
+                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":3)");
                             a.extra = extra;
                             emit_event(writer, a);
@@ -670,7 +693,7 @@ int main(int argc, char** argv) {
                             a.dur = jitter(rng, 20);
                             a.hhash = my_hhash;
                             a.fhash = data_fhash;
-                            a.cmd_hash = script_hash;
+                            a.cmd_hash = sref;
                             std::uint64_t offset =
                                 static_cast<std::uint64_t>(r) * io_size;
                             std::snprintf(
@@ -696,7 +719,7 @@ int main(int argc, char** argv) {
                             a.dur = jitter(rng, 3);
                             a.hhash = my_hhash;
                             a.fhash = data_fhash;
-                            a.cmd_hash = script_hash;
+                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":0)");
                             a.extra = extra;
                             emit_event(writer, a);
@@ -716,7 +739,7 @@ int main(int argc, char** argv) {
                             a.ts = ts;
                             a.dur = jitter(rng, step_dur_us / 5);
                             a.hhash = my_hhash;
-                            a.cmd_hash = script_hash;
+                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra),
                                           R"("epoch":%d,"step":%d)", epoch,
                                           step);
@@ -738,7 +761,7 @@ int main(int argc, char** argv) {
                             a.ts = ts;
                             a.dur = jitter(rng, step_dur_us / 4);
                             a.hhash = my_hhash;
-                            a.cmd_hash = script_hash;
+                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra),
                                           R"("epoch":%d,"step":%d)", epoch,
                                           step);
@@ -758,7 +781,7 @@ int main(int argc, char** argv) {
                             a.ts = ts;
                             a.dur = jitter(rng, step_dur_us / 8);
                             a.hhash = my_hhash;
-                            a.cmd_hash = script_hash;
+                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra),
                                           R"("epoch":%d,"step":%d)", epoch,
                                           step);
@@ -777,7 +800,7 @@ int main(int argc, char** argv) {
                             char extra[256];
                             int vf_idx = vs % num_val_files;
                             const std::string& vf_hash =
-                                val_file_hashes[vf_idx];
+                                (*val_file_hashes_ptr)[vf_idx];
                             std::uint64_t vio_size = jitter(rng, 4096);
 
                             // open
@@ -791,7 +814,7 @@ int main(int argc, char** argv) {
                                 a.dur = jitter(rng, 5);
                                 a.hhash = my_hhash;
                                 a.fhash = vf_hash;
-                                a.cmd_hash = script_hash;
+                                a.cmd_hash = sref;
                                 std::snprintf(extra, sizeof(extra),
                                               R"("ret":4)");
                                 a.extra = extra;
@@ -813,7 +836,7 @@ int main(int argc, char** argv) {
                                 a.dur = jitter(rng, 20);
                                 a.hhash = my_hhash;
                                 a.fhash = vf_hash;
-                                a.cmd_hash = script_hash;
+                                a.cmd_hash = sref;
                                 std::snprintf(
                                     extra, sizeof(extra),
                                     R"("ret":%llu,"count":%llu,"offset":%llu)",
@@ -839,7 +862,7 @@ int main(int argc, char** argv) {
                                 a.dur = jitter(rng, 3);
                                 a.hhash = my_hhash;
                                 a.fhash = vf_hash;
-                                a.cmd_hash = script_hash;
+                                a.cmd_hash = sref;
                                 std::snprintf(extra, sizeof(extra),
                                               R"("ret":0)");
                                 a.extra = extra;
@@ -858,7 +881,7 @@ int main(int argc, char** argv) {
                                 a.ts = ts;
                                 a.dur = jitter(rng, step_dur_us / 3);
                                 a.hhash = my_hhash;
-                                a.cmd_hash = script_hash;
+                                a.cmd_hash = sref;
                                 std::snprintf(extra, sizeof(extra),
                                               R"("epoch":%d,"step":%d)", epoch,
                                               vs);
@@ -878,7 +901,7 @@ int main(int argc, char** argv) {
                                 a.ts = ts;
                                 a.dur = jitter(rng, step_dur_us / 6);
                                 a.hhash = my_hhash;
-                                a.cmd_hash = script_hash;
+                                a.cmd_hash = sref;
                                 std::snprintf(extra, sizeof(extra),
                                               R"("epoch":%d,"step":%d)", epoch,
                                               vs);
@@ -905,8 +928,8 @@ int main(int argc, char** argv) {
                             a.ts = ts;
                             a.dur = jitter(rng, 10);
                             a.hhash = my_hhash;
-                            a.fhash = ckpt_file_hash;
-                            a.cmd_hash = script_hash;
+                            a.fhash = ckref;
+                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":5)");
                             a.extra = extra;
                             emit_event(writer, a);
@@ -925,8 +948,8 @@ int main(int argc, char** argv) {
                             a.ts = ts;
                             a.dur = jitter(rng, 50);
                             a.hhash = my_hhash;
-                            a.fhash = ckpt_file_hash;
-                            a.cmd_hash = script_hash;
+                            a.fhash = ckref;
+                            a.cmd_hash = sref;
                             std::uint64_t wr_size =
                                 jitter(rng, 1048576);  // ~1 MB
                             std::snprintf(
@@ -952,8 +975,8 @@ int main(int argc, char** argv) {
                             a.ts = ts;
                             a.dur = jitter(rng, 200);
                             a.hhash = my_hhash;
-                            a.fhash = ckpt_file_hash;
-                            a.cmd_hash = script_hash;
+                            a.fhash = ckref;
+                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":0)");
                             a.extra = extra;
                             emit_event(writer, a);
@@ -971,8 +994,8 @@ int main(int argc, char** argv) {
                             a.ts = ts;
                             a.dur = jitter(rng, 3);
                             a.hhash = my_hhash;
-                            a.fhash = ckpt_file_hash;
-                            a.cmd_hash = script_hash;
+                            a.fhash = ckref;
+                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":0)");
                             a.extra = extra;
                             emit_event(writer, a);
@@ -983,7 +1006,7 @@ int main(int argc, char** argv) {
                 }
 
                 writer.close();
-                rank_event_counts[rank] = rank_events;
+                (*rank_event_counts_ptr)[rank] = rank_events;
                 co_return rank_events;
             },
             "Rank-" + std::to_string(rank));
@@ -1076,7 +1099,7 @@ int main(int argc, char** argv) {
         test_queries.push_back({"hhash=" + host_names[0] + " (resolved)",
                                 {{"hhash", {host_hashes[0]}}}});
 
-        // shash dimension (script hash)
+        // sref dimension (script hash)
         test_queries.push_back(
             {"shash=train_unet3d (resolved)", {{"shash", {script_hash}}}});
 

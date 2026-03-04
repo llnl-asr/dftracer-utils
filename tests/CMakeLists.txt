@@ -183,6 +183,19 @@ add_subdirectory(utilities)
 
 set(TEST_BINARY_SOURCES
     binaries/test_dftracer_server.cpp
+    binaries/test_dftracer_merge.cpp
+    binaries/test_dftracer_event_count.cpp
+    binaries/test_dftracer_split.cpp
+    binaries/test_dftracer_pgzip.cpp
+    binaries/test_dftracer_gen_fake_trace.cpp
+    binaries/test_dftracer_info.cpp
+    binaries/test_dftracer_reader.cpp
+    binaries/test_dftracer_stats.cpp
+    binaries/test_dftracer_index.cpp
+    binaries/test_dftracer_aggregator.cpp
+    binaries/test_dftracer_organize.cpp
+    binaries/test_dftracer_view.cpp
+    binaries/test_dftracer_tar.cpp
     )
 
 foreach(test_file ${TEST_BINARY_SOURCES})
@@ -222,9 +235,50 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   endif()
   set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${integration_test_timeout})
 
-  # Pass the server binary path so the test can find it
-  set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
-    "DFTRACER_SERVER_PATH=$<TARGET_FILE:dftracer_server>")
+  # Pass binary paths so tests can find them
+  if(bin_exec STREQUAL "binaries/test_dftracer_server")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_SERVER_PATH=$<TARGET_FILE:dftracer_server>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_merge")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_MERGE_PATH=$<TARGET_FILE:dftracer_merge>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_event_count")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_EVENT_COUNT_PATH=$<TARGET_FILE:dftracer_event_count>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_split")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_SPLIT_PATH=$<TARGET_FILE:dftracer_split>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_pgzip")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_PGZIP_PATH=$<TARGET_FILE:dftracer_pgzip>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_gen_fake_trace")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_GEN_FAKE_TRACE_PATH=$<TARGET_FILE:dftracer_gen_fake_trace>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_info")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_INFO_PATH=$<TARGET_FILE:dftracer_info>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_reader")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_READER_BIN_PATH=$<TARGET_FILE:dftracer_reader>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_stats")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_STATS_PATH=$<TARGET_FILE:dftracer_stats>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_index")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_INDEX_PATH=$<TARGET_FILE:dftracer_index>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_aggregator")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_AGGREGATOR_PATH=$<TARGET_FILE:dftracer_aggregator>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_organize")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_ORGANIZE_PATH=$<TARGET_FILE:dftracer_organize>;DFTRACER_RECONSTRUCT_PATH=$<TARGET_FILE:dftracer_reconstruct>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_view")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_VIEW_PATH=$<TARGET_FILE:dftracer_view>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_tar")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_TAR_PATH=$<TARGET_FILE:dftracer_tar>")
+  endif()
 
 endforeach()
 # +++++++++++++++++++++++++++++++++++++++++

@@ -37,6 +37,8 @@ class StreamingDecompressorUtility
    private:
     z_stream stream_;
     bool initialized_ = false;
+    bool finished_ = false;
+    bool between_members_ = false;
     DecompressionFormat format_;
     std::size_t total_in_ = 0;
     std::size_t total_out_ = 0;
@@ -76,6 +78,14 @@ class StreamingDecompressorUtility
             co_return {};
         }
 
+        // A previous chunk ended exactly at a gzip member boundary.
+        // Reset for the next concatenated member.
+        if (finished_) {
+            inflateReset2(&stream_, static_cast<int>(format_));
+            finished_ = false;
+            between_members_ = true;
+        }
+
         std::vector<fileio::RawData> output_chunks;
 
         stream_.avail_in = static_cast<uInt>(chunk.size());
@@ -87,14 +97,25 @@ class StreamingDecompressorUtility
 
             int ret = inflate(&stream_, Z_NO_FLUSH);
 
-            if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR ||
-                ret == Z_MEM_ERROR) {
+            if (ret == Z_STREAM_ERROR || ret == Z_MEM_ERROR) {
+                throw std::runtime_error("Inflate error: corrupted data");
+            }
+
+            if (ret == Z_DATA_ERROR) {
+                if (between_members_) {
+                    // After a reset between concatenated members the
+                    // leftover bytes may not form a valid gzip header
+                    // (e.g. trailing padding).  Treat as end-of-stream.
+                    finished_ = true;
+                    break;
+                }
                 throw std::runtime_error("Inflate error: corrupted data");
             }
 
             std::size_t decompressed_size =
                 output_buffer_.size() - stream_.avail_out;
             if (decompressed_size > 0) {
+                between_members_ = false;
                 total_out_ += decompressed_size;
 
                 std::vector<unsigned char> decompressed_data(
@@ -106,10 +127,18 @@ class StreamingDecompressorUtility
             }
 
             if (ret == Z_STREAM_END) {
+                // Concatenated gzip: reset for the next member if
+                // there is remaining input in this chunk.
+                if (stream_.avail_in > 0) {
+                    inflateReset2(&stream_, static_cast<int>(format_));
+                    between_members_ = true;
+                    continue;
+                }
+                finished_ = true;
                 break;
             }
 
-        } while (stream_.avail_out == 0);
+        } while (stream_.avail_out == 0 || stream_.avail_in > 0);
 
         total_in_ += chunk.size();
         co_return output_chunks;

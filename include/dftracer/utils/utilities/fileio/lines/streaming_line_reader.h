@@ -10,6 +10,7 @@
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_bytes_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_line_generator.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
 #include <memory>
@@ -185,11 +186,18 @@ class StreamingLineReader {
         const StreamingLineReaderConfig& config) {
         const std::string& file_path = config.file_path();
         const std::string& idx_path = config.index_path();
-
-        std::string actual_idx_path =
-            idx_path.empty() ? file_path + ".idx" : idx_path;
-        bool has_index = fs::exists(actual_idx_path);
         bool is_compressed = is_compressed_format(file_path);
+
+        // Only use the indexed path when an index was explicitly
+        // provided.  Auto-discovering .idx files would silently
+        // override callers that intentionally omit the index to
+        // get single-pass streaming decompression.
+        bool has_index = false;
+        std::string actual_idx_path;
+        if (!idx_path.empty()) {
+            actual_idx_path = idx_path;
+            has_index = fs::exists(actual_idx_path);
+        }
 
         if (is_compressed && has_index) {
             auto iter_config =
@@ -200,6 +208,9 @@ class StreamingLineReader {
                                             config.end_line());
             }
             return sources::async_indexed_file_lines(iter_config);
+        } else if (is_compressed) {
+            return sources::async_streaming_gz_lines(
+                file_path, config.start_line(), config.end_line());
         } else {
             return sources::async_plain_file_lines(
                 file_path, config.start_line(), config.end_line());
@@ -221,6 +232,19 @@ class StreamingLineReader {
         const std::string& file_path, std::size_t start_line = 0,
         std::size_t end_line = 0) {
         return sources::async_plain_file_lines(file_path, start_line, end_line);
+    }
+
+    /**
+     * @brief Async read lines from compressed file without an index.
+     *
+     * Stream-decompresses the file and splits into lines in a single
+     * pass, avoiding the overhead of building a sidecar index.
+     */
+    static coro::AsyncGenerator<Line> read_streaming_gz_async(
+        const std::string& file_path, std::size_t start_line = 0,
+        std::size_t end_line = 0) {
+        return sources::async_streaming_gz_lines(file_path, start_line,
+                                                 end_line);
     }
 
    private:

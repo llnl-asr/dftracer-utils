@@ -217,7 +217,6 @@ int main(int argc, char** argv) {
     pipeline.set_destination(task2_cleanup);
     pipeline.execute(dir_input);
 
-    auto compression_results = task1_compress_files->get<CompressFilesOutput>();
     auto cleanup_result = task2_cleanup->get<CleanupOutput>();
 
     auto end_time = std::chrono::high_resolution_clock::now();

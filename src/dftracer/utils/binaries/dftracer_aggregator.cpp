@@ -12,6 +12,7 @@
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <unistd.h>
 
 #include <argparse/argparse.hpp>
 #include <atomic>
@@ -119,15 +120,17 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
     if (index_dir.empty()) {
         try {
             auto temp_path = fs::temp_directory_path();
-            temp_path /= "dftracer_idx_" + std::to_string(std::time(nullptr));
+            temp_path /= "dftracer_idx_" + std::to_string(std::time(nullptr)) +
+                         "_" + std::to_string(getpid());
             temp_index_dir = temp_path.string();
             fs::create_directories(temp_index_dir);
             index_dir = temp_index_dir;
             DFTRACER_UTILS_LOG_INFO("Created temporary index directory: %s",
                                     index_dir.c_str());
         } catch (const std::filesystem::filesystem_error& e) {
-            temp_index_dir =
-                "/tmp/dftracer_idx_" + std::to_string(std::time(nullptr));
+            temp_index_dir = "/tmp/dftracer_idx_" +
+                             std::to_string(std::time(nullptr)) + "_" +
+                             std::to_string(getpid());
             fs::create_directories(temp_index_dir);
             index_dir = temp_index_dir;
             DFTRACER_UTILS_LOG_WARN(

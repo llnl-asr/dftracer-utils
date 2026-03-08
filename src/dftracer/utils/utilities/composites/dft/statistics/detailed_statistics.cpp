@@ -1,6 +1,7 @@
 #include <dftracer/utils/utilities/composites/dft/statistics/detailed_statistics.h>
 #include <yyjson.h>
 
+#include <cmath>
 #include <cstdint>
 
 namespace dftracer::utils::utilities::composites::dft::statistics {
@@ -11,12 +12,14 @@ void DistributionStats::update(double value) {
     histogram.add(static_cast<std::uint64_t>(value));
     sketch.add(value);
     sum += value;
+    sum_sq += value * value;
 }
 
 void DistributionStats::merge(const DistributionStats& other) {
     histogram.merge(other.histogram);
     sketch.merge(other.sketch);
     sum += other.sum;
+    sum_sq += other.sum_sq;
 }
 
 std::uint64_t DistributionStats::count() const {
@@ -26,6 +29,15 @@ std::uint64_t DistributionStats::count() const {
 double DistributionStats::mean() const {
     if (count() == 0) return 0.0;
     return sum / static_cast<double>(count());
+}
+
+double DistributionStats::stddev() const {
+    auto n = count();
+    if (n < 2) return 0.0;
+    double dn = static_cast<double>(n);
+    double m = mean();
+    double variance = (sum_sq - dn * m * m) / (dn - 1.0);
+    return variance > 0.0 ? std::sqrt(variance) : 0.0;
 }
 
 // --- IOEventMetrics ---
@@ -65,16 +77,22 @@ static yyjson_mut_val* distribution_to_json(yyjson_mut_doc* doc,
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
 
     yyjson_mut_obj_add_uint(doc, obj, "count", dist.count());
-    yyjson_mut_obj_add_real(doc, obj, "mean", dist.mean());
     yyjson_mut_obj_add_real(doc, obj, "sum", dist.sum);
+    yyjson_mut_obj_add_real(doc, obj, "mean", dist.mean());
+    yyjson_mut_obj_add_real(doc, obj, "stddev", dist.stddev());
 
     if (dist.count() > 0 && !dist.sketch.empty()) {
+        yyjson_mut_obj_add_real(doc, obj, "min", dist.sketch.min());
+        yyjson_mut_obj_add_real(doc, obj, "max", dist.sketch.max());
+
         yyjson_mut_val* pctls = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_real(doc, pctls, "p10", dist.sketch.quantile(0.1));
+        yyjson_mut_obj_add_real(doc, pctls, "p25", dist.sketch.quantile(0.25));
         yyjson_mut_obj_add_real(doc, pctls, "p50", dist.sketch.quantile(0.5));
+        yyjson_mut_obj_add_real(doc, pctls, "p75", dist.sketch.quantile(0.75));
         yyjson_mut_obj_add_real(doc, pctls, "p90", dist.sketch.quantile(0.9));
+        yyjson_mut_obj_add_real(doc, pctls, "p95", dist.sketch.quantile(0.95));
         yyjson_mut_obj_add_real(doc, pctls, "p99", dist.sketch.quantile(0.99));
-        yyjson_mut_obj_add_real(doc, pctls, "p999",
-                                dist.sketch.quantile(0.999));
         yyjson_mut_obj_add_val(doc, obj, "percentiles", pctls);
     }
 

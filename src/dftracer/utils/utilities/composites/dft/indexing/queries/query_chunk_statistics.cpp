@@ -15,7 +15,7 @@ std::vector<ChunkStatisticsResult> query_chunk_statistics(
         "SELECT checkpoint_idx, total_events, category_counts, "
         "name_counts, pid_tid_counts, min_timestamp_us, max_timestamp_us, "
         "duration_sum_us, duration_min_us, duration_max_us, duration_count, "
-        "duration_m2 "
+        "duration_m2, duration_sketch, name_category "
         "FROM chunk_statistics WHERE file_info_id = ? "
         "ORDER BY checkpoint_idx;");
 
@@ -87,6 +87,26 @@ std::vector<ChunkStatisticsResult> query_chunk_statistics(
         r.stats.duration_count =
             static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 10));
         r.stats.duration_m2 = sqlite3_column_double(stmt, 11);
+
+        // Deserialize duration_sketch BLOB (column 12)
+        if (sqlite3_column_type(stmt, 12) != SQLITE_NULL) {
+            auto* blob =
+                static_cast<const uint8_t*>(sqlite3_column_blob(stmt, 12));
+            auto blob_len =
+                static_cast<std::size_t>(sqlite3_column_bytes(stmt, 12));
+            if (blob && blob_len > 0) {
+                using dftracer::utils::utilities::common::statistics::DDSketch;
+                r.stats.duration_sketch = DDSketch::deserialize(blob, blob_len);
+            }
+        }
+
+        // Deserialize name_category TEXT (column 13)
+        const char* nc_text =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 13));
+        if (nc_text) {
+            r.stats.name_category =
+                ChunkStatistics::parse_string_map_json(nc_text);
+        }
 
         results.push_back(std::move(r));
     }

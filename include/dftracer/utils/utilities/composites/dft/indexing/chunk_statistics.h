@@ -1,6 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_CHUNK_STATISTICS_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_CHUNK_STATISTICS_H
 
+#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
+#include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
+
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -30,6 +33,16 @@ struct ChunkStatistics {
     std::uint64_t duration_max_us = 0;
     double duration_m2 = 0.0;
 
+    common::statistics::DDSketch duration_sketch{0.01};
+    common::statistics::Log2Histogram duration_histogram;
+    std::unordered_map<std::string, common::statistics::DDSketch>
+        name_duration_sketches;
+    std::unordered_map<std::string, common::statistics::Log2Histogram>
+        name_duration_histograms;
+    std::unordered_map<std::string, double> name_duration_sums;
+    std::unordered_map<std::string, double> name_duration_sum_sqs;
+    std::unordered_map<std::string, std::string> name_category;
+
     void update_from_event(std::string_view name, std::string_view cat,
                            std::uint64_t pid, std::uint64_t tid,
                            std::uint64_t ts, std::uint64_t dur);
@@ -42,8 +55,11 @@ struct ChunkStatistics {
     std::string category_counts_json() const;
     std::string name_counts_json() const;
     std::string pid_tid_counts_json() const;
+    std::string name_category_json() const;
 
     static std::unordered_map<std::string, std::uint64_t> parse_counts_json(
+        const std::string& json);
+    static std::unordered_map<std::string, std::string> parse_string_map_json(
         const std::string& json);
 };
 

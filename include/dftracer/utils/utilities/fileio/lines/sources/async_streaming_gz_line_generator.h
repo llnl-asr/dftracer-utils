@@ -34,7 +34,9 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     ssize_t fd_result =
         co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
     if (fd_result < 0) {
-        throw std::runtime_error("Cannot open compressed file: " + file_path);
+        throw std::runtime_error(
+            "Cannot open compressed file: " + file_path +
+            " (errno=" + std::to_string(static_cast<int>(-fd_result)) + ")");
     }
     int fd = static_cast<int>(fd_result);
 

@@ -31,6 +31,9 @@ class DDSketch {
     double max() const { return max_; }
     std::size_t memory_usage() const;
 
+    std::vector<uint8_t> serialize() const;
+    static DDSketch deserialize(const uint8_t* data, std::size_t len);
+
    private:
     double gamma_;
     double log_gamma_;

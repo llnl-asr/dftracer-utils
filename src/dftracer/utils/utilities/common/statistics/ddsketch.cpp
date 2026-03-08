@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace dftracer::utils::utilities::common::statistics {
@@ -149,6 +150,88 @@ void DDSketch::reset() {
 std::size_t DDSketch::memory_usage() const {
     return sizeof(DDSketch) +
            bins_.capacity() * sizeof(std::pair<int, uint64_t>);
+}
+
+std::vector<uint8_t> DDSketch::serialize() const {
+    // Header: gamma(f64) min(f64) max(f64) count(u64) zero_count(u64)
+    //         num_bins(u32)
+    // Bins:   num_bins × (index(i32) count(u64))
+    constexpr std::size_t HEADER_SIZE =
+        sizeof(double) * 3 + sizeof(uint64_t) * 2 + sizeof(uint32_t);
+    constexpr std::size_t BIN_SIZE = sizeof(int32_t) + sizeof(uint64_t);
+
+    auto num_bins = static_cast<uint32_t>(bins_.size());
+    std::vector<uint8_t> buf(HEADER_SIZE + num_bins * BIN_SIZE);
+    uint8_t* p = buf.data();
+
+    std::memcpy(p, &gamma_, sizeof(double));
+    p += sizeof(double);
+    std::memcpy(p, &min_, sizeof(double));
+    p += sizeof(double);
+    std::memcpy(p, &max_, sizeof(double));
+    p += sizeof(double);
+    std::memcpy(p, &count_, sizeof(uint64_t));
+    p += sizeof(uint64_t);
+    std::memcpy(p, &zero_count_, sizeof(uint64_t));
+    p += sizeof(uint64_t);
+    std::memcpy(p, &num_bins, sizeof(uint32_t));
+    p += sizeof(uint32_t);
+
+    for (const auto& [idx, cnt] : bins_) {
+        auto idx32 = static_cast<int32_t>(idx);
+        std::memcpy(p, &idx32, sizeof(int32_t));
+        p += sizeof(int32_t);
+        std::memcpy(p, &cnt, sizeof(uint64_t));
+        p += sizeof(uint64_t);
+    }
+
+    return buf;
+}
+
+DDSketch DDSketch::deserialize(const uint8_t* data, std::size_t len) {
+    constexpr std::size_t HEADER_SIZE =
+        sizeof(double) * 3 + sizeof(uint64_t) * 2 + sizeof(uint32_t);
+    constexpr std::size_t BIN_SIZE = sizeof(int32_t) + sizeof(uint64_t);
+
+    if (len < HEADER_SIZE) {
+        return DDSketch{};
+    }
+
+    DDSketch s;
+    const uint8_t* p = data;
+
+    std::memcpy(&s.gamma_, p, sizeof(double));
+    p += sizeof(double);
+    s.log_gamma_ = std::log(s.gamma_);
+    std::memcpy(&s.min_, p, sizeof(double));
+    p += sizeof(double);
+    std::memcpy(&s.max_, p, sizeof(double));
+    p += sizeof(double);
+    std::memcpy(&s.count_, p, sizeof(uint64_t));
+    p += sizeof(uint64_t);
+    std::memcpy(&s.zero_count_, p, sizeof(uint64_t));
+    p += sizeof(uint64_t);
+
+    uint32_t num_bins = 0;
+    std::memcpy(&num_bins, p, sizeof(uint32_t));
+    p += sizeof(uint32_t);
+
+    if (len < HEADER_SIZE + num_bins * BIN_SIZE) {
+        return DDSketch{};
+    }
+
+    s.bins_.reserve(num_bins);
+    for (uint32_t i = 0; i < num_bins; ++i) {
+        int32_t idx = 0;
+        uint64_t cnt = 0;
+        std::memcpy(&idx, p, sizeof(int32_t));
+        p += sizeof(int32_t);
+        std::memcpy(&cnt, p, sizeof(uint64_t));
+        p += sizeof(uint64_t);
+        s.bins_.emplace_back(static_cast<int>(idx), cnt);
+    }
+
+    return s;
 }
 
 }  // namespace dftracer::utils::utilities::common::statistics

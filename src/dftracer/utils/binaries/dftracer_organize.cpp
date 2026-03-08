@@ -218,6 +218,10 @@ coro::CoroTask<int> run_organize(
     std::atomic<std::size_t> lines_written{0};
     std::atomic<std::size_t> checkpoints_processed{0};
 
+    // 256KB write buffers per group file
+    constexpr std::size_t WRITE_BUFFER_SIZE = 256 * 1024;
+    std::unordered_map<std::string, std::vector<char>> write_buffers;
+
     // Process checkpoints sequentially per source
     // file (output files are shared, so we
     // serialize writes)
@@ -286,9 +290,15 @@ coro::CoroTask<int> run_organize(
                     for (const auto& gname : it->second) {
                         auto fit = group_fds.find(gname);
                         if (fit != group_fds.end()) {
-                            co_await io::write(fit->second, line_start,
-                                               line_len);
-                            co_await io::write(fit->second, "\n", 1);
+                            auto& buf = write_buffers[gname];
+                            buf.insert(buf.end(), line_start,
+                                       line_start + line_len);
+                            buf.push_back('\n');
+                            if (buf.size() >= WRITE_BUFFER_SIZE) {
+                                co_await io::write(fit->second, buf.data(),
+                                                   buf.size());
+                                buf.clear();
+                            }
                             lines_written++;
                         }
                     }
@@ -300,6 +310,17 @@ coro::CoroTask<int> run_organize(
         }
 
         checkpoints_processed++;
+    }
+
+    // Flush remaining write buffers
+    for (auto& [gname, buf] : write_buffers) {
+        if (!buf.empty()) {
+            auto fit = group_fds.find(gname);
+            if (fit != group_fds.end()) {
+                co_await io::write(fit->second, buf.data(), buf.size());
+            }
+            buf.clear();
+        }
     }
 
     // Close all output files

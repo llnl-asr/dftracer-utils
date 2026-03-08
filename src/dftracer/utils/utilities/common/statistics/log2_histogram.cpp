@@ -136,6 +136,67 @@ std::string Log2Histogram::render_ascii(std::size_t max_width,
     return out.str();
 }
 
+std::string Log2Histogram::render_blocks(std::size_t max_width,
+                                         const std::string& unit,
+                                         const std::string& indent) const {
+    if (total_count_ == 0) return indent + "(no data)\n";
+
+    // Unicode block elements: 8 levels from thinnest to fullest
+    static const char* blocks[] = {
+        " ",      "\u2581",  // ▁
+        "\u2582",            // ▂
+        "\u2583",            // ▃
+        "\u2584",            // ▄
+        "\u2585",            // ▅
+        "\u2586",            // ▆
+        "\u2587",            // ▇
+        "\u2588"             // █
+    };
+
+    std::uint64_t max_count = 0;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] > max_count) max_count = bins_[i];
+    }
+
+    std::ostringstream out;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+
+        std::string range = format_range(bin_lower(i), bin_upper(i), unit);
+        std::string count_str = format_count(bins_[i]);
+
+        // Scale to max_width full blocks + fractional last block
+        double scaled = static_cast<double>(bins_[i]) /
+                        static_cast<double>(max_count) *
+                        static_cast<double>(max_width);
+        auto full_blocks = static_cast<std::size_t>(scaled);
+        int frac =
+            static_cast<int>((scaled - static_cast<double>(full_blocks)) * 8.0);
+        if (full_blocks == 0 && frac == 0 && bins_[i] > 0) frac = 1;
+
+        std::string bar;
+        for (std::size_t b = 0; b < full_blocks; ++b) {
+            bar += blocks[8];
+        }
+        if (frac > 0 && full_blocks < max_width) {
+            bar += blocks[frac];
+        }
+
+        // Pad to fixed display width
+        std::size_t display_len = full_blocks + (frac > 0 ? 1 : 0);
+        std::string padding;
+        if (display_len < max_width) {
+            padding = std::string(max_width - display_len, ' ');
+        }
+
+        char label[128];
+        std::snprintf(label, sizeof(label), "%-24s", range.c_str());
+        out << indent << label << bar << padding << " " << count_str << "\n";
+    }
+
+    return out.str();
+}
+
 yyjson_mut_val* Log2Histogram::to_yyjson(yyjson_mut_doc* doc) const {
     yyjson_mut_val* arr = yyjson_mut_arr(doc);
     for (std::size_t i = 0; i < NUM_BINS; ++i) {

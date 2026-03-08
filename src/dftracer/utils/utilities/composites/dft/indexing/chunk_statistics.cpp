@@ -40,6 +40,17 @@ void ChunkStatistics::update_from_event(std::string_view name,
                       static_cast<double>(duration_count);
     double delta2 = static_cast<double>(dur) - new_mean;
     duration_m2 += delta * delta2;
+
+    double dur_d = static_cast<double>(dur);
+    duration_sketch.add(dur_d);
+    duration_histogram.add(dur);
+
+    std::string name_str(name);
+    name_duration_sketches[name_str].add(dur_d);
+    name_duration_histograms[name_str].add(dur);
+    name_duration_sums[name_str] += dur_d;
+    name_duration_sum_sqs[name_str] += dur_d * dur_d;
+    name_category.emplace(name_str, std::string(cat));
 }
 
 void ChunkStatistics::merge_from(const ChunkStatistics& other) {
@@ -81,6 +92,25 @@ void ChunkStatistics::merge_from(const ChunkStatistics& other) {
     duration_sum_us += other.duration_sum_us;
     duration_min_us = std::min(duration_min_us, other.duration_min_us);
     duration_max_us = std::max(duration_max_us, other.duration_max_us);
+
+    duration_sketch.merge(other.duration_sketch);
+    duration_histogram.merge(other.duration_histogram);
+
+    for (const auto& [k, v] : other.name_duration_sketches) {
+        name_duration_sketches[k].merge(v);
+    }
+    for (const auto& [k, v] : other.name_duration_histograms) {
+        name_duration_histograms[k].merge(v);
+    }
+    for (const auto& [k, v] : other.name_duration_sums) {
+        name_duration_sums[k] += v;
+    }
+    for (const auto& [k, v] : other.name_duration_sum_sqs) {
+        name_duration_sum_sqs[k] += v;
+    }
+    for (const auto& [k, v] : other.name_category) {
+        name_category.emplace(k, v);
+    }
 }
 
 double ChunkStatistics::duration_mean() const {
@@ -151,6 +181,50 @@ ChunkStatistics::parse_counts_json(const std::string& json) {
             if (v >= 0) {
                 result[yyjson_get_str(key)] = static_cast<std::uint64_t>(v);
             }
+        }
+    }
+
+    yyjson_doc_free(doc);
+    return result;
+}
+
+std::string ChunkStatistics::name_category_json() const {
+    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
+    yyjson_mut_val* root = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, root);
+
+    for (const auto& [key, value] : name_category) {
+        yyjson_mut_obj_add_str(doc, root, key.c_str(), value.c_str());
+    }
+
+    char* json_str = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, nullptr);
+    std::string result(json_str ? json_str : "{}");
+    if (json_str) free(json_str);
+    yyjson_mut_doc_free(doc);
+    return result;
+}
+
+std::unordered_map<std::string, std::string>
+ChunkStatistics::parse_string_map_json(const std::string& json) {
+    std::unordered_map<std::string, std::string> result;
+
+    yyjson_doc* doc =
+        yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
+    if (!doc) return result;
+
+    yyjson_val* root = yyjson_doc_get_root(doc);
+    if (!root || !yyjson_is_obj(root)) {
+        yyjson_doc_free(doc);
+        return result;
+    }
+
+    yyjson_obj_iter iter;
+    yyjson_obj_iter_init(root, &iter);
+    yyjson_val* key;
+    while ((key = yyjson_obj_iter_next(&iter))) {
+        yyjson_val* val = yyjson_obj_iter_get_val(key);
+        if (yyjson_is_str(val)) {
+            result[yyjson_get_str(key)] = yyjson_get_str(val);
         }
     }
 

@@ -31,6 +31,8 @@ class Log2Histogram {
     double approx_percentile(double p) const;
     std::string render_ascii(std::size_t max_width,
                              const std::string& unit) const;
+    std::string render_blocks(std::size_t max_width, const std::string& unit,
+                              const std::string& indent = "      ") const;
     std::string to_json() const;
     static Log2Histogram from_json(const std::string& json);
 

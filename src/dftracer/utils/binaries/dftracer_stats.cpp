@@ -8,6 +8,7 @@
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
+#include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
@@ -19,19 +20,23 @@
 #include <dftracer/utils/utilities/composites/dft/statistics/detailed_statistics.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_query_utility.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <algorithm>
 #include <argparse/argparse.hpp>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -41,6 +46,15 @@ using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
+using dftracer::utils::utilities::fileio::lines::sources::
+    async_streaming_gz_lines;
+
+// Files below this compressed size are scanned directly without building
+// sidecar index files (.idx/.bidx).  At 8 MB compressed (~160 MB
+// uncompressed with typical 20x JSON compression), a file has only a
+// handful of 32 MB checkpoints — the indexing overhead exceeds the
+// benefit of bloom-filter skip.
+static constexpr std::size_t INDEX_SIZE_THRESHOLD = 8 * 1024 * 1024;
 
 static StatisticsQueryType parse_report_type_str(const std::string& s) {
     if (s == "summary") return StatisticsQueryType::SUMMARY;
@@ -99,125 +113,42 @@ static std::string format_bandwidth(double bps) {
     return buf;
 }
 
-static void print_text_summary(const TraceStatistics& stats,
-                               std::uint64_t top_n) {
-    std::printf("========================================\n");
-    std::printf("File: %s\n", stats.file_path.c_str());
-    std::printf("========================================\n");
+// Build a DetailedStatistics from TraceStatistics (summary path).
+// Per-op distributions come from ChunkStatistics in-memory sketches
+// (populated during live scanning, empty when loaded from index).
+static DetailedStatistics to_detailed(const TraceStatistics& stats) {
+    DetailedStatistics d;
+    const auto& m = stats.merged;
 
-    if (!stats.success) {
-        std::printf("  Status: ERROR - %s\n\n", stats.error_message.c_str());
-        return;
-    }
+    // Global duration
+    d.duration.sketch = m.duration_sketch;
+    d.duration.histogram = m.duration_histogram;
+    d.duration.sum = static_cast<double>(m.duration_sum_us);
 
-    std::printf("  Chunks: %llu\n", (unsigned long long)stats.num_chunks);
-    std::printf("  Total Events: %llu\n",
-                (unsigned long long)stats.total_events());
-
-    if (stats.time_span_seconds() > 0.0) {
-        std::printf("  Time Span: %.6f seconds\n", stats.time_span_seconds());
-    }
-
-    // Category breakdown
-    const auto& cat_counts = stats.merged.category_counts;
-    auto sorted_cats = sorted_by_count_desc(cat_counts);
-    std::printf("\n  Categories (%zu):\n", cat_counts.size());
-    for (const auto& [name, count] : sorted_cats) {
-        std::printf("    %-40s %llu\n", name.c_str(),
-                    (unsigned long long)count);
-    }
-
-    // Top operation names
-    const auto& name_counts = stats.merged.name_counts;
-    auto sorted_names = sorted_by_count_desc(name_counts);
-    std::size_t names_to_show =
-        std::min(static_cast<std::size_t>(top_n), sorted_names.size());
-    if (names_to_show < sorted_names.size()) {
-        std::printf("\n  Top Operations (%zu of %zu):\n", names_to_show,
-                    sorted_names.size());
-    } else {
-        std::printf("\n  Operations (%zu):\n", sorted_names.size());
-    }
-    for (std::size_t i = 0; i < names_to_show; ++i) {
-        std::printf("    %-40s %llu\n", sorted_names[i].first.c_str(),
-                    (unsigned long long)sorted_names[i].second);
-    }
-
-    // PID:TID breakdown
-    const auto& pid_tid_counts = stats.merged.pid_tid_counts;
-    auto sorted_pid_tids = sorted_by_count_desc(pid_tid_counts);
-    std::size_t pid_tids_to_show =
-        std::min(static_cast<std::size_t>(top_n), sorted_pid_tids.size());
-    if (pid_tids_to_show < sorted_pid_tids.size()) {
-        std::printf("\n  Process/Thread Pairs (%zu of %zu):\n",
-                    pid_tids_to_show, sorted_pid_tids.size());
-    } else {
-        std::printf("\n  Process/Thread Pairs (%zu):\n",
-                    sorted_pid_tids.size());
-    }
-    for (std::size_t i = 0; i < pid_tids_to_show; ++i) {
-        std::printf("    %-40s %llu\n", sorted_pid_tids[i].first.c_str(),
-                    (unsigned long long)sorted_pid_tids[i].second);
-    }
-
-    // Duration stats
-    if (stats.merged.duration_count > 0) {
-        std::printf("\n  Duration:\n");
-        std::printf("    Count: %llu\n",
-                    (unsigned long long)stats.merged.duration_count);
-        std::printf("    Mean: %.2f us\n", stats.duration_mean_us());
-        std::printf("    Stddev: %.2f us\n", stats.duration_stddev_us());
-        if (stats.merged.duration_min_us !=
-            std::numeric_limits<std::uint64_t>::max()) {
-            std::printf("    Min: %llu us\n",
-                        (unsigned long long)stats.merged.duration_min_us);
+    // Per-operation distributions
+    for (const auto& [name, sketch] : m.name_duration_sketches) {
+        auto& dist = d.grouped_duration[name];
+        dist.sketch = sketch;
+        auto hist_it = m.name_duration_histograms.find(name);
+        if (hist_it != m.name_duration_histograms.end()) {
+            dist.histogram = hist_it->second;
         }
-        std::printf("    Max: %llu us\n",
-                    (unsigned long long)stats.merged.duration_max_us);
-    }
-
-    std::printf("\n");
-}
-
-static void print_text_query(const StatisticsQueryOutput& output,
-                             const std::string& file_path) {
-    std::printf("========================================\n");
-    std::printf("Query: %s  File: %s\n", output.query_type_name.c_str(),
-                file_path.c_str());
-    std::printf("========================================\n");
-    std::printf("  Total Events: %llu\n",
-                (unsigned long long)output.total_events);
-
-    if (!output.results.empty()) {
-        std::printf("  Results:\n");
-        for (const auto& [name, count] : output.results) {
-            std::printf("    %-40s %llu\n", name.c_str(),
-                        (unsigned long long)count);
+        auto sum_it = m.name_duration_sums.find(name);
+        if (sum_it != m.name_duration_sums.end()) {
+            dist.sum = sum_it->second;
+        }
+        auto sq_it = m.name_duration_sum_sqs.find(name);
+        if (sq_it != m.name_duration_sum_sqs.end()) {
+            dist.sum_sq = sq_it->second;
         }
     }
 
-    if (output.min_timestamp_us > 0 || output.max_timestamp_us > 0) {
-        std::printf("  Time Range:\n");
-        std::printf("    Min Timestamp: %llu us\n",
-                    (unsigned long long)output.min_timestamp_us);
-        std::printf("    Max Timestamp: %llu us\n",
-                    (unsigned long long)output.max_timestamp_us);
-        std::printf("    Span: %.6f seconds\n", output.time_span_seconds);
-    }
+    d.group_key_category = m.name_category;
+    d.events_scanned = m.total_events;
+    d.chunks_scanned = stats.num_chunks;
+    d.chunks_skipped = 0;
 
-    if (output.duration_count > 0) {
-        std::printf("  Duration:\n");
-        std::printf("    Count: %llu\n",
-                    (unsigned long long)output.duration_count);
-        std::printf("    Mean: %.2f us\n", output.duration_mean_us);
-        std::printf("    Stddev: %.2f us\n", output.duration_stddev_us);
-        std::printf("    Min: %llu us\n",
-                    (unsigned long long)output.duration_min_us);
-        std::printf("    Max: %llu us\n",
-                    (unsigned long long)output.duration_max_us);
-    }
-
-    std::printf("\n");
+    return d;
 }
 
 // Resolve a group key for display, looking up hash values if needed
@@ -236,7 +167,9 @@ static std::string resolve_display_key(
 static void print_text_detailed(
     const std::string& file_path, const DetailedStatistics& detailed,
     std::uint64_t total_chunks, std::uint64_t top_n,
-    const std::unordered_map<std::string, std::string>& hash_resolutions) {
+    const std::unordered_map<std::string, std::string>& hash_resolutions,
+    const TraceStatistics* summary = nullptr,
+    std::uint64_t top_n_pid_tid = 10) {
     std::printf("========================================\n");
     std::printf("File: %s\n", file_path.c_str());
     std::printf("========================================\n");
@@ -247,22 +180,67 @@ static void print_text_detailed(
     std::printf("  Events Scanned: %llu\n",
                 (unsigned long long)detailed.events_scanned);
 
+    // Summary sections (categories, PID:TID, time span)
+    if (summary && summary->success) {
+        if (summary->time_span_seconds() > 0.0) {
+            std::printf("  Time Span: %.6f seconds\n",
+                        summary->time_span_seconds());
+        }
+
+        // Category breakdown
+        const auto& cat_counts = summary->merged.category_counts;
+        auto sorted_cats_summary = sorted_by_count_desc(cat_counts);
+        std::printf("\n  Categories (%zu):\n", cat_counts.size());
+        for (const auto& [name, count] : sorted_cats_summary) {
+            std::printf("    %-40s %llu\n", name.c_str(),
+                        (unsigned long long)count);
+        }
+
+        // PID:TID breakdown
+        const auto& pid_tid_counts = summary->merged.pid_tid_counts;
+        auto sorted_pid_tids = sorted_by_count_desc(pid_tid_counts);
+        std::size_t pid_tids_to_show =
+            (top_n_pid_tid == 0)
+                ? sorted_pid_tids.size()
+                : std::min(static_cast<std::size_t>(top_n_pid_tid),
+                           sorted_pid_tids.size());
+        if (pid_tids_to_show < sorted_pid_tids.size()) {
+            std::printf("\n  Process/Thread Pairs (%zu of %zu):\n",
+                        pid_tids_to_show, sorted_pid_tids.size());
+        } else {
+            std::printf("\n  Process/Thread Pairs (%zu):\n",
+                        sorted_pid_tids.size());
+        }
+        for (std::size_t i = 0; i < pid_tids_to_show; ++i) {
+            std::printf("    %-40s %llu\n", sorted_pid_tids[i].first.c_str(),
+                        (unsigned long long)sorted_pid_tids[i].second);
+        }
+    }
+
     // Global duration distribution
     if (detailed.duration.count() > 0) {
-        std::printf("\n  Duration Distribution:\n");
-        std::printf("%s",
-                    detailed.duration.histogram.render_ascii(40, "us").c_str());
+        const auto& d = detailed.duration;
+        std::printf("\n  Duration (all events):\n");
+        std::printf(
+            "    Count: %llu   Sum: %.1f us   Mean: %.1f us"
+            "   Stddev: %.1f us\n",
+            (unsigned long long)d.count(), d.sum, d.mean(), d.stddev());
 
-        if (!detailed.duration.sketch.empty()) {
-            std::printf("  Duration Percentiles:\n");
+        if (!d.sketch.empty()) {
+            std::printf("    Min: %.1f us   Max: %.1f us\n", d.sketch.min(),
+                        d.sketch.max());
             std::printf(
-                "    p50: %.1f us  p90: %.1f us  p99: %.1f us  p99.9: "
-                "%.1f us\n",
-                detailed.duration.sketch.quantile(0.5),
-                detailed.duration.sketch.quantile(0.9),
-                detailed.duration.sketch.quantile(0.99),
-                detailed.duration.sketch.quantile(0.999));
+                "    p10: %.1f   p25: %.1f   p50: %.1f"
+                "   p75: %.1f   p90: %.1f   p95: %.1f"
+                "   p99: %.1f us\n",
+                d.sketch.quantile(0.1), d.sketch.quantile(0.25),
+                d.sketch.quantile(0.5), d.sketch.quantile(0.75),
+                d.sketch.quantile(0.9), d.sketch.quantile(0.95),
+                d.sketch.quantile(0.99));
         }
+
+        std::printf("\n  Duration Histogram:\n");
+        std::printf("%s", d.histogram.render_blocks(20, "us").c_str());
     }
 
     // Per-group duration table, split by category
@@ -301,15 +279,13 @@ static void print_text_detailed(
                       return sum_a > sum_b;
                   });
 
-        // Track overall top event for histogram
-        const DistributionStats* overall_top_dist = nullptr;
-        std::string overall_top_key;
-
         for (const auto& [cat, entries_ptr] : sorted_cats) {
             const auto& entries = *entries_ptr;
 
             std::size_t show =
-                std::min(static_cast<std::size_t>(top_n), entries.size());
+                (top_n == 0)
+                    ? entries.size()
+                    : std::min(static_cast<std::size_t>(top_n), entries.size());
 
             if (show < entries.size()) {
                 std::printf("\n  Duration [%s] (top %zu of %zu):\n",
@@ -318,8 +294,12 @@ static void print_text_detailed(
                 std::printf("\n  Duration [%s] (%zu):\n", cat.c_str(),
                             entries.size());
             }
-            std::printf("    %-30s %12s %12s %12s %12s %12s\n", "Name", "Count",
-                        "Mean us", "p50 us", "p90 us", "p99 us");
+            std::printf(
+                "    %-30s %10s %14s %10s %10s %10s"
+                " %10s %10s %10s %10s %10s %10s %10s %10s\n",
+                "Name", "Count", "Sum us", "Mean us", "Stddev us", "Min us",
+                "p10 us", "p25 us", "p50 us", "p75 us", "p90 us", "p95 us",
+                "p99 us", "Max us");
 
             for (std::size_t i = 0; i < show; ++i) {
                 const auto& [key, dist] = entries[i];
@@ -329,36 +309,32 @@ static void print_text_detailed(
                     display_key = display_key.substr(0, 27) + "...";
                 }
 
-                double p50 =
-                    dist->sketch.empty() ? 0.0 : dist->sketch.quantile(0.5);
-                double p90 =
-                    dist->sketch.empty() ? 0.0 : dist->sketch.quantile(0.9);
-                double p99 =
-                    dist->sketch.empty() ? 0.0 : dist->sketch.quantile(0.99);
+                bool has_sketch = !dist->sketch.empty();
+                double sk_min = has_sketch ? dist->sketch.min() : 0.0;
+                double sk_max = has_sketch ? dist->sketch.max() : 0.0;
+                double p10 = has_sketch ? dist->sketch.quantile(0.1) : 0.0;
+                double p25 = has_sketch ? dist->sketch.quantile(0.25) : 0.0;
+                double p50 = has_sketch ? dist->sketch.quantile(0.5) : 0.0;
+                double p75 = has_sketch ? dist->sketch.quantile(0.75) : 0.0;
+                double p90 = has_sketch ? dist->sketch.quantile(0.9) : 0.0;
+                double p95 = has_sketch ? dist->sketch.quantile(0.95) : 0.0;
+                double p99 = has_sketch ? dist->sketch.quantile(0.99) : 0.0;
 
-                std::printf("    %-30s %12llu %12.1f %12.1f %12.1f %12.1f\n",
-                            display_key.c_str(),
-                            (unsigned long long)dist->count(), dist->mean(),
-                            p50, p90, p99);
+                std::printf(
+                    "    %-30s %10llu %14.1f %10.1f %10.1f %10.1f"
+                    " %10.1f %10.1f %10.1f %10.1f %10.1f %10.1f"
+                    " %10.1f %10.1f\n",
+                    display_key.c_str(), (unsigned long long)dist->count(),
+                    dist->sum, dist->mean(), dist->stddev(), sk_min, p10, p25,
+                    p50, p75, p90, p95, p99, sk_max);
 
-                // Track the overall top event
-                if (!overall_top_dist ||
-                    dist->count() > overall_top_dist->count()) {
-                    overall_top_dist = dist;
-                    overall_top_key = key;
+                // Inline histogram after each operation
+                if (dist->histogram.total_count() > 0) {
+                    std::printf(
+                        "%s", dist->histogram.render_blocks(20, "us", "      ")
+                                  .c_str());
                 }
             }
-        }
-
-        // Print histogram for overall top event
-        if (overall_top_dist) {
-            std::string display_key =
-                resolve_display_key(overall_top_key, hash_resolutions);
-            std::printf("\n  Duration Histogram (top: %s):\n",
-                        display_key.c_str());
-            std::printf(
-                "%s",
-                overall_top_dist->histogram.render_ascii(40, "us").c_str());
         }
     }
 
@@ -380,7 +356,9 @@ static void print_text_detailed(
                   });
 
         std::size_t show =
-            std::min(static_cast<std::size_t>(top_n), sorted_io.size());
+            (top_n == 0)
+                ? sorted_io.size()
+                : std::min(static_cast<std::size_t>(top_n), sorted_io.size());
 
         if (is_global) {
             std::printf("\n  I/O Statistics:\n");
@@ -472,12 +450,458 @@ static void print_text_detailed(
     std::printf("\n");
 }
 
+// Direct-scan a small .pfw.gz file without any sidecar index.
+// Streams lines via async_streaming_gz_lines, parses each with yyjson,
+// and accumulates stats via ChunkStatistics::update_from_event().
+static coro::CoroTask<TraceStatistics> direct_scan_trace_statistics(
+    std::string file_path) {
+    TraceStatistics result;
+    result.file_path = file_path;
+
+    try {
+        auto gen = async_streaming_gz_lines(file_path);
+        ChunkStatistics stats;
+
+        while (auto line = co_await gen.next()) {
+            if (line->content.empty()) continue;
+
+            yyjson_doc* doc = yyjson_read_opts(
+                const_cast<char*>(line->content.data()), line->content.size(),
+                YYJSON_READ_NOFLAG, nullptr, nullptr);
+            if (!doc) continue;
+
+            yyjson_val* root = yyjson_doc_get_root(doc);
+            if (root && yyjson_is_obj(root)) {
+                using dftracer::utils::utilities::common::json::JsonValue;
+                JsonValue json(root);
+                std::string_view ph = json["ph"].get<std::string_view>();
+                if (ph != "M") {
+                    stats.update_from_event(
+                        json["name"].get<std::string_view>(),
+                        json["cat"].get<std::string_view>(),
+                        json["pid"].get<std::uint64_t>(),
+                        json["tid"].get<std::uint64_t>(),
+                        json["ts"].get<std::uint64_t>(),
+                        json["dur"].get<std::uint64_t>());
+                }
+            }
+            yyjson_doc_free(doc);
+        }
+
+        result.merged = stats;
+        result.num_chunks = 1;
+        result.success = true;
+    } catch (const std::exception& e) {
+        result.success = false;
+        result.error_message = "Failed to scan: " + file_path + ": " + e.what();
+    }
+
+    co_return result;
+}
+
+// Direct-scan a small .pfw.gz for the detailed query path.
+// Applies name/category filters and group-by dimensions.
+static coro::CoroTask<DetailedStatistics> direct_scan_detailed_statistics(
+    std::string file_path, const std::vector<std::string>* filter_names_ptr,
+    const std::vector<std::string>* filter_cats_ptr,
+    const std::vector<std::string>* group_by_ptr) {
+    DetailedStatistics result;
+
+    // Build filter sets from pointer args (pointers are safe: caller's scope
+    // outlives this coroutine).
+    std::unordered_set<std::string_view> name_filter;
+    std::unordered_set<std::string_view> cat_filter;
+    for (const auto& n : *filter_names_ptr) name_filter.insert(n);
+    for (const auto& c : *filter_cats_ptr) cat_filter.insert(c);
+    bool has_name_filter = !name_filter.empty();
+    bool has_cat_filter = !cat_filter.empty();
+    bool has_grouping = !group_by_ptr->empty();
+
+    // I/O event names (same list as chunk_detail_scanner_utility.cpp)
+    static constexpr auto IO_EVENTS = std::to_array<std::string_view>(
+        {"read", "write", "pread", "pwrite", "pread64", "pwrite64", "readv",
+         "writev"});
+    auto is_io = [](std::string_view name) {
+        return std::find(IO_EVENTS.begin(), IO_EVENTS.end(), name) !=
+               IO_EVENTS.end();
+    };
+
+    try {
+        auto gen = async_streaming_gz_lines(file_path);
+
+        while (auto line = co_await gen.next()) {
+            if (line->content.empty()) continue;
+
+            yyjson_doc* doc = yyjson_read_opts(
+                const_cast<char*>(line->content.data()), line->content.size(),
+                YYJSON_READ_NOFLAG, nullptr, nullptr);
+            if (!doc) continue;
+
+            yyjson_val* root = yyjson_doc_get_root(doc);
+            if (root && yyjson_is_obj(root)) {
+                using dftracer::utils::utilities::common::json::JsonValue;
+                JsonValue json(root);
+                std::string_view ph = json["ph"].get<std::string_view>();
+
+                if (ph != "M") {
+                    std::string_view name_sv =
+                        json["name"].get<std::string_view>();
+                    std::string_view cat_sv =
+                        json["cat"].get<std::string_view>();
+
+                    bool passes = true;
+                    if (has_name_filter &&
+                        name_filter.find(name_sv) == name_filter.end()) {
+                        passes = false;
+                    }
+                    if (passes && has_cat_filter &&
+                        cat_filter.find(cat_sv) == cat_filter.end()) {
+                        passes = false;
+                    }
+
+                    if (passes) {
+                        double dur = static_cast<double>(
+                            json["dur"].get<std::uint64_t>());
+                        result.duration.update(dur);
+
+                        JsonValue args = json["args"];
+                        std::string io_key;
+
+                        if (has_grouping) {
+                            // Build group key inline (same logic as
+                            // chunk_detail_scanner_utility.cpp)
+                            std::string key;
+                            key.reserve(128);
+                            for (std::size_t i = 0; i < group_by_ptr->size();
+                                 ++i) {
+                                if (i > 0) key.push_back('|');
+                                const auto& dim = (*group_by_ptr)[i];
+                                if (dim == "name") {
+                                    key += json["name"].get<std::string>();
+                                } else if (dim == "cat") {
+                                    key += json["cat"].get<std::string>();
+                                } else if (dim == "pid" || dim == "tid") {
+                                    key += std::to_string(
+                                        json[dim].get<std::uint64_t>());
+                                } else if (dim == "pid_tid") {
+                                    key += std::to_string(
+                                        json["pid"].get<std::uint64_t>());
+                                    key.push_back(':');
+                                    key += std::to_string(
+                                        json["tid"].get<std::uint64_t>());
+                                } else if (dim == "fhash") {
+                                    if (args.exists())
+                                        key += args["fhash"].get<std::string>();
+                                } else if (dim == "hhash") {
+                                    if (args.exists())
+                                        key += args["hhash"].get<std::string>();
+                                }
+                            }
+                            result.grouped_duration[key].update(dur);
+                            result.group_key_category.emplace(
+                                key, std::string(cat_sv));
+                            io_key = std::move(key);
+                        } else {
+                            io_key = "__global__";
+                        }
+
+                        if (is_io(name_sv) && args.exists()) {
+                            auto ret_opt =
+                                args["ret"].get_optional<std::int64_t>();
+                            if (ret_opt.has_value() && ret_opt.value() > 0) {
+                                double ret =
+                                    static_cast<double>(ret_opt.value());
+                                auto& io = result.grouped_io[io_key];
+                                io.duration.update(dur);
+                                io.size.update(ret);
+                                if (dur > 0) {
+                                    io.bandwidth.update(ret * 1e6 / dur);
+                                }
+                                auto offset_opt =
+                                    args["offset"]
+                                        .get_optional<std::uint64_t>();
+                                if (offset_opt.has_value()) {
+                                    io.offset.update(static_cast<double>(
+                                        offset_opt.value()));
+                                }
+                            }
+                        }
+
+                        result.events_scanned++;
+                    }
+                }
+            }
+            yyjson_doc_free(doc);
+        }
+
+        result.chunks_scanned = 1;
+    } catch (const std::exception&) {
+        // Return empty result on open/read failure (matches original behaviour)
+    }
+
+    co_return result;
+}
+
+// Per-chunk scanning coroutine for parallel detailed stats.
+// Scans a single chunk and merges results into shared file_detailed.
+static coro::CoroTask<void> scan_chunk_detailed(
+    std::string file_path, std::string idx_path, std::size_t checkpoint_size,
+    std::size_t file_size, std::size_t num_ckpts, std::uint64_t ckpt_idx,
+    const std::vector<std::string>* filter_names_ptr,
+    const std::vector<std::string>* filter_cats_ptr,
+    const std::vector<std::string>* group_by_ptr,
+    std::shared_ptr<DetailedStatistics> file_detailed,
+    std::shared_ptr<std::mutex> chunk_mutex) {
+    std::size_t start_byte = 0;
+    std::size_t end_byte = file_size;
+
+    if (num_ckpts > 0) {
+        std::size_t bytes_per = file_size / num_ckpts;
+        start_byte = ckpt_idx * bytes_per;
+        end_byte = (ckpt_idx + 1 == num_ckpts) ? file_size
+                                               : (ckpt_idx + 1) * bytes_per;
+    }
+
+    ChunkDetailScanInput scan_input;
+    scan_input.file_path = file_path;
+    scan_input.idx_path = idx_path;
+    scan_input.checkpoint_size = checkpoint_size;
+    scan_input.start_byte = start_byte;
+    scan_input.end_byte = end_byte;
+    scan_input.checkpoint_idx = ckpt_idx;
+    scan_input.filter_names = *filter_names_ptr;
+    scan_input.filter_categories = *filter_cats_ptr;
+    scan_input.group_by = *group_by_ptr;
+
+    ChunkDetailScannerUtility scanner;
+    auto scan_output = co_await scanner.process(scan_input);
+
+    if (scan_output.success) {
+        std::lock_guard<std::mutex> lock(*chunk_mutex);
+        file_detailed->merge(scan_output.stats);
+    }
+
+    co_return;
+}
+
+// Per-file detailed stats coroutine. Spawns parallel chunk scans,
+// then resolves hashes and produces output.
+static coro::CoroTask<void> process_file_detailed(
+    CoroScope& fctx, std::string file_path, std::size_t fi,
+    std::string index_dir, std::size_t checkpoint_size,
+    bool needs_hash_resolution, bool json_output, std::uint64_t top_n,
+    const PredicateMap* merged_predicates_ptr,
+    const std::vector<std::string>* filter_names_ptr,
+    const std::vector<std::string>* filter_cats_ptr,
+    const std::vector<std::string>* group_by_ptr,
+    DetailedStatistics* aggregate_detailed_ptr, std::mutex* aggregate_mutex_ptr,
+    std::mutex* output_mutex_ptr,
+    std::vector<std::pair<std::size_t, std::string>>* json_results_ptr) {
+    std::string bidx_path = determine_bloom_index_path(file_path, index_dir);
+    std::string idx_path = internal::determine_index_path(file_path, index_dir);
+
+    auto meta_input = MetadataCollectorUtilityInput::from_file(file_path)
+                          .with_checkpoint_size(checkpoint_size)
+                          .with_force_rebuild(false)
+                          .with_index(idx_path);
+    auto metadata = co_await MetadataCollectorUtility{}.process(meta_input);
+
+    if (!metadata.success) {
+        DFTRACER_UTILS_LOG_ERROR("Failed to collect metadata for %s: %s",
+                                 file_path.c_str(),
+                                 metadata.error_message.c_str());
+        co_return;
+    }
+
+    std::size_t file_size = metadata.uncompressed_size;
+    std::size_t num_ckpts = metadata.num_checkpoints;
+
+    // Determine candidate checkpoints via bloom pre-filtering
+    std::vector<std::uint64_t> candidate_checkpoints;
+    std::uint64_t total_checkpoints = (num_ckpts == 0) ? 1 : num_ckpts;
+
+    if (!merged_predicates_ptr->empty() && fs::exists(bidx_path)) {
+        try {
+            BloomQueryInput bq_input;
+            bq_input.bidx_path = bidx_path;
+            bq_input.file_path = file_path;
+            bq_input.predicates = *merged_predicates_ptr;
+
+            BloomQueryUtility bloom_query;
+            auto bq_output = co_await bloom_query.process(bq_input);
+
+            if (bq_output.success) {
+                candidate_checkpoints = bq_output.candidate_checkpoints;
+                total_checkpoints = bq_output.total_checkpoints;
+            } else {
+                for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
+                    candidate_checkpoints.push_back(i);
+                }
+            }
+        } catch (const std::exception& e) {
+            DFTRACER_UTILS_LOG_WARN(
+                "Bloom query failed for %s: %s, scanning all chunks",
+                file_path.c_str(), e.what());
+            for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
+                candidate_checkpoints.push_back(i);
+            }
+        }
+    } else {
+        for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
+            candidate_checkpoints.push_back(i);
+        }
+    }
+
+    // Scan candidate chunks in parallel
+    auto file_detailed = std::make_shared<DetailedStatistics>();
+    file_detailed->chunks_skipped =
+        total_checkpoints - candidate_checkpoints.size();
+    auto chunk_mutex = std::make_shared<std::mutex>();
+
+    co_await fctx.scope([file_path, idx_path, checkpoint_size, file_size,
+                         num_ckpts, filter_names_ptr, filter_cats_ptr,
+                         group_by_ptr, file_detailed, chunk_mutex,
+                         candidates = std::move(candidate_checkpoints)](
+                            CoroScope& chunk_scope) -> coro::CoroTask<void> {
+        for (auto ckpt_idx : candidates) {
+            chunk_scope.spawn(
+                [file_path, idx_path, checkpoint_size, file_size, num_ckpts,
+                 ckpt_idx, filter_names_ptr, filter_cats_ptr, group_by_ptr,
+                 file_detailed,
+                 chunk_mutex](CoroScope& /*cctx*/) -> coro::CoroTask<void> {
+                    co_return co_await scan_chunk_detailed(
+                        file_path, idx_path, checkpoint_size, file_size,
+                        num_ckpts, ckpt_idx, filter_names_ptr, filter_cats_ptr,
+                        group_by_ptr, file_detailed, chunk_mutex);
+                });
+        }
+        co_return;
+    });
+
+    // Hash resolution (sequential, all chunks done)
+    std::unordered_map<std::string, std::string> hash_resolutions;
+    if (needs_hash_resolution && fs::exists(bidx_path)) {
+        try {
+            BloomIndexDatabase bidx_db(bidx_path);
+            int file_info_id = bidx_db.get_file_info_id(file_path);
+            if (file_info_id >= 0) {
+                auto resolve_hashes = [&](const std::string& dim) {
+                    for (const auto& [key, _] :
+                         file_detailed->grouped_duration) {
+                        if (hash_resolutions.count(key) == 0) {
+                            auto resolved = queries::query_resolved_by_hash(
+                                bidx_db.db(), dim, key);
+                            if (resolved.has_value()) {
+                                hash_resolutions[key] = resolved.value();
+                            }
+                        }
+                    }
+                    for (const auto& [key, _] : file_detailed->grouped_io) {
+                        if (hash_resolutions.count(key) == 0) {
+                            auto resolved = queries::query_resolved_by_hash(
+                                bidx_db.db(), dim, key);
+                            if (resolved.has_value()) {
+                                hash_resolutions[key] = resolved.value();
+                            }
+                        }
+                    }
+                };
+
+                for (const auto& dim : *group_by_ptr) {
+                    if (dim == "fhash" || dim == "hhash") {
+                        resolve_hashes(dim);
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            DFTRACER_UTILS_LOG_WARN("Hash resolution failed for %s: %s",
+                                    file_path.c_str(), e.what());
+        }
+    }
+
+    // Output per-file results
+    if (json_output) {
+        std::string detail_json = file_detailed->to_json();
+        std::string json_obj = std::string("{\"file_path\": \"") + file_path +
+                               "\", \"detailed\": " + detail_json + "}";
+        std::lock_guard<std::mutex> lock(*output_mutex_ptr);
+        json_results_ptr->emplace_back(fi, std::move(json_obj));
+    } else {
+        std::lock_guard<std::mutex> lock(*output_mutex_ptr);
+        print_text_detailed(
+            file_path, *file_detailed,
+            file_detailed->chunks_scanned + file_detailed->chunks_skipped,
+            top_n, hash_resolutions);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(*aggregate_mutex_ptr);
+        aggregate_detailed_ptr->merge(*file_detailed);
+    }
+
+    co_return;
+}
+
+static void run_detailed_query_workers(
+    CoroScope& scope, const std::vector<std::string>* files_ptr,
+    const std::vector<std::string>* small_files_ptr,
+    std::size_t executor_threads, std::string index_dir,
+    std::size_t checkpoint_size, bool needs_hash_resolution, bool json_output,
+    std::size_t top_n, const PredicateMap* mp,
+    const std::vector<std::string>* fn, const std::vector<std::string>* fc,
+    const std::vector<std::string>* gb, DetailedStatistics* ad, std::mutex* am,
+    std::mutex* om, std::vector<std::pair<std::size_t, std::string>>* jr) {
+    auto small_set = std::make_shared<std::unordered_set<std::string>>(
+        small_files_ptr->begin(), small_files_ptr->end());
+
+    auto file_chan = coro::make_channel<std::size_t>(executor_threads * 2);
+
+    scope.spawn([file_chan, files_ptr](CoroScope&) -> coro::CoroTask<void> {
+        auto guard = file_chan->producer_guard();
+        for (std::size_t fi = 0; fi < files_ptr->size(); ++fi) {
+            if (!co_await file_chan->send(fi)) {
+                co_return;
+            }
+        }
+        co_return;
+    });
+
+    for (std::size_t w = 0; w < executor_threads; ++w) {
+        scope.spawn([file_chan, files_ptr, index_dir, checkpoint_size,
+                     needs_hash_resolution, json_output, top_n, small_set, mp,
+                     fn, fc, gb, ad, am, om,
+                     jr](CoroScope& fctx) -> coro::CoroTask<void> {
+            while (auto fi_opt = co_await file_chan->receive()) {
+                std::size_t fi = *fi_opt;
+                const auto& file_path = (*files_ptr)[fi];
+                bool is_small = small_set->count(file_path) > 0;
+
+                if (is_small) {
+                    auto stats = co_await direct_scan_detailed_statistics(
+                        file_path, fn, fc, gb);
+                    {
+                        std::lock_guard<std::mutex> lock(*am);
+                        ad->merge(stats);
+                    }
+                    continue;
+                }
+                co_await process_file_detailed(
+                    fctx, file_path, fi, index_dir, checkpoint_size,
+                    needs_hash_resolution, json_output, top_n, mp, fn, fc, gb,
+                    ad, am, om, jr);
+            }
+            co_return;
+        });
+    }
+}
+
 static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
     std::string directory = program.get<std::string>("--directory");
     std::string index_dir = program.get<std::string>("--index-dir");
     bool json_output = program.get<bool>("--json");
     std::string report_str = program.get<std::string>("--report");
     std::uint64_t top_n = program.get<std::uint64_t>("--top-n");
+    std::uint64_t top_n_pid_tid = program.get<std::uint64_t>("--top-n-pid-tid");
     bool no_auto_index = program.get<bool>("--no-auto-index");
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
@@ -561,14 +985,34 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
         }
     }
 
-    // Auto-build bloom indices for files missing .bidx
+    // Partition files: large files get indexed, small files are scanned
+    // directly to avoid creating sidecar files on metadata-sensitive
+    // filesystems (e.g. Lustre).
     std::vector<std::string> files_needing_index;
+    std::vector<std::string> small_files;
     for (const auto& file_path : files) {
         std::string bidx_path =
             determine_bloom_index_path(file_path, index_dir);
-        if (!fs::exists(bidx_path)) {
+        if (fs::exists(bidx_path)) {
+            continue;  // already indexed
+        }
+        std::error_code ec;
+        auto fsize = fs::file_size(file_path, ec);
+        if (ec || fsize == 0) {
+            continue;  // skip unreadable or empty files
+        }
+        if (fsize < INDEX_SIZE_THRESHOLD) {
+            small_files.push_back(file_path);
+        } else {
             files_needing_index.push_back(file_path);
         }
+    }
+
+    if (!small_files.empty()) {
+        std::printf(
+            "Skipping index for %zu small file(s) (< %zu bytes "
+            "compressed); will scan directly.\n",
+            small_files.size(), INDEX_SIZE_THRESHOLD);
     }
 
     if (!files_needing_index.empty()) {
@@ -603,44 +1047,73 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
 
         auto index_task = make_task(
             [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                auto file_chan =
+                    coro::make_channel<std::string>(executor_threads * 2);
+
                 co_await ctx.scope([&](CoroScope& scope)
                                        -> coro::CoroTask<void> {
+                    // Producer: push all file paths into the channel
+                    auto* files_ptr = &files_needing_index;
+                    scope.spawn([file_chan, files_ptr](CoroScope& /*pctx*/)
+                                    -> coro::CoroTask<void> {
+                        auto guard = file_chan->producer_guard();
+                        for (const auto& f : *files_ptr) {
+                            if (!co_await file_chan->send(f)) {
+                                co_return;
+                            }
+                        }
+                        co_return;
+                    });
+
+                    // Workers: N coroutines pulling from the channel
                     auto* indexed_count_ptr = &indexed_count;
                     auto* failed_count_ptr = &failed_count;
-                    for (std::size_t i = 0; i < files_needing_index.size();
-                         ++i) {
-                        const auto file_path = files_needing_index[i];
-                        scope.spawn([build_template, file_path,
+                    for (std::size_t w = 0; w < executor_threads; ++w) {
+                        scope.spawn([file_chan, build_template,
                                      indexed_count_ptr,
-                                     failed_count_ptr](CoroScope& fctx)
+                                     failed_count_ptr](CoroScope& wctx)
                                         -> coro::CoroTask<void> {
-                            BloomIndexBuildInput build_input = build_template;
-                            build_input.file_path = file_path;
+                            while (auto file_path =
+                                       co_await file_chan->receive()) {
+                                try {
+                                    BloomIndexBuildInput build_input =
+                                        build_template;
+                                    build_input.file_path = *file_path;
 
-                            auto utility =
-                                std::make_shared<BloomIndexBuilderUtility>();
-                            behaviors::BehaviorChain<BloomIndexBuildInput,
-                                                     BloomIndexBuildOutput>
-                                chain;
-                            behaviors::UtilityExecutor<
-                                BloomIndexBuildInput, BloomIndexBuildOutput,
-                                utilities::tags::NeedsContext>
-                                executor(utility, std::move(chain));
+                                    auto utility = std::make_shared<
+                                        BloomIndexBuilderUtility>();
+                                    behaviors::BehaviorChain<
+                                        BloomIndexBuildInput,
+                                        BloomIndexBuildOutput>
+                                        chain;
+                                    behaviors::UtilityExecutor<
+                                        BloomIndexBuildInput,
+                                        BloomIndexBuildOutput,
+                                        utilities::tags::NeedsContext>
+                                        executor(utility, std::move(chain));
 
-                            auto result =
-                                co_await executor.execute_with_context(
-                                    fctx, build_input);
+                                    auto result =
+                                        co_await executor.execute_with_context(
+                                            wctx, build_input);
 
-                            if (result.success) {
-                                (*indexed_count_ptr)++;
-                            } else {
-                                (*failed_count_ptr)++;
-                                DFTRACER_UTILS_LOG_ERROR(
-                                    "Auto-indexing failed for %s: %s",
-                                    file_path.c_str(),
-                                    result.error_message.c_str());
+                                    if (result.success) {
+                                        (*indexed_count_ptr)++;
+                                    } else {
+                                        (*failed_count_ptr)++;
+                                        DFTRACER_UTILS_LOG_ERROR(
+                                            "Auto-indexing failed "
+                                            "for %s: %s",
+                                            file_path->c_str(),
+                                            result.error_message.c_str());
+                                    }
+                                } catch (const std::exception& e) {
+                                    (*failed_count_ptr)++;
+                                    DFTRACER_UTILS_LOG_ERROR(
+                                        "Auto-indexing exception "
+                                        "for %s: %s",
+                                        file_path->c_str(), e.what());
+                                }
                             }
-
                             co_return;
                         });
                     }
@@ -663,7 +1136,6 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
 
     // Detailed query path: scan chunks on-demand with bloom pre-filtering
     if (report_type == StatisticsQueryType::DETAILED) {
-        // Determine if we need hash resolutions
         bool needs_hash_resolution = false;
         for (const auto& dim : group_by) {
             if (dim == "fhash" || dim == "hhash") {
@@ -672,222 +1144,64 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
             }
         }
 
+        DetailedStatistics aggregate_detailed;
+        std::mutex aggregate_mutex;
+        std::mutex output_mutex;
+        std::vector<std::pair<std::size_t, std::string>> json_results;
+
+        {
+            auto pipeline_config = PipelineConfig()
+                                       .with_name("DFTracer Stats Detailed")
+                                       .with_compute_threads(executor_threads)
+                                       .with_watchdog(false);
+
+            Pipeline pipeline(pipeline_config);
+
+            auto stats_task = make_task(
+                [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                    co_await ctx.scope(
+                        [&](CoroScope& scope) -> coro::CoroTask<void> {
+                            run_detailed_query_workers(
+                                scope, &files, &small_files, executor_threads,
+                                index_dir, checkpoint_size,
+                                needs_hash_resolution, json_output, top_n,
+                                &merged_predicates, &filter_names, &filter_cats,
+                                &group_by, &aggregate_detailed,
+                                &aggregate_mutex, &output_mutex, &json_results);
+                            co_return;
+                        });
+                    co_return;
+                },
+                "StatsDetailed");
+
+            pipeline.set_source(stats_task);
+            pipeline.set_destination(stats_task);
+            pipeline.execute();
+        }
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> duration =
+            end_time - start_time;
+
         if (json_output) {
             std::printf("[\n");
-        }
-
-        DetailedStatistics aggregate_detailed;
-
-        for (std::size_t fi = 0; fi < files.size(); ++fi) {
-            const auto& file_path = files[fi];
-
-            // Resolve paths
-            std::string bidx_path =
-                determine_bloom_index_path(file_path, index_dir);
-            std::string idx_path =
-                internal::determine_index_path(file_path, index_dir);
-
-            // Collect metadata
-            auto meta_input =
-                MetadataCollectorUtilityInput::from_file(file_path)
-                    .with_checkpoint_size(checkpoint_size)
-                    .with_force_rebuild(false)
-                    .with_index(idx_path);
-            auto metadata =
-                co_await MetadataCollectorUtility{}.process(meta_input);
-
-            if (!metadata.success) {
-                DFTRACER_UTILS_LOG_ERROR(
-                    "Failed to collect metadata for %s: %s", file_path.c_str(),
-                    metadata.error_message.c_str());
-                continue;
+            std::sort(
+                json_results.begin(), json_results.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+            for (std::size_t i = 0; i < json_results.size(); ++i) {
+                std::printf("%s%s", json_results[i].second.c_str(),
+                            i + 1 < json_results.size() ? ",\n" : "\n");
             }
-
-            std::size_t file_size = metadata.uncompressed_size;
-            std::size_t num_ckpts = metadata.num_checkpoints;
-
-            // Use merged predicates for bloom pre-filtering
-            const auto& predicates = merged_predicates;
-
-            // Determine candidate checkpoints via bloom pre-filtering
-            std::vector<std::uint64_t> candidate_checkpoints;
-            std::uint64_t total_checkpoints = (num_ckpts == 0) ? 1 : num_ckpts;
-
-            if (!predicates.empty() && fs::exists(bidx_path)) {
-                try {
-                    BloomQueryInput bq_input;
-                    bq_input.bidx_path = bidx_path;
-                    bq_input.file_path = file_path;
-                    bq_input.predicates = predicates;
-
-                    BloomQueryUtility bloom_query;
-                    auto bq_output = co_await bloom_query.process(bq_input);
-
-                    if (bq_output.success) {
-                        candidate_checkpoints = bq_output.candidate_checkpoints;
-                        total_checkpoints = bq_output.total_checkpoints;
-                    } else {
-                        // Fallback: scan all chunks
-                        for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
-                            candidate_checkpoints.push_back(i);
-                        }
-                    }
-                } catch (const std::exception& e) {
-                    DFTRACER_UTILS_LOG_WARN(
-                        "Bloom query failed for %s: %s, scanning all chunks",
-                        file_path.c_str(), e.what());
-                    for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
-                        candidate_checkpoints.push_back(i);
-                    }
-                }
-            } else {
-                // No filters or no bidx: scan all chunks
-                for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
-                    candidate_checkpoints.push_back(i);
-                }
-            }
-
-            // Compute byte ranges and scan candidate chunks
-            DetailedStatistics file_detailed;
-            file_detailed.chunks_skipped =
-                total_checkpoints - candidate_checkpoints.size();
-
-            ChunkDetailScannerUtility scanner;
-
-            for (auto ckpt_idx : candidate_checkpoints) {
-                std::size_t start_byte = 0;
-                std::size_t end_byte = file_size;
-
-                if (num_ckpts > 0) {
-                    std::size_t bytes_per = file_size / num_ckpts;
-                    start_byte = ckpt_idx * bytes_per;
-                    end_byte = (ckpt_idx + 1 == num_ckpts)
-                                   ? file_size
-                                   : (ckpt_idx + 1) * bytes_per;
-                }
-
-                ChunkDetailScanInput scan_input;
-                scan_input.file_path = file_path;
-                scan_input.idx_path = idx_path;
-                scan_input.checkpoint_size = checkpoint_size;
-                scan_input.start_byte = start_byte;
-                scan_input.end_byte = end_byte;
-                scan_input.checkpoint_idx = ckpt_idx;
-                scan_input.filter_names = filter_names;
-                scan_input.filter_categories = filter_cats;
-                scan_input.group_by = group_by;
-
-                auto scan_output = co_await scanner.process(scan_input);
-                if (scan_output.success) {
-                    file_detailed.merge(scan_output.stats);
-                }
-            }
-
-            // Load hash resolutions for display if needed
-            std::unordered_map<std::string, std::string> hash_resolutions;
-            if (needs_hash_resolution && fs::exists(bidx_path)) {
-                try {
-                    BloomIndexDatabase bidx_db(bidx_path);
-                    int file_info_id = bidx_db.get_file_info_id(file_path);
-                    if (file_info_id >= 0) {
-                        // Collect all unique hash keys that need resolution
-                        auto resolve_hashes = [&](const std::string& dim) {
-                            // Check grouped_duration keys
-                            for (const auto& [key, _] :
-                                 file_detailed.grouped_duration) {
-                                if (hash_resolutions.count(key) == 0) {
-                                    auto resolved =
-                                        queries::query_resolved_by_hash(
-                                            bidx_db.db(), dim, key);
-                                    if (resolved.has_value()) {
-                                        hash_resolutions[key] =
-                                            resolved.value();
-                                    }
-                                }
-                            }
-                            // Check grouped_io keys
-                            for (const auto& [key, _] :
-                                 file_detailed.grouped_io) {
-                                if (hash_resolutions.count(key) == 0) {
-                                    auto resolved =
-                                        queries::query_resolved_by_hash(
-                                            bidx_db.db(), dim, key);
-                                    if (resolved.has_value()) {
-                                        hash_resolutions[key] =
-                                            resolved.value();
-                                    }
-                                }
-                            }
-                        };
-
-                        for (const auto& dim : group_by) {
-                            if (dim == "fhash" || dim == "hhash") {
-                                resolve_hashes(dim);
-                            }
-                        }
-                    }
-                } catch (const std::exception& e) {
-                    DFTRACER_UTILS_LOG_WARN("Hash resolution failed for %s: %s",
-                                            file_path.c_str(), e.what());
-                }
-            }
-
-            if (json_output) {
-                // Wrap per-file detailed stats in a file object
-                std::string detail_json = file_detailed.to_json();
-                std::printf("{\"file_path\": \"%s\", \"detailed\": %s}%s",
-                            file_path.c_str(), detail_json.c_str(),
-                            fi + 1 < files.size() ? ",\n" : "\n");
-            } else {
-                print_text_detailed(file_path, file_detailed, total_checkpoints,
-                                    top_n, hash_resolutions);
-            }
-
-            aggregate_detailed.merge(file_detailed);
-        }
-
-        if (json_output) {
             std::printf("]\n");
-        }
-
-        // Aggregate for multiple files
-        if (files.size() > 1 && !json_output) {
-            auto end_time = std::chrono::high_resolution_clock::now();
-            std::chrono::duration<double, std::milli> duration =
-                end_time - start_time;
-
+        } else {
             std::printf("==========================================\n");
-            std::printf("Aggregate Detailed Summary (%zu files)\n",
-                        files.size());
+            std::printf("Consolidated Detailed (%zu files)\n", files.size());
             std::printf("==========================================\n");
-            std::printf("  Total Events Scanned: %llu\n",
-                        (unsigned long long)aggregate_detailed.events_scanned);
-            std::printf("  Total Chunks Scanned: %llu\n",
-                        (unsigned long long)aggregate_detailed.chunks_scanned);
-            std::printf("  Total Chunks Skipped: %llu\n",
-                        (unsigned long long)aggregate_detailed.chunks_skipped);
-
-            if (aggregate_detailed.duration.count() > 0 &&
-                !aggregate_detailed.duration.sketch.empty()) {
-                std::printf("\n  Duration Percentiles:\n");
-                std::printf("    p50: %.1f us  p90: %.1f us  p99: %.1f us\n",
-                            aggregate_detailed.duration.sketch.quantile(0.5),
-                            aggregate_detailed.duration.sketch.quantile(0.9),
-                            aggregate_detailed.duration.sketch.quantile(0.99));
-            }
-
-            // Show global I/O summary if present
-            auto global_io_it =
-                aggregate_detailed.grouped_io.find("__global__");
-            if (global_io_it != aggregate_detailed.grouped_io.end() &&
-                global_io_it->second.size.count() > 0) {
-                std::printf("\n  I/O Size:\n");
-                std::printf(
-                    "    Count: %llu   Mean: %s\n",
-                    (unsigned long long)global_io_it->second.size.count(),
-                    format_bytes(global_io_it->second.size.mean()).c_str());
-            }
-
+            std::unordered_map<std::string, std::string> no_resolutions;
+            print_text_detailed(directory, aggregate_detailed,
+                                aggregate_detailed.chunks_scanned +
+                                    aggregate_detailed.chunks_skipped,
+                                top_n, no_resolutions);
             std::printf("  Processing Time: %.2f ms\n", duration.count());
             std::printf("==========================================\n");
         }
@@ -895,101 +1209,154 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
         co_return 0;
     }
 
-    // Aggregate statistics per file
-    StatisticsAggregatorUtility aggregator;
-    StatisticsQueryUtility query_util;
+    // Non-detailed path: aggregate statistics per file in parallel
+    std::vector<std::pair<std::size_t, TraceStatistics>> indexed_stats;
+    std::mutex stats_mutex;
+
+    {
+        auto pipeline_config = PipelineConfig()
+                                   .with_name("DFTracer Stats")
+                                   .with_compute_threads(executor_threads)
+                                   .with_watchdog(false);
+
+        Pipeline pipeline(pipeline_config);
+
+        auto stats_task = make_task(
+            [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                co_await ctx.scope([&](CoroScope& scope)
+                                       -> coro::CoroTask<void> {
+                    auto* indexed_stats_ptr = &indexed_stats;
+                    auto* stats_mutex_ptr = &stats_mutex;
+                    auto* files_ptr = &files;
+
+                    // Build set of small files for O(1) lookup.
+                    // shared_ptr so workers keep it alive after this
+                    // scope lambda's coroutine frame is destroyed.
+                    auto small_set =
+                        std::make_shared<std::unordered_set<std::string>>(
+                            small_files.begin(), small_files.end());
+
+                    auto file_chan =
+                        coro::make_channel<std::size_t>(executor_threads * 2);
+
+                    // Producer: push file indices
+                    scope.spawn([file_chan, files_ptr](
+                                    CoroScope&) -> coro::CoroTask<void> {
+                        auto guard = file_chan->producer_guard();
+                        for (std::size_t fi = 0; fi < files_ptr->size(); ++fi) {
+                            if (!co_await file_chan->send(fi)) {
+                                co_return;
+                            }
+                        }
+                        co_return;
+                    });
+
+                    // Workers: N coroutines, each processing one file at a time
+                    for (std::size_t w = 0; w < executor_threads; ++w) {
+                        scope.spawn([file_chan, files_ptr, index_dir, small_set,
+                                     indexed_stats_ptr, stats_mutex_ptr](
+                                        CoroScope&) -> coro::CoroTask<void> {
+                            while (auto fi_opt =
+                                       co_await file_chan->receive()) {
+                                std::size_t fi = *fi_opt;
+                                const auto& file_path = (*files_ptr)[fi];
+                                bool is_small = small_set->count(file_path) > 0;
+
+                                TraceStatistics result;
+                                if (is_small) {
+                                    result =
+                                        co_await direct_scan_trace_statistics(
+                                            file_path);
+                                } else {
+                                    StatisticsAggregatorInput agg_input;
+                                    agg_input.file_path = file_path;
+                                    agg_input.index_dir = index_dir;
+
+                                    StatisticsAggregatorUtility aggregator;
+                                    result =
+                                        co_await aggregator.process(agg_input);
+                                }
+
+                                std::lock_guard<std::mutex> lock(
+                                    *stats_mutex_ptr);
+                                indexed_stats_ptr->emplace_back(
+                                    fi, std::move(result));
+                            }
+                            co_return;
+                        });
+                    }
+                    co_return;
+                });
+
+                co_return;
+            },
+            "StatsProcess");
+
+        pipeline.set_source(stats_task);
+        pipeline.set_destination(stats_task);
+        pipeline.execute();
+    }
+
+    // Restore original file order
+    std::sort(indexed_stats.begin(), indexed_stats.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
 
     std::vector<TraceStatistics> all_stats;
-    all_stats.reserve(files.size());
-
-    for (const auto& file_path : files) {
-        StatisticsAggregatorInput agg_input;
-        agg_input.file_path = file_path;
-        agg_input.index_dir = index_dir;
-
-        all_stats.push_back(co_await aggregator.process(agg_input));
+    all_stats.reserve(indexed_stats.size());
+    for (auto& [_, stats] : indexed_stats) {
+        all_stats.push_back(std::move(stats));
     }
 
-    // Query and output per file
+    // Merge all per-file stats into a single consolidated result
+    TraceStatistics total;
+    total.success = true;
+    total.file_path = directory;
+    std::size_t successful = 0;
+    std::size_t failed = 0;
+
+    for (const auto& stats : all_stats) {
+        if (stats.success) {
+            total.merged.merge_from(stats.merged);
+            total.num_chunks += stats.num_chunks;
+            successful++;
+        } else {
+            failed++;
+        }
+    }
+
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> duration = end_time - start_time;
+
     if (json_output) {
+        // For JSON, output per-file results
+        StatisticsQueryUtility query_util;
         std::printf("[\n");
-    }
-
-    for (std::size_t i = 0; i < all_stats.size(); ++i) {
-        const auto& stats = all_stats[i];
-
-        if (!stats.success) {
-            if (json_output) {
+        for (std::size_t i = 0; i < all_stats.size(); ++i) {
+            const auto& stats = all_stats[i];
+            if (!stats.success) {
                 std::printf("%s%s", stats.to_json().c_str(),
                             i + 1 < all_stats.size() ? ",\n" : "\n");
-            } else {
-                print_text_summary(stats, top_n);
+                continue;
             }
-            continue;
-        }
-
-        StatisticsQueryInput qi;
-        qi.stats = stats;
-        qi.query_type = report_type;
-        qi.top_n = top_n;
-
-        auto output = co_await query_util.process(qi);
-
-        if (json_output) {
+            StatisticsQueryInput qi;
+            qi.stats = stats;
+            qi.query_type = report_type;
+            qi.top_n = top_n;
+            auto output = co_await query_util.process(qi);
             std::printf("%s%s", output.to_json().c_str(),
                         i + 1 < all_stats.size() ? ",\n" : "\n");
-        } else if (report_type == StatisticsQueryType::SUMMARY) {
-            print_text_summary(stats, top_n);
-        } else {
-            print_text_query(output, stats.file_path);
         }
-    }
-
-    if (json_output) {
         std::printf("]\n");
-    }
-
-    // Aggregate totals for multiple files
-    if (files.size() > 1 && !json_output) {
-        TraceStatistics total;
-        total.success = true;
-        std::size_t successful = 0;
-
-        for (const auto& stats : all_stats) {
-            if (stats.success) {
-                total.merged.merge_from(stats.merged);
-                total.num_chunks += stats.num_chunks;
-                successful++;
-            }
-        }
-
-        auto end_time = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> duration =
-            end_time - start_time;
-
+    } else {
+        // Text output: print consolidated summary
         std::printf("==========================================\n");
-        std::printf("Aggregate Summary (%zu files)\n", files.size());
+        std::printf("Consolidated (%zu files, %zu successful, %zu failed)\n",
+                    files.size(), successful, failed);
         std::printf("==========================================\n");
-        std::printf("  Successful: %zu / %zu\n", successful, files.size());
-        std::printf("  Total Chunks: %llu\n",
-                    (unsigned long long)total.num_chunks);
-        std::printf("  Total Events: %llu\n",
-                    (unsigned long long)total.merged.total_events);
-        std::printf("  Unique Categories: %zu\n",
-                    total.merged.category_counts.size());
-        std::printf("  Unique Names: %zu\n", total.merged.name_counts.size());
-        std::printf("  Unique PID:TIDs: %zu\n",
-                    total.merged.pid_tid_counts.size());
-
-        if (total.merged.duration_count > 0) {
-            std::printf("  Duration Mean: %.2f us\n",
-                        total.merged.duration_mean());
-            std::printf("  Duration Min: %llu us\n",
-                        (unsigned long long)total.merged.duration_min_us);
-            std::printf("  Duration Max: %llu us\n",
-                        (unsigned long long)total.merged.duration_max_us);
-        }
-
+        auto detailed = to_detailed(total);
+        std::unordered_map<std::string, std::string> no_resolutions;
+        print_text_detailed(total.file_path, detailed, total.num_chunks, top_n,
+                            no_resolutions, &total, top_n_pid_tid);
         std::printf("  Processing Time: %.2f ms\n", duration.count());
         std::printf("==========================================\n");
     }
@@ -1029,7 +1396,14 @@ int main(int argc, char** argv) {
         .default_value<std::string>("summary");
 
     program.add_argument("--top-n")
-        .help("Number of results for top-N queries (default: 10)")
+        .help(
+            "Number of results for top-N queries (0 = show all, "
+            "default: 0)")
+        .scan<'d', std::uint64_t>()
+        .default_value(static_cast<std::uint64_t>(0));
+
+    program.add_argument("--top-n-pid-tid")
+        .help("Max PID:TID pairs to display (0 = show all, default: 10)")
         .scan<'d', std::uint64_t>()
         .default_value(static_cast<std::uint64_t>(10));
 

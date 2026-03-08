@@ -19,11 +19,13 @@ struct DistributionStats {
     Log2Histogram histogram;
     common::statistics::DDSketch sketch{0.01};
     double sum = 0.0;
+    double sum_sq = 0.0;
 
     void update(double value);
     void merge(const DistributionStats& other);
     std::uint64_t count() const;
     double mean() const;
+    double stddev() const;
 };
 
 /**

@@ -287,17 +287,33 @@ static coro::CoroTask<int> run_reconstruct(const std::string& directory,
         }
         int fd = static_cast<int>(open_result);
 
+        // 256KB write buffer
+        constexpr std::size_t WRITE_BUFFER_SIZE = 256 * 1024;
+        std::vector<char> write_buf;
+
         std::size_t lines_written = 0;
         auto buf_it = buffers.find(orig_path);
         if (buf_it != buffers.end()) {
             // Write in checkpoint order
             for (const auto& [ckpt, lines] : buf_it->second) {
                 for (const auto& line : lines) {
-                    co_await io::write(fd, line.data(), line.size());
-                    co_await io::write(fd, "\n", 1);
+                    write_buf.insert(write_buf.end(), line.data(),
+                                     line.data() + line.size());
+                    write_buf.push_back('\n');
+                    if (write_buf.size() >= WRITE_BUFFER_SIZE) {
+                        co_await io::write(fd, write_buf.data(),
+                                           write_buf.size());
+                        write_buf.clear();
+                    }
                     lines_written++;
                 }
             }
+        }
+
+        // Flush remaining write buffer
+        if (!write_buf.empty()) {
+            co_await io::write(fd, write_buf.data(), write_buf.size());
+            write_buf.clear();
         }
 
         co_await io::close(fd);

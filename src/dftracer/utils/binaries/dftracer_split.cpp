@@ -231,7 +231,8 @@ int main(int argc, char** argv) {
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
 
     // Phase 2: Build TaskGraph for file processing
-    auto graph = TaskGraph::builder("DFTracerSplit");
+    auto graph = TaskGraph::builder(
+        {.name = "DFTracerSplit", .max_concurrency = executor_threads});
 
     DFTRACER_UTILS_LOG_INFO("%s", "Creating file processing tasks...");
 
@@ -270,7 +271,7 @@ int main(int argc, char** argv) {
                 MetadataCollectorUtility{}
                     .process(meta_input);
         },
-        "ProcessFile");
+        {.name = "ProcessFile"});
 
     DFTRACER_UTILS_LOG_INFO("%s", "Creating chunk mapping task...");
 
@@ -291,7 +292,7 @@ int main(int argc, char** argv) {
             DFTRACER_UTILS_LOG_INFO("Created %zu chunks", manifests.size());
             co_return manifests;
         },
-        "CreateManifests");
+        {.name = "CreateManifests"});
 
     DFTRACER_UTILS_LOG_INFO("%s", "Creating extraction task...");
 

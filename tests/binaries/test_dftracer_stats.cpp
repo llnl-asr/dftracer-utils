@@ -131,8 +131,8 @@ TEST_SUITE("DFTracerStats") {
         int rc = 0;
         auto output = run_stats_capture(binary, {"-d", env.get_dir()}, &rc);
         CHECK(rc == 0);
-        // Text summary always prints "Total Events:".
-        CHECK(output.find("Total Events") != std::string::npos);
+        // Text summary always prints "Events Scanned:".
+        CHECK(output.find("Events Scanned") != std::string::npos);
     }
 
     TEST_CASE("json output") {

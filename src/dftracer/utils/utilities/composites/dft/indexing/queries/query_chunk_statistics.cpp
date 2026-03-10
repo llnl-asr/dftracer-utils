@@ -15,7 +15,9 @@ std::vector<ChunkStatisticsResult> query_chunk_statistics(
         "SELECT checkpoint_idx, total_events, category_counts, "
         "name_counts, pid_tid_counts, min_timestamp_us, max_timestamp_us, "
         "duration_sum_us, duration_min_us, duration_max_us, duration_count, "
-        "duration_m2, duration_sketch, name_category "
+        "duration_m2, duration_sketch, duration_histogram, "
+        "name_duration_sketches, name_duration_histograms, "
+        "name_duration_sums, name_duration_sum_sqs, name_category "
         "FROM chunk_statistics WHERE file_info_id = ? "
         "ORDER BY checkpoint_idx;");
 
@@ -100,9 +102,54 @@ std::vector<ChunkStatisticsResult> query_chunk_statistics(
             }
         }
 
-        // Deserialize name_category TEXT (column 13)
-        const char* nc_text =
+        // Deserialize duration_histogram TEXT (column 13)
+        const char* dh_text =
             reinterpret_cast<const char*>(sqlite3_column_text(stmt, 13));
+        if (dh_text) {
+            using dftracer::utils::utilities::common::statistics::Log2Histogram;
+            r.stats.duration_histogram = Log2Histogram::from_json(dh_text);
+        }
+
+        // Deserialize name_duration_sketches BLOB (column 14)
+        if (sqlite3_column_type(stmt, 14) != SQLITE_NULL) {
+            auto* blob =
+                static_cast<const uint8_t*>(sqlite3_column_blob(stmt, 14));
+            auto blob_len =
+                static_cast<std::size_t>(sqlite3_column_bytes(stmt, 14));
+            if (blob && blob_len > 0) {
+                r.stats.name_duration_sketches =
+                    ChunkStatistics::deserialize_name_duration_sketches(
+                        blob, blob_len);
+            }
+        }
+
+        // Deserialize name_duration_histograms TEXT (column 15)
+        const char* ndh_text =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 15));
+        if (ndh_text) {
+            r.stats.name_duration_histograms =
+                ChunkStatistics::parse_histogram_map_json(ndh_text);
+        }
+
+        // Deserialize name_duration_sums TEXT (column 16)
+        const char* nds_text =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 16));
+        if (nds_text) {
+            r.stats.name_duration_sums =
+                ChunkStatistics::parse_double_map_json(nds_text);
+        }
+
+        // Deserialize name_duration_sum_sqs TEXT (column 17)
+        const char* ndss_text =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 17));
+        if (ndss_text) {
+            r.stats.name_duration_sum_sqs =
+                ChunkStatistics::parse_double_map_json(ndss_text);
+        }
+
+        // Deserialize name_category TEXT (column 18)
+        const char* nc_text =
+            reinterpret_cast<const char*>(sqlite3_column_text(stmt, 18));
         if (nc_text) {
             r.stats.name_category =
                 ChunkStatistics::parse_string_map_json(nc_text);

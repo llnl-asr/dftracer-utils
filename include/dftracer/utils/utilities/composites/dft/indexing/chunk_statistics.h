@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
@@ -56,11 +57,23 @@ struct ChunkStatistics {
     std::string name_counts_json() const;
     std::string pid_tid_counts_json() const;
     std::string name_category_json() const;
+    std::string name_duration_histograms_json() const;
+    std::string name_duration_sums_json() const;
+    std::string name_duration_sum_sqs_json() const;
+
+    /// Serialize per-name DDSketches to a single binary blob.
+    std::vector<uint8_t> serialize_name_duration_sketches() const;
 
     static std::unordered_map<std::string, std::uint64_t> parse_counts_json(
         const std::string& json);
     static std::unordered_map<std::string, std::string> parse_string_map_json(
         const std::string& json);
+    static std::unordered_map<std::string, double> parse_double_map_json(
+        const std::string& json);
+    static std::unordered_map<std::string, common::statistics::Log2Histogram>
+    parse_histogram_map_json(const std::string& json);
+    static std::unordered_map<std::string, common::statistics::DDSketch>
+    deserialize_name_duration_sketches(const uint8_t* data, std::size_t len);
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

@@ -3,6 +3,7 @@
 #include <dftracer/utils/call_tree/internal/process_key.h>
 #include <dftracer/utils/call_tree/internal/trace_reader.h>
 #include <dftracer/utils/call_tree/json_serializer.h>
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <unistd.h>
 
@@ -10,14 +11,11 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <set>
 #include <sstream>
-
-namespace fs = std::filesystem;
 
 namespace dftracer::utils::call_tree {
 

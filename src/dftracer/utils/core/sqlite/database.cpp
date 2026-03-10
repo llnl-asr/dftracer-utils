@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/sqlite/database.h>
 #include <dftracer/utils/core/sqlite/error.h>
 
@@ -35,6 +36,11 @@ bool SqliteDatabase::open(const std::string &db_path) {
     }
 
     db_path_ = db_path;
+
+    // Ensure parent directory exists (SQLite cannot create it)
+    std::error_code ec;
+    fs::create_directories(fs::path(db_path_).parent_path(), ec);
+
     if (sqlite3_open(db_path_.c_str(), &db_) != SQLITE_OK) {
         throw SqliteError(
             SqliteError::Type::OPEN_ERROR,
@@ -60,6 +66,10 @@ bool SqliteDatabase::open_with_vfs(const std::string &db_path,
         close();
     }
     db_path_ = db_path;
+
+    std::error_code ec;
+    fs::create_directories(fs::path(db_path_).parent_path(), ec);
+
     int rc =
         sqlite3_open_v2(db_path_.c_str(), &db_,
                         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, vfs_name);

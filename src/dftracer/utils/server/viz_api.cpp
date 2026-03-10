@@ -1,26 +1,49 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/channel.h>
+#include <dftracer/utils/core/pipeline/executor.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/server/viz_api.h>
-#include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
+#include <dftracer/utils/utilities/common/json/json_doc_guard.h>
+#include <dftracer/utils/utilities/common/json/json_value.h>
+#include <dftracer/utils/utilities/composites/dft/views/predicate_filter.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <yyjson.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace dftracer::utils::server {
 
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::views;
+
+using dftracer::utils::utilities::common::json::JsonDocGuard;
+using dftracer::utils::utilities::common::json::JsonValue;
+using dftracer::utils::utilities::composites::dft::views::
+    build_predicate_filter;
+using dftracer::utils::utilities::composites::dft::views::matches_any_predicate;
+using dftracer::utils::utilities::composites::dft::views::matches_predicate;
+using dftracer::utils::utilities::composites::dft::views::
+    metadata_matches_identity;
+using dftracer::utils::utilities::composites::dft::views::PredicateFilter;
+
+static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
+                                                                    "SH"};
 
 /// Normalize the "ts" field in a Chrome Trace Event JSON string by
 /// subtracting an offset.  Returns the modified JSON.  Falls back to
@@ -250,6 +273,108 @@ static void apply_filters(ViewPredicate& pred, std::string_view filters_str) {
     }
 }
 
+/// Direct-scan a small file without any sidecar index.
+/// Streams via async_streaming_gz_lines(), parses JSON, applies
+/// predicate filters, collects matching events as raw JSON strings.
+static coro::CoroTask<void> direct_scan_events(
+    const TraceIndex::FileInfo* file_info,
+    const std::vector<PredicateFilter>& filters, bool include_metadata,
+    std::vector<std::string>* collected_events, std::uint64_t* total_scanned,
+    std::uint64_t* total_matched, int limit) {
+    using dftracer::utils::utilities::fileio::lines::sources::
+        async_streaming_gz_lines;
+
+    try {
+        auto gen = async_streaming_gz_lines(file_info->path);
+
+        std::unordered_map<std::string, std::string> pending_metadata;
+        std::unordered_set<std::string> emitted_hashes;
+
+        while (auto line = co_await gen.next()) {
+            if (limit > 0 &&
+                collected_events->size() >= static_cast<std::size_t>(limit)) {
+                co_return;
+            }
+            if (line->content.empty()) continue;
+
+            JsonDocGuard guard{yyjson_read_opts(
+                const_cast<char*>(line->content.data()), line->content.size(),
+                YYJSON_READ_NOFLAG, nullptr, nullptr)};
+            if (!guard.doc) continue;
+
+            yyjson_val* root = yyjson_doc_get_root(guard.doc);
+            if (root && yyjson_is_obj(root)) {
+                JsonValue json(root);
+                // line->content is a string_view valid only for this
+                // iteration.  All storage into collected_events and
+                // pending_metadata must copy to owning std::string.
+                std::string_view ph = json["ph"].get<std::string_view>();
+
+                if (ph == "M" && include_metadata) {
+                    std::string name_str = json["name"].get<std::string>();
+
+                    if (HASH_METADATA_NAMES.count(name_str)) {
+                        auto args = json["args"];
+                        if (args.exists()) {
+                            auto val = args["value"];
+                            if (val.exists()) {
+                                std::string hash_val = val.get<std::string>();
+                                if (!emitted_hashes.count(hash_val)) {
+                                    pending_metadata[hash_val] =
+                                        std::string(line->content.data(),
+                                                    line->content.size());
+                                }
+                            }
+                        }
+                    } else {
+                        if (metadata_matches_identity(json, filters)) {
+                            collected_events->emplace_back(
+                                line->content.data(), line->content.size());
+                            (*total_matched)++;
+                        }
+                    }
+                } else if (ph != "M") {
+                    (*total_scanned)++;
+                    if (matches_any_predicate(json, filters)) {
+                        // Flush referenced hash metadata first
+                        if (include_metadata) {
+                            auto args = json["args"];
+                            if (args.exists()) {
+                                static const char* hash_fields[] = {
+                                    "hhash", "fhash", "shash"};
+                                for (const char* field : hash_fields) {
+                                    auto val = args[field];
+                                    if (!val.exists()) continue;
+                                    std::string hash_val =
+                                        val.get<std::string>();
+                                    if (emitted_hashes.count(hash_val))
+                                        continue;
+                                    auto it = pending_metadata.find(hash_val);
+                                    if (it != pending_metadata.end()) {
+                                        collected_events->push_back(
+                                            std::move(it->second));
+                                        (*total_matched)++;
+                                        emitted_hashes.insert(hash_val);
+                                        pending_metadata.erase(it);
+                                    }
+                                }
+                            }
+                        }
+                        collected_events->emplace_back(line->content.data(),
+                                                       line->content.size());
+                        (*total_matched)++;
+                    }
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_WARN("Direct scan failed for %s: %s",
+                                file_info->path.c_str(), e.what());
+    }
+
+    co_return;
+}
+
 // --- GET /api/v1/viz/events ---
 static coro::CoroTask<HttpResponse> handle_viz_events(
     const HttpRequest& /*req*/, const QueryParams& params, TraceIndex& index) {
@@ -324,6 +449,10 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
     view.with_predicate(std::move(pred));
 
+    // Optional limit: 0 (default) means no limit.
+    int limit = params.get_int("limit", 0);
+    if (limit < 0) limit = 0;
+
     // Determine files
     std::vector<const TraceIndex::FileInfo*> target_files;
     auto file_param = params.get("file");
@@ -336,43 +465,224 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
         }
     }
 
+    // File-level time range skip: remove files whose cached time
+    // bounds don't overlap the query window [begin, end].
+    if (begin > 0 || end > 0) {
+        std::vector<const TraceIndex::FileInfo*> filtered;
+        filtered.reserve(target_files.size());
+        for (auto* fi : target_files) {
+            if (fi->is_small) {
+                filtered.push_back(fi);
+                continue;
+            }
+            if (fi->min_timestamp_us == 0 && fi->max_timestamp_us == 0) {
+                filtered.push_back(fi);
+                continue;
+            }
+            double fi_min = static_cast<double>(fi->min_timestamp_us);
+            double fi_max = static_cast<double>(fi->max_timestamp_us);
+            if (fi_max < begin || fi_min > end) continue;
+            filtered.push_back(fi);
+        }
+        target_files = std::move(filtered);
+    }
+
+    std::vector<PredicateFilter> pred_filters;
+    for (const auto& predicate : view.predicates) {
+        pred_filters.push_back(build_predicate_filter(predicate));
+    }
+
     std::vector<std::string> collected_events;
 
-    for (auto* file_info : target_files) {
-        auto meta_input =
-            MetadataCollectorUtilityInput::from_file(file_info->path)
-                .with_index(file_info->idx_path);
-        auto metadata = co_await MetadataCollectorUtility{}.process(meta_input);
-        if (!metadata.success) continue;
+    bool truncated = false;
 
-        ViewBuilderInput builder_input;
-        builder_input.with_view(view)
-            .with_file_path(file_info->path)
-            .with_bidx_path(file_info->has_bloom_index ? file_info->bidx_path
-                                                       : "")
-            .with_uncompressed_size(metadata.uncompressed_size)
-            .with_num_checkpoints(metadata.num_checkpoints);
+    if (target_files.size() <= 1) {
+        for (auto* file_info : target_files) {
+            if (limit > 0 &&
+                static_cast<int>(collected_events.size()) >= limit) {
+                truncated = true;
+                break;
+            }
+            if (file_info->is_small) {
+                std::uint64_t scanned = 0;
+                std::uint64_t matched = 0;
+                co_await direct_scan_events(
+                    file_info, pred_filters, view.include_metadata,
+                    &collected_events, &scanned, &matched, limit);
+                if (limit > 0 &&
+                    static_cast<int>(collected_events.size()) >= limit)
+                    truncated = true;
+            } else {
+                if (file_info->uncompressed_size == 0 &&
+                    file_info->num_checkpoints == 0)
+                    continue;
 
-        ViewBuilderUtility builder;
-        auto build_output = co_await builder.process(builder_input);
-        if (!build_output.success || !build_output.file_may_match) continue;
+                ViewBuilderInput builder_input;
+                builder_input.with_view(view)
+                    .with_file_path(file_info->path)
+                    .with_bidx_path(
+                        file_info->has_bloom_index ? file_info->bidx_path : "")
+                    .with_uncompressed_size(file_info->uncompressed_size)
+                    .with_num_checkpoints(file_info->num_checkpoints)
+                    .with_bloom_cache(&index.bloom_cache())
+                    .with_time_range(begin, end);
 
-        for (const auto& candidate : build_output.candidates) {
-            ViewReaderInput reader_input;
-            reader_input.with_file_path(file_info->path)
-                .with_idx_path(file_info->idx_path)
-                .with_byte_range(candidate.start_byte, candidate.end_byte)
-                .with_checkpoint_idx(candidate.checkpoint_idx)
-                .with_view(view);
+                ViewBuilderUtility builder;
+                auto build_output = co_await builder.process(builder_input);
+                if (!build_output.success || !build_output.file_may_match)
+                    continue;
 
-            ViewReaderUtility reader;
-            auto read_output = co_await reader.process(reader_input);
+                for (const auto& candidate : build_output.candidates) {
+                    if (limit > 0 &&
+                        static_cast<int>(collected_events.size()) >= limit) {
+                        truncated = true;
+                        break;
+                    }
+                    ViewReaderInput reader_input;
+                    reader_input.with_file_path(file_info->path)
+                        .with_idx_path(file_info->idx_path)
+                        .with_byte_range(candidate.start_byte,
+                                         candidate.end_byte)
+                        .with_checkpoint_idx(candidate.checkpoint_idx)
+                        .with_view(view);
 
-            if (read_output.success) {
-                for (auto& event : read_output.events) {
-                    collected_events.push_back(std::move(event));
+                    ViewReaderUtility reader;
+                    auto read_output = co_await reader.process(reader_input);
+
+                    if (read_output.success) {
+                        for (auto& event : read_output.events) {
+                            if (limit > 0 &&
+                                static_cast<int>(collected_events.size()) >=
+                                    limit) {
+                                truncated = true;
+                                break;
+                            }
+                            collected_events.push_back(std::move(event));
+                        }
+                    }
                 }
             }
+        }
+    } else {
+        std::size_t num_workers =
+            std::min(index.max_concurrent(), target_files.size());
+        auto* executor = Executor::current();
+
+        auto file_chan = coro::make_channel<std::size_t>(num_workers * 2);
+        auto collected_mutex = std::make_shared<std::mutex>();
+        auto remaining = std::make_shared<std::atomic<int>>(
+            limit > 0 ? limit : std::numeric_limits<int>::max());
+
+        auto* target_files_ptr = &target_files;
+        auto* collected_ptr = &collected_events;
+        auto* pred_filters_ptr = &pred_filters;
+        auto* view_ptr = &view;
+        auto* bloom_cache_ptr = &index.bloom_cache();
+        double t_begin = begin;
+        double t_end = end;
+
+        CoroScope scope(executor);
+
+        scope.spawn(
+            [file_chan, target_files_ptr](CoroScope&) -> coro::CoroTask<void> {
+                auto guard = file_chan->producer_guard();
+                for (std::size_t i = 0; i < target_files_ptr->size(); ++i) {
+                    if (!co_await file_chan->send(i)) co_return;
+                }
+                co_return;
+            });
+
+        for (std::size_t w = 0; w < num_workers; ++w) {
+            scope.spawn([file_chan, target_files_ptr, collected_mutex,
+                         collected_ptr, pred_filters_ptr, view_ptr,
+                         bloom_cache_ptr, remaining, t_begin,
+                         t_end](CoroScope&) -> coro::CoroTask<void> {
+                while (auto fi_opt = co_await file_chan->receive()) {
+                    if (remaining->load(std::memory_order_relaxed) <= 0)
+                        co_return;
+                    auto* file_info = (*target_files_ptr)[*fi_opt];
+
+                    if (file_info->is_small) {
+                        std::vector<std::string> local_events;
+                        std::uint64_t local_scanned = 0;
+                        std::uint64_t local_matched = 0;
+                        int local_limit =
+                            remaining->load(std::memory_order_relaxed);
+                        if (local_limit <= 0) co_return;
+                        co_await direct_scan_events(
+                            file_info, *pred_filters_ptr,
+                            view_ptr->include_metadata, &local_events,
+                            &local_scanned, &local_matched, local_limit);
+                        if (!local_events.empty()) {
+                            std::lock_guard<std::mutex> lock(*collected_mutex);
+                            for (auto& ev : local_events) {
+                                collected_ptr->push_back(std::move(ev));
+                            }
+                            remaining->fetch_sub(
+                                static_cast<int>(local_events.size()));
+                        }
+                    } else {
+                        if (file_info->uncompressed_size == 0 &&
+                            file_info->num_checkpoints == 0)
+                            continue;
+
+                        ViewBuilderInput builder_input;
+                        builder_input.with_view(*view_ptr)
+                            .with_file_path(file_info->path)
+                            .with_bidx_path(file_info->has_bloom_index
+                                                ? file_info->bidx_path
+                                                : "")
+                            .with_uncompressed_size(
+                                file_info->uncompressed_size)
+                            .with_num_checkpoints(file_info->num_checkpoints)
+                            .with_bloom_cache(bloom_cache_ptr)
+                            .with_time_range(t_begin, t_end);
+
+                        ViewBuilderUtility builder;
+                        auto build_output =
+                            co_await builder.process(builder_input);
+                        if (!build_output.success ||
+                            !build_output.file_may_match)
+                            continue;
+
+                        for (const auto& candidate : build_output.candidates) {
+                            if (remaining->load(std::memory_order_relaxed) <= 0)
+                                break;
+
+                            ViewReaderInput reader_input;
+                            reader_input.with_file_path(file_info->path)
+                                .with_idx_path(file_info->idx_path)
+                                .with_byte_range(candidate.start_byte,
+                                                 candidate.end_byte)
+                                .with_checkpoint_idx(candidate.checkpoint_idx)
+                                .with_view(*view_ptr);
+
+                            ViewReaderUtility reader;
+                            auto read_output =
+                                co_await reader.process(reader_input);
+
+                            if (read_output.success &&
+                                !read_output.events.empty()) {
+                                std::lock_guard<std::mutex> lock(
+                                    *collected_mutex);
+                                for (auto& event : read_output.events) {
+                                    collected_ptr->push_back(std::move(event));
+                                }
+                                remaining->fetch_sub(static_cast<int>(
+                                    read_output.events.size()));
+                            }
+                        }
+                    }
+                }
+                co_return;
+            });
+        }
+
+        co_await scope.join();
+
+        if (limit > 0 && static_cast<int>(collected_events.size()) > limit) {
+            collected_events.resize(static_cast<std::size_t>(limit));
+            truncated = true;
         }
     }
 
@@ -404,6 +714,10 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
     body += std::to_string(meta_end);
     body += ",\"count\":";
     body += std::to_string(collected_events.size());
+    body += ",\"limit\":";
+    body += std::to_string(limit);
+    body += ",\"truncated\":";
+    body += truncated ? "true" : "false";
     body += ",\"ts_normalized\":";
     body += (normalize && global_min > 0) ? "true" : "false";
     body += ",\"global_min_timestamp_us\":";

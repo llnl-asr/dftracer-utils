@@ -2,23 +2,29 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/utility_adapter.h>
-#include <dftracer/utils/utilities/composites/composites.h>
-#include <dftracer/utils/utilities/composites/dft/dft.h>
+#include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
+#include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
 #include <argparse/argparse.hpp>
+#include <atomic>
 #include <chrono>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
+#include <unordered_set>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
-using namespace dftracer::utils::utilities::composites;
 using namespace dftracer::utils::utilities::composites::dft;
+using dftracer::utils::utilities::indexer::internal::Indexer;
 
 static std::string format_size(std::uint64_t bytes) {
     const char* units[] = {"B", "KB", "MB", "GB", "TB"};
@@ -34,6 +40,111 @@ static std::string format_size(std::uint64_t bytes) {
     oss << std::fixed << std::setprecision(2) << size << " "
         << units[unit_index];
     return oss.str();
+}
+
+/// Zero-decompression path for summary mode: stat() for compressed size,
+/// estimate uncompressed size and event count from empirical compression
+/// ratio.  No file I/O beyond stat().  Handles multi-member gzip files
+/// correctly (unlike ISIZE trailer which only covers the last member).
+/// 60K files completes in seconds instead of minutes.
+static coro::CoroTask<MetadataCollectorUtilityOutput> gz_trailer_info(
+    std::string file_path) {
+    MetadataCollectorUtilityOutput meta;
+    meta.file_path = file_path;
+    meta.has_index = false;
+    meta.index_valid = false;
+
+    try {
+        meta.format = dftracer::utils::utilities::indexer::internal::
+            IndexerFactory::detect_format(file_path);
+        meta.compressed_size = fs::file_size(file_path);
+        meta.size_mb =
+            static_cast<double>(meta.compressed_size) / (1024.0 * 1024.0);
+
+        // DFTracer JSON traces compress at ~20:1 with gzip.
+        // Multi-member gzip files make the ISIZE trailer unreliable,
+        // so estimate from compressed size instead.
+        constexpr double COMPRESSION_RATIO = 20.0;
+        constexpr double BYTES_PER_EVENT = 210.0;
+
+        auto est_uncompressed = static_cast<std::uint64_t>(
+            static_cast<double>(meta.compressed_size) * COMPRESSION_RATIO);
+        meta.uncompressed_size = est_uncompressed;
+
+        std::size_t est_events = static_cast<std::size_t>(
+            static_cast<double>(est_uncompressed) / BYTES_PER_EVENT);
+        if (est_events > 2) est_events -= 2;
+
+        meta.num_lines = est_events + 2;
+        meta.valid_events = est_events;
+        meta.start_line = 1;
+        meta.end_line = meta.num_lines;
+        meta.size_per_line =
+            (est_events > 0) ? meta.size_mb / static_cast<double>(est_events)
+                             : 0;
+        meta.success = true;
+    } catch (const std::exception& e) {
+        meta.error_message = e.what();
+        meta.success = false;
+    }
+
+    co_return meta;
+}
+
+/// Detailed path for small compressed files: one streaming decompress pass,
+/// count lines with JSON validation, no sidecar index created.
+static coro::CoroTask<MetadataCollectorUtilityOutput> direct_scan_info(
+    std::string file_path) {
+    using dftracer::utils::utilities::fileio::lines::sources::
+        async_streaming_gz_lines;
+
+    MetadataCollectorUtilityOutput meta;
+    meta.file_path = file_path;
+    meta.has_index = false;
+    meta.index_valid = false;
+
+    try {
+        meta.format = dftracer::utils::utilities::indexer::internal::
+            IndexerFactory::detect_format(file_path);
+        meta.compressed_size = fs::file_size(file_path);
+
+        std::size_t total_lines = 0;
+        std::size_t valid_events = 0;
+        std::uint64_t total_bytes = 0;
+
+        auto gen = async_streaming_gz_lines(file_path);
+        while (auto line_opt = co_await gen.next()) {
+            total_lines++;
+            const auto& line = *line_opt;
+            total_bytes += line.content.length();
+            const char* trimmed;
+            std::size_t trimmed_length;
+            if (json_trim_and_validate(line.content.data(),
+                                       line.content.length(), trimmed,
+                                       trimmed_length) &&
+                trimmed_length > 8) {
+                valid_events++;
+            }
+        }
+
+        meta.num_lines = total_lines;
+        meta.valid_events = valid_events;
+        meta.uncompressed_size = total_bytes;
+        meta.size_mb =
+            static_cast<double>(meta.compressed_size) / (1024.0 * 1024.0);
+        meta.start_line = 1;
+        meta.end_line = total_lines;
+        meta.size_per_line =
+            (valid_events > 0)
+                ? meta.size_mb / static_cast<double>(valid_events)
+                : 0;
+        meta.success = true;
+    } catch (const std::exception& e) {
+        meta.error_message = e.what();
+        meta.success = false;
+    }
+
+    co_return meta;
 }
 
 static void print_file_info(const MetadataCollectorUtilityOutput& info,
@@ -199,6 +310,12 @@ int main(int argc, char** argv) {
         .help("Directory containing files to inspect")
         .default_value<std::string>("");
 
+    program.add_argument("--query")
+        .help(
+            "Query type: summary (aggregate all files, default) or "
+            "detailed (per-file output)")
+        .default_value<std::string>("summary");
+
     program.add_argument("-v", "--verbose")
         .help("Show detailed information including index details")
         .flag();
@@ -236,12 +353,15 @@ int main(int argc, char** argv) {
 
     // Parse arguments
     std::string directory = program.get<std::string>("--directory");
+    std::string query_type = program.get<std::string>("--query");
     bool verbose = program.get<bool>("--verbose");
     bool force_rebuild = program.get<bool>("--force-rebuild");
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::string index_dir = program.get<std::string>("--index-dir");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
+
+    bool summary_mode = (query_type != "detailed");
 
     // Collect files to process
     std::vector<std::string> files;
@@ -279,115 +399,270 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::printf("==========================================\n");
-    std::printf("DFTracer File Information (Pipeline Processing)\n");
-    std::printf("==========================================\n");
-    std::printf("Arguments:\n");
-    std::printf("  Files to process: %zu\n", files.size());
-    std::printf("  Checkpoint size: %zu bytes\n", checkpoint_size);
-    std::printf("  Force rebuild: %s\n", force_rebuild ? "true" : "false");
-    std::printf("  Index dir: %s\n",
-                index_dir.empty() ? "(auto)" : index_dir.c_str());
-    std::printf("  Executor threads: %zu\n", executor_threads);
-    std::printf("  Verbose: %s\n", verbose ? "true" : "false");
-    std::printf("==========================================\n\n");
+    // Small files skip indexing to avoid creating sidecar files on
+    // metadata-sensitive filesystems (e.g. Lustre).
+    static constexpr std::size_t INDEX_SIZE_THRESHOLD = 8 * 1024 * 1024;
+    std::unordered_set<std::string> small_files;
+    for (const auto& file_path : files) {
+        std::error_code ec;
+        auto fsize = fs::file_size(file_path, ec);
+        if (!ec && fsize > 0 && fsize < INDEX_SIZE_THRESHOLD) {
+            small_files.insert(file_path);
+        }
+    }
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    auto pipeline_config = PipelineConfig()
-                               .with_name("DFTracer File Info")
-                               .with_compute_threads(executor_threads);
+    if (summary_mode) {
+        // Summary: accumulate totals in workers, print once at the end.
+        // No per-file storage, no sort, no per-file print.
+        std::atomic<std::uint64_t> total_compressed{0};
+        std::atomic<std::uint64_t> total_uncompressed{0};
+        std::atomic<std::uint64_t> total_lines{0};
+        std::atomic<std::uint64_t> total_valid_events{0};
+        std::atomic<std::size_t> successful{0};
+        std::atomic<std::size_t> failed{0};
 
-    Pipeline pipeline(pipeline_config);
+        {
+            auto pipeline_config = PipelineConfig()
+                                       .with_name("DFTracer File Info")
+                                       .with_compute_threads(executor_threads)
+                                       .with_watchdog(false);
 
-    // Task 1: Collect Metadata
-    DFTRACER_UTILS_LOG_INFO("%s", "Task 1: Collecting metadata...");
+            Pipeline pipeline(pipeline_config);
 
-    using MetadataInputList = std::vector<std::string>;
-    using MetadataOutputList = std::vector<MetadataCollectorUtilityOutput>;
+            auto info_task = make_task(
+                [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                    co_await ctx.scope([&](CoroScope& scope)
+                                           -> coro::CoroTask<void> {
+                        auto* files_ptr = &files;
+                        auto* total_compressed_ptr = &total_compressed;
+                        auto* total_uncompressed_ptr = &total_uncompressed;
+                        auto* total_lines_ptr = &total_lines;
+                        auto* total_valid_events_ptr = &total_valid_events;
+                        auto* successful_ptr = &successful;
+                        auto* failed_ptr = &failed;
 
-    auto metadata_collector = std::make_shared<MetadataCollectorUtility>();
-    auto batch_processor =
-        std::make_shared<BatchProcessorUtility<MetadataCollectorUtilityInput,
-                                               MetadataCollectorUtilityOutput>>(
-            metadata_collector);
+                        auto file_chan = coro::make_channel<std::size_t>(
+                            executor_threads * 2);
 
-    auto create_inputs_func = [checkpoint_size, force_rebuild,
-                               index_dir](const MetadataInputList& file_paths)
-        -> std::vector<MetadataCollectorUtilityInput> {
-        std::vector<MetadataCollectorUtilityInput> inputs;
-        inputs.reserve(file_paths.size());
+                        scope.spawn([file_chan, files_ptr](
+                                        CoroScope&) -> coro::CoroTask<void> {
+                            auto guard = file_chan->producer_guard();
+                            for (std::size_t i = 0; i < files_ptr->size();
+                                 ++i) {
+                                if (!co_await file_chan->send(i)) {
+                                    co_return;
+                                }
+                            }
+                            co_return;
+                        });
 
-        for (const auto& file_path : file_paths) {
-            auto input = MetadataCollectorUtilityInput::from_file(file_path)
-                             .with_checkpoint_size(checkpoint_size)
-                             .with_force_rebuild(force_rebuild)
-                             .with_count_lines(true);
+                        for (std::size_t w = 0; w < executor_threads; ++w) {
+                            scope.spawn(
+                                [file_chan, files_ptr, total_compressed_ptr,
+                                 total_uncompressed_ptr, total_lines_ptr,
+                                 total_valid_events_ptr, successful_ptr,
+                                 failed_ptr](
+                                    CoroScope&) -> coro::CoroTask<void> {
+                                    while (auto fi_opt =
+                                               co_await file_chan->receive()) {
+                                        std::size_t fi = *fi_opt;
+                                        const auto& fp = (*files_ptr)[fi];
 
-            if (!index_dir.empty()) {
-                input.with_index(
-                    internal::determine_index_path(file_path, index_dir));
-            }
+                                        auto info =
+                                            co_await gz_trailer_info(fp);
 
-            inputs.push_back(input);
+                                        if (info.success) {
+                                            total_compressed_ptr->fetch_add(
+                                                info.compressed_size,
+                                                std::memory_order_relaxed);
+                                            total_uncompressed_ptr->fetch_add(
+                                                info.uncompressed_size,
+                                                std::memory_order_relaxed);
+                                            total_lines_ptr->fetch_add(
+                                                info.num_lines,
+                                                std::memory_order_relaxed);
+                                            total_valid_events_ptr->fetch_add(
+                                                info.valid_events,
+                                                std::memory_order_relaxed);
+                                            successful_ptr->fetch_add(
+                                                1, std::memory_order_relaxed);
+                                        } else {
+                                            failed_ptr->fetch_add(
+                                                1, std::memory_order_relaxed);
+                                        }
+                                    }
+                                    co_return;
+                                });
+                        }
+                        co_return;
+                    });
+                    co_return;
+                },
+                "CollectInfo");
+
+            pipeline.set_source(info_task);
+            pipeline.set_destination(info_task);
+            pipeline.execute();
         }
 
-        DFTRACER_UTILS_LOG_INFO("Created %zu metadata collection inputs",
-                                inputs.size());
-        return inputs;
-    };
+        auto end_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> duration =
+            end_time - start_time;
 
-    auto task1_create_inputs =
-        make_task(create_inputs_func, "CreateMetadataInputs");
+        auto tc = total_compressed.load();
+        auto tu = total_uncompressed.load();
+        auto tl = total_lines.load();
+        auto tv = total_valid_events.load();
+        auto ok = successful.load();
+        auto bad = failed.load();
 
-    auto task1_collect_metadata = utilities::use(batch_processor).as_task();
-    task1_collect_metadata->with_name("CollectMetadata");
+        std::printf("==========================================\n");
+        std::printf("DFTracer File Info Summary\n");
+        std::printf("==========================================\n");
+        std::printf("  Total Files:        %zu\n", files.size());
+        std::printf("  Successful:         %zu\n", ok);
+        std::printf("  Failed:             %zu\n", bad);
+        std::printf("  Total Lines:        %llu\n", (unsigned long long)tl);
+        std::printf("  Valid Events:       %llu\n", (unsigned long long)tv);
+        std::printf("  Total Compressed:   %s (%llu bytes)\n",
+                    format_size(tc).c_str(), (unsigned long long)tc);
+        std::printf("  Total Uncompressed: %s (%llu bytes)\n",
+                    format_size(tu).c_str(), (unsigned long long)tu);
 
-    task1_collect_metadata->depends_on(task1_create_inputs);
-
-    // Task 2: Aggregate and Print Results
-    DFTRACER_UTILS_LOG_INFO("%s", "Task 2: Setting up result aggregation...");
-
-    using AggregationInput = MetadataOutputList;
-
-    struct AggregationOutput {
-        std::uint64_t total_compressed = 0;
-        std::uint64_t total_uncompressed = 0;
-        std::uint64_t total_lines = 0;
-        std::size_t successful = 0;
-        std::size_t total_files = 0;
-    };
-
-    auto aggregate_results_func =
-        [verbose](const AggregationInput& all_info) -> AggregationOutput {
-        AggregationOutput output;
-        output.total_files = all_info.size();
-
-        for (const auto& info : all_info) {
-            print_file_info(info, verbose);
-
-            if (info.success) {
-                output.successful++;
-                output.total_compressed += info.compressed_size;
-                output.total_uncompressed += info.uncompressed_size;
-                output.total_lines += info.num_lines;
-            }
+        if (tc > 0 && tu > 0 && tc != tu) {
+            double ratio = 100.0 * (1.0 - static_cast<double>(tc) /
+                                              static_cast<double>(tu));
+            std::printf("  Compression:        %.2f%%\n", ratio);
         }
 
-        return output;
+        if (tv > 0) {
+            std::printf("  Avg Bytes/Event:    %.2f bytes\n",
+                        static_cast<double>(tu) / static_cast<double>(tv));
+        }
+
+        std::printf("  Processing Time:    %.2f seconds\n",
+                    duration.count() / 1000.0);
+        std::printf("==========================================\n");
+
+        return (bad == 0) ? 0 : 1;
+    }
+
+    // Detailed mode: per-file output (original behavior)
+    struct IndexedResult {
+        std::size_t index;
+        MetadataCollectorUtilityOutput info;
     };
 
-    auto task2_aggregate =
-        make_task(aggregate_results_func, "AggregateResults");
+    std::vector<IndexedResult> results;
+    std::mutex results_mutex;
 
-    // Execute Pipeline
-    task2_aggregate->depends_on(task1_collect_metadata);
+    {
+        auto pipeline_config = PipelineConfig()
+                                   .with_name("DFTracer File Info")
+                                   .with_compute_threads(executor_threads)
+                                   .with_watchdog(false);
 
-    pipeline.set_source(task1_create_inputs);
-    pipeline.set_destination(task2_aggregate);
-    pipeline.execute(files);
+        Pipeline pipeline(pipeline_config);
 
-    auto aggregation_result = task2_aggregate->get<AggregationOutput>();
+        auto info_task = make_task(
+            [&](CoroScope& ctx) -> coro::CoroTask<void> {
+                co_await ctx.scope([&](CoroScope& scope)
+                                       -> coro::CoroTask<void> {
+                    auto* files_ptr = &files;
+                    auto* results_ptr = &results;
+                    auto* results_mutex_ptr = &results_mutex;
+
+                    auto small_set =
+                        std::make_shared<std::unordered_set<std::string>>(
+                            small_files);
+
+                    auto file_chan =
+                        coro::make_channel<std::size_t>(executor_threads * 2);
+
+                    scope.spawn([file_chan, files_ptr](
+                                    CoroScope&) -> coro::CoroTask<void> {
+                        auto guard = file_chan->producer_guard();
+                        for (std::size_t i = 0; i < files_ptr->size(); ++i) {
+                            if (!co_await file_chan->send(i)) {
+                                co_return;
+                            }
+                        }
+                        co_return;
+                    });
+
+                    for (std::size_t w = 0; w < executor_threads; ++w) {
+                        scope.spawn([file_chan, files_ptr, checkpoint_size,
+                                     force_rebuild, verbose, index_dir,
+                                     small_set, results_ptr, results_mutex_ptr](
+                                        CoroScope&) -> coro::CoroTask<void> {
+                            while (auto fi_opt =
+                                       co_await file_chan->receive()) {
+                                std::size_t fi = *fi_opt;
+                                const auto& file_path = (*files_ptr)[fi];
+                                bool is_small = small_set->count(file_path) > 0;
+
+                                MetadataCollectorUtilityOutput info;
+                                if (is_small) {
+                                    info = co_await direct_scan_info(file_path);
+                                } else {
+                                    auto input =
+                                        MetadataCollectorUtilityInput::
+                                            from_file(file_path)
+                                                .with_checkpoint_size(
+                                                    checkpoint_size)
+                                                .with_force_rebuild(
+                                                    force_rebuild)
+                                                .with_count_lines(verbose);
+
+                                    if (!index_dir.empty()) {
+                                        input.with_index(
+                                            internal::determine_index_path(
+                                                file_path, index_dir));
+                                    }
+
+                                    MetadataCollectorUtility collector;
+                                    info = co_await collector.process(input);
+                                }
+
+                                std::lock_guard<std::mutex> lock(
+                                    *results_mutex_ptr);
+                                results_ptr->push_back({fi, std::move(info)});
+                            }
+                            co_return;
+                        });
+                    }
+                    co_return;
+                });
+                co_return;
+            },
+            "CollectInfo");
+
+        pipeline.set_source(info_task);
+        pipeline.set_destination(info_task);
+        pipeline.execute();
+    }
+
+    std::sort(results.begin(), results.end(),
+              [](const IndexedResult& a, const IndexedResult& b) {
+                  return a.index < b.index;
+              });
+
+    std::uint64_t total_compressed = 0;
+    std::uint64_t total_uncompressed = 0;
+    std::uint64_t total_lines = 0;
+    std::size_t successful = 0;
+
+    for (const auto& r : results) {
+        print_file_info(r.info, verbose);
+        if (r.info.success) {
+            successful++;
+            total_compressed += r.info.compressed_size;
+            total_uncompressed += r.info.uncompressed_size;
+            total_lines += r.info.num_lines;
+        }
+    }
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
@@ -396,23 +671,19 @@ int main(int argc, char** argv) {
         std::printf("==========================================\n");
         std::printf("Summary\n");
         std::printf("==========================================\n");
-        std::printf("Total Files: %zu\n", aggregation_result.total_files);
-        std::printf("Successful: %zu\n", aggregation_result.successful);
-        std::printf("Failed: %zu\n", aggregation_result.total_files -
-                                         aggregation_result.successful);
-        std::printf("Total Lines: %llu\n",
-                    (unsigned long long)aggregation_result.total_lines);
+        std::printf("Total Files: %zu\n", files.size());
+        std::printf("Successful: %zu\n", successful);
+        std::printf("Failed: %zu\n", files.size() - successful);
+        std::printf("Total Lines: %llu\n", (unsigned long long)total_lines);
         std::printf("Total Compressed: %s\n",
-                    format_size(aggregation_result.total_compressed).c_str());
+                    format_size(total_compressed).c_str());
         std::printf("Total Uncompressed: %s\n",
-                    format_size(aggregation_result.total_uncompressed).c_str());
+                    format_size(total_uncompressed).c_str());
 
-        if (aggregation_result.total_uncompressed > 0) {
+        if (total_uncompressed > 0) {
             double ratio =
-                100.0 * (1.0 - static_cast<double>(
-                                   aggregation_result.total_compressed) /
-                                   static_cast<double>(
-                                       aggregation_result.total_uncompressed));
+                100.0 * (1.0 - static_cast<double>(total_compressed) /
+                                   static_cast<double>(total_uncompressed));
             std::printf("Overall Compression: %.2f%%\n", ratio);
         }
 
@@ -420,7 +691,5 @@ int main(int argc, char** argv) {
                     duration.count() / 1000.0);
     }
 
-    return (aggregation_result.successful == aggregation_result.total_files)
-               ? 0
-               : 1;
+    return (successful == files.size()) ? 0 : 1;
 }

@@ -16,8 +16,10 @@ void insert_chunk_statistics(const SqliteDatabase& db, int file_info_id,
         "(file_info_id, checkpoint_idx, total_events, category_counts, "
         "name_counts, pid_tid_counts, min_timestamp_us, max_timestamp_us, "
         "duration_sum_us, duration_min_us, duration_max_us, duration_count, "
-        "duration_m2, duration_sketch, name_category) "
-        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
+        "duration_m2, duration_sketch, duration_histogram, "
+        "name_duration_sketches, name_duration_histograms, "
+        "name_duration_sums, name_duration_sum_sqs, name_category) "
+        "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
 
     stmt.bind_int(1, file_info_id);
     stmt.bind_int64(2, static_cast<std::int64_t>(checkpoint_idx));
@@ -62,7 +64,20 @@ void insert_chunk_statistics(const SqliteDatabase& db, int file_info_id,
         stmt.bind_null(14);
     }
 
-    stmt.bind_text(15, stats.name_category_json());
+    stmt.bind_text(15, stats.duration_histogram.to_json());
+
+    if (!stats.name_duration_sketches.empty()) {
+        auto blob = stats.serialize_name_duration_sketches();
+        stmt.bind_blob(16, blob.data(), static_cast<int>(blob.size()));
+    } else {
+        stmt.bind_null(16);
+    }
+
+    stmt.bind_text(17, stats.name_duration_histograms_json());
+    stmt.bind_text(18, stats.name_duration_sums_json());
+    stmt.bind_text(19, stats.name_duration_sum_sqs_json());
+
+    stmt.bind_text(20, stats.name_category_json());
 
     int result = sqlite3_step(stmt);
     if (result != SQLITE_DONE) {

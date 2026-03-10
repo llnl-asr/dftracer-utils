@@ -1,9 +1,9 @@
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.h>
 
-#include <filesystem>
 #include <map>
 #include <utility>
 
@@ -29,7 +29,7 @@ coro::CoroTask<ReconstructionPlan> ReconstructionPlannerUtility::process(
         std::string midx_path =
             determine_manifest_index_path(reorg_file, input.index_dir);
 
-        if (!std::filesystem::exists(midx_path)) {
+        if (!fs::exists(midx_path)) {
             continue;
         }
 

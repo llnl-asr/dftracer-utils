@@ -24,23 +24,6 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::server;
 
-/// RAII guard that removes a directory tree on destruction.
-/// Covers normal return, signal-induced pipeline drain, and exceptions.
-struct TempDirGuard {
-    std::string path;
-    explicit TempDirGuard(std::string p) : path(std::move(p)) {}
-    TempDirGuard(const TempDirGuard&) = delete;
-    TempDirGuard& operator=(const TempDirGuard&) = delete;
-    ~TempDirGuard() {
-        if (path.empty()) return;
-        std::error_code ec;
-        fs::remove_all(path, ec);
-        if (!ec) {
-            std::fprintf(stderr, "Cleaned up temp index directory\n");
-        }
-    }
-};
-
 static coro::CoroTask<int> run_server(argparse::ArgumentParser& program) {
     std::string bind_addr = program.get<std::string>("--bind");
     uint16_t port = program.get<uint16_t>("--port");
@@ -49,16 +32,15 @@ static coro::CoroTask<int> run_server(argparse::ArgumentParser& program) {
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
 
-    // When no explicit index dir is given, use a temp directory so
-    // on-the-fly .idx/.bidx files don't pollute the data directory.
-    std::unique_ptr<TempDirGuard> temp_guard;
+    // When no explicit index dir is given, default to the trace
+    // directory so sidecar files (.idx/.bidx) persist across restarts
+    // and don't need to be rebuilt every time.
     if (index_dir.empty()) {
-        auto tmp = fs::temp_directory_path() / "dftracer-server-index";
-        fs::create_directories(tmp);
-        index_dir = tmp.string();
-        temp_guard = std::make_unique<TempDirGuard>(index_dir);
-        std::fprintf(stderr, "Using temp index directory: %s\n",
+        index_dir = directory;
+        std::fprintf(stderr, "Using trace directory for indexes: %s\n",
                      index_dir.c_str());
+    } else {
+        fs::create_directories(index_dir);
     }
 
     auto pipeline_config =
@@ -75,7 +57,7 @@ static coro::CoroTask<int> run_server(argparse::ArgumentParser& program) {
     Pipeline pipeline(pipeline_config);
 
     // Build trace index (scan directory, load bloom indexes)
-    TraceIndex trace_index(directory, index_dir);
+    TraceIndex trace_index(directory, index_dir, executor_threads);
     co_await trace_index.initialize();
 
     // Set up router
@@ -122,7 +104,6 @@ static coro::CoroTask<int> run_server(argparse::ArgumentParser& program) {
 
     std::fprintf(stderr, "Server shut down gracefully\n");
 
-    // temp_guard destructor handles cleanup.
     co_return 0;
 }
 
@@ -149,7 +130,9 @@ int main(int argc, char** argv) {
         .required();
 
     program.add_argument("--index-dir")
-        .help("Directory for bloom/checkpoint index files")
+        .help(
+            "Directory for bloom/checkpoint index files (default: same as "
+            "--directory)")
         .default_value<std::string>("");
 
     program.add_argument("--executor-threads")

@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/task_graph/reduction.h>
+#include <dftracer/utils/core/task_graph/task_graph_config.h>
 #include <dftracer/utils/core/task_graph/task_group.h>
 #include <dftracer/utils/core/task_graph/task_result.h>
 #include <dftracer/utils/core/task_graph/types.h>
@@ -158,25 +159,26 @@ std::shared_ptr<Task> make_tree_reduce(
  * - Optional auto-registration with Pipeline
  * - Support for fan-in, fan-out, transform, reduce patterns
  * - Bi-directional connectivity with external tasks via wrap()
+ * - Configurable max_concurrency to limit in-flight parallel tasks
  *
  * Usage:
  *   Pipeline pipeline(config);
- *   auto graph = TaskGraph::builder("MyGraph", pipeline);
- *   auto readers = graph.parallel(8, reader_fn, "Reader");
- *   auto reduced = graph.reduce(readers, split_every{2}, reducer, "Merge");
+ *   auto graph = TaskGraph::builder({.name = "MyGraph",
+ *                                    .max_concurrency = 128});
+ *   auto readers = graph.parallel<int>(8, reader_fn,
+ *                                      {.name = "Reader"});
+ *   auto reduced = graph.reduce<int>(readers, split_every{2}, reducer,
+ *                                    {.name = "Merge"});
  *   pipeline.set_source(readers.tasks()[0]);
  *   pipeline.execute();
  */
 class TaskGraph {
    public:
     /**
-     * Create a TaskGraph builder
-     *
-     * Tasks are connected via depends_on() relationships.
-     * After building, set one task as Pipeline source to execute.
+     * Create a TaskGraph builder with options
      */
-    static TaskGraph builder(std::string name = "") {
-        return TaskGraph(std::move(name));
+    static TaskGraph builder(TaskGraphConfig opts = {}) {
+        return TaskGraph(std::move(opts));
     }
 
     /**
@@ -204,30 +206,43 @@ class TaskGraph {
      * Create a single source task
      */
     template <typename T, typename Func>
-    TaskGroup<T> source(Func&& func, std::string name = "Source") {
-        auto task = make_task(std::forward<Func>(func), name);
+    TaskGroup<T> source(Func&& func, TaskGraphSourceConfig opts = {}) {
+        auto task = make_task(std::forward<Func>(func), opts.name);
         register_task(task);
         return TaskGroup<T>(task);
     }
 
     /**
-     * Create N parallel tasks (no dependencies)
+     * Create N parallel tasks (no dependencies between them)
      *
      * Each task receives its index (0 to count-1) as parameter.
+     *
+     * When max_concurrency is set (via options or graph-level default),
+     * a sliding window dependency chain limits in-flight tasks:
+     * task[i] depends on task[i - max_concurrency], so at most
+     * max_concurrency tasks execute simultaneously.
      */
     template <typename T, typename Func>
     TaskGroup<T> parallel(std::size_t count, Func&& func,
-                          std::string name_prefix = "Parallel") {
+                          TaskGraphParallelConfig opts = {}) {
+        auto max_conc = resolve_max_concurrency(opts.max_concurrency);
+
         TaskGroup<T> group;
         group.reserve(count);
 
         for (std::size_t i = 0; i < count; ++i) {
-            auto task_name = name_prefix + "_" + std::to_string(i);
+            auto task_name = opts.name + "_" + std::to_string(i);
             // Wrap the function to pass the index
             auto task =
                 make_task([func = func,
                            i](CoroScope& ctx) mutable { return func(ctx, i); },
                           task_name);
+
+            // Sliding window: task[i] waits for task[i - W] to complete
+            if (max_conc > 0 && i >= max_conc) {
+                task->depends_on(group[i - max_conc]);
+            }
+
             register_task(task);
             group.add(task);
         }
@@ -239,14 +254,19 @@ class TaskGraph {
      * Fan-out: 1 -> N (one input produces N outputs)
      *
      * Each output task receives the source output and its index.
+     *
+     * When max_concurrency is set, a sliding window dependency chain
+     * limits in-flight fan-out tasks.
      */
     template <typename U, typename T, typename Func>
     TaskGroup<U> fan_out(const TaskGroup<T>& source, num_outputs count,
-                         Func&& mapper, std::string name_prefix = "FanOut") {
+                         Func&& mapper, TaskGraphFanOutConfig opts = {}) {
         if (source.size() != 1) {
             throw std::invalid_argument(
                 "fan_out: source must have exactly 1 task");
         }
+
+        auto max_conc = resolve_max_concurrency(opts.max_concurrency);
 
         TaskGroup<U> group;
         group.reserve(count.count);
@@ -254,13 +274,19 @@ class TaskGraph {
         auto source_task = source.task();
 
         for (std::size_t i = 0; i < count.count; ++i) {
-            auto task_name = name_prefix + "_" + std::to_string(i);
+            auto task_name = opts.name + "_" + std::to_string(i);
             auto task = make_task(
                 [mapper = mapper, i](CoroScope& ctx, T input) mutable {
                     return mapper(ctx, std::move(input), i);
                 },
                 task_name);
             task->depends_on(source_task);
+
+            // Sliding window among fan-out siblings
+            if (max_conc > 0 && i >= max_conc) {
+                task->depends_on(group[i - max_conc]);
+            }
+
             register_task(task);
             group.add(task);
         }
@@ -273,8 +299,8 @@ class TaskGraph {
      */
     template <typename U, typename T, typename Combiner>
     TaskGroup<U> fan_in(const TaskGroup<T>& group, Combiner&& combiner,
-                        std::string name = "FanIn") {
-        auto task = make_task(std::forward<Combiner>(combiner), name);
+                        TaskGraphFanInConfig opts = {}) {
+        auto task = make_task(std::forward<Combiner>(combiner), opts.name);
 
         for (const auto& source : group.tasks()) {
             task->depends_on(source);
@@ -289,15 +315,14 @@ class TaskGraph {
      */
     template <typename U, typename T, typename Combiner>
     TaskGroup<U> fan_in(const TaskGroup<T>& group, split_every count,
-                        Combiner&& combiner,
-                        std::string name_prefix = "FanIn") {
+                        Combiner&& combiner, TaskGraphFanInConfig opts = {}) {
         auto groups = partition_all(count.count, group.tasks());
         TaskGroup<U> result;
         result.reserve(groups.size());
 
         for (std::size_t i = 0; i < groups.size(); ++i) {
             auto& task_group = groups[i];
-            auto task_name = name_prefix + "_" + std::to_string(i);
+            auto task_name = opts.name + "_" + std::to_string(i);
 
             if (task_group.size() == 1) {
                 // Singleton: might need type conversion or pass-through
@@ -318,17 +343,28 @@ class TaskGraph {
 
     /**
      * Map: 1-to-1 mapping
+     *
+     * When max_concurrency is set, a sliding window dependency chain
+     * limits in-flight map tasks.
      */
     template <typename U, typename T, typename Mapper>
     TaskGroup<U> map(const TaskGroup<T>& group, Mapper&& mapper,
-                     std::string name_prefix = "Map") {
+                     TaskGraphMapConfig opts = {}) {
+        auto max_conc = resolve_max_concurrency(opts.max_concurrency);
+
         TaskGroup<U> result;
         result.reserve(group.size());
 
         for (std::size_t i = 0; i < group.size(); ++i) {
-            auto task_name = name_prefix + "_" + std::to_string(i);
+            auto task_name = opts.name + "_" + std::to_string(i);
             auto task = make_task(std::forward<Mapper>(mapper), task_name);
             task->depends_on(group[i]);
+
+            // Sliding window among map siblings
+            if (max_conc > 0 && i >= max_conc) {
+                task->depends_on(result[i - max_conc]);
+            }
+
             register_task(task);
             result.add(task);
         }
@@ -341,13 +377,13 @@ class TaskGraph {
      */
     template <typename U, typename T, typename Reducer>
     TaskGroup<U> reduce(const TaskGroup<T>& group, split_every count,
-                        Reducer&& reducer, std::string name_prefix = "Reduce") {
+                        Reducer&& reducer, TaskGraphReduceConfig opts = {}) {
         if (group.empty()) {
             throw std::invalid_argument("reduce: group cannot be empty");
         }
 
         if (group.size() == 1) {
-            auto task_name = name_prefix + "_L0_G0";
+            auto task_name = opts.name + "_L0_G0";
             auto task = make_task(reducer, task_name);
             task->depends_on(group.task());
             // Wrap the single parent output into vector<any> so decode_input
@@ -377,9 +413,8 @@ class TaskGraph {
                     // Singleton: pass through
                     next_level.push_back(std::move(task_group[0]));
                 } else {
-                    auto task_name = name_prefix + "_L" +
-                                     std::to_string(level) + "_G" +
-                                     std::to_string(group_idx);
+                    auto task_name = opts.name + "_L" + std::to_string(level) +
+                                     "_G" + std::to_string(group_idx);
                     auto task = make_task(reducer, task_name);
 
                     for (auto& source : task_group) {
@@ -405,7 +440,7 @@ class TaskGraph {
      */
     template <typename T, typename BinaryOp>
     TaskGroup<T> fold(const TaskGroup<T>& group, T init, split_every count,
-                      BinaryOp&& op, std::string name_prefix = "Fold") {
+                      BinaryOp&& op, TaskGraphFoldConfig opts = {}) {
         if (group.empty()) {
             throw std::invalid_argument("fold: group cannot be empty");
         }
@@ -429,9 +464,8 @@ class TaskGraph {
                 if (task_group.size() == 1) {
                     next_level.push_back(std::move(task_group[0]));
                 } else {
-                    auto task_name = name_prefix + "_L" +
-                                     std::to_string(level) + "_G" +
-                                     std::to_string(group_idx);
+                    auto task_name = opts.name + "_L" + std::to_string(level) +
+                                     "_G" + std::to_string(group_idx);
                     auto task = make_task(
                         [op = op, init](CoroScope&, std::vector<T> items)
                             -> coro::CoroTask<T> {
@@ -468,11 +502,11 @@ class TaskGraph {
               typename ReduceFn>
     TaskGroup<U> aggregate(const TaskGroup<T>& group, MapFn&& map_fn,
                            split_every count, ReduceFn&& reduce_fn,
-                           std::string name_prefix = "Aggregate") {
+                           TaskGraphAggregateConfig opts = {}) {
         auto mapped = map<Intermediate>(group, std::forward<MapFn>(map_fn),
-                                        name_prefix + "_Map");
+                                        {.name = opts.name + "_Map"});
         return reduce<U>(mapped, count, std::forward<ReduceFn>(reduce_fn),
-                         name_prefix + "_Reduce");
+                         {.name = opts.name + "_Reduce"});
     }
 
     /**
@@ -483,7 +517,7 @@ class TaskGraph {
     template <typename T>
     TaskGroup<std::vector<T>> partition(const std::vector<T>& data,
                                         num_partitions count,
-                                        std::string name_prefix = "Partition") {
+                                        TaskGraphPartitionConfig opts = {}) {
         if (count.count == 0) {
             throw std::invalid_argument("partition: count must be > 0");
         }
@@ -500,7 +534,7 @@ class TaskGraph {
             std::size_t chunk_size = base_size + (i < remainder ? 1 : 0);
             std::size_t end = start + chunk_size;
 
-            auto task_name = name_prefix + "_" + std::to_string(i);
+            auto task_name = opts.name + "_" + std::to_string(i);
             std::vector<T> chunk(data.begin() + start, data.begin() + end);
 
             auto task = make_task(
@@ -524,8 +558,7 @@ class TaskGraph {
     template <typename T>
     TaskGroup<std::vector<T>> concat_partitions(
         const TaskGroup<std::vector<T>>& group,
-        split_every count = split_every{2},
-        std::string name_prefix = "Concat") {
+        split_every count = split_every{2}, TaskGraphConcatConfig opts = {}) {
         if (group.empty()) {
             throw std::invalid_argument(
                 "concat_partitions: group cannot be empty");
@@ -550,9 +583,8 @@ class TaskGraph {
                 if (task_group.size() == 1) {
                     next_level.push_back(std::move(task_group[0]));
                 } else {
-                    auto task_name = name_prefix + "_L" +
-                                     std::to_string(level) + "_G" +
-                                     std::to_string(group_idx);
+                    auto task_name = opts.name + "_L" + std::to_string(level) +
+                                     "_G" + std::to_string(group_idx);
                     auto task = make_task(
                         [](CoroScope&, std::vector<std::vector<T>> chunks)
                             -> coro::CoroTask<std::vector<T>> {
@@ -614,13 +646,26 @@ class TaskGraph {
     const std::string& name() const { return name_; }
 
    private:
-    explicit TaskGraph(std::string name) : name_(std::move(name)) {}
+    explicit TaskGraph(TaskGraphConfig opts)
+        : name_(std::move(opts.name)), max_concurrency_(opts.max_concurrency) {}
+
+    /**
+     * Resolve effective max_concurrency: per-method override wins,
+     * then graph-level default, 0 = unlimited.
+     */
+    std::size_t resolve_max_concurrency(std::size_t method_override) const {
+        if (method_override > 0) {
+            return method_override;
+        }
+        return max_concurrency_;
+    }
 
     void register_task(std::shared_ptr<Task> task) {
         all_tasks_.push_back(task);
     }
 
     std::string name_;
+    std::size_t max_concurrency_ = 0;
     std::vector<std::shared_ptr<Task>> all_tasks_;
 };
 

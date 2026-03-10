@@ -55,6 +55,11 @@ static const char* BLOOM_INDEX_SCHEMA = R"(
         duration_count INTEGER NOT NULL DEFAULT 0,
         duration_m2 REAL NOT NULL DEFAULT 0,
         duration_sketch BLOB,
+        duration_histogram TEXT NOT NULL DEFAULT '[]',
+        name_duration_sketches BLOB,
+        name_duration_histograms TEXT NOT NULL DEFAULT '{}',
+        name_duration_sums TEXT NOT NULL DEFAULT '{}',
+        name_duration_sum_sqs TEXT NOT NULL DEFAULT '{}',
         name_category TEXT NOT NULL DEFAULT '{}',
         UNIQUE(file_info_id, checkpoint_idx)
     );

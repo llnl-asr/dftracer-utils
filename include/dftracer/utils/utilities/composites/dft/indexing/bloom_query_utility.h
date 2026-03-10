@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
 
 #include <cstdint>
@@ -17,6 +18,7 @@ struct BloomQueryInput {
     std::string file_path;
     // dimension -> values (OR within dimension, AND across dimensions)
     std::unordered_map<std::string, std::vector<std::string>> predicates;
+    BloomFilterCache* cache = nullptr;
 
     BloomQueryInput& with_bidx_path(const std::string& path) {
         bidx_path = path;
@@ -25,6 +27,11 @@ struct BloomQueryInput {
 
     BloomQueryInput& with_file_path(const std::string& path) {
         file_path = path;
+        return *this;
+    }
+
+    BloomQueryInput& with_cache(BloomFilterCache* c) {
+        cache = c;
         return *this;
     }
 

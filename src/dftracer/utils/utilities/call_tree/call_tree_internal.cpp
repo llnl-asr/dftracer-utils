@@ -4,6 +4,7 @@
 #include <dftracer/utils/call_tree/internal/process_call_tree.h>
 #include <dftracer/utils/call_tree/internal/process_key.h>
 #include <dftracer/utils/call_tree/internal/trace_reader.h>
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/format_detector.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
@@ -14,7 +15,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <filesystem>
 #include <fstream>
 #include <iostream>
 
@@ -506,8 +506,6 @@ bool TraceReader::read_multiple(const std::vector<std::string>& trace_files,
 
 bool TraceReader::read_directory(const std::string& directory,
                                  const std::string& pattern, CallTree& graph) {
-    namespace fs = std::filesystem;
-
     if (!fs::exists(directory) || !fs::is_directory(directory)) {
         DFTRACER_UTILS_LOG_ERROR("directory does not exist: %s",
                                  directory.c_str());

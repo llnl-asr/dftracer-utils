@@ -221,13 +221,13 @@ TEST_CASE("build_tree_indices - 7 items") {
 // ============================================================================
 
 TEST_CASE("TaskGraph - builder without pipeline") {
-    auto graph = TaskGraph::builder("TestGraph");
+    auto graph = TaskGraph::builder({.name = "TestGraph"});
     CHECK(graph.name() == "TestGraph");
     CHECK(graph.tasks().empty());
 }
 
 TEST_CASE("TaskGraph - parallel creates N tasks") {
-    auto graph = TaskGraph::builder("Test");
+    auto graph = TaskGraph::builder({.name = "Test"});
 
     auto group = graph.parallel<task_graph::TaskResult<int>>(
         4,
@@ -235,14 +235,14 @@ TEST_CASE("TaskGraph - parallel creates N tasks") {
            std::size_t id) -> coro::CoroTask<task_graph::TaskResult<int>> {
             co_return task_graph::TaskResult<int>::make(static_cast<int>(id));
         },
-        "Worker");
+        {.name = "Worker"});
 
     CHECK(group.size() == 4);
     CHECK(graph.tasks().size() == 4);
 }
 
 TEST_CASE("TaskGraph - parallel tasks in graph") {
-    auto graph = TaskGraph::builder("Test");
+    auto graph = TaskGraph::builder({.name = "Test"});
 
     auto group = graph.parallel<task_graph::TaskResult<int>>(
         4,
@@ -250,7 +250,7 @@ TEST_CASE("TaskGraph - parallel tasks in graph") {
            std::size_t id) -> coro::CoroTask<task_graph::TaskResult<int>> {
             co_return task_graph::TaskResult<int>::make(static_cast<int>(id));
         },
-        "Worker");
+        {.name = "Worker"});
 
     CHECK(group.size() == 4);
     CHECK(graph.tasks().size() == 4);
@@ -260,7 +260,7 @@ TEST_CASE("TaskGraph - wrap external task") {
     auto external = make_task(
         [](CoroScope&) -> coro::CoroTask<int> { co_return 100; }, "External");
 
-    auto graph = TaskGraph::builder("Test");
+    auto graph = TaskGraph::builder({.name = "Test"});
     auto wrapped = graph.wrap<int>(external);
 
     CHECK(wrapped.size() == 1);
@@ -272,14 +272,14 @@ TEST_CASE("TaskGraph - wrap external task") {
 // ============================================================================
 
 TEST_CASE("TaskGraph - parallel + reduce integration") {
-    auto graph = TaskGraph::builder("MapReduce");
+    auto graph = TaskGraph::builder({.name = "MapReduce"});
 
     auto workers = graph.parallel<int>(
         8,
         [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
-        "Worker");
+        {.name = "Worker"});
 
     CHECK(workers.size() == 8);
 
@@ -290,7 +290,7 @@ TEST_CASE("TaskGraph - parallel + reduce integration") {
             for (int x : items) sum += x;
             co_return sum;
         },
-        "Sum");
+        {.name = "Sum"});
 
     CHECK(reduced.size() == 1);
 
@@ -307,15 +307,15 @@ TEST_CASE("TaskGraph - barebone task as input (before graph)") {
         make_task([](CoroScope&) -> coro::CoroTask<int> { co_return 10; },
                   "BareboneSource");
 
-    auto graph = TaskGraph::builder("WithBareboneInput");
+    auto graph = TaskGraph::builder({.name = "WithBareboneInput"});
     auto wrapped = graph.wrap<int>(source_task);
 
-    auto mapped = graph.map<int>(
-        wrapped,
-        [](CoroScope&, int value) -> coro::CoroTask<int> {
-            co_return value * 2;
-        },
-        "Double");
+    auto mapped =
+        graph.map<int>(wrapped,
+                       [](CoroScope&, int value) -> coro::CoroTask<int> {
+                           co_return value * 2;
+                       },
+                       {.name = "Double"});
 
     CHECK(mapped.size() == 1);
 
@@ -328,14 +328,14 @@ TEST_CASE("TaskGraph - barebone task as input (before graph)") {
 }
 
 TEST_CASE("TaskGraph - barebone task consumes graph output (after graph)") {
-    auto graph = TaskGraph::builder("GraphWithBareboneOutput");
+    auto graph = TaskGraph::builder({.name = "GraphWithBareboneOutput"});
 
     auto workers = graph.parallel<int>(
         4,
         [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
-        "Worker");
+        {.name = "Worker"});
 
     auto reduced = graph.reduce<int>(
         workers, split_every{2},
@@ -344,7 +344,7 @@ TEST_CASE("TaskGraph - barebone task consumes graph output (after graph)") {
             for (int x : items) sum += x;
             co_return sum;
         },
-        "Sum");
+        {.name = "Sum"});
 
     auto consumer_task = make_task(
         [](CoroScope&, int graph_result) -> coro::CoroTask<std::string> {
@@ -363,14 +363,14 @@ TEST_CASE("TaskGraph - barebone task consumes graph output (after graph)") {
 }
 
 TEST_CASE("TaskGraph - reduce with split_every > 2") {
-    auto graph = TaskGraph::builder("SplitEvery3");
+    auto graph = TaskGraph::builder({.name = "SplitEvery3"});
 
     auto workers = graph.parallel<int>(
         9,
         [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
-        "Worker");
+        {.name = "Worker"});
 
     CHECK(workers.size() == 9);
 
@@ -381,7 +381,7 @@ TEST_CASE("TaskGraph - reduce with split_every > 2") {
             for (int x : items) sum += x;
             co_return sum;
         },
-        "Sum");
+        {.name = "Sum"});
 
     CHECK(reduced.size() == 1);
 
@@ -394,21 +394,21 @@ TEST_CASE("TaskGraph - reduce with split_every > 2") {
 }
 
 TEST_CASE("TaskGraph - fold with init value") {
-    auto graph = TaskGraph::builder("FoldTest");
+    auto graph = TaskGraph::builder({.name = "FoldTest"});
 
     auto workers = graph.parallel<int>(
         5,
         [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
-        "Worker");
+        {.name = "Worker"});
 
     CHECK(workers.size() == 5);
 
     // Fold with init=0, binary op=add
-    auto folded = graph.fold<int>(
-        workers, 0, split_every{2}, [](int acc, int x) { return acc + x; },
-        "Sum");
+    auto folded = graph.fold<int>(workers, 0, split_every{2},
+                                  [](int acc, int x) { return acc + x; },
+                                  {.name = "Sum"});
 
     CHECK(folded.size() == 1);
 
@@ -421,19 +421,19 @@ TEST_CASE("TaskGraph - fold with init value") {
 }
 
 TEST_CASE("TaskGraph - fold with product") {
-    auto graph = TaskGraph::builder("FoldProduct");
+    auto graph = TaskGraph::builder({.name = "FoldProduct"});
 
     auto workers = graph.parallel<int>(
         4,
         [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
-        "Worker");
+        {.name = "Worker"});
 
     // Fold with init=1, binary op=multiply
-    auto folded = graph.fold<int>(
-        workers, 1, split_every{2}, [](int acc, int x) { return acc * x; },
-        "Product");
+    auto folded = graph.fold<int>(workers, 1, split_every{2},
+                                  [](int acc, int x) { return acc * x; },
+                                  {.name = "Product"});
 
     Pipeline pipeline(PipelineConfig::parallel(2));
     pipeline.set_source(workers.tasks());
@@ -444,14 +444,14 @@ TEST_CASE("TaskGraph - fold with product") {
 }
 
 TEST_CASE("TaskGraph - aggregate (map + reduce)") {
-    auto graph = TaskGraph::builder("AggregateTest");
+    auto graph = TaskGraph::builder({.name = "AggregateTest"});
 
     auto workers = graph.parallel<int>(
         4,
         [](CoroScope&, std::size_t id) -> coro::CoroTask<int> {
             co_return static_cast<int>(id + 1);
         },
-        "Worker");
+        {.name = "Worker"});
 
     // Aggregate: square each value, then sum
     auto aggregated = graph.aggregate<int, int>(
@@ -463,7 +463,7 @@ TEST_CASE("TaskGraph - aggregate (map + reduce)") {
             for (int x : items) sum += x;
             co_return sum;
         },
-        "SumOfSquares");
+        {.name = "SumOfSquares"});
 
     Pipeline pipeline(PipelineConfig::parallel(2));
     pipeline.set_source(workers.tasks());
@@ -474,14 +474,14 @@ TEST_CASE("TaskGraph - aggregate (map + reduce)") {
 }
 
 TEST_CASE("TaskGraph - aggregate with type transformation") {
-    auto graph = TaskGraph::builder("AggregateTypeChange");
+    auto graph = TaskGraph::builder({.name = "AggregateTypeChange"});
 
     auto workers = graph.parallel<std::string>(
         3,
         [](CoroScope&, std::size_t id) -> coro::CoroTask<std::string> {
             co_return std::to_string(id + 1);
         },
-        "Worker");
+        {.name = "Worker"});
 
     // Aggregate: convert string to int, then sum
     auto aggregated = graph.aggregate<int, int>(
@@ -495,7 +495,7 @@ TEST_CASE("TaskGraph - aggregate with type transformation") {
             for (int x : items) sum += x;
             co_return sum;
         },
-        "StringToSum");
+        {.name = "StringToSum"});
 
     Pipeline pipeline(PipelineConfig::parallel(2));
     pipeline.set_source(workers.tasks());
@@ -510,7 +510,7 @@ TEST_CASE("TaskGraph - barebone tasks on both ends") {
         make_task([](CoroScope&) -> coro::CoroTask<int> { co_return 5; },
                   "BareboneStart");
 
-    auto graph = TaskGraph::builder("FullIntegration");
+    auto graph = TaskGraph::builder({.name = "FullIntegration"});
     auto wrapped = graph.wrap<int>(source);
 
     auto fanned = graph.fan_out<int>(
@@ -518,7 +518,7 @@ TEST_CASE("TaskGraph - barebone tasks on both ends") {
         [](CoroScope&, int input, std::size_t idx) -> coro::CoroTask<int> {
             co_return input* static_cast<int>(idx + 1);
         },
-        "Multiply");
+        {.name = "Multiply"});
 
     auto reduced = graph.reduce<int>(
         fanned, split_every{2},
@@ -527,7 +527,7 @@ TEST_CASE("TaskGraph - barebone tasks on both ends") {
             for (int x : items) sum += x;
             co_return sum;
         },
-        "Sum");
+        {.name = "Sum"});
 
     auto consumer = make_task(
         [](CoroScope&, int value) -> coro::CoroTask<int> {
@@ -556,7 +556,7 @@ TEST_CASE("num_partitions - construction") {
 TEST_CASE("TaskGraph - partition basic") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8};
 
-    auto graph = TaskGraph::builder("PartitionBasic");
+    auto graph = TaskGraph::builder({.name = "PartitionBasic"});
     auto parts = graph.partition<int>(data, num_partitions{4});
 
     CHECK(parts.size() == 4);
@@ -580,7 +580,7 @@ TEST_CASE("TaskGraph - partition basic") {
 TEST_CASE("TaskGraph - partition uneven split") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7};
 
-    auto graph = TaskGraph::builder("PartitionUneven");
+    auto graph = TaskGraph::builder({.name = "PartitionUneven"});
     auto parts = graph.partition<int>(data, num_partitions{3});
 
     CHECK(parts.size() == 3);
@@ -601,7 +601,7 @@ TEST_CASE("TaskGraph - partition uneven split") {
 TEST_CASE("TaskGraph - partition + map") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6};
 
-    auto graph = TaskGraph::builder("PartitionMap");
+    auto graph = TaskGraph::builder({.name = "PartitionMap"});
     auto parts = graph.partition<int>(data, num_partitions{3});
 
     auto mapped = graph.map<int>(
@@ -629,7 +629,7 @@ TEST_CASE("TaskGraph - partition + map") {
 TEST_CASE("TaskGraph - partition + reduce") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8};
 
-    auto graph = TaskGraph::builder("PartitionReduce");
+    auto graph = TaskGraph::builder({.name = "PartitionReduce"});
     auto parts = graph.partition<int>(data, num_partitions{4});
 
     auto sums = graph.map<int>(
@@ -658,7 +658,7 @@ TEST_CASE("TaskGraph - partition + reduce") {
 TEST_CASE("TaskGraph - concat_partitions") {
     std::vector<int> data = {1, 2, 3, 4, 5, 6, 7, 8};
 
-    auto graph = TaskGraph::builder("ConcatPartitions");
+    auto graph = TaskGraph::builder({.name = "ConcatPartitions"});
     auto parts = graph.partition<int>(data, num_partitions{4});
 
     auto combined = graph.concat_partitions(parts);
@@ -676,7 +676,7 @@ TEST_CASE("TaskGraph - concat_partitions") {
 TEST_CASE("TaskGraph - partition + map + concat_partitions") {
     std::vector<int> data = {1, 2, 3, 4};
 
-    auto graph = TaskGraph::builder("PartitionMapConcat");
+    auto graph = TaskGraph::builder({.name = "PartitionMapConcat"});
     auto parts = graph.partition<int>(data, num_partitions{2});
 
     auto doubled = graph.map<std::vector<int>>(
@@ -700,7 +700,7 @@ TEST_CASE("TaskGraph - partition + map + concat_partitions") {
 TEST_CASE("TaskGraph - partition single element") {
     std::vector<int> data = {42};
 
-    auto graph = TaskGraph::builder("PartitionSingle");
+    auto graph = TaskGraph::builder({.name = "PartitionSingle"});
     auto parts = graph.partition<int>(data, num_partitions{1});
 
     CHECK(parts.size() == 1);
@@ -716,7 +716,7 @@ TEST_CASE("TaskGraph - partition single element") {
 TEST_CASE("TaskGraph - partition empty data") {
     std::vector<int> data;
 
-    auto graph = TaskGraph::builder("PartitionEmpty");
+    auto graph = TaskGraph::builder({.name = "PartitionEmpty"});
     auto parts = graph.partition<int>(data, num_partitions{2});
 
     CHECK(parts.size() == 2);
@@ -733,7 +733,7 @@ TEST_CASE("TaskGraph - partition empty data") {
 }
 
 TEST_CASE("TaskGraph - reduce single element with type conversion") {
-    auto graph = TaskGraph::builder("ReduceSingleTypeConvert");
+    auto graph = TaskGraph::builder({.name = "ReduceSingleTypeConvert"});
 
     // Single parallel task producing a string
     auto workers = graph.parallel<std::string>(
@@ -741,7 +741,7 @@ TEST_CASE("TaskGraph - reduce single element with type conversion") {
         [](CoroScope&, std::size_t) -> coro::CoroTask<std::string> {
             co_return std::string("42");
         },
-        "Worker");
+        {.name = "Worker"});
 
     CHECK(workers.size() == 1);
 
@@ -753,7 +753,7 @@ TEST_CASE("TaskGraph - reduce single element with type conversion") {
             for (const auto& s : items) sum += std::stoi(s);
             co_return sum;
         },
-        "ParseAndSum");
+        {.name = "ParseAndSum"});
 
     CHECK(reduced.size() == 1);
     // The reduce task must be a DIFFERENT task from the worker
@@ -768,11 +768,11 @@ TEST_CASE("TaskGraph - reduce single element with type conversion") {
 }
 
 TEST_CASE("TaskGraph - reduce single element same type") {
-    auto graph = TaskGraph::builder("ReduceSingleSameType");
+    auto graph = TaskGraph::builder({.name = "ReduceSingleSameType"});
 
     auto workers = graph.parallel<int>(
         1, [](CoroScope&, std::size_t) -> coro::CoroTask<int> { co_return 99; },
-        "Worker");
+        {.name = "Worker"});
 
     CHECK(workers.size() == 1);
 
@@ -783,7 +783,7 @@ TEST_CASE("TaskGraph - reduce single element same type") {
             for (int x : items) sum += x;
             co_return sum;
         },
-        "Sum");
+        {.name = "Sum"});
 
     CHECK(reduced.size() == 1);
     // Even with same type, reduce should create a new task

@@ -64,7 +64,7 @@ const SegmentInterval* find_segment(
 // "/path/to/trace.pfw.gz" -> "trace.pfw"
 // "/path/to/trace.pfw" -> "trace.pfw"
 std::string output_filename(const std::string& original_path) {
-    auto p = std::filesystem::path(original_path).filename().string();
+    auto p = fs::path(original_path).filename().string();
     // Strip .gz suffix if present
     if (p.size() > 3 && p.substr(p.size() - 3) == ".gz") {
         p = p.substr(0, p.size() - 3);
@@ -188,7 +188,7 @@ static coro::CoroTask<int> run_reconstruct(const std::string& directory,
     // Stream each reorganized file once
     for (const auto& [reorg_file, intervals] : per_reorg_segments) {
         std::printf("  Processing: %s\n",
-                    std::filesystem::path(reorg_file).filename().c_str());
+                    fs::path(reorg_file).filename().c_str());
 
         // Get file metadata for byte range
         std::string idx_path =

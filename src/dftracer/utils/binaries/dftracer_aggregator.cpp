@@ -127,7 +127,7 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
             index_dir = temp_index_dir;
             DFTRACER_UTILS_LOG_INFO("Created temporary index directory: %s",
                                     index_dir.c_str());
-        } catch (const std::filesystem::filesystem_error& e) {
+        } catch (const fs::filesystem_error& e) {
             temp_index_dir = "/tmp/dftracer_idx_" +
                              std::to_string(std::time(nullptr)) + "_" +
                              std::to_string(getpid());

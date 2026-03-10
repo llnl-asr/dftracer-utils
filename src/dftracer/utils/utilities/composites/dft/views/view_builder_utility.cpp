@@ -1,8 +1,11 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -35,6 +38,17 @@ ViewBuilderInput& ViewBuilderInput::with_num_checkpoints(std::size_t n) {
     return *this;
 }
 
+ViewBuilderInput& ViewBuilderInput::with_bloom_cache(
+    indexing::BloomFilterCache* c) {
+    bloom_cache = c;
+    return *this;
+}
+
+ViewBuilderInput& ViewBuilderInput::with_time_range(double b, double e) {
+    time_range = {b, e};
+    return *this;
+}
+
 coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
     const ViewBuilderInput& input) {
     ViewBuilderOutput output;
@@ -63,6 +77,7 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
         bq_input.bidx_path = input.bidx_path;
         bq_input.file_path = input.file_path;
         bq_input.predicates = bloom_predicates;
+        bq_input.cache = input.bloom_cache;
 
         indexing::BloomQueryUtility bloom_query;
         auto bq_output = co_await bloom_query.process(bq_input);
@@ -91,6 +106,56 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
         // No bloom predicates or no bidx: scan all chunks
         for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
             candidate_checkpoints.push_back(i);
+        }
+    }
+
+    // Chunk-level time range skip: query per-chunk time bounds from
+    // the bloom index and remove chunks that don't overlap the query.
+    if (input.time_range && !input.bidx_path.empty() &&
+        !candidate_checkpoints.empty()) {
+        auto [t_begin, t_end] = *input.time_range;
+        if (t_begin > 0 || t_end > 0) {
+            try {
+                indexing::BloomIndexDatabase bidx(input.bidx_path);
+                int fid = bidx.get_file_info_id(input.file_path);
+                if (fid >= 0) {
+                    auto chunk_stats =
+                        indexing::queries::query_chunk_statistics(bidx.db(),
+                                                                  fid);
+
+                    std::unordered_map<std::uint64_t,
+                                       std::pair<std::uint64_t, std::uint64_t>>
+                        chunk_time_bounds;
+                    chunk_time_bounds.reserve(chunk_stats.size());
+                    for (const auto& cs : chunk_stats) {
+                        chunk_time_bounds[cs.checkpoint_idx] = {
+                            cs.stats.min_timestamp_us,
+                            cs.stats.max_timestamp_us};
+                    }
+
+                    std::vector<std::uint64_t> time_filtered;
+                    time_filtered.reserve(candidate_checkpoints.size());
+                    for (auto ckpt : candidate_checkpoints) {
+                        auto it = chunk_time_bounds.find(ckpt);
+                        if (it == chunk_time_bounds.end()) {
+                            time_filtered.push_back(ckpt);
+                            continue;
+                        }
+                        double c_min = static_cast<double>(it->second.first);
+                        double c_max = static_cast<double>(it->second.second);
+                        if (c_max < t_begin || (t_end > 0 && c_min > t_end)) {
+                            continue;
+                        }
+                        time_filtered.push_back(ckpt);
+                    }
+                    candidate_checkpoints = std::move(time_filtered);
+                }
+            } catch (const std::exception& e) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "ViewBuilder: chunk time filter failed for %s: %s",
+                    input.file_path.c_str(), e.what());
+                // Keep all candidates on failure
+            }
         }
     }
 

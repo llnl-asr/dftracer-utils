@@ -10,6 +10,7 @@
 #include <dftracer/utils/call_tree/mpi/pid_index_info.h>
 #include <dftracer/utils/call_tree/mpi/serializable.h>
 #include <dftracer/utils/call_tree/mpi/serialization.h>
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/format_detector.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
@@ -26,12 +27,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
-#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
-
-namespace fs = std::filesystem;
 
 namespace dftracer::utils::call_tree {
 

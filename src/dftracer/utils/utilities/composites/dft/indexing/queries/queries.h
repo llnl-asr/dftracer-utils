@@ -8,6 +8,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -51,6 +52,11 @@ struct ChunkBloomResult {
 std::vector<ChunkBloomResult> query_chunk_bloom_filters(
     const SqliteDatabase& db, int file_info_id, const std::string& dimension);
 
+/// Fetch chunk bloom filters for ALL specified dimensions in one query.
+std::unordered_map<std::string, std::vector<ChunkBloomResult>>
+query_chunk_bloom_filters_batch(const SqliteDatabase& db, int file_info_id,
+                                const std::vector<std::string>& dimensions);
+
 struct FileBloomResult {
     std::vector<unsigned char> bloom_data;
     std::uint64_t num_entries;
@@ -58,6 +64,11 @@ struct FileBloomResult {
 
 std::optional<FileBloomResult> query_file_bloom_filter(
     const SqliteDatabase& db, int file_info_id, const std::string& dimension);
+
+/// Fetch file-level bloom filters for ALL specified dimensions in one query.
+std::unordered_map<std::string, FileBloomResult> query_file_bloom_filters_batch(
+    const SqliteDatabase& db, int file_info_id,
+    const std::vector<std::string>& dimensions);
 
 std::vector<std::string> query_index_dimensions(const SqliteDatabase& db,
                                                 int file_info_id);

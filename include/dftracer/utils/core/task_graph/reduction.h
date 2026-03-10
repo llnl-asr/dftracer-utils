@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/task_graph/types.h>
 
 #include <cstddef>
+#include <stdexcept>
 #include <vector>
 
 namespace dftracer::utils::task_graph {

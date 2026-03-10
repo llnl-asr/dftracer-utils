@@ -130,8 +130,8 @@ TEST_SUITE("DFTracerInfo") {
         int rc = 0;
         auto output = run_info_capture(binary, {"--files", f}, &rc);
         CHECK(rc == 0);
-        // The binary prints "Index Information:" for gzip files.
-        CHECK(output.find("Index") != std::string::npos);
+        // Default summary mode prints aggregate totals.
+        CHECK(output.find("Total Files") != std::string::npos);
     }
 
     TEST_CASE("info with directory") {
@@ -171,13 +171,12 @@ TEST_SUITE("DFTracerInfo") {
         CHECK(rc_plain == 0);
 
         int rc_verbose = 0;
-        auto verbose =
-            run_info_capture(binary, {"--files", f, "--verbose"}, &rc_verbose);
+        auto verbose = run_info_capture(
+            binary, {"--files", f, "--query", "detailed", "--verbose"},
+            &rc_verbose);
         CHECK(rc_verbose == 0);
 
-        // Verbose mode adds "Detailed Statistics:" section.
-        // Note: size comparison is unreliable because debug logging
-        // (captured via stderr) varies between runs.
+        // Detailed + verbose mode adds "Detailed Statistics:" section.
         CHECK(verbose.find("Detailed Statistics") != std::string::npos);
     }
 

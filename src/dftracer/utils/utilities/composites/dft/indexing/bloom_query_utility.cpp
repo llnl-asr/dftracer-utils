@@ -97,17 +97,44 @@ coro::CoroTask<BloomQueryOutput> BloomQueryUtility::process(
                 return out;
             }
 
-            // Step 1: File-level bloom check (fast skip)
+            // Collect dimension names for batch queries.
+            std::vector<std::string> dim_names;
+            dim_names.reserve(effective_predicates.size());
             for (const auto& [dimension, values] : effective_predicates) {
-                auto file_bloom = queries::query_file_bloom_filter(
-                    bidx.db(), file_info_id, dimension);
-                if (!file_bloom) {
-                    continue;
-                }
+                dim_names.push_back(dimension);
+            }
 
-                auto bloom =
-                    BloomFilter::from_blob(file_bloom->bloom_data.data(),
-                                           file_bloom->bloom_data.size());
+            auto* cache = input.cache;
+
+            auto get_or_deserialize = [cache, &input](
+                                          const std::string& dimension,
+                                          std::uint64_t checkpoint_idx,
+                                          const unsigned char* data,
+                                          std::size_t size) -> BloomFilter {
+                if (cache) {
+                    auto cached =
+                        cache->get(input.bidx_path, dimension, checkpoint_idx);
+                    if (cached) return std::move(*cached);
+                }
+                auto bloom = BloomFilter::from_blob(data, size);
+                if (cache) {
+                    cache->put(input.bidx_path, dimension, checkpoint_idx,
+                               bloom);
+                }
+                return bloom;
+            };
+
+            // Step 1: File-level bloom check (single batch query)
+            auto file_blooms = queries::query_file_bloom_filters_batch(
+                bidx.db(), file_info_id, dim_names);
+
+            for (const auto& [dimension, values] : effective_predicates) {
+                auto it = file_blooms.find(dimension);
+                if (it == file_blooms.end()) continue;
+
+                auto bloom = get_or_deserialize(
+                    dimension, BloomFilterCache::FILE_LEVEL_SENTINEL,
+                    it->second.bloom_data.data(), it->second.bloom_data.size());
 
                 bool any_match = false;
                 for (const auto& val : values) {
@@ -124,17 +151,19 @@ coro::CoroTask<BloomQueryOutput> BloomQueryUtility::process(
                 }
             }
 
-            // Step 2: Chunk-level bloom check
+            // Step 2: Chunk-level bloom check (single batch query)
+            auto all_chunk_blooms = queries::query_chunk_bloom_filters_batch(
+                bidx.db(), file_info_id, dim_names);
+
             std::set<std::uint64_t>* candidate_set = nullptr;
             std::set<std::uint64_t> current_candidates;
 
             for (const auto& [dimension, values] : effective_predicates) {
-                auto chunk_blooms = queries::query_chunk_bloom_filters(
-                    bidx.db(), file_info_id, dimension);
+                auto it = all_chunk_blooms.find(dimension);
+                if (it == all_chunk_blooms.end()) continue;
 
-                if (chunk_blooms.empty()) {
-                    continue;
-                }
+                const auto& chunk_blooms = it->second;
+                if (chunk_blooms.empty()) continue;
 
                 if (out.total_checkpoints == 0) {
                     out.total_checkpoints = chunk_blooms.size();
@@ -142,8 +171,9 @@ coro::CoroTask<BloomQueryOutput> BloomQueryUtility::process(
 
                 std::set<std::uint64_t> dim_candidates;
                 for (const auto& cb : chunk_blooms) {
-                    auto bloom = BloomFilter::from_blob(cb.bloom_data.data(),
-                                                        cb.bloom_data.size());
+                    auto bloom = get_or_deserialize(
+                        dimension, cb.checkpoint_idx, cb.bloom_data.data(),
+                        cb.bloom_data.size());
 
                     bool any_match = false;
                     for (const auto& val : values) {

@@ -1,7 +1,9 @@
-I/O Utilities
-=============
+File I/O Utilities
+==================
 
-File reading, writing, and streaming utilities.
+File reading, writing, and streaming utilities supporting both synchronous and asynchronous operations.
+
+Synchronous I/O:
 
 .. code-block:: cpp
 
@@ -9,6 +11,16 @@ File reading, writing, and streaming utilities.
    #include <dftracer/utils/utilities/fileio/streaming_file_reader.h>
    #include <dftracer/utils/utilities/fileio/streaming_file_writer.h>
    #include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
+
+Asynchronous Generators:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_line_generator.h>
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_bytes_generator.h>
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_bytes_generator.h>
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 
 Types
 -----
@@ -139,6 +151,110 @@ Lazy line-by-line reading for both plain and indexed files.
    std::vector<Line> first_100 = lines.take(100);
 
    // Or filter
-   auto filtered = lines.filter([](const Line& l) {
-       return l.content.find("error") != std::string_view::npos;
-   });
+    auto filtered = lines.filter([](const Line& l) {
+        return l.content.find("error") != std::string_view::npos;
+    });
+
+Asynchronous File I/O
+---------------------
+
+Async generators provide non-blocking line and byte reading using C++20 coroutines. They are ideal for high-concurrency scenarios and integrating with async task pipelines.
+
+**Plain Text Files**
+
+Read lines from uncompressed files with async I/O:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_line_generator.h>
+
+   // Read all lines asynchronously
+   auto gen = async_plain_file_lines("data.txt");
+   while (auto line = co_await gen.next()) {
+       std::cout << line->line_number << ": " << line->content << "\n";
+   }
+
+   // Read specific line range
+   auto gen = async_plain_file_lines("data.txt", 100, 200);  // lines 100-200
+   while (auto line = co_await gen.next()) {
+       process(*line);
+   }
+
+**Plain Text Files by Byte Range**
+
+Read lines within a byte range from plain files, with automatic line-boundary alignment:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_bytes_generator.h>
+
+   auto gen = async_plain_file_bytes("data.txt", 1000, 5000);  // bytes 1000-5000
+   while (auto line = co_await gen.next()) {
+       process(*line);  // Yields complete lines within the byte range
+   }
+
+**Indexed (Compressed) Files**
+
+Read lines from ``.gz.idx`` indexed archive files asynchronously:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
+
+   auto config = IndexedFileLineIteratorConfig()
+       .with_file("trace.pfw.gz", "trace.pfw.gz.idx")
+       .with_line_range(1, 1000);
+
+   auto gen = async_indexed_file_lines(config);
+   while (auto line = co_await gen.next()) {
+       process(*line);
+   }
+
+**Indexed Files by Byte Range**
+
+Read lines within a byte range from indexed archives:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_bytes_generator.h>
+
+   auto reader = ReaderFactory::create("trace.pfw.gz", "trace.pfw.gz.idx");
+   auto gen = async_indexed_file_bytes(reader, 1000, 5000);  // bytes 1000-5000
+   while (auto line = co_await gen.next()) {
+       process(*line);
+   }
+
+**Streaming Gzip Decompression**
+
+Read lines from ``.gz`` files without building an index, using streaming decompression:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+
+   // Decompress and stream lines without building a sidecar index
+   auto gen = async_streaming_gz_lines("data.pfw.gz");
+   while (auto line = co_await gen.next()) {
+       process(*line);
+   }
+
+   // With line range filtering
+   auto gen = async_streaming_gz_lines("data.pfw.gz", 100, 200);  // lines 100-200
+   while (auto line = co_await gen.next()) {
+       process(*line);
+   }
+
+Async vs Synchronous
+--------------------
+
+Use async generators when:
+
+- Integrating with coroutine-based pipelines (TaskGraph, Channel-based streaming)
+- Processing multiple files concurrently without blocking threads
+- Operating in high-concurrency environments (many tasks sharing thread pools)
+
+Use synchronous readers when:
+
+- Sequential file processing is acceptable
+- Working outside of coroutine contexts
+- Simpler error handling is preferred (no need to handle resumable failures)

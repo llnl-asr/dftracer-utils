@@ -25,17 +25,19 @@ Features
    DFTracer GitHub <https://github.com/LLNL/dftracer>
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+    :maxdepth: 2
+    :caption: Contents:
 
-   installation
-   quickstart
-   pipeline
-   cli
-   utilities
-   api/index
-   cpp_api/index
-   developers
+    installation
+    quickstart
+    pipeline
+    cli
+    server
+    utilities
+    replay
+    api/index
+    cpp_api/index
+    developers
 
 Getting Started
 ---------------

@@ -322,7 +322,7 @@ class ReplayLineProcessor
    public:
     explicit ReplayLineProcessor(ReplayEngine& engine, ReplayResult& result);
 
-    bool process(const char* data, std::size_t length) override;
+    coro::CoroTask<bool> process(const char* data, std::size_t length) override;
 
    private:
     ReplayEngine& engine_;

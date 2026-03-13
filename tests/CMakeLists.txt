@@ -52,8 +52,7 @@ set(TEST_CPP_SOURCES
     reader/test_reader_robustness.cpp
     # reader/test_reader_tar_comprehensive.cpp
     # Replay tests
-    test_replay.cpp
-    test_replay_binary.cpp
+    replay/test_replay.cpp
     # Server unit tests
     server/test_http_parser.cpp
     server/test_http_response.cpp
@@ -98,13 +97,6 @@ foreach(test_file ${TEST_CPP_SOURCES})
   endif()
 
   add_test(NAME ${bin_exec} COMMAND ${target_name})
-
-  # Ensure binary tests can find the dftracer_replay executable
-  if("${target_name}" STREQUAL "test_replay_binary")
-    if(TARGET dftracer_replay)
-      add_dependencies(${target_name} dftracer_replay)
-    endif()
-  endif()
 
   # Default timeout for all tests (safety net against hangs in CI)
   set(default_test_timeout 120)
@@ -196,6 +188,7 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_organize.cpp
     binaries/test_dftracer_view.cpp
     binaries/test_dftracer_tar.cpp
+    binaries/test_dftracer_replay.cpp
     )
 
 foreach(test_file ${TEST_BINARY_SOURCES})
@@ -278,6 +271,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_tar")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_TAR_PATH=$<TARGET_FILE:dftracer_tar>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_replay")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_REPLAY_PATH=$<TARGET_FILE:dftracer_replay>")
   endif()
 
 endforeach()

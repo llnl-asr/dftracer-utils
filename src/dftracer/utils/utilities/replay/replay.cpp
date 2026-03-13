@@ -1094,9 +1094,10 @@ ReplayLineProcessor::ReplayLineProcessor(ReplayEngine& engine,
                                          ReplayResult& result)
     : engine_(engine), result_(result) {}
 
-bool ReplayLineProcessor::process(const char* data, std::size_t length) {
+coro::CoroTask<bool> ReplayLineProcessor::process(const char* data,
+                                                  std::size_t length) {
     std::string line(data, length);
-    return engine_.process_trace_line(line, result_);
+    co_return engine_.process_trace_line(line, result_);
 }
 
 // =============================================================================

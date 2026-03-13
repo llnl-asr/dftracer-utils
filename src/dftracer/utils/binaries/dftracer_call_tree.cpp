@@ -23,7 +23,7 @@ using namespace dftracer::utils::call_tree;
 /**
  * Collect trace files from directory or file list
  */
-std::vector<std::string> collect_trace_files(
+static std::vector<std::string> collect_trace_files(
     const std::vector<std::string>& inputs, bool recursive) {
     std::vector<std::string> trace_files;
 
@@ -69,7 +69,7 @@ std::vector<std::string> collect_trace_files(
 /**
  * Analyze call patterns in the tree
  */
-void analyze_call_patterns(const std::vector<CallTreeNodeInfo>& nodes) {
+static void analyze_call_patterns(const std::vector<CallTreeNodeInfo>& nodes) {
     printf("\n--- Call Pattern Analysis ---\n");
 
     if (nodes.empty()) {
@@ -99,7 +99,7 @@ void analyze_call_patterns(const std::vector<CallTreeNodeInfo>& nodes) {
 /**
  * Analyze timing statistics
  */
-void analyze_timing(const std::vector<CallTreeNodeInfo>& nodes) {
+static void analyze_timing(const std::vector<CallTreeNodeInfo>& nodes) {
     printf("\n--- Timing Analysis ---\n");
 
     if (nodes.empty()) {
@@ -121,27 +121,30 @@ void analyze_timing(const std::vector<CallTreeNodeInfo>& nodes) {
     for (auto d : durations) {
         total += d;
     }
-    double avg = static_cast<double>(total) / durations.size();
+    double avg =
+        static_cast<double>(total) / static_cast<double>(durations.size());
 
     std::uint64_t min_time = durations.front();
     std::uint64_t max_time = durations.back();
     std::uint64_t median = durations[durations.size() / 2];
-    std::uint64_t p95 = durations[static_cast<size_t>(durations.size() * 0.95)];
-    std::uint64_t p99 = durations[static_cast<size_t>(durations.size() * 0.99)];
+    std::uint64_t p95 = durations[static_cast<size_t>(
+        static_cast<double>(durations.size()) * 0.95)];
+    std::uint64_t p99 = durations[static_cast<size_t>(
+        static_cast<double>(durations.size()) * 0.99)];
 
     printf("Duration statistics (milliseconds):\n");
-    printf("  Min:    %.3f ms\n", min_time / 1000.0);
-    printf("  Max:    %.3f ms\n", max_time / 1000.0);
+    printf("  Min:    %.3f ms\n", static_cast<double>(min_time) / 1000.0);
+    printf("  Max:    %.3f ms\n", static_cast<double>(max_time) / 1000.0);
     printf("  Mean:   %.3f ms\n", avg / 1000.0);
-    printf("  Median: %.3f ms\n", median / 1000.0);
-    printf("  95th:   %.3f ms\n", p95 / 1000.0);
-    printf("  99th:   %.3f ms\n", p99 / 1000.0);
+    printf("  Median: %.3f ms\n", static_cast<double>(median) / 1000.0);
+    printf("  95th:   %.3f ms\n", static_cast<double>(p95) / 1000.0);
+    printf("  99th:   %.3f ms\n", static_cast<double>(p99) / 1000.0);
 }
 
 /**
  * Find critical path (longest duration calls)
  */
-void find_critical_path(const std::vector<CallTreeNodeInfo>& nodes) {
+static void find_critical_path(const std::vector<CallTreeNodeInfo>& nodes) {
     printf("\n--- Critical Path (Longest Duration Calls) ---\n");
 
     if (nodes.empty()) {
@@ -161,14 +164,14 @@ void find_critical_path(const std::vector<CallTreeNodeInfo>& nodes) {
         const auto& node = sorted_nodes[i];
         printf("  %2zu. %-30s [%-15s] - %10.3f ms (level %d)\n", i + 1,
                node.name.c_str(), node.category.c_str(),
-               node.duration_us / 1000.0, node.level);
+               static_cast<double>(node.duration_us) / 1000.0, node.level);
     }
 }
 
 /**
  * Analyze by category
  */
-void analyze_by_category(const std::vector<CallTreeNodeInfo>& nodes) {
+static void analyze_by_category(const std::vector<CallTreeNodeInfo>& nodes) {
     printf("\n--- Analysis by Category ---\n");
 
     if (nodes.empty()) {
@@ -187,7 +190,8 @@ void analyze_by_category(const std::vector<CallTreeNodeInfo>& nodes) {
     printf("Nodes by category:\n");
     for (const auto& [category, count] : category_counts) {
         double avg_duration =
-            static_cast<double>(category_durations[category]) / count / 1000.0;
+            static_cast<double>(category_durations[category]) /
+            static_cast<double>(count) / 1000.0;
         printf("  %-20s: %6zu nodes, avg duration: %.3f ms\n", category.c_str(),
                count, avg_duration);
     }

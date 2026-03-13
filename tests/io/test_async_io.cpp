@@ -122,7 +122,8 @@ TEST_CASE("AsyncIO - sync fallback: pwrite without executor") {
 
     // Write initial content
     std::string initial = "AAAAAAAAAA";
-    (void)::write(fd, initial.data(), initial.size());
+    auto wr = ::write(fd, initial.data(), initial.size());
+    REQUIRE(wr == static_cast<ssize_t>(initial.size()));
 
     // Positional write at offset 3
     std::string patch = "BBB";
@@ -302,7 +303,8 @@ TEST_CASE("AsyncIO - pwrite does not change file position") {
     REQUIRE(fd >= 0);
 
     std::string initial = "AAAAAAAAAA";
-    (void)::write(fd, initial.data(), initial.size());
+    auto wr = ::write(fd, initial.data(), initial.size());
+    REQUIRE(wr == static_cast<ssize_t>(initial.size()));
 
     // Seek to position 0
     ::lseek(fd, 0, SEEK_SET);
@@ -455,7 +457,8 @@ TEST_CASE("AsyncIO - async pwrite with executor") {
     int tmpfd = ::mkstemp(path);
     REQUIRE(tmpfd >= 0);
     std::string initial = "AAAAAAAAAA";
-    (void)::write(tmpfd, initial.data(), initial.size());
+    auto wr = ::write(tmpfd, initial.data(), initial.size());
+    REQUIRE(wr == static_cast<ssize_t>(initial.size()));
     ::close(tmpfd);
 
     Executor executor(ExecutorConfig{.num_threads = 2});
@@ -929,7 +932,8 @@ TEST_CASE("AsyncIO - sync fallback: pwritev without executor") {
     REQUIRE(fd >= 0);
 
     std::string initial = "AAAAAAAAAA";
-    (void)::write(fd, initial.data(), initial.size());
+    auto wr = ::write(fd, initial.data(), initial.size());
+    REQUIRE(wr == static_cast<ssize_t>(initial.size()));
 
     std::string p1 = "BB";
     std::string p2 = "CC";

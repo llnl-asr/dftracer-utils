@@ -126,11 +126,10 @@ class WhenAllVectorAwaitable {
         : state_(std::make_shared<WhenAllVectorState<Awaitable>>(
               std::move(awaitables))) {}
 
-    bool await_ready() {
-        return std::all_of(state_->awaitables_.begin(),
-                           state_->awaitables_.end(),
-                           [](auto& a) { return a.await_ready(); });
-    }
+    // Always return false: wrapper coroutines are launched in
+    // await_suspend, so we must always enter it.  If all sub-awaitables
+    // complete synchronously, await_suspend returns false (no suspend).
+    bool await_ready() { return false; }
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
@@ -323,11 +322,10 @@ class WhenAllVectorAwaitable<Awaitable> {
         : state_(std::make_shared<WhenAllVectorState<Awaitable>>(
               std::move(awaitables))) {}
 
-    bool await_ready() {
-        return std::all_of(state_->awaitables_.begin(),
-                           state_->awaitables_.end(),
-                           [](auto& a) { return a.await_ready(); });
-    }
+    // Always return false: wrapper coroutines are launched in
+    // await_suspend, so we must always enter it.  If all sub-awaitables
+    // complete synchronously, await_suspend returns false (no suspend).
+    bool await_ready() { return false; }
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
@@ -502,10 +500,10 @@ class WhenAllTupleAwaitable {
         : state_(std::make_shared<WhenAllTupleState<Awaitables...>>(
               std::forward<Awaitables>(awaitables)...)) {}
 
-    bool await_ready() {
-        return std::apply([](auto&... a) { return (a.await_ready() && ...); },
-                          state_->awaitables_);
-    }
+    // Always return false: wrapper coroutines are launched in
+    // await_suspend, so we must always enter it.  If all sub-awaitables
+    // complete synchronously, await_suspend returns false (no suspend).
+    bool await_ready() { return false; }
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {

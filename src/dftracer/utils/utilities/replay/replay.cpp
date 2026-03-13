@@ -121,18 +121,6 @@ std::string get_args_string(yyjson_val* root, const char* key,
 }
 
 /**
- * Get a uint64 value from args object
- */
-std::uint64_t get_args_uint64(yyjson_val* root, const char* key,
-                              std::uint64_t default_value = 0) {
-    yyjson_val* args = yyjson_obj_get(root, "args");
-    if (args && yyjson_is_obj(args)) {
-        return get_json_uint64(args, key, default_value);
-    }
-    return default_value;
-}
-
-/**
  * Get an int64 value from args object
  */
 std::int64_t get_args_int64(yyjson_val* root, const char* key,
@@ -662,8 +650,8 @@ void ReplayEngine::apply_timing(const Trace& trace) {
     std::uint64_t trace_elapsed_us = trace.time_start - first_trace_timestamp_;
 
     // Apply timing scale
-    std::uint64_t scaled_elapsed_us =
-        static_cast<std::uint64_t>(trace_elapsed_us * config_.timing_scale);
+    std::uint64_t scaled_elapsed_us = static_cast<std::uint64_t>(
+        static_cast<double>(trace_elapsed_us) * config_.timing_scale);
 
     // Calculate how long we should sleep
     auto replay_elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -678,15 +666,16 @@ void ReplayEngine::apply_timing(const Trace& trace) {
         const std::uint64_t MAX_SLEEP_US = 10 * 1000 * 1000;
         if (sleep_us > MAX_SLEEP_US) {
             if (config_.verbose) {
-                std::cout << "Warning: Capping sleep from " << sleep_us / 1000.0
-                          << " ms to " << MAX_SLEEP_US / 1000.0 << " ms"
-                          << std::endl;
+                std::cout << "Warning: Capping sleep from "
+                          << static_cast<double>(sleep_us) / 1000.0 << " ms to "
+                          << MAX_SLEEP_US / 1000.0 << " ms" << std::endl;
             }
             sleep_us = MAX_SLEEP_US;
         }
 
         if (config_.verbose && sleep_us > 1000) {
-            std::cout << "Timing sleep: " << sleep_us / 1000.0 << " ms"
+            std::cout << "Timing sleep: "
+                      << static_cast<double>(sleep_us) / 1000.0 << " ms"
                       << std::endl;
         }
 
@@ -1119,9 +1108,11 @@ void ReplayResult::print_summary(bool verbose) const {
               << success_rate << "%" << std::endl;
 
     std::cout << "\nTiming:" << std::endl;
-    std::cout << "  Total duration: " << total_duration.count() / 1000.0
-              << " ms" << std::endl;
-    std::cout << "  Execution duration: " << execution_duration.count() / 1000.0
+    std::cout << "  Total duration: "
+              << static_cast<double>(total_duration.count()) / 1000.0 << " ms"
+              << std::endl;
+    std::cout << "  Execution duration: "
+              << static_cast<double>(execution_duration.count()) / 1000.0
               << " ms" << std::endl;
 
     if (first_timestamp != UINT64_MAX && last_timestamp > 0) {

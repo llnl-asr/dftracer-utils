@@ -22,7 +22,7 @@ using namespace dftracer::utils::utilities::replay;
 /**
  * Collect trace files from directory or file list
  */
-std::vector<std::string> collect_trace_files(
+static std::vector<std::string> collect_trace_files(
     const std::vector<std::string>& inputs, bool recursive) {
     std::vector<std::string> trace_files;
 
@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
         std::string token;
         while (std::getline(ss, token, ',')) {
             if (!token.empty()) {
-                result.insert(std::stoul(token));
+                result.insert(static_cast<std::uint32_t>(std::stoul(token)));
             }
         }
         return result;

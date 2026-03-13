@@ -32,7 +32,7 @@ Tasks are created using ``make_task`` and receive a ``CoroScope&`` parameter:
        co_return;
    }, "MyTask");
 
-   // Task that spawns child work
+   // Task that spawns child work (fire-and-forget)
    auto parent = make_task([](CoroScope& scope) -> CoroTask<void> {
        scope.spawn([](CoroScope& child_scope) -> CoroTask<void> {
            // Do work here
@@ -40,6 +40,16 @@ Tasks are created using ``make_task`` and receive a ``CoroScope&`` parameter:
        });
        co_return;
    }, "ParentTask");
+
+   // Task that awaits a spawned coroutine
+   auto awaiting = make_task([](CoroScope& scope) -> CoroTask<void> {
+       co_await scope.spawn([](CoroScope& child_scope) -> CoroTask<void> {
+           // Caller suspends until this completes
+           co_return;
+       });
+       // Execution continues here only after the spawn finishes
+       co_return;
+   }, "AwaitingTask");
 
 Pipeline Configuration and Execution
 -------------------------------------
@@ -93,8 +103,7 @@ CoroScope and Structured Concurrency
 
 ``CoroScope`` is the primary context type for managing concurrent work. It provides:
 
-- ``spawn(lambda)`` - Fire-and-forget void coroutines
-- ``spawn(lambda)`` returning ``SpawnFuture<T>`` - Typed results with ``co_await``
+- ``spawn(lambda)`` returning ``SpawnFuture<T>`` - Always returns an awaitable future (for both void and typed coroutines). The return value can be ignored for fire-and-forget usage, or ``co_await``'d to wait for that specific coroutine.
 - ``scope(lambda)`` - Create a child scope (all spawned work must complete before returning)
 - ``join_all()`` - Wait for all spawned work to complete
 
@@ -328,6 +337,23 @@ Run multiple operations concurrently:
    // result.index tells which completed first
 
 See :doc:`cpp_api/coro` for ``when_all``, ``when_any``, and ``timeout``.
+
+For tasks returning different types, use the variadic overload directly:
+
+.. code-block:: cpp
+
+   // Heterogeneous when_all - returns std::tuple
+   auto f1 = scope.spawn([](CoroScope&) -> CoroTask<int> { co_return 1; });
+   auto f2 = scope.spawn([](CoroScope&) -> CoroTask<std::string> {
+       co_return std::string("two");
+   });
+   auto [num, text] = co_await when_all(std::move(f1), std::move(f2));
+
+    // Heterogeneous when_any — use get<N>() for index-based access
+    auto f3 = scope.spawn([](CoroScope&) -> CoroTask<int> { co_return 3; });
+    auto f4 = scope.spawn([](CoroScope&) -> CoroTask<float> { co_return 4.0f; });
+    auto result = co_await when_any(std::move(f3), std::move(f4));
+    // result.index indicates winner; result.get<0>() or result.get<1>()
 
 Lazy Sequences and Async Generators
 ------------------------------------
@@ -883,8 +909,13 @@ The project has migrated from the old ``TaskContext``/``TaskScope`` API to the n
        // Send data (no _blocking)
        co_await channel->send(std::move(data));
        
-       // Spawn tasks (new way)
+       // Spawn tasks (fire-and-forget, or co_await for completion)
        scope.spawn([](CoroScope& child) -> CoroTask<void> {
+           co_return;
+       });
+       
+       // Or await a specific spawn
+       co_await scope.spawn([](CoroScope& child) -> CoroTask<void> {
            co_return;
        });
        

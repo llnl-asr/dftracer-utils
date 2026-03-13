@@ -52,11 +52,14 @@ Usage example:
 SpawnFuture
 -----------
 
-Typed future returned by CoroScope::spawn() for retrieving results from spawned coroutines.
+Future returned by ``CoroScope::spawn()`` for all coroutines (both void and typed).
 
-SpawnFuture<T> is awaitable and suspends the caller until the spawned coroutine completes,
-then returns the typed result. It uses a lock-free shared state (SharedState<T>) with one
+``spawn()`` always returns ``SpawnFuture<T>`` (where ``T`` is ``void`` for void coroutines).
+The future is awaitable and suspends the caller until the spawned coroutine completes,
+then returns the typed result. It uses a lock-free shared state (``SharedState<T>``) with one
 heap allocation per spawn.
+
+For fire-and-forget usage, the return value can simply be discarded.
 
 **Awaitable interface:**
 
@@ -66,16 +69,31 @@ heap allocation per spawn.
 - ``is_done()`` - Check if the spawned coroutine has completed without blocking
 - ``detach()`` - Prevent automatic resumption (used by when_any)
 
-Usage example:
+Usage examples:
 
 .. code-block:: cpp
 
+   // Await a typed spawn directly:
+   int result = co_await scope.spawn([](CoroScope& s) -> CoroTask<int> {
+       co_return 42;
+   });
+
+   // Or capture the future for later:
    SpawnFuture<int> future = scope.spawn([](CoroScope& s) -> CoroTask<int> {
        co_return 42;
    });
-   int result = co_await future;  // suspends until spawn completes
+   int result = co_await future;
 
-Void specialization (SpawnFuture<void>) is also provided for coroutines that don't return a value.
+   // Await a void spawn:
+   co_await scope.spawn([](CoroScope& s) -> CoroTask<void> {
+       // caller suspends until this completes
+       co_return;
+   });
+
+   // Fire-and-forget (discard the SpawnFuture):
+   scope.spawn([](CoroScope& s) -> CoroTask<void> {
+       co_return;
+   });
 
 .. doxygenclass:: dftracer::utils::coro::SpawnFuture
    :project: dftracer-utils
@@ -350,6 +368,81 @@ Usage example:
 
 .. doxygenfunction:: dftracer::utils::coro::when_any
     :project: dftracer-utils
+
+Heterogeneous when_all and when_any
+------------------------------------
+
+The variadic overloads of ``when_all`` and ``when_any`` accept awaitables of
+different types. Return types are deduced automatically: ``when_all`` returns a
+``std::tuple`` of each awaitable's result type, and ``when_any`` returns a
+``WhenAnyTupleResult`` with index-based ``get<N>()`` access to the winning
+result. ``void`` results map to ``std::monostate`` in both cases.
+
+**Heterogeneous when_all:**
+
+.. code-block:: cpp
+
+    // Wait for tasks returning different types
+    auto f_int = scope.spawn([](CoroScope&) -> CoroTask<int> {
+        co_return 42;
+    });
+    auto f_str = scope.spawn([](CoroScope&) -> CoroTask<std::string> {
+        co_return std::string("hello");
+    });
+
+    // Returns std::tuple<int, std::string>
+    auto [num, text] = co_await when_all(std::move(f_int), std::move(f_str));
+
+**Void handling in when_all:**
+
+.. code-block:: cpp
+
+    // Void results map to std::monostate in the tuple
+    auto f_void = scope.spawn([](CoroScope&) -> CoroTask<void> {
+        co_return;
+    });
+    auto f_int = scope.spawn([](CoroScope&) -> CoroTask<int> {
+        co_return 99;
+    });
+
+    // Returns std::tuple<std::monostate, int>
+    auto [_, val] = co_await when_all(std::move(f_void), std::move(f_int));
+
+**Heterogeneous when_any:**
+
+.. code-block:: cpp
+
+    // Race tasks returning different types
+    auto f_int = scope.spawn([](CoroScope&) -> CoroTask<int> {
+        co_return 42;
+    });
+    auto f_str = scope.spawn([](CoroScope&) -> CoroTask<std::string> {
+        co_return std::string("hello");
+    });
+
+    // Returns WhenAnyTupleResult — use get<N>() for index-based access
+    auto result = co_await when_any(std::move(f_int), std::move(f_str));
+
+    // result.index tells which awaitable completed first (0-based).
+    // get<N>() works correctly even when types repeat.
+    if (result.index == 0) {
+        int val = result.get<0>();
+    } else {
+        std::string val = result.get<1>();
+    }
+    result.cancel_remaining();
+
+**Overload resolution:**
+
+The correct overload is selected automatically via ``requires`` constraints:
+
+- All arguments share the same type → homogeneous (vector-based) overload,
+  returning ``std::vector<T>`` or ``WhenAnyResult<T>``.
+- Arguments have different types → heterogeneous overload,
+  returning ``std::tuple<...>`` or ``WhenAnyTupleResult<...>`` (with ``get<N>()`` access).
+
+No explicit template arguments are needed; the compiler resolves the overload
+based on the argument types.
 
 TimeoutAwaitable
 ----------------

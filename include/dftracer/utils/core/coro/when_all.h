@@ -9,7 +9,10 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
+#include <optional>
+#include <tuple>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace dftracer::utils::coro {
@@ -386,6 +389,230 @@ class WhenAllVectorAwaitable<Awaitable> {
         state_->wrapper_coros_.back().handle().resume();
     }
 };
+
+// ============================================================================
+// when_all_result_t - maps void result to std::monostate for tuple storage
+// ============================================================================
+
+template <typename T>
+using when_all_result_t =
+    std::conditional_t<std::is_void_v<T>, std::monostate, T>;
+
+// ============================================================================
+// WhenAllTupleAwaitable - Heterogeneous awaitable types (variadic/tuple)
+// Heap-allocated state pattern, mirrors WhenAllVectorState/Awaitable exactly.
+// ============================================================================
+
+/**
+ * Shared state for WhenAllTupleAwaitable.
+ * Heap-allocated so lifetime extends beyond await_suspend.
+ */
+template <typename... Awaitables>
+struct WhenAllTupleState {
+    static constexpr std::size_t total_ = sizeof...(Awaitables);
+
+    std::tuple<Awaitables...> awaitables_;
+    std::tuple<
+        std::optional<when_all_result_t<typename Awaitables::result_type>>...>
+        results_;
+    std::exception_ptr exception_;
+    std::atomic<bool> has_exception_{false};
+    std::atomic<std::size_t> completed_count_{0};
+    std::coroutine_handle<> awaiting_coroutine_;
+    std::vector<CoroTask<void>> wrapper_coros_;
+    Executor* executor_{nullptr};
+
+    // Single-atomic coordination between await_suspend and on_one_complete.
+    // Uses fetch_or(acq_rel) on a bitmask -- the total modification order on
+    // one atomic guarantees exactly one side sees the other's bit, eliminating
+    // the store-buffer (SB) reordering hazard that two independent atomics
+    // with seq_cst were guarding against.
+    static constexpr std::uint8_t BIT_SUSPENDED = 1;
+    static constexpr std::uint8_t BIT_COMPLETED = 2;
+    std::atomic<std::uint8_t> sync_state_{0};
+
+    explicit WhenAllTupleState(Awaitables&&... awaitables)
+        : awaitables_(std::forward<Awaitables>(awaitables)...) {
+        wrapper_coros_.reserve(total_);
+    }
+
+    void on_one_complete() {
+        std::size_t count =
+            completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (count == total_) {
+            auto prev =
+                sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
+            if (prev & BIT_SUSPENDED) {
+                if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
+                    if (executor_) {
+                        schedule_coroutine_resumption_helper(
+                            executor_, awaiting_coroutine_);
+                    } else {
+                        awaiting_coroutine_.resume();
+                    }
+                }
+            }
+        }
+    }
+
+    void on_exception(std::exception_ptr e) {
+        bool expected = false;
+        if (has_exception_.compare_exchange_strong(expected, true,
+                                                   std::memory_order_acq_rel,
+                                                   std::memory_order_relaxed)) {
+            exception_ = e;
+        }
+        on_one_complete();
+    }
+
+    void mark_suspended_and_check_completion() {
+        auto prev =
+            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
+        if (prev & BIT_COMPLETED) {
+            if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
+                if (executor_) {
+                    schedule_coroutine_resumption_helper(executor_,
+                                                         awaiting_coroutine_);
+                } else {
+                    awaiting_coroutine_.resume();
+                }
+            }
+        }
+    }
+};
+
+/**
+ * WhenAllTupleAwaitable - Lightweight awaitable wrapping heap-allocated state.
+ *
+ * Accepts heterogeneous awaitable types; returns std::tuple of their results.
+ * Void result types are mapped to std::monostate in the tuple.
+ *
+ * Usage:
+ * @code
+ * auto [a, b, c] = co_await when_all(task_int(), task_str(), task_float());
+ * @endcode
+ */
+template <typename... Awaitables>
+class WhenAllTupleAwaitable {
+   public:
+    using result_type =
+        std::tuple<when_all_result_t<typename Awaitables::result_type>...>;
+
+    explicit WhenAllTupleAwaitable(Awaitables&&... awaitables)
+        : state_(std::make_shared<WhenAllTupleState<Awaitables...>>(
+              std::forward<Awaitables>(awaitables)...)) {}
+
+    bool await_ready() {
+        return std::apply([](auto&... a) { return (a.await_ready() && ...); },
+                          state_->awaitables_);
+    }
+
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> h) {
+        state_->awaiting_coroutine_ = h;
+
+        if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
+            auto* root = h.promise().get_root_promise();
+            state_->executor_ = root->get_executor();
+        }
+
+        if constexpr (WhenAllTupleState<Awaitables...>::total_ == 0) {
+            return false;
+        }
+
+        launch_all(std::index_sequence_for<Awaitables...>{});
+
+        // Check if all completed synchronously during launch
+        if (state_->completed_count_.load(std::memory_order_acquire) ==
+            WhenAllTupleState<Awaitables...>::total_) {
+            return false;  // Don't suspend
+        }
+
+        if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
+            auto* root = h.promise().get_root_promise();
+            root->awaiting_async_ = true;
+        }
+
+        // We will suspend - mark it and double-check for completion.
+        // Do this last: completion may schedule/resume and destroy this frame.
+        state_->mark_suspended_and_check_completion();
+
+        return true;
+    }
+
+    result_type await_resume() {
+        if (state_->exception_) {
+            std::rethrow_exception(state_->exception_);
+        }
+        return build_result(std::index_sequence_for<Awaitables...>{});
+    }
+
+   private:
+    std::shared_ptr<WhenAllTupleState<Awaitables...>> state_;
+
+    // Build result tuple from per-slot optionals (called from await_resume).
+    template <std::size_t... Is>
+    result_type build_result(std::index_sequence<Is...>) {
+        return result_type{std::move(*std::get<Is>(state_->results_))...};
+    }
+
+    // Launch wrapper coroutine for slot I.
+    template <std::size_t I>
+    void launch_one() {
+        using A = std::tuple_element_t<I, std::tuple<Awaitables...>>;
+        using R = typename A::result_type;
+
+        auto state = state_;
+
+        auto wrapper_coro =
+            [](std::shared_ptr<WhenAllTupleState<Awaitables...>> s)
+            -> CoroTask<void> {
+            try {
+                if constexpr (std::is_void_v<R>) {
+                    co_await std::get<I>(s->awaitables_);
+                    std::get<I>(s->results_).emplace(std::monostate{});
+                } else {
+                    std::get<I>(s->results_)
+                        .emplace(co_await std::get<I>(s->awaitables_));
+                }
+                s->on_one_complete();
+            } catch (...) {
+                s->on_exception(std::current_exception());
+            }
+        }(state);
+
+        state_->wrapper_coros_.push_back(std::move(wrapper_coro));
+        // Start the lazy coroutine - it will suspend at its first co_await
+        state_->wrapper_coros_.back().handle().resume();
+    }
+
+    // Expand index sequence to launch all wrapper coroutines.
+    template <std::size_t... Is>
+    void launch_all(std::index_sequence<Is...>) {
+        (launch_one<Is>(), ...);
+    }
+};
+
+/**
+ * when_all - Wait for all awaitables to complete (variadic/tuple version)
+ *
+ * Accepts 2+ heterogeneous awaitable types and returns a std::tuple of
+ * their results. Void result types appear as std::monostate in the tuple.
+ *
+ * The requires(sizeof...(Awaitables) >= 2) constraint prevents ambiguity
+ * with the single-argument vector overload.
+ *
+ * Usage:
+ * @code
+ * auto [n, s] = co_await when_all(task_returning_int(), task_returning_str());
+ * @endcode
+ */
+template <typename... Awaitables>
+    requires(sizeof...(Awaitables) >= 2)
+auto when_all(Awaitables&&... awaitables) {
+    return WhenAllTupleAwaitable<std::decay_t<Awaitables>...>(
+        std::forward<Awaitables>(awaitables)...);
+}
 
 }  // namespace dftracer::utils::coro
 

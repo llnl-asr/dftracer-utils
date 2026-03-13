@@ -26,8 +26,7 @@ namespace dftracer::utils {
 ///
 /// This is the single context type that task lambdas receive.
 /// It replaces both CoroScope and CoroScope with a unified API:
-/// - spawn() for fire-and-forget void coroutines
-/// - spawn() returning SpawnFuture<T> for typed results
+/// - spawn() returning SpawnFuture<T> for all coroutines (void and typed)
 /// - io::async_read/write/open/close for async I/O
 /// - receive() for channel consumption
 /// - Cancellation support
@@ -36,16 +35,29 @@ namespace dftracer::utils {
 /// directly to the Executor's run_queue_ -- no Task objects, no
 /// Scheduler overhead, no when_all().
 ///
+/// spawn() always returns SpawnFuture<T>. For void coroutines the
+/// return value can be ignored (fire-and-forget) or co_await'd to
+/// wait for that specific coroutine to complete.
+///
 /// Usage:
 /// @code
 /// auto task = make_task([](CoroScope& scope) -> coro::CoroTask<void> {
+///     // Fire-and-forget (return value ignored):
 ///     scope.spawn([](CoroScope& s) -> coro::CoroTask<void> {
 ///         co_return;
 ///     });
-///     auto future = scope.spawn([](CoroScope& s) -> coro::CoroTask<int> {
-///         co_return 42;
+///
+///     // Await a void spawn:
+///     co_await scope.spawn([](CoroScope& s) -> coro::CoroTask<void> {
+///         // do work
+///         co_return;
 ///     });
-///     int result = co_await future;
+///
+///     // Await a typed spawn:
+///     int result = co_await scope.spawn(
+///         [](CoroScope& s) -> coro::CoroTask<int> {
+///             co_return 42;
+///         });
 ///     co_return;
 /// });
 /// @endcode
@@ -129,22 +141,43 @@ class CoroScope {
     /// The lambda receives CoroScope& and returns CoroTask<void>.
     /// Internally wrapped in a lightweight Coro and enqueued directly.
     ///
+    /// Returns SpawnFuture<void> that can be co_await'd to wait for
+    /// this specific coroutine to complete. The return value can be
+    /// safely ignored for fire-and-forget usage.
+    ///
     /// The captureless-lambda-with-parameters pattern ensures
     /// coroutine parameters are copied into the coroutine frame,
     /// avoiding the dangling-capture bug.
+    ///
+    /// Usage:
+    /// @code
+    /// // Fire-and-forget (existing usage, still works):
+    /// scope.spawn([](CoroScope& s) -> coro::CoroTask<void> {
+    ///     co_return;
+    /// });
+    ///
+    /// // Awaitable (new):
+    /// co_await scope.spawn([](CoroScope& s) -> coro::CoroTask<void> {
+    ///     // do work
+    ///     co_return;
+    /// });
+    /// @endcode
     template <typename Func,
               typename R =
                   typename std::invoke_result_t<Func, CoroScope&>::value_type,
               std::enable_if_t<std::is_void_v<R>, int> = 0>
-    void spawn(Func&& func) {
+    coro::SpawnFuture<void> spawn(Func&& func) {
+        auto state = std::make_shared<coro::SharedState<void>>();
+        state->executor = executor_;
+
         auto make_coro =
             [](auto f, Executor* exec,
-               std::shared_ptr<std::atomic<bool>> cancel_token) -> coro::Coro {
+               std::shared_ptr<std::atomic<bool>> cancel_token,
+               std::shared_ptr<coro::SharedState<void>> st) -> coro::Coro {
             // Each spawned coroutine gets its own CoroScope (child) so it
             // can safely outlive the parent scope (e.g., when_any completes
             // while slow tasks are still running). Shares cancellation.
             CoroScope child_scope(exec, std::move(cancel_token));
-            std::exception_ptr err;
             try {
                 auto task = f(child_scope);
                 // Propagate executor to the CoroTask's PromiseBase
@@ -153,20 +186,19 @@ class CoroScope {
                 // manually.
                 task.handle().promise().set_executor(exec);
                 co_await std::move(task);
+                st->complete();
             } catch (...) {
-                err = std::current_exception();
+                st->complete_with_exception(std::current_exception());
             }
             // Always join child scope to wait for any sub-spawned
             // coroutines.  Without this, the child scope's JoinHandle
             // would be destroyed while FinalAwaiters still reference it.
             co_await child_scope.join();
-            if (err) {
-                std::rethrow_exception(err);
-            }
         };
         auto c = make_coro(std::forward<Func>(func), executor_,
-                           cancellation_requested_);
+                           cancellation_requested_, state);
         enqueue_coro(c);
+        return coro::SpawnFuture<void>(std::move(state));
     }
 
     // ====================================================================

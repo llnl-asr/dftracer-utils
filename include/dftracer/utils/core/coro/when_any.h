@@ -11,15 +11,23 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <stdexcept>
+#include <tuple>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 // Timer service needed for TimeoutAwaitable
 #include <dftracer/utils/core/common/timer_service.h>
 
 namespace dftracer::utils::coro {
+
+// Maps void result types to std::monostate for use in std::variant.
+template <typename T>
+using when_any_result_t =
+    std::conditional_t<std::is_void_v<T>, std::monostate, T>;
 
 // ============================================================================
 // WhenAnyResult - Result of when_any operation
@@ -415,6 +423,360 @@ auto when_any(Awaitable&& first, Rest&&... rest) {
     return WhenAnyAwaitable<std::decay_t<Awaitable>>(
         detail::make_awaitable_vector(std::forward<Awaitable>(first),
                                       std::forward<Rest>(rest)...));
+}
+
+// ============================================================================
+// Heterogeneous when_any — different awaitable types, variant result
+// ============================================================================
+
+/**
+ * WhenAnyTupleResult - Result of heterogeneous when_any.
+ *
+ * @tparam Awaitables Pack of distinct awaitable types.
+ */
+template <typename... Awaitables>
+struct WhenAnyTupleResult {
+    std::size_t index;
+
+    /// Type-safe index-based access to the winning result.
+    /// N must equal index at runtime, otherwise std::bad_variant_access.
+    /// Works correctly even when multiple awaitables share the same
+    /// result type (e.g. variant<float, int, int, float>).
+    template <std::size_t N>
+    auto& get() & {
+        return std::get<N>(result_);
+    }
+
+    template <std::size_t N>
+    auto&& get() && {
+        return std::get<N>(std::move(result_));
+    }
+
+    template <std::size_t N>
+    const auto& get() const& {
+        return std::get<N>(result_);
+    }
+
+    void cancel_remaining() const {
+        for (auto& token : remaining_cancellation_tokens_) {
+            if (token) {
+                token->store(true, std::memory_order_release);
+            }
+        }
+    }
+
+   private:
+    // Internal state — accessed by WhenAnyTupleState and
+    // WhenAnyTupleAwaitable via friendship.
+    template <typename... As>
+    friend struct WhenAnyTupleState;
+
+    template <typename... As>
+    friend class WhenAnyTupleAwaitable;
+
+    std::variant<when_any_result_t<typename Awaitables::result_type>...>
+        result_;
+    std::vector<std::shared_ptr<std::atomic<bool>>>
+        remaining_cancellation_tokens_;
+};
+
+template <typename... Awaitables>
+struct WhenAnyTupleState {
+    static constexpr std::size_t total_ = sizeof...(Awaitables);
+
+    std::tuple<Awaitables...> awaitables_;
+    std::atomic<bool> completed{false};
+    WhenAnyTupleResult<Awaitables...> result;
+    std::exception_ptr exception;
+    std::coroutine_handle<> awaiting_coroutine;
+    std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
+    Executor* executor{nullptr};
+
+    static constexpr std::uint8_t BIT_SUSPENDED = 1;
+    static constexpr std::uint8_t BIT_COMPLETED = 2;
+    std::atomic<std::uint8_t> sync_state_{0};
+
+    explicit WhenAnyTupleState(Awaitables&&... aws)
+        : awaitables_(std::forward<Awaitables>(aws)...) {
+        cancellation_tokens.reserve(total_);
+        std::apply(
+            [this](auto&... a) {
+                (
+                    [&](auto& aw) {
+                        if constexpr (requires {
+                                          aw.get_cancellation_token();
+                                      }) {
+                            cancellation_tokens.push_back(
+                                aw.get_cancellation_token());
+                        } else {
+                            cancellation_tokens.push_back(nullptr);
+                        }
+                    }(a),
+                    ...);
+            },
+            awaitables_);
+    }
+
+    ~WhenAnyTupleState() {
+        std::apply(
+            [](auto&... a) {
+                (
+                    [&](auto& aw) {
+                        if constexpr (requires { aw.detach(); }) {
+                            aw.detach();
+                        }
+                    }(a),
+                    ...);
+            },
+            awaitables_);
+    }
+
+    void on_first_complete() {
+        auto prev =
+            sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
+        if (prev & BIT_SUSPENDED) {
+            if (awaiting_coroutine && !awaiting_coroutine.done()) {
+                if (executor) {
+                    schedule_coroutine_resumption_helper(executor,
+                                                         awaiting_coroutine);
+                } else {
+                    awaiting_coroutine.resume();
+                }
+            }
+        }
+    }
+
+    void mark_suspended_and_check_completion() {
+        auto prev =
+            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
+        if (prev & BIT_COMPLETED) {
+            if (awaiting_coroutine && !awaiting_coroutine.done()) {
+                if (executor) {
+                    schedule_coroutine_resumption_helper(executor,
+                                                         awaiting_coroutine);
+                } else {
+                    awaiting_coroutine.resume();
+                }
+            }
+        }
+    }
+};
+
+template <typename... Awaitables>
+class WhenAnyTupleAwaitable {
+   private:
+    using State = WhenAnyTupleState<Awaitables...>;
+    std::shared_ptr<State> state_;
+
+    // Launch a fire-and-forget Coro wrapper for the I-th awaitable.
+    template <std::size_t I>
+    void launch_one() {
+        using A = std::tuple_element_t<I, std::tuple<Awaitables...>>;
+        using R = typename A::result_type;
+
+        auto wrapper = [](std::shared_ptr<State> state) -> coro::Coro {
+            try {
+                if (state->completed.load(std::memory_order_acquire)) {
+                    co_return;
+                }
+
+                if constexpr (std::is_void_v<R>) {
+                    co_await std::get<I>(state->awaitables_);
+
+                    bool expected = false;
+                    if (state->completed.compare_exchange_strong(
+                            expected, true, std::memory_order_acq_rel)) {
+                        state->result.index = I;
+                        state->result.result_.template emplace<I>(
+                            std::monostate{});
+
+                        state->result.remaining_cancellation_tokens_.reserve(
+                            State::total_ - 1);
+                        for (std::size_t j = 0;
+                             j < state->cancellation_tokens.size(); ++j) {
+                            if (j != I && state->cancellation_tokens[j]) {
+                                state->result.remaining_cancellation_tokens_
+                                    .push_back(state->cancellation_tokens[j]);
+                            }
+                        }
+
+                        state->on_first_complete();
+                    }
+                } else {
+                    auto r = co_await std::get<I>(state->awaitables_);
+
+                    bool expected = false;
+                    if (state->completed.compare_exchange_strong(
+                            expected, true, std::memory_order_acq_rel)) {
+                        state->result.index = I;
+                        state->result.result_.template emplace<I>(std::move(r));
+
+                        state->result.remaining_cancellation_tokens_.reserve(
+                            State::total_ - 1);
+                        for (std::size_t j = 0;
+                             j < state->cancellation_tokens.size(); ++j) {
+                            if (j != I && state->cancellation_tokens[j]) {
+                                state->result.remaining_cancellation_tokens_
+                                    .push_back(state->cancellation_tokens[j]);
+                            }
+                        }
+
+                        state->on_first_complete();
+                    }
+                }
+            } catch (...) {
+                if (state->completed.load(std::memory_order_acquire)) {
+                    co_return;
+                }
+
+                bool expected = false;
+                if (state->completed.compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel)) {
+                    try {
+                        state->exception = std::current_exception();
+                    } catch (...) {
+                    }
+                    state->on_first_complete();
+                }
+            }
+            co_return;
+        }(state_);
+
+        wrapper.handle().promise().executor = state_->executor;
+        auto h = wrapper.release();
+        h.resume();
+    }
+
+    template <std::size_t... Is>
+    void launch_all(std::index_sequence<Is...>) {
+        (launch_one<Is>(), ...);
+    }
+
+    // Check if the I-th awaitable is immediately ready; if so, populate
+    // state and return true.
+    template <std::size_t I>
+    bool check_ready_one() {
+        using A = std::tuple_element_t<I, std::tuple<Awaitables...>>;
+        using R = typename A::result_type;
+
+        auto& aw = std::get<I>(state_->awaitables_);
+        if (!aw.await_ready()) {
+            return false;
+        }
+
+        try {
+            state_->result.index = I;
+            if constexpr (std::is_void_v<R>) {
+                aw.await_resume();
+                state_->result.result_.template emplace<I>(std::monostate{});
+            } else {
+                state_->result.result_.template emplace<I>(aw.await_resume());
+            }
+
+            state_->result.remaining_cancellation_tokens_.reserve(
+                State::total_ - 1);
+            for (std::size_t j = 0; j < state_->cancellation_tokens.size();
+                 ++j) {
+                if (j != I && state_->cancellation_tokens[j]) {
+                    state_->result.remaining_cancellation_tokens_.push_back(
+                        state_->cancellation_tokens[j]);
+                }
+            }
+
+            state_->completed.store(true, std::memory_order_release);
+        } catch (...) {
+            state_->exception = std::current_exception();
+            state_->completed.store(true, std::memory_order_release);
+        }
+        return true;
+    }
+
+    template <std::size_t... Is>
+    bool check_ready_any(std::index_sequence<Is...>) {
+        return (check_ready_one<Is>() || ...);
+    }
+
+   public:
+    using result_type = WhenAnyTupleResult<Awaitables...>;
+
+    explicit WhenAnyTupleAwaitable(Awaitables&&... aws)
+        : state_(std::make_shared<State>(std::forward<Awaitables>(aws)...)) {}
+
+    ~WhenAnyTupleAwaitable() = default;
+
+    bool await_ready() {
+        return check_ready_any(
+            std::make_index_sequence<sizeof...(Awaitables)>{});
+    }
+
+    template <typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> h) {
+        state_->awaiting_coroutine = h;
+
+        if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
+            auto* root = h.promise().get_root_promise();
+            state_->executor = root->get_executor();
+        }
+
+        launch_all(std::make_index_sequence<sizeof...(Awaitables)>{});
+
+        if (state_->completed.load(std::memory_order_acquire)) {
+            return false;
+        }
+
+        state_->mark_suspended_and_check_completion();
+
+        if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
+            auto* root = h.promise().get_root_promise();
+            root->awaiting_async_ = true;
+        }
+
+        return true;
+    }
+
+    result_type await_resume() {
+        std::apply(
+            [](auto&... a) {
+                (
+                    [&](auto& aw) {
+                        if constexpr (requires { aw.detach(); }) {
+                            aw.detach();
+                        }
+                    }(a),
+                    ...);
+            },
+            state_->awaitables_);
+
+        // Clear by replacing with a default-constructed tuple.
+        // Individual awaitables are move-only so we cannot assign
+        // a fresh tuple; instead we rely on the destructor having
+        // been called via detach() above.  The state shared_ptr
+        // keeps the tuple alive until all wrappers finish.
+
+        if (state_->exception) {
+            std::rethrow_exception(state_->exception);
+        }
+        return std::move(state_->result);
+    }
+};
+
+/**
+ * when_any - Race heterogeneous awaitables, return first to complete.
+ *
+ * Selected only when not all types are the same (the homogeneous variadic
+ * overload handles the identical-type case).
+ *
+ * @return WhenAnyTupleResult with variant result and winner index.
+ */
+template <typename A1, typename A2, typename... Rest>
+    requires(!std::conjunction_v<
+             std::is_same<std::decay_t<A1>, std::decay_t<A2>>,
+             std::is_same<std::decay_t<A1>, std::decay_t<Rest>>...>)
+auto when_any(A1&& a1, A2&& a2, Rest&&... rest) {
+    return WhenAnyTupleAwaitable<std::decay_t<A1>, std::decay_t<A2>,
+                                 std::decay_t<Rest>...>(
+        std::forward<A1>(a1), std::forward<A2>(a2),
+        std::forward<Rest>(rest)...);
 }
 
 // ============================================================================

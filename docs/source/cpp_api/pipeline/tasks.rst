@@ -10,8 +10,7 @@ Lightweight structured concurrency scope using Coro + JoinHandle.
 
 CoroScope is the primary context type passed to task lambdas. It provides:
 
-- ``spawn()`` for fire-and-forget void coroutines
-- ``spawn()`` returning SpawnFuture<T> for typed results
+- ``spawn()`` returning ``SpawnFuture<T>`` for all coroutines (void and typed). The return value can be ignored for fire-and-forget usage, or ``co_await``'d to wait for that specific coroutine.
 - Channel operations (send/receive)
 - Producer-consumer patterns with helpers
 - Structured cancellation support
@@ -22,18 +21,32 @@ eliminating the Task/Scheduler overhead for lightweight work.
 
 **Basic spawning:**
 
-Fire-and-forget coroutine::
+Fire-and-forget (return value ignored)::
 
     scope.spawn([](CoroScope& s) -> CoroTask<void> {
         // do work
         co_return;
     });
 
+Await a void spawn::
+
+    co_await scope.spawn([](CoroScope& s) -> CoroTask<void> {
+        // caller suspends until this completes
+        co_return;
+    });
+
 Typed result with SpawnFuture::
+
+    int result = co_await scope.spawn([](CoroScope& s) -> CoroTask<int> {
+        co_return 42;
+    });
+
+Or capture the future for later::
 
     auto future = scope.spawn([](CoroScope& s) -> CoroTask<int> {
         co_return 42;
     });
+    // ... do other work ...
     int result = co_await future;
 
 **Channel patterns:**
@@ -194,7 +207,7 @@ The task system has been significantly redesigned:
 - **TaskScope replaced by CoroScope:** Lightweight coroutine scoping with JoinHandle
 - **Old Pipeline API removed:** Use coroutine + channel patterns instead
 - **Task/Scheduler unified execution:** Tasks dispatch to CoroScope internally
-- **SpawnFuture for typed results:** Replaces manual promise patterns
+- **SpawnFuture for all spawns:** ``spawn()`` always returns ``SpawnFuture<T>`` (including ``SpawnFuture<void>``), enabling ``co_await`` on any spawn
 - **Channel expanded:** Bounded capacity, async send/receive, producer tracking
 
 Breaking changes:

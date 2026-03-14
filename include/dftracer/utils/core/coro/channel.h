@@ -74,6 +74,15 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
        private:
         Channel* channel_;
+        std::shared_ptr<Channel> shared_;
+
+        void release() {
+            if (channel_) {
+                channel_->release_producer();
+            }
+            channel_ = nullptr;
+            shared_.reset();
+        }
 
        public:
         /// Register a new producer slot.
@@ -86,20 +95,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
 
         /// Adopt an existing producer registration (no increment).
-        /// Use after register_producer() when you need RAII release only.
         ProducerGuard(Channel* ch, Adopt) : channel_(ch) {}
 
-        ~ProducerGuard() {
-            if (!channel_) return;
-            std::size_t prev = channel_->num_producers_.fetch_sub(
-                1, std::memory_order_acq_rel);
-            if (prev == 1) {
-                // Mark closed for consumers only if user hasn't closed already
-                if (!channel_->user_closed_.load(std::memory_order_acquire))
-                    channel_->closed_.store(true, std::memory_order_release);
-                channel_->notify_all_waiters();
-            }
-        }
+        /// Adopt with shared_ptr to extend channel lifetime.
+        ProducerGuard(Channel* ch, std::shared_ptr<Channel> shared, Adopt)
+            : channel_(ch), shared_(std::move(shared)) {}
+
+        ~ProducerGuard() { release(); }
 
         // Non-copyable
         ProducerGuard(const ProducerGuard&) = delete;
@@ -107,26 +109,15 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
 
         // Movable
         ProducerGuard(ProducerGuard&& other) noexcept
-            : channel_(other.channel_) {
+            : channel_(other.channel_), shared_(std::move(other.shared_)) {
             other.channel_ = nullptr;
         }
 
         ProducerGuard& operator=(ProducerGuard&& other) noexcept {
             if (this != &other) {
-                if (channel_) {
-                    // Release current channel
-                    std::size_t remaining = channel_->num_producers_.fetch_sub(
-                        1, std::memory_order_acq_rel);
-                    if (remaining == 1) {
-                        if (!channel_->user_closed_.load(
-                                std::memory_order_acquire)) {
-                            channel_->closed_.store(true,
-                                                    std::memory_order_release);
-                        }
-                        channel_->notify_all_waiters();
-                    }
-                }
+                release();
                 channel_ = other.channel_;
+                shared_ = std::move(other.shared_);
                 other.channel_ = nullptr;
             }
             return *this;
@@ -858,6 +849,11 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         return ProducerGuard(this, typename ProducerGuard::Adopt{});
     }
 
+    ProducerGuard adopt_producer(std::shared_ptr<Channel> shared) {
+        return ProducerGuard(this, std::move(shared),
+                             typename ProducerGuard::Adopt{});
+    }
+
     void register_producer() {
         had_producers_.store(true, std::memory_order_release);
         num_producers_.fetch_add(1, std::memory_order_release);
@@ -1115,6 +1111,9 @@ class ChannelProducer {
     /// Call this once inside the coroutine body.
     typename Channel<T>::ProducerGuard guard() {
         adopted_ = true;
+        if (shared_) {
+            return raw_->adopt_producer(shared_);
+        }
         return raw_->adopt_producer();
     }
 

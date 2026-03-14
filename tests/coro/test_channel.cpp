@@ -1336,6 +1336,28 @@ TEST_CASE("Channel - producer() bulk") {
     CHECK(channel.is_closed() == true);
 }
 
+TEST_CASE("Channel - producer() guard extends shared_ptr lifetime") {
+    // Verify that ProducerGuard keeps the channel alive even after
+    // the original shared_ptr is released.
+    auto channel = coro::make_channel<int>(10);
+
+    // Create a producer and get a guard
+    auto prod = channel->producer();
+    auto guard = prod.guard();
+
+    // Send a value while channel is alive
+    CHECK(blocking_send(*channel, 42));
+
+    // Release the original shared_ptr -- channel must stay alive
+    // because the guard holds a shared_ptr internally.
+    channel.reset();
+
+    // Guard destructor runs here, accesses channel's mutex to
+    // call release_producer() + notify_all_waiters().
+    // If the guard didn't hold a shared_ptr, this would crash
+    // with "mutex lock failed: Invalid argument" on macOS.
+}
+
 TEST_CASE("Channel - producer() with threads") {
     Channel<int> channel(100);
 

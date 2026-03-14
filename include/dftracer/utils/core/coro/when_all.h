@@ -18,6 +18,21 @@
 namespace dftracer::utils::coro {
 
 // ============================================================================
+// FireAndForget - self-destroying coroutine for when_all wrappers
+// ============================================================================
+
+/// Coroutine that destroys its own frame on completion.
+struct FireAndForget {
+    struct promise_type {
+        FireAndForget get_return_object() { return {}; }
+        std::suspend_never initial_suspend() { return {}; }
+        std::suspend_never final_suspend() noexcept { return {}; }
+        void return_void() {}
+        void unhandled_exception() { std::terminate(); }
+    };
+};
+
+// ============================================================================
 // WhenAllVectorAwaitable - Homogeneous awaitable types (vector)
 // Heap-allocated state pattern
 // ============================================================================
@@ -34,15 +49,9 @@ struct WhenAllVectorState {
     std::atomic<bool> has_exception_{false};
     std::atomic<std::size_t> completed_count_{0};
     std::coroutine_handle<> awaiting_coroutine_;
-    std::vector<CoroTask<void>> wrapper_coros_;
     std::size_t total_;
     Executor* executor_{nullptr};
 
-    // Single-atomic coordination between await_suspend and on_one_complete.
-    // Uses fetch_or(acq_rel) on a bitmask -- the total modification order on
-    // one atomic guarantees exactly one side sees the other's bit, eliminating
-    // the store-buffer (SB) reordering hazard that two independent atomics
-    // with seq_cst were guarding against.
     static constexpr std::uint8_t BIT_SUSPENDED = 1;
     static constexpr std::uint8_t BIT_COMPLETED = 2;
     std::atomic<std::uint8_t> sync_state_{0};
@@ -50,9 +59,7 @@ struct WhenAllVectorState {
     explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
         : awaitables_(std::move(awaitables)),
           results_(awaitables_.size()),
-          total_(awaitables_.size()) {
-        wrapper_coros_.reserve(total_);
-    }
+          total_(awaitables_.size()) {}
 
     void on_one_complete() {
         std::size_t count =
@@ -175,21 +182,15 @@ class WhenAllVectorAwaitable {
 
    private:
     void launch_wrapper(std::size_t i) {
-        auto state = state_;
-
-        auto wrapper_coro = [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
-                               std::size_t index) -> CoroTask<void> {
+        [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
+           std::size_t index) -> FireAndForget {
             try {
                 s->results_[index] = co_await s->awaitables_[index];
                 s->on_one_complete();
             } catch (...) {
                 s->on_exception(std::current_exception());
             }
-        }(state, i);
-
-        state_->wrapper_coros_.push_back(std::move(wrapper_coro));
-        // Start the lazy coroutine - it will suspend at its first co_await
-        state_->wrapper_coros_.back().handle().resume();
+        }(state_, i);
     }
 };
 
@@ -245,23 +246,15 @@ struct WhenAllVectorState<Awaitable> {
     std::atomic<bool> has_exception_{false};
     std::atomic<std::size_t> completed_count_{0};
     std::coroutine_handle<> awaiting_coroutine_;
-    std::vector<CoroTask<void>> wrapper_coros_;
     std::size_t total_;
     Executor* executor_{nullptr};
 
-    // Single-atomic coordination between await_suspend and on_one_complete.
-    // Uses fetch_or(acq_rel) on a bitmask -- the total modification order on
-    // one atomic guarantees exactly one side sees the other's bit, eliminating
-    // the store-buffer (SB) reordering hazard that two independent atomics
-    // with seq_cst were guarding against.
     static constexpr std::uint8_t BIT_SUSPENDED = 1;
     static constexpr std::uint8_t BIT_COMPLETED = 2;
     std::atomic<std::uint8_t> sync_state_{0};
 
     explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
-        : awaitables_(std::move(awaitables)), total_(awaitables_.size()) {
-        wrapper_coros_.reserve(total_);
-    }
+        : awaitables_(std::move(awaitables)), total_(awaitables_.size()) {}
 
     void on_one_complete() {
         std::size_t count =
@@ -370,21 +363,15 @@ class WhenAllVectorAwaitable<Awaitable> {
 
    private:
     void launch_wrapper(std::size_t i) {
-        auto state = state_;
-
-        auto wrapper_coro = [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
-                               std::size_t index) -> CoroTask<void> {
+        [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
+           std::size_t index) -> FireAndForget {
             try {
                 co_await s->awaitables_[index];
                 s->on_one_complete();
             } catch (...) {
                 s->on_exception(std::current_exception());
             }
-        }(state, i);
-
-        state_->wrapper_coros_.push_back(std::move(wrapper_coro));
-        // Start the lazy coroutine - it will suspend at its first co_await
-        state_->wrapper_coros_.back().handle().resume();
+        }(state_, i);
     }
 };
 
@@ -417,22 +404,14 @@ struct WhenAllTupleState {
     std::atomic<bool> has_exception_{false};
     std::atomic<std::size_t> completed_count_{0};
     std::coroutine_handle<> awaiting_coroutine_;
-    std::vector<CoroTask<void>> wrapper_coros_;
     Executor* executor_{nullptr};
 
-    // Single-atomic coordination between await_suspend and on_one_complete.
-    // Uses fetch_or(acq_rel) on a bitmask -- the total modification order on
-    // one atomic guarantees exactly one side sees the other's bit, eliminating
-    // the store-buffer (SB) reordering hazard that two independent atomics
-    // with seq_cst were guarding against.
     static constexpr std::uint8_t BIT_SUSPENDED = 1;
     static constexpr std::uint8_t BIT_COMPLETED = 2;
     std::atomic<std::uint8_t> sync_state_{0};
 
     explicit WhenAllTupleState(Awaitables&&... awaitables)
-        : awaitables_(std::forward<Awaitables>(awaitables)...) {
-        wrapper_coros_.reserve(total_);
-    }
+        : awaitables_(std::forward<Awaitables>(awaitables)...) {}
 
     void on_one_complete() {
         std::size_t count =
@@ -548,23 +527,18 @@ class WhenAllTupleAwaitable {
    private:
     std::shared_ptr<WhenAllTupleState<Awaitables...>> state_;
 
-    // Build result tuple from per-slot optionals (called from await_resume).
     template <std::size_t... Is>
     result_type build_result(std::index_sequence<Is...>) {
         return result_type{std::move(*std::get<Is>(state_->results_))...};
     }
 
-    // Launch wrapper coroutine for slot I.
     template <std::size_t I>
     void launch_one() {
         using A = std::tuple_element_t<I, std::tuple<Awaitables...>>;
         using R = typename A::result_type;
 
-        auto state = state_;
-
-        auto wrapper_coro =
-            [](std::shared_ptr<WhenAllTupleState<Awaitables...>> s)
-            -> CoroTask<void> {
+        [](std::shared_ptr<WhenAllTupleState<Awaitables...>> s)
+            -> FireAndForget {
             try {
                 if constexpr (std::is_void_v<R>) {
                     co_await std::get<I>(s->awaitables_);
@@ -577,11 +551,7 @@ class WhenAllTupleAwaitable {
             } catch (...) {
                 s->on_exception(std::current_exception());
             }
-        }(state);
-
-        state_->wrapper_coros_.push_back(std::move(wrapper_coro));
-        // Start the lazy coroutine - it will suspend at its first co_await
-        state_->wrapper_coros_.back().handle().resume();
+        }(state_);
     }
 
     // Expand index sequence to launch all wrapper coroutines.

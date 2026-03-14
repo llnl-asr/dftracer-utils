@@ -840,7 +840,16 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      * The producer count is incremented immediately (on the caller's
      * thread), not when the coroutine starts.
      */
-    ChannelProducer<T> producer() { return ChannelProducer<T>(this); }
+    ChannelProducer<T> producer() {
+        // Try to obtain a shared_ptr if this channel is managed by one.
+        // For stack-allocated channels, weak_from_this().lock() returns
+        // nullptr, and we fall back to the raw-pointer constructor.
+        auto sp = this->weak_from_this().lock();
+        if (sp) {
+            return ChannelProducer<T>(std::move(sp));
+        }
+        return ChannelProducer<T>(this);
+    }
 
    private:
     friend class ChannelProducer<T>;

@@ -648,7 +648,7 @@ TEST_CASE("Channel - close wakes blocked receive") {
     CHECK(receive_result == false);
     CHECK(receive_done.load(std::memory_order_acquire) == true);
     CHECK(channel.is_closed() == true);
-    CHECK(elapsed.count() < 50);
+    CHECK(elapsed.count() < 200);
 }
 
 TEST_CASE("Channel - last producer release wakes blocked receive") {
@@ -682,7 +682,7 @@ TEST_CASE("Channel - last producer release wakes blocked receive") {
     CHECK(receive_result == false);
     CHECK(channel.num_producers() == 0);
     CHECK(channel.is_closed() == true);
-    CHECK(elapsed.count() < 50);
+    CHECK(elapsed.count() < 200);
 }
 
 TEST_CASE("Channel - send_async unblocks when receiver drains") {

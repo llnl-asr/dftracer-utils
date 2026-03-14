@@ -234,11 +234,12 @@ Always ensure the ``CoroScope`` outlives all spawned tasks and channels.
     auto task = make_task([](CoroScope& scope) -> coro::CoroTask<void> {
         auto channel = coro::make_channel<Event>(100);
 
-        // Spawn producer with RAII guard
-        scope.spawn([channel](CoroScope& s) -> coro::CoroTask<void> {
-            auto guard = channel->producer_guard();
+        // Spawn producer -- producer() pre-registers the slot eagerly
+        scope.spawn([ch = channel->producer()](CoroScope& s) mutable
+                        -> coro::CoroTask<void> {
+            auto guard = ch.guard();
             for (int i = 0; i < 100; ++i) {
-                co_await channel->send(Event{i});
+                co_await ch.send(Event{i});
             }
             // ~ProducerGuard auto-releases; channel closes when last producer exits
             co_return;

@@ -77,7 +77,7 @@ void EpollThreadPoolBackend::stop() {
     // Wake epoll_wait by writing to eventfd.
     if (event_fd_ >= 0) {
         uint64_t val = 1;
-        (void)::write(event_fd_, &val, sizeof(val));
+        [[maybe_unused]] auto r = ::write(event_fd_, &val, sizeof(val));
     }
 
     completion_thread_.join();
@@ -108,7 +108,7 @@ void EpollThreadPoolBackend::epoll_loop() {
             if (events[i].data.fd == event_fd_) {
                 // Shutdown signal -- drain the eventfd and exit.
                 uint64_t val = 0;
-                (void)::read(event_fd_, &val, sizeof(val));
+                [[maybe_unused]] auto r = ::read(event_fd_, &val, sizeof(val));
                 // Don't break immediately; process any other events first.
                 continue;
             }

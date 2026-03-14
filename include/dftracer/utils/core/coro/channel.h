@@ -21,36 +21,27 @@ class Executor;
 
 namespace dftracer::utils::coro {
 
+template <typename T>
+class ChannelProducer;
+
 /**
  * Channel<T> - Producer-consumer queue for streaming data
  *
- * Usage (simple -- guard registers and releases automatically):
+ * Usage:
  * @code
  * auto channel = make_channel<Chunk>(1000);
  *
- * auto producer = make_task([&](CoroScope& ctx) -> CoroTask<void> {
- *     auto guard = channel->producer_guard();  // registers
- *     for (auto chunk : read_chunks())
- *         co_await channel->send(std::move(chunk));
- *     // ~ProducerGuard auto-releases; channel closes when last exits
- * });
- * @endcode
- *
- * Usage (coroutines -- pre-register then adopt for RAII release):
- * @code
- * auto channel = make_channel<Chunk>(0);
- *
- * // Pre-register before spawning so consumers see producers immediately
- * for (std::size_t i = 0; i < N; ++i)
- *     channel->register_producer();
- *
- * for (std::size_t i = 0; i < N; ++i) {
- *     scope.spawn([&](CoroScope& ctx) -> CoroTask<void> {
- *         auto guard = channel->adopt_producer();  // no increment
- *         // ... work ...
- *         co_return;  // ~ProducerGuard auto-releases
+ * // channel->producer() increments the producer count immediately,
+ * // so the channel never transiently sees zero producers while
+ * // coroutines are still being scheduled.
+ * auto task = make_task(
+ *     [ch = channel->producer()](CoroScope& ctx) mutable
+ *         -> CoroTask<void> {
+ *         auto guard = ch.guard();  // adopts slot, RAII release
+ *         for (auto chunk : read_chunks())
+ *             co_await ch.send(std::move(chunk));
+ *         // ~ProducerGuard auto-releases; channel closes when last exits
  *     });
- * }
  * @endcode
  */
 template <typename T>
@@ -847,31 +838,31 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     }
 
     /**
-     * Get producer guard (RAII)
-     * Use this to automatically close channel when last producer exits
+     * Get a send-side handle with a pre-registered producer slot.
+     * Use this when capturing a channel into a coroutine lambda:
+     *
+     *   [ch = channel->producer()](...) mutable -> CoroTask<...> {
+     *       auto guard = ch.guard();
+     *       co_await ch.send(...);
+     *   }
+     *
+     * The producer count is incremented immediately (on the caller's
+     * thread), not when the coroutine starts.
      */
-    ProducerGuard producer_guard() { return ProducerGuard(this); }
+    ChannelProducer<T> producer() { return ChannelProducer<T>(this); }
 
-    /**
-     * Adopt an already-registered producer slot as an RAII guard.
-     * Call register_producer() first, then adopt_producer() inside the
-     * coroutine/thread to get automatic release on scope exit.
-     */
+   private:
+    friend class ChannelProducer<T>;
+
     ProducerGuard adopt_producer() {
         return ProducerGuard(this, typename ProducerGuard::Adopt{});
     }
 
-    /**
-     * Pre-register a single producer before the task actually starts
-     */
     void register_producer() {
         had_producers_.store(true, std::memory_order_release);
         num_producers_.fetch_add(1, std::memory_order_release);
     }
 
-    /**
-     * Pre-register multiple producers at once
-     */
     void register_producers(std::size_t n) {
         if (n > 0) {
             had_producers_.store(true, std::memory_order_release);
@@ -879,9 +870,6 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
     }
 
-    /**
-     * Release a pre-registered producer slot
-     */
     void release_producer() {
         std::size_t prev =
             num_producers_.fetch_sub(1, std::memory_order_acq_rel);
@@ -893,6 +881,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         }
     }
 
+   public:
     /**
      * Try to send without blocking
      *
@@ -1040,6 +1029,100 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      * Check if queue is full (approximate)
      */
     bool full() const { return queue_.size_approx() >= capacity_; }
+};
+
+/**
+ * Send-side handle that pre-registers a producer slot on construction.
+ *
+ * Create via channel->producer() or channel.producer() *before*
+ * spawning a coroutine, then capture by value into the lambda.
+ * The producer count is incremented eagerly (on the caller's thread),
+ * so the channel never transiently sees zero producers while
+ * coroutines are still being scheduled.
+ *
+ * Inside the coroutine, call guard() to get an RAII ProducerGuard
+ * that decrements the count when the coroutine finishes.  If the
+ * ChannelProducer is destroyed without calling guard() (e.g. the
+ * task was never scheduled), it decrements automatically.
+ *
+ * Usage:
+ * @code
+ * auto channel = make_channel<Batch>(100);
+ * auto task = make_task(
+ *     [ch = channel->producer()](CoroScope& ctx) mutable
+ *         -> CoroTask<void> {
+ *         auto guard = ch.guard();
+ *         co_await ch.send(Batch{...});
+ *     });
+ * @endcode
+ */
+template <typename T>
+class ChannelProducer {
+    Channel<T>* raw_{nullptr};
+    std::shared_ptr<Channel<T>> shared_;
+    bool adopted_{false};
+
+   public:
+    /// Construct from raw pointer (stack-allocated channels).
+    explicit ChannelProducer(Channel<T>* ch) : raw_(ch) {
+        if (raw_) {
+            raw_->register_producer();
+        }
+    }
+
+    /// Construct from shared_ptr (heap-allocated channels).
+    explicit ChannelProducer(std::shared_ptr<Channel<T>> ch)
+        : raw_(ch.get()), shared_(std::move(ch)) {
+        if (raw_) {
+            raw_->register_producer();
+        }
+    }
+
+    ~ChannelProducer() {
+        if (raw_ && !adopted_) {
+            raw_->release_producer();
+        }
+    }
+
+    // Movable
+    ChannelProducer(ChannelProducer&& other) noexcept
+        : raw_(other.raw_),
+          shared_(std::move(other.shared_)),
+          adopted_(other.adopted_) {
+        other.raw_ = nullptr;
+        other.adopted_ = true;
+    }
+
+    ChannelProducer& operator=(ChannelProducer&& other) noexcept {
+        if (this != &other) {
+            if (raw_ && !adopted_) {
+                raw_->release_producer();
+            }
+            raw_ = other.raw_;
+            shared_ = std::move(other.shared_);
+            adopted_ = other.adopted_;
+            other.raw_ = nullptr;
+            other.adopted_ = true;
+        }
+        return *this;
+    }
+
+    // Non-copyable
+    ChannelProducer(const ChannelProducer&) = delete;
+    ChannelProducer& operator=(const ChannelProducer&) = delete;
+
+    /// Adopt the pre-registered slot as an RAII guard.
+    /// Call this once inside the coroutine body.
+    typename Channel<T>::ProducerGuard guard() {
+        adopted_ = true;
+        return raw_->adopt_producer();
+    }
+
+    /// Send an item through the channel.
+    auto send(const T& item) { return raw_->send(item); }
+
+    /// Send an item through the channel (move).
+    auto send(T&& item) { return raw_->send(std::move(item)); }
 };
 
 /**

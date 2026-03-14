@@ -165,7 +165,6 @@ class PosixExecutor : public TraceExecutor {
 
    private:
     std::unordered_map<std::string, int> open_files_;
-    int next_fd_ = 1000;
 
     bool execute_open(const Trace& trace, const ReplayConfig& config);
     bool execute_close(const Trace& trace, const ReplayConfig& config);
@@ -187,7 +186,6 @@ class DFTracerExecutor : public TraceExecutor {
 
    private:
     void sleep_for_duration(double duration_microseconds);
-    bool dftracer_initialized_ = false;
 };
 
 // Forward declaration

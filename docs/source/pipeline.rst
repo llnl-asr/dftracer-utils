@@ -216,16 +216,19 @@ Use ``Channel<T>`` for streaming data between tasks. This pattern is useful when
    auto channel = coro::make_channel<Batch>(100);
 
    // Multiple producer tasks
+   // channel->producer() increments the producer count immediately,
+   // so the channel never transiently sees zero producers while
+   // coroutines are still being scheduled.
    std::vector<std::shared_ptr<Task>> producers;
    for (std::size_t i = 0; i < input_files.size(); ++i) {
        auto task = make_task(
-           [i, channel, input_files](CoroScope& scope) -> coro::CoroTask<void> {
-               // RAII guard - auto-registers and releases producer slot
-               auto guard = channel->producer_guard();
+           [i, ch = channel->producer(), input_files](CoroScope& scope)
+               mutable -> coro::CoroTask<void> {
+               auto guard = ch.guard();
 
                // Read and send batches
                for (auto& batch : read_batches(input_files[i])) {
-                   co_await channel->send(std::move(batch));
+                   co_await ch.send(std::move(batch));
                }
                // ~ProducerGuard auto-releases; channel closes when last exits
                co_return;
@@ -254,9 +257,9 @@ Use ``Channel<T>`` for streaming data between tasks. This pattern is useful when
 
 **Key patterns:**
 
-- ``channel->producer_guard()`` - RAII registration (increment count, auto-decrement on exit)
-- ``channel->register_producer()`` / ``channel->adopt_producer()`` - Manual registration for pre-setup patterns
-- ``co_await channel->send(T)`` - Enqueue value (may suspend if buffer full)
+- ``channel->producer()`` - Returns a ``ChannelProducer`` handle with a pre-registered producer slot
+- ``.guard()`` on ``ChannelProducer`` - Adopts the slot as an RAII ``ProducerGuard`` (auto-decrements on exit)
+- ``.send(T)`` on ``ChannelProducer`` - Enqueue value (may suspend if buffer full)
 - ``co_await channel->receive()`` - Dequeue value (returns ``std::optional<T>``, nullopt when closed)
 
 Fan-Out and Fan-In Patterns
@@ -598,13 +601,13 @@ Chain multiple ``Channel<T>`` instances to build staged processing pipelines. Ea
             // Stage 1: Producers (read files -> raw_channel)
             for (std::size_t i = 0; i < num_producers; ++i) {
                 stage_scope.spawn(
-                    [i, raw_channel, input_files](CoroScope& pctx)
+                    [i, ch = raw_channel->producer(),
+                     input_files](CoroScope& pctx) mutable
                         -> coro::CoroTask<void> {
-                        auto guard = raw_channel->producer_guard();
+                        auto guard = ch.guard();
                         for (const auto& file : input_files) {
                             RawData data = read_file(file);
-                            if (!co_await raw_channel->send(
-                                    std::move(data))) {
+                            if (!co_await ch.send(std::move(data))) {
                                 break;
                             }
                         }
@@ -615,13 +618,13 @@ Chain multiple ``Channel<T>`` instances to build staged processing pipelines. Ea
             // Stage 2: Processors (raw_channel -> result_channel)
             for (std::size_t w = 0; w < num_workers; ++w) {
                 stage_scope.spawn(
-                    [raw_channel, result_channel](CoroScope& wctx)
-                        -> coro::CoroTask<void> {
-                        auto guard = result_channel->producer_guard();
+                    [raw_channel,
+                     rp = result_channel->producer()](CoroScope& wctx)
+                        mutable -> coro::CoroTask<void> {
+                        auto guard = rp.guard();
                         while (auto data = co_await wctx.receive(raw_channel)) {
                             Result result = process(*data);
-                            if (!co_await result_channel->send(
-                                    std::move(result))) {
+                            if (!co_await rp.send(std::move(result))) {
                                 break;
                             }
                         }
@@ -652,31 +655,29 @@ Chain multiple ``Channel<T>`` instances to build staged processing pipelines. Ea
     auto result_chan = coro::make_channel<ChunkAggregationOutput>(8);
 
     co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-        chunk_chan->register_producers(input_files.size());
-
         // Stage 1: File producers
         for (const auto& file_path : input_files) {
-            scope.spawn([file_path, chunk_chan](CoroScope& fctx)
-                            -> coro::CoroTask<void> {
-                auto guard = chunk_chan->adopt_producer();
+            scope.spawn([file_path,
+                         ch = chunk_chan->producer()](CoroScope& fctx)
+                            mutable -> coro::CoroTask<void> {
+                auto guard = ch.guard();
                 auto chunks = extract_chunks(file_path);
                 for (auto& chunk : chunks) {
-                    co_await chunk_chan->send(std::move(chunk));
+                    co_await ch.send(std::move(chunk));
                 }
                 co_return;
             });
         }
 
-        result_chan->register_producers(num_workers);
-
         // Stage 2: Parallel chunk workers
         for (std::size_t i = 0; i < num_workers; ++i) {
-            scope.spawn([chunk_chan, result_chan](CoroScope& wctx)
-                            -> coro::CoroTask<void> {
-                auto guard = result_chan->adopt_producer();
+            scope.spawn([chunk_chan,
+                         rp = result_chan->producer()](CoroScope& wctx)
+                            mutable -> coro::CoroTask<void> {
+                auto guard = rp.guard();
                 while (auto input = co_await wctx.receive(chunk_chan)) {
                     auto output = co_await aggregate_chunk(*input);
-                    co_await result_chan->send(std::move(output));
+                    co_await rp.send(std::move(output));
                 }
                 co_return;
             });
@@ -698,7 +699,7 @@ Chain multiple ``Channel<T>`` instances to build staged processing pipelines. Ea
 
 **Key insights:**
 
-- Each ``producer_guard()`` or ``adopt_producer()`` increments the producer count; when all exit, the channel auto-closes
+- Each ``channel->producer()`` pre-registers a producer slot; when all ``ProducerGuard``\s exit, the channel auto-closes
 - Channels buffer ``N`` items; senders block if full, receivers block if empty
 - Pipelined stages can run at different speeds, limited only by buffer capacity and not by synchronous task dependencies
 
@@ -759,10 +760,10 @@ Errors in pipeline tasks propagate to the caller of ``Pipeline::execute()``. Exc
 
 .. code-block:: cpp
 
-    // Producer
-    auto guard = channel->producer_guard();
+    // Producer (inside coroutine with ch = channel->producer())
+    auto guard = ch.guard();
     for (const auto& item : items) {
-        if (!co_await channel->send(std::move(item))) {
+        if (!co_await ch.send(std::move(item))) {
             // Channel closed (consumer exited or error)
             DFTRACER_UTILS_LOG_WARN("Channel closed prematurely");
             co_return;

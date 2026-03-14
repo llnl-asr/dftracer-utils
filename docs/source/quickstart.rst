@@ -82,15 +82,17 @@ Create and execute parallel data processing tasks using coroutines:
        auto channel = make_channel<std::string>(100);
 
        // Producer task - reads data and sends through channel
-       auto producer = make_task([channel](CoroScope& scope) -> CoroTask<void> {
-           auto guard = channel->producer_guard();
-           
-           for (int i = 0; i < 100; i++) {
-               std::string data = "item-" + std::to_string(i);
-               co_await channel->send(std::move(data));
-           }
-           co_return;
-       }, "Producer");
+       auto producer = make_task(
+           [ch = channel->producer()](CoroScope& scope) mutable
+               -> CoroTask<void> {
+               auto guard = ch.guard();
+
+               for (int i = 0; i < 100; i++) {
+                   std::string data = "item-" + std::to_string(i);
+                   co_await ch.send(std::move(data));
+               }
+               co_return;
+           }, "Producer");
 
        // Consumer task - reads from channel and processes
        auto consumer = make_task([channel](CoroScope& scope) -> CoroTask<void> {

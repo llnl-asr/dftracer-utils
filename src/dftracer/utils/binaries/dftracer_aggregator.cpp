@@ -248,20 +248,16 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
             auto result_chan = coro::make_channel<ChunkAggregationOutput>(8);
 
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                // Pre-register all file producers to prevent
-                // premature channel closure
-                chunk_chan->register_producers(input_files.size());
-
                 // File producers: one per input file
                 for (const auto& file_path : input_files) {
                     auto* global_chunk_idx_ptr = &global_chunk_idx;
-                    scope.spawn([file_path, chunk_chan, index_dir,
-                                 checkpoint_size, force_rebuild, agg_config,
-                                 chunk_size_mb, batch_size_mb,
-                                 global_chunk_idx_ptr](CoroScope& /*fctx*/)
+                    scope.spawn([file_path, ch = chunk_chan->producer(),
+                                 index_dir, checkpoint_size, force_rebuild,
+                                 agg_config, chunk_size_mb, batch_size_mb,
+                                 global_chunk_idx_ptr](
+                                    CoroScope& /*fctx*/) mutable
                                     -> coro::CoroTask<void> {
-                        [[maybe_unused]] auto producer_guard =
-                            chunk_chan->adopt_producer();
+                        [[maybe_unused]] auto producer_guard = ch.guard();
                         // Build index
                         std::string idx_path =
                             composites::dft::internal::determine_index_path(
@@ -309,7 +305,7 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
                         }
 
                         for (auto& chunk : file_chunks) {
-                            if (!co_await chunk_chan->send(std::move(chunk))) {
+                            if (!co_await ch.send(std::move(chunk))) {
                                 co_return;
                             }
                         }
@@ -318,27 +314,24 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
                     });
                 }
 
-                // Pre-register all chunk workers as producers
-                // on result_chan
-                result_chan->register_producers(executor_threads);
-
                 // Chunk workers: parallel aggregation
                 for (std::size_t w = 0; w < executor_threads; ++w) {
                     (void)w;
-                    scope.spawn([chunk_chan, result_chan](
-                                    CoroScope& wctx) -> coro::CoroTask<void> {
-                        [[maybe_unused]] auto producer_guard =
-                            result_chan->adopt_producer();
-                        while (auto input = co_await wctx.receive(chunk_chan)) {
-                            ChunkAggregatorUtility agg;
-                            auto output = co_await agg.process(*input);
-                            if (!co_await result_chan->send(
-                                    std::move(output))) {
-                                co_return;
+                    scope.spawn(
+                        [chunk_chan, rp = result_chan->producer(), result_chan](
+                            CoroScope& wctx) mutable -> coro::CoroTask<void> {
+                            [[maybe_unused]] auto producer_guard = rp.guard();
+                            while (auto input =
+                                       co_await wctx.receive(chunk_chan)) {
+                                ChunkAggregatorUtility agg;
+                                auto output = co_await agg.process(*input);
+                                if (!co_await result_chan->send(
+                                        std::move(output))) {
+                                    co_return;
+                                }
                             }
-                        }
-                        co_return;
-                    });
+                            co_return;
+                        });
                 }
 
                 // Streaming merger: incremental merge

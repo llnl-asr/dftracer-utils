@@ -124,14 +124,15 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                         index_dir,
                                         max_concurrent](CoroScope& scope)
                                            -> coro::CoroTask<void> {
-                        scope.spawn([file_chan, needs_build_ptr](
-                                        CoroScope&) -> coro::CoroTask<void> {
-                            auto guard = file_chan->producer_guard();
-                            for (auto idx : *needs_build_ptr) {
-                                if (!co_await file_chan->send(idx)) co_return;
-                            }
-                            co_return;
-                        });
+                        scope.spawn(
+                            [ch = file_chan->producer(), needs_build_ptr](
+                                CoroScope&) mutable -> coro::CoroTask<void> {
+                                auto guard = ch.guard();
+                                for (auto idx : *needs_build_ptr) {
+                                    if (!co_await ch.send(idx)) co_return;
+                                }
+                                co_return;
+                            });
 
                         for (std::size_t w = 0; w < max_concurrent; ++w) {
                             scope.spawn(
@@ -189,14 +190,15 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     co_await ctx.scope([meta_chan, files_ptr, large_files_ptr,
                                         max_concurrent](CoroScope& scope)
                                            -> coro::CoroTask<void> {
-                        scope.spawn([meta_chan, large_files_ptr](
-                                        CoroScope&) -> coro::CoroTask<void> {
-                            auto guard = meta_chan->producer_guard();
-                            for (auto idx : *large_files_ptr) {
-                                if (!co_await meta_chan->send(idx)) co_return;
-                            }
-                            co_return;
-                        });
+                        scope.spawn(
+                            [ch = meta_chan->producer(), large_files_ptr](
+                                CoroScope&) mutable -> coro::CoroTask<void> {
+                                auto guard = ch.guard();
+                                for (auto idx : *large_files_ptr) {
+                                    if (!co_await ch.send(idx)) co_return;
+                                }
+                                co_return;
+                            });
 
                         for (std::size_t w = 0; w < max_concurrent; ++w) {
                             scope.spawn([meta_chan, files_ptr](CoroScope&)

@@ -228,12 +228,12 @@ int main(int argc, char** argv) {
         auto* producer_results_ptr = &producer_results;
         auto producer_task = make_task(
             [i, input_files_ptr, batch_size, verify, channel,
-             producer_results_ptr]([[maybe_unused]] CoroScope& ctx)
+             ch = channel->producer(),
+             producer_results_ptr]([[maybe_unused]] CoroScope& ctx) mutable
                 -> coro::CoroTask<StreamingFileProducerOutput> {
-                auto guard = channel->producer_guard();
+                auto guard = ch.guard();
 
                 StreamingFileProducerUtility producer(channel);
-
                 auto input =
                     StreamingFileProducerInput::from_file((*input_files_ptr)[i])
                         .with_batch_size(batch_size)

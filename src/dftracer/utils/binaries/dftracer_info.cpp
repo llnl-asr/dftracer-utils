@@ -446,17 +446,18 @@ int main(int argc, char** argv) {
                         auto file_chan = coro::make_channel<std::size_t>(
                             executor_threads * 2);
 
-                        scope.spawn([file_chan, files_ptr](
-                                        CoroScope&) -> coro::CoroTask<void> {
-                            auto guard = file_chan->producer_guard();
-                            for (std::size_t i = 0; i < files_ptr->size();
-                                 ++i) {
-                                if (!co_await file_chan->send(i)) {
-                                    co_return;
+                        scope.spawn(
+                            [ch = file_chan->producer(), files_ptr](
+                                CoroScope&) mutable -> coro::CoroTask<void> {
+                                auto guard = ch.guard();
+                                for (std::size_t i = 0; i < files_ptr->size();
+                                     ++i) {
+                                    if (!co_await ch.send(i)) {
+                                        co_return;
+                                    }
                                 }
-                            }
-                            co_return;
-                        });
+                                co_return;
+                            });
 
                         for (std::size_t w = 0; w < executor_threads; ++w) {
                             scope.spawn(
@@ -581,16 +582,18 @@ int main(int argc, char** argv) {
                     auto file_chan =
                         coro::make_channel<std::size_t>(executor_threads * 2);
 
-                    scope.spawn([file_chan, files_ptr](
-                                    CoroScope&) -> coro::CoroTask<void> {
-                        auto guard = file_chan->producer_guard();
-                        for (std::size_t i = 0; i < files_ptr->size(); ++i) {
-                            if (!co_await file_chan->send(i)) {
-                                co_return;
+                    scope.spawn(
+                        [ch = file_chan->producer(), files_ptr](
+                            CoroScope&) mutable -> coro::CoroTask<void> {
+                            auto guard = ch.guard();
+                            for (std::size_t i = 0; i < files_ptr->size();
+                                 ++i) {
+                                if (!co_await ch.send(i)) {
+                                    co_return;
+                                }
                             }
-                        }
-                        co_return;
-                    });
+                            co_return;
+                        });
 
                     for (std::size_t w = 0; w < executor_threads; ++w) {
                         scope.spawn([file_chan, files_ptr, checkpoint_size,

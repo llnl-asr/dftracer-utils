@@ -583,14 +583,14 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
         CoroScope scope(executor);
 
-        scope.spawn(
-            [file_chan, target_files_ptr](CoroScope&) -> coro::CoroTask<void> {
-                auto guard = file_chan->producer_guard();
-                for (std::size_t i = 0; i < target_files_ptr->size(); ++i) {
-                    if (!co_await file_chan->send(i)) co_return;
-                }
-                co_return;
-            });
+        scope.spawn([ch = file_chan->producer(), target_files_ptr](
+                        CoroScope&) mutable -> coro::CoroTask<void> {
+            auto guard = ch.guard();
+            for (std::size_t i = 0; i < target_files_ptr->size(); ++i) {
+                if (!co_await ch.send(i)) co_return;
+            }
+            co_return;
+        });
 
         for (std::size_t w = 0; w < num_workers; ++w) {
             scope.spawn([file_chan, target_files_ptr, collected_mutex,

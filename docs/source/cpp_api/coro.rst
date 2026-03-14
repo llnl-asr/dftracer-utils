@@ -200,37 +200,40 @@ Usage example:
 .. code-block:: cpp
 
     auto channel = make_channel<int>(100);
-    
-    // Producer: send values until done
-    CoroTask<void> producer = [](auto ch) -> CoroTask<void> {
-        auto guard = ch->producer_guard();  // auto-releases on exit
-        for (int i = 0; i < 10; ++i) {
-            co_await ch->send(i);
-        }
-        // ~ProducerGuard auto-closes when exiting
-    }(channel);
-    
+
+    // Producer: channel->producer() increments the producer count
+    // immediately, then .guard() adopts the slot for RAII cleanup.
+    auto task = make_task(
+        [ch = channel->producer()](CoroScope& scope) mutable
+            -> CoroTask<void> {
+            auto guard = ch.guard();
+            for (int i = 0; i < 10; ++i) {
+                co_await ch.send(i);
+            }
+            // ~ProducerGuard auto-releases; channel closes when last exits
+            co_return;
+        }, "Producer");
+
     // Consumer: receive until channel closes
     while (auto value = co_await channel->receive()) {
         std::cout << *value << "\n";  // value is std::optional<int>
     }
 
-**Pre-registration pattern:**
+**Multiple producers pattern:**
 
 .. code-block:: cpp
 
     auto channel = make_channel<Chunk>(0);
-    
-    // Pre-register N producers before spawning
-    for (std::size_t i = 0; i < 4; ++i)
-        channel->register_producer();
-    
-    // Spawn N tasks; each adopts a registration for RAII cleanup
+
+    // channel->producer() increments the count eagerly on the caller's
+    // thread, so the channel never transiently sees zero producers
+    // while coroutines are still being scheduled.
     for (std::size_t i = 0; i < 4; ++i) {
-        scope.spawn([ch = channel](CoroScope& s) -> CoroTask<void> {
-            auto guard = ch->adopt_producer();  // no counter increment
+        scope.spawn([ch = channel->producer(),
+                     i](CoroScope& s) mutable -> CoroTask<void> {
+            auto guard = ch.guard();
             for (auto chunk : read_my_chunks(i)) {
-                co_await ch->send(std::move(chunk));
+                co_await ch.send(std::move(chunk));
             }
             // ~ProducerGuard releases the slot; channel closes when all exit
         });

@@ -273,50 +273,40 @@ class CoroScope {
     /// Spawn producer feeding Generator<T> into Channel<T> (reference).
     template <typename T, typename Func>
     void spawn_producer(coro::Channel<T>& channel, Func&& generator_func) {
-        channel.register_producer();
-        try {
-            spawn([&channel, func = std::forward<Func>(generator_func)](
-                      CoroScope& scope) -> coro::CoroTask<void> {
-                auto guard = channel.adopt_producer();
-                coro::Generator<T> gen = func(scope);
+        spawn([ch = channel.producer(),
+               func = std::forward<Func>(generator_func)](
+                  CoroScope& scope) mutable -> coro::CoroTask<void> {
+            auto guard = ch.guard();
+            coro::Generator<T> gen = func(scope);
 
-                for (auto item : gen) {
-                    if (!co_await channel.send(std::move(item))) {
-                        co_return;
-                    }
+            for (auto item : gen) {
+                if (!co_await ch.send(std::move(item))) {
+                    co_return;
                 }
+            }
 
-                co_return;
-            });
-        } catch (...) {
-            channel.release_producer();
-            throw;
-        }
+            co_return;
+        });
     }
 
     /// Spawn producer feeding Generator<T> into Channel<T> (shared_ptr).
     template <typename T, typename Func>
     void spawn_producer(std::shared_ptr<coro::Channel<T>> channel,
                         Func&& generator_func) {
-        channel->register_producer();
-        try {
-            spawn([channel, func = std::forward<Func>(generator_func)](
-                      CoroScope& scope) -> coro::CoroTask<void> {
-                auto guard = channel->adopt_producer();
-                coro::Generator<T> gen = func(scope);
+        spawn([ch = channel->producer(),
+               func = std::forward<Func>(generator_func)](
+                  CoroScope& scope) mutable -> coro::CoroTask<void> {
+            auto guard = ch.guard();
+            coro::Generator<T> gen = func(scope);
 
-                for (auto item : gen) {
-                    if (!co_await channel->send(std::move(item))) {
-                        co_return;
-                    }
+            for (auto item : gen) {
+                if (!co_await ch.send(std::move(item))) {
+                    co_return;
                 }
+            }
 
-                co_return;
-            });
-        } catch (...) {
-            channel->release_producer();
-            throw;
-        }
+            co_return;
+        });
     }
 
     /// Spawn async producer feeding AsyncGenerator<T> into Channel<T>
@@ -324,25 +314,20 @@ class CoroScope {
     template <typename T, typename Func>
     void spawn_async_producer(coro::Channel<T>& channel,
                               Func&& async_generator_func) {
-        channel.register_producer();
-        try {
-            spawn([&channel, func = std::forward<Func>(async_generator_func)](
-                      CoroScope& scope) -> coro::CoroTask<void> {
-                auto guard = channel.adopt_producer();
-                coro::AsyncGenerator<T> gen = func(scope);
+        spawn([ch = channel.producer(),
+               func = std::forward<Func>(async_generator_func)](
+                  CoroScope& scope) mutable -> coro::CoroTask<void> {
+            auto guard = ch.guard();
+            coro::AsyncGenerator<T> gen = func(scope);
 
-                while (auto item = co_await gen.next()) {
-                    if (!co_await channel.send(std::move(*item))) {
-                        co_return;
-                    }
+            while (auto item = co_await gen.next()) {
+                if (!co_await ch.send(std::move(*item))) {
+                    co_return;
                 }
+            }
 
-                co_return;
-            });
-        } catch (...) {
-            channel.release_producer();
-            throw;
-        }
+            co_return;
+        });
     }
 
     /// Spawn async producer feeding AsyncGenerator<T> into Channel<T>
@@ -350,48 +335,33 @@ class CoroScope {
     template <typename T, typename Func>
     void spawn_async_producer(std::shared_ptr<coro::Channel<T>> channel,
                               Func&& async_generator_func) {
-        channel->register_producer();
-        try {
-            spawn([channel, func = std::forward<Func>(async_generator_func)](
-                      CoroScope& scope) -> coro::CoroTask<void> {
-                auto guard = channel->adopt_producer();
-                coro::AsyncGenerator<T> gen = func(scope);
+        spawn([ch = channel->producer(),
+               func = std::forward<Func>(async_generator_func)](
+                  CoroScope& scope) mutable -> coro::CoroTask<void> {
+            auto guard = ch.guard();
+            coro::AsyncGenerator<T> gen = func(scope);
 
-                while (auto item = co_await gen.next()) {
-                    if (!co_await channel->send(std::move(*item))) {
-                        co_return;
-                    }
+            while (auto item = co_await gen.next()) {
+                if (!co_await ch.send(std::move(*item))) {
+                    co_return;
                 }
+            }
 
-                co_return;
-            });
-        } catch (...) {
-            channel->release_producer();
-            throw;
-        }
+            co_return;
+        });
     }
 
     /// Spawn N producers (shared_ptr).
     template <typename T, typename Func>
     void spawn_producers(std::shared_ptr<coro::Channel<T>> channel,
                          std::size_t count, Func&& producer_func) {
-        channel->register_producers(count);
-        std::size_t spawned = 0;
-        try {
-            for (std::size_t i = 0; i < count; ++i) {
-                spawn([channel, func = producer_func,
-                       i](CoroScope& scope) -> coro::CoroTask<void> {
-                    auto guard = channel->adopt_producer();
-                    co_await func(scope, i);
-                    co_return;
-                });
-                ++spawned;
-            }
-        } catch (...) {
-            for (std::size_t i = spawned; i < count; ++i) {
-                channel->release_producer();
-            }
-            throw;
+        for (std::size_t i = 0; i < count; ++i) {
+            spawn([ch = channel->producer(), func = producer_func,
+                   i](CoroScope& scope) mutable -> coro::CoroTask<void> {
+                auto guard = ch.guard();
+                co_await func(scope, i);
+                co_return;
+            });
         }
     }
 
@@ -399,23 +369,13 @@ class CoroScope {
     template <typename T, typename Func>
     void spawn_producers(coro::Channel<T>& channel, std::size_t count,
                          Func&& producer_func) {
-        channel.register_producers(count);
-        std::size_t spawned = 0;
-        try {
-            for (std::size_t i = 0; i < count; ++i) {
-                spawn([&channel, func = producer_func,
-                       i](CoroScope& scope) -> coro::CoroTask<void> {
-                    auto guard = channel.adopt_producer();
-                    co_await func(scope, i);
-                    co_return;
-                });
-                ++spawned;
-            }
-        } catch (...) {
-            for (std::size_t i = spawned; i < count; ++i) {
-                channel.release_producer();
-            }
-            throw;
+        for (std::size_t i = 0; i < count; ++i) {
+            spawn([ch = channel.producer(), func = producer_func,
+                   i](CoroScope& scope) mutable -> coro::CoroTask<void> {
+                auto guard = ch.guard();
+                co_await func(scope, i);
+                co_return;
+            });
         }
     }
 
@@ -458,28 +418,18 @@ class CoroScope {
     void spawn_transforms(std::shared_ptr<coro::Channel<TIn>> input,
                           std::shared_ptr<coro::Channel<TOut>> output,
                           std::size_t count, Func&& transform_func) {
-        output->register_producers(count);
-        std::size_t spawned = 0;
-        try {
-            for (std::size_t i = 0; i < count; ++i) {
-                spawn([input, output, func = transform_func](
-                          CoroScope& scope) -> coro::CoroTask<void> {
-                    auto guard = output->adopt_producer();
-                    while (auto item = co_await input->receive()) {
-                        auto result = co_await func(scope, std::move(*item));
-                        if (!co_await output->send(std::move(result))) {
-                            co_return;
-                        }
+        for (std::size_t i = 0; i < count; ++i) {
+            spawn([input, op = output->producer(), func = transform_func](
+                      CoroScope& scope) mutable -> coro::CoroTask<void> {
+                auto guard = op.guard();
+                while (auto item = co_await input->receive()) {
+                    auto result = co_await func(scope, std::move(*item));
+                    if (!co_await op.send(std::move(result))) {
+                        co_return;
                     }
-                    co_return;
-                });
-                ++spawned;
-            }
-        } catch (...) {
-            for (std::size_t i = spawned; i < count; ++i) {
-                output->release_producer();
-            }
-            throw;
+                }
+                co_return;
+            });
         }
     }
 
@@ -488,28 +438,18 @@ class CoroScope {
     void spawn_transforms(coro::Channel<TIn>& input,
                           coro::Channel<TOut>& output, std::size_t count,
                           Func&& transform_func) {
-        output.register_producers(count);
-        std::size_t spawned = 0;
-        try {
-            for (std::size_t i = 0; i < count; ++i) {
-                spawn([&input, &output, func = transform_func](
-                          CoroScope& scope) -> coro::CoroTask<void> {
-                    auto guard = output.adopt_producer();
-                    while (auto item = co_await input.receive()) {
-                        auto result = co_await func(scope, std::move(*item));
-                        if (!co_await output.send(std::move(result))) {
-                            co_return;
-                        }
+        for (std::size_t i = 0; i < count; ++i) {
+            spawn([&input, op = output.producer(), func = transform_func](
+                      CoroScope& scope) mutable -> coro::CoroTask<void> {
+                auto guard = op.guard();
+                while (auto item = co_await input.receive()) {
+                    auto result = co_await func(scope, std::move(*item));
+                    if (!co_await op.send(std::move(result))) {
+                        co_return;
                     }
-                    co_return;
-                });
-                ++spawned;
-            }
-        } catch (...) {
-            for (std::size_t i = spawned; i < count; ++i) {
-                output.release_producer();
-            }
-            throw;
+                }
+                co_return;
+            });
         }
     }
 

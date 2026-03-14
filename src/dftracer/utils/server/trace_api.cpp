@@ -458,14 +458,14 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
 
         CoroScope scope(executor);
 
-        scope.spawn(
-            [file_chan, target_files_ptr](CoroScope&) -> coro::CoroTask<void> {
-                auto guard = file_chan->producer_guard();
-                for (std::size_t i = 0; i < target_files_ptr->size(); ++i) {
-                    if (!co_await file_chan->send(i)) co_return;
-                }
-                co_return;
-            });
+        scope.spawn([ch = file_chan->producer(), target_files_ptr](
+                        CoroScope&) mutable -> coro::CoroTask<void> {
+            auto guard = ch.guard();
+            for (std::size_t i = 0; i < target_files_ptr->size(); ++i) {
+                if (!co_await ch.send(i)) co_return;
+            }
+            co_return;
+        });
 
         for (std::size_t w = 0; w < num_workers; ++w) {
             scope.spawn([file_chan, target_files_ptr, collected_mutex,
@@ -719,14 +719,14 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
 
         CoroScope scope(executor);
 
-        scope.spawn(
-            [file_chan, target_files_ptr](CoroScope&) -> coro::CoroTask<void> {
-                auto guard = file_chan->producer_guard();
-                for (std::size_t i = 0; i < target_files_ptr->size(); ++i) {
-                    if (!co_await file_chan->send(i)) co_return;
-                }
-                co_return;
-            });
+        scope.spawn([ch = file_chan->producer(), target_files_ptr](
+                        CoroScope&) mutable -> coro::CoroTask<void> {
+            auto guard = ch.guard();
+            for (std::size_t i = 0; i < target_files_ptr->size(); ++i) {
+                if (!co_await ch.send(i)) co_return;
+            }
+            co_return;
+        });
 
         for (std::size_t w = 0; w < num_workers; ++w) {
             scope.spawn([file_chan, target_files_ptr, body_mutex, ndjson_ptr,
@@ -852,14 +852,14 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& /*req*/,
 
         CoroScope scope(executor);
 
-        scope.spawn(
-            [file_chan, stat_files_ptr](CoroScope&) -> coro::CoroTask<void> {
-                auto guard = file_chan->producer_guard();
-                for (std::size_t i = 0; i < stat_files_ptr->size(); ++i) {
-                    if (!co_await file_chan->send(i)) co_return;
-                }
-                co_return;
-            });
+        scope.spawn([ch = file_chan->producer(), stat_files_ptr](
+                        CoroScope&) mutable -> coro::CoroTask<void> {
+            auto guard = ch.guard();
+            for (std::size_t i = 0; i < stat_files_ptr->size(); ++i) {
+                if (!co_await ch.send(i)) co_return;
+            }
+            co_return;
+        });
 
         for (std::size_t w = 0; w < num_workers; ++w) {
             scope.spawn([file_chan, stat_files_ptr, stats_mutex, all_stats_ptr,

@@ -135,11 +135,13 @@ TEST_CASE("Channel - Producer guard") {
     CHECK(channel.num_producers() == 0);
 
     {
-        auto guard1 = channel.producer_guard();
+        auto p1 = channel.producer();
+        auto guard1 = p1.guard();
         CHECK(channel.num_producers() == 1);
 
         {
-            auto guard2 = channel.producer_guard();
+            auto p2 = channel.producer();
+            auto guard2 = p2.guard();
             CHECK(channel.num_producers() == 2);
         }
 
@@ -162,8 +164,8 @@ TEST_CASE("Channel - Single producer, single consumer") {
     std::atomic<int> sum_consumed{0};
 
     // Producer thread
-    std::thread producer([&]() {
-        auto guard = channel.producer_guard();
+    std::thread producer([&, p = channel.producer()]() mutable {
+        auto guard = p.guard();
         for (int i = 0; i < NUM_ITEMS; ++i) {
             if (blocking_send(channel, i)) sum_produced.fetch_add(i);
         }
@@ -207,8 +209,8 @@ TEST_CASE("Channel - receive waits before first producer registration") {
 
     CHECK(consumer_done.load(std::memory_order_acquire) == false);
 
-    std::thread producer([&]() {
-        auto guard = channel.producer_guard();
+    std::thread producer([&, p = channel.producer()]() mutable {
+        auto guard = p.guard();
         CHECK(channel.num_producers() >= 1);
         CHECK(blocking_send(channel, 123));
     });
@@ -241,13 +243,11 @@ TEST_CASE("Channel - Multiple producers, single consumer") {
     std::atomic<int> total_produced{0};
     std::atomic<int> total_consumed{0};
 
-    channel.register_producers(NUM_PRODUCERS);
-
     // Producer threads
     std::vector<std::thread> producers;
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
-        producers.emplace_back([&, p]() {
-            auto guard = channel.adopt_producer();
+        producers.emplace_back([&, p, prod = channel.producer()]() mutable {
+            auto guard = prod.guard();
             for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
                 int value = p * 1000 + i;
                 CHECK(blocking_send(channel, value));
@@ -281,8 +281,8 @@ TEST_CASE("Channel - Single producer, multiple consumers") {
     std::atomic<int> sum_consumed{0};
 
     // Producer thread
-    std::thread producer([&]() {
-        auto guard = channel.producer_guard();
+    std::thread producer([&, p = channel.producer()]() mutable {
+        auto guard = p.guard();
         for (int i = 0; i < NUM_ITEMS; ++i) {
             CHECK(blocking_send(channel, i));
             sum_produced.fetch_add(i);
@@ -377,8 +377,9 @@ TEST_CASE("Channel - With tasks in pipeline") {
 
     // Create producer task
     auto producer_task = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            auto guard = channel.producer_guard();
+        [&, p = channel.producer()](
+            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
+            auto guard = p.guard();
 
             for (int i = 0; i < 100; ++i) {
                 CHECK(co_await channel.send(i));
@@ -431,8 +432,9 @@ TEST_CASE("Channel - Pipeline with transform") {
 
     // Producer task
     auto producer = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            auto guard = input_channel.producer_guard();
+        [&, p = input_channel.producer()](
+            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
+            auto guard = p.guard();
 
             for (int i = 1; i <= 10; ++i) {
                 CHECK(co_await input_channel.send(i));
@@ -445,9 +447,10 @@ TEST_CASE("Channel - Pipeline with transform") {
 
     // Transform task (multiply by 2)
     auto transform = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx,
-            [[maybe_unused]] int count) -> coro::CoroTask<int> {
-            auto out_guard = output_channel.producer_guard();
+        [&, op = output_channel.producer()](
+            [[maybe_unused]] CoroScope& ctx,
+            [[maybe_unused]] int count) mutable -> coro::CoroTask<int> {
+            auto out_guard = op.guard();
 
             int value;
             while (blocking_receive(input_channel, value)) {
@@ -507,8 +510,9 @@ TEST_CASE("Channel - Fan-out pattern (one producer, multiple consumers)") {
 
     // Producer
     auto producer = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            auto guard = channel.producer_guard();
+        [&, p = channel.producer()](
+            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
+            auto guard = p.guard();
 
             for (int i = 0; i < 100; ++i) {
                 CHECK(co_await channel.send(i));
@@ -578,8 +582,8 @@ TEST_CASE("Channel - High throughput stress test") {
     std::atomic<int> items_sent{0};
     std::atomic<int> items_received{0};
 
-    std::thread producer([&]() {
-        auto guard = channel.producer_guard();
+    std::thread producer([&, p = channel.producer()]() mutable {
+        auto guard = p.guard();
         for (int i = 0; i < NUM_ITEMS; ++i) {
             CHECK(blocking_send(channel, i));
             items_sent.fetch_add(1);
@@ -604,7 +608,8 @@ TEST_CASE("Channel - Rapid open/close cycles") {
     for (int cycle = 0; cycle < 10; ++cycle) {
         Channel<int> channel(10);
 
-        auto guard = channel.producer_guard();
+        auto p = channel.producer();
+        auto guard = p.guard();
 
         for (int i = 0; i < 10; ++i) {
             CHECK(blocking_send(channel, i));
@@ -654,8 +659,8 @@ TEST_CASE("Channel - close wakes blocked receive") {
 TEST_CASE("Channel - last producer release wakes blocked receive") {
     Channel<int> channel(10);
 
-    auto guard =
-        std::make_unique<Channel<int>::ProducerGuard>(channel.producer_guard());
+    auto cp = channel.producer();
+    auto guard = std::make_unique<Channel<int>::ProducerGuard>(cp.guard());
 
     std::atomic<bool> receiver_entered{false};
     bool receive_result = true;
@@ -693,8 +698,9 @@ TEST_CASE("Channel - send_async unblocks when receiver drains") {
     std::atomic<int> consumed_sum{0};
 
     auto producer = make_task(
-        [&](CoroScope& /*ctx*/) -> coro::CoroTask<void> {
-            auto guard = channel->producer_guard();
+        [&, p = channel->producer()](
+            CoroScope& /*ctx*/) mutable -> coro::CoroTask<void> {
+            auto guard = p.guard();
             CHECK(co_await channel->send(1));
             CHECK(co_await channel->send(2));
             third_send_started.store(true, std::memory_order_release);
@@ -744,8 +750,9 @@ TEST_CASE("Channel - send_async resumes false when closed") {
     std::atomic<bool> second_send_result{true};
 
     auto producer = make_task(
-        [&](CoroScope& /*ctx*/) -> coro::CoroTask<void> {
-            auto guard = channel->producer_guard();
+        [&, p = channel->producer()](
+            CoroScope& /*ctx*/) mutable -> coro::CoroTask<void> {
+            auto guard = p.guard();
             CHECK(co_await channel->send(1));
             second_send_started.store(true, std::memory_order_release);
             const bool sent = co_await channel->send(2);
@@ -786,8 +793,9 @@ TEST_CASE("Channel - async bounded handoff on single compute thread") {
     std::atomic<int> consumed{0};
 
     auto producer = make_task(
-        [&](CoroScope& /*ctx*/) -> coro::CoroTask<void> {
-            auto guard = channel.producer_guard();
+        [&, p = channel.producer()](
+            CoroScope& /*ctx*/) mutable -> coro::CoroTask<void> {
+            auto guard = p.guard();
             for (int i = 1; i <= num_items; ++i) {
                 CHECK(co_await channel.send(i));
                 produced.fetch_add(i, std::memory_order_relaxed);
@@ -831,8 +839,9 @@ TEST_CASE("Channel - receive_async()") {
 
     // Producer task
     auto producer = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            auto guard = channel.producer_guard();
+        [&, p = channel.producer()](
+            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
+            auto guard = p.guard();
 
             for (int i = 0; i < 50; ++i) {
                 CHECK(co_await channel.send(i));
@@ -880,8 +889,9 @@ TEST_CASE("Channel - receive_async() with multiple consumers") {
 
     // Producer task
     auto producer = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            auto guard = channel.producer_guard();
+        [&, p = channel.producer()](
+            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
+            auto guard = p.guard();
 
             for (int i = 0; i < 100; ++i) {
                 CHECK(co_await channel.send(i));
@@ -944,8 +954,9 @@ TEST_CASE("Channel - receive_async() with transform pipeline") {
 
     // Producer task
     auto producer = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            auto guard = input_channel.producer_guard();
+        [&, p = input_channel.producer()](
+            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
+            auto guard = p.guard();
 
             for (int i = 1; i <= 20; ++i) {
                 CHECK(co_await input_channel.send(i));
@@ -958,8 +969,10 @@ TEST_CASE("Channel - receive_async() with transform pipeline") {
 
     // Transform task using receive_async() (square the values)
     auto transform = make_task(
-        [&](CoroScope& ctx, [[maybe_unused]] int count) -> coro::CoroTask<int> {
-            auto out_guard = output_channel.producer_guard();
+        [&, op = output_channel.producer()](
+            CoroScope& ctx,
+            [[maybe_unused]] int count) mutable -> coro::CoroTask<int> {
+            auto out_guard = op.guard();
 
             while (auto item_opt = co_await ctx.receive(input_channel)) {
                 int transformed = (*item_opt) * (*item_opt);  // Square
@@ -1014,8 +1027,9 @@ TEST_CASE("Channel - receive_async() fallback") {
 
     // Producer task
     auto producer = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            auto guard = channel.producer_guard();
+        [&, p = channel.producer()](
+            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
+            auto guard = p.guard();
 
             for (int i = 0; i < 30; ++i) {
                 CHECK(co_await channel.send(i));
@@ -1065,8 +1079,9 @@ TEST_CASE("Channel - receive_async() stress test") {
 
     // Producer task
     auto producer = make_task(
-        [&]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-            auto guard = channel.producer_guard();
+        [&, p = channel.producer()](
+            [[maybe_unused]] CoroScope& ctx) mutable -> coro::CoroTask<int> {
+            auto guard = p.guard();
 
             for (int i = 0; i < NUM_ITEMS; ++i) {
                 CHECK(co_await channel.send(i));
@@ -1119,13 +1134,13 @@ TEST_CASE("Channel - Multiple producers, multiple consumers (blocking)") {
     std::vector<std::shared_ptr<Task>> producers;
     std::vector<std::shared_ptr<Task>> consumers;
 
-    channel.register_producers(NUM_PRODUCERS);
-
     // Create multiple producers
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
         auto producer = make_task(
-            [&, p]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-                auto guard = channel.adopt_producer();
+            [&, p,
+             prod = channel.producer()]([[maybe_unused]] CoroScope& ctx) mutable
+                -> coro::CoroTask<int> {
+                auto guard = prod.guard();
 
                 for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
                     int value = p * 1000 + i;
@@ -1198,13 +1213,13 @@ TEST_CASE(
     std::vector<std::shared_ptr<Task>> producers;
     std::vector<std::shared_ptr<Task>> consumers;
 
-    channel.register_producers(NUM_PRODUCERS);
-
     // Create multiple producers
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
         auto producer = make_task(
-            [&, p]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<int> {
-                auto guard = channel.adopt_producer();
+            [&, p,
+             prod = channel.producer()]([[maybe_unused]] CoroScope& ctx) mutable
+                -> coro::CoroTask<int> {
+                auto guard = prod.guard();
 
                 for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
                     int value = p * 1000 + i;
@@ -1263,51 +1278,65 @@ TEST_CASE(
 }
 
 // ============================================================================
-// adopt_producer() and register_producer() Tests
+// producer() and ProducerGuard Tests
 // ============================================================================
 
-TEST_CASE("Channel - adopt_producer() basic") {
+TEST_CASE("Channel - producer() basic") {
     Channel<int> channel(10);
 
     CHECK(channel.num_producers() == 0);
 
-    // Pre-register, then adopt
-    channel.register_producer();
-    CHECK(channel.num_producers() == 1);
-
     {
-        auto guard = channel.adopt_producer();  // no increment
-        CHECK(channel.num_producers() == 1);    // still 1
+        auto p1 = channel.producer();
+        auto guard1 = p1.guard();
+        CHECK(channel.num_producers() == 1);
+
+        {
+            auto p2 = channel.producer();
+            auto guard2 = p2.guard();
+            CHECK(channel.num_producers() == 2);
+        }
+
+        CHECK(channel.num_producers() == 1);
     }
     // guard destroyed -> released
     CHECK(channel.num_producers() == 0);
     CHECK(channel.is_closed() == true);
 }
 
-TEST_CASE("Channel - register_producer() bulk") {
+TEST_CASE("Channel - producer() bulk") {
     Channel<int> channel(10);
 
-    channel.register_producers(5);
-    CHECK(channel.num_producers() == 5);
+    CHECK(channel.num_producers() == 0);
 
-    // Adopt and release one at a time
-    for (int i = 0; i < 5; ++i) {
-        auto guard = channel.adopt_producer();
-        CHECK(channel.num_producers() == static_cast<std::size_t>(5 - i));
+    // Create and release multiple producers
+    {
+        auto p1 = channel.producer();
+        auto guard1 = p1.guard();
+        CHECK(channel.num_producers() == 1);
+
+        auto p2 = channel.producer();
+        auto guard2 = p2.guard();
+        CHECK(channel.num_producers() == 2);
+
+        auto p3 = channel.producer();
+        auto guard3 = p3.guard();
+        CHECK(channel.num_producers() == 3);
+
+        auto p4 = channel.producer();
+        auto guard4 = p4.guard();
+        CHECK(channel.num_producers() == 4);
+
+        auto p5 = channel.producer();
+        auto guard5 = p5.guard();
+        CHECK(channel.num_producers() == 5);
     }
     // All released
     CHECK(channel.num_producers() == 0);
     CHECK(channel.is_closed() == true);
 }
 
-TEST_CASE("Channel - register_producers(0) is a no-op") {
-    Channel<int> channel(10);
-
-    channel.register_producers(0);
-    CHECK(channel.num_producers() == 0);
-}
-
-TEST_CASE("Channel - adopt_producer() with threads") {
+TEST_CASE("Channel - producer() with threads") {
     Channel<int> channel(100);
 
     constexpr int NUM_PRODUCERS = 4;
@@ -1315,14 +1344,11 @@ TEST_CASE("Channel - adopt_producer() with threads") {
     std::atomic<int> total_produced{0};
     std::atomic<int> total_consumed{0};
 
-    // Pre-register all producers
-    channel.register_producers(NUM_PRODUCERS);
-
-    // Producer threads use adopt_producer()
+    // Producer threads use producer()
     std::vector<std::thread> producers;
     for (int p = 0; p < NUM_PRODUCERS; ++p) {
-        producers.emplace_back([&, p]() {
-            auto guard = channel.adopt_producer();  // RAII release
+        producers.emplace_back([&, p, prod = channel.producer()]() mutable {
+            auto guard = prod.guard();  // RAII release
             for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
                 int value = p * 1000 + i;
                 CHECK(blocking_send(channel, value));
@@ -1345,7 +1371,7 @@ TEST_CASE("Channel - adopt_producer() with threads") {
     CHECK(total_produced.load() == total_consumed.load());
 }
 
-TEST_CASE("Channel - adopt_producer() with scope.spawn() pattern") {
+TEST_CASE("Channel - producer() with scope.spawn() pattern") {
     auto channel = coro::make_channel<int>(100);
 
     constexpr int NUM_PRODUCERS = 4;
@@ -1356,21 +1382,19 @@ TEST_CASE("Channel - adopt_producer() with scope.spawn() pattern") {
     auto streaming_task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                // Pre-register before spawning
-                channel->register_producers(NUM_PRODUCERS);
-
-                // Spawn producers that adopt pre-registered slots
+                // Spawn producers using producer()
                 for (int p = 0; p < NUM_PRODUCERS; ++p) {
-                    scope.spawn(
-                        [&, p](CoroScope& /*pctx*/) -> coro::CoroTask<void> {
-                            auto guard = channel->adopt_producer();
-                            for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
-                                int value = p * 1000 + i;
-                                CHECK(co_await channel->send(value));
-                                total_produced.fetch_add(value);
-                            }
-                            co_return;
-                        });
+                    scope.spawn([&, p, prod = channel->producer()](
+                                    CoroScope& /*pctx*/) mutable
+                                    -> coro::CoroTask<void> {
+                        auto guard = prod.guard();
+                        for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+                            int value = p * 1000 + i;
+                            CHECK(co_await channel->send(value));
+                            total_produced.fetch_add(value);
+                        }
+                        co_return;
+                    });
                 }
 
                 // Consumer coroutine
@@ -1408,7 +1432,7 @@ TEST_CASE("Channel - adopt_producer() with scope.spawn() pattern") {
     CHECK(total_produced.load() == expected_sum);
 }
 
-TEST_CASE("Channel - adopt_producer() early exit in scope.spawn()") {
+TEST_CASE("Channel - producer() early exit in scope.spawn()") {
     auto channel = coro::make_channel<int>(100);
 
     constexpr int NUM_PRODUCERS = 4;
@@ -1417,22 +1441,21 @@ TEST_CASE("Channel - adopt_producer() early exit in scope.spawn()") {
     auto streaming_task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                channel->register_producers(NUM_PRODUCERS);
-
                 // Some producers exit early (simulating skip/error)
                 for (int p = 0; p < NUM_PRODUCERS; ++p) {
-                    scope.spawn(
-                        [&, p](CoroScope& /*pctx*/) -> coro::CoroTask<void> {
-                            auto guard = channel->adopt_producer();
-                            if (p % 2 == 0) {
-                                // Early exit - guard still releases
-                                co_return;
-                            }
-                            for (int i = 0; i < 10; ++i) {
-                                CHECK(co_await channel->send(p * 100 + i));
-                            }
+                    scope.spawn([&, p, prod = channel->producer()](
+                                    CoroScope& /*pctx*/) mutable
+                                    -> coro::CoroTask<void> {
+                        auto guard = prod.guard();
+                        if (p % 2 == 0) {
+                            // Early exit - guard still releases
                             co_return;
-                        });
+                        }
+                        for (int i = 0; i < 10; ++i) {
+                            CHECK(co_await channel->send(p * 100 + i));
+                        }
+                        co_return;
+                    });
                 }
 
                 // Consumer
@@ -1464,7 +1487,7 @@ TEST_CASE("Channel - adopt_producer() early exit in scope.spawn()") {
     CHECK(total_consumed.load() == 20);
 }
 
-TEST_CASE("Channel - adopt_producer() two-stage pipeline with scope.spawn()") {
+TEST_CASE("Channel - producer() two-stage pipeline with scope.spawn()") {
     auto stage1 = coro::make_channel<int>(50);
     auto stage2 = coro::make_channel<int>(50);
 
@@ -1477,32 +1500,32 @@ TEST_CASE("Channel - adopt_producer() two-stage pipeline with scope.spawn()") {
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
                 // Stage 1: producers -> stage1 channel
-                stage1->register_producers(NUM_PRODUCERS);
                 for (int p = 0; p < NUM_PRODUCERS; ++p) {
-                    scope.spawn(
-                        [&, p](CoroScope& /*pctx*/) -> coro::CoroTask<void> {
-                            auto guard = stage1->adopt_producer();
-                            for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
-                                CHECK(co_await stage1->send(p * 1000 + i));
-                            }
-                            co_return;
-                        });
-                }
-
-                // Stage 2: workers read stage1, write stage2
-                stage2->register_producers(NUM_WORKERS);
-                auto* stage1_ptr = &stage1;
-                auto* stage2_ptr = &stage2;
-                for (int w = 0; w < NUM_WORKERS; ++w) {
-                    scope.spawn([stage1_ptr, stage2_ptr](
-                                    CoroScope& wctx) -> coro::CoroTask<void> {
-                        auto guard = (*stage2_ptr)->adopt_producer();
-                        while (auto item =
-                                   co_await wctx.receive(**stage1_ptr)) {
-                            CHECK(co_await (*stage2_ptr)->send(*item * 2));
+                    scope.spawn([&, p, prod = stage1->producer()](
+                                    CoroScope& /*pctx*/) mutable
+                                    -> coro::CoroTask<void> {
+                        auto guard = prod.guard();
+                        for (int i = 0; i < ITEMS_PER_PRODUCER; ++i) {
+                            CHECK(co_await stage1->send(p * 1000 + i));
                         }
                         co_return;
                     });
+                }
+
+                // Stage 2: workers read stage1, write stage2
+                auto* stage1_ptr = &stage1;
+                auto* stage2_ptr = &stage2;
+                for (int w = 0; w < NUM_WORKERS; ++w) {
+                    scope.spawn(
+                        [stage1_ptr, prod = stage2->producer()](
+                            CoroScope& wctx) mutable -> coro::CoroTask<void> {
+                            auto guard = prod.guard();
+                            while (auto item =
+                                       co_await wctx.receive(**stage1_ptr)) {
+                                CHECK(co_await prod.send(*item * 2));
+                            }
+                            co_return;
+                        });
                 }
 
                 // Final consumer

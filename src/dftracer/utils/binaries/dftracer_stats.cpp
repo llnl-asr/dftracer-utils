@@ -856,10 +856,11 @@ static void run_detailed_query_workers(
 
     auto file_chan = coro::make_channel<std::size_t>(executor_threads * 2);
 
-    scope.spawn([file_chan, files_ptr](CoroScope&) -> coro::CoroTask<void> {
-        auto guard = file_chan->producer_guard();
+    scope.spawn([ch = file_chan->producer(),
+                 files_ptr](CoroScope&) mutable -> coro::CoroTask<void> {
+        auto guard = ch.guard();
         for (std::size_t fi = 0; fi < files_ptr->size(); ++fi) {
-            if (!co_await file_chan->send(fi)) {
+            if (!co_await ch.send(fi)) {
                 co_return;
             }
         }
@@ -1054,16 +1055,17 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
                                        -> coro::CoroTask<void> {
                     // Producer: push all file paths into the channel
                     auto* files_ptr = &files_needing_index;
-                    scope.spawn([file_chan, files_ptr](CoroScope& /*pctx*/)
-                                    -> coro::CoroTask<void> {
-                        auto guard = file_chan->producer_guard();
-                        for (const auto& f : *files_ptr) {
-                            if (!co_await file_chan->send(f)) {
-                                co_return;
+                    scope.spawn(
+                        [ch = file_chan->producer(), files_ptr](
+                            CoroScope&) mutable -> coro::CoroTask<void> {
+                            auto guard = ch.guard();
+                            for (const auto& f : *files_ptr) {
+                                if (!co_await ch.send(f)) {
+                                    co_return;
+                                }
                             }
-                        }
-                        co_return;
-                    });
+                            co_return;
+                        });
 
                     // Workers: N coroutines pulling from the channel
                     auto* indexed_count_ptr = &indexed_count;
@@ -1240,16 +1242,18 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
                         coro::make_channel<std::size_t>(executor_threads * 2);
 
                     // Producer: push file indices
-                    scope.spawn([file_chan, files_ptr](
-                                    CoroScope&) -> coro::CoroTask<void> {
-                        auto guard = file_chan->producer_guard();
-                        for (std::size_t fi = 0; fi < files_ptr->size(); ++fi) {
-                            if (!co_await file_chan->send(fi)) {
-                                co_return;
+                    scope.spawn(
+                        [ch = file_chan->producer(), files_ptr](
+                            CoroScope&) mutable -> coro::CoroTask<void> {
+                            auto guard = ch.guard();
+                            for (std::size_t fi = 0; fi < files_ptr->size();
+                                 ++fi) {
+                                if (!co_await ch.send(fi)) {
+                                    co_return;
+                                }
                             }
-                        }
-                        co_return;
-                    });
+                            co_return;
+                        });
 
                     // Workers: N coroutines, each processing one file at a time
                     for (std::size_t w = 0; w < executor_threads; ++w) {

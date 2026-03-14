@@ -341,7 +341,8 @@ int main(int argc, char** argv) {
     auto gen_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         gen_time - start_time);
     if (verbose) {
-        printf("Generation time: %ld ms\n\n", gen_duration.count());
+        printf("Generation time: %lld ms\n\n",
+               static_cast<long long>(gen_duration.count()));
     }
 
     // Print statistics
@@ -419,7 +420,8 @@ int main(int argc, char** argv) {
         end_time - start_time);
 
     printf("\n=== Completed ===\n");
-    printf("Total execution time: %ld ms\n", total_duration.count());
+    printf("Total execution time: %lld ms\n",
+           static_cast<long long>(total_duration.count()));
 
     return 0;
 }

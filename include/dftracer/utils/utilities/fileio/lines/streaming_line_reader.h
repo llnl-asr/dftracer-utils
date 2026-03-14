@@ -203,7 +203,7 @@ class StreamingLineReader {
             auto iter_config =
                 sources::IndexedFileLineIteratorConfig().with_file(
                     file_path, actual_idx_path);
-            if (config.start_line() > 0 && config.end_line() > 0) {
+            if (config.start_line() > 0 || config.end_line() > 0) {
                 iter_config.with_line_range(config.start_line(),
                                             config.end_line());
             }

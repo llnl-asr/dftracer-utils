@@ -67,8 +67,11 @@ inline coro::AsyncGenerator<Line> async_indexed_file_lines(
     stream_buffer.resize(config.buffer_size());
     std::string line_buffer;
     std::size_t current_position = config.start();
+    const bool is_line_range =
+        config.range_type() == reader::internal::RangeType::LINE_RANGE;
 
-    while (!stream->done() && current_position <= config.end()) {
+    while (!stream->done() &&
+           (!is_line_range || current_position <= config.end())) {
         // Async read — this is the key difference from sync version
         std::size_t bytes_read = co_await stream->read_async(
             stream_buffer.data(), stream_buffer.size());

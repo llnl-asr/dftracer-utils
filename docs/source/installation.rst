@@ -176,7 +176,7 @@ To verify which backend was built, check the CMake output during configuration:
 
 .. note::
    Backend selection is automatic based on platform detection during CMake configuration.
-   There is no manual override option; the build system selects the best available backend.
+   You can override the default backend at runtime via ``PipelineConfig::with_io_backend()``.
 
 Minimum Requirements by Backend
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

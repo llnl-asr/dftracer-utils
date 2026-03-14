@@ -108,7 +108,7 @@ function(target_set_warnings TARGET_NAME)
                 # -Wuseless-cast          # Warn about useless casts
       )
 
-      # GCC 14+ has false-positive -Wnull-dereference, -Warray-bounds,
+      # GCC 13+ has false-positive -Wnull-dereference, -Warray-bounds,
       # and -Wstringop-overflow in libstdc++ (streambuf, exception_ptr,
       # vector copy). Disable for affected versions.
       if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "13")

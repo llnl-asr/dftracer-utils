@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_BATCH_PROCESSOR_UTILITY_H
 
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utilities.h>
@@ -100,18 +101,21 @@ class BatchProcessorUtility
             co_return {};
         }
 
-        // Get CoroScope for parallel execution
         CoroScope& ctx = this->context();
 
-        // Process each item sequentially
-        std::vector<ItemOutput> results;
-        results.reserve(items.size());
+        std::vector<coro::SpawnFuture<ItemOutput>> futures;
+        futures.reserve(items.size());
 
         for (const auto& item : items) {
-            results.push_back(processor_(ctx, item));
+            auto* proc = &processor_;
+            futures.push_back(ctx.spawn(
+                [proc, item](CoroScope& s) -> coro::CoroTask<ItemOutput> {
+                    co_return (*proc)(s, item);
+                }));
         }
 
-        // Sort if comparator provided
+        auto results = co_await coro::when_all(std::move(futures));
+
         if (comparator_.has_value()) {
             std::sort(results.begin(), results.end(), comparator_.value());
         }

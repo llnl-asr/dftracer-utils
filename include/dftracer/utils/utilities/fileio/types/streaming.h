@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H
 
-#include <dftracer/utils/utilities/fileio/types/types.h>
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <functional>

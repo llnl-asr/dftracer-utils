@@ -49,56 +49,74 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     compression::zlib::StreamingDecompressorUtility decompressor(
         compression::zlib::DecompressionFormat::AUTO);
 
-    bool eof = false;
-    while (!eof) {
-        ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
-            fd, read_buffer.data(), READ_BUFFER_SIZE, file_offset);
+    // Capture exceptions so we can close fd before rethrowing
+    // (co_await is not allowed inside catch handlers).
+    std::exception_ptr ex;
 
-        if (bytes_read <= 0) {
-            eof = true;
-            // Yield final partial line if any
-            if (!line_buffer.empty()) {
-                current_line++;
-                if ((start_line == 0 || current_line >= start_line) &&
-                    (end_line == 0 || current_line <= end_line)) {
-                    co_yield Line(std::string_view(line_buffer), current_line);
-                }
+    try {
+        bool eof = false;
+        while (!eof) {
+            ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
+                fd, read_buffer.data(), READ_BUFFER_SIZE, file_offset);
+
+            if (bytes_read < 0) {
+                throw std::runtime_error(
+                    "Read error on compressed file: " + file_path + " (errno=" +
+                    std::to_string(static_cast<int>(-bytes_read)) + ")");
             }
-            break;
-        }
 
-        file_offset += bytes_read;
-
-        // Wrap raw bytes into CompressedData for the decompressor
-        CompressedData compressed(std::vector<unsigned char>(
-            reinterpret_cast<unsigned char*>(read_buffer.data()),
-            reinterpret_cast<unsigned char*>(read_buffer.data()) + bytes_read));
-
-        auto raw_chunks = co_await decompressor.process(compressed);
-
-        // Split decompressed bytes into lines
-        for (const auto& raw : raw_chunks) {
-            for (unsigned char byte : raw.data) {
-                if (byte == '\n') {
+            if (bytes_read == 0) {
+                // EOF — yield final partial line if any
+                if (!line_buffer.empty()) {
                     current_line++;
                     if ((start_line == 0 || current_line >= start_line) &&
                         (end_line == 0 || current_line <= end_line)) {
                         co_yield Line(std::string_view(line_buffer),
                                       current_line);
                     }
-                    if (end_line > 0 && current_line >= end_line) {
-                        co_await ::dftracer::utils::io::close(fd);
-                        co_return;
+                }
+                break;
+            }
+
+            file_offset += bytes_read;
+
+            // Wrap raw bytes into CompressedData for the decompressor
+            CompressedData compressed(std::vector<unsigned char>(
+                reinterpret_cast<unsigned char*>(read_buffer.data()),
+                reinterpret_cast<unsigned char*>(read_buffer.data()) +
+                    bytes_read));
+
+            auto raw_chunks = co_await decompressor.process(compressed);
+
+            // Split decompressed bytes into lines
+            for (const auto& raw : raw_chunks) {
+                for (unsigned char byte : raw.data) {
+                    if (byte == '\n') {
+                        current_line++;
+                        if ((start_line == 0 || current_line >= start_line) &&
+                            (end_line == 0 || current_line <= end_line)) {
+                            co_yield Line(std::string_view(line_buffer),
+                                          current_line);
+                        }
+                        if (end_line > 0 && current_line >= end_line) {
+                            co_await ::dftracer::utils::io::close(fd);
+                            co_return;
+                        }
+                        line_buffer.clear();
+                    } else {
+                        line_buffer.push_back(static_cast<char>(byte));
                     }
-                    line_buffer.clear();
-                } else {
-                    line_buffer.push_back(static_cast<char>(byte));
                 }
             }
         }
+    } catch (...) {
+        ex = std::current_exception();
     }
 
     co_await ::dftracer::utils::io::close(fd);
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
 }
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

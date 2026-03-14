@@ -46,67 +46,64 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
     std::size_t current_line = 0;
     auto file_offset = static_cast<off_t>(start_byte);
 
-    // Align to next line boundary if starting mid-file
-    if (start_byte > 0) {
-        // Read a chunk to find the next newline
-        bool aligned = false;
-        while (!aligned) {
+    // Capture exceptions so we can close fd before rethrowing
+    // (co_await is not allowed inside catch handlers).
+    std::exception_ptr ex;
+
+    try {
+        // Align to next line boundary if starting mid-file
+        if (start_byte > 0) {
+            bool aligned = false;
+            while (!aligned) {
+                ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
+                    fd, read_buffer.data(), read_buffer.size(), file_offset);
+
+                if (bytes_read < 0) {
+                    throw std::runtime_error(
+                        "Read error on file: " + file_path + " (errno=" +
+                        std::to_string(static_cast<int>(-bytes_read)) + ")");
+                }
+
+                if (bytes_read == 0) {
+                    // Hit EOF before finding a newline — nothing to yield
+                    co_await ::dftracer::utils::io::close(fd);
+                    co_return;
+                }
+
+                for (ssize_t i = 0; i < bytes_read; ++i) {
+                    file_offset++;
+                    if (read_buffer[static_cast<std::size_t>(i)] == '\n') {
+                        aligned = true;
+                        break;
+                    }
+                }
+
+                if (static_cast<std::size_t>(file_offset) >= end_byte) {
+                    // Passed end_byte while aligning — nothing to yield
+                    co_await ::dftracer::utils::io::close(fd);
+                    co_return;
+                }
+            }
+        }
+
+        // Read chunks and split into lines.
+        bool done = false;
+        while (!done) {
+            if (static_cast<std::size_t>(file_offset) >= end_byte) {
+                break;
+            }
+
             ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
                 fd, read_buffer.data(), read_buffer.size(), file_offset);
 
-            if (bytes_read <= 0) {
-                // Hit EOF before finding a newline — nothing to yield
-                co_await ::dftracer::utils::io::close(fd);
-                co_return;
+            if (bytes_read < 0) {
+                throw std::runtime_error(
+                    "Read error on file: " + file_path + " (errno=" +
+                    std::to_string(static_cast<int>(-bytes_read)) + ")");
             }
 
-            for (ssize_t i = 0; i < bytes_read; ++i) {
-                file_offset++;
-                if (read_buffer[static_cast<std::size_t>(i)] == '\n') {
-                    aligned = true;
-                    break;
-                }
-            }
-
-            if (static_cast<std::size_t>(file_offset) >= end_byte) {
-                // Passed end_byte while aligning — nothing to yield
-                co_await ::dftracer::utils::io::close(fd);
-                co_return;
-            }
-        }
-    }
-
-    // Read chunks and split into lines.
-    // Mirrors sync PlainFileBytesIterator: process chars while pos < end_byte.
-    bool done = false;
-    while (!done) {
-        // Check if we've reached the end boundary before reading
-        if (static_cast<std::size_t>(file_offset) >= end_byte) {
-            break;
-        }
-
-        ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
-            fd, read_buffer.data(), read_buffer.size(), file_offset);
-
-        if (bytes_read <= 0) {
-            // EOF — yield final partial line if any
-            if (!line_buffer.empty()) {
-                current_line++;
-                co_yield Line(std::string_view(line_buffer), current_line);
-            }
-            done = true;
-            break;
-        }
-
-        for (ssize_t i = 0; i < bytes_read; ++i) {
-            auto abs_pos = static_cast<std::size_t>(file_offset) +
-                           static_cast<std::size_t>(i);
-
-            // Stop strictly at end_byte (sync reads while pos < end)
-            if (abs_pos >= end_byte) {
-                // Yield whatever partial content we accumulated
-                // But only if we have content (sync: has_line=true only if
-                // buffer not empty)
+            if (bytes_read == 0) {
+                // EOF — yield final partial line if any
                 if (!line_buffer.empty()) {
                     current_line++;
                     co_yield Line(std::string_view(line_buffer), current_line);
@@ -115,30 +112,46 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
                 break;
             }
 
-            char c = read_buffer[static_cast<std::size_t>(i)];
+            for (ssize_t i = 0; i < bytes_read; ++i) {
+                auto abs_pos = static_cast<std::size_t>(file_offset) +
+                               static_cast<std::size_t>(i);
 
-            if (c == '\n') {
-                // Sync yields a line when it finds \n, even if buffer
-                // is empty (empty line).
-                // After yielding, check if we've passed end_byte.
-                current_line++;
-                co_yield Line(std::string_view(line_buffer), current_line);
-                line_buffer.clear();
-
-                // Check if we've reached end_byte after consuming the newline
-                if (abs_pos + 1 >= end_byte) {
+                if (abs_pos >= end_byte) {
+                    if (!line_buffer.empty()) {
+                        current_line++;
+                        co_yield Line(std::string_view(line_buffer),
+                                      current_line);
+                    }
                     done = true;
                     break;
                 }
-            } else {
-                line_buffer.push_back(c);
-            }
-        }
 
-        file_offset += bytes_read;
+                char c = read_buffer[static_cast<std::size_t>(i)];
+
+                if (c == '\n') {
+                    current_line++;
+                    co_yield Line(std::string_view(line_buffer), current_line);
+                    line_buffer.clear();
+
+                    if (abs_pos + 1 >= end_byte) {
+                        done = true;
+                        break;
+                    }
+                } else {
+                    line_buffer.push_back(c);
+                }
+            }
+
+            file_offset += bytes_read;
+        }
+    } catch (...) {
+        ex = std::current_exception();
     }
 
     co_await ::dftracer::utils::io::close(fd);
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
 }
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

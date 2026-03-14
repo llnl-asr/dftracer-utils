@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
 
 #include <chrono>
-#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -12,7 +12,6 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils::utilities::replay;
-namespace fs = std::filesystem;
 
 TEST_CASE("DFTracer Replay - Basic functionality") {
     DFTRACER_UTILS_LOGGER_INIT();

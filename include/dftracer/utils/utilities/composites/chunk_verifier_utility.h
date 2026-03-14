@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_CHUNK_VERIFIER_UTILITY_H
 
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 
@@ -139,12 +140,28 @@ class ChunkVerifierUtility
         // Step 2: Get CoroScope for parallel event collection
         CoroScope& ctx = this->context();
 
-        // Collect events from all chunks sequentially
-        std::vector<EventType> output_events;
+        // Spawn parallel event collection for each chunk
+        std::vector<coro::SpawnFuture<std::vector<EventType>>> futures;
+        futures.reserve(input.chunks.size());
+
         for (const auto& chunk : input.chunks) {
-            auto events = event_collector_(ctx, chunk);
-            output_events.insert(output_events.end(), events.begin(),
-                                 events.end());
+            auto* collector = &event_collector_;
+            futures.push_back(ctx.spawn(
+                [collector, chunk](
+                    CoroScope& s) -> coro::CoroTask<std::vector<EventType>> {
+                    co_return (*collector)(s, chunk);
+                }));
+        }
+
+        // Wait for all collections to complete
+        auto chunk_results = co_await coro::when_all(std::move(futures));
+
+        // Flatten results
+        std::vector<EventType> output_events;
+        for (auto& events : chunk_results) {
+            output_events.insert(output_events.end(),
+                                 std::make_move_iterator(events.begin()),
+                                 std::make_move_iterator(events.end()));
         }
 
         // Step 5: Sort events for consistent hashing

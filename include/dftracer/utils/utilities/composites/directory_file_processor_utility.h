@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/types.h>
@@ -91,11 +92,20 @@ class DirectoryFileProcessorUtility
         // Step 3: Get CoroScope for parallel execution
         CoroScope& ctx = this->context();
 
-        // Process each file sequentially
-        output.results.reserve(files.size());
+        // Spawn parallel tasks for each file
+        std::vector<coro::SpawnFuture<FileOutput>> futures;
+        futures.reserve(files.size());
+
         for (const auto& file_path : files) {
-            output.results.push_back(processor_(ctx, file_path));
+            auto* proc = &processor_;
+            futures.push_back(ctx.spawn(
+                [proc, file_path](CoroScope& s) -> coro::CoroTask<FileOutput> {
+                    co_return (*proc)(s, file_path);
+                }));
         }
+
+        // Wait for all tasks to complete
+        output.results = co_await coro::when_all(std::move(futures));
 
         // Step 6: Finalize aggregated statistics
         output.finalize();

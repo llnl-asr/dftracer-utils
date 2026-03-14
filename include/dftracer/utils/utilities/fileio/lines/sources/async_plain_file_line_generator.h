@@ -13,7 +13,7 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
 /**
  * @brief Async generator that yields lines from plain text files.
  *
- * Uses io::open + io::read for non-blocking I/O.
+ * Uses io::open + io::pread for non-blocking I/O.
  *
  * Usage:
  * @code
@@ -40,50 +40,65 @@ inline coro::AsyncGenerator<Line> async_plain_file_lines(
     std::size_t current_line = 0;
     off_t file_offset = 0;
 
-    // Read chunks and split into lines
-    bool eof = false;
-    while (!eof) {
-        // Async read
-        ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
-            fd, read_buffer.data(), BUFFER_SIZE, file_offset);
+    // Capture exceptions so we can close fd before rethrowing
+    // (co_await is not allowed inside catch handlers).
+    std::exception_ptr ex;
 
-        if (bytes_read <= 0) {
-            eof = true;
-            // Yield final line if buffer has content
-            if (!line_buffer.empty()) {
-                current_line++;
-                if ((start_line == 0 || current_line >= start_line) &&
-                    (end_line == 0 || current_line <= end_line)) {
-                    co_yield Line(std::string_view(line_buffer), current_line);
+    try {
+        bool eof = false;
+        while (!eof) {
+            ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
+                fd, read_buffer.data(), BUFFER_SIZE, file_offset);
+
+            if (bytes_read < 0) {
+                throw std::runtime_error(
+                    "Read error on file: " + file_path + " (errno=" +
+                    std::to_string(static_cast<int>(-bytes_read)) + ")");
+            }
+
+            if (bytes_read == 0) {
+                // EOF — yield final line if buffer has content
+                if (!line_buffer.empty()) {
+                    current_line++;
+                    if ((start_line == 0 || current_line >= start_line) &&
+                        (end_line == 0 || current_line <= end_line)) {
+                        co_yield Line(std::string_view(line_buffer),
+                                      current_line);
+                    }
+                }
+                break;
+            }
+
+            file_offset += bytes_read;
+
+            // Parse lines from buffer
+            for (ssize_t i = 0; i < bytes_read; ++i) {
+                char c = read_buffer[static_cast<std::size_t>(i)];
+                if (c == '\n') {
+                    current_line++;
+                    if ((start_line == 0 || current_line >= start_line) &&
+                        (end_line == 0 || current_line <= end_line)) {
+                        co_yield Line(std::string_view(line_buffer),
+                                      current_line);
+                    }
+                    if (end_line > 0 && current_line >= end_line) {
+                        co_await ::dftracer::utils::io::close(fd);
+                        co_return;
+                    }
+                    line_buffer.clear();
+                } else {
+                    line_buffer.push_back(c);
                 }
             }
-            break;
         }
-
-        file_offset += bytes_read;
-
-        // Parse lines from buffer
-        for (ssize_t i = 0; i < bytes_read; ++i) {
-            char c = read_buffer[static_cast<std::size_t>(i)];
-            if (c == '\n') {
-                current_line++;
-                if ((start_line == 0 || current_line >= start_line) &&
-                    (end_line == 0 || current_line <= end_line)) {
-                    co_yield Line(std::string_view(line_buffer), current_line);
-                }
-                if (end_line > 0 && current_line >= end_line) {
-                    // Close fd and exit
-                    co_await ::dftracer::utils::io::close(fd);
-                    co_return;
-                }
-                line_buffer.clear();
-            } else {
-                line_buffer.push_back(c);
-            }
-        }
+    } catch (...) {
+        ex = std::current_exception();
     }
 
     co_await ::dftracer::utils::io::close(fd);
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
 }
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

@@ -3,6 +3,8 @@ Task System
 
 Task-based DAG execution and coroutine scoping for structured concurrency.
 
+.. mermaid:: ../../_generated/pipeline_tasks.mmd
+
 CoroScope
 ---------
 
@@ -196,7 +198,7 @@ make_task
 
 Create a new Task with a given function.
 
-.. doxygenfunction:: dftracer::utils::make_task(Func&&, std::string)
+.. doxygenfunction:: dftracer::utils::make_task
    :project: dftracer-utils
 
 Migration from Old API

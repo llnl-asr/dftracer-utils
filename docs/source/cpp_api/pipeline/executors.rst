@@ -3,8 +3,25 @@ Executor Classes
 
 Executor classes for running pipeline tasks.
 
-Base Executor
--------------
+.. mermaid::
+
+   graph TB
+       Executor["Executor"]
+       Workers["Worker Threads<br/>(N threads)"]
+       RunQueue["ConcurrentQueue<br/>(coroutine handles)"]
+       IoBack["IoBackend"]
+       SqlPool["SQLite ThreadPool"]
+       Timer["TimerService"]
+
+       Executor --> Workers
+       Executor --> RunQueue
+       Executor --> IoBack
+       Executor --> SqlPool
+       Executor --> Timer
+       Workers --> |dequeue + resume| RunQueue
+
+Executor
+--------
 
 .. doxygenclass:: dftracer::utils::Executor
    :project: dftracer-utils
@@ -12,18 +29,28 @@ Base Executor
    :protected-members:
    :undoc-members:
 
-Executor Factory
-----------------
+Configuration
+-------------
 
-.. doxygenclass:: dftracer::utils::ExecutorFactory
+.. doxygenstruct:: dftracer::utils::ExecutorConfig
    :project: dftracer-utils
    :members:
    :undoc-members:
 
-Executor Support
-----------------
+Progress Tracking
+-----------------
 
-.. doxygenclass:: dftracer::utils::ExecutorContext
+.. doxygenstruct:: dftracer::utils::TaskInfo
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::TaskProgress
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::ExecutorProgress
    :project: dftracer-utils
    :members:
    :undoc-members:

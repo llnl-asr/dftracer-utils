@@ -10,7 +10,6 @@ build:
     python: "3.11"
   apt_packages:
     - doxygen
-    - graphviz
     - cmake
     - build-essential
     - zlib1g-dev

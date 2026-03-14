@@ -14,6 +14,32 @@ The pipeline consists of:
 - **Channels**: Thread-safe queues for producer-consumer patterns
 - **JoinHandle**: Stack-allocated join barrier for coordinating parallel work
 
+.. mermaid::
+
+   graph TB
+       subgraph Pipeline["Pipeline"]
+           Executor["Executor<br/>(thread pool)"]
+           Scheduler["Scheduler<br/>(DAG tracking)"]
+           Watchdog["Watchdog<br/>(timeout detection)"]
+       end
+
+       subgraph Primitives["Coroutine Primitives"]
+           CoroScope["CoroScope"]
+           CoroTask["CoroTask&lt;T&gt;"]
+           Channel["Channel&lt;T&gt;"]
+           SpawnFuture["SpawnFuture&lt;T&gt;"]
+           JoinHandle["JoinHandle"]
+       end
+
+       Pipeline --> Executor
+       Pipeline --> Scheduler
+       Scheduler --> Watchdog
+       Executor --> CoroScope
+       CoroScope --> CoroTask
+       CoroScope --> SpawnFuture
+       CoroScope --> JoinHandle
+       CoroTask --> Channel
+
 Basic Task Creation
 -------------------
 
@@ -527,6 +553,33 @@ Without nested scopes, you'd flatten to one task per chunk, increasing context-s
 Multi-Stage Channel Pipelines
 -----------------------------
 
+.. mermaid::
+
+   graph LR
+       subgraph Stage1["Stage 1: Producers"]
+           P1["Producer 1"]
+           P2["Producer 2"]
+           Pn["Producer N"]
+       end
+
+       subgraph Stage2["Stage 2: Workers"]
+           W1["Worker 1"]
+           W2["Worker 2"]
+       end
+
+       subgraph Stage3["Stage 3: Writer"]
+           Writer["Writer"]
+       end
+
+       P1 --> |send| RawChan["Channel&lt;RawData&gt;<br/>capacity: 100"]
+       P2 --> |send| RawChan
+       Pn --> |send| RawChan
+       RawChan --> |receive| W1
+       RawChan --> |receive| W2
+       W1 --> |send| ResultChan["Channel&lt;Result&gt;<br/>capacity: 50"]
+       W2 --> |send| ResultChan
+       ResultChan --> |receive| Writer
+
 Chain multiple ``Channel<T>`` instances to build staged processing pipelines. Each stage reads from an upstream channel, processes, and writes to a downstream channel. This achieves streaming backpressure propagation.
 
 **Pattern:** Create one channel per stage, then spawn producer, processing, and consumer tasks that coordinate through channels:
@@ -950,7 +1003,7 @@ The project has migrated from the old ``TaskContext``/``TaskScope`` API to the n
 +----------------------------------+----------------------------------------------+
 | ``scope.join_all()``             | ``co_await scope.join_all()``                |
 +----------------------------------+----------------------------------------------+
-| ``with_scheduler_threads(N)``    | ``with_compute_threads(N)``                 |
+| ``with_scheduler_threads(N)``    | ``with_compute_threads(N)``                  |
 +----------------------------------+----------------------------------------------+
 | ``ctx.spawn_io(...)``            | Various ``io::*`` utilities                  |
 +----------------------------------+----------------------------------------------+

@@ -1,4 +1,4 @@
-Text Utilities
+Text
 ==============
 
 Text processing utilities for splitting and filtering.

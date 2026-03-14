@@ -4,12 +4,32 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 # Don't add project root to path - we want to use the installed package from site-packages
 # If we add the project root, Python will try to import from source which doesn't have the compiled .so
 # sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+# Auto-generate Mermaid class diagrams from Doxygen XML before building
+_docs_dir = Path(__file__).parent.parent  # docs/
+_script = _docs_dir / "scripts" / "generate_class_diagrams.py"
+_xml_dir = _docs_dir / "doxygen" / "xml"
+_gen_dir = _docs_dir / "source" / "_generated"
+if _script.exists() and _xml_dir.exists():
+    print("Generating Mermaid class diagrams from Doxygen XML...")
+    subprocess.run(
+        [
+            sys.executable,
+            str(_script),
+            "--xml-dir",
+            str(_xml_dir),
+            "--output-dir",
+            str(_gen_dir),
+        ],
+        check=False,
+    )
 
 # Mock imports for packages that may not be available during doc build
 autodoc_mock_imports = []
@@ -50,7 +70,7 @@ except Exception:
 
 extensions = [
     "sphinx.ext.autodoc",
-    "sphinx.ext.autosummary",
+    # "sphinx.ext.autosummary",  # Disabled: manual docs in api/reader.rst and api/indexer.rst
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx.ext.intersphinx",
@@ -60,7 +80,13 @@ extensions = [
     "myst_parser",  # For Markdown support
     "breathe",  # Always enable breathe
     "sphinx.ext.ifconfig",  # For conditional inclusion
+    "sphinxcontrib.mermaid",  # Mermaid diagrams
 ]
+
+# Mermaid configuration
+mermaid_version = "11"
+mermaid_init_js = "mermaid.initialize({startOnLoad:true, theme:'neutral'});"
+mermaid_d3_zoom = True
 
 # Check if Doxygen XML output exists and set up Breathe config
 doxygen_xml_path = Path(__file__).parent.parent / "doxygen" / "xml"
@@ -100,7 +126,7 @@ intersphinx_mapping = {
 }
 
 templates_path = ["_templates"]
-exclude_patterns = []
+exclude_patterns = ["api/_autosummary"]
 
 # The suffix(es) of source filenames.
 source_suffix = {
@@ -114,7 +140,7 @@ master_doc = "index"
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = "sphinx_rtd_theme"
+html_theme = "furo"
 html_static_path = ["_static"]
 
 # Search configuration
@@ -122,11 +148,7 @@ html_search_language = "en"
 
 # Theme options
 html_theme_options = {
-    "navigation_depth": 4,
-    "collapse_navigation": False,
-    "sticky_navigation": True,
-    "includehidden": True,
-    "titles_only": False,
+    "navigation_with_keys": True,
 }
 
 # -- Options for autodoc -----------------------------------------------------
@@ -146,4 +168,4 @@ autodoc_typehints_description_target = "documented"
 todo_include_todos = True
 
 # -- Options for autosummary -------------------------------------------------
-autosummary_generate = True
+autosummary_generate = False

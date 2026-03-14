@@ -1,4 +1,4 @@
-Filesystem Utilities
+Filesystem
 ====================
 
 Directory scanning and file enumeration utilities.

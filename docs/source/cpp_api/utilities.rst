@@ -3,6 +3,8 @@ Utilities API
 
 Composable processing utilities. For usage examples, see :doc:`/utilities`.
 
+.. mermaid:: ../_generated/utility_hierarchy.mmd
+
 Call Tree
 ---------
 
@@ -166,24 +168,11 @@ Indexing & Aggregation
 
 Indexing utilities for efficient trace querying and aggregation.
 
-Chunk Statistics
-^^^^^^^^^^^^^^^^
+Chunk Statistics & Bloom Filter Cache
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Per-chunk event statistics including counts, timestamp ranges, and duration distributions.
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkStatistics
-   :project: dftracer-utils
-   :members:
-
-Bloom Filter Cache
-^^^^^^^^^^^^^^^^^^
-
-Thread-safe bounded cache for deserialized bloom filters.
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::BloomFilterCache
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
+See :doc:`dft_indexing` for full documentation of ``ChunkStatistics``,
+``BloomFilter``, ``BloomFilterCache``, and the complete indexing pipeline.
 
 Views & Predicates
 ------------------

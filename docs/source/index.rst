@@ -34,7 +34,6 @@ Features
     cli
     server
     utilities
-    replay
     api/index
     cpp_api/index
     developers

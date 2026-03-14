@@ -1,4 +1,4 @@
-Composite Utilities
+Composites
 ===================
 
 High-level utilities that combine multiple operations into complete workflows.

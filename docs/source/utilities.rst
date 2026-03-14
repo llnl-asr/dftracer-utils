@@ -12,6 +12,11 @@ dftracer-utils provides a collection of composable utilities for trace file proc
    utilities/compression
    utilities/text
    utilities/composites
+   utilities/replay
+   utilities/hash
+   utilities/indexer
+   utilities/reader
+   utilities/common
    call-tree
 
 Overview
@@ -23,6 +28,33 @@ Utilities follow a consistent pattern:
 - **Output types**: Result structs with success status and data
 - **process() method**: Main entry point that transforms input to output
 - **Tags**: Metadata like ``Parallelizable`` for thread-safe utilities
+
+.. mermaid::
+
+   graph TB
+       subgraph Base["Utility Pattern"]
+           Utility["Utility&lt;I, O, Tags...&gt;<br/>process(I) → CoroTask&lt;O&gt;"]
+       end
+
+       subgraph Categories["Utility Categories"]
+           FileIO["File I/O<br/>FileReader, StreamingReader"]
+           Compression["Compression<br/>Compressor, Decompressor"]
+           Text["Text<br/>LineSplitter, LineFilter"]
+           Hash["Hash<br/>FNV1a, Std, MurmurHash3"]
+           Indexer["Indexer<br/>Checkpoint, BloomFilter"]
+           Reader["Reader<br/>Stream, LineProcessor"]
+           Common["Common<br/>JSON, DDSketch, Log2Histogram"]
+           Composites["Composites<br/>DFTracer-specific pipelines"]
+       end
+
+       Utility --> FileIO
+       Utility --> Compression
+       Utility --> Text
+       Utility --> Hash
+       Utility --> Indexer
+       Utility --> Reader
+       Utility --> Common
+       Utility --> Composites
 
 File I/O
 --------

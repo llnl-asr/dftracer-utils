@@ -20,6 +20,8 @@ RECURSIVE              = YES
 INPUT                  = ../include
 FILE_PATTERNS          = *.h *.hpp *.cpp
 EXCLUDE_PATTERNS       = */test/* */tests/*
+STRIP_FROM_INC_PATH    = ../include
+STRIP_FROM_PATH        = ../include
 
 # XML output for Breathe
 GENERATE_XML           = YES

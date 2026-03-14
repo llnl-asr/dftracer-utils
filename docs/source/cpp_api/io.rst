@@ -19,7 +19,7 @@ Backend Selection
 
 The I/O backend is selected at runtime (or forced via configuration). Available backends are exposed via the ``IoBackendType`` enum:
 
-.. doxygentype:: dftracer::utils::io::IoBackendType
+.. doxygenenum:: dftracer::utils::io::IoBackendType
    :project: dftracer-utils
 
 Platform Support
@@ -30,6 +30,29 @@ Platform Support
 - **KQUEUE_THREADPOOL**: macOS and BSD only. Uses kqueue + thread pool model.
 - **THREADPOOL**: All platforms. Pure thread pool backend; always available as fallback.
 - **AUTO**: Runtime detection. Tries io_uring first, falls back to platform-specific epoll/kqueue, finally to thread pool.
+
+.. mermaid::
+
+   graph TB
+       IoBackend["IoBackend<br/>(abstract)"]
+       IoAwaitable["IoAwaitable<br/>(co_await result)"]
+
+       IoBackend --> IoAwaitable
+
+       subgraph Backends["Platform Backends"]
+           IoUring["IoUringBackend<br/>(Linux 5.1+)"]
+           Epoll["EpollThreadPoolBackend<br/>(Linux)"]
+           Kqueue["KqueueThreadPoolBackend<br/>(macOS/BSD)"]
+           ThreadPool["ThreadPoolBackend<br/>(all platforms)"]
+       end
+
+       IoUring -.-> |implements| IoBackend
+       Epoll -.-> |implements| IoBackend
+       Kqueue -.-> |implements| IoBackend
+       ThreadPool -.-> |implements| IoBackend
+
+       Executor["Executor"] --> |owns| IoBackend
+       CoroTask["CoroTask"] --> |co_await| IoAwaitable
 
 Core Async Operations
 ---------------------
@@ -130,7 +153,7 @@ The Awaitable Type
 
 All I/O operations return an ``IoAwaitable`` object. It is a standard C++20 awaitable that suspends the coroutine until the operation completes:
 
-.. doxygenclass:: dftracer::utils::io::IoAwaitable
+.. doxygenstruct:: dftracer::utils::io::IoAwaitable
    :project: dftracer-utils
    :members:
 

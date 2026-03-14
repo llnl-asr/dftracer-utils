@@ -5,6 +5,8 @@ C++20 coroutine primitives for asynchronous task execution. All classes are in t
 
 For usage examples and task scheduling, see :doc:`/pipeline` and :doc:`pipeline/tasks`.
 
+.. mermaid:: ../_generated/coro.mmd
+
 Coro
 ----
 
@@ -326,7 +328,13 @@ Usage example:
     auto results = co_await when_all(std::move(tasks));
     // results is std::vector<int>
 
-.. doxygenfunction:: dftracer::utils::coro::when_all
+.. doxygenfunction:: dftracer::utils::coro::when_all(std::vector<Awaitable> awaitables)
+    :project: dftracer-utils
+
+.. doxygenfunction:: dftracer::utils::coro::when_all(std::initializer_list<Awaitable> awaitables)
+    :project: dftracer-utils
+
+.. doxygenfunction:: dftracer::utils::coro::when_all(Awaitables&&... awaitables)
     :project: dftracer-utils
 
 when_any
@@ -366,7 +374,13 @@ Usage example:
     :project: dftracer-utils
     :members:
 
-.. doxygenfunction:: dftracer::utils::coro::when_any
+.. doxygenfunction:: dftracer::utils::coro::when_any(std::vector<Awaitable> awaitables)
+    :project: dftracer-utils
+
+.. doxygenfunction:: dftracer::utils::coro::when_any(std::initializer_list<Awaitable> awaitables)
+    :project: dftracer-utils
+
+.. doxygenfunction:: dftracer::utils::coro::when_any(A1 &&a1, A2 &&a2, Rest&&... rest)
     :project: dftracer-utils
 
 Heterogeneous when_all and when_any

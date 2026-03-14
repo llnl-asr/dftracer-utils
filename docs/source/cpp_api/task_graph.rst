@@ -3,6 +3,39 @@ Task Graph API
 
 DAG-based task graph builder for constructing parallel computation graphs. All classes are in the ``dftracer::utils::task_graph`` namespace.
 
+.. mermaid::
+
+   graph LR
+       subgraph parallel["parallel(N)"]
+           T1["Task 0"]
+           T2["Task 1"]
+           Tn["Task N-1"]
+       end
+
+       subgraph reduce["reduce()"]
+           R1["Reduce 0-1"]
+           R2["Reduce 2-3"]
+           RF["Final"]
+       end
+
+       T1 --> R1
+       T2 --> R1
+       Tn --> R2
+       R1 --> RF
+       R2 --> RF
+
+       subgraph fanout["fan_out(1 to N)"]
+           Src["Source"] --> S1["Shard 0"]
+           Src --> S2["Shard 1"]
+           Src --> Sn["Shard N"]
+       end
+
+       subgraph fanin["fan_in(N to 1)"]
+           I1["Input 0"] --> Merge["Merge"]
+           I2["Input 1"] --> Merge
+           In["Input N"] --> Merge
+       end
+
 Usage Examples
 --------------
 
@@ -403,7 +436,7 @@ Configuration for parallel task execution.
    :members:
 
 TaskGraphFanOutConfig
-^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
 
 Configuration for fan-out operations.
 
@@ -430,7 +463,7 @@ Configuration for map operations.
    :members:
 
 TaskGraphReduceConfig
-^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
 
 Configuration for reduce operations.
 
@@ -439,7 +472,7 @@ Configuration for reduce operations.
    :members:
 
 TaskGraphFoldConfig
-^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^
 
 Configuration for fold operations.
 
@@ -448,7 +481,7 @@ Configuration for fold operations.
    :members:
 
 TaskGraphAggregateConfig
-^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^^^^
 
 Configuration for aggregate operations.
 
@@ -466,7 +499,7 @@ Configuration for partition operations.
    :members:
 
 TaskGraphConcatConfig
-^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^^
 
 Configuration for concat operations.
 

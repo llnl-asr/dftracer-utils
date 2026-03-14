@@ -533,7 +533,7 @@ dftracer_replay
     # Replay only POSIX read operations
     dftracer_replay -d ./traces -r --filter-category POSIX --filter-function read
 
-For detailed usage, see :doc:`replay`.
+For detailed usage, see :doc:`utilities/replay`.
 
 dftracer_tar
 ------------
@@ -624,7 +624,7 @@ dftracer_call_tree
 
 - ``inputs`` - Trace files (.pfw, .pfw.gz) or directories containing trace files [required]
 - ``-r, --recursive`` - Recursively search directories for trace files
-- ``--pattern <pattern>`` - File pattern for trace files (default: *.pfw.gz)
+- ``--pattern <pattern>`` - File pattern for trace files (default: ``*.pfw.gz``)
 - ``-o, --output <path>`` - Output file path for serialized call tree (auto-generated from input if not specified)
 - ``--json`` - Also save call tree in JSON (Chrome Tracing) format
 - ``--text <path>`` - Export call tree to text file

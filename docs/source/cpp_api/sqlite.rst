@@ -16,6 +16,22 @@ Key Features:
 - **Minimal overhead**: Thin wrapper on top of SQLite3; no ORM abstractions
 - **Thread-safe**: All database access is serialized through the thread pool
 
+.. mermaid::
+
+   sequenceDiagram
+       participant Task as CoroTask
+       participant Await as SqliteAwaitable
+       participant Pool as SQLite ThreadPool
+       participant DB as sqlite3
+
+       Task->>Await: co_await sqlite::run(fn)
+       Await->>Pool: submit work
+       Note over Task: suspended
+       Pool->>DB: execute SQL
+       DB-->>Pool: result
+       Pool-->>Await: complete
+       Await-->>Task: resume with result
+
 Database Management
 -------------------
 
@@ -74,11 +90,15 @@ The ``DfTracerSqliteVfs`` is a custom SQLite Virtual File System that:
 - Handles WAL mode, synchronization, and shared memory regions
 - Integrates with the Executor to resume coroutines on completion
 
-.. doxygentype:: dftracer::utils::sqlite::DfTracerSqliteVfsAppData
+.. doxygenstruct:: dftracer::utils::sqlite::DfTracerSqliteVfsAppData
    :project: dftracer-utils
+   :members:
+   :undoc-members:
 
-.. doxygentype:: dftracer::utils::sqlite::DfTracerSqliteVfsFile
+.. doxygenstruct:: dftracer::utils::sqlite::DfTracerSqliteVfsFile
    :project: dftracer-utils
+   :members:
+   :undoc-members:
 
 .. doxygenfunction:: dftracer::utils::sqlite::register_dftracer_sqlite_vfs
    :project: dftracer-utils
@@ -124,7 +144,10 @@ Binding Functions
 .. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_double
    :project: dftracer-utils
 
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_text
+.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_text(int index, const std::string &text)
+   :project: dftracer-utils
+
+.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_text(int index, const char *text, int length, void (*destructor)(void*))
    :project: dftracer-utils
 
 .. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_blob

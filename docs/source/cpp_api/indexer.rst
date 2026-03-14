@@ -3,27 +3,28 @@ Indexer Components
 
 Indexing and searching functionality.
 
-C API
------
-
-C language bindings for indexer operations.
-
-.. doxygenfile:: indexer/indexer.h
-   :project: dftracer-utils
-   :sections: briefdescription detaileddescription innernamespace innerclass define typedef func
+.. mermaid:: ../_generated/indexer.mmd
 
 C++ API
 -------
 
-C++ classes in the ``dftracer::utils`` namespace.
+C++ classes in the ``dftracer::utils::utilities::indexer::internal`` namespace.
 
-.. doxygenclass:: dftracer::utils::Indexer
+.. doxygenclass:: dftracer::utils::utilities::indexer::internal::Indexer
    :project: dftracer-utils
    :members:
    :protected-members:
    :undoc-members:
 
-.. doxygenclass:: dftracer::utils::IndexerFactory
+.. doxygenclass:: dftracer::utils::utilities::indexer::internal::IndexerFactory
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+Checkpoint
+----------
+
+.. doxygenstruct:: dftracer::utils::utilities::indexer::internal::IndexerCheckpoint
    :project: dftracer-utils
    :members:
    :undoc-members:

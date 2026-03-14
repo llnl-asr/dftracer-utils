@@ -1,4 +1,4 @@
-Compression Utilities
+Compression
 =====================
 
 Zlib compression and decompression utilities supporting GZIP, ZLIB, and DEFLATE formats.

@@ -81,6 +81,7 @@ venv
 docs/build/
 docs/doxygen/
 docs/source/**/_autosummary/
+docs/source/_generated/
 
 # LSP
 compile_commands.json

@@ -55,7 +55,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Create input
             auto input = MetadataCollectorUtilityInput::from_file(trace_file)
-                             .with_count_lines(true);
+                             .with_compute_hash(true);
 
             // Process
             MetadataCollectorUtility collector;
@@ -78,7 +78,7 @@ TEST_SUITE("MetadataCollector") {
             auto input = MetadataCollectorUtilityInput::from_file(trace_file)
                              .with_checkpoint_size(100)
                              .with_force_rebuild(true)
-                             .with_count_lines(true);
+                             .with_compute_hash(true);
 
             // Process
             MetadataCollectorUtility collector;
@@ -96,7 +96,7 @@ TEST_SUITE("MetadataCollector") {
 
             // Create input
             auto input = MetadataCollectorUtilityInput::from_file(trace_file)
-                             .with_count_lines(true);
+                             .with_compute_hash(true);
 
             // Process
             MetadataCollectorUtility collector;
@@ -150,7 +150,7 @@ TEST_SUITE("MetadataCollector") {
                              .with_index(idx_path)
                              .with_checkpoint_size(1024 * 1024)  // 1MB
                              .with_force_rebuild(true)
-                             .with_count_lines(true);
+                             .with_compute_hash(true);
 
             // Process
             MetadataCollectorUtility collector;
@@ -193,7 +193,7 @@ TEST_SUITE("MetadataCollector") {
                 auto input = MetadataCollectorUtilityInput::from_file(gz_file)
                                  .with_index(idx_path)
                                  .with_force_rebuild(true)
-                                 .with_count_lines(true);
+                                 .with_compute_hash(true);
 
                 MetadataCollectorUtility collector;
                 auto output = collector.process(input).get();
@@ -209,7 +209,7 @@ TEST_SUITE("MetadataCollector") {
                 auto input = MetadataCollectorUtilityInput::from_file(gz_file)
                                  .with_index(idx_path)
                                  .with_force_rebuild(false)
-                                 .with_count_lines(true);
+                                 .with_compute_hash(true);
 
                 MetadataCollectorUtility collector;
                 auto output = collector.process(input).get();

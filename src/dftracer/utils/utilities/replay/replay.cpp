@@ -247,7 +247,8 @@ bool PosixExecutor::execute_read(const Trace& trace,
     if (it != open_files_.end() && trace.size > 0) {
         std::vector<char> buffer(std::min(static_cast<std::size_t>(trace.size),
                                           config.max_file_size));
-        ssize_t bytes_read = read(it->second, buffer.data(), buffer.size());
+        [[maybe_unused]] ssize_t bytes_read =
+            read(it->second, buffer.data(), buffer.size());
         DFTRACER_UTILS_LOG_DEBUG("Read %zd bytes", bytes_read);
     }
 
@@ -264,7 +265,8 @@ bool PosixExecutor::execute_write(const Trace& trace,
         std::size_t write_size = std::min(static_cast<std::size_t>(trace.size),
                                           config.max_file_size);
         std::vector<char> buffer(write_size, 'A');
-        ssize_t bytes_written = write(it->second, buffer.data(), buffer.size());
+        [[maybe_unused]] ssize_t bytes_written =
+            write(it->second, buffer.data(), buffer.size());
         DFTRACER_UTILS_LOG_DEBUG("Wrote %zd bytes", bytes_written);
     }
 
@@ -278,7 +280,8 @@ bool PosixExecutor::execute_seek(const Trace& trace,
 
     auto it = open_files_.find(trace.fhash);
     if (it != open_files_.end() && trace.offset >= 0) {
-        off_t result = lseek(it->second, trace.offset, SEEK_SET);
+        [[maybe_unused]] off_t result =
+            lseek(it->second, trace.offset, SEEK_SET);
         DFTRACER_UTILS_LOG_DEBUG("Seek to offset %lld, result: %lld",
                                  static_cast<long long>(trace.offset),
                                  static_cast<long long>(result));

@@ -21,7 +21,7 @@ struct MetadataCollectorUtilityInput {
     std::size_t checkpoint_size = dftracer::utils::utilities::indexer::
         internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
-    bool count_lines = false;
+    bool compute_hash = false;
 
     MetadataCollectorUtilityInput() = default;
 
@@ -29,12 +29,12 @@ struct MetadataCollectorUtilityInput {
         std::string fpath, std::string ipath = "",
         std::size_t ckpt = dftracer::utils::utilities::indexer::internal::
             Indexer::DEFAULT_CHECKPOINT_SIZE,
-        bool force = false, bool count = false)
+        bool force = false, bool hash = false)
         : file_path(std::move(fpath)),
           idx_path(std::move(ipath)),
           checkpoint_size(ckpt),
           force_rebuild(force),
-          count_lines(count) {}
+          compute_hash(hash) {}
 
     static MetadataCollectorUtilityInput from_file(std::string path) {
         MetadataCollectorUtilityInput input;
@@ -57,8 +57,8 @@ struct MetadataCollectorUtilityInput {
         return *this;
     }
 
-    MetadataCollectorUtilityInput& with_count_lines(bool count) {
-        count_lines = count;
+    MetadataCollectorUtilityInput& with_compute_hash(bool hash) {
+        compute_hash = hash;
         return *this;
     }
 
@@ -66,7 +66,7 @@ struct MetadataCollectorUtilityInput {
         return file_path == other.file_path && idx_path == other.idx_path &&
                checkpoint_size == other.checkpoint_size &&
                force_rebuild == other.force_rebuild &&
-               count_lines == other.count_lines;
+               compute_hash == other.compute_hash;
     }
 };
 

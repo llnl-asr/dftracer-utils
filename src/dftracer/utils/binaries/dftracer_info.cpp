@@ -42,57 +42,8 @@ static std::string format_size(std::uint64_t bytes) {
     return oss.str();
 }
 
-/// Zero-decompression path for summary mode: stat() for compressed size,
-/// estimate uncompressed size and event count from empirical compression
-/// ratio.  No file I/O beyond stat().  Handles multi-member gzip files
-/// correctly (unlike ISIZE trailer which only covers the last member).
-/// 60K files completes in seconds instead of minutes.
-static coro::CoroTask<MetadataCollectorUtilityOutput> gz_trailer_info(
-    std::string file_path) {
-    MetadataCollectorUtilityOutput meta;
-    meta.file_path = file_path;
-    meta.has_index = false;
-    meta.index_valid = false;
-
-    try {
-        meta.format = dftracer::utils::utilities::indexer::internal::
-            IndexerFactory::detect_format(file_path);
-        meta.compressed_size = fs::file_size(file_path);
-        meta.size_mb =
-            static_cast<double>(meta.compressed_size) / (1024.0 * 1024.0);
-
-        // DFTracer JSON traces compress at ~20:1 with gzip.
-        // Multi-member gzip files make the ISIZE trailer unreliable,
-        // so estimate from compressed size instead.
-        constexpr double COMPRESSION_RATIO = 20.0;
-        constexpr double BYTES_PER_EVENT = 210.0;
-
-        auto est_uncompressed = static_cast<std::uint64_t>(
-            static_cast<double>(meta.compressed_size) * COMPRESSION_RATIO);
-        meta.uncompressed_size = est_uncompressed;
-
-        std::size_t est_events = static_cast<std::size_t>(
-            static_cast<double>(est_uncompressed) / BYTES_PER_EVENT);
-        if (est_events > 2) est_events -= 2;
-
-        meta.num_lines = est_events + 2;
-        meta.valid_events = est_events;
-        meta.start_line = 1;
-        meta.end_line = meta.num_lines;
-        meta.size_per_line =
-            (est_events > 0) ? meta.size_mb / static_cast<double>(est_events)
-                             : 0;
-        meta.success = true;
-    } catch (const std::exception& e) {
-        meta.error_message = e.what();
-        meta.success = false;
-    }
-
-    co_return meta;
-}
-
-/// Detailed path for small compressed files: one streaming decompress pass,
-/// count lines with JSON validation, no sidecar index created.
+/// One streaming decompress pass, count lines with JSON validation,
+/// no sidecar index created.
 static coro::CoroTask<MetadataCollectorUtilityOutput> direct_scan_info(
     std::string file_path) {
     using dftracer::utils::utilities::fileio::lines::sources::
@@ -191,7 +142,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
     // Content Information
     std::printf("\nContent:\n");
     std::printf("  Total Lines: %llu\n", (unsigned long long)info.num_lines);
-    std::printf("  Valid Events: %zu (estimated)\n", info.valid_events);
+    std::printf("  Valid Events: %zu\n", info.valid_events);
 
     if (info.num_lines > 0) {
         std::printf("  Avg Bytes/Line: %.2f bytes\n",
@@ -472,7 +423,7 @@ int main(int argc, char** argv) {
                                         const auto& fp = (*files_ptr)[fi];
 
                                         auto info =
-                                            co_await gz_trailer_info(fp);
+                                            co_await direct_scan_info(fp);
 
                                         if (info.success) {
                                             total_compressed_ptr->fetch_add(
@@ -617,7 +568,7 @@ int main(int argc, char** argv) {
                                                     checkpoint_size)
                                                 .with_force_rebuild(
                                                     force_rebuild)
-                                                .with_count_lines(verbose);
+                                                .with_compute_hash(verbose);
 
                                     if (!index_dir.empty()) {
                                         input.with_index(

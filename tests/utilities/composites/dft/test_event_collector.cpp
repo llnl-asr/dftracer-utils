@@ -21,7 +21,7 @@ TEST_SUITE("EventCollector") {
 
         // First collect metadata
         auto meta_input = MetadataCollectorUtilityInput::from_file(test_file)
-                              .with_count_lines(true);
+                              .with_compute_hash(true);
         MetadataCollectorUtility meta_collector;
         auto meta_output = meta_collector.process(meta_input).get();
 

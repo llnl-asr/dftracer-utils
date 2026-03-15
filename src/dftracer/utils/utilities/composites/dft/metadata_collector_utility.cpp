@@ -113,8 +113,10 @@ MetadataCollectorUtility::process_compressed(
         double size_mb =
             static_cast<double>(file_size_bytes) / (1024.0 * 1024.0);
 
-        if (input.count_lines) {
-            // Full read: compute content hash and accurate event count
+        meta.valid_events = (total_lines > 2) ? (total_lines - 2) : 0;
+        meta.event_hash = 0;
+
+        if (input.compute_hash) {
             std::size_t content_hash = 0;
             std::size_t actual_valid_events = 0;
             hash::HasherUtility hasher;
@@ -142,12 +144,6 @@ MetadataCollectorUtility::process_compressed(
             }
             meta.valid_events = actual_valid_events;
             meta.event_hash = content_hash;
-        } else {
-            // Fast path: estimate from indexer line count
-            std::size_t estimated_valid_events =
-                (total_lines > 2) ? (total_lines - 2) : 0;
-            meta.valid_events = estimated_valid_events;
-            meta.event_hash = 0;
         }
 
         meta.size_mb = size_mb;
@@ -188,65 +184,44 @@ MetadataCollectorUtility::process_plain(
         meta.uncompressed_size = file_size;
         meta.compressed_size = file_size;  // No compression for plain files
 
-        if (input.count_lines) {
-            // Full read: count lines, events, compute hash
-            auto line_gen =
-                StreamingLineReader::read_plain_async(input.file_path);
+        // Always count lines precisely
+        auto line_gen = StreamingLineReader::read_plain_async(input.file_path);
 
-            std::size_t total_lines = 0;
-            std::size_t total_bytes = 0;
-            std::size_t valid_events = 0;
-            std::size_t content_hash = 0;
-            hash::HasherUtility hasher;
+        std::size_t total_lines = 0;
+        std::size_t valid_events = 0;
+        std::size_t content_hash = 0;
+        hash::HasherUtility hasher;
 
-            while (auto line_opt = co_await line_gen.next()) {
-                const auto& line = *line_opt;
-                total_lines++;
-                const char* trimmed;
-                std::size_t trimmed_length;
-                if (json_trim_and_validate(line.content.data(),
-                                           line.content.length(), trimmed,
-                                           trimmed_length) &&
-                    trimmed_length > 8) {
-                    total_bytes += line.content.length();
-                    valid_events++;
+        while (auto line_opt = co_await line_gen.next()) {
+            total_lines++;
+            const auto& line = *line_opt;
+            const char* trimmed;
+            std::size_t trimmed_length;
+            if (json_trim_and_validate(line.content.data(),
+                                       line.content.length(), trimmed,
+                                       trimmed_length) &&
+                trimmed_length > 8) {
+                valid_events++;
+                if (input.compute_hash) {
                     hasher.reset();
                     hasher.update(std::string_view(trimmed, trimmed_length));
                     content_hash += hasher.get_hash().value;
                 }
             }
-
-            meta.num_lines = total_lines;
-            meta.size_mb = static_cast<double>(total_bytes) / (1024.0 * 1024.0);
-            meta.start_line = 1;
-            meta.end_line = total_lines;
-            meta.valid_events = valid_events;
-            meta.event_hash = content_hash;
-            meta.size_per_line =
-                (valid_events > 0)
-                    ? meta.size_mb / static_cast<double>(valid_events)
-                    : 0;
-        } else {
-            // Fast path: estimate from file size, no line reading
-            double size_mb = static_cast<double>(file_size) / (1024.0 * 1024.0);
-            // Estimate ~200 bytes per event line for DFTracer JSON
-            constexpr double ESTIMATED_BYTES_PER_EVENT = 200.0;
-            std::size_t estimated_events = static_cast<std::size_t>(
-                static_cast<double>(file_size) / ESTIMATED_BYTES_PER_EVENT);
-            if (estimated_events < 1 && file_size > 0) {
-                estimated_events = 1;
-            }
-            meta.num_lines = 0;
-            meta.size_mb = size_mb;
-            meta.start_line = 0;
-            meta.end_line = 0;
-            meta.valid_events = estimated_events;
-            meta.event_hash = 0;
-            meta.size_per_line =
-                (estimated_events > 0)
-                    ? size_mb / static_cast<double>(estimated_events)
-                    : 0;
         }
+
+        meta.num_lines = total_lines;
+        meta.valid_events = valid_events;
+        meta.event_hash = content_hash;
+
+        double size_mb = static_cast<double>(file_size) / (1024.0 * 1024.0);
+        meta.size_mb = size_mb;
+        meta.start_line = 1;
+        meta.end_line = total_lines;
+        meta.size_per_line =
+            (meta.valid_events > 0)
+                ? size_mb / static_cast<double>(meta.valid_events)
+                : 0;
         meta.success = true;
 
         DFTRACER_UTILS_LOG_DEBUG(

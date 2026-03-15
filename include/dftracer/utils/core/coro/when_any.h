@@ -286,7 +286,7 @@ class WhenAnyAwaitable {
                     co_return;
                 }
 
-                auto result = co_await state->awaitables[index];
+                auto result = co_await std::move(state->awaitables[index]);
 
                 bool expected = false;
                 if (state->completed.compare_exchange_strong(
@@ -581,7 +581,7 @@ class WhenAnyTupleAwaitable {
                 }
 
                 if constexpr (std::is_void_v<R>) {
-                    co_await std::get<I>(state->awaitables_);
+                    co_await std::move(std::get<I>(state->awaitables_));
 
                     bool expected = false;
                     if (state->completed.compare_exchange_strong(
@@ -603,7 +603,8 @@ class WhenAnyTupleAwaitable {
                         state->on_first_complete();
                     }
                 } else {
-                    auto r = co_await std::get<I>(state->awaitables_);
+                    auto r =
+                        co_await std::move(std::get<I>(state->awaitables_));
 
                     bool expected = false;
                     if (state->completed.compare_exchange_strong(

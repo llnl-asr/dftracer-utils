@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/sqlite/async.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
@@ -121,14 +122,21 @@ coro::CoroTask<BloomIndexBuildOutput> BloomIndexBuilderUtility::process(
             }
         }
 
-        // Process each chunk inline (process() is synchronous)
-        std::vector<ChunkIndexerOutput> results;
-        results.reserve(chunk_inputs.size());
+        // Spawn chunk indexing in parallel
+        auto& scope = this->context();
+        std::vector<coro::SpawnFuture<ChunkIndexerOutput>> futures;
+        futures.reserve(chunk_inputs.size());
 
         for (auto& ci : chunk_inputs) {
-            ChunkIndexerUtility idx;
-            results.push_back(co_await idx.process(ci));
+            futures.push_back(scope.spawn(
+                [ci = std::move(ci)](
+                    CoroScope&) mutable -> coro::CoroTask<ChunkIndexerOutput> {
+                    ChunkIndexerUtility idx;
+                    co_return co_await idx.process(ci);
+                }));
         }
+
+        auto results = co_await coro::when_all(std::move(futures));
 
         // 7. Persist to .bidx
         co_await dftracer::utils::sqlite::run([&] {

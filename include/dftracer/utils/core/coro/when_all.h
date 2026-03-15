@@ -185,7 +185,7 @@ class WhenAllVectorAwaitable {
         [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
            std::size_t index) -> FireAndForget {
             try {
-                s->results_[index] = co_await s->awaitables_[index];
+                s->results_[index] = co_await std::move(s->awaitables_[index]);
                 s->on_one_complete();
             } catch (...) {
                 s->on_exception(std::current_exception());
@@ -366,7 +366,7 @@ class WhenAllVectorAwaitable<Awaitable> {
         [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
            std::size_t index) -> FireAndForget {
             try {
-                co_await s->awaitables_[index];
+                co_await std::move(s->awaitables_[index]);
                 s->on_one_complete();
             } catch (...) {
                 s->on_exception(std::current_exception());
@@ -541,11 +541,12 @@ class WhenAllTupleAwaitable {
             -> FireAndForget {
             try {
                 if constexpr (std::is_void_v<R>) {
-                    co_await std::get<I>(s->awaitables_);
+                    co_await std::move(std::get<I>(s->awaitables_));
                     std::get<I>(s->results_).emplace(std::monostate{});
                 } else {
                     std::get<I>(s->results_)
-                        .emplace(co_await std::get<I>(s->awaitables_));
+                        .emplace(
+                            co_await std::move(std::get<I>(s->awaitables_)));
                 }
                 s->on_one_complete();
             } catch (...) {

@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
                         .with_checkpoint_size(checkpoint_size)
                         .with_force_rebuild(force)
                         .with_index(idx_path)
-                        .with_count_lines(verify);
+                        .with_compute_hash(verify);
 
             co_return co_await utilities::composites::dft::
                 MetadataCollectorUtility{}

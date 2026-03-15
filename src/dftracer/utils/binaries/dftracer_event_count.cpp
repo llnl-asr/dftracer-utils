@@ -154,7 +154,7 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
                              .with_checkpoint_size(checkpoint_size)
                              .with_force_rebuild(force_rebuild)
                              .with_index(idx_path)
-                             .with_count_lines(true);
+                             .with_compute_hash(true);
 
         return utilities::composites::dft::MetadataCollectorUtility{}
             .process(input)

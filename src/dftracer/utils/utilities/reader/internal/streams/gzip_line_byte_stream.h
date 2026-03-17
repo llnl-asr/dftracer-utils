@@ -3,12 +3,12 @@
 
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
-#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
@@ -223,9 +223,7 @@ class GzipLineByteStream : public GzipStream {
         co_return adjusted_size;
     }
 
-    // Zero-copy read - returns span to internal buffer
-    coro::CoroTask<dftracer::utils::span_view<const char>> read_async()
-        override {
+    coro::CoroTask<::std::span<const char>> read_async() override {
         if (is_finished_) {
             co_return {};
         }
@@ -237,8 +235,8 @@ class GzipLineByteStream : public GzipStream {
             co_return {};
         }
 
-        // Return span view to the data in buffer_
-        co_return span_view<const char>(buffer_.data(), valid_bytes_);
+        // Return view to the data in buffer_
+        co_return std::span<const char>(buffer_.data(), valid_bytes_);
     }
 
     void reset() override {

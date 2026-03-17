@@ -57,7 +57,7 @@ class GzipStream : public StreamBase {
 
     bool done() const override { return is_finished_; }
 
-    coro::CoroTask<span_view<const char>> read_async() override = 0;
+    coro::CoroTask<std::span<const char>> read_async() override = 0;
     coro::CoroTask<std::size_t> read_async(
         char *buffer, std::size_t buffer_size) override = 0;
 

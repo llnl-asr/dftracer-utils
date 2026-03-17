@@ -2,11 +2,11 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_BYTE_STREAM_H
 
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
@@ -53,7 +53,7 @@ class GzipByteStream : public GzipStream {
             current_position_);
     }
 
-    coro::CoroTask<span_view<const char>> read_async() override {
+    coro::CoroTask<std::span<const char>> read_async() override {
         if (!decompression_initialized_) {
             throw ReaderError(ReaderError::INITIALIZATION_ERROR,
                               "Streaming session not properly initialized");
@@ -98,7 +98,7 @@ class GzipByteStream : public GzipStream {
             "Streamed (zero-copy) %zu bytes (position: %zu / %zu)", bytes_read,
             current_position_, target_end_bytes_);
 
-        co_return span_view<const char>(buffer_.data(), bytes_read);
+        co_return std::span<const char>(buffer_.data(), bytes_read);
     }
 
     coro::CoroTask<std::size_t> read_async(char *buffer,

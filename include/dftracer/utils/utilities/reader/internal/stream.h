@@ -2,10 +2,10 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAM_H
 
 #ifdef __cplusplus
-#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/core/coro/task.h>
 
 #include <cstddef>
+#include <span>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -43,12 +43,12 @@ class ReaderStream {
      *
      * @return View to next chunk (empty span if done)
      */
-    virtual coro::CoroTask<span_view<const char>> read_async() = 0;
+    virtual coro::CoroTask<std::span<const char>> read_async() = 0;
 
     /**
      * @brief Read next chunk as zero-copy view (sync wrapper).
      */
-    span_view<const char> read() { return read_async().get(); }
+    std::span<const char> read() { return read_async().get(); }
 
     /**
      * @brief Read next chunk of data into buffer (coroutine).

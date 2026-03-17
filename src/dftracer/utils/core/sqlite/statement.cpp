@@ -2,6 +2,9 @@
 #include <dftracer/utils/core/sqlite/error.h>
 #include <dftracer/utils/core/sqlite/statement.h>
 
+#include <cstddef>
+#include <span>
+
 namespace dftracer::utils::sqlite {
 
 SqliteStmt::SqliteStmt(const SqliteDatabase &db, const char *sql) {
@@ -77,6 +80,17 @@ void SqliteStmt::bind_text(int index, const std::string &text) {
     }
 }
 
+void SqliteStmt::bind_text(int index, std::string_view text) {
+    validate_parameter_index(index);
+    int rc = sqlite3_bind_text(stmt_, index, text.data(),
+                               static_cast<int>(text.size()), SQLITE_TRANSIENT);
+    if (rc != SQLITE_OK) {
+        throw SqliteError(
+            SqliteError::Type::STATEMENT_ERROR,
+            "Failed to bind text parameter at index " + std::to_string(index));
+    }
+}
+
 void SqliteStmt::bind_text(int index, const char *text, int length,
                            void (*destructor)(void *)) {
     validate_parameter_index(index);
@@ -96,6 +110,14 @@ void SqliteStmt::bind_blob(int index, const void *blob, int length) {
             SqliteError::Type::STATEMENT_ERROR,
             "Failed to bind blob parameter at index " + std::to_string(index));
     }
+}
+
+void SqliteStmt::bind_blob(int index, std::span<const std::byte> data) {
+    bind_blob(index, data.data(), static_cast<int>(data.size()));
+}
+
+void SqliteStmt::bind_blob(int index, std::span<const unsigned char> data) {
+    bind_blob(index, data.data(), static_cast<int>(data.size()));
 }
 
 void SqliteStmt::bind_null(int index) {

@@ -2,13 +2,13 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_TAR_BYTE_STREAM_H
 
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_byte_stream.h>
 #include <dftracer/utils/utilities/reader/internal/streams/tar_stream.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -147,8 +147,8 @@ class TarByteStream : public TarStream {
         co_return total_bytes_read;
     }
 
-    // Zero-copy read - stub for now
-    coro::CoroTask<span_view<const char>> read_async() override {
+    // TODO: stub
+    coro::CoroTask<std::span<const char>> read_async() override {
         // TODO: Implement zero-copy read for TarByteStream
         co_return {};
     }

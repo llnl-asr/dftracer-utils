@@ -3,7 +3,10 @@
 
 #include <sqlite3.h>
 
+#include <cstddef>
+#include <span>
 #include <string>
+#include <string_view>
 
 namespace dftracer::utils::sqlite {
 
@@ -27,9 +30,12 @@ class SqliteStmt {
     void bind_int64(int index, int64_t value);
     void bind_double(int index, double value);
     void bind_text(int index, const std::string &text);
+    void bind_text(int index, std::string_view text);
     void bind_text(int index, const char *text, int length = -1,
                    void (*destructor)(void *) = SQLITE_TRANSIENT);
     void bind_blob(int index, const void *blob, int length);
+    void bind_blob(int index, std::span<const std::byte> data);
+    void bind_blob(int index, std::span<const unsigned char> data);
     void bind_null(int index);
 
     void clear_bindings();

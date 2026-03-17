@@ -2,11 +2,11 @@
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_LINE_STREAM_H
 
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/span.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 
 #include <cstring>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -23,7 +23,7 @@ namespace dftracer::utils::utilities::reader::internal {
 class LineStream : public ReaderStream {
    private:
     std::unique_ptr<internal::ReaderStream> underlying_stream_;
-    span_view<const char> current_span_;  // Current span from underlying stream
+    std::span<const char> current_span_;
     std::string line_accumulator_;
     std::string current_line_;
     bool is_finished_;
@@ -33,7 +33,7 @@ class LineStream : public ReaderStream {
     std::size_t end_line_;
     std::size_t initial_line_;
     std::size_t output_position_;
-    std::size_t span_pos_;  // Position within current span
+    std::size_t span_pos_;
 
    public:
     explicit LineStream(std::unique_ptr<ReaderStream> underlying_stream,
@@ -55,8 +55,7 @@ class LineStream : public ReaderStream {
 
     ~LineStream() override { reset(); }
 
-    // Zero-copy read - returns view to current_line_
-    coro::CoroTask<span_view<const char>> read_async() override {
+    coro::CoroTask<std::span<const char>> read_async() override {
         if (!underlying_stream_) {
             co_return {};
         }
@@ -70,8 +69,8 @@ class LineStream : public ReaderStream {
             co_return {};
         }
 
-        // Return span view to current_line_
-        co_return span_view<const char>(current_line_.data(),
+        // Return view to current_line_
+        co_return std::span<const char>(current_line_.data(),
                                         current_line_.size());
     }
 
@@ -113,7 +112,7 @@ class LineStream : public ReaderStream {
         }
         line_accumulator_.clear();
         current_line_.clear();
-        current_span_ = span_view<const char>();
+        current_span_ = std::span<const char>();
         is_finished_ = false;
         has_pending_line_ = false;
         current_line_number_ = initial_line_;

@@ -157,7 +157,7 @@ class Reader {
      *
      * // Zero-copy reading
      * while (!stream->done()) {
-     *     auto chunk = stream->read();  // span_view - zero copy
+     *     auto chunk = stream->read();
      *     if (chunk.empty()) break;
      *     process(chunk);
      * }

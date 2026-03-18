@@ -1,13 +1,15 @@
 #include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 
+#include <string_view>
+
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteStmt;
 
-std::optional<std::string> query_resolved_by_hash(
-    const SqliteDatabase& db, const std::string& dimension,
-    const std::string& hash_value) {
+std::optional<std::string> query_resolved_by_hash(const SqliteDatabase& db,
+                                                  std::string_view dimension,
+                                                  std::string_view hash_value) {
     SqliteStmt stmt(db,
                     "SELECT resolved_value FROM hash_resolutions "
                     "WHERE dimension = ? AND hash_value = ? LIMIT 1;");

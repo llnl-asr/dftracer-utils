@@ -1,10 +1,10 @@
 #include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 #include <algorithm>
 #include <map>
@@ -15,15 +15,10 @@ namespace dftracer::utils::utilities::composites::dft::reorganize {
 
 namespace {
 
-using indexing::determine_manifest_index_path;
-using indexing::ManifestIndexDatabase;
+using dftracer::utils::utilities::indexer::IndexDatabase;
 using indexing::PredicateMap;
 using indexing::PredicateParserInput;
 using indexing::PredicateParserUtility;
-using indexing::queries::EventRangeResult;
-using indexing::queries::MetadataLinesResult;
-using indexing::queries::query_event_ranges_for_checkpoint;
-using indexing::queries::query_metadata_lines_for_checkpoint;
 
 // Check if an event (cat, name) matches a parsed predicate
 // map. A predicate map has dimension -> values. An event
@@ -150,9 +145,9 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
                                      file_path);
         }
 
-        // Determine midx path
-        std::string midx_path =
-            determine_manifest_index_path(file_path, input.index_dir);
+        // Determine .idx path (manifest data now lives in .idx)
+        std::string idx_path =
+            internal::determine_index_path(file_path, input.index_dir);
 
         // Effective checkpoint count: treat 0 as 1
         std::size_t eff_ckpts =
@@ -161,22 +156,23 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         SourceFileInfo sfi;
         sfi.file_path = file_path;
         sfi.idx_path = idx_result.idx_path;
-        sfi.midx_path = midx_path;
+        sfi.idx_path = idx_path;
         sfi.num_checkpoints = eff_ckpts;
         sfi.uncompressed_size = meta.uncompressed_size;
         sfi.checkpoint_size = meta.checkpoint_size;
         plan.source_files.push_back(std::move(sfi));
 
-        // Open .midx
-        ManifestIndexDatabase midx_db(midx_path);
-        int file_info_id = midx_db.get_file_info_id(file_path);
+        // Open .idx
+        IndexDatabase idx_db(idx_path);
+        int file_info_id = idx_db.get_file_info_id(
+            indexer::internal::get_logical_path(file_path));
         if (file_info_id < 0) {
-            throw std::runtime_error("File not found in .midx: " + file_path);
+            throw std::runtime_error("File not found in .idx: " + file_path);
         }
 
         // Compute the bytes-per-chunk using the same formula as
         // manifest_index_builder: integer division of uncompressed
-        // size by checkpoint count. The MIDX line_numbers are
+        // size by checkpoint count. The line_numbers are
         // 0-based within each such chunk, so the extraction byte
         // ranges must match exactly.
         //
@@ -204,12 +200,12 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
                                          : (ckpt + 1) * bytes_per_ckpt;
 
             // Query event ranges for this checkpoint
-            auto events = query_event_ranges_for_checkpoint(midx_db.db(),
-                                                            file_info_id, ckpt);
+            auto events =
+                idx_db.query_event_ranges_for_checkpoint(file_info_id, ckpt);
 
             // Query metadata lines for this checkpoint
-            auto metadata = query_metadata_lines_for_checkpoint(
-                midx_db.db(), file_info_id, ckpt);
+            auto metadata =
+                idx_db.query_metadata_lines_for_checkpoint(file_info_id, ckpt);
 
             // Collect metadata line numbers (go to ALL
             // groups)

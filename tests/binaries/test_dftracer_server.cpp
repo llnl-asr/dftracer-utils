@@ -296,7 +296,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         CHECK(!body.empty());
         CHECK(body.front() == '{');
         CHECK(body.find("\"path\"") != std::string::npos);
-        CHECK(body.find("\"has_bloom_index\"") != std::string::npos);
+        CHECK(body.find("\"has_bloom_data\"") != std::string::npos);
     }
 
     // -- GET /api/v1/files/info returns 400 without file param --

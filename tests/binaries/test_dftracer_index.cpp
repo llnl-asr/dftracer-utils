@@ -105,12 +105,12 @@ TEST_SUITE("DFTracerIndex") {
         auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
 
-        // Path convention: file.pfw.gz -> file.pfw.gz.bidx (same directory).
+        // Path convention: file.pfw.gz -> file.pfw.gz.idx (same directory).
         int rc = run_index(binary, {"-d", env.get_dir(), "--force"});
         CHECK(rc == 0);
 
-        // The .bidx sidecar must appear next to the input file.
-        CHECK(fs::exists(f + ".bidx"));
+        // The .idx sidecar must appear next to the input file.
+        CHECK(fs::exists(f + ".idx"));
     }
 
     TEST_CASE("build index with custom index-dir") {
@@ -134,11 +134,11 @@ TEST_SUITE("DFTracerIndex") {
             binary, {"-d", env.get_dir(), "--force", "--index-dir", idx_dir});
         CHECK(rc == 0);
 
-        // A .bidx file must appear somewhere inside idx_dir.
-        CHECK(has_file_with_suffix(idx_dir, ".bidx"));
+        // A .idx file must appear somewhere inside idx_dir.
+        CHECK(has_file_with_suffix(idx_dir, ".idx"));
     }
 
-    TEST_CASE("build with manifest creates midx") {
+    TEST_CASE("build with manifest creates idx") {
         auto binary = find_index_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_index binary not found, skipping.");
@@ -155,9 +155,8 @@ TEST_SUITE("DFTracerIndex") {
             run_index(binary, {"-d", env.get_dir(), "--force", "--manifest"});
         CHECK(rc == 0);
 
-        // Both sidecar types must be created.
-        CHECK(fs::exists(f + ".bidx"));
-        CHECK(fs::exists(f + ".midx"));
+        // The sidecar must be created.
+        CHECK(fs::exists(f + ".idx"));
     }
 
     TEST_CASE("force rebuild runs twice without error") {
@@ -175,11 +174,11 @@ TEST_SUITE("DFTracerIndex") {
 
         int rc1 = run_index(binary, {"-d", env.get_dir(), "--force"});
         CHECK(rc1 == 0);
-        REQUIRE(fs::exists(f + ".bidx"));
+        REQUIRE(fs::exists(f + ".idx"));
 
         // Second run with --force must overwrite successfully.
         int rc2 = run_index(binary, {"-d", env.get_dir(), "--force"});
         CHECK(rc2 == 0);
-        CHECK(fs::exists(f + ".bidx"));
+        CHECK(fs::exists(f + ".idx"));
     }
 }

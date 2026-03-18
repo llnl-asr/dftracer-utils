@@ -6,6 +6,7 @@ from .dftracer_utils_ext import (
     Indexer,  # noqa: F401
     IndexerCheckpoint,  # noqa: F401
     JSON,  # noqa: F401
+    TraceReader,  # noqa: F401
 )
 
 try:
@@ -38,5 +39,6 @@ __all__ = [
     "Reader",
     "Indexer",
     "IndexerCheckpoint",
+    "TraceReader",
     "dft_reader",
 ]

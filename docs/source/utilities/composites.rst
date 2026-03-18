@@ -338,12 +338,12 @@ Thread-safe bounded cache for deserialized bloom filters used during chunk skipp
     BloomFilterCache cache(BloomFilterCache::DEFAULT_MAX_ENTRIES);
 
     // Typical usage during index query: check if event might be in chunk
-    const std::string bidx_path = "/data/trace.pfw.gz.bidx";
+    const std::string idx_path = "/data/trace.pfw.gz.idx";
     const std::string dimension = "name";  // which filter (by operation name)
     std::uint64_t checkpoint_idx = 5;     // chunk number
 
     // Look up cached bloom filter
-    auto cached = cache.get(bidx_path, dimension, checkpoint_idx);
+    auto cached = cache.get(idx_path, dimension, checkpoint_idx);
     if (cached) {
         // Filter was in cache
         auto& filter = cached.value();
@@ -353,14 +353,14 @@ Thread-safe bounded cache for deserialized bloom filters used during chunk skipp
             // Event definitely NOT in this chunk - safe to skip
         }
     } else {
-        // Cache miss - load filter from .bidx file, add to cache
-        auto filter = load_bloom_from_bidx(bidx_path, dimension, checkpoint_idx);
-        cache.put(bidx_path, dimension, checkpoint_idx, filter);
+        // Cache miss - load filter from .idx file, add to cache
+        auto filter = load_bloom_from_idx(idx_path, dimension, checkpoint_idx);
+        cache.put(idx_path, dimension, checkpoint_idx, filter);
     }
 
     // For file-level bloom filters
     std::uint64_t FILE_LEVEL = BloomFilterCache::FILE_LEVEL_SENTINEL;  // UINT64_MAX
-    cache.put(bidx_path, dimension, FILE_LEVEL, file_level_filter);
+    cache.put(idx_path, dimension, FILE_LEVEL, file_level_filter);
 
     // Cache statistics
     std::size_t cache_size = cache.size();
@@ -487,7 +487,7 @@ Complete example of gathering statistics from a DFTracer trace file:
     // Prepare input (uses bloom index for chunk skipping)
     StatisticsAggregatorInput input{
         .file_path = "/data/trace.pfw.gz",
-        .bidx_path = "/data/trace.pfw.gz.bidx",
+        .idx_path = "/data/trace.pfw.gz.idx",
         .index_dir = "/data/.indexes"
     };
 

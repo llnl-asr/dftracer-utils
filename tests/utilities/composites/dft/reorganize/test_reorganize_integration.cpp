@@ -5,16 +5,13 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
-#include <dftracer/utils/core/utilities/utility_executor.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
+#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/provenance_database.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -31,8 +28,10 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites;
 using namespace dftracer::utils::utilities::composites::dft;
-using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
+using dftracer::utils::utilities::indexer::IndexBuildConfig;
+using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using dftracer::utils::utilities::indexer::ProvenanceDatabase;
 
 // Test trace layout:
 // Line 0: HH metadata
@@ -80,43 +79,37 @@ static std::string create_integration_test_trace(const std::string& dir) {
     return gz_path;
 }
 
-// Build .midx for a trace file using the full pipeline
-static void build_midx_for_file(const std::string& trace_file,
-                                const std::string& index_dir) {
-    ManifestIndexBuildInput input;
-    input.file_path = trace_file;
-    input.index_dir = index_dir;
-    input.force_rebuild = true;
-
+// Build .idx for a trace file using IndexBuilder
+static void build_idx_for_file(const std::string& trace_file,
+                               const std::string& index_dir) {
     auto pipeline_config = PipelineConfig()
-                               .with_name("IntegrationTestMidxBuild")
+                               .with_name("IntegrationTestIdxBuild")
                                .with_compute_threads(2)
                                .with_watchdog(false);
 
     Pipeline pipeline(pipeline_config);
-    ManifestIndexBuildOutput result;
+    indexer::IndexBuildResult result;
 
+    auto* result_ptr = &result;
     auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            auto utility = std::make_shared<ManifestIndexBuilderUtility>();
-            behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                     ManifestIndexBuildOutput>
-                chain;
-            behaviors::UtilityExecutor<ManifestIndexBuildInput,
-                                       ManifestIndexBuildOutput,
-                                       utilities::tags::NeedsContext>
-                executor(utility, std::move(chain));
-            result = co_await executor.execute_with_context(ctx, input);
+        [trace_file, index_dir,
+         result_ptr](CoroScope&) -> coro::CoroTask<void> {
+            IndexBuilderUtility builder;
+            auto config = IndexBuildConfig::for_file(trace_file)
+                              .with_index_dir(index_dir)
+                              .with_manifest(true)
+                              .with_index_threshold(0);
+            *result_ptr = co_await builder.process(config);
             co_return;
         },
-        "BuildMidx");
+        "BuildIdx");
 
     pipeline.set_source(task);
     pipeline.set_destination(task);
     pipeline.execute();
 
     if (!result.success) {
-        throw std::runtime_error("Failed to build .midx for test: " +
+        throw std::runtime_error("Failed to build .idx for test: " +
                                  result.error_message);
     }
 }
@@ -242,7 +235,7 @@ TEST_SUITE("ReorganizeIntegration") {
 
         // Step 1: Create and index test trace
         std::string trace_file = create_integration_test_trace(input_dir);
-        build_midx_for_file(trace_file, input_dir);
+        build_idx_for_file(trace_file, input_dir);
 
         // Step 2: Plan extraction
         ReorganizationPlannerUtility planner;
@@ -333,7 +326,7 @@ TEST_SUITE("ReorganizeIntegration") {
 
         // Create trace and index
         std::string trace_file = create_integration_test_trace(input_dir);
-        build_midx_for_file(trace_file, input_dir);
+        build_idx_for_file(trace_file, input_dir);
 
         // Plan for io group only
         ReorganizationPlannerUtility planner;
@@ -379,7 +372,7 @@ TEST_SUITE("ReorganizeIntegration") {
         // Remove plain .pfw
         fs::remove(io_pfw);
 
-        // Build .midx sidecar for compressed output
+        // Build .idx sidecar for compressed output
         {
             auto pipeline_config = PipelineConfig()
                                        .with_name("SidecarBuild")
@@ -387,79 +380,68 @@ TEST_SUITE("ReorganizeIntegration") {
                                        .with_watchdog(false);
 
             Pipeline pipeline(pipeline_config);
-            ManifestIndexBuildOutput midx_result;
+            indexer::IndexBuildResult idx_result;
+            auto* idx_result_ptr = &idx_result;
 
             auto task = make_task(
-                [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                    ManifestIndexBuildInput midx_input;
-                    midx_input.file_path = io_gz;
-                    midx_input.index_dir = output_dir;
-                    midx_input.force_rebuild = true;
-
-                    auto utility =
-                        std::make_shared<ManifestIndexBuilderUtility>();
-                    behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                             ManifestIndexBuildOutput>
-                        chain;
-                    behaviors::UtilityExecutor<ManifestIndexBuildInput,
-                                               ManifestIndexBuildOutput,
-                                               utilities::tags::NeedsContext>
-                        executor(utility, std::move(chain));
-                    midx_result =
-                        co_await executor.execute_with_context(ctx, midx_input);
+                [io_gz, output_dir,
+                 idx_result_ptr](CoroScope&) -> coro::CoroTask<void> {
+                    IndexBuilderUtility builder;
+                    auto config = IndexBuildConfig::for_file(io_gz)
+                                      .with_index_dir(output_dir)
+                                      .with_manifest(true)
+                                      .with_index_threshold(0);
+                    *idx_result_ptr = co_await builder.process(config);
                     co_return;
                 },
-                "BuildOutputMidx");
+                "BuildOutputIdx");
 
             pipeline.set_source(task);
             pipeline.set_destination(task);
             pipeline.execute();
 
-            CHECK(midx_result.success);
+            CHECK(idx_result.success);
         }
 
-        // Verify .midx exists for output
-        std::string out_midx = determine_manifest_index_path(io_gz, output_dir);
-        CHECK(fs::exists(out_midx));
+        // Verify .idx exists for output
+        std::string out_idx = internal::determine_index_path(io_gz, output_dir);
+        CHECK(fs::exists(out_idx));
 
-        // Write provenance
+        // Write provenance into .pidx
+        std::string out_pidx =
+            internal::determine_provenance_index_path(io_gz, output_dir);
         {
-            ManifestIndexDatabase midx(out_midx);
-            midx.init_schema();
-            int fid = midx.get_file_info_id(io_gz);
+            ProvenanceDatabase pdb(out_pidx);
+            pdb.init_schema();
+            int fid = pdb.get_or_create_file_info(io_gz, 0);
             REQUIRE(fid >= 0);
 
-            midx.begin_transaction();
-            queries::insert_provenance_info(midx.db(), "version", "1.0");
-            queries::insert_provenance_info(midx.db(), "tool",
-                                            "dftracer_organize");
-            queries::insert_provenance_group(midx.db(), "io", "cat=POSIX");
-            queries::insert_provenance_source(midx.db(), fid, 0, trace_file, 1,
-                                              "");
-            queries::insert_provenance_segment(midx.db(), 0, 0, 0, 5, 3);
-            midx.commit_transaction();
+            pdb.begin_transaction();
+            pdb.insert_info("version", "1.0");
+            pdb.insert_info("tool", "dftracer_organize");
+            pdb.insert_group("io", "cat=POSIX");
+            pdb.insert_source(fid, 0, trace_file, 1, "");
+            pdb.insert_segment(0, 0, 0, 5, 3);
+            pdb.commit_transaction();
         }
 
         // Verify provenance
         {
-            ManifestIndexDatabase midx(out_midx);
-            midx.init_schema();
-            int fid = midx.get_file_info_id(io_gz);
+            ProvenanceDatabase pdb(out_pidx);
+            pdb.init_schema();
+            int fid = pdb.get_file_info_id(io_gz);
             REQUIRE(fid >= 0);
 
-            CHECK(queries::query_provenance_info(midx.db(), "version") ==
-                  "1.0");
-            CHECK(queries::query_provenance_info(midx.db(), "tool") ==
-                  "dftracer_organize");
-            CHECK(queries::query_provenance_group_name(midx.db()) == "io");
-            CHECK(queries::query_provenance_group_predicate(midx.db()) ==
-                  "cat=POSIX");
+            CHECK(pdb.query_info("version") == "1.0");
+            CHECK(pdb.query_info("tool") == "dftracer_organize");
+            CHECK(pdb.query_group_name() == "io");
+            CHECK(pdb.query_group_predicate() == "cat=POSIX");
 
-            auto sources = queries::query_provenance_sources(midx.db(), fid);
+            auto sources = pdb.query_sources(fid);
             REQUIRE(sources.size() == 1);
             CHECK(sources[0].path == trace_file);
 
-            auto segments = queries::query_provenance_segments(midx.db(), 0);
+            auto segments = pdb.query_segments(0);
             REQUIRE(segments.size() == 1);
             CHECK(segments[0].output_line_start == 0);
             CHECK(segments[0].output_line_end == 5);

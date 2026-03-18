@@ -22,6 +22,19 @@ namespace dftracer::utils::utilities::composites::dft::internal {
 std::string determine_index_path(const std::string& file_path,
                                  const std::string& index_dir = "");
 
+/**
+ * @brief Determine the provenance index file path for a given data file.
+ *
+ * Follows the same placement logic as determine_index_path but produces
+ * a `.pidx` sidecar instead of `.idx`.
+ *
+ * @param data_path Path to the data file
+ * @param index_dir Optional directory. If empty, places next to data file.
+ * @return Complete path to the provenance index file
+ */
+std::string determine_provenance_index_path(const std::string& data_path,
+                                            const std::string& index_dir = "");
+
 }  // namespace dftracer::utils::utilities::composites::dft::internal
 
 #endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INTERNAL_UTILS_H

@@ -150,7 +150,13 @@ Binding Functions
 .. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_text(int index, const char *text, int length, void (*destructor)(void*))
    :project: dftracer-utils
 
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_blob
+.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_blob(int index, const void *blob, int length)
+   :project: dftracer-utils
+
+.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_blob(int index, std::span<const std::byte> data)
+   :project: dftracer-utils
+
+.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_blob(int index, std::span<const unsigned char> data)
    :project: dftracer-utils
 
 .. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_null

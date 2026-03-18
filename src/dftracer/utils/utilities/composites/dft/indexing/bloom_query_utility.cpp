@@ -1,15 +1,19 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/sqlite/async.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 #include <algorithm>
 #include <set>
 #include <unordered_set>
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
+
+using dftracer::utils::utilities::indexer::IndexDatabase;
+using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
 namespace {
 
@@ -43,8 +47,9 @@ coro::CoroTask<BloomQueryOutput> BloomQueryUtility::process(
         out.file_may_match = false;
 
         try {
-            BloomIndexDatabase bidx(input.bidx_path);
-            int file_info_id = bidx.get_file_info_id(input.file_path);
+            IndexDatabase idx_db(input.idx_path);
+            int file_info_id =
+                idx_db.get_file_info_id(get_logical_path(input.file_path));
             if (file_info_id < 0) {
                 DFTRACER_UTILS_LOG_WARN(
                     "BloomQuery: file not found in bloom index: %s",
@@ -55,7 +60,7 @@ coro::CoroTask<BloomQueryOutput> BloomQueryUtility::process(
             }
 
             auto indexed_dims =
-                queries::query_index_dimensions(bidx.db(), file_info_id);
+                queries::query_index_dimensions(idx_db.sql_db(), file_info_id);
             std::unordered_set<std::string> indexed_set(indexed_dims.begin(),
                                                         indexed_dims.end());
 
@@ -76,7 +81,7 @@ coro::CoroTask<BloomQueryOutput> BloomQueryUtility::process(
                     if (HASH_DIMENSIONS.count(dimension) &&
                         !looks_like_hash(val)) {
                         auto hashes = queries::query_hash_by_resolved(
-                            bidx.db(), dimension, val);
+                            idx_db.sql_db(), dimension, val);
                         for (auto& h : hashes) {
                             resolved_values.push_back(std::move(h));
                         }
@@ -113,12 +118,12 @@ coro::CoroTask<BloomQueryOutput> BloomQueryUtility::process(
                                           std::size_t size) -> BloomFilter {
                 if (cache) {
                     auto cached =
-                        cache->get(input.bidx_path, dimension, checkpoint_idx);
+                        cache->get(input.idx_path, dimension, checkpoint_idx);
                     if (cached) return std::move(*cached);
                 }
                 auto bloom = BloomFilter::from_blob(data, size);
                 if (cache) {
-                    cache->put(input.bidx_path, dimension, checkpoint_idx,
+                    cache->put(input.idx_path, dimension, checkpoint_idx,
                                bloom);
                 }
                 return bloom;
@@ -126,7 +131,7 @@ coro::CoroTask<BloomQueryOutput> BloomQueryUtility::process(
 
             // Step 1: File-level bloom check (single batch query)
             auto file_blooms = queries::query_file_bloom_filters_batch(
-                bidx.db(), file_info_id, dim_names);
+                idx_db.sql_db(), file_info_id, dim_names);
 
             for (const auto& [dimension, values] : effective_predicates) {
                 auto it = file_blooms.find(dimension);
@@ -153,7 +158,7 @@ coro::CoroTask<BloomQueryOutput> BloomQueryUtility::process(
 
             // Step 2: Chunk-level bloom check (single batch query)
             auto all_chunk_blooms = queries::query_chunk_bloom_filters_batch(
-                bidx.db(), file_info_id, dim_names);
+                idx_db.sql_db(), file_info_id, dim_names);
 
             std::set<std::uint64_t>* candidate_set = nullptr;
             std::set<std::uint64_t> current_candidates;

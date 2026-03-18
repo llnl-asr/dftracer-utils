@@ -1,6 +1,8 @@
 #include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 
+#include <string_view>
+
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteStmt;
@@ -76,7 +78,7 @@ std::vector<ProvenanceSegment> query_all_provenance_segments(
 }
 
 std::string query_provenance_info(const SqliteDatabase& db,
-                                  const std::string& key) {
+                                  std::string_view key) {
     SqliteStmt stmt(db,
                     "SELECT value FROM provenance_info "
                     "WHERE key = ?;");

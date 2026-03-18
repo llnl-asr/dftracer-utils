@@ -63,6 +63,11 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/aggregators/test_aggregation_key.cpp
     composites/dft/aggregators/test_aggregation_config.cpp
 
+    # Indexer
+    indexer/test_index_database.cpp
+    indexer/test_provenance_database.cpp
+    indexer/test_index_builder.cpp
+
     # Compression
     compression/zlib/test_compressor.cpp
     compression/zlib/test_decompressor.cpp
@@ -94,6 +99,9 @@ set(UTILITIES_TEST_SOURCES
     fileio/lines/sources/test_async_plain_file_line_generator.cpp
     fileio/lines/sources/test_async_indexed_file_bytes_generator.cpp
     fileio/lines/sources/test_async_plain_file_bytes_generator.cpp
+
+    # Reader
+    reader/test_trace_reader.cpp
 
     # Text
     text/test_line_filter.cpp

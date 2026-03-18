@@ -24,6 +24,9 @@ class Indexer:
         idx_path: Optional[str] = None,
         checkpoint_size: int = 1048576,
         force_rebuild: bool = False,
+        build_bloom: bool = False,
+        build_manifest: bool = False,
+        index_threshold: int = 8388608,
     ) -> None:
         """Create an indexer for a gzip file."""
         ...
@@ -69,6 +72,16 @@ class Indexer:
     @property
     def checkpoint_size(self) -> int:
         """Get checkpoint size."""
+        ...
+
+    @property
+    def has_bloom(self) -> bool:
+        """Whether bloom filter data exists in the index sidecar."""
+        ...
+
+    @property
+    def has_manifest(self) -> bool:
+        """Whether manifest data exists in the index sidecar."""
         ...
 
     def __enter__(self) -> "Indexer":
@@ -286,4 +299,63 @@ class JSON:
 
     def __repr__(self) -> str:
         """Return string representation of the object."""
+        ...
+
+# ========== TRACE READER ==========
+
+class TraceReader:
+    """Smart trace file reader that auto-selects sequential vs indexed reading."""
+
+    def __init__(
+        self,
+        file_path: str,
+        index_dir: str = "",
+        checkpoint_size: int = 33554432,
+        auto_build_index: bool = False,
+        index_threshold: int = 8388608,
+    ) -> None:
+        """Create a TraceReader.
+
+        Raises RuntimeError if file_path does not exist or cannot be opened.
+        """
+        ...
+
+    def read_lines(
+        self,
+        start_line: int = 0,
+        end_line: int = 0,
+    ) -> List[str]:
+        """Read lines from the trace file.
+
+        Both start_line and end_line default to 0, which means read all lines.
+        Raises ValueError if either argument is negative.
+        """
+        ...
+
+    @property
+    def file_path(self) -> str:
+        """Path to the trace file."""
+        ...
+
+    @property
+    def index_dir(self) -> str:
+        """Directory searched for index sidecar files."""
+        ...
+
+    @property
+    def has_index(self) -> bool:
+        """True if a checkpoint index was found at construction time."""
+        ...
+
+    @property
+    def num_lines(self) -> int:
+        """Total line count (reads all lines to compute if needed)."""
+        ...
+
+    def __enter__(self) -> "TraceReader":
+        """Enter the runtime context for the with statement."""
+        ...
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit the runtime context for the with statement."""
         ...

@@ -196,8 +196,8 @@ TEST_SUITE("DFTracerOrganize") {
                                      "--groups", "io:cat=IO"});
         CHECK(rc == 0);
 
-        // The organizer builds .midx sidecars in the output directory.
-        CHECK(any_file_with_suffix(out_dir, ".midx"));
+        // The organizer builds .pidx sidecars in the output directory.
+        CHECK(any_file_with_suffix(out_dir, ".pidx"));
     }
 
     TEST_CASE("reconstruct from organized") {
@@ -225,7 +225,7 @@ TEST_SUITE("DFTracerOrganize") {
                                              "--groups", "io:cat=IO"});
         REQUIRE(rc_org == 0);
 
-        // Reconstruct needs the .midx sidecars in the organized dir.
+        // Reconstruct needs the .pidx sidecars in the organized dir.
         int rc_rec = run_binary(
             rec_binary, {"-d", org_dir, "-o", rec_dir, "--no-compress"});
         CHECK(rc_rec == 0);

@@ -5,7 +5,7 @@
  * @file statistics.h
  * @brief Convenience header for all DFTracer statistics components.
  *
- * Provides zero-cost statistics aggregation from pre-indexed .bidx databases:
+ * Provides zero-cost statistics aggregation from pre-indexed .idx databases:
  * trace statistics, aggregation, and querying.
  */
 

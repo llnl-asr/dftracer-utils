@@ -14,12 +14,12 @@
 namespace dftracer::utils::server {
 
 /// Scans a directory for trace files and caches paths to their
-/// sidecar index files (.idx, .bidx). Used by API handlers to
-/// resolve file paths and check index availability.
+/// sidecar index file (.idx). Used by API handlers to resolve file
+/// paths and check index availability.
 class TraceIndex {
    public:
     // Files below this compressed size are streamed directly without
-    // building sidecar index files (.idx/.bidx).  At 8 MB compressed
+    // building a sidecar index file (.idx).  At 8 MB compressed
     // (~160 MB uncompressed with typical 20x JSON compression), a file
     // has only a handful of 32 MB checkpoints -- the indexing overhead
     // exceeds the benefit of bloom-filter skip.
@@ -27,9 +27,8 @@ class TraceIndex {
 
     struct FileInfo {
         std::string path;
-        std::string bidx_path;
         std::string idx_path;
-        bool has_bloom_index = false;
+        bool has_bloom_data = false;
         bool has_checkpoint_index = false;
         bool is_small = false;
         std::uint64_t min_timestamp_us = 0;

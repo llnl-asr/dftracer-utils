@@ -2,11 +2,12 @@
 #include <dftracer/utils/core/sqlite/async.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/chunk_aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <yyjson.h>
 
@@ -144,17 +145,19 @@ coro::CoroTask<ChunkAggregationOutput> ChunkAggregatorUtility::process(
     }
 
     // --- Bloom Filter Chunk Skipping ---
-    if (!input.bloom_predicates.empty() && !input.bidx_path.empty()) {
-        using namespace dftracer::utils::utilities::composites::dft::indexing;
+    if (!input.bloom_predicates.empty() && !input.idx_path.empty()) {
+        using indexer::IndexDatabase;
+        using indexer::internal::get_logical_path;
 
         auto bloom_check = [&input]() -> bool {
             try {
-                BloomIndexDatabase bidx(input.bidx_path);
-                int file_info_id = bidx.get_file_info_id(input.file_path);
+                IndexDatabase idx_db(input.idx_path);
+                int file_info_id =
+                    idx_db.get_file_info_id(get_logical_path(input.file_path));
                 if (file_info_id < 0) return false;
 
-                auto indexed_dims =
-                    queries::query_index_dimensions(bidx.db(), file_info_id);
+                auto indexed_dims = indexing::queries::query_index_dimensions(
+                    idx_db.sql_db(), file_info_id);
                 std::unordered_set<std::string> indexed_set(
                     indexed_dims.begin(), indexed_dims.end());
 
@@ -180,15 +183,16 @@ coro::CoroTask<ChunkAggregationOutput> ChunkAggregatorUtility::process(
 
                 bool chunk_may_match = false;
                 for (const auto& [dimension, values] : effective_predicates) {
-                    auto chunk_blooms = queries::query_chunk_bloom_filters(
-                        bidx.db(), file_info_id, dimension);
+                    auto chunk_blooms =
+                        indexing::queries::query_chunk_bloom_filters(
+                            idx_db.sql_db(), file_info_id, dimension);
 
                     for (const auto& cb : chunk_blooms) {
                         if (cb.checkpoint_idx < start_ckpt ||
                             cb.checkpoint_idx > end_ckpt) {
                             continue;
                         }
-                        auto bloom = BloomFilter::from_blob(
+                        auto bloom = indexing::BloomFilter::from_blob(
                             cb.bloom_data.data(), cb.bloom_data.size());
                         for (const auto& val : values) {
                             if (bloom.possibly_contains(val)) {

@@ -7,18 +7,17 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
-#include <dftracer/utils/core/utilities/utility_executor.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/utilities/indexer/provenance_database.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -37,8 +36,8 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites;
 using namespace dftracer::utils::utilities::composites::dft;
-using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
+using namespace dftracer::utils::utilities::indexer;
 
 namespace {
 
@@ -67,12 +66,11 @@ coro::CoroTask<int> run_organize(
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Step 1: Auto-build .midx for files that
-    // need it
-    std::printf("Step 1: Building manifest indices...\n");
+    // Step 1: Auto-build .idx for files that need it
+    std::printf("Step 1: Building indices...\n");
     {
         auto pipeline_config = PipelineConfig()
-                                   .with_name("Organize: Build MIDX")
+                                   .with_name("Organize: Build IDX")
                                    .with_compute_threads(executor_threads)
                                    .with_watchdog(false);
 
@@ -83,60 +81,50 @@ coro::CoroTask<int> run_organize(
 
         auto build_task = make_task(
             [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                co_await ctx.scope([&](CoroScope& scope)
-                                       -> coro::CoroTask<void> {
-                    auto* built_count_ptr = &built_count;
-                    auto* skipped_count_ptr = &skipped_count;
-                    for (std::size_t i = 0; i < files.size(); ++i) {
-                        const auto file_path = files[i];
-                        scope.spawn([file_path, index_dir, checkpoint_size,
-                                     force_rebuild, built_count_ptr,
-                                     skipped_count_ptr](CoroScope& fctx)
-                                        -> coro::CoroTask<void> {
-                            ManifestIndexBuildInput input;
-                            input.file_path = file_path;
-                            input.index_dir = index_dir;
-                            input.checkpoint_size = checkpoint_size;
-                            input.force_rebuild = force_rebuild;
+                co_await ctx.scope(
+                    [&](CoroScope& scope) -> coro::CoroTask<void> {
+                        auto* built_count_ptr = &built_count;
+                        auto* skipped_count_ptr = &skipped_count;
+                        for (std::size_t i = 0; i < files.size(); ++i) {
+                            const auto file_path = files[i];
+                            scope.spawn([file_path, index_dir, checkpoint_size,
+                                         force_rebuild, built_count_ptr,
+                                         skipped_count_ptr](CoroScope& /*fctx*/)
+                                            -> coro::CoroTask<void> {
+                                auto config =
+                                    IndexBuildConfig::for_file(file_path)
+                                        .with_index_dir(index_dir)
+                                        .with_checkpoint_size(checkpoint_size)
+                                        .with_force_rebuild(force_rebuild)
+                                        .with_manifest(true)
+                                        .with_index_threshold(0);
 
-                            auto utility =
-                                std::make_shared<ManifestIndexBuilderUtility>();
-                            behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                                     ManifestIndexBuildOutput>
-                                chain;
-                            behaviors::UtilityExecutor<
-                                ManifestIndexBuildInput,
-                                ManifestIndexBuildOutput,
-                                utilities::tags::NeedsContext>
-                                executor(utility, std::move(chain));
+                                IndexBuilderUtility builder;
+                                auto result = co_await builder.process(config);
 
-                            auto result =
-                                co_await executor.execute_with_context(fctx,
-                                                                       input);
-
-                            if (result.was_skipped) {
-                                (*skipped_count_ptr)++;
-                            } else if (result.success) {
-                                (*built_count_ptr)++;
-                            } else {
-                                DFTRACER_UTILS_LOG_ERROR(
-                                    "MIDX "
-                                    "build "
-                                    "failed"
-                                    " for "
-                                    "%s: "
-                                    "%s",
-                                    file_path.c_str(),
-                                    result.error_message.c_str());
-                            }
-                            co_return;
-                        });
-                    }
-                    co_return;
-                });
+                                if (result.was_skipped) {
+                                    (*skipped_count_ptr)++;
+                                } else if (result.success) {
+                                    (*built_count_ptr)++;
+                                } else {
+                                    DFTRACER_UTILS_LOG_ERROR(
+                                        "IDX "
+                                        "build "
+                                        "failed"
+                                        " for "
+                                        "%s: "
+                                        "%s",
+                                        file_path.c_str(),
+                                        result.error_message.c_str());
+                                }
+                                co_return;
+                            });
+                        }
+                        co_return;
+                    });
                 co_return;
             },
-            "BuildMIDX");
+            "BuildIDX");
 
         pipeline.set_source(build_task);
         pipeline.set_destination(build_task);
@@ -238,8 +226,8 @@ coro::CoroTask<int> run_organize(
         }
 
         // Create reader for this source file
-        std::string idx_path =
-            internal::determine_index_path(src.file_path, index_dir);
+        std::string idx_path = composites::dft::internal::determine_index_path(
+            src.file_path, index_dir);
         auto reader_input = IndexedReadInput::from_file(src.file_path)
                                 .with_index(idx_path)
                                 .with_checkpoint_size(src.checkpoint_size > 0
@@ -348,8 +336,7 @@ coro::CoroTask<int> run_organize(
             auto comp_result = co_await compressor.process(comp_input);
 
             if (comp_result.success) {
-                // Remove plain .pfw after
-                // compression
+                // Remove plain .pfw after compression
                 fs::remove(pfw_path);
                 std::printf(
                     "  %s: %.2f MB -> %.2f MB"
@@ -392,60 +379,51 @@ coro::CoroTask<int> run_organize(
 
         auto sidecar_task = make_task(
             [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                co_await ctx.scope([&](CoroScope& scope)
-                                       -> coro::CoroTask<void> {
-                    for (std::size_t i = 0; i < output_files.size(); ++i) {
-                        const auto out_file = output_files[i];
-                        scope.spawn([out_file, output_dir,
-                                     checkpoint_size](CoroScope& fctx)
-                                        -> coro::CoroTask<void> {
-                            ManifestIndexBuildInput midx_input;
-                            midx_input.file_path = out_file;
-                            midx_input.index_dir = output_dir;
-                            midx_input.checkpoint_size = checkpoint_size;
-                            midx_input.force_rebuild = true;
+                co_await ctx.scope(
+                    [&](CoroScope& scope) -> coro::CoroTask<void> {
+                        for (std::size_t i = 0; i < output_files.size(); ++i) {
+                            const auto out_file = output_files[i];
+                            scope.spawn([out_file, output_dir,
+                                         checkpoint_size](CoroScope& /*fctx*/)
+                                            -> coro::CoroTask<void> {
+                                auto config =
+                                    IndexBuildConfig::for_file(out_file)
+                                        .with_index_dir(output_dir)
+                                        .with_checkpoint_size(checkpoint_size)
+                                        .with_force_rebuild(true)
+                                        .with_manifest(true)
+                                        .with_index_threshold(0);
 
-                            auto m_util =
-                                std::make_shared<ManifestIndexBuilderUtility>();
-                            behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                                     ManifestIndexBuildOutput>
-                                m_chain;
-                            behaviors::UtilityExecutor<
-                                ManifestIndexBuildInput,
-                                ManifestIndexBuildOutput,
-                                utilities::tags::NeedsContext>
-                                m_executor(m_util, std::move(m_chain));
+                                IndexBuilderUtility builder;
+                                auto result = co_await builder.process(config);
 
-                            auto m_result =
-                                co_await m_executor.execute_with_context(
-                                    fctx, midx_input);
+                                if (result.success) {
+                                    std::printf(
+                                        "  %s"
+                                        ": "
+                                        ".idx"
+                                        " "
+                                        "buil"
+                                        "t "
+                                        "(%zu"
+                                        " "
+                                        "even"
+                                        "ts,"
+                                        " "
+                                        "%zu "
+                                        "chun"
+                                        "ks)"
+                                        "\n",
+                                        out_file.c_str(),
+                                        result.events_processed,
+                                        result.chunks_processed);
+                                }
 
-                            if (m_result.success) {
-                                std::printf(
-                                    "  %s"
-                                    ": "
-                                    ".mid"
-                                    "x "
-                                    "buil"
-                                    "t "
-                                    "(%zu"
-                                    " "
-                                    "even"
-                                    "ts,"
-                                    " "
-                                    "%zu "
-                                    "chun"
-                                    "ks)"
-                                    "\n",
-                                    out_file.c_str(), m_result.events_processed,
-                                    m_result.chunks_processed);
-                            }
-
-                            co_return;
-                        });
-                    }
-                    co_return;
-                });
+                                co_return;
+                            });
+                        }
+                        co_return;
+                    });
                 co_return;
             },
             "BuildSidecars");
@@ -455,8 +433,7 @@ coro::CoroTask<int> run_organize(
         pipeline.execute();
     }
 
-    // Step 6: Write provenance to output .midx
-    // files
+    // Step 6: Write provenance to output .pidx files
     std::printf("Step 6: Writing provenance...\n");
     for (const auto& g : plan.groups) {
         std::string out_file;
@@ -470,37 +447,37 @@ coro::CoroTask<int> run_organize(
             continue;
         }
 
-        std::string midx_path =
-            determine_manifest_index_path(out_file, output_dir);
-        if (!fs::exists(midx_path)) continue;
+        std::string idx_path = composites::dft::internal::determine_index_path(
+            out_file, output_dir);
+        if (!fs::exists(idx_path)) continue;
+
+        std::string pidx_path =
+            determine_provenance_index_path(out_file, output_dir);
 
         try {
-            ManifestIndexDatabase midx(midx_path);
-            midx.init_schema();
+            ProvenanceDatabase pdb(pidx_path);
+            pdb.init_schema();
 
-            int fid = midx.get_file_info_id(out_file);
-            if (fid < 0) continue;
+            std::uint64_t out_hash = 0;
+            if (fs::exists(out_file)) {
+                out_hash = static_cast<std::uint64_t>(fs::file_size(out_file));
+            }
+            int fid = pdb.get_or_create_file_info(out_file, out_hash);
 
-            midx.begin_transaction();
+            pdb.begin_transaction();
 
-            // Provenance info
-            queries::insert_provenance_info(midx.db(), "version", "1.0");
-            queries::insert_provenance_info(midx.db(), "tool",
-                                            "dftracer_organize");
+            pdb.insert_info("version", "1.0");
+            pdb.insert_info("tool", "dftracer_organize");
 
-            // Provenance group
-            queries::insert_provenance_group(midx.db(), g.name, g.predicate);
+            pdb.insert_group(g.name, g.predicate);
 
-            // Provenance sources
             for (std::size_t si = 0; si < plan.source_files.size(); ++si) {
                 const auto& src = plan.source_files[si];
-                queries::insert_provenance_source(
-                    midx.db(), fid, static_cast<int>(si), src.file_path,
-                    static_cast<int>(src.num_checkpoints), "");
+                pdb.insert_source(fid, static_cast<int>(si), src.file_path,
+                                  static_cast<int>(src.num_checkpoints));
             }
 
-            // Provenance segments: track which
-            // lines came from where
+            // Track which lines came from where
             std::map<std::size_t, std::map<std::uint64_t, std::size_t>>
                 segment_events;
             for (const auto& task : plan.tasks) {
@@ -513,16 +490,15 @@ coro::CoroTask<int> run_organize(
             int output_line = 0;
             for (const auto& [src_idx, ckpts] : segment_events) {
                 for (const auto& [ckpt, count] : ckpts) {
-                    queries::insert_provenance_segment(
-                        midx.db(), static_cast<int>(src_idx),
-                        static_cast<int>(ckpt), output_line,
-                        output_line + static_cast<int>(count),
-                        static_cast<int>(count));
+                    pdb.insert_segment(static_cast<int>(src_idx),
+                                       static_cast<int>(ckpt), output_line,
+                                       output_line + static_cast<int>(count),
+                                       static_cast<int>(count));
                     output_line += static_cast<int>(count);
                 }
             }
 
-            midx.commit_transaction();
+            pdb.commit_transaction();
             std::printf("  %s: provenance written\n", g.name.c_str());
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_ERROR(

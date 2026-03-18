@@ -5,12 +5,9 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
-#include <dftracer/utils/core/utilities/utility_executor.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/indexer/index_builder.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <argparse/argparse.hpp>
@@ -22,6 +19,7 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
+using namespace dftracer::utils::utilities::indexer;
 
 static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
     std::string log_dir = program.get<std::string>("--directory");
@@ -34,7 +32,6 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
     std::size_t expected_entries =
         program.get<std::size_t>("--expected-entries");
     double false_positive_rate = program.get<double>("--false-positive-rate");
-    std::size_t batch_size_mb = program.get<std::size_t>("--read-batch-size");
     bool build_manifest = program.get<bool>("--manifest");
 
     auto split_string = [](const std::string& str) {
@@ -57,7 +54,9 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
     indexer_config.expected_entries_per_chunk = expected_entries;
     indexer_config.false_positive_rate = false_positive_rate;
 
-    std::vector<std::string> all_dimensions = default_bloom_dimensions();
+    // Default bloom dimensions + any user-supplied extras.
+    std::vector<std::string> all_dimensions =
+        dftracer::utils::utilities::indexer::default_bloom_dimensions();
     for (const auto& dim : extra_dimensions) {
         all_dimensions.push_back(dim);
     }
@@ -119,15 +118,6 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
     std::atomic<std::size_t> total_files_processed{0};
     std::atomic<std::size_t> total_files_skipped{0};
 
-    // Build bloom index input template
-    BloomIndexBuildInput build_template;
-    build_template.index_dir = index_dir;
-    build_template.checkpoint_size = checkpoint_size;
-    build_template.indexer_config = indexer_config;
-    build_template.batch_size = batch_size_mb * 1024 * 1024;
-    build_template.force_rebuild = force_rebuild;
-    build_template.dimensions = all_dimensions;
-
     auto streaming_task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
@@ -135,29 +125,27 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
                 auto* total_checkpoints_ptr = &total_checkpoints_processed;
                 auto* total_processed_ptr = &total_files_processed;
                 auto* total_skipped_ptr = &total_files_skipped;
+                auto* all_dims_ptr = &all_dimensions;
                 for (std::size_t i = 0; i < input_files.size(); ++i) {
                     const auto file_path = input_files[i];
-                    scope.spawn([build_template, file_path, build_manifest,
-                                 index_dir, checkpoint_size, batch_size_mb,
-                                 force_rebuild, total_events_ptr,
+                    scope.spawn([indexer_config, file_path, build_manifest,
+                                 index_dir, checkpoint_size, force_rebuild,
+                                 all_dims_ptr, total_events_ptr,
                                  total_checkpoints_ptr, total_processed_ptr,
                                  total_skipped_ptr](
-                                    CoroScope& fctx) -> coro::CoroTask<void> {
-                        BloomIndexBuildInput build_input = build_template;
-                        build_input.file_path = file_path;
+                                    CoroScope&) -> coro::CoroTask<void> {
+                        IndexBuilderUtility builder;
+                        auto config = IndexBuildConfig::for_file(file_path)
+                                          .with_index_dir(index_dir)
+                                          .with_checkpoint_size(checkpoint_size)
+                                          .with_force_rebuild(force_rebuild)
+                                          .with_bloom(true)
+                                          .with_manifest(build_manifest)
+                                          .with_index_threshold(0)
+                                          .with_bloom_config(indexer_config)
+                                          .with_bloom_dimensions(*all_dims_ptr);
 
-                        auto utility =
-                            std::make_shared<BloomIndexBuilderUtility>();
-                        behaviors::BehaviorChain<BloomIndexBuildInput,
-                                                 BloomIndexBuildOutput>
-                            chain;
-                        behaviors::UtilityExecutor<
-                            BloomIndexBuildInput, BloomIndexBuildOutput,
-                            utilities::tags::NeedsContext>
-                            executor(utility, std::move(chain));
-
-                        auto result = co_await executor.execute_with_context(
-                            fctx, build_input);
+                        auto result = co_await builder.process(config);
 
                         if (result.was_skipped) {
                             (*total_skipped_ptr)++;
@@ -167,38 +155,11 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
                             (*total_checkpoints_ptr) += result.chunks_processed;
                         } else {
                             (*total_skipped_ptr)++;
-                        }
-
-                        if (build_manifest) {
-                            ManifestIndexBuildInput manifest_input;
-                            manifest_input.file_path = file_path;
-                            manifest_input.index_dir = index_dir;
-                            manifest_input.checkpoint_size = checkpoint_size;
-                            manifest_input.batch_size =
-                                batch_size_mb * 1024 * 1024;
-                            manifest_input.force_rebuild = force_rebuild;
-
-                            auto m_utility =
-                                std::make_shared<ManifestIndexBuilderUtility>();
-                            behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                                     ManifestIndexBuildOutput>
-                                m_chain;
-                            behaviors::UtilityExecutor<
-                                ManifestIndexBuildInput,
-                                ManifestIndexBuildOutput,
-                                utilities::tags::NeedsContext>
-                                m_executor(m_utility, std::move(m_chain));
-
-                            auto m_result =
-                                co_await m_executor.execute_with_context(
-                                    fctx, manifest_input);
-
-                            if (!m_result.success && !m_result.was_skipped) {
+                            if (!result.error_message.empty()) {
                                 DFTRACER_UTILS_LOG_ERROR(
-                                    "Manifest index failed "
-                                    "for %s: %s",
+                                    "Index failed for %s: %s",
                                     file_path.c_str(),
-                                    m_result.error_message.c_str());
+                                    result.error_message.c_str());
                             }
                         }
 
@@ -257,7 +218,7 @@ int main(int argc, char** argv) {
                                      DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(
         "Build per-chunk bloom filter indices for DFTracer trace files. "
-        "Creates .bidx sidecar databases enabling fast chunk-skipping "
+        "Creates .idx sidecar databases enabling fast chunk-skipping "
         "queries.");
 
     program.add_argument("-d", "--directory")
@@ -310,7 +271,7 @@ int main(int argc, char** argv) {
 
     program.add_argument("--manifest")
         .help(
-            "Also build .midx manifest index "
+            "Also build .idx manifest index "
             "(per-checkpoint event line routing)")
         .flag();
 

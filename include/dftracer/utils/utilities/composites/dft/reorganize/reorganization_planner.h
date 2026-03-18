@@ -19,7 +19,6 @@ struct PredicateGroup {
 struct SourceFileInfo {
     std::string file_path;
     std::string idx_path;
-    std::string midx_path;
     std::size_t num_checkpoints = 0;
     std::uint64_t uncompressed_size = 0;
     std::uint64_t checkpoint_size = 0;

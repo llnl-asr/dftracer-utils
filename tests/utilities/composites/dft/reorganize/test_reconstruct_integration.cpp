@@ -5,11 +5,6 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
-#include <dftracer/utils/core/utilities/utility_executor.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.h>
@@ -17,6 +12,8 @@
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
+#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/provenance_database.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -33,8 +30,11 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites;
 using namespace dftracer::utils::utilities::composites::dft;
-using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
+using dftracer::utils::utilities::indexer::determine_provenance_index_path;
+using dftracer::utils::utilities::indexer::IndexBuildConfig;
+using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using dftracer::utils::utilities::indexer::ProvenanceDatabase;
 
 // Test trace layout:
 // Line 0: HH metadata
@@ -82,44 +82,37 @@ static std::string create_test_trace(const std::string& dir) {
     return gz_path;
 }
 
-// Build .midx for a trace file using the full
-// pipeline
-static void build_midx(const std::string& trace_file,
-                       const std::string& index_dir) {
-    ManifestIndexBuildInput input;
-    input.file_path = trace_file;
-    input.index_dir = index_dir;
-    input.force_rebuild = true;
-
+// Build .idx for a trace file using IndexBuilder
+static void build_idx(const std::string& trace_file,
+                      const std::string& index_dir) {
     auto pipeline_config = PipelineConfig()
-                               .with_name("ReconTestMidxBuild")
+                               .with_name("ReconTestIdxBuild")
                                .with_compute_threads(2)
                                .with_watchdog(false);
 
     Pipeline pipeline(pipeline_config);
-    ManifestIndexBuildOutput result;
+    indexer::IndexBuildResult result;
 
+    auto* result_ptr = &result;
     auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            auto utility = std::make_shared<ManifestIndexBuilderUtility>();
-            behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                     ManifestIndexBuildOutput>
-                chain;
-            behaviors::UtilityExecutor<ManifestIndexBuildInput,
-                                       ManifestIndexBuildOutput,
-                                       utilities::tags::NeedsContext>
-                executor(utility, std::move(chain));
-            result = co_await executor.execute_with_context(ctx, input);
+        [trace_file, index_dir,
+         result_ptr](CoroScope&) -> coro::CoroTask<void> {
+            IndexBuilderUtility builder;
+            auto config = IndexBuildConfig::for_file(trace_file)
+                              .with_index_dir(index_dir)
+                              .with_manifest(true)
+                              .with_index_threshold(0);
+            *result_ptr = co_await builder.process(config);
             co_return;
         },
-        "BuildMidx");
+        "BuildIdx");
 
     pipeline.set_source(task);
     pipeline.set_destination(task);
     pipeline.execute();
 
     if (!result.success) {
-        throw std::runtime_error("Failed to build .midx for test: " +
+        throw std::runtime_error("Failed to build .idx for test: " +
                                  result.error_message);
     }
 }
@@ -270,7 +263,7 @@ TEST_SUITE("ReconstructIntegration") {
 
         // Step 1: Create and index test trace
         std::string trace_file = create_test_trace(input_dir);
-        build_midx(trace_file, input_dir);
+        build_idx(trace_file, input_dir);
 
         // Step 2: Plan reorganization
         ReorganizationPlannerUtility planner;
@@ -318,45 +311,39 @@ TEST_SUITE("ReconstructIntegration") {
             group_gz_paths[g.name] = gz_path;
         }
 
-        // Step 5: Build .midx for each compressed
-        // output
+        // Step 5: Build .idx for each compressed output
         for (const auto& [gname, gz_path] : group_gz_paths) {
-            build_midx(gz_path, reorg_dir);
+            build_idx(gz_path, reorg_dir);
         }
 
-        // Step 6: Write provenance into each output
-        // .midx
+        // Step 6: Write provenance into each output .pidx
         for (const auto& g : plan.groups) {
             auto gz_it = group_gz_paths.find(g.name);
             if (gz_it == group_gz_paths.end()) continue;
             const std::string& gz_path = gz_it->second;
 
-            std::string midx_path =
-                determine_manifest_index_path(gz_path, reorg_dir);
-            REQUIRE(fs::exists(midx_path));
+            std::string pidx_path =
+                internal::determine_provenance_index_path(gz_path, reorg_dir);
 
-            ManifestIndexDatabase midx(midx_path);
-            midx.init_schema();
-            int fid = midx.get_file_info_id(gz_path);
+            ProvenanceDatabase pdb(pidx_path);
+            pdb.init_schema();
+            int fid = pdb.get_or_create_file_info(gz_path, 0);
             REQUIRE(fid >= 0);
 
-            midx.begin_transaction();
+            pdb.begin_transaction();
 
-            queries::insert_provenance_info(midx.db(), "version", "1.0");
-            queries::insert_provenance_info(midx.db(), "tool",
-                                            "dftracer_organize");
-            queries::insert_provenance_group(midx.db(), g.name, g.predicate);
+            pdb.insert_info("version", "1.0");
+            pdb.insert_info("tool", "dftracer_organize");
+            pdb.insert_group(g.name, g.predicate);
 
             // Insert source
             for (std::size_t si = 0; si < plan.source_files.size(); ++si) {
                 const auto& src = plan.source_files[si];
-                queries::insert_provenance_source(
-                    midx.db(), fid, static_cast<int>(si), src.file_path,
-                    static_cast<int>(src.num_checkpoints), "");
+                pdb.insert_source(fid, static_cast<int>(si), src.file_path,
+                                  static_cast<int>(src.num_checkpoints), "");
             }
 
-            // Insert segments: track which lines
-            // came from where
+            // Insert segments: track which lines came from where
             std::map<std::size_t, std::map<std::uint64_t, std::size_t>>
                 segment_events;
             for (const auto& task : plan.tasks) {
@@ -369,16 +356,15 @@ TEST_SUITE("ReconstructIntegration") {
             int output_line = 0;
             for (const auto& [src_idx, ckpts] : segment_events) {
                 for (const auto& [ckpt, count] : ckpts) {
-                    queries::insert_provenance_segment(
-                        midx.db(), static_cast<int>(src_idx),
-                        static_cast<int>(ckpt), output_line,
-                        output_line + static_cast<int>(count),
-                        static_cast<int>(count));
+                    pdb.insert_segment(static_cast<int>(src_idx),
+                                       static_cast<int>(ckpt), output_line,
+                                       output_line + static_cast<int>(count),
+                                       static_cast<int>(count));
                     output_line += static_cast<int>(count);
                 }
             }
 
-            midx.commit_transaction();
+            pdb.commit_transaction();
         }
 
         // Step 7: Plan reconstruction
@@ -403,8 +389,7 @@ TEST_SUITE("ReconstructIntegration") {
         // extract lines from reorganized files
         std::map<std::string, std::map<int, std::vector<std::string>>> buffers;
 
-        // Build segment intervals per reorganized
-        // file
+        // Build segment intervals per reorganized file
         std::map<std::string, std::vector<SegmentInterval>> per_reorg_segments;
 
         for (const auto& [orig_path, recon] : recon_plan.files) {

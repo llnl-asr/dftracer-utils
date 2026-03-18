@@ -7,12 +7,12 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/server/trace_index.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 #include <cinttypes>
 #include <limits>
@@ -22,6 +22,7 @@ namespace dftracer::utils::server {
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
+namespace indexer = dftracer::utils::utilities::indexer;
 
 TraceIndex::TraceIndex(const std::string& directory,
                        const std::string& index_dir, std::size_t max_concurrent)
@@ -49,7 +50,6 @@ coro::CoroTask<void> TraceIndex::initialize() {
     for (const auto& entry : entries) {
         FileInfo info;
         info.path = entry.path.string();
-        info.bidx_path = determine_bloom_index_path(info.path, index_dir_);
         info.idx_path = internal::determine_index_path(info.path, index_dir_);
 
         std::error_code ec;
@@ -62,15 +62,15 @@ coro::CoroTask<void> TraceIndex::initialize() {
         path_to_index_[info.path] = idx;
 
         if (info.is_small) {
-            info.has_bloom_index = false;
+            info.has_bloom_data = false;
             info.has_checkpoint_index = false;
             info.size_mb =
                 static_cast<double>(info.compressed_size) / (1024.0 * 1024.0);
             small_count++;
         } else {
-            info.has_bloom_index = fs::exists(info.bidx_path);
+            info.has_bloom_data = fs::exists(info.idx_path);
             info.has_checkpoint_index = fs::exists(info.idx_path);
-            if (!info.has_bloom_index) {
+            if (!info.has_bloom_data) {
                 needs_build.push_back(idx);
             } else {
                 large_files.push_back(idx);
@@ -143,23 +143,21 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                         std::size_t fi = *fi_opt;
                                         auto* info = &(*files_ptr)[fi];
 
-                                        BloomIndexBuildInput build_input;
-                                        build_input.file_path = info->path;
-                                        build_input.index_dir = index_dir;
-                                        build_input.force_rebuild = false;
-                                        build_input.dimensions =
-                                            default_bloom_dimensions();
-
+                                        indexer::IndexBuilderUtility builder;
+                                        auto config =
+                                            indexer::IndexBuildConfig::for_file(
+                                                info->path)
+                                                .with_index_dir(index_dir)
+                                                .with_bloom(true)
+                                                .with_index_threshold(0);
                                         auto result =
-                                            co_await BloomIndexBuilderUtility{}
-                                                .process(build_input);
+                                            co_await builder.process(config);
 
                                         if (result.success) {
-                                            info->bidx_path = result.bidx_path;
-                                            info->has_bloom_index = true;
                                             info->idx_path =
                                                 internal::determine_index_path(
                                                     info->path, index_dir);
+                                            info->has_bloom_data = true;
                                             info->has_checkpoint_index =
                                                 fs::exists(info->idx_path);
                                         } else {
@@ -177,7 +175,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     });
 
                     for (auto idx : *needs_build_ptr) {
-                        if ((*files_ptr)[idx].has_bloom_index) {
+                        if ((*files_ptr)[idx].has_bloom_data) {
                             large_files_ptr->push_back(idx);
                         }
                     }
@@ -208,16 +206,18 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                     std::size_t fi = *fi_opt;
                                     auto* info = &(*files_ptr)[fi];
 
-                                    if (info->has_bloom_index) {
+                                    if (info->has_bloom_data) {
                                         try {
-                                            BloomIndexDatabase bidx(
-                                                info->bidx_path);
-                                            int fid = bidx.get_file_info_id(
-                                                info->path);
+                                            indexer::IndexDatabase idx_db(
+                                                info->idx_path);
+                                            auto logical = indexer::internal::
+                                                get_logical_path(info->path);
+                                            int fid = idx_db.get_file_info_id(
+                                                logical);
                                             if (fid >= 0) {
                                                 auto tb =
-                                                    queries::query_time_bounds(
-                                                        bidx.db(), fid);
+                                                    idx_db.query_time_bounds(
+                                                        fid);
                                                 if (tb.valid) {
                                                     info->min_timestamp_us =
                                                         tb.min_timestamp_us;
@@ -230,7 +230,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                                 "TraceIndex: failed to "
                                                 "read time bounds from "
                                                 "%s: %s",
-                                                info->bidx_path.c_str(),
+                                                info->idx_path.c_str(),
                                                 e.what());
                                         }
                                     }

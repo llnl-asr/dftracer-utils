@@ -2,15 +2,17 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 
+#include <string_view>
+
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteStmt;
 using indexer::internal::IndexerError;
 
 void insert_hash_resolution(const SqliteDatabase& db, int file_info_id,
-                            const std::string& dimension,
-                            const std::string& hash_value,
-                            const std::string& resolved_value) {
+                            std::string_view dimension,
+                            std::string_view hash_value,
+                            std::string_view resolved_value) {
     SqliteStmt stmt(db,
                     "INSERT OR IGNORE INTO hash_resolutions"
                     "(file_info_id, dimension, hash_value, resolved_value) "

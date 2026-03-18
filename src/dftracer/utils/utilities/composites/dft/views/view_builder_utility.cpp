@@ -1,9 +1,10 @@
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 #include <cstdint>
 #include <string>
@@ -11,6 +12,9 @@
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::views {
+
+using dftracer::utils::utilities::indexer::IndexDatabase;
+using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
 // ViewBuilderInput fluent builders
 ViewBuilderInput& ViewBuilderInput::with_view(const ViewDefinition& v) {
@@ -23,8 +27,8 @@ ViewBuilderInput& ViewBuilderInput::with_file_path(const std::string& path) {
     return *this;
 }
 
-ViewBuilderInput& ViewBuilderInput::with_bidx_path(const std::string& path) {
-    bidx_path = path;
+ViewBuilderInput& ViewBuilderInput::with_idx_path(const std::string& path) {
+    idx_path = path;
     return *this;
 }
 
@@ -72,9 +76,9 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
     // Determine candidate checkpoints via bloom pre-filtering
     std::vector<std::uint64_t> candidate_checkpoints;
 
-    if (!bloom_predicates.empty() && !input.bidx_path.empty()) {
+    if (!bloom_predicates.empty() && !input.idx_path.empty()) {
         indexing::BloomQueryInput bq_input;
-        bq_input.bidx_path = input.bidx_path;
+        bq_input.idx_path = input.idx_path;
         bq_input.file_path = input.file_path;
         bq_input.predicates = bloom_predicates;
         bq_input.cache = input.bloom_cache;
@@ -103,7 +107,7 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
             }
         }
     } else {
-        // No bloom predicates or no bidx: scan all chunks
+        // No bloom predicates or no idx: scan all chunks
         for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
             candidate_checkpoints.push_back(i);
         }
@@ -111,17 +115,18 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
 
     // Chunk-level time range skip: query per-chunk time bounds from
     // the bloom index and remove chunks that don't overlap the query.
-    if (input.time_range && !input.bidx_path.empty() &&
+    if (input.time_range && !input.idx_path.empty() &&
         !candidate_checkpoints.empty()) {
         auto [t_begin, t_end] = *input.time_range;
         if (t_begin > 0 || t_end > 0) {
             try {
-                indexing::BloomIndexDatabase bidx(input.bidx_path);
-                int fid = bidx.get_file_info_id(input.file_path);
+                IndexDatabase idx_db(input.idx_path);
+                int fid =
+                    idx_db.get_file_info_id(get_logical_path(input.file_path));
                 if (fid >= 0) {
                     auto chunk_stats =
-                        indexing::queries::query_chunk_statistics(bidx.db(),
-                                                                  fid);
+                        indexing::queries::query_chunk_statistics(
+                            idx_db.sql_db(), fid);
 
                     std::unordered_map<std::uint64_t,
                                        std::pair<std::uint64_t, std::uint64_t>>

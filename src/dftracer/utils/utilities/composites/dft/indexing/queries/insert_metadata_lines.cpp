@@ -2,6 +2,9 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 
+#include <span>
+#include <string_view>
+
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteStmt;
@@ -9,7 +12,7 @@ using indexer::internal::IndexerError;
 
 void insert_metadata_lines(const SqliteDatabase& db, int file_info_id,
                            std::uint64_t checkpoint_idx,
-                           const std::string& meta_type,
+                           std::string_view meta_type,
                            const std::vector<std::uint32_t>& line_numbers) {
     auto blob = pack_line_numbers(line_numbers);
 
@@ -30,6 +33,14 @@ void insert_metadata_lines(const SqliteDatabase& db, int file_info_id,
                            "Failed to insert metadata lines: " +
                                std::string(sqlite3_errmsg(db.get())));
     }
+}
+
+void insert_metadata_lines(const SqliteDatabase& db, int file_info_id,
+                           std::uint64_t checkpoint_idx,
+                           std::string_view meta_type,
+                           std::span<const std::uint32_t> line_numbers) {
+    std::vector<std::uint32_t> vec(line_numbers.begin(), line_numbers.end());
+    insert_metadata_lines(db, file_info_id, checkpoint_idx, meta_type, vec);
 }
 
 }  // namespace

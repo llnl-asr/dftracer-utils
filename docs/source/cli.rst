@@ -312,8 +312,8 @@ dftracer_view
 - ``-o, --output <path>`` - Output file path (default: stdout)
 - ``--stream`` - Stream matching events to stdout as NDJSON
 - ``--no-metadata`` - Exclude metadata events (ph=M) from output
-- ``--index-dir <path>`` - Directory where .bidx index files are stored
-- ``--no-auto-index`` - Disable automatic bloom index building for files missing .bidx
+- ``--index-dir <path>`` - Directory where .idx index files are stored
+- ``--no-auto-index`` - Disable automatic bloom index building for files missing .idx
 - ``--checkpoint-size <bytes>`` - Checkpoint size for auto-indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads (default: number of CPU cores)
 
@@ -352,7 +352,7 @@ dftracer_index
 - ``--expected-entries <count>`` - Expected entries per chunk for bloom filter sizing (default: 1024)
 - ``--false-positive-rate <rate>`` - Bloom filter false positive rate (default: 0.01)
 - ``--read-batch-size <MB>`` - Batch read size in MB for stream processing (default: 4)
-- ``--manifest`` - Also build .midx manifest index (per-checkpoint event line routing)
+- ``--manifest`` - Also build manifest tables in .idx (per-checkpoint event line routing)
 
 **Example:**
 
@@ -454,7 +454,7 @@ dftracer_organize
 dftracer_reconstruct
 --------------------
 
-**Description:** Reconstruct original traces from reorganized files using provenance tracking in .midx sidecars
+**Description:** Reconstruct original traces from reorganized files using provenance tracking in .pidx sidecars
 
 **Usage:**
 

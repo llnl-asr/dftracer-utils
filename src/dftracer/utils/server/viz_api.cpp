@@ -520,8 +520,8 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                 ViewBuilderInput builder_input;
                 builder_input.with_view(view)
                     .with_file_path(file_info->path)
-                    .with_bidx_path(
-                        file_info->has_bloom_index ? file_info->bidx_path : "")
+                    .with_idx_path(
+                        file_info->has_bloom_data ? file_info->idx_path : "")
                     .with_uncompressed_size(file_info->uncompressed_size)
                     .with_num_checkpoints(file_info->num_checkpoints)
                     .with_bloom_cache(&index.bloom_cache())
@@ -629,9 +629,9 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                         ViewBuilderInput builder_input;
                         builder_input.with_view(*view_ptr)
                             .with_file_path(file_info->path)
-                            .with_bidx_path(file_info->has_bloom_index
-                                                ? file_info->bidx_path
-                                                : "")
+                            .with_idx_path(file_info->has_bloom_data
+                                               ? file_info->idx_path
+                                               : "")
                             .with_uncompressed_size(
                                 file_info->uncompressed_size)
                             .with_num_checkpoints(file_info->num_checkpoints)

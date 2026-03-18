@@ -1,8 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.h>
+#include <dftracer/utils/utilities/indexer/provenance_database.h>
 #include <doctest/doctest.h>
 
 #include <fstream>
@@ -13,8 +12,9 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
+using dftracer::utils::utilities::indexer::determine_provenance_index_path;
+using dftracer::utils::utilities::indexer::ProvenanceDatabase;
 
 TEST_SUITE("ReconstructionPlanner") {
     TEST_CASE("Empty input produces empty plan") {
@@ -42,41 +42,38 @@ TEST_SUITE("ReconstructionPlanner") {
             ofs << "dummy";
         }
 
-        // Create .midx sidecar with provenance
-        std::string midx_path = determine_manifest_index_path(reorg_file, "");
+        // Create .pidx sidecar with provenance
+        std::string pidx_path = determine_provenance_index_path(reorg_file, "");
         {
-            ManifestIndexDatabase midx(midx_path);
-            midx.init_schema();
-            midx.get_or_create_file_info(reorg_file, 0);
+            ProvenanceDatabase pdb(pidx_path);
+            pdb.init_schema();
+            int fid = pdb.get_or_create_file_info(reorg_file, 0);
 
-            midx.begin_transaction();
+            pdb.begin_transaction();
 
             // Provenance info
-            queries::insert_provenance_info(midx.db(), "version", "1.0");
-            queries::insert_provenance_info(midx.db(), "tool",
-                                            "dftracer_organize");
+            pdb.insert_info("version", "1.0");
+            pdb.insert_info("tool", "dftracer_organize");
 
             // Provenance group
-            queries::insert_provenance_group(midx.db(), "io", "cat=POSIX");
+            pdb.insert_group("io", "cat=POSIX");
 
             // Provenance source
-            int fid = midx.get_file_info_id(reorg_file);
-            queries::insert_provenance_source(
-                midx.db(), fid, 0, "/original/trace.pfw.gz", 3, "abc123");
+            pdb.insert_source(fid, 0, "/original/trace.pfw.gz", 3, "abc123");
 
             // Provenance segments (3 checkpoints)
-            queries::insert_provenance_segment(midx.db(), 0, 0, 0, 100, 100);
-            queries::insert_provenance_segment(midx.db(), 0, 1, 100, 250, 150);
-            queries::insert_provenance_segment(midx.db(), 0, 2, 250, 400, 150);
+            pdb.insert_segment(0, 0, 0, 100, 100);
+            pdb.insert_segment(0, 1, 100, 250, 150);
+            pdb.insert_segment(0, 2, 250, 400, 150);
 
-            midx.commit_transaction();
+            pdb.commit_transaction();
         }
 
         // Run planner
         ReconstructionPlannerUtility planner;
         ReconstructionPlannerInput input;
         input.reorganized_files = {reorg_file};
-        // index_dir empty => midx is next to file
+        // index_dir empty => pidx is next to file
 
         auto plan = planner.process(input).get();
 
@@ -128,53 +125,46 @@ TEST_SUITE("ReconstructionPlanner") {
             std::ofstream(compute_file) << "dummy";
         }
 
-        // Create .midx for io.pfw.gz
+        // Create .pidx for io.pfw.gz
         {
-            std::string midx_path = determine_manifest_index_path(io_file, "");
-            ManifestIndexDatabase midx(midx_path);
-            midx.init_schema();
-            midx.get_or_create_file_info(io_file, 0);
+            std::string pidx_path =
+                determine_provenance_index_path(io_file, "");
+            ProvenanceDatabase pdb(pidx_path);
+            pdb.init_schema();
+            int fid = pdb.get_or_create_file_info(io_file, 0);
 
-            midx.begin_transaction();
-            queries::insert_provenance_info(midx.db(), "version", "1.0");
-            queries::insert_provenance_info(midx.db(), "tool",
-                                            "dftracer_organize");
-            queries::insert_provenance_group(midx.db(), "io", "cat=POSIX");
-
-            int fid = midx.get_file_info_id(io_file);
-            queries::insert_provenance_source(
-                midx.db(), fid, 0, "/original/trace.pfw.gz", 2, "hash1");
+            pdb.begin_transaction();
+            pdb.insert_info("version", "1.0");
+            pdb.insert_info("tool", "dftracer_organize");
+            pdb.insert_group("io", "cat=POSIX");
+            pdb.insert_source(fid, 0, "/original/trace.pfw.gz", 2, "hash1");
 
             // Segments for checkpoints 0 and 1
-            queries::insert_provenance_segment(midx.db(), 0, 0, 0, 50, 50);
-            queries::insert_provenance_segment(midx.db(), 0, 1, 50, 120, 70);
+            pdb.insert_segment(0, 0, 0, 50, 50);
+            pdb.insert_segment(0, 1, 50, 120, 70);
 
-            midx.commit_transaction();
+            pdb.commit_transaction();
         }
 
-        // Create .midx for compute.pfw.gz
+        // Create .pidx for compute.pfw.gz
         {
-            std::string midx_path =
-                determine_manifest_index_path(compute_file, "");
-            ManifestIndexDatabase midx(midx_path);
-            midx.init_schema();
-            midx.get_or_create_file_info(compute_file, 0);
+            std::string pidx_path =
+                determine_provenance_index_path(compute_file, "");
+            ProvenanceDatabase pdb(pidx_path);
+            pdb.init_schema();
+            int fid = pdb.get_or_create_file_info(compute_file, 0);
 
-            midx.begin_transaction();
-            queries::insert_provenance_info(midx.db(), "version", "1.0");
-            queries::insert_provenance_info(midx.db(), "tool",
-                                            "dftracer_organize");
-            queries::insert_provenance_group(midx.db(), "compute", "cat=APP");
-
-            int fid = midx.get_file_info_id(compute_file);
-            queries::insert_provenance_source(
-                midx.db(), fid, 0, "/original/trace.pfw.gz", 2, "hash1");
+            pdb.begin_transaction();
+            pdb.insert_info("version", "1.0");
+            pdb.insert_info("tool", "dftracer_organize");
+            pdb.insert_group("compute", "cat=APP");
+            pdb.insert_source(fid, 0, "/original/trace.pfw.gz", 2, "hash1");
 
             // Segments for checkpoints 0 and 1
-            queries::insert_provenance_segment(midx.db(), 0, 0, 0, 30, 30);
-            queries::insert_provenance_segment(midx.db(), 0, 1, 30, 80, 50);
+            pdb.insert_segment(0, 0, 0, 30, 30);
+            pdb.insert_segment(0, 1, 30, 80, 50);
 
-            midx.commit_transaction();
+            pdb.commit_transaction();
         }
 
         // Run planner with both files
@@ -216,12 +206,12 @@ TEST_SUITE("ReconstructionPlanner") {
             std::ofstream(reorg_file) << "dummy";
         }
 
-        // Create .midx with NO provenance tables
-        std::string midx_path = determine_manifest_index_path(reorg_file, "");
+        // Create .pidx with NO provenance tables
+        std::string pidx_path = determine_provenance_index_path(reorg_file, "");
         {
-            ManifestIndexDatabase midx(midx_path);
-            midx.init_schema();
-            midx.get_or_create_file_info(reorg_file, 0);
+            ProvenanceDatabase pdb(pidx_path);
+            pdb.init_schema();
+            pdb.get_or_create_file_info(reorg_file, 0);
             // No provenance data inserted
         }
 

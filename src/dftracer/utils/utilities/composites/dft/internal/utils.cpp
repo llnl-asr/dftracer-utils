@@ -17,18 +17,19 @@ std::string determine_index_path(const std::string& file_path,
         return (fs::path(index_dir) / base_name).string();
     }
 
-    // Default: place in /tmp/dft_<hash>/ using a hash of the absolute
-    // path so that files with the same basename in different directories
-    // never collide on the same sidecar.
-    std::string abs_path = fs::absolute(data_path).string();
-    auto path_hash = std::hash<std::string>{}(abs_path);
+    return (data_path.parent_path() / base_name).string();
+}
 
-    std::ostringstream oss;
-    oss << "dft_" << std::hex << path_hash;
-    fs::path idx_dir = fs::temp_directory_path() / oss.str();
-    fs::create_directories(idx_dir);
+std::string determine_provenance_index_path(const std::string& data_path,
+                                            const std::string& index_dir) {
+    fs::path path(data_path);
+    std::string base_name = path.filename().string() + ".pidx";
 
-    return (idx_dir / base_name).string();
+    if (!index_dir.empty()) {
+        return (fs::path(index_dir) / base_name).string();
+    }
+
+    return (path.parent_path() / base_name).string();
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::internal

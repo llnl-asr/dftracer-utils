@@ -11,7 +11,7 @@ namespace dftracer::utils::utilities::composites::dft::statistics {
 
 struct StatisticsAggregatorInput {
     std::string file_path;
-    std::string bidx_path;
+    std::string idx_path;
     std::string index_dir;
 };
 

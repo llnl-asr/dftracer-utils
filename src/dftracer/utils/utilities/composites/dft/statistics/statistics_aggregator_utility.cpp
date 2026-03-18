@@ -1,36 +1,40 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/sqlite/async.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 namespace dftracer::utils::utilities::composites::dft::statistics {
+
+using dftracer::utils::utilities::indexer::IndexDatabase;
+using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
 coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
     const StatisticsAggregatorInput& input) {
     TraceStatistics result;
     result.file_path = input.file_path;
 
-    if (!input.bidx_path.empty()) {
-        result.bidx_path = input.bidx_path;
+    if (!input.idx_path.empty()) {
+        result.idx_path = input.idx_path;
     } else {
-        result.bidx_path = indexing::determine_bloom_index_path(
-            input.file_path, input.index_dir);
+        result.idx_path =
+            internal::determine_index_path(input.file_path, input.index_dir);
     }
 
-    if (!fs::exists(result.bidx_path)) {
+    if (!fs::exists(result.idx_path)) {
         result.success = false;
-        result.error_message =
-            "Bloom index file not found: " + result.bidx_path;
+        result.error_message = "Index file not found: " + result.idx_path;
         co_return result;
     }
 
     auto do_query = [&input, &result]() -> TraceStatistics {
         try {
-            indexing::BloomIndexDatabase bidx(result.bidx_path);
-            bidx.init_schema();
+            IndexDatabase idx_db(result.idx_path);
 
-            int fid = bidx.get_file_info_id(input.file_path);
+            int fid =
+                idx_db.get_file_info_id(get_logical_path(input.file_path));
             if (fid < 0) {
                 result.success = false;
                 result.error_message =
@@ -39,7 +43,7 @@ coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
             }
 
             auto chunks =
-                indexing::queries::query_chunk_statistics(bidx.db(), fid);
+                indexing::queries::query_chunk_statistics(idx_db.sql_db(), fid);
 
             if (chunks.empty()) {
                 result.success = true;

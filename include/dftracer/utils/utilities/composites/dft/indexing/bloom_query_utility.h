@@ -14,14 +14,14 @@
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
 struct BloomQueryInput {
-    std::string bidx_path;
+    std::string idx_path;
     std::string file_path;
     // dimension -> values (OR within dimension, AND across dimensions)
     std::unordered_map<std::string, std::vector<std::string>> predicates;
     BloomFilterCache* cache = nullptr;
 
-    BloomQueryInput& with_bidx_path(const std::string& path) {
-        bidx_path = path;
+    BloomQueryInput& with_idx_path(const std::string& path) {
+        idx_path = path;
         return *this;
     }
 

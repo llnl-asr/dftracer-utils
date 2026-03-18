@@ -10,7 +10,6 @@ need_argparse()
 need_ghc_filesystem()
 need_cpplogger()
 need_yyjson()
-need_nonstd_span()
 need_readerwriterqueue()
 need_concurrentqueue()
 
@@ -27,7 +26,6 @@ set(DFTRACER_UTILS_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/constants.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/format_detector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/filesystem.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/span.cpp
     # Utilities
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utils/timer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utils/string.cpp
@@ -112,11 +110,7 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     # DFT Indexing (bloom filters, statistics, queries)
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_chunk_bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_file_bloom_filter.cpp
@@ -165,6 +159,13 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/view_builder_utility.cpp
 
     # Indexer
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_database.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_builder_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/provenance_database.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/visitors/bloom_visitor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/visitors/manifest_visitor.cpp
+    # Reader
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_c.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/checkpoint_size.cpp
@@ -314,7 +315,6 @@ create_library(
     ${DFTRACER_UTILS_BUILD_STATIC}
   PUBLIC_LINK_LIBRARIES
     ghc_filesystem
-    nonstd::span-lite
     Threads::Threads
     readerwriterqueue
     concurrentqueue
@@ -886,6 +886,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer_checkpoint.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/reader.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/reader.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.cpp)
 

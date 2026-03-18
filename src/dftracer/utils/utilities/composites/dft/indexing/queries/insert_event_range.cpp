@@ -3,6 +3,8 @@
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 
 #include <cstring>
+#include <span>
+#include <string_view>
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
@@ -25,8 +27,8 @@ std::vector<std::uint32_t> unpack_line_numbers(const unsigned char* data,
 }
 
 void insert_event_range(const SqliteDatabase& db, int file_info_id,
-                        std::uint64_t checkpoint_idx, const std::string& cat,
-                        const std::string& name,
+                        std::uint64_t checkpoint_idx, std::string_view cat,
+                        std::string_view name,
                         const std::vector<std::uint32_t>& line_numbers) {
     auto blob = pack_line_numbers(line_numbers);
 
@@ -49,6 +51,14 @@ void insert_event_range(const SqliteDatabase& db, int file_info_id,
                            "Failed to insert event range: " +
                                std::string(sqlite3_errmsg(db.get())));
     }
+}
+
+void insert_event_range(const SqliteDatabase& db, int file_info_id,
+                        std::uint64_t checkpoint_idx, std::string_view cat,
+                        std::string_view name,
+                        std::span<const std::uint32_t> line_numbers) {
+    std::vector<std::uint32_t> vec(line_numbers.begin(), line_numbers.end());
+    insert_event_range(db, file_info_id, checkpoint_idx, cat, name, vec);
 }
 
 }  // namespace

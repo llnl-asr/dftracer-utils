@@ -25,7 +25,6 @@ using dftracer::utils::utilities::common::json::JsonValue;
 struct ChunkAggregatorInput {
     std::string file_path;
     std::string idx_path;
-    std::string bidx_path;
     std::size_t start_byte;
     std::size_t end_byte;
     std::size_t start_line;
@@ -44,11 +43,6 @@ struct ChunkAggregatorInput {
 
     ChunkAggregatorInput& with_idx_path(const std::string& path) {
         idx_path = path;
-        return *this;
-    }
-
-    ChunkAggregatorInput& with_bidx_path(const std::string& path) {
-        bidx_path = path;
         return *this;
     }
 

@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/sqlite/database.h>
+#include <dftracer/utils/utilities/indexer/index_visitor.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
@@ -34,6 +35,10 @@ class GzipIndexer : public Indexer {
     dftracer::utils::coro::CoroTask<void> build_async() const override;
     bool need_rebuild() const override;
     bool exists() const override;
+
+    void set_visitors(VisitorList visitors) override {
+        visitors_ = std::move(visitors);
+    }
 
     // Metadata - BaseIndexer interface implementation
     const std::string &get_idx_path() const override;
@@ -67,6 +72,7 @@ class GzipIndexer : public Indexer {
     std::uint64_t ckpt_size;
     bool force_rebuild;
     SqliteDatabase db;
+    VisitorList visitors_;
 
     // Cached values
     mutable bool cached_is_valid;

@@ -5,15 +5,15 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <argparse/argparse.hpp>
@@ -29,6 +29,8 @@ using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 namespace compression = dftracer::utils::utilities::compression;
 namespace util_io = dftracer::utils::utilities::fileio;
+using dftracer::utils::utilities::indexer::IndexDatabase;
+using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
 // ---------------------------------------------------------------------------
 // TraceWriter – compresses via ManualStreamingCompressorUtility and writes
@@ -241,18 +243,21 @@ static coro::CoroTask<int> run_verify(
             continue;
         }
 
-        // 3. Index chunks and write to .bidx
+        // 3. Index chunks and write to .idx
         try {
-            std::string bidx_path = determine_bloom_index_path(abs_path, "");
-            BloomIndexDatabase bidx(bidx_path);
-            bidx.init_schema();
+            std::string idx_path_bidx =
+                internal::determine_index_path(abs_path, "");
+            IndexDatabase idx_db(idx_path_bidx);
+            idx_db.init_base_schema();
+            idx_db.init_bloom_schema();
 
             std::uint64_t file_hash_val = 0;
             if (fs::exists(abs_path)) {
                 file_hash_val =
                     static_cast<std::uint64_t>(fs::file_size(abs_path));
             }
-            int fid = bidx.get_or_create_file_info(abs_path, file_hash_val);
+            int fid = idx_db.get_or_create_file_info(get_logical_path(abs_path),
+                                                     file_hash_val);
 
             std::size_t file_size = metadata.uncompressed_size;
             std::size_t num_ckpts = metadata.num_checkpoints;
@@ -277,7 +282,7 @@ static coro::CoroTask<int> run_verify(
                 }
             }
 
-            bidx.begin_transaction();
+            idx_db.begin_transaction();
             std::unordered_map<std::string, BloomFilter> file_blooms;
             HashResolutions all_hr;
             std::size_t total_events = 0;
@@ -298,8 +303,8 @@ static coro::CoroTask<int> run_verify(
 
                 for (auto& [dim, bloom] : output.bloom_filters) {
                     auto blob = bloom.serialize();
-                    queries::insert_chunk_bloom_filter(
-                        bidx.db(), fid, output.checkpoint_idx, dim, blob.data(),
+                    idx_db.insert_chunk_bloom_filter(
+                        fid, output.checkpoint_idx, dim, blob.data(),
                         static_cast<int>(blob.size()), bloom.num_entries());
 
                     auto it = file_blooms.find(dim);
@@ -310,8 +315,8 @@ static coro::CoroTask<int> run_verify(
                     }
                 }
 
-                queries::insert_chunk_statistics(
-                    bidx.db(), fid, output.checkpoint_idx, output.statistics);
+                idx_db.insert_chunk_statistics(fid, output.checkpoint_idx,
+                                               output.statistics);
 
                 for (auto& [dim, resolutions] : output.hash_resolutions) {
                     for (auto& [h, resolved] : resolutions) {
@@ -322,21 +327,20 @@ static coro::CoroTask<int> run_verify(
 
             for (auto& [dim, bloom] : file_blooms) {
                 auto blob = bloom.serialize();
-                queries::insert_file_bloom_filter(
-                    bidx.db(), fid, dim, blob.data(),
-                    static_cast<int>(blob.size()), bloom.num_entries());
+                idx_db.insert_file_bloom_filter(fid, dim, blob.data(),
+                                                static_cast<int>(blob.size()),
+                                                bloom.num_entries());
             }
             for (const auto& [dim, resolutions] : all_hr) {
                 for (const auto& [h, resolved] : resolutions) {
-                    queries::insert_hash_resolution(bidx.db(), fid, dim, h,
-                                                    resolved);
+                    idx_db.insert_hash_resolution(fid, dim, h, resolved);
                 }
             }
             for (const auto& dim : all_dimensions) {
-                queries::insert_index_dimension(bidx.db(), fid, dim);
+                idx_db.insert_index_dimension(fid, dim);
             }
 
-            bidx.commit_transaction();
+            idx_db.commit_transaction();
 
             std::string basename = fs::path(abs_path).filename().string();
             std::printf("  %s: indexed (%zu events, %zu chunks)\n",
@@ -364,11 +368,12 @@ static coro::CoroTask<int> run_verify(
 
         for (const auto& file_path : file_paths) {
             std::string abs_path = fs::absolute(file_path).string();
-            std::string bidx_path = determine_bloom_index_path(abs_path, "");
+            std::string idx_path_q =
+                internal::determine_index_path(abs_path, "");
 
             try {
                 BloomQueryInput input;
-                input.with_bidx_path(bidx_path).with_file_path(abs_path);
+                input.with_idx_path(idx_path_q).with_file_path(abs_path);
                 for (const auto& [dim, vals] : q.predicates) {
                     input.with_predicate(dim, vals);
                 }

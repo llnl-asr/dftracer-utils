@@ -11,7 +11,6 @@
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/utilities/common/json/json_doc_guard.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
@@ -198,8 +197,8 @@ static coro::CoroTask<HttpResponse> handle_files(const HttpRequest& /*req*/,
         first = false;
         body += "{\"path\":\"";
         body += json_escape(f.path);
-        body += "\",\"has_bloom_index\":";
-        body += f.has_bloom_index ? "true" : "false";
+        body += "\",\"has_bloom_data\":";
+        body += f.has_bloom_data ? "true" : "false";
         body += ",\"has_checkpoint_index\":";
         body += f.has_checkpoint_index ? "true" : "false";
         body += ",\"is_small\":";
@@ -231,8 +230,8 @@ static coro::CoroTask<HttpResponse> handle_file_info(const HttpRequest& /*req*/,
     body.reserve(512);
     body += "{\"path\":\"";
     body += json_escape(info->path);
-    body += "\",\"has_bloom_index\":";
-    body += info->has_bloom_index ? "true" : "false";
+    body += "\",\"has_bloom_data\":";
+    body += info->has_bloom_data ? "true" : "false";
     body += ",\"has_checkpoint_index\":";
     body += info->has_checkpoint_index ? "true" : "false";
     body += ",\"is_small\":";
@@ -396,8 +395,8 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
                 ViewBuilderInput builder_input;
                 builder_input.with_view(view)
                     .with_file_path(file_info->path)
-                    .with_bidx_path(
-                        file_info->has_bloom_index ? file_info->bidx_path : "")
+                    .with_idx_path(
+                        file_info->has_bloom_data ? file_info->idx_path : "")
                     .with_uncompressed_size(file_info->uncompressed_size)
                     .with_num_checkpoints(file_info->num_checkpoints)
                     .with_bloom_cache(&index.bloom_cache())
@@ -507,9 +506,9 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
                         ViewBuilderInput builder_input;
                         builder_input.with_view(*view_ptr)
                             .with_file_path(file_info->path)
-                            .with_bidx_path(file_info->has_bloom_index
-                                                ? file_info->bidx_path
-                                                : "")
+                            .with_idx_path(file_info->has_bloom_data
+                                               ? file_info->idx_path
+                                               : "")
                             .with_uncompressed_size(
                                 file_info->uncompressed_size)
                             .with_num_checkpoints(file_info->num_checkpoints)
@@ -667,8 +666,8 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
                 ViewBuilderInput builder_input;
                 builder_input.with_view(view)
                     .with_file_path(file_info->path)
-                    .with_bidx_path(
-                        file_info->has_bloom_index ? file_info->bidx_path : "")
+                    .with_idx_path(
+                        file_info->has_bloom_data ? file_info->idx_path : "")
                     .with_uncompressed_size(file_info->uncompressed_size)
                     .with_num_checkpoints(file_info->num_checkpoints)
                     .with_bloom_cache(&index.bloom_cache())
@@ -756,9 +755,9 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
                         ViewBuilderInput builder_input;
                         builder_input.with_view(*view_ptr)
                             .with_file_path(file_info->path)
-                            .with_bidx_path(file_info->has_bloom_index
-                                                ? file_info->bidx_path
-                                                : "")
+                            .with_idx_path(file_info->has_bloom_data
+                                               ? file_info->idx_path
+                                               : "")
                             .with_uncompressed_size(
                                 file_info->uncompressed_size)
                             .with_num_checkpoints(file_info->num_checkpoints)
@@ -822,7 +821,7 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& /*req*/,
             skipped_small++;
             continue;
         }
-        if (!file_info.has_bloom_index) continue;
+        if (!file_info.has_bloom_data) continue;
         stat_files.push_back(&file_info);
     }
 
@@ -830,7 +829,7 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& /*req*/,
         for (auto* file_info : stat_files) {
             StatisticsAggregatorInput agg_input;
             agg_input.file_path = file_info->path;
-            agg_input.bidx_path = file_info->bidx_path;
+            agg_input.idx_path = file_info->idx_path;
             agg_input.index_dir = index.index_dir();
 
             StatisticsAggregatorUtility aggregator;
@@ -869,7 +868,7 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& /*req*/,
 
                     StatisticsAggregatorInput agg_input;
                     agg_input.file_path = file_info->path;
-                    agg_input.bidx_path = file_info->bidx_path;
+                    agg_input.idx_path = file_info->idx_path;
                     agg_input.index_dir = index_dir;
 
                     StatisticsAggregatorUtility aggregator;
@@ -941,8 +940,8 @@ static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
         first = false;
         body += "{\"path\":\"";
         body += json_escape(f.path);
-        body += "\",\"has_bloom_index\":";
-        body += f.has_bloom_index ? "true" : "false";
+        body += "\",\"has_bloom_data\":";
+        body += f.has_bloom_data ? "true" : "false";
         body += ",\"has_checkpoint_index\":";
         body += f.has_checkpoint_index ? "true" : "false";
         body += ",\"is_small\":";

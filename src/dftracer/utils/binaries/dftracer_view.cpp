@@ -6,10 +6,6 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
-#include <dftracer/utils/core/utilities/utility_executor.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
@@ -17,6 +13,8 @@
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <algorithm>
@@ -34,8 +32,14 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::views;
-using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
+using dftracer::utils::utilities::composites::dft::indexing::PredicateMap;
+using dftracer::utils::utilities::composites::dft::indexing::
+    PredicateParserInput;
+using dftracer::utils::utilities::composites::dft::indexing::
+    PredicateParserUtility;
+using dftracer::utils::utilities::indexer::IndexBuildConfig;
+using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 
 // Convert parsed predicates to a ViewPredicate
 static ViewPredicate predicates_to_view_predicate(const PredicateMap& preds) {
@@ -196,12 +200,12 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
         }
     }
 
-    // Auto-build bloom indices for files missing .bidx
+    // Auto-build indices for files missing .idx
     std::vector<std::string> files_needing_index;
     for (const auto& file_path : files) {
-        std::string bidx_path =
-            determine_bloom_index_path(file_path, index_dir);
-        if (!fs::exists(bidx_path)) {
+        std::string idx_path =
+            internal::determine_index_path(file_path, index_dir);
+        if (!fs::exists(idx_path)) {
             files_needing_index.push_back(file_path);
         }
     }
@@ -209,7 +213,7 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
     if (!files_needing_index.empty()) {
         if (no_auto_index) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Missing .bidx index for %zu file(s) and --no-auto-index is "
+                "Missing .idx index for %zu file(s) and --no-auto-index is "
                 "set. Run dftracer_index first.",
                 files_needing_index.size());
             for (const auto& f : files_needing_index) {
@@ -218,7 +222,7 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
             co_return 1;
         }
 
-        std::printf("Auto-building bloom index for %zu file(s)...\n",
+        std::printf("Auto-building index for %zu file(s)...\n",
                     files_needing_index.size());
 
         auto pipeline_config = PipelineConfig()
@@ -231,56 +235,43 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
         std::atomic<std::size_t> indexed_count{0};
         std::atomic<std::size_t> failed_count{0};
 
-        BloomIndexBuildInput build_template;
-        build_template.index_dir = index_dir;
-        build_template.checkpoint_size = checkpoint_size;
-        build_template.dimensions = default_bloom_dimensions();
-
         auto index_task = make_task(
             [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                co_await ctx.scope([&](CoroScope& scope)
-                                       -> coro::CoroTask<void> {
-                    auto* indexed_count_ptr = &indexed_count;
-                    auto* failed_count_ptr = &failed_count;
-                    for (std::size_t i = 0; i < files_needing_index.size();
-                         ++i) {
-                        const auto file_path = files_needing_index[i];
-                        scope.spawn([build_template, file_path,
-                                     indexed_count_ptr,
-                                     failed_count_ptr](CoroScope& fctx)
-                                        -> coro::CoroTask<void> {
-                            BloomIndexBuildInput build_input = build_template;
-                            build_input.file_path = file_path;
+                co_await ctx.scope(
+                    [&](CoroScope& scope) -> coro::CoroTask<void> {
+                        auto* indexed_count_ptr = &indexed_count;
+                        auto* failed_count_ptr = &failed_count;
+                        for (std::size_t i = 0; i < files_needing_index.size();
+                             ++i) {
+                            const auto file_path = files_needing_index[i];
+                            scope.spawn([file_path, index_dir, checkpoint_size,
+                                         indexed_count_ptr,
+                                         failed_count_ptr](CoroScope& /*fctx*/)
+                                            -> coro::CoroTask<void> {
+                                IndexBuilderUtility builder;
+                                auto config =
+                                    IndexBuildConfig::for_file(file_path)
+                                        .with_index_dir(index_dir)
+                                        .with_checkpoint_size(checkpoint_size)
+                                        .with_bloom(true)
+                                        .with_index_threshold(0);
+                                auto result = co_await builder.process(config);
 
-                            auto utility =
-                                std::make_shared<BloomIndexBuilderUtility>();
-                            behaviors::BehaviorChain<BloomIndexBuildInput,
-                                                     BloomIndexBuildOutput>
-                                chain;
-                            behaviors::UtilityExecutor<
-                                BloomIndexBuildInput, BloomIndexBuildOutput,
-                                utilities::tags::NeedsContext>
-                                executor(utility, std::move(chain));
+                                if (result.success) {
+                                    (*indexed_count_ptr)++;
+                                } else {
+                                    (*failed_count_ptr)++;
+                                    DFTRACER_UTILS_LOG_ERROR(
+                                        "Auto-indexing failed for %s: %s",
+                                        file_path.c_str(),
+                                        result.error_message.c_str());
+                                }
 
-                            auto result =
-                                co_await executor.execute_with_context(
-                                    fctx, build_input);
-
-                            if (result.success) {
-                                (*indexed_count_ptr)++;
-                            } else {
-                                (*failed_count_ptr)++;
-                                DFTRACER_UTILS_LOG_ERROR(
-                                    "Auto-indexing failed for %s: %s",
-                                    file_path.c_str(),
-                                    result.error_message.c_str());
-                            }
-
-                            co_return;
-                        });
-                    }
-                    co_return;
-                });
+                                co_return;
+                            });
+                        }
+                        co_return;
+                    });
 
                 co_return;
             },
@@ -340,8 +331,6 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
                                  all_events_ptr](
                                     CoroScope& fctx) -> coro::CoroTask<void> {
                         // Resolve paths
-                        std::string bidx_path =
-                            determine_bloom_index_path(file_path, index_dir);
                         std::string idx_path = internal::determine_index_path(
                             file_path, index_dir);
 
@@ -367,8 +356,7 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
                         ViewBuilderInput builder_input;
                         builder_input.with_view(view)
                             .with_file_path(file_path)
-                            .with_bidx_path(fs::exists(bidx_path) ? bidx_path
-                                                                  : "")
+                            .with_idx_path(fs::exists(idx_path) ? idx_path : "")
                             .with_uncompressed_size(metadata.uncompressed_size)
                             .with_num_checkpoints(metadata.num_checkpoints);
 
@@ -575,11 +563,11 @@ int main(int argc, char** argv) {
 
     // Indexing options
     program.add_argument("--index-dir")
-        .help("Directory where .bidx index files are stored")
+        .help("Directory where .idx index files are stored")
         .default_value<std::string>("");
 
     program.add_argument("--no-auto-index")
-        .help("Disable automatic bloom index building for files missing .bidx")
+        .help("Disable automatic index building for files missing .idx")
         .flag();
 
     program.add_argument("--checkpoint-size")

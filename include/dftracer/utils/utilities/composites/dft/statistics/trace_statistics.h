@@ -12,7 +12,7 @@ using indexing::ChunkStatistics;
 
 struct TraceStatistics {
     std::string file_path;
-    std::string bidx_path;
+    std::string idx_path;
     ChunkStatistics merged;
     std::uint64_t num_chunks = 0;
     bool success = false;

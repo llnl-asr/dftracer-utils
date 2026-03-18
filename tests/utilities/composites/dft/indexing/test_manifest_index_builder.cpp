@@ -5,11 +5,10 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
-#include <dftracer/utils/core/utilities/utility_executor.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
+#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -18,7 +17,13 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
-using namespace dftracer::utils::utilities::composites::dft::indexing;
+using dftracer::utils::utilities::indexer::IndexBuildConfig;
+using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexBuildResult;
+using dftracer::utils::utilities::indexer::IndexDatabase;
+using dftracer::utils::utilities::indexer::internal::get_logical_path;
+namespace queries =
+    dftracer::utils::utilities::composites::dft::indexing::queries;
 
 static std::string create_test_trace(const std::string& dir) {
     std::string plain_path = dir + "/test_builder.trace";
@@ -54,32 +59,24 @@ TEST_SUITE("ManifestIndexBuilder") {
 
         std::string trace_file = create_test_trace(test_dir);
 
-        ManifestIndexBuildInput input;
-        input.file_path = trace_file;
-        input.index_dir = test_dir;
-        input.force_rebuild = true;
-
         auto pipeline_config = PipelineConfig()
                                    .with_name("ManifestBuilderTest")
                                    .with_compute_threads(2)
                                    .with_watchdog(false);
 
         Pipeline pipeline(pipeline_config);
+        IndexBuildResult result;
 
-        ManifestIndexBuildOutput result;
-
+        auto* result_ptr = &result;
         auto task = make_task(
-            [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                auto utility = std::make_shared<ManifestIndexBuilderUtility>();
-                behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                         ManifestIndexBuildOutput>
-                    chain;
-                behaviors::UtilityExecutor<ManifestIndexBuildInput,
-                                           ManifestIndexBuildOutput,
-                                           utilities::tags::NeedsContext>
-                    executor(utility, std::move(chain));
-
-                result = co_await executor.execute_with_context(ctx, input);
+            [trace_file, test_dir,
+             result_ptr](CoroScope&) -> coro::CoroTask<void> {
+                IndexBuilderUtility builder;
+                auto config = IndexBuildConfig::for_file(trace_file)
+                                  .with_index_dir(test_dir)
+                                  .with_manifest(true)
+                                  .with_index_threshold(0);
+                *result_ptr = co_await builder.process(config);
                 co_return;
             },
             "BuildManifest");
@@ -89,21 +86,21 @@ TEST_SUITE("ManifestIndexBuilder") {
         pipeline.execute();
 
         CHECK(result.success == true);
-        CHECK(result.events_processed == 4);
-        CHECK(result.chunks_processed == 1);
+        CHECK(result.total_lines > 0);
+        // chunks_processed may be 0 for small files (single chunk)
+        // events_processed is only populated by bloom visitor
 
-        // Verify .midx file exists
-        std::string midx_path =
-            determine_manifest_index_path(trace_file, test_dir);
-        CHECK(fs::exists(midx_path));
+        // Verify .idx file exists
+        CHECK(fs::exists(result.idx_path));
 
-        // Query the .midx and verify contents
-        ManifestIndexDatabase midx(midx_path);
-        midx.init_schema();
-        int fid = midx.get_file_info_id(trace_file);
+        // Query the .idx and verify contents
+        IndexDatabase idx_db(result.idx_path);
+        idx_db.init_base_schema();
+        idx_db.init_manifest_schema();
+        int fid = idx_db.get_file_info_id(get_logical_path(trace_file));
         REQUIRE(fid >= 0);
 
-        auto event_ranges = queries::query_event_ranges(midx.db(), fid);
+        auto event_ranges = queries::query_event_ranges(idx_db.sql_db(), fid);
         CHECK(event_ranges.size() == 3);
 
         // Find POSIX/read group
@@ -119,7 +116,7 @@ TEST_SUITE("ManifestIndexBuilder") {
         }
         CHECK(found_posix_read);
 
-        auto metadata = queries::query_metadata_lines(midx.db(), fid);
+        auto metadata = queries::query_metadata_lines(idx_db.sql_db(), fid);
         CHECK(metadata.size() == 2);
 
         fs::remove_all(test_dir);
@@ -133,11 +130,6 @@ TEST_SUITE("ManifestIndexBuilder") {
 
         std::string trace_file = create_test_trace(test_dir);
 
-        ManifestIndexBuildInput input;
-        input.file_path = trace_file;
-        input.index_dir = test_dir;
-        input.force_rebuild = false;
-
         auto pipeline_config = PipelineConfig()
                                    .with_name("ManifestSkipTest")
                                    .with_compute_threads(2)
@@ -146,19 +138,18 @@ TEST_SUITE("ManifestIndexBuilder") {
         // First build
         {
             Pipeline pipeline(pipeline_config);
-            ManifestIndexBuildOutput result;
+            IndexBuildResult result;
+            auto* result_ptr = &result;
             auto task = make_task(
-                [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                    auto utility =
-                        std::make_shared<ManifestIndexBuilderUtility>();
-                    behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                             ManifestIndexBuildOutput>
-                        chain;
-                    behaviors::UtilityExecutor<ManifestIndexBuildInput,
-                                               ManifestIndexBuildOutput,
-                                               utilities::tags::NeedsContext>
-                        executor(utility, std::move(chain));
-                    result = co_await executor.execute_with_context(ctx, input);
+                [trace_file, test_dir,
+                 result_ptr](CoroScope&) -> coro::CoroTask<void> {
+                    IndexBuilderUtility builder;
+                    auto config = IndexBuildConfig::for_file(trace_file)
+                                      .with_index_dir(test_dir)
+                                      .with_manifest(true)
+                                      .with_index_threshold(0)
+                                      .with_force_rebuild(false);
+                    *result_ptr = co_await builder.process(config);
                     co_return;
                 },
                 "Build1");
@@ -172,19 +163,18 @@ TEST_SUITE("ManifestIndexBuilder") {
         // Second build should skip
         {
             Pipeline pipeline(pipeline_config);
-            ManifestIndexBuildOutput result;
+            IndexBuildResult result;
+            auto* result_ptr = &result;
             auto task = make_task(
-                [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                    auto utility =
-                        std::make_shared<ManifestIndexBuilderUtility>();
-                    behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                             ManifestIndexBuildOutput>
-                        chain;
-                    behaviors::UtilityExecutor<ManifestIndexBuildInput,
-                                               ManifestIndexBuildOutput,
-                                               utilities::tags::NeedsContext>
-                        executor(utility, std::move(chain));
-                    result = co_await executor.execute_with_context(ctx, input);
+                [trace_file, test_dir,
+                 result_ptr](CoroScope&) -> coro::CoroTask<void> {
+                    IndexBuilderUtility builder;
+                    auto config = IndexBuildConfig::for_file(trace_file)
+                                      .with_index_dir(test_dir)
+                                      .with_manifest(true)
+                                      .with_index_threshold(0)
+                                      .with_force_rebuild(false);
+                    *result_ptr = co_await builder.process(config);
                     co_return;
                 },
                 "Build2");

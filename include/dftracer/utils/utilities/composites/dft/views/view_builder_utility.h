@@ -18,7 +18,7 @@ namespace dftracer::utils::utilities::composites::dft::views {
 struct ViewBuilderInput {
     ViewDefinition view;
     std::string file_path;
-    std::string bidx_path;  // bloom index sidecar path
+    std::string idx_path;  // index sidecar path
     std::size_t uncompressed_size = 0;
     std::size_t num_checkpoints = 0;
     indexing::BloomFilterCache* bloom_cache = nullptr;
@@ -27,7 +27,7 @@ struct ViewBuilderInput {
     // Fluent builders
     ViewBuilderInput& with_view(const ViewDefinition& v);
     ViewBuilderInput& with_file_path(const std::string& path);
-    ViewBuilderInput& with_bidx_path(const std::string& path);
+    ViewBuilderInput& with_idx_path(const std::string& path);
     ViewBuilderInput& with_uncompressed_size(std::size_t s);
     ViewBuilderInput& with_num_checkpoints(std::size_t n);
     ViewBuilderInput& with_bloom_cache(indexing::BloomFilterCache* c);

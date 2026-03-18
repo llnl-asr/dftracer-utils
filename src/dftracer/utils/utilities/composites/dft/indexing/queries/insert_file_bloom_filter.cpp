@@ -2,15 +2,17 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 
+#include <span>
+#include <string_view>
+
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteStmt;
 using indexer::internal::IndexerError;
 
 void insert_file_bloom_filter(const SqliteDatabase& db, int file_info_id,
-                              const std::string& dimension,
-                              const void* blob_data, int blob_size,
-                              std::uint64_t num_entries) {
+                              std::string_view dimension, const void* blob_data,
+                              int blob_size, std::uint64_t num_entries) {
     SqliteStmt stmt(db,
                     "INSERT OR REPLACE INTO file_bloom_filters"
                     "(file_info_id, dimension, bloom_data, num_entries) "
@@ -27,6 +29,14 @@ void insert_file_bloom_filter(const SqliteDatabase& db, int file_info_id,
                            "Failed to insert file bloom filter: " +
                                std::string(sqlite3_errmsg(db.get())));
     }
+}
+
+void insert_file_bloom_filter(const SqliteDatabase& db, int file_info_id,
+                              std::string_view dimension,
+                              std::span<const unsigned char> blob_data,
+                              std::uint64_t num_entries) {
+    insert_file_bloom_filter(db, file_info_id, dimension, blob_data.data(),
+                             static_cast<int>(blob_data.size()), num_entries);
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing::queries

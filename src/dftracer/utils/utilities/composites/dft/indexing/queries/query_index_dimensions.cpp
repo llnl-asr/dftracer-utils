@@ -1,6 +1,8 @@
 #include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 
+#include <string_view>
+
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteStmt;
@@ -25,7 +27,7 @@ std::vector<std::string> query_index_dimensions(const SqliteDatabase& db,
 }
 
 bool has_index_dimension(const SqliteDatabase& db, int file_info_id,
-                         const std::string& dimension) {
+                         std::string_view dimension) {
     SqliteStmt stmt(db,
                     "SELECT 1 FROM index_dimensions "
                     "WHERE file_info_id = ? AND dimension = ? LIMIT 1;");

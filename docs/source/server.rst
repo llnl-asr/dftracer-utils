@@ -12,7 +12,7 @@ Basic startup:
 
     dftracer_server -d /path/to/traces
 
-The server scans the trace directory on startup, loads or builds bloom/checkpoint sidecar indexes (``.bidx`` and ``.idx`` files), and begins listening for HTTP requests on ``0.0.0.0:8080``.
+The server scans the trace directory on startup, loads or builds bloom/checkpoint sidecar indexes (``.idx`` files), and begins listening for HTTP requests on ``0.0.0.0:8080``.
 
 Custom Configuration:
 
@@ -52,7 +52,7 @@ List all available trace files in the directory.
                 "num_lines": 1234567,
                 "min_timestamp_us": 1000000,
                 "max_timestamp_us": 5000000,
-                "has_bloom_index": true,
+                "has_bloom_data": true,
                 "has_checkpoint_index": true,
                 "is_small": false
             }
@@ -82,7 +82,7 @@ Get detailed metadata for a specific file.
         "checkpoint_size": 33554432,
         "min_timestamp_us": 1000000,
         "max_timestamp_us": 5000000,
-        "has_bloom_index": true,
+        "has_bloom_data": true,
         "has_checkpoint_index": true,
         "is_small": false
     }
@@ -314,7 +314,7 @@ Indexing
 
 **Bloom Filters:**
 
-Trace files larger than 8 MB (compressed) are automatically indexed with bloom filters (``.bidx`` files) during server startup. Bloom filters accelerate event filtering by skipping chunks that cannot contain matching events.
+Trace files larger than 8 MB (compressed) are automatically indexed with bloom filters (``.idx`` files) during server startup. Bloom filters accelerate event filtering by skipping chunks that cannot contain matching events.
 
 **Checkpoint Indexes:**
 

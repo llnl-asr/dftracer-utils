@@ -4,8 +4,8 @@ DFTracer Indexing System
 Bloom filter indexing and manifest building for fast event lookup in trace files.
 All classes are in the ``dftracer::utils::utilities::composites::dft::indexing`` namespace.
 
-The indexing system creates sidecar files (``.bidx`` for bloom indices, ``.midx``
-for manifest indices) that enable sub-second event filtering without scanning
+The indexing system creates sidecar files (``.idx`` unified index, ``.pidx``
+for provenance) that enable sub-second event filtering without scanning
 entire trace files. Bloom filters provide probabilistic set membership testing
 per chunk, while chunk statistics enable predicate pushdown.
 
@@ -23,8 +23,8 @@ per chunk, while chunk statistics enable predicate pushdown.
        end
 
        subgraph Storage["Sidecar Files"]
-           BIDX[".bidx<br/>(Bloom Index)"]
-           MIDX[".midx<br/>(Manifest Index)"]
+           IDX[".idx<br/>(Unified Index)"]
+           PIDX[".pidx<br/>(Provenance Index)"]
        end
 
        subgraph Query["Query Path"]
@@ -36,14 +36,14 @@ per chunk, while chunk statistics enable predicate pushdown.
        Files --> CI1
        Files --> CI2
        Files --> CIN
-       CI1 --> BIDX
-       CI2 --> BIDX
-       CIN --> BIDX
-       CI1 --> MIDX
-       CI2 --> MIDX
-       CIN --> MIDX
+       CI1 --> IDX
+       CI2 --> IDX
+       CIN --> IDX
+       CI1 --> PIDX
+       CI2 --> PIDX
+       CIN --> PIDX
        PP --> BQ
-       BIDX --> BQ
+       IDX --> BQ
        Cache --> BQ
 
 Bloom Filter
@@ -77,7 +77,7 @@ Usage example:
         // This chunk definitely does NOT contain "close" — skip it
     }
 
-    // Serialize for storage in .bidx SQLite database
+    // Serialize for storage in .idx SQLite database
     auto blob = filter.serialize();
 
     // Deserialize from storage
@@ -93,8 +93,8 @@ BloomFilterCache
 
 Thread-safe bounded LRU cache for deserialized bloom filters.
 
-Avoids repeated deserialization of bloom filters from the ``.bidx`` database
-during query execution. Cache keys are ``(bidx_path, dimension, checkpoint_idx)``.
+Avoids repeated deserialization of bloom filters from the ``.idx`` database
+during query execution. Cache keys are ``(idx_path, dimension, checkpoint_idx)``.
 
 When the cache is full, all entries are evicted (simple reset strategy).
 
@@ -106,7 +106,7 @@ When the cache is full, all entries are evicted (simple reset strategy).
 Chunk Statistics
 ----------------
 
-Per-chunk aggregated statistics stored alongside bloom filters in the ``.bidx``
+Per-chunk aggregated statistics stored alongside bloom filters in the ``.idx``
 sidecar. Used for predicate pushdown (e.g., skip chunks where max timestamp
 is before the query range) and for summary queries without full scans.
 
@@ -208,63 +208,6 @@ Supporting Types
 Index Builders
 --------------
 
-BloomIndexBuilderUtility
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-End-to-end bloom index builder for a single trace file.
-
-Orchestrates the full indexing pipeline: checkpoint discovery, parallel
-chunk indexing, and writing results to the ``.bidx`` SQLite sidecar.
-
-Supports incremental builds: skips files that are already indexed
-(unless ``force_rebuild`` is set).
-
-Tagged ``NeedsContext`` — requires an Executor with I/O backend.
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::BloomIndexBuildInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::BloomIndexBuildOutput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::BloomIndexBuilderUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenfunction:: dftracer::utils::utilities::composites::dft::indexing::default_bloom_dimensions
-   :project: dftracer-utils
-
-ManifestIndexBuilderUtility
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-End-to-end manifest index builder for event-level line routing.
-
-Creates a ``.midx`` sidecar that maps ``(category, name)`` pairs to specific
-line numbers within each chunk. This enables precise event retrieval without
-scanning entire chunks.
-
-Tagged ``NeedsContext`` — requires an Executor with I/O backend.
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ManifestIndexBuildInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ManifestIndexBuildOutput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::ManifestIndexBuilderUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 Query Utilities
 ---------------
 
@@ -323,7 +266,7 @@ Tagged ``Parallelizable`` — can query multiple files concurrently.
 .. code-block:: cpp
 
     BloomQueryInput input;
-    input.with_bidx_path("trace.pfw.gz.bidx")
+    input.with_idx_path("trace.pfw.gz.idx")
          .with_file_path("trace.pfw.gz")
          .with_predicate("cat", {"POSIX"})
          .with_predicate("name", {"read", "write"});
@@ -358,34 +301,33 @@ Tagged ``Parallelizable`` — can query multiple files concurrently.
 Database Schemas
 ----------------
 
-BloomIndexDatabase
+IndexDatabase
+~~~~~~~~~~~~~
+Manages the unified ``.idx`` SQLite sidecar file with additive schema
+(checkpoints + bloom filters + statistics + manifest).
+
+.. doxygenclass:: dftracer::utils::utilities::indexer::IndexDatabase
+   :members:
+
+ProvenanceDatabase
 ~~~~~~~~~~~~~~~~~~
+Manages the ``.pidx`` SQLite sidecar file for reorganization provenance.
 
-Manages the ``.bidx`` SQLite sidecar file.
-
-Schema stores per-chunk bloom filters (as BLOBs), chunk statistics,
-and file metadata. Uses WAL mode for concurrent read/write access.
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::BloomIndexDatabase
-   :project: dftracer-utils
+.. doxygenclass:: dftracer::utils::utilities::indexer::ProvenanceDatabase
    :members:
-   :undoc-members:
 
-.. doxygenfunction:: dftracer::utils::utilities::composites::dft::indexing::determine_bloom_index_path
-   :project: dftracer-utils
+IndexBuilder
+~~~~~~~~~~~~
+Single-pass index builder that decompresses once and builds all index
+data (checkpoints, bloom filters, manifest) via the visitor pattern.
 
-ManifestIndexDatabase
-~~~~~~~~~~~~~~~~~~~~~
-
-Manages the ``.midx`` SQLite sidecar file.
-
-Schema stores event-level line routing: for each ``(category, name)`` pair
-in each chunk, the specific line numbers where matching events appear.
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::ManifestIndexDatabase
-   :project: dftracer-utils
+.. doxygenclass:: dftracer::utils::utilities::indexer::IndexBuilder
    :members:
-   :undoc-members:
 
-.. doxygenfunction:: dftracer::utils::utilities::composites::dft::indexing::determine_manifest_index_path
-   :project: dftracer-utils
+TraceReader
+~~~~~~~~~~~
+Smart reader that auto-selects between sequential decompression and
+indexed random access based on ``.idx`` file presence.
+
+.. doxygenclass:: dftracer::utils::utilities::reader::TraceReader
+   :members:

@@ -2,6 +2,9 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 
+#include <span>
+#include <string_view>
+
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteStmt;
@@ -9,7 +12,7 @@ using indexer::internal::IndexerError;
 
 void insert_chunk_bloom_filter(const SqliteDatabase& db, int file_info_id,
                                std::uint64_t checkpoint_idx,
-                               const std::string& dimension,
+                               std::string_view dimension,
                                const void* blob_data, int blob_size,
                                std::uint64_t num_entries) {
     SqliteStmt stmt(
@@ -30,6 +33,16 @@ void insert_chunk_bloom_filter(const SqliteDatabase& db, int file_info_id,
                            "Failed to insert chunk bloom filter: " +
                                std::string(sqlite3_errmsg(db.get())));
     }
+}
+
+void insert_chunk_bloom_filter(const SqliteDatabase& db, int file_info_id,
+                               std::uint64_t checkpoint_idx,
+                               std::string_view dimension,
+                               std::span<const unsigned char> blob_data,
+                               std::uint64_t num_entries) {
+    insert_chunk_bloom_filter(db, file_info_id, checkpoint_idx, dimension,
+                              blob_data.data(),
+                              static_cast<int>(blob_data.size()), num_entries);
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing::queries

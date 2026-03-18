@@ -2,13 +2,15 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 
+#include <string_view>
+
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteStmt;
 using indexer::internal::IndexerError;
 
-void insert_provenance_info(const SqliteDatabase& db, const std::string& key,
-                            const std::string& value) {
+void insert_provenance_info(const SqliteDatabase& db, std::string_view key,
+                            std::string_view value) {
     SqliteStmt stmt(db,
                     "INSERT OR REPLACE INTO provenance_info(key, value) "
                     "VALUES(?, ?);");
@@ -25,9 +27,9 @@ void insert_provenance_info(const SqliteDatabase& db, const std::string& key,
 }
 
 void insert_provenance_source(const SqliteDatabase& db, int file_info_id,
-                              int source_idx, const std::string& path,
+                              int source_idx, std::string_view path,
                               int num_checkpoints,
-                              const std::string& event_hash) {
+                              std::string_view event_hash) {
     SqliteStmt stmt(db,
                     "INSERT OR REPLACE INTO provenance_sources"
                     "(source_idx, file_info_id, path, "
@@ -48,8 +50,8 @@ void insert_provenance_source(const SqliteDatabase& db, int file_info_id,
     }
 }
 
-void insert_provenance_group(const SqliteDatabase& db, const std::string& name,
-                             const std::string& predicate) {
+void insert_provenance_group(const SqliteDatabase& db, std::string_view name,
+                             std::string_view predicate) {
     SqliteStmt stmt(db,
                     "INSERT INTO provenance_group(name, predicate) "
                     "VALUES(?, ?);");

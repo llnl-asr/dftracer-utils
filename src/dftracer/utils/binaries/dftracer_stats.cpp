@@ -6,11 +6,7 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
-#include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_builder.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_index_schema.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
@@ -22,6 +18,9 @@
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_query_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <algorithm>
@@ -48,9 +47,12 @@ using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
 using dftracer::utils::utilities::fileio::lines::sources::
     async_streaming_gz_lines;
+using dftracer::utils::utilities::indexer::IndexBuildConfig;
+using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexDatabase;
 
 // Files below this compressed size are scanned directly without building
-// sidecar index files (.idx/.bidx).  At 8 MB compressed (~160 MB
+// sidecar index files (.idx).  At 8 MB compressed (~160 MB
 // uncompressed with typical 20x JSON compression), a file has only a
 // handful of 32 MB checkpoints — the indexing overhead exceeds the
 // benefit of bloom-filter skip.
@@ -697,7 +699,6 @@ static coro::CoroTask<void> process_file_detailed(
     DetailedStatistics* aggregate_detailed_ptr, std::mutex* aggregate_mutex_ptr,
     std::mutex* output_mutex_ptr,
     std::vector<std::pair<std::size_t, std::string>>* json_results_ptr) {
-    std::string bidx_path = determine_bloom_index_path(file_path, index_dir);
     std::string idx_path = internal::determine_index_path(file_path, index_dir);
 
     auto meta_input = MetadataCollectorUtilityInput::from_file(file_path)
@@ -720,10 +721,10 @@ static coro::CoroTask<void> process_file_detailed(
     std::vector<std::uint64_t> candidate_checkpoints;
     std::uint64_t total_checkpoints = (num_ckpts == 0) ? 1 : num_ckpts;
 
-    if (!merged_predicates_ptr->empty() && fs::exists(bidx_path)) {
+    if (!merged_predicates_ptr->empty() && fs::exists(idx_path)) {
         try {
             BloomQueryInput bq_input;
-            bq_input.bidx_path = bidx_path;
+            bq_input.idx_path = idx_path;
             bq_input.file_path = file_path;
             bq_input.predicates = *merged_predicates_ptr;
 
@@ -780,17 +781,19 @@ static coro::CoroTask<void> process_file_detailed(
 
     // Hash resolution (sequential, all chunks done)
     std::unordered_map<std::string, std::string> hash_resolutions;
-    if (needs_hash_resolution && fs::exists(bidx_path)) {
+    if (needs_hash_resolution && fs::exists(idx_path)) {
         try {
-            BloomIndexDatabase bidx_db(bidx_path);
-            int file_info_id = bidx_db.get_file_info_id(file_path);
+            IndexDatabase idx_db(idx_path);
+            auto logical =
+                utilities::indexer::internal::get_logical_path(file_path);
+            int file_info_id = idx_db.get_file_info_id(logical);
             if (file_info_id >= 0) {
                 auto resolve_hashes = [&](const std::string& dim) {
                     for (const auto& [key, _] :
                          file_detailed->grouped_duration) {
                         if (hash_resolutions.count(key) == 0) {
-                            auto resolved = queries::query_resolved_by_hash(
-                                bidx_db.db(), dim, key);
+                            auto resolved =
+                                idx_db.query_resolved_by_hash(dim, key);
                             if (resolved.has_value()) {
                                 hash_resolutions[key] = resolved.value();
                             }
@@ -798,8 +801,8 @@ static coro::CoroTask<void> process_file_detailed(
                     }
                     for (const auto& [key, _] : file_detailed->grouped_io) {
                         if (hash_resolutions.count(key) == 0) {
-                            auto resolved = queries::query_resolved_by_hash(
-                                bidx_db.db(), dim, key);
+                            auto resolved =
+                                idx_db.query_resolved_by_hash(dim, key);
                             if (resolved.has_value()) {
                                 hash_resolutions[key] = resolved.value();
                             }
@@ -992,10 +995,17 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
     std::vector<std::string> files_needing_index;
     std::vector<std::string> small_files;
     for (const auto& file_path : files) {
-        std::string bidx_path =
-            determine_bloom_index_path(file_path, index_dir);
-        if (fs::exists(bidx_path)) {
-            continue;  // already indexed
+        std::string idx_path =
+            internal::determine_index_path(file_path, index_dir);
+        if (fs::exists(idx_path)) {
+            try {
+                IndexDatabase db(idx_path);
+                auto logical =
+                    utilities::indexer::internal::get_logical_path(file_path);
+                int fid = db.get_file_info_id(logical);
+                if (fid >= 0 && db.has_bloom_data(fid)) continue;
+            } catch (...) {
+            }
         }
         std::error_code ec;
         auto fsize = fs::file_size(file_path, ec);
@@ -1019,7 +1029,7 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
     if (!files_needing_index.empty()) {
         if (no_auto_index) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Missing .bidx index for %zu file(s) and --no-auto-index is "
+                "Missing index for %zu file(s) and --no-auto-index is "
                 "set. Run dftracer_index first.",
                 files_needing_index.size());
             for (const auto& f : files_needing_index) {
@@ -1028,7 +1038,7 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
             co_return 1;
         }
 
-        std::printf("Auto-building bloom index for %zu file(s)...\n",
+        std::printf("Auto-building index for %zu file(s)...\n",
                     files_needing_index.size());
 
         auto pipeline_config = PipelineConfig()
@@ -1041,11 +1051,6 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
         std::atomic<std::size_t> indexed_count{0};
         std::atomic<std::size_t> failed_count{0};
 
-        BloomIndexBuildInput build_template;
-        build_template.index_dir = index_dir;
-        build_template.checkpoint_size = checkpoint_size;
-        build_template.dimensions = default_bloom_dimensions();
-
         auto index_task = make_task(
             [&](CoroScope& ctx) -> coro::CoroTask<void> {
                 auto file_chan =
@@ -1053,7 +1058,6 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
 
                 co_await ctx.scope([&](CoroScope& scope)
                                        -> coro::CoroTask<void> {
-                    // Producer: push all file paths into the channel
                     auto* files_ptr = &files_needing_index;
                     scope.spawn(
                         [ch = file_chan->producer(), files_ptr](
@@ -1067,36 +1071,26 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
                             co_return;
                         });
 
-                    // Workers: N coroutines pulling from the channel
                     auto* indexed_count_ptr = &indexed_count;
                     auto* failed_count_ptr = &failed_count;
+                    std::string index_dir_copy = index_dir;
+                    std::size_t ckpt_size = checkpoint_size;
                     for (std::size_t w = 0; w < executor_threads; ++w) {
-                        scope.spawn([file_chan, build_template,
-                                     indexed_count_ptr,
-                                     failed_count_ptr](CoroScope& wctx)
-                                        -> coro::CoroTask<void> {
+                        scope.spawn([file_chan, index_dir_copy, ckpt_size,
+                                     indexed_count_ptr, failed_count_ptr](
+                                        CoroScope&) -> coro::CoroTask<void> {
                             while (auto file_path =
                                        co_await file_chan->receive()) {
                                 try {
-                                    BloomIndexBuildInput build_input =
-                                        build_template;
-                                    build_input.file_path = *file_path;
-
-                                    auto utility = std::make_shared<
-                                        BloomIndexBuilderUtility>();
-                                    behaviors::BehaviorChain<
-                                        BloomIndexBuildInput,
-                                        BloomIndexBuildOutput>
-                                        chain;
-                                    behaviors::UtilityExecutor<
-                                        BloomIndexBuildInput,
-                                        BloomIndexBuildOutput,
-                                        utilities::tags::NeedsContext>
-                                        executor(utility, std::move(chain));
-
+                                    IndexBuilderUtility builder;
+                                    auto config =
+                                        IndexBuildConfig::for_file(*file_path)
+                                            .with_index_dir(index_dir_copy)
+                                            .with_checkpoint_size(ckpt_size)
+                                            .with_bloom(true)
+                                            .with_index_threshold(0);
                                     auto result =
-                                        co_await executor.execute_with_context(
-                                            wctx, build_input);
+                                        co_await builder.process(config);
 
                                     if (result.success) {
                                         (*indexed_count_ptr)++;
@@ -1374,8 +1368,8 @@ int main(int argc, char** argv) {
     argparse::ArgumentParser program("dftracer_stats",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(
-        "Display statistics for DFTracer trace files from pre-built bloom "
-        "index (.bidx) databases. Auto-builds indices if missing. "
+        "Display statistics for DFTracer trace files from pre-built "
+        "index (.idx) databases. Auto-builds indices if missing. "
         "Zero-cost reads: only SQLite metadata, no decompression.");
 
     program.add_argument("--files")
@@ -1388,7 +1382,7 @@ int main(int argc, char** argv) {
         .default_value<std::string>("");
 
     program.add_argument("--index-dir")
-        .help("Directory where .bidx index files are stored")
+        .help("Directory where .idx index files are stored")
         .default_value<std::string>("");
 
     program.add_argument("--json").help("Output in JSON format").flag();
@@ -1412,7 +1406,7 @@ int main(int argc, char** argv) {
         .default_value(static_cast<std::uint64_t>(10));
 
     program.add_argument("--no-auto-index")
-        .help("Disable automatic bloom index building for files missing .bidx")
+        .help("Disable automatic index building for files missing .idx")
         .flag();
 
     program.add_argument("--checkpoint-size")

@@ -5,12 +5,9 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
-#include <dftracer/utils/core/utilities/utility_executor.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_builder.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
+#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/provenance_database.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -21,8 +18,11 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
-using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
+using dftracer::utils::utilities::indexer::determine_provenance_index_path;
+using dftracer::utils::utilities::indexer::IndexBuildConfig;
+using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using dftracer::utils::utilities::indexer::ProvenanceDatabase;
 
 // Create a test trace with known events:
 // Line 0: HH metadata
@@ -56,43 +56,37 @@ static std::string create_planner_test_trace(const std::string& dir) {
     return gz_path;
 }
 
-// Build .midx for a trace file using the full pipeline
-static void build_midx(const std::string& trace_file,
-                       const std::string& index_dir) {
-    ManifestIndexBuildInput input;
-    input.file_path = trace_file;
-    input.index_dir = index_dir;
-    input.force_rebuild = true;
-
+// Build .idx for a trace file using IndexBuilder
+static void build_idx(const std::string& trace_file,
+                      const std::string& index_dir) {
     auto pipeline_config = PipelineConfig()
-                               .with_name("PlannerTestMidxBuild")
+                               .with_name("PlannerTestIdxBuild")
                                .with_compute_threads(2)
                                .with_watchdog(false);
 
     Pipeline pipeline(pipeline_config);
-    ManifestIndexBuildOutput result;
+    indexer::IndexBuildResult result;
 
+    auto* result_ptr = &result;
     auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            auto utility = std::make_shared<ManifestIndexBuilderUtility>();
-            behaviors::BehaviorChain<ManifestIndexBuildInput,
-                                     ManifestIndexBuildOutput>
-                chain;
-            behaviors::UtilityExecutor<ManifestIndexBuildInput,
-                                       ManifestIndexBuildOutput,
-                                       utilities::tags::NeedsContext>
-                executor(utility, std::move(chain));
-            result = co_await executor.execute_with_context(ctx, input);
+        [trace_file, index_dir,
+         result_ptr](CoroScope&) -> coro::CoroTask<void> {
+            IndexBuilderUtility builder;
+            auto config = IndexBuildConfig::for_file(trace_file)
+                              .with_index_dir(index_dir)
+                              .with_manifest(true)
+                              .with_index_threshold(0);
+            *result_ptr = co_await builder.process(config);
             co_return;
         },
-        "BuildMidx");
+        "BuildIdx");
 
     pipeline.set_source(task);
     pipeline.set_destination(task);
     pipeline.execute();
 
     if (!result.success) {
-        throw std::runtime_error("Failed to build .midx for test");
+        throw std::runtime_error("Failed to build .idx for test");
     }
 }
 
@@ -135,7 +129,7 @@ TEST_SUITE("ReorganizationPlanner") {
         fs::create_directories(test_dir);
 
         std::string trace_file = create_planner_test_trace(test_dir);
-        build_midx(trace_file, test_dir);
+        build_idx(trace_file, test_dir);
 
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput input;
@@ -207,7 +201,7 @@ TEST_SUITE("ReorganizationPlanner") {
         fs::create_directories(test_dir);
 
         std::string trace_file = create_planner_test_trace(test_dir);
-        build_midx(trace_file, test_dir);
+        build_idx(trace_file, test_dir);
 
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput input;
@@ -250,7 +244,7 @@ TEST_SUITE("ReorganizationPlanner") {
         fs::create_directories(test_dir);
 
         std::string trace_file = create_planner_test_trace(test_dir);
-        build_midx(trace_file, test_dir);
+        build_idx(trace_file, test_dir);
 
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput input;
@@ -283,32 +277,30 @@ TEST_SUITE("ReorganizationPlanner") {
         std::string test_dir =
             dft_utils_test::make_unique_test_path("test_planner_prov").string();
         fs::create_directories(test_dir);
-        std::string midx_path = test_dir + "/test_prov.pfw.gz.midx";
+        std::string pidx_path = test_dir + "/test_prov.pfw.gz.pidx";
 
-        ManifestIndexDatabase midx(midx_path);
-        midx.init_schema();
-        int fid = midx.get_or_create_file_info("test.pfw.gz", 0);
+        ProvenanceDatabase pdb(pidx_path);
+        pdb.init_schema();
+        int fid = pdb.get_or_create_file_info("test.pfw.gz", 0);
 
-        midx.begin_transaction();
+        pdb.begin_transaction();
 
-        queries::insert_provenance_info(midx.db(), "version", "1.0");
-        queries::insert_provenance_info(midx.db(), "created_at", "2026-02-17");
-        queries::insert_provenance_source(midx.db(), fid, 0,
-                                          "/data/trace.pfw.gz", 9, "abc123");
-        queries::insert_provenance_group(midx.db(), "io", "cat=POSIX");
-        queries::insert_provenance_segment(midx.db(), 0, 0, 0, 100, 50);
-        queries::insert_provenance_segment(midx.db(), 0, 1, 100, 200, 45);
+        pdb.insert_info("version", "1.0");
+        pdb.insert_info("created_at", "2026-02-17");
+        pdb.insert_source(fid, 0, "/data/trace.pfw.gz", 9, "abc123");
+        pdb.insert_group("io", "cat=POSIX");
+        pdb.insert_segment(0, 0, 0, 100, 50);
+        pdb.insert_segment(0, 1, 100, 200, 45);
 
-        midx.commit_transaction();
+        pdb.commit_transaction();
 
         // Query provenance info
-        CHECK(queries::query_provenance_info(midx.db(), "version") == "1.0");
-        CHECK(queries::query_provenance_info(midx.db(), "created_at") ==
-              "2026-02-17");
-        CHECK(queries::query_provenance_info(midx.db(), "nonexistent").empty());
+        CHECK(pdb.query_info("version") == "1.0");
+        CHECK(pdb.query_info("created_at") == "2026-02-17");
+        CHECK(pdb.query_info("nonexistent").empty());
 
         // Query provenance sources
-        auto sources = queries::query_provenance_sources(midx.db(), fid);
+        auto sources = pdb.query_sources(fid);
         REQUIRE(sources.size() == 1);
         CHECK(sources[0].source_idx == 0);
         CHECK(sources[0].path == "/data/trace.pfw.gz");
@@ -316,7 +308,7 @@ TEST_SUITE("ReorganizationPlanner") {
         CHECK(sources[0].event_hash == "abc123");
 
         // Query provenance segments
-        auto segments = queries::query_provenance_segments(midx.db(), 0);
+        auto segments = pdb.query_segments(0);
         REQUIRE(segments.size() == 2);
         CHECK(segments[0].source_checkpoint == 0);
         CHECK(segments[0].output_line_start == 0);
@@ -325,9 +317,8 @@ TEST_SUITE("ReorganizationPlanner") {
         CHECK(segments[1].source_checkpoint == 1);
 
         // Query provenance group
-        CHECK(queries::query_provenance_group_name(midx.db()) == "io");
-        CHECK(queries::query_provenance_group_predicate(midx.db()) ==
-              "cat=POSIX");
+        CHECK(pdb.query_group_name() == "io");
+        CHECK(pdb.query_group_predicate() == "cat=POSIX");
 
         fs::remove_all(test_dir);
     }

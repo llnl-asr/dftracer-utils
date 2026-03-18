@@ -1,8 +1,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/manifest_index_schema.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.h>
+#include <dftracer/utils/utilities/indexer/provenance_database.h>
 
 #include <map>
 #include <utility>
@@ -11,13 +10,7 @@ namespace dftracer::utils::utilities::composites::dft::reorganize {
 
 namespace {
 
-using indexing::determine_manifest_index_path;
-using indexing::ManifestIndexDatabase;
-using indexing::queries::ProvenanceSegment;
-using indexing::queries::ProvenanceSource;
-using indexing::queries::query_all_provenance_segments;
-using indexing::queries::query_provenance_info;
-using indexing::queries::query_provenance_sources;
+using dftracer::utils::utilities::indexer::ProvenanceDatabase;
 
 }  // namespace
 
@@ -26,29 +19,29 @@ coro::CoroTask<ReconstructionPlan> ReconstructionPlannerUtility::process(
     ReconstructionPlan plan;
 
     for (const auto& reorg_file : input.reorganized_files) {
-        std::string midx_path =
-            determine_manifest_index_path(reorg_file, input.index_dir);
+        std::string pidx_path = internal::determine_provenance_index_path(
+            reorg_file, input.index_dir);
 
-        if (!fs::exists(midx_path)) {
+        if (!fs::exists(pidx_path)) {
             continue;
         }
 
-        ManifestIndexDatabase midx(midx_path);
-        midx.init_schema();
+        ProvenanceDatabase pdb(pidx_path);
+        pdb.init_schema();
 
-        int fid = midx.get_file_info_id(reorg_file);
+        int fid = pdb.get_file_info_id(reorg_file);
         if (fid < 0) continue;
 
         // Check if this file has provenance
-        std::string tool = query_provenance_info(midx.db(), "tool");
+        std::string tool = pdb.query_info("tool");
         if (tool.empty()) continue;
 
         // Read sources
-        auto sources = query_provenance_sources(midx.db(), fid);
+        auto sources = pdb.query_sources(fid);
         if (sources.empty()) continue;
 
         // Build source_idx -> source info map
-        std::map<int, ProvenanceSource> source_map;
+        std::map<int, ProvenanceDatabase::ProvenanceSource> source_map;
         for (const auto& src : sources) {
             source_map[src.source_idx] = src;
 
@@ -61,7 +54,7 @@ coro::CoroTask<ReconstructionPlan> ReconstructionPlannerUtility::process(
         }
 
         // Read all segments
-        auto segments = query_all_provenance_segments(midx.db());
+        auto segments = pdb.query_all_segments();
 
         for (const auto& seg : segments) {
             auto src_it = source_map.find(seg.source_idx);

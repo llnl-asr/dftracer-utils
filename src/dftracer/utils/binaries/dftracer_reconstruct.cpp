@@ -407,7 +407,7 @@ int main(int argc, char** argv) {
     program.add_description(
         "Reconstruct original trace files from "
         "reorganized files using provenance "
-        "tracking in .midx sidecars.");
+        "tracking in .pidx sidecars.");
 
     program.add_argument("-d", "--directory")
         .help(

@@ -33,9 +33,11 @@ void dft_indexer_destroy(dft_indexer_handle_t indexer);
 
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/utilities/indexer/index_visitor.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -57,6 +59,10 @@ class Indexer {
     void build() const { build_async().get(); }
     virtual bool need_rebuild() const = 0;
     virtual bool exists() const = 0;
+
+    using VisitorList = std::vector<std::reference_wrapper<IndexVisitor>>;
+
+    virtual void set_visitors(VisitorList visitors) { (void)visitors; }
 
     // Metadata accessors
     virtual const std::string &get_idx_path() const = 0;

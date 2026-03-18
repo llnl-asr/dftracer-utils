@@ -3,13 +3,14 @@
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 
 #include <cstring>
+#include <string_view>
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteStmt;
 
 std::vector<ChunkBloomResult> query_chunk_bloom_filters(
-    const SqliteDatabase& db, int file_info_id, const std::string& dimension) {
+    const SqliteDatabase& db, int file_info_id, std::string_view dimension) {
     SqliteStmt stmt(db,
                     "SELECT checkpoint_idx, bloom_data, num_entries "
                     "FROM chunk_bloom_filters "

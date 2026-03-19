@@ -234,18 +234,19 @@ class WhenAnyAwaitable {
             launch_wrapper(i);
         }
 
-        // Check if any task completed synchronously
         if (state_->completed.load(std::memory_order_acquire)) {
-            return false;  // Don't suspend
+            return false;
         }
 
-        // We will suspend - mark it and double-check for completion
-        state_->mark_suspended_and_check_completion();
-
+        // Set awaiting_async BEFORE mark_suspended_and_check_completion.
+        // After that call, another thread may complete a task and destroy
+        // this frame, so h.promise() must not be accessed afterward.
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
             root->awaiting_async_ = true;
         }
+
+        state_->mark_suspended_and_check_completion();
 
         return true;
     }
@@ -264,7 +265,9 @@ class WhenAnyAwaitable {
         }
         state_->awaitables.clear();
         if (state_->exception) {
-            std::rethrow_exception(state_->exception);
+            auto ex = std::move(state_->exception);
+            state_->exception = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
         return std::move(state_->result);
     }
@@ -725,12 +728,12 @@ class WhenAnyTupleAwaitable {
             return false;
         }
 
-        state_->mark_suspended_and_check_completion();
-
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
             root->awaiting_async_ = true;
         }
+
+        state_->mark_suspended_and_check_completion();
 
         return true;
     }
@@ -755,7 +758,9 @@ class WhenAnyTupleAwaitable {
         // keeps the tuple alive until all wrappers finish.
 
         if (state_->exception) {
-            std::rethrow_exception(state_->exception);
+            auto ex = std::move(state_->exception);
+            state_->exception = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
         return std::move(state_->result);
     }

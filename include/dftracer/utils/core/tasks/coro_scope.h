@@ -498,7 +498,9 @@ class CoroScope {
         }
         co_await child.join();
         if (error) {
-            std::rethrow_exception(error);
+            auto ex = std::move(error);
+            error = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
         co_return;
     }
@@ -546,7 +548,9 @@ inline coro::CoroTask<void> run_coro_scope(Executor* executor,
     }
     co_await scope.join();
     if (error) {
-        std::rethrow_exception(error);
+        auto ex = std::move(error);
+        error = nullptr;
+        std::rethrow_exception(std::move(ex));
     }
     co_return;
 }

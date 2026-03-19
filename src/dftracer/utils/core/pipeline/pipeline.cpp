@@ -1,5 +1,4 @@
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
 #include <dftracer/utils/core/tasks/noop_task.h>
@@ -11,22 +10,24 @@
 namespace dftracer::utils {
 
 Pipeline::Pipeline(const PipelineConfig& config)
-    : name_(config.name),
+    : runtime_(
+          [&config] {
+              ExecutorConfig exec_cfg;
+              exec_cfg.num_threads = config.executor_threads;
+              exec_cfg.idle_timeout = config.executor_idle_timeout;
+              exec_cfg.deadlock_timeout = config.executor_deadlock_timeout;
+              exec_cfg.io_pool_size = config.io_thread_count;
+              exec_cfg.io_backend_type = config.io_backend_type;
+              exec_cfg.io_batch_threshold = config.io_batch_threshold;
+              exec_cfg.sqlite_pool_size = config.sqlite_pool_size;
+              return exec_cfg;
+          }(),
+          config.enable_watchdog),
+      name_(config.name),
       error_policy_(config.error_policy),
       error_handler_(config.error_handler) {
-    // Create executor from pipeline config
-    ExecutorConfig exec_cfg;
-    exec_cfg.num_threads = config.executor_threads;
-    exec_cfg.idle_timeout = config.executor_idle_timeout;
-    exec_cfg.deadlock_timeout = config.executor_deadlock_timeout;
-    exec_cfg.io_pool_size = config.io_thread_count;
-    exec_cfg.io_backend_type = config.io_backend_type;
-    exec_cfg.io_batch_threshold = config.io_batch_threshold;
-    exec_cfg.sqlite_pool_size = config.sqlite_pool_size;
-    executor_ = std::make_unique<Executor>(exec_cfg);
-
-    // Create scheduler with reference to executor and full config
-    scheduler_ = std::make_unique<Scheduler>(executor_.get(), config);
+    scheduler_ = std::make_unique<Scheduler>(runtime_.executor(),
+                                             runtime_.watchdog(), config);
 
     DFTRACER_UTILS_LOG_DEBUG(
         "Pipeline '%s' created with config: executor_threads=%zu, "
@@ -37,10 +38,9 @@ Pipeline::Pipeline(const PipelineConfig& config)
 
 Pipeline::~Pipeline() {
     DFTRACER_UTILS_LOG_DEBUG("Pipeline '%s' destroyed", name_.c_str());
-    // Ensure executor is properly shut down before destruction
-    if (executor_) {
-        executor_->shutdown();
-    }
+    // Workers may call scheduler via completion callbacks.
+    // Shut down before scheduler_ is destroyed (reverse member order).
+    runtime_.shutdown();
 }
 
 void Pipeline::set_source(std::shared_ptr<Task> source) {

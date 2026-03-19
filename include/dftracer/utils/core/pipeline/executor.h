@@ -207,6 +207,9 @@ class Executor {
     std::unordered_map<TaskIndex, TaskInfo> task_registry_;
     mutable std::shared_mutex registry_mutex_;
 
+    // Counter for tracked-coro IDs (negative to avoid collision with DAG IDs).
+    std::atomic<TaskIndex> next_coro_task_id_{-1000000};
+
     // Global run queue (coroutine handles only).
     // Primary submission path for all task execution.
     moodycamel::ConcurrentQueue<std::coroutine_handle<>> run_queue_;
@@ -355,6 +358,15 @@ class Executor {
      * @param handle The coroutine handle to resume
      */
     void enqueue(std::coroutine_handle<> handle);
+
+    /**
+     * Enqueue a Coro with progress tracking in task_registry_.
+     */
+    TaskIndex enqueue_tracked(
+        coro::Coro coro, std::string name,
+        std::shared_ptr<std::atomic<TaskIndex>> tid_out = nullptr);
+
+    void mark_coro_completed(TaskIndex id);
 
     /**
      * Submit a Task for execution via a Coro (Phase 3 path).

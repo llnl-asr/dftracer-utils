@@ -40,12 +40,12 @@ TEST_CASE("Scheduler - Construction with config") {
     Executor executor(ExecutorConfig{.num_threads = 4});
 
     auto config = PipelineConfig::default_config();
-    Scheduler scheduler(&executor, config);
+    Watchdog watchdog;
+    watchdog.set_executor(&executor);
+    Scheduler scheduler(&executor, &watchdog, config);
 
-    // Should have watchdog enabled by default
     CHECK(scheduler.get_watchdog() != nullptr);
 
-    // Explicit shutdown to prevent resource leaks
     executor.shutdown();
 }
 
@@ -53,7 +53,7 @@ TEST_CASE("Scheduler - Sequential config") {
     Executor executor(ExecutorConfig{.num_threads = 1});
 
     auto config = PipelineConfig::sequential();
-    Scheduler scheduler(&executor, config);
+    Scheduler scheduler(&executor, nullptr, config);
 
     // Sequential mode should disable watchdog
     CHECK(scheduler.get_watchdog() == nullptr);
@@ -66,12 +66,12 @@ TEST_CASE("Scheduler - Parallel config") {
     Executor executor(ExecutorConfig{.num_threads = 4});
 
     auto config = PipelineConfig::parallel(4);
-    Scheduler scheduler(&executor, config);
+    Watchdog watchdog;
+    watchdog.set_executor(&executor);
+    Scheduler scheduler(&executor, &watchdog, config);
 
-    // Parallel mode should enable watchdog
     CHECK(scheduler.get_watchdog() != nullptr);
 
-    // Explicit shutdown to prevent resource leaks
     executor.shutdown();
 }
 
@@ -276,7 +276,7 @@ TEST_CASE("Scheduler - Threading with multiple workers") {
 TEST_CASE("Scheduler - Single threaded execution") {
     Executor executor(ExecutorConfig{.num_threads = 1});
     auto config = PipelineConfig::sequential();
-    Scheduler scheduler(&executor, config);
+    Scheduler scheduler(&executor, nullptr, config);
 
     std::atomic<int> active_count{0};
     std::atomic<int> max_active{0};
@@ -335,13 +335,14 @@ TEST_CASE("Scheduler - Global timeout triggers") {
                       .with_watchdog(true)
                       .with_watchdog_interval(std::chrono::seconds(1));
 
-    // Create executor and scheduler in a scope so they cleanup properly
     {
         Executor executor(ExecutorConfig{.num_threads = 4});
-        Scheduler scheduler(&executor, config);
+        Watchdog watchdog(config.watchdog_interval, config.global_timeout,
+                          config.default_task_timeout,
+                          config.long_task_warning_threshold);
+        watchdog.set_executor(&executor);
+        Scheduler scheduler(&executor, &watchdog, config);
 
-        // Create a task that spins/blocks longer than timeout
-        // Use shared_ptr to ensure flag survives task execution
         auto should_exit = std::make_shared<std::atomic<bool>>(false);
         auto task_started = std::make_shared<std::atomic<bool>>(false);
 
@@ -399,7 +400,7 @@ TEST_CASE("Scheduler - No timeout with zero value") {
             .with_global_timeout(std::chrono::seconds(0))  // 0 = wait forever
             .with_watchdog(false);
 
-    Scheduler scheduler(&executor, config);
+    Scheduler scheduler(&executor, nullptr, config);
 
     std::atomic<bool> completed{false};
 
@@ -510,7 +511,7 @@ TEST_CASE("Scheduler - Shutdown during execution") {
     Executor executor(ExecutorConfig{.num_threads = 2});
     auto config = PipelineConfig().with_compute_threads(2).with_watchdog(false);
 
-    Scheduler scheduler(&executor, config);
+    Scheduler scheduler(&executor, nullptr, config);
 
     std::atomic<bool> task_running{false};
 
@@ -558,7 +559,7 @@ TEST_CASE("Integration - Scheduler with Watchdog and Timeout") {
     auto config = PipelineConfig::with_timeouts(4, std::chrono::seconds(5),
                                                 std::chrono::seconds(2));
 
-    Scheduler scheduler(&executor, config);
+    Scheduler scheduler(&executor, nullptr, config);
 
     std::atomic<int> completed{0};
 
@@ -601,7 +602,7 @@ TEST_CASE("Integration - Full pipeline with all features") {
                       .with_watchdog_interval(std::chrono::seconds(1))
                       .with_warning_threshold(std::chrono::seconds(1));
 
-    Scheduler scheduler(&executor, config);
+    Scheduler scheduler(&executor, nullptr, config);
 
     // Create a dependency chain
     auto task1 = make_task(
@@ -869,9 +870,12 @@ TEST_CASE("Error Scenario - Per-task timeout") {
 
     {
         Executor executor(ExecutorConfig{.num_threads = 4});
-        Scheduler scheduler(&executor, config);
+        Watchdog watchdog(config.watchdog_interval, config.global_timeout,
+                          config.default_task_timeout,
+                          config.long_task_warning_threshold);
+        watchdog.set_executor(&executor);
+        Scheduler scheduler(&executor, &watchdog, config);
 
-        // Create task with specific timeout
         auto should_exit = std::make_shared<std::atomic<bool>>(false);
         auto task_started = std::make_shared<std::atomic<bool>>(false);
 
@@ -891,7 +895,6 @@ TEST_CASE("Error Scenario - Per-task timeout") {
             },
             "TaskWithTimeout");
 
-        // Set per-task timeout (shorter than the task duration)
         task_with_timeout->with_timeout(std::chrono::milliseconds(150));
 
         bool caught_timeout = false;
@@ -935,7 +938,7 @@ TEST_CASE("Error Scenario - Graceful shutdown (INTERRUPTED)") {
 
     {
         Executor executor(ExecutorConfig{.num_threads = 4});
-        Scheduler scheduler(&executor, config);
+        Scheduler scheduler(&executor, nullptr, config);
 
         auto should_exit = std::make_shared<std::atomic<bool>>(false);
         auto task_started = std::make_shared<std::atomic<bool>>(false);

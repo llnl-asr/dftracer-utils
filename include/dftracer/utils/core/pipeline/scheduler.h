@@ -40,11 +40,10 @@ class Watchdog;
  */
 class Scheduler {
    private:
-    Executor* executor_;  // Reference to executor
+    Executor* executor_;
     std::atomic<bool> running_{false};
 
-    // Watchdog integration
-    std::unique_ptr<Watchdog> watchdog_;
+    Watchdog* watchdog_{nullptr};  // Borrowed from Runtime, not owned
 
     // Timeout configuration
     std::chrono::milliseconds global_timeout_{0};
@@ -82,18 +81,10 @@ class Scheduler {
     ShardedMutex<CallbackMap, 64> completion_callbacks_;
 
    public:
-    /**
-     * Constructor
-     * @param executor Reference to executor
-     */
     explicit Scheduler(Executor* executor);
 
-    /**
-     * Constructor with configuration
-     * @param executor Reference to executor
-     * @param config Pipeline configuration
-     */
-    explicit Scheduler(Executor* executor, const PipelineConfig& config);
+    Scheduler(Executor* executor, Watchdog* watchdog,
+              const PipelineConfig& config);
 
     ~Scheduler();
 
@@ -175,7 +166,7 @@ class Scheduler {
     /**
      * Get watchdog (for configuration)
      */
-    Watchdog* get_watchdog() { return watchdog_.get(); }
+    Watchdog* get_watchdog() { return watchdog_; }
 
     /**
      * Reset scheduler state

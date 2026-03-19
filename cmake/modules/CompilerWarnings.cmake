@@ -105,6 +105,8 @@ function(target_set_warnings TARGET_NAME)
                 -Wstrict-overflow=2 # Warn about strict overflow assumptions
                 -Wno-maybe-uninitialized # Suppress warnings about
                                          # maybe-uninitialized variables
+                -Wno-missing-field-initializers # GCC false positive with
+                                                # aggregate/designated init
                 # -Wuseless-cast          # Warn about useless casts
       )
 

@@ -43,8 +43,10 @@ Scheduler::Scheduler(Executor* executor) : executor_(executor) {
     }
 }
 
-Scheduler::Scheduler(Executor* executor, const PipelineConfig& config)
+Scheduler::Scheduler(Executor* executor, Watchdog* watchdog,
+                     const PipelineConfig& config)
     : executor_(executor),
+      watchdog_(watchdog),
       global_timeout_(config.global_timeout),
       default_task_timeout_(config.default_task_timeout),
       error_policy_(config.error_policy),
@@ -54,7 +56,6 @@ Scheduler::Scheduler(Executor* executor, const PipelineConfig& config)
                             "Executor cannot be null");
     }
 
-    // Set completion callback
     executor_->set_completion_callback([this](std::shared_ptr<Task> task) {
         try {
             on_task_completed(task);
@@ -69,27 +70,11 @@ Scheduler::Scheduler(Executor* executor, const PipelineConfig& config)
         }
     });
 
-    // Set scheduler reference
     executor_->set_scheduler(this);
 
-    // Start executor to ensure workers are ready before scheduling begins
-    if (!executor_->is_running()) {
-        executor_->start();
-    }
-
-    // Create watchdog if enabled
-    if (config.enable_watchdog) {
-        watchdog_ = std::make_unique<Watchdog>(
-            config.watchdog_interval, config.global_timeout,
-            config.default_task_timeout, config.long_task_warning_threshold);
-
-        // Set watchdog callbacks
-        watchdog_->set_executor(executor_);
-
+    if (watchdog_) {
         watchdog_->set_timeout_callback([this](const std::string& reason) {
             DFTRACER_UTILS_LOG_ERROR("Watchdog timeout: %s", reason.c_str());
-            // Set error flag first, then request shutdown
-            // This ensures we throw TIMEOUT_ERROR instead of INTERRUPTED
             has_error_ = true;
             timeout_reason_ = reason;
             request_shutdown();
@@ -107,14 +92,8 @@ Scheduler::Scheduler(Executor* executor, const PipelineConfig& config)
 }
 
 Scheduler::~Scheduler() {
-    // Shutdown executor first to ensure all worker threads stop before
-    // we destroy the scheduler (workers may call scheduler methods)
     if (executor_) {
-        executor_->shutdown();
-    }
-
-    if (watchdog_) {
-        watchdog_->stop();
+        executor_->set_scheduler(nullptr);
     }
 }
 

@@ -105,7 +105,9 @@ class Generator {
             if (handle_ && !handle_.done()) {
                 handle_.resume();
                 if (handle_.promise().exception_) {
-                    std::rethrow_exception(handle_.promise().exception_);
+                    auto ex = std::move(handle_.promise().exception_);
+                    handle_.promise().exception_ = nullptr;
+                    std::rethrow_exception(std::move(ex));
                 }
             }
             return *this;
@@ -203,7 +205,9 @@ class Generator {
         handle_.resume();
 
         if (handle_.promise().exception_) {
-            std::rethrow_exception(handle_.promise().exception_);
+            auto ex = std::move(handle_.promise().exception_);
+            handle_.promise().exception_ = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
 
         if (handle_.done()) {
@@ -230,7 +234,9 @@ class Generator {
         handle_.resume();
 
         if (handle_.promise().exception_) {
-            std::rethrow_exception(handle_.promise().exception_);
+            auto ex = std::move(handle_.promise().exception_);
+            handle_.promise().exception_ = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
 
         return !handle_.done();
@@ -262,9 +268,11 @@ class Generator {
     /**
      * Rethrow pending exception
      */
-    void rethrow_if_exception() const {
+    void rethrow_if_exception() {
         if (handle_ && handle_.promise().exception_) {
-            std::rethrow_exception(handle_.promise().exception_);
+            auto ex = std::move(handle_.promise().exception_);
+            handle_.promise().exception_ = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
     }
 };

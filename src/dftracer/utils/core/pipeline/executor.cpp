@@ -48,8 +48,15 @@ void schedule_thread_local_destroy(std::coroutine_handle<> h) {
 }
 
 void drain_thread_local_destroys() {
+    Executor* exec = Executor::current();
+    bool shutting_down = exec && !exec->is_running();
     for (auto h : tls_pending_destroys) {
-        if (h) h.destroy();
+        if (!h) continue;
+        if (shutting_down) {
+            exec->schedule_destroy(h);
+        } else {
+            h.destroy();
+        }
     }
     tls_pending_destroys.clear();
 }
@@ -149,18 +156,10 @@ void Executor::shutdown() {
         io_backend_.reset();
     }
 
-    workers_.clear();
-
-    timer_service_.stop();
-
-    // Final cleanup: drain any remaining coroutine frames that were
-    // scheduled for deferred destruction but never drained by workers
-    // (e.g., frames from the last resume before shutdown).
+    // Destroy deferred frames and orphaned run-queue entries BEFORE
+    // clearing workers_. Frames may hold shared_ptr<Channel> whose
+    // ConcurrentQueue has TLS producer tokens tied to worker threads.
     drain_destroy_queue();
-
-    // Destroy any coroutine handles still sitting in the run queue.
-    // These are coroutines that were enqueued but never picked up by
-    // a worker before shutdown.  Without this, their frames leak.
     {
         std::coroutine_handle<> orphan;
         while (run_queue_.try_dequeue(orphan)) {
@@ -169,6 +168,9 @@ void Executor::shutdown() {
             }
         }
     }
+
+    workers_.clear();
+    timer_service_.stop();
 
     // Drain the main thread's thread-local destroy list (for
     // coroutines whose FinalAwaiter ran on the main thread).
@@ -194,8 +196,9 @@ void Executor::worker_thread(WorkerContext* context) {
     coro::reset_timeslice();
 
     while (running_) {
-        // Drain deferred-destruction queue (released Coro handles).
-        drain_destroy_queue();
+        if (running_.load(std::memory_order_acquire)) {
+            drain_destroy_queue();
+        }
 
         std::coroutine_handle<> pending_resume;
 
@@ -778,6 +781,58 @@ void Executor::submit_task(std::shared_ptr<Task> task,
     auto coro = run_task(std::move(task), std::move(input));
     coro.handle().promise().executor = this;
     enqueue(coro.release());
+}
+
+TaskIndex Executor::enqueue_tracked(
+    coro::Coro coro, std::string name,
+    std::shared_ptr<std::atomic<TaskIndex>> tid_out) {
+    TaskIndex id = next_coro_task_id_.fetch_sub(1, std::memory_order_relaxed);
+    coro.handle().promise().task_id = id;
+    coro.handle().promise().executor = this;
+
+    {
+        std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+        auto [it, inserted] = task_registry_.emplace(std::piecewise_construct,
+                                                     std::forward_as_tuple(id),
+                                                     std::forward_as_tuple());
+        if (inserted) {
+            auto now = std::chrono::steady_clock::now();
+            it->second.task_id = id;
+            it->second.parent_task_id = -1;
+            it->second.name = std::move(name);
+            it->second.state = TaskInfo::QUEUED;
+            it->second.queued_at = now;
+            it->second.started_at = now;
+            it->second.location = TaskInfo::SHARED_QUEUE;
+            it->second.worker_id = static_cast<std::size_t>(-1);
+        }
+    }
+    ++total_tasks_submitted_;
+    ++tasks_started_;
+
+    if (tid_out) {
+        tid_out->store(id, std::memory_order_release);
+    }
+
+    auto handle = coro.release();
+    enqueue(handle);
+    return id;
+}
+
+void Executor::mark_coro_completed(TaskIndex id) {
+    bool was_new = false;
+    {
+        std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+        auto it = task_registry_.find(id);
+        if (it != task_registry_.end() &&
+            it->second.state != TaskInfo::COMPLETED) {
+            it->second.state = TaskInfo::COMPLETED;
+            it->second.completed_at = std::chrono::steady_clock::now();
+            it->second.location = TaskInfo::DONE;
+            was_new = true;
+        }
+    }
+    if (was_new) ++tasks_completed_;
 }
 
 void Executor::schedule_destroy(std::coroutine_handle<> handle) {

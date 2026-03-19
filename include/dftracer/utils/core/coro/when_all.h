@@ -175,7 +175,9 @@ class WhenAllVectorAwaitable {
 
     result_type await_resume() {
         if (state_->exception_) {
-            std::rethrow_exception(state_->exception_);
+            auto ex = std::move(state_->exception_);
+            state_->exception_ = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
         return std::move(state_->results_);
     }
@@ -357,7 +359,9 @@ class WhenAllVectorAwaitable<Awaitable> {
 
     void await_resume() {
         if (state_->exception_) {
-            std::rethrow_exception(state_->exception_);
+            auto ex = std::move(state_->exception_);
+            state_->exception_ = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
     }
 
@@ -519,7 +523,9 @@ class WhenAllTupleAwaitable {
 
     result_type await_resume() {
         if (state_->exception_) {
-            std::rethrow_exception(state_->exception_);
+            auto ex = std::move(state_->exception_);
+            state_->exception_ = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
         return build_result(std::index_sequence_for<Awaitables...>{});
     }

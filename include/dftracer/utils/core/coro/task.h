@@ -184,7 +184,9 @@ class CoroTask {
 
     T await_resume() {
         if (coro_handle_.promise().exception_) {
-            std::rethrow_exception(coro_handle_.promise().exception_);
+            auto ex = std::move(coro_handle_.promise().exception_);
+            coro_handle_.promise().exception_ = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
         if constexpr (!std::is_void_v<T>) {
             return std::move(coro_handle_.promise().result_);
@@ -521,7 +523,9 @@ class CoroTask<void> {
 
     void await_resume() {
         if (coro_handle_.promise().exception_) {
-            std::rethrow_exception(coro_handle_.promise().exception_);
+            auto ex = std::move(coro_handle_.promise().exception_);
+            coro_handle_.promise().exception_ = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
     }
 

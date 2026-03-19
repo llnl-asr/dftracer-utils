@@ -36,6 +36,7 @@ set(DFTRACER_UTILS_CORE_SOURCES
 
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/pipeline/watchdog.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/runtime.cpp
     # Coro
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/coro.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/coro/yield.cpp
@@ -888,6 +889,10 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/reader.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader_iterator.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader_iterator.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.cpp)
 

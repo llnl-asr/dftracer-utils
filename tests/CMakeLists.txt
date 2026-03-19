@@ -25,6 +25,8 @@ link_zlib(testing_utilities STATIC)
 # +++++++++++++++++++++++++++++++++++++++++
 
 set(TEST_CPP_SOURCES
+    # Core tests
+    core/test_runtime.cpp
     # Pipeline tests
     pipeline/test_pipeline.cpp
 

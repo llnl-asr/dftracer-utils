@@ -117,7 +117,9 @@ class AsyncGenerator {
                 return std::nullopt;
             }
             if (handle_.promise().exception_) {
-                std::rethrow_exception(handle_.promise().exception_);
+                auto ex = std::move(handle_.promise().exception_);
+                handle_.promise().exception_ = nullptr;
+                std::rethrow_exception(std::move(ex));
             }
             if (handle_.done()) {
                 return std::nullopt;
@@ -189,9 +191,11 @@ class AsyncGenerator {
         return handle_ && handle_.promise().exception_ != nullptr;
     }
 
-    void rethrow_if_exception() const {
+    void rethrow_if_exception() {
         if (handle_ && handle_.promise().exception_) {
-            std::rethrow_exception(handle_.promise().exception_);
+            auto ex = std::move(handle_.promise().exception_);
+            handle_.promise().exception_ = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
     }
 };

@@ -176,4 +176,93 @@ TEST_SUITE("TraceReader") {
         }
         CHECK((n == 0 || threw));
     }
+
+    TEST_CASE("read_raw with byte range returns subset") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        auto total = count_raw_bytes(reader.read_raw()).get();
+        REQUIRE(total > 0);
+
+        ReadConfig rc;
+        rc.start_byte = 100;
+        rc.end_byte = total / 2;
+        auto subset = count_raw_bytes(reader.read_raw(rc)).get();
+        CHECK(subset > 0);
+        CHECK(subset < total);
+    }
+
+    TEST_CASE("read_raw byte range works with index") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        std::string index_dir = env.get_dir();
+        std::string idx_path = env.get_index_path(gz_file);
+
+        auto indexer =
+            IndexerFactory::create(gz_file, idx_path, 32 * 1024 * 1024, false);
+        REQUIRE(indexer != nullptr);
+        indexer->build();
+        REQUIRE(fs::exists(idx_path));
+
+        TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
+        CHECK(reader.has_index());
+
+        auto total = count_raw_bytes(reader.read_raw()).get();
+        REQUIRE(total > 0);
+
+        ReadConfig rc;
+        rc.start_byte = 100;
+        rc.end_byte = total / 2;
+        auto subset = count_raw_bytes(reader.read_raw(rc)).get();
+        CHECK(subset > 0);
+        CHECK(subset < total);
+    }
+
+    TEST_CASE("read_raw indexed and unindexed produce same chunk count") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        std::string index_dir = env.get_dir();
+        std::string idx_path = env.get_index_path(gz_file);
+
+        TraceReader plain_reader({.file_path = gz_file});
+        CHECK_FALSE(plain_reader.has_index());
+        ReadConfig single_line;
+        single_line.line_aligned = true;
+        single_line.multi_line = false;
+        auto plain_chunks =
+            count_raw_chunks(plain_reader.read_raw(single_line)).get();
+
+        auto indexer =
+            IndexerFactory::create(gz_file, idx_path, 32 * 1024 * 1024, false);
+        REQUIRE(indexer != nullptr);
+        indexer->build();
+
+        TraceReader indexed_reader(
+            {.file_path = gz_file, .index_dir = index_dir});
+        CHECK(indexed_reader.has_index());
+        auto indexed_chunks =
+            count_raw_chunks(indexed_reader.read_raw(single_line)).get();
+
+        CHECK(plain_chunks > 0);
+        CHECK(plain_chunks == indexed_chunks);
+    }
+
+    TEST_CASE("read_raw small buffer_size produces more chunks") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        ReadConfig large_buf;
+        large_buf.buffer_size = 4 * 1024 * 1024;
+        auto large_chunks = count_raw_chunks(reader.read_raw(large_buf)).get();
+
+        ReadConfig small_buf;
+        small_buf.buffer_size = 256;
+        auto small_chunks = count_raw_chunks(reader.read_raw(small_buf)).get();
+
+        CHECK(large_chunks > 0);
+        CHECK(small_chunks > 0);
+        CHECK(small_chunks >= large_chunks);
+    }
 }

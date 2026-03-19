@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_CORO_H
 #define DFTRACER_UTILS_CORE_CORO_CORO_H
 
+#include <dftracer/utils/core/common/typedefs.h>
+
 #include <atomic>
 #include <coroutine>
 #include <exception>
@@ -73,6 +75,8 @@ struct CoroPromise {
 
     /// Executor for global scheduling (set before enqueue).
     Executor* executor{nullptr};
+
+    TaskIndex task_id{-1};
 
     /// True when Coro::release() transferred ownership to the queue.
     /// FinalAwaiter uses this to schedule deferred destruction.

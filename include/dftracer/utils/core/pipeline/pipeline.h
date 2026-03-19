@@ -6,6 +6,7 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/pipeline/pipeline_output.h>
 #include <dftracer/utils/core/pipeline/scheduler.h>
+#include <dftracer/utils/core/runtime.h>
 
 #include <any>
 #include <cstddef>
@@ -35,9 +36,9 @@ class Pipeline {
     std::shared_ptr<Task> source_;       // Single source (may be NoOpTask)
     std::shared_ptr<Task> destination_;  // Can be nullptr
 
-    std::vector<std::shared_ptr<Task>> all_tasks_;  // All reachable tasks
+    std::vector<std::shared_ptr<Task>> all_tasks_;
 
-    std::unique_ptr<Executor> executor_;
+    Runtime runtime_;
     std::unique_ptr<Scheduler> scheduler_;
 
     std::string name_;
@@ -56,13 +57,10 @@ class Pipeline {
 
     ~Pipeline();
 
-    // Prevent copying
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
-
-    // Allow moving
-    Pipeline(Pipeline&&) = default;
-    Pipeline& operator=(Pipeline&&) = default;
+    Pipeline(Pipeline&&) = delete;
+    Pipeline& operator=(Pipeline&&) = delete;
 
     /**
      * Set source task (single task)

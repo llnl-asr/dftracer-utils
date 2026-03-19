@@ -15,24 +15,21 @@ std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
     const bool was_released = p.released;
     auto* const jc = p.join_counter;
     auto* const jcont = p.join_continuation;
+    const TaskIndex tracked_id = p.task_id;
+    Executor* const tracked_executor = p.executor;
+
+    // Mark tracked coro as completed regardless of join-group path.
+    if (tracked_id != -1 && tracked_executor) {
+        tracked_executor->mark_coro_completed(tracked_id);
+    }
 
     // Handle join group (JoinHandle integration).
     if (jc) {
         auto prev = jc->fetch_sub(1, std::memory_order_acq_rel);
         if (prev == 1 && jcont) {
-            // Last coro in join group -- atomically take the
-            // continuation.  exchange(nullptr) ensures exactly one
-            // side gets the handle (no double-resume).
-            //
-            // We use the snapshotted jcont pointer here.  This
-            // is safe: we are the LAST decrement (prev==1), so the
-            // joiner has not been resumed yet and the JoinHandle
-            // memory is still alive.
             auto cont_addr =
                 jcont->exchange(nullptr, std::memory_order_acq_rel);
             if (cont_addr) {
-                // Defer destruction to AFTER resume() returns on
-                // this worker thread.
                 if (was_released) {
                     dftracer::utils::schedule_thread_local_destroy(
                         std::coroutine_handle<>(h));
@@ -40,7 +37,6 @@ std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
                 return std::coroutine_handle<>::from_address(cont_addr);
             }
         }
-        // Non-last coro, or continuation was null.
         if (was_released) {
             dftracer::utils::schedule_thread_local_destroy(
                 std::coroutine_handle<>(h));
@@ -48,7 +44,6 @@ std::coroutine_handle<> CoroPromise::FinalAwaiter::await_suspend(
         return std::noop_coroutine();
     }
 
-    // Not part of a join group (abnormal path).
     if (was_released) {
         dftracer::utils::schedule_thread_local_destroy(
             std::coroutine_handle<>(h));

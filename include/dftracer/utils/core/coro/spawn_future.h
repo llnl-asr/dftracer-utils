@@ -149,7 +149,9 @@ class SpawnFuture {
 
     T await_resume() {
         if (state_->exception) {
-            std::rethrow_exception(state_->exception);
+            auto ex = std::move(state_->exception);
+            state_->exception = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
         if constexpr (!std::is_void_v<T>) {
             return std::move(*state_->result);
@@ -210,7 +212,9 @@ class SpawnFuture<void> {
 
     void await_resume() {
         if (state_->exception) {
-            std::rethrow_exception(state_->exception);
+            auto ex = std::move(state_->exception);
+            state_->exception = nullptr;
+            std::rethrow_exception(std::move(ex));
         }
     }
 

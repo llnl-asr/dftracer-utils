@@ -28,6 +28,60 @@ The most common use case is reading trace files:
    for json_obj in json_lines:
        print(json_obj['field'])
 
+Streaming with TraceReader
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``TraceReader`` is the recommended way to read trace files. It auto-selects
+sequential or indexed reading and supports streaming iterators:
+
+.. code-block:: python
+
+   from dftracer.utils import TraceReader
+
+   reader = TraceReader("trace.pfw.gz")
+
+   # Stream lines (memory-efficient, uses iterator)
+   for line in reader.iter_lines():
+       process(line)
+
+   # Stream raw byte chunks
+   for chunk in reader.iter_raw(multi_line=False):
+       process(chunk)  # one line per chunk as bytes
+
+   # Materialize all lines (convenience wrapper)
+   lines = reader.read_lines()
+
+   # With explicit Runtime for thread pool control
+   from dftracer.utils import Runtime
+
+   with Runtime(threads=8) as rt:
+       reader = TraceReader("trace.pfw.gz", runtime=rt)
+       for line in reader.iter_lines():
+           process(line)
+
+       # Check progress
+       print(rt.get_progress())
+
+Using with Dask
+~~~~~~~~~~~~~~~
+
+For distributed processing with ``dask.distributed``:
+
+.. code-block:: python
+
+   from dask.distributed import Client
+   from dftracer.utils.dask import DFTracerUtilsDaskWorkerPlugin
+
+   client = Client("scheduler:8786")
+   client.register_plugin(DFTracerUtilsDaskWorkerPlugin(threads=48))
+
+   def count_lines(path):
+       from dftracer.utils import TraceReader
+       return sum(1 for _ in TraceReader(path).iter_lines())
+
+   futures = client.map(count_lines, file_paths)
+   results = client.gather(futures)
+
 Working with Indexer
 ~~~~~~~~~~~~~~~~~~~~
 

@@ -12,6 +12,7 @@ typedef struct {
     int auto_build_index;
     std::size_t index_threshold;
     int has_index;
+    PyObject *runtime_obj;  // RuntimeObject* or NULL (uses default)
 } TraceReaderObject;
 
 extern PyTypeObject TraceReaderType;

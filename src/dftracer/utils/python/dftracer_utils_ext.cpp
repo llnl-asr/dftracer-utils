@@ -4,7 +4,9 @@
 #include <dftracer/utils/python/indexer_checkpoint.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/reader.h>
+#include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader.h>
+#include <dftracer/utils/python/trace_reader_iterator.h>
 
 static PyModuleDef dftracer_utils_module = {
     PyModuleDef_HEAD_INIT,
@@ -27,6 +29,8 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (init_json(m) < 0) return NULL;
     if (init_reader(m) < 0) return NULL;
     if (init_indexer(m) < 0) return NULL;
+    if (init_runtime(m) < 0) return NULL;
+    if (init_trace_reader_iterator(m) < 0) return NULL;
     if (init_trace_reader(m) < 0) return NULL;
     return m;
 }

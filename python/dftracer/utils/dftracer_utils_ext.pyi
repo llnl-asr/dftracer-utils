@@ -1,6 +1,6 @@
 """Type stubs for dftracer_utils_ext module."""
 
-from typing import Optional, List, Any, Union
+from typing import Optional, List, Any, Union, Iterator
 
 # ========== INDEXER ==========
 
@@ -301,6 +301,25 @@ class JSON:
         """Return string representation of the object."""
         ...
 
+# ========== RUNTIME ==========
+
+class Runtime:
+    """Lightweight coroutine runtime wrapping Executor + Watchdog."""
+
+    def __init__(self, threads: int = 0) -> None: ...
+    def shutdown(self) -> None: ...
+    def get_progress(self) -> dict: ...
+    def is_responsive(self) -> bool: ...
+    def set_timeout(self, global_ms: int = 0) -> None: ...
+    def set_default_task_timeout(self, ms: int = 0) -> None: ...
+    @property
+    def threads(self) -> int: ...
+    def __enter__(self) -> "Runtime": ...
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None: ...
+
+def get_default_runtime() -> Runtime: ...
+def set_default_runtime(runtime: Runtime) -> None: ...
+
 # ========== TRACE READER ==========
 
 class TraceReader:
@@ -313,6 +332,7 @@ class TraceReader:
         checkpoint_size: int = 33554432,
         auto_build_index: bool = False,
         index_threshold: int = 8388608,
+        runtime: Optional[Runtime] = None,
     ) -> None:
         """Create a TraceReader.
 
@@ -324,6 +344,9 @@ class TraceReader:
         self,
         start_line: int = 0,
         end_line: int = 0,
+        start_byte: int = 0,
+        end_byte: int = 0,
+        buffer_size: int = 4194304,
     ) -> List[str]:
         """Read lines from the trace file.
 
@@ -332,6 +355,34 @@ class TraceReader:
         """
         ...
 
+    def iter_lines(
+        self,
+        start_line: int = 0,
+        end_line: int = 0,
+        start_byte: int = 0,
+        end_byte: int = 0,
+        buffer_size: int = 4194304,
+    ) -> Iterator[str]: ...
+    def iter_raw(
+        self,
+        start_line: int = 0,
+        end_line: int = 0,
+        start_byte: int = 0,
+        end_byte: int = 0,
+        line_aligned: bool = True,
+        multi_line: bool = True,
+        buffer_size: int = 4194304,
+    ) -> Iterator[bytes]: ...
+    def read_raw(
+        self,
+        start_line: int = 0,
+        end_line: int = 0,
+        start_byte: int = 0,
+        end_byte: int = 0,
+        line_aligned: bool = True,
+        multi_line: bool = True,
+        buffer_size: int = 4194304,
+    ) -> List[bytes]: ...
     @property
     def file_path(self) -> str:
         """Path to the trace file."""

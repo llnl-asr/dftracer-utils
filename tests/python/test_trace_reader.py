@@ -273,5 +273,184 @@ class TestTraceReaderOptionalParams:
             assert reader.index_dir == env.temp_dir
 
 
+class TestTraceReaderIterLines:
+    """iter_lines() streaming iterator tests."""
+
+    def test_iter_lines_returns_iterator(self):
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            it = reader.iter_lines()
+            assert hasattr(it, "__iter__")
+            assert hasattr(it, "__next__")
+
+    def test_iter_lines_yields_strings(self):
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            for line in reader.iter_lines():
+                assert isinstance(line, str)
+
+    def test_iter_lines_count(self):
+        with Environment(lines=20) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            count = sum(1 for _ in reader.iter_lines())
+            assert count == 20
+
+    def test_iter_lines_matches_read_lines(self):
+        with Environment(lines=15) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            from_iter = list(reader.iter_lines())
+            from_read = reader.read_lines()
+            assert from_iter == from_read
+
+    def test_iter_lines_with_range(self):
+        with Environment(lines=20) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            all_lines = list(reader.iter_lines())
+            partial = list(reader.iter_lines(start_line=2, end_line=6))
+            assert 0 < len(partial) <= len(all_lines)
+
+    def test_iter_lines_early_break(self):
+        """Early break from iterator does not hang or leak."""
+        with Environment(lines=100) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            count = 0
+            for line in reader.iter_lines():
+                count += 1
+                if count >= 5:
+                    break
+            assert count == 5
+
+    def test_iter_lines_negative_raises(self):
+        with Environment(lines=5) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            with pytest.raises(ValueError):
+                list(reader.iter_lines(start_line=-1))
+
+    def test_iter_lines_buffer_size_accepted(self):
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            lines = list(reader.iter_lines(buffer_size=1024))
+            assert len(lines) == 10
+
+
+class TestTraceReaderIterRaw:
+    """iter_raw() streaming iterator tests."""
+
+    def test_iter_raw_returns_iterator(self):
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            it = reader.iter_raw()
+            assert hasattr(it, "__iter__")
+            assert hasattr(it, "__next__")
+
+    def test_iter_raw_yields_bytes(self):
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            for chunk in reader.iter_raw():
+                assert isinstance(chunk, bytes)
+
+    def test_iter_raw_single_line_mode(self):
+        """multi_line=False yields one chunk per line."""
+        with Environment(lines=20) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            chunks = list(reader.iter_raw(multi_line=False))
+            assert len(chunks) == 20
+
+    def test_iter_raw_content_consistent_with_lines(self):
+        """Total raw content matches total line content."""
+        with Environment(lines=15) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            lines = list(reader.iter_lines())
+            raw_chunks = list(reader.iter_raw(multi_line=False))
+            assert len(raw_chunks) == len(lines)
+
+    def test_iter_raw_early_break(self):
+        with Environment(lines=100) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            count = 0
+            for chunk in reader.iter_raw():
+                count += 1
+                if count >= 3:
+                    break
+            assert count == 3
+
+    def test_iter_raw_negative_raises(self):
+        with Environment(lines=5) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            with pytest.raises(ValueError):
+                list(reader.iter_raw(start_line=-1))
+
+
+class TestTraceReaderReadRaw:
+    """read_raw() materialized list tests."""
+
+    def test_read_raw_returns_list_of_bytes(self):
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            chunks = reader.read_raw()
+            assert isinstance(chunks, list)
+            assert all(isinstance(c, bytes) for c in chunks)
+
+    def test_read_raw_matches_iter_raw(self):
+        with Environment(lines=15) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            from_read = reader.read_raw()
+            from_iter = list(reader.iter_raw())
+            assert from_read == from_iter
+
+    def test_read_raw_single_line_count(self):
+        with Environment(lines=20) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            chunks = reader.read_raw(multi_line=False)
+            assert len(chunks) == 20
+
+
+class TestTraceReaderWithRuntime:
+    """TraceReader with explicit Runtime."""
+
+    def test_accepts_runtime_kwarg(self):
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            rt = dft_utils.Runtime(threads=2)
+            reader = dft_utils.TraceReader(gz_file, runtime=rt)
+            lines = reader.read_lines()
+            assert len(lines) == 10
+            rt.shutdown()
+
+    def test_iter_lines_with_runtime(self):
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            rt = dft_utils.Runtime(threads=2)
+            reader = dft_utils.TraceReader(gz_file, runtime=rt)
+            count = sum(1 for _ in reader.iter_lines())
+            assert count == 10
+            rt.shutdown()
+
+    def test_default_runtime_works(self):
+        """TraceReader without explicit runtime uses default."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            lines = list(reader.iter_lines())
+            assert len(lines) == 10
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

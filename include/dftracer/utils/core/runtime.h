@@ -24,6 +24,7 @@ class Runtime {
    public:
     explicit Runtime(std::size_t threads = 0);
     explicit Runtime(const ExecutorConfig& config, bool enable_watchdog = true);
+    Runtime(const ExecutorConfig& config, std::unique_ptr<Watchdog> watchdog);
     ~Runtime();
 
     Runtime(const Runtime&) = delete;
@@ -107,7 +108,6 @@ coro::Coro Runtime::make_submit_coro(
         result->exception = std::current_exception();
     }
     result->signal.set_value();
-    result.reset();
 }
 
 }  // namespace dftracer::utils

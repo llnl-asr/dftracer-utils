@@ -258,12 +258,14 @@ class WhenAnyAwaitable {
         // any stale waiter handles for deferred destruction, which
         // prevents the race between SpawnFuture::complete() and
         // frame cleanup.
+        for (auto& token : state_->cancellation_tokens) {
+            if (token) token->store(true, std::memory_order_release);
+        }
         for (auto& a : state_->awaitables) {
             if constexpr (requires { a.detach(); }) {
                 a.detach();
             }
         }
-        state_->awaitables.clear();
         if (state_->exception) {
             auto ex = std::move(state_->exception);
             state_->exception = nullptr;
@@ -312,6 +314,7 @@ class WhenAnyAwaitable {
 
                 state->wrappers_done.fetch_add(1, std::memory_order_release);
             } catch (...) {
+                auto ex = std::current_exception();
                 if (state->completed.load(std::memory_order_acquire)) {
                     state->wrappers_done.fetch_add(1,
                                                    std::memory_order_release);
@@ -321,11 +324,7 @@ class WhenAnyAwaitable {
                 bool expected = false;
                 if (state->completed.compare_exchange_strong(
                         expected, true, std::memory_order_acq_rel)) {
-                    try {
-                        state->exception = std::current_exception();
-                    } catch (...) {
-                    }
-
+                    state->exception = std::move(ex);
                     state->on_first_complete();
                 }
 
@@ -629,6 +628,7 @@ class WhenAnyTupleAwaitable {
                     }
                 }
             } catch (...) {
+                auto ex = std::current_exception();
                 if (state->completed.load(std::memory_order_acquire)) {
                     co_return;
                 }
@@ -636,10 +636,7 @@ class WhenAnyTupleAwaitable {
                 bool expected = false;
                 if (state->completed.compare_exchange_strong(
                         expected, true, std::memory_order_acq_rel)) {
-                    try {
-                        state->exception = std::current_exception();
-                    } catch (...) {
-                    }
+                    state->exception = std::move(ex);
                     state->on_first_complete();
                 }
             }
@@ -739,6 +736,9 @@ class WhenAnyTupleAwaitable {
     }
 
     result_type await_resume() {
+        for (auto& token : state_->cancellation_tokens) {
+            if (token) token->store(true, std::memory_order_release);
+        }
         std::apply(
             [](auto&... a) {
                 (
@@ -750,12 +750,6 @@ class WhenAnyTupleAwaitable {
                     ...);
             },
             state_->awaitables_);
-
-        // Clear by replacing with a default-constructed tuple.
-        // Individual awaitables are move-only so we cannot assign
-        // a fresh tuple; instead we rely on the destructor having
-        // been called via detach() above.  The state shared_ptr
-        // keeps the tuple alive until all wrappers finish.
 
         if (state_->exception) {
             auto ex = std::move(state_->exception);

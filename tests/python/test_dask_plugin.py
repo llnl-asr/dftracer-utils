@@ -112,7 +112,7 @@ class TestDaskWorkerPluginIntegration:
 
                 future = client.submit(read_line_count, gz_file)
                 result = future.result()
-                assert result == 20
+                assert result == 22
             finally:
                 client.close()
                 cluster.close()
@@ -138,7 +138,7 @@ class TestDaskWorkerPluginIntegration:
 
                 futures = client.map(read_line_count, files)
                 results = client.gather(futures)
-                assert all(r == 10 for r in results)
+                assert all(r == 12 for r in results)
             finally:
                 client.close()
                 cluster.close()

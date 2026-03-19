@@ -352,25 +352,23 @@ std::string TestEnvironment::create_dft_test_file(int num_events) {
                               "fread", "fwrite", "open", "close"};
     const int num_names = sizeof(io_names) / sizeof(io_names[0]);
 
+    ofs << "[\n";
     for (int i = 1; i <= num_events; ++i) {
-        // Use microseconds as uint64_t
         uint64_t timestamp_us =
-            1000000000ULL +
-            static_cast<uint64_t>(
-                i * 100000);  // Start at 1 second, increment by 0.1 seconds
+            1000000000ULL + static_cast<uint64_t>(i * 100000);
         int size = 1024 * i;
-        const char* op_name = io_names[i % num_names];  // Cycle through names
+        const char* op_name = io_names[i % num_names];
 
         ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
             << (2000 + i) << R"(,"name":")" << op_name << R"(")"
-            << R"(,"cat":"IO")"  // Category
-            << R"(,"ph":"C")"    // Phase (complete event)
-            << R"(,"ts":)" << timestamp_us << R"(,"dur":)"
-            << (100 + i * 10)    // Duration in microseconds
+            << R"(,"cat":"IO")"
+            << R"(,"ph":"C")"
+            << R"(,"ts":)" << timestamp_us << R"(,"dur":)" << (100 + i * 10)
             << R"(,"args":{"ret":)" << size << R"(,"file":"test_)" << i
-            << R"(.dat"})"       // args with ret and file
+            << R"(.dat"})"
             << R"(})" << "\n";
     }
+    ofs << "]\n";
     ofs.close();
 
     return file_path;

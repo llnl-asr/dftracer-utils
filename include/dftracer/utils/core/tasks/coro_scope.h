@@ -188,11 +188,9 @@ class CoroScope {
                 co_await std::move(task);
                 st->complete();
             } catch (...) {
-                st->complete_with_exception(std::current_exception());
+                auto ex = std::current_exception();
+                st->complete_with_exception(std::move(ex));
             }
-            // Always join child scope to wait for any sub-spawned
-            // coroutines.  Without this, the child scope's JoinHandle
-            // would be destroyed while FinalAwaiters still reference it.
             co_await child_scope.join();
         };
         auto c = make_coro(std::forward<Func>(func), executor_,
@@ -236,11 +234,9 @@ class CoroScope {
                 R result = co_await std::move(task);
                 st->complete(std::move(result));
             } catch (...) {
-                st->complete_with_exception(std::current_exception());
+                auto ex = std::current_exception();
+                st->complete_with_exception(std::move(ex));
             }
-            // Always join child scope to wait for any sub-spawned
-            // coroutines.  Without this, the child scope's JoinHandle
-            // would be destroyed while FinalAwaiters still reference it.
             co_await child_scope.join();
         };
 

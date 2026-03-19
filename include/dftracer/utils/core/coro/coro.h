@@ -31,7 +31,11 @@ class Coro {
     explicit Coro(std::coroutine_handle<CoroPromise> h) : handle_(h) {}
 
     ~Coro() {
-        if (handle_) handle_.destroy();
+        if (handle_) {
+            auto h = handle_;
+            handle_ = nullptr;
+            h.destroy();
+        }
     }
 
     Coro(Coro&& o) noexcept : handle_(o.handle_) { o.handle_ = nullptr; }

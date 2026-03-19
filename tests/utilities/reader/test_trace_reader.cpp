@@ -70,7 +70,7 @@ TEST_SUITE("TraceReader") {
 
         auto n = count_lines(reader.read_lines()).get();
         CHECK(n > 0);
-        CHECK(n == 100);
+        CHECK(n == 102);
     }
 
     TEST_CASE("Read all lines with pre-built index") {
@@ -91,7 +91,7 @@ TEST_SUITE("TraceReader") {
 
         auto n_indexed = count_lines(reader.read_lines()).get();
         CHECK(n_indexed > 0);
-        CHECK(n_indexed == 100);
+        CHECK(n_indexed == 102);
 
         SUBCASE("Indexed and unindexed counts match") {
             // Remove the index and re-read to compare.

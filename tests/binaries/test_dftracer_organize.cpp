@@ -263,6 +263,8 @@ TEST_SUITE("DFTracerOrganize") {
 
         int original_lines = count_gz_lines(f);
         REQUIRE(original_lines > 0);
+        // Subtract array delimiters ([ and ]) -- organizer strips them.
+        int original_events = original_lines - 2;
 
         std::string org_dir = env.get_dir() + "/org_roundtrip";
         std::string rec_dir = env.get_dir() + "/rec_roundtrip";
@@ -290,6 +292,6 @@ TEST_SUITE("DFTracerOrganize") {
         }
 
         // All events routed to "io" group should be recoverable.
-        CHECK(reconstructed_lines == original_lines);
+        CHECK(reconstructed_lines == original_events);
     }
 }

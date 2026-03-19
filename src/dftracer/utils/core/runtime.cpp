@@ -15,7 +15,6 @@ Runtime::Runtime(std::size_t threads)
 
     watchdog_ = std::make_unique<Watchdog>();
     watchdog_->set_executor(executor_.get());
-    watchdog_->start();
 }
 
 Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
@@ -27,7 +26,19 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
     if (enable_watchdog) {
         watchdog_ = std::make_unique<Watchdog>();
         watchdog_->set_executor(executor_.get());
-        watchdog_->start();
+    }
+}
+
+Runtime::Runtime(const ExecutorConfig& config,
+                 std::unique_ptr<Watchdog> watchdog)
+    : threads_(config.num_threads == 0 ? std::thread::hardware_concurrency()
+                                       : config.num_threads) {
+    executor_ = std::make_unique<Executor>(config);
+    executor_->start();
+
+    watchdog_ = std::move(watchdog);
+    if (watchdog_) {
+        watchdog_->set_executor(executor_.get());
     }
 }
 
@@ -66,7 +77,6 @@ coro::Coro Runtime::make_submit_coro(
         result->exception = std::current_exception();
     }
     result->signal.set_value();
-    result.reset();
 }
 
 coro::Coro Runtime::make_schedule_coro(

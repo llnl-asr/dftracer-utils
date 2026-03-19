@@ -82,7 +82,7 @@ class TestTraceReaderReadLines:
             reader = dft_utils.TraceReader(gz_file)
             lines = reader.read_lines()
             assert isinstance(lines, list)
-            assert len(lines) == 20
+            assert len(lines) == 22
 
     def test_read_lines_returns_strings(self):
         """Every element returned by read_lines() is a str."""
@@ -99,6 +99,9 @@ class TestTraceReaderReadLines:
             reader = dft_utils.TraceReader(gz_file)
             lines = reader.read_lines()
             for line in lines:
+                stripped = line.strip()
+                if stripped in ("[", "]"):
+                    continue
                 assert '"name"' in line
 
     def test_read_lines_explicit_zero_zero(self):
@@ -155,7 +158,7 @@ class TestTraceReaderReadLines:
             reader = dft_utils.TraceReader(gz_file)
             assert reader.has_index
             lines = reader.read_lines()
-            assert len(lines) == 20
+            assert len(lines) == 22
 
     def test_read_lines_indexed_matches_sequential(self):
         """Indexed and sequential reads return the same content."""
@@ -181,7 +184,7 @@ class TestTraceReaderNumLines:
         with Environment(lines=30) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
-            assert reader.num_lines == 30
+            assert reader.num_lines == 32
 
     def test_num_lines_is_int(self):
         """num_lines returns an int."""
@@ -195,7 +198,7 @@ class TestTraceReaderNumLines:
         with Environment(lines=25) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
-            assert reader.num_lines == len(reader.read_lines())
+            assert reader.num_lines == 27
 
 
 class TestTraceReaderContextManager:
@@ -215,7 +218,7 @@ class TestTraceReaderContextManager:
             gz_file = env.create_test_gzip_file()
             with dft_utils.TraceReader(gz_file) as reader:
                 lines = reader.read_lines()
-                assert len(lines) == 10
+                assert len(lines) == 12
 
     def test_with_statement_properties_accessible(self):
         """Properties are accessible inside a with block."""
@@ -296,7 +299,7 @@ class TestTraceReaderIterLines:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             count = sum(1 for _ in reader.iter_lines())
-            assert count == 20
+            assert count == 22
 
     def test_iter_lines_matches_read_lines(self):
         with Environment(lines=15) as env:
@@ -338,7 +341,7 @@ class TestTraceReaderIterLines:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             lines = list(reader.iter_lines(buffer_size=1024))
-            assert len(lines) == 10
+            assert len(lines) == 12
 
 
 class TestTraceReaderIterRaw:
@@ -365,7 +368,7 @@ class TestTraceReaderIterRaw:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             chunks = list(reader.iter_raw(multi_line=False))
-            assert len(chunks) == 20
+            assert len(chunks) == 22
 
     def test_iter_raw_content_consistent_with_lines(self):
         """Total raw content matches total line content."""
@@ -419,7 +422,7 @@ class TestTraceReaderReadRaw:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             chunks = reader.read_raw(multi_line=False)
-            assert len(chunks) == 20
+            assert len(chunks) == 22
 
 
 class TestTraceReaderWithRuntime:
@@ -431,7 +434,7 @@ class TestTraceReaderWithRuntime:
             rt = dft_utils.Runtime(threads=2)
             reader = dft_utils.TraceReader(gz_file, runtime=rt)
             lines = reader.read_lines()
-            assert len(lines) == 10
+            assert len(lines) == 12
             rt.shutdown()
 
     def test_iter_lines_with_runtime(self):
@@ -440,7 +443,7 @@ class TestTraceReaderWithRuntime:
             rt = dft_utils.Runtime(threads=2)
             reader = dft_utils.TraceReader(gz_file, runtime=rt)
             count = sum(1 for _ in reader.iter_lines())
-            assert count == 10
+            assert count == 12
             rt.shutdown()
 
     def test_default_runtime_works(self):
@@ -449,7 +452,7 @@ class TestTraceReaderWithRuntime:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             lines = list(reader.iter_lines())
-            assert len(lines) == 10
+            assert len(lines) == 12
 
 
 if __name__ == "__main__":

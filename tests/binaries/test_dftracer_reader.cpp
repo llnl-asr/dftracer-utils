@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <doctest/doctest.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -76,8 +77,12 @@ std::string run_reader_capture(const std::string& binary,
     if (pid == 0) {
         ::close(pipefd[0]);
         ::dup2(pipefd[1], STDOUT_FILENO);
-        ::dup2(pipefd[1], STDERR_FILENO);
         ::close(pipefd[1]);
+        int devnull = ::open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            ::dup2(devnull, STDERR_FILENO);
+            ::close(devnull);
+        }
         std::vector<const char*> argv;
         argv.push_back(binary.c_str());
         for (const auto& arg : args) argv.push_back(arg.c_str());
@@ -145,13 +150,10 @@ TEST_SUITE("DFTracerReader") {
         auto f = create_pfw_gz(env, 20, 0);
         REQUIRE(!f.empty());
 
-        // Default mode is "bytes" -- raw decompressed bytes, not JSON array.
-        // Use --mode lines to get the line-oriented output.
         int rc = 0;
         auto output = run_reader_capture(binary, {f, "--mode", "lines"}, &rc);
         CHECK(rc == 0);
         CHECK(!output.empty());
-        // The decompressed .pfw.gz is a JSON array: first line "[", last "]".
         CHECK(first_nonws(output) == '[');
         CHECK(last_nonws(output) == ']');
     }

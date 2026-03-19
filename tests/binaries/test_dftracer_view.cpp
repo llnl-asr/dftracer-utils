@@ -41,7 +41,6 @@ std::string find_view_binary() {
     return "";
 }
 
-// Run binary, return exit code. stdout+stderr are discarded.
 int run_view(const std::string& binary, const std::vector<std::string>& args) {
     pid_t pid = ::fork();
     if (pid < 0) return -1;
@@ -56,6 +55,11 @@ int run_view(const std::string& binary, const std::vector<std::string>& args) {
     int status = 0;
     ::waitpid(pid, &status, 0);
     if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) {
+        int sig = WTERMSIG(status);
+        MESSAGE("Binary killed by signal ", sig);
+        return -(sig);
+    }
     return -1;
 }
 
@@ -75,6 +79,17 @@ TEST_SUITE("DFTracerView") {
             return;
         }
         CHECK(!binary.empty());
+    }
+
+    TEST_CASE("binary runs (--help)") {
+        auto binary = find_view_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_view binary not found, skipping.");
+            return;
+        }
+        int rc = run_view(binary, {"--help"});
+        MESSAGE("--help returned: ", rc);
+        CHECK(rc == 0);
     }
 
     TEST_CASE("stream all events") {
@@ -139,7 +154,7 @@ TEST_SUITE("DFTracerView") {
         CHECK(fs::file_size(output) > 0);
     }
 
-    TEST_CASE("preset io") {
+    TEST_CASE("query with name filter") {
         auto binary = find_view_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_view binary not found, skipping.");
@@ -152,9 +167,8 @@ TEST_SUITE("DFTracerView") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        // The "io" preset targets IO-category events; test data has cat=IO.
-        int rc = run_view(binary,
-                          {"--preset", "io", "--stream", "-d", env.get_dir()});
+        int rc = run_view(binary, {"--query", "cat=IO", "name=pread|pwrite",
+                                   "--stream", "-d", env.get_dir()});
         CHECK(rc == 0);
     }
 }

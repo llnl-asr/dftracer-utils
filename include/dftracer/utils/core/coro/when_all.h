@@ -186,12 +186,14 @@ class WhenAllVectorAwaitable {
     void launch_wrapper(std::size_t i) {
         [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
            std::size_t index) -> FireAndForget {
+            std::exception_ptr ex;
             try {
                 s->results_[index] = co_await std::move(s->awaitables_[index]);
                 s->on_one_complete();
             } catch (...) {
-                s->on_exception(std::current_exception());
+                ex = std::current_exception();
             }
+            if (ex) s->on_exception(std::move(ex));
         }(state_, i);
     }
 };
@@ -369,12 +371,14 @@ class WhenAllVectorAwaitable<Awaitable> {
     void launch_wrapper(std::size_t i) {
         [](std::shared_ptr<WhenAllVectorState<Awaitable>> s,
            std::size_t index) -> FireAndForget {
+            std::exception_ptr ex;
             try {
                 co_await std::move(s->awaitables_[index]);
                 s->on_one_complete();
             } catch (...) {
-                s->on_exception(std::current_exception());
+                ex = std::current_exception();
             }
+            if (ex) s->on_exception(std::move(ex));
         }(state_, i);
     }
 };
@@ -545,6 +549,7 @@ class WhenAllTupleAwaitable {
 
         [](std::shared_ptr<WhenAllTupleState<Awaitables...>> s)
             -> FireAndForget {
+            std::exception_ptr ex;
             try {
                 if constexpr (std::is_void_v<R>) {
                     co_await std::move(std::get<I>(s->awaitables_));
@@ -556,8 +561,9 @@ class WhenAllTupleAwaitable {
                 }
                 s->on_one_complete();
             } catch (...) {
-                s->on_exception(std::current_exception());
+                ex = std::current_exception();
             }
+            if (ex) s->on_exception(std::move(ex));
         }(state_);
     }
 

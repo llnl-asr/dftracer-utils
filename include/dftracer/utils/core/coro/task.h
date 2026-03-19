@@ -132,7 +132,9 @@ class CoroTask {
      */
     ~CoroTask() {
         if (coro_handle_) {
-            coro_handle_.destroy();
+            auto h = coro_handle_;
+            coro_handle_ = nullptr;
+            h.destroy();
         }
     }
 
@@ -480,7 +482,9 @@ class CoroTask<void> {
 
     ~CoroTask() {
         if (coro_handle_) {
-            coro_handle_.destroy();
+            auto h = coro_handle_;
+            coro_handle_ = nullptr;
+            h.destroy();
         }
     }
 

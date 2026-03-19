@@ -93,7 +93,11 @@ Scheduler::Scheduler(Executor* executor, Watchdog* watchdog,
 
 Scheduler::~Scheduler() {
     if (executor_) {
+        executor_->shutdown();
         executor_->set_scheduler(nullptr);
+    }
+    if (watchdog_) {
+        watchdog_->stop();
     }
 }
 

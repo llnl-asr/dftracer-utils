@@ -80,7 +80,10 @@ Executor::Executor(const ExecutorConfig& config)
         num_threads_, idle_timeout_.count(), deadlock_timeout_.count());
 }
 
-Executor::~Executor() { shutdown(); }
+Executor::~Executor() {
+    shutdown();
+    drain_destroy_queue();
+}
 
 void Executor::start() {
     if (running_) {

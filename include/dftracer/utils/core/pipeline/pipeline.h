@@ -38,7 +38,7 @@ class Pipeline {
 
     std::vector<std::shared_ptr<Task>> all_tasks_;
 
-    Runtime runtime_;
+    std::unique_ptr<Runtime> runtime_;
     std::unique_ptr<Scheduler> scheduler_;
 
     std::string name_;

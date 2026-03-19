@@ -140,10 +140,9 @@ TEST_SUITE("DFTracerPgzip") {
         std::string gz_path = pfw + ".gz";
         REQUIRE(fs::exists(gz_path));
 
-        // First line of a DFTracer event file starts with '{'.
         auto first = gz_first_line(gz_path);
         REQUIRE(!first.empty());
-        CHECK(first.front() == '{');
+        CHECK(first.front() == '[');
     }
 
     TEST_CASE("compression level 1 (fast) succeeds") {

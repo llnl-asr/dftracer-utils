@@ -534,7 +534,7 @@ class CoroScope {
 template <typename Func>
     requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&>
 inline coro::CoroTask<void> run_coro_scope(Executor* executor,
-                                           Func&& scope_func) {
+                                           Func scope_func) {
     CoroScope scope(executor);
     std::exception_ptr error;
     try {

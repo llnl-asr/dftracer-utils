@@ -49,10 +49,9 @@ void schedule_thread_local_destroy(std::coroutine_handle<> h) {
 
 void drain_thread_local_destroys() {
     Executor* exec = Executor::current();
-    bool shutting_down = exec && !exec->is_running();
     for (auto h : tls_pending_destroys) {
         if (!h) continue;
-        if (shutting_down) {
+        if (exec) {
             exec->schedule_destroy(h);
         } else {
             h.destroy();
@@ -199,10 +198,6 @@ void Executor::worker_thread(WorkerContext* context) {
     coro::reset_timeslice();
 
     while (running_) {
-        if (running_.load(std::memory_order_acquire)) {
-            drain_destroy_queue();
-        }
-
         std::coroutine_handle<> pending_resume;
 
         // Snapshot the work signal BEFORE checking any queues.
@@ -222,6 +217,23 @@ void Executor::worker_thread(WorkerContext* context) {
             coro::reset_timeslice();
             context->is_idle.store(false, std::memory_order_relaxed);
             if (pending_resume && !pending_resume.done()) {
+                auto typed =
+                    std::coroutine_handle<coro::CoroPromise>::from_address(
+                        pending_resume.address());
+                TaskIndex tid = typed.promise().task_id;
+                if (tid >= 0) {
+                    std::unique_lock<std::shared_mutex> lock(registry_mutex_);
+                    auto it = task_registry_.find(tid);
+                    if (it != task_registry_.end() &&
+                        it->second.state == TaskInfo::QUEUED) {
+                        it->second.state = TaskInfo::RUNNING;
+                        it->second.started_at =
+                            std::chrono::steady_clock::now();
+                        it->second.worker_id = context->worker_id;
+                        it->second.location = TaskInfo::EXECUTING;
+                        ++tasks_started_;
+                    }
+                }
                 pending_resume.resume();
             }
             // Destroy coroutine frames that FinalAwaiter deferred to this
@@ -805,13 +817,11 @@ TaskIndex Executor::enqueue_tracked(
             it->second.name = std::move(name);
             it->second.state = TaskInfo::QUEUED;
             it->second.queued_at = now;
-            it->second.started_at = now;
             it->second.location = TaskInfo::SHARED_QUEUE;
             it->second.worker_id = static_cast<std::size_t>(-1);
         }
     }
     ++total_tasks_submitted_;
-    ++tasks_started_;
 
     if (tid_out) {
         tid_out->store(id, std::memory_order_release);
@@ -829,8 +839,12 @@ void Executor::mark_coro_completed(TaskIndex id) {
         auto it = task_registry_.find(id);
         if (it != task_registry_.end() &&
             it->second.state != TaskInfo::COMPLETED) {
+            auto now = std::chrono::steady_clock::now();
+            if (it->second.started_at.time_since_epoch().count() == 0) {
+                it->second.started_at = now;
+            }
             it->second.state = TaskInfo::COMPLETED;
-            it->second.completed_at = std::chrono::steady_clock::now();
+            it->second.completed_at = now;
             it->second.location = TaskInfo::DONE;
             was_new = true;
         }

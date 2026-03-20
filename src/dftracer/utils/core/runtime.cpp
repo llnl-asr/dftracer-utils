@@ -113,10 +113,18 @@ ExecutorProgress Runtime::get_progress() const {
 bool Runtime::is_responsive() const { return executor_->is_responsive(); }
 
 void Runtime::set_global_timeout(std::chrono::milliseconds timeout) {
+    if (!watchdog_) {
+        throw std::runtime_error(
+            "Cannot set timeout: Runtime created without watchdog");
+    }
     watchdog_->set_global_timeout(timeout);
 }
 
 void Runtime::set_default_task_timeout(std::chrono::milliseconds timeout) {
+    if (!watchdog_) {
+        throw std::runtime_error(
+            "Cannot set timeout: Runtime created without watchdog");
+    }
     watchdog_->set_default_task_timeout(timeout);
 }
 

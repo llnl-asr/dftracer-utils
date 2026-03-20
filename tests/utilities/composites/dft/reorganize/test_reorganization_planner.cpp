@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
+#include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/provenance_database.h>
@@ -19,10 +19,13 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
+using dftracer::utils::utilities::behaviors::BehaviorChain;
+using dftracer::utils::utilities::behaviors::UtilityExecutor;
 using dftracer::utils::utilities::indexer::determine_provenance_index_path;
 using dftracer::utils::utilities::indexer::IndexBuildConfig;
 using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::ProvenanceDatabase;
+namespace tags = dftracer::utils::utilities::tags;
 
 // Create a test trace with known events:
 // Line 0: HH metadata
@@ -56,34 +59,31 @@ static std::string create_planner_test_trace(const std::string& dir) {
     return gz_path;
 }
 
-// Build .idx for a trace file using IndexBuilder
+// Build .idx for a trace file using IndexBuilder via Runtime.
 static void build_idx(const std::string& trace_file,
                       const std::string& index_dir) {
-    auto pipeline_config = PipelineConfig()
-                               .with_name("PlannerTestIdxBuild")
-                               .with_compute_threads(2)
-                               .with_watchdog(false);
-
-    Pipeline pipeline(pipeline_config);
+    Runtime rt(4);
     indexer::IndexBuildResult result;
-
     auto* result_ptr = &result;
-    auto task = make_task(
+
+    auto task = run_coro_scope(
+        rt.executor(),
         [trace_file, index_dir,
-         result_ptr](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
+         result_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<indexer::IndexBuildConfig,
+                            indexer::IndexBuildResult, tags::NeedsContext>
+                exec(builder, BehaviorChain<indexer::IndexBuildConfig,
+                                            indexer::IndexBuildResult>{});
             auto config = IndexBuildConfig::for_file(trace_file)
                               .with_index_dir(index_dir)
                               .with_manifest(true)
                               .with_index_threshold(0);
-            *result_ptr = co_await builder.process(config);
-            co_return;
-        },
-        "BuildIdx");
+            *result_ptr = co_await exec.execute_with_context(scope, config);
+        });
 
-    pipeline.set_source(task);
-    pipeline.set_destination(task);
-    pipeline.execute();
+    rt.submit(std::move(task), "build-idx").wait();
+    rt.shutdown();
 
     if (!result.success) {
         throw std::runtime_error("Failed to build .idx for test");
@@ -139,22 +139,17 @@ TEST_SUITE("ReorganizationPlanner") {
 
         auto plan = planner.process(input).get();
 
-        // Should have 2 groups: "io" + auto-created
-        // "remainder"
+        // Should have 2 groups: "io" + auto-created "remainder"
         CHECK(plan.groups.size() == 2);
         CHECK(plan.groups[0].name == "io");
         CHECK(plan.groups[1].name == "remainder");
 
-        // Should have 1 source file
         CHECK(plan.source_files.size() == 1);
         CHECK(plan.source_files[0].file_path == trace_file);
         CHECK(plan.source_files[0].num_checkpoints == 1);
 
-        // Should have 2 tasks (io + remainder) for
-        // checkpoint 0
         CHECK(plan.tasks.size() == 2);
 
-        // Find io task
         const ExtractionTask* io_task = nullptr;
         const ExtractionTask* remainder_task = nullptr;
         for (const auto& t : plan.tasks) {
@@ -168,9 +163,8 @@ TEST_SUITE("ReorganizationPlanner") {
         REQUIRE(io_task != nullptr);
         REQUIRE(remainder_task != nullptr);
 
-        // io group: POSIX read (lines 2, 5) + POSIX write
-        // (line 3) + metadata (lines 0, 1)
-        // = lines {0, 1, 2, 3, 5}
+        // io group: POSIX read (lines 2, 5) + POSIX write (line 3) + metadata
+        // (lines 0, 1) = lines {0, 1, 2, 3, 5}
         std::set<std::uint32_t> io_lines(io_task->line_numbers.begin(),
                                          io_task->line_numbers.end());
         CHECK(io_lines.count(0) == 1);  // HH metadata
@@ -179,8 +173,7 @@ TEST_SUITE("ReorganizationPlanner") {
         CHECK(io_lines.count(3) == 1);  // POSIX write
         CHECK(io_lines.count(5) == 1);  // POSIX read
 
-        // remainder group: APP compute (line 4) + metadata
-        // (lines 0, 1)
+        // remainder group: APP compute (line 4) + metadata (lines 0, 1)
         // = lines {0, 1, 4}
         std::set<std::uint32_t> rem_lines(remainder_task->line_numbers.begin(),
                                           remainder_task->line_numbers.end());
@@ -188,7 +181,6 @@ TEST_SUITE("ReorganizationPlanner") {
         CHECK(rem_lines.count(1) == 1);  // FH metadata
         CHECK(rem_lines.count(4) == 1);  // APP compute
 
-        // Total events should be 4 (3 POSIX + 1 APP)
         CHECK(plan.total_events == 4);
 
         fs::remove_all(test_dir);
@@ -211,14 +203,8 @@ TEST_SUITE("ReorganizationPlanner") {
 
         auto plan = planner.process(input).get();
 
-        // 3 groups: io, compute, remainder
         CHECK(plan.groups.size() == 3);
 
-        // All events matched, so remainder should have no
-        // tasks (or no event lines, just metadata if any
-        // group has events)
-        // Actually: all events match io or compute, so
-        // remainder has no events -> no remainder task
         std::size_t io_count = 0;
         std::size_t compute_count = 0;
         std::size_t remainder_count = 0;
@@ -254,8 +240,6 @@ TEST_SUITE("ReorganizationPlanner") {
 
         auto plan = planner.process(input).get();
 
-        // Both io and compute tasks should contain
-        // metadata lines 0 and 1
         for (const auto& t : plan.tasks) {
             if (t.target_group == "remainder") {
                 continue;
@@ -294,12 +278,10 @@ TEST_SUITE("ReorganizationPlanner") {
 
         pdb.commit_transaction();
 
-        // Query provenance info
         CHECK(pdb.query_info("version") == "1.0");
         CHECK(pdb.query_info("created_at") == "2026-02-17");
         CHECK(pdb.query_info("nonexistent").empty());
 
-        // Query provenance sources
         auto sources = pdb.query_sources(fid);
         REQUIRE(sources.size() == 1);
         CHECK(sources[0].source_idx == 0);
@@ -307,7 +289,6 @@ TEST_SUITE("ReorganizationPlanner") {
         CHECK(sources[0].num_checkpoints == 9);
         CHECK(sources[0].event_hash == "abc123");
 
-        // Query provenance segments
         auto segments = pdb.query_segments(0);
         REQUIRE(segments.size() == 2);
         CHECK(segments[0].source_checkpoint == 0);
@@ -316,7 +297,6 @@ TEST_SUITE("ReorganizationPlanner") {
         CHECK(segments[0].event_count == 50);
         CHECK(segments[1].source_checkpoint == 1);
 
-        // Query provenance group
         CHECK(pdb.query_group_name() == "io");
         CHECK(pdb.query_group_predicate() == "cat=POSIX");
 

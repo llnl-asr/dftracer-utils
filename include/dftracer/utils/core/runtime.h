@@ -109,6 +109,7 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
 
     {
         std::lock_guard<std::mutex> lock(futures_mutex_);
+        cleanup_completed_futures();
         outstanding_futures_.push_back(void_future);
     }
 

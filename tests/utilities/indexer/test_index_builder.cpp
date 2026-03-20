@@ -1,9 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/pipeline/scheduler.h>
+#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
+#include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
@@ -13,20 +13,21 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer;
+using namespace dftracer::utils::utilities::behaviors;
 using namespace dft_utils_test;
+
+namespace tags = dftracer::utils::utilities::tags;
 
 namespace {
 
-// Run a CoroTask-returning lambda synchronously via Executor+Scheduler.
-// The lambda must have signature: (CoroScope&) -> coro::CoroTask<void>
+// Run an IndexBuilderUtility synchronously via Runtime + run_coro_scope.
+// The lambda receives (CoroScope&) -> coro::CoroTask<void>.
 template <typename Fn>
 void run_coro(Fn&& fn) {
-    Executor executor(ExecutorConfig{.num_threads = 2});
-    Scheduler scheduler(&executor);
-    auto task = make_task(std::forward<Fn>(fn), "test");
-    scheduler.schedule(task);
-    task->wait();
-    executor.shutdown();
+    Runtime rt(4);
+    auto task = run_coro_scope(rt.executor(), std::forward<Fn>(fn));
+    rt.submit(std::move(task), "test").wait();
+    rt.shutdown();
 }
 
 }  // namespace
@@ -41,10 +42,13 @@ TEST_SUITE("IndexBuilder") {
                 false);
 
         IndexBuildResult result;
-        run_coro([&config, &result](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            result = co_await builder.process(config);
-            co_return;
+        run_coro([&config, &result](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            result = co_await exec.execute_with_context(scope, config);
         });
 
         CHECK(result.success);
@@ -91,10 +95,13 @@ TEST_SUITE("IndexBuilder") {
                           .with_index_threshold(0);
 
         IndexBuildResult result;
-        run_coro([&config, &result](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            result = co_await builder.process(config);
-            co_return;
+        run_coro([&config, &result](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            result = co_await exec.execute_with_context(scope, config);
         });
 
         REQUIRE(result.success);
@@ -117,10 +124,13 @@ TEST_SUITE("IndexBuilder") {
                           .with_index_threshold(0);
 
         IndexBuildResult result;
-        run_coro([&config, &result](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            result = co_await builder.process(config);
-            co_return;
+        run_coro([&config, &result](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            result = co_await exec.execute_with_context(scope, config);
         });
 
         REQUIRE(result.success);
@@ -143,10 +153,13 @@ TEST_SUITE("IndexBuilder") {
                           .with_index_threshold(0);
 
         IndexBuildResult result;
-        run_coro([&config, &result](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            result = co_await builder.process(config);
-            co_return;
+        run_coro([&config, &result](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            result = co_await exec.execute_with_context(scope, config);
         });
 
         REQUIRE(result.success);
@@ -171,19 +184,25 @@ TEST_SUITE("IndexBuilder") {
                           .with_index_threshold(0);
 
         IndexBuildResult first;
-        run_coro([&config, &first](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            first = co_await builder.process(config);
-            co_return;
+        run_coro([&config, &first](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            first = co_await exec.execute_with_context(scope, config);
         });
         REQUIRE(first.success);
         CHECK_FALSE(first.was_skipped);
 
         IndexBuildResult second;
-        run_coro([&config, &second](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            second = co_await builder.process(config);
-            co_return;
+        run_coro([&config, &second](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            second = co_await exec.execute_with_context(scope, config);
         });
         CHECK(second.success);
         CHECK(second.was_skipped);
@@ -200,10 +219,14 @@ TEST_SUITE("IndexBuilder") {
                                  .with_index_threshold(0);
 
         IndexBuildResult first;
-        run_coro([&config_normal, &first](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            first = co_await builder.process(config_normal);
-            co_return;
+        run_coro([&config_normal,
+                  &first](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            first = co_await exec.execute_with_context(scope, config_normal);
         });
         REQUIRE(first.success);
 
@@ -214,10 +237,14 @@ TEST_SUITE("IndexBuilder") {
                                 .with_index_threshold(0);
 
         IndexBuildResult second;
-        run_coro([&config_force, &second](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            second = co_await builder.process(config_force);
-            co_return;
+        run_coro([&config_force,
+                  &second](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            second = co_await exec.execute_with_context(scope, config_force);
         });
         CHECK(second.success);
         CHECK_FALSE(second.was_skipped);
@@ -232,10 +259,13 @@ TEST_SUITE("IndexBuilder") {
                 false);
 
         IndexBuildResult result;
-        run_coro([&config, &result](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            result = co_await builder.process(config);
-            co_return;
+        run_coro([&config, &result](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            result = co_await exec.execute_with_context(scope, config);
         });
 
         REQUIRE(result.success);
@@ -254,10 +284,13 @@ TEST_SUITE("IndexBuilder") {
                            .with_index_threshold(0);
 
         IndexBuildResult r1;
-        run_coro([&config1, &r1](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            r1 = co_await builder.process(config1);
-            co_return;
+        run_coro([&config1, &r1](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            r1 = co_await exec.execute_with_context(scope, config1);
         });
         REQUIRE(r1.success);
         CHECK(r1.index_created);
@@ -277,10 +310,13 @@ TEST_SUITE("IndexBuilder") {
                            .with_index_threshold(0);
 
         IndexBuildResult r2;
-        run_coro([&config2, &r2](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            r2 = co_await builder.process(config2);
-            co_return;
+        run_coro([&config2, &r2](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            r2 = co_await exec.execute_with_context(scope, config2);
         });
         REQUIRE(r2.success);
         CHECK_FALSE(r2.was_skipped);
@@ -305,10 +341,13 @@ TEST_SUITE("IndexBuilder") {
                            .with_index_threshold(0);
 
         IndexBuildResult r1;
-        run_coro([&config1, &r1](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            r1 = co_await builder.process(config1);
-            co_return;
+        run_coro([&config1, &r1](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            r1 = co_await exec.execute_with_context(scope, config1);
         });
         REQUIRE(r1.success);
 
@@ -326,10 +365,13 @@ TEST_SUITE("IndexBuilder") {
                            .with_index_threshold(0);
 
         IndexBuildResult r2;
-        run_coro([&config2, &r2](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            r2 = co_await builder.process(config2);
-            co_return;
+        run_coro([&config2, &r2](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            r2 = co_await exec.execute_with_context(scope, config2);
         });
         REQUIRE(r2.success);
         CHECK_FALSE(r2.was_skipped);
@@ -354,20 +396,26 @@ TEST_SUITE("IndexBuilder") {
                            .with_index_threshold(0);
 
         IndexBuildResult r1;
-        run_coro([&config1, &r1](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            r1 = co_await builder.process(config1);
-            co_return;
+        run_coro([&config1, &r1](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            r1 = co_await exec.execute_with_context(scope, config1);
         });
         REQUIRE(r1.success);
         CHECK_FALSE(r1.was_skipped);
 
         // Build again with same features — should skip
         IndexBuildResult r2;
-        run_coro([&config1, &r2](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
-            r2 = co_await builder.process(config1);
-            co_return;
+        run_coro([&config1, &r2](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                            tags::NeedsContext>
+                exec(builder,
+                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+            r2 = co_await exec.execute_with_context(scope, config1);
         });
         REQUIRE(r2.success);
         CHECK(r2.was_skipped);

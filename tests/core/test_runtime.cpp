@@ -25,11 +25,6 @@ static CoroTask<int> throw_async() {
     co_return 0;
 }
 
-static CoroTask<void> fulfill_async(std::shared_ptr<std::promise<void>> p) {
-    p->set_value();
-    co_return;
-}
-
 static CoroTask<std::string> string_async() { co_return "hello"; }
 
 static CoroTask<void> throw_void_async() {
@@ -64,11 +59,9 @@ TEST_CASE("Runtime - submit string result") {
 
 TEST_CASE("Runtime - submit runs async coroutine") {
     Runtime rt(2);
-    auto p = std::make_shared<std::promise<void>>();
-    auto f = p->get_future();
-    rt.submit(fulfill_async(std::move(p)), "fulfill");
-    auto status = f.wait_for(std::chrono::seconds(5));
-    CHECK(status == std::future_status::ready);
+    auto h = rt.submit(noop_async(), "async-run");
+    h.wait();
+    CHECK(h.done());
 }
 
 TEST_CASE("Runtime - multiple sequential submits") {
@@ -126,10 +119,7 @@ TEST_CASE("Runtime - submit after shutdown throws (void)") {
 TEST_CASE("Runtime - submit exception does not crash runtime") {
     Runtime rt(2);
     rt.submit(throw_void_async(), "throw");
-    auto p = std::make_shared<std::promise<void>>();
-    auto f = p->get_future();
-    rt.submit(fulfill_async(std::move(p)), "after_throw");
-    f.wait_for(std::chrono::seconds(5));
+    rt.submit(noop_async(), "after_throw").wait();
     CHECK_NOTHROW(rt.submit(noop_async(), "noop").wait());
 }
 
@@ -166,14 +156,9 @@ TEST_CASE("Runtime - progress accumulates across submits") {
 
 TEST_CASE("Runtime - progress tracks async submit") {
     Runtime rt(2);
-    auto pr = std::make_shared<std::promise<void>>();
-    auto f = pr->get_future();
-    rt.submit(fulfill_async(std::move(pr)), "bg");
-    auto status = f.wait_for(std::chrono::seconds(5));
-    REQUIRE(status == std::future_status::ready);
-    // wait() acts as a barrier -- ensures the prior submit()'s
-    // mark_coro_completed has run before we snapshot progress.
-    rt.submit(noop_async(), "barrier").wait();
+    rt.submit(noop_async(), "bg");
+    rt.submit(noop_async(), "bg2");
+    rt.wait_all();
     auto p = rt.get_progress();
     CHECK(p.total_tasks_submitted >= 2);
     CHECK(p.tasks_completed >= 2);

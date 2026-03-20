@@ -5,14 +5,13 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/utility_adapter.h>
+#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
+#include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/chunk_verifier_utility.h>
 #include <doctest/doctest.h>
 
-#include <any>
 #include <chrono>
 #include <cstdio>
 #include <numeric>
@@ -21,6 +20,9 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites;
+using namespace dftracer::utils::utilities::behaviors;
+
+namespace tags = dftracer::utils::utilities::tags;
 
 // Test data structures
 struct TestChunk {
@@ -42,12 +44,40 @@ struct TestMetadata {
 
 using TestEvent = int;
 
+// Helper: run a ChunkVerifierUtility via Runtime + run_coro_scope.
+template <typename ChunkType, typename MetadataType, typename EventType>
+static ChunkVerificationUtilityOutput run_verifier(
+    std::shared_ptr<ChunkVerifierUtility<ChunkType, MetadataType, EventType>>
+        verifier,
+    const ChunkVerificationUtilityInput<ChunkType, MetadataType>& input,
+    std::size_t threads = 4) {
+    Runtime rt(threads);
+    ChunkVerificationUtilityOutput output;
+    auto* out_ptr = &output;
+
+    auto task = run_coro_scope(
+        rt.executor(),
+        [verifier, input, out_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            UtilityExecutor<
+                ChunkVerificationUtilityInput<ChunkType, MetadataType>,
+                ChunkVerificationUtilityOutput, tags::NeedsContext>
+                exec(verifier,
+                     BehaviorChain<
+                         ChunkVerificationUtilityInput<ChunkType, MetadataType>,
+                         ChunkVerificationUtilityOutput>{});
+            *out_ptr = co_await exec.execute_with_context(scope, input);
+        });
+
+    rt.submit(std::move(task), "chunk-verify").wait();
+    rt.shutdown();
+    return output;
+}
+
 TEST_SUITE("ChunkVerifier") {
     TEST_CASE("ChunkVerifier - Basic Verification") {
         SUBCASE("Verify matching chunks") {
             printf("Starting test: Verify matching chunks\n");
 
-            // Create input hasher
             auto input_hasher =
                 [](const std::vector<TestMetadata>& metadata) -> std::uint64_t {
                 std::uint64_t hash = 0;
@@ -60,7 +90,6 @@ TEST_SUITE("ChunkVerifier") {
                 return hash;
             };
 
-            // Create event collector
             auto event_collector =
                 [](CoroScope&,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
@@ -68,13 +97,8 @@ TEST_SUITE("ChunkVerifier") {
                 return chunk.data;
             };
 
-            // Create event hasher - must match the logic of input_hasher for
-            // this test
             auto event_hasher =
                 [](const std::vector<TestEvent>& /*events*/) -> std::uint64_t {
-                // Since the input hash uses metadata (name="test",
-                // total_events=9), and we want the hashes to match, we need to
-                // produce the same hash from the collected events
                 std::uint64_t hash = 0;
                 hash ^= std::hash<std::string>{}("test");
                 hash ^= std::hash<std::size_t>{}(9);  // total events
@@ -84,49 +108,19 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             printf("Creating verifier...\n");
-            // Create verifier
             auto verifier = std::make_shared<
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            printf("Setting up pipeline...\n");
-            // Set up pipeline instead of bare executor/scheduler
-            // Need N+1 threads: 1 for main task + N for parallel chunk
-            // processing
-            auto pipeline_config =
-                PipelineConfig()
-                    .with_compute_threads(4)  // 1 main + 3 chunks
-                    .with_watchdog(true)
-                    .with_task_timeout(std::chrono::seconds(5));
-
-            Pipeline pipeline(pipeline_config);
-
-            // Create input
             std::vector<TestChunk> chunks = {TestChunk(1, {1, 2, 3}),
                                              TestChunk(2, {4, 5, 6}),
                                              TestChunk(3, {7, 8, 9})};
-
             std::vector<TestMetadata> metadata = {TestMetadata("test", 9)};
-
             ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
                 chunks, metadata);
 
-            printf("Creating task adapter...\n");
-            // Use adapter to convert to task
-            auto verify_task = use(verifier).as_task();
-
-            printf("Setting up pipeline with single task...\n");
-            // Set up pipeline with single task
-            pipeline.set_source(verify_task);
-            pipeline.set_destination(verify_task);
-
-            printf("Executing pipeline...\n");
-            // Execute pipeline
-            pipeline.execute(input);
-
-            printf("Getting results...\n");
-            // Get results
-            auto result = verify_task->get<ChunkVerificationUtilityOutput>();
+            printf("Running verifier...\n");
+            auto result = run_verifier(verifier, input, 4);
 
             printf("Checking results...\n");
             CHECK(result.passed == true);
@@ -136,11 +130,10 @@ TEST_SUITE("ChunkVerifier") {
         }
 
         SUBCASE("Detect mismatched chunks") {
-            // Create hashers that will produce different hashes
             auto input_hasher =
                 [](const std::vector<TestMetadata>& metadata) -> std::uint64_t {
-                (void)metadata;  // Suppress unused warning
-                return 12345;    // Fixed input hash
+                (void)metadata;
+                return 12345;
             };
 
             auto event_collector = [](CoroScope&, const TestChunk& chunk)
@@ -148,30 +141,20 @@ TEST_SUITE("ChunkVerifier") {
 
             auto event_hasher =
                 [](const std::vector<TestEvent>& events) -> std::uint64_t {
-                (void)events;  // Suppress unused warning
-                return 67890;  // Different fixed output hash
+                (void)events;
+                return 67890;
             };
 
             auto verifier = std::make_shared<
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfig().with_compute_threads(4);
-            Pipeline pipeline(pipeline_config);
-
             std::vector<TestChunk> chunks = {TestChunk(1, {1, 2, 3})};
-
             std::vector<TestMetadata> metadata = {TestMetadata("test", 3)};
-
             ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
                 chunks, metadata);
 
-            auto verify_task = use(verifier).as_task();
-            pipeline.set_source(verify_task);
-            pipeline.set_destination(verify_task);
-            pipeline.execute(input);
-
-            auto result = verify_task->get<ChunkVerificationUtilityOutput>();
+            auto result = run_verifier(verifier, input, 4);
 
             CHECK(result.passed == false);
             CHECK(result.input_hash != result.output_hash);
@@ -182,23 +165,16 @@ TEST_SUITE("ChunkVerifier") {
 
     TEST_CASE("ChunkVerifier - Parallel Processing") {
         SUBCASE("Process multiple chunks in parallel") {
-            // For this test to pass, input_hash and output_hash must match
-            // We'll make input_hasher predict what the sum of events will be
             auto input_hasher =
                 [](const std::vector<TestMetadata>& metadata) -> std::uint64_t {
-                // The test creates 10 chunks with values:
-                // chunk 0: [0,1,2], chunk 1: [3,4,5], ..., chunk 9: [27,28,29]
-                // Sum = 0+1+2+...+29 = 435
-                (void)metadata;  // Suppress unused warning
-                return 435;      // Expected sum of all event values
+                (void)metadata;
+                return 435;  // Expected sum of all event values
             };
 
-            // Event collector that simulates work
             auto event_collector =
                 [](CoroScope&,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(10));  // Simulate work
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 return chunk.data;
             };
 
@@ -215,10 +191,6 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfig().with_compute_threads(4);
-            Pipeline pipeline(pipeline_config);
-
-            // Create many chunks
             std::vector<TestChunk> chunks;
             std::vector<TestEvent> all_events;
             for (int i = 0; i < 10; ++i) {
@@ -229,19 +201,13 @@ TEST_SUITE("ChunkVerifier") {
 
             std::vector<TestMetadata> metadata = {
                 TestMetadata("parallel_test", all_events.size())};
-
             ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
                 chunks, metadata);
 
-            auto verify_task = use(verifier).as_task();
-            pipeline.set_source(verify_task);
-            pipeline.set_destination(verify_task);
-            pipeline.execute(input);
-
-            auto result = verify_task->get<ChunkVerificationUtilityOutput>();
+            auto result = run_verifier(verifier, input, 4);
 
             CHECK(result.passed == true);
-            CHECK(result.input_hash == 435);  // Expected sum
+            CHECK(result.input_hash == 435);
             CHECK(result.output_hash ==
                   std::accumulate(all_events.begin(), all_events.end(), 0ULL));
         }
@@ -268,21 +234,12 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfig().with_compute_threads(2);
-            Pipeline pipeline(pipeline_config);
-
             std::vector<TestChunk> chunks;
             std::vector<TestMetadata> metadata;
-
             ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
                 chunks, metadata);
 
-            auto verify_task = use(verifier).as_task();
-            pipeline.set_source(verify_task);
-            pipeline.set_destination(verify_task);
-            pipeline.execute(input);
-
-            auto result = verify_task->get<ChunkVerificationUtilityOutput>();
+            auto result = run_verifier(verifier, input, 2);
 
             CHECK(result.passed == true);
             CHECK(result.input_hash == 0);
@@ -302,7 +259,7 @@ TEST_SUITE("ChunkVerifier") {
             auto event_collector =
                 [](CoroScope& ctx,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
-                (void)ctx;  // Not used in this simple test
+                (void)ctx;
                 printf("Collecting from chunk %zu\n", chunk.id);
                 return chunk.data;
             };
@@ -320,42 +277,20 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            printf("Creating pipeline\n");
-            {
-                // Need at least 2 threads: 1 for main task + 1 for subtasks
-                auto pipeline_config = PipelineConfig().with_compute_threads(
-                    2);  // Increased from 1 to avoid deadlock
-                Pipeline pipeline(pipeline_config);
+            std::vector<TestChunk> chunks = {TestChunk(1, {10, 20, 30})};
+            std::vector<TestMetadata> metadata = {TestMetadata("single", 3)};
+            ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
+                chunks, metadata);
 
-                std::vector<TestChunk> chunks = {TestChunk(1, {10, 20, 30})};
+            printf("Running verifier\n");
+            auto result = run_verifier(verifier, input, 2);
 
-                std::vector<TestMetadata> metadata = {
-                    TestMetadata("single", 3)};
+            printf("Checking result\n");
+            CHECK(result.passed == true);
+            CHECK(result.input_hash == 3);
+            CHECK(result.output_hash == 3);
 
-                ChunkVerificationUtilityInput<TestChunk, TestMetadata> input(
-                    chunks, metadata);
-
-                printf("Creating task\n");
-                auto verify_task = use(verifier).as_task();
-
-                printf("Scheduling task\n");
-                pipeline.set_source(verify_task);
-                pipeline.set_destination(verify_task);
-                pipeline.execute(input);
-
-                printf("Waiting for completion\n");
-                printf("Getting result\n");
-                auto result =
-                    verify_task->get<ChunkVerificationUtilityOutput>();
-
-                printf("Checking result\n");
-                CHECK(result.passed == true);
-                CHECK(result.input_hash == 3);
-                CHECK(result.output_hash == 3);
-
-                printf("Single chunk test completed\n");
-            }
-            // Executor and Scheduler destroyed here
+            printf("Single chunk test completed\n");
         }
     }
 
@@ -378,24 +313,15 @@ TEST_SUITE("ChunkVerifier") {
                 ChunkVerifierUtility<TestChunk, TestMetadata, TestEvent>>(
                 input_hasher, event_collector, event_hasher);
 
-            auto pipeline_config = PipelineConfig().with_compute_threads(2);
-            Pipeline pipeline(pipeline_config);
-
             std::vector<TestChunk> chunks = {TestChunk(1, {1, 2}),
                                              TestChunk(2, {3, 4})};
 
-            // Use builder pattern
             auto input =
                 ChunkVerificationUtilityInput<TestChunk,
                                               TestMetadata>::from_chunks(chunks)
                     .with_metadata({TestMetadata("built", 4)});
 
-            auto verify_task = use(verifier).as_task();
-            pipeline.set_source(verify_task);
-            pipeline.set_destination(verify_task);
-            pipeline.execute(input);
-
-            auto result = verify_task->get<ChunkVerificationUtilityOutput>();
+            auto result = run_verifier(verifier, input, 2);
 
             CHECK(result.passed == true);
         }

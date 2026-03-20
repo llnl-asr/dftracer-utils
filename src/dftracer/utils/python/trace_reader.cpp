@@ -263,7 +263,12 @@ static PyObject *TraceReader_iter_lines(TraceReaderObject *self, PyObject *args,
     auto state = std::make_shared<IteratorState>();
 
     Runtime *rt = get_runtime(self);
-    rt->submit(produce_lines(state, cfg, rc), "iter_lines");
+    try {
+        rt->submit(produce_lines(state, cfg, rc), "iter_lines");
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
 
     TraceReaderIteratorObject *it = make_iterator(state, IteratorMode::LINES);
     return (PyObject *)it;
@@ -314,7 +319,12 @@ static PyObject *TraceReader_iter_raw(TraceReaderObject *self, PyObject *args,
     auto state = std::make_shared<IteratorState>();
 
     Runtime *rt = get_runtime(self);
-    rt->submit(produce_raw(state, cfg, rc), "iter_raw");
+    try {
+        rt->submit(produce_raw(state, cfg, rc), "iter_raw");
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
 
     TraceReaderIteratorObject *it = make_iterator(state, IteratorMode::RAW);
     return (PyObject *)it;

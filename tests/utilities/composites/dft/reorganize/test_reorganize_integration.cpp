@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
+#include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
@@ -29,9 +29,12 @@ using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites;
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
+using dftracer::utils::utilities::behaviors::BehaviorChain;
+using dftracer::utils::utilities::behaviors::UtilityExecutor;
 using dftracer::utils::utilities::indexer::IndexBuildConfig;
 using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::ProvenanceDatabase;
+namespace tags = dftracer::utils::utilities::tags;
 
 // Test trace layout:
 // Line 0: HH metadata
@@ -79,34 +82,31 @@ static std::string create_integration_test_trace(const std::string& dir) {
     return gz_path;
 }
 
-// Build .idx for a trace file using IndexBuilder
+// Build .idx for a trace file using IndexBuilder via Runtime.
 static void build_idx_for_file(const std::string& trace_file,
                                const std::string& index_dir) {
-    auto pipeline_config = PipelineConfig()
-                               .with_name("IntegrationTestIdxBuild")
-                               .with_compute_threads(2)
-                               .with_watchdog(false);
-
-    Pipeline pipeline(pipeline_config);
+    Runtime rt(4);
     indexer::IndexBuildResult result;
-
     auto* result_ptr = &result;
-    auto task = make_task(
+
+    auto task = run_coro_scope(
+        rt.executor(),
         [trace_file, index_dir,
-         result_ptr](CoroScope&) -> coro::CoroTask<void> {
-            IndexBuilderUtility builder;
+         result_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            auto builder = std::make_shared<IndexBuilderUtility>();
+            UtilityExecutor<indexer::IndexBuildConfig,
+                            indexer::IndexBuildResult, tags::NeedsContext>
+                exec(builder, BehaviorChain<indexer::IndexBuildConfig,
+                                            indexer::IndexBuildResult>{});
             auto config = IndexBuildConfig::for_file(trace_file)
                               .with_index_dir(index_dir)
                               .with_manifest(true)
                               .with_index_threshold(0);
-            *result_ptr = co_await builder.process(config);
-            co_return;
-        },
-        "BuildIdx");
+            *result_ptr = co_await exec.execute_with_context(scope, config);
+        });
 
-    pipeline.set_source(task);
-    pipeline.set_destination(task);
-    pipeline.execute();
+    rt.submit(std::move(task), "build-idx").wait();
+    rt.shutdown();
 
     if (!result.success) {
         throw std::runtime_error("Failed to build .idx for test: " +
@@ -125,22 +125,18 @@ static std::vector<std::string> read_lines(const std::string& path) {
     return lines;
 }
 
-// Check if a line contains a specific JSON field
-// value
+// Check if a line contains a specific JSON field value
 static bool line_contains(const std::string& line, const std::string& field,
                           const std::string& value) {
     std::string pattern = "\"" + field + "\":\"" + value + "\"";
     return line.find(pattern) != std::string::npos;
 }
 
-// Extract lines from a source file according to
-// the extraction plan and write to group output
-// files. Mirrors the logic in dftracer_organize.
+// Extract lines from a source file according to the extraction plan and write
+// to group output files. Mirrors the logic in dftracer_organize.
 static void execute_extraction(const ExtractionPlan& plan,
                                const std::string& index_dir,
                                std::map<std::string, FILE*>& group_files) {
-    // Group tasks by (source_file_idx,
-    // checkpoint_idx)
     struct CheckpointKey {
         std::size_t source_file_idx;
         std::uint64_t checkpoint_idx;
@@ -161,7 +157,6 @@ static void execute_extraction(const ExtractionPlan& plan,
     for (const auto& [ckpt_key, tasks] : checkpoint_tasks) {
         const auto& src = plan.source_files[ckpt_key.source_file_idx];
 
-        // Build line routing table
         std::map<std::uint32_t, std::vector<std::string>> line_routing;
         for (const auto* task : tasks) {
             for (auto ln : task->line_numbers) {
@@ -169,7 +164,6 @@ static void execute_extraction(const ExtractionPlan& plan,
             }
         }
 
-        // Create reader
         std::string idx_path =
             internal::determine_index_path(src.file_path, index_dir);
         auto reader_input =
@@ -177,7 +171,6 @@ static void execute_extraction(const ExtractionPlan& plan,
         IndexedFileReaderUtility reader_utility;
         auto reader = reader_utility.process(reader_input).get();
 
-        // Compute byte range
         std::uint64_t start_byte = tasks[0]->start_byte;
         std::uint64_t end_byte = tasks[0]->end_byte;
 
@@ -271,7 +264,6 @@ TEST_SUITE("ReorganizeIntegration") {
         // io: HH, FH, read, write, read = 5 lines
         CHECK(io_lines.size() == 5);
 
-        // Check metadata present
         bool has_hh = false;
         bool has_fh = false;
         for (const auto& line : io_lines) {
@@ -281,7 +273,6 @@ TEST_SUITE("ReorganizeIntegration") {
         CHECK(has_hh);
         CHECK(has_fh);
 
-        // Check POSIX events present
         std::size_t posix_events = 0;
         for (const auto& line : io_lines) {
             if (line_contains(line, "cat", "POSIX")) posix_events++;
@@ -301,15 +292,12 @@ TEST_SUITE("ReorganizeIntegration") {
         }
         CHECK(app_events == 1);
 
-        // Verify no remainder file (all events
-        // matched)
+        // Verify no remainder file (all events matched)
         std::string remainder_pfw = output_dir + "/remainder.pfw";
         if (fs::exists(remainder_pfw)) {
             CHECK(fs::file_size(remainder_pfw) == 0);
         }
 
-        // Verify total lines: io(5) + compute(3)
-        // = 8 (metadata duplicated in both)
         CHECK(io_lines.size() + compute_lines.size() == 8);
 
         fs::remove_all(test_dir);
@@ -369,36 +357,35 @@ TEST_SUITE("ReorganizeIntegration") {
         CHECK(fs::exists(io_gz));
         CHECK(fs::file_size(io_gz) > 0);
 
-        // Remove plain .pfw
         fs::remove(io_pfw);
 
-        // Build .idx sidecar for compressed output
+        // Build .idx sidecar for compressed output via Runtime
         {
-            auto pipeline_config = PipelineConfig()
-                                       .with_name("SidecarBuild")
-                                       .with_compute_threads(2)
-                                       .with_watchdog(false);
-
-            Pipeline pipeline(pipeline_config);
             indexer::IndexBuildResult idx_result;
+            Runtime rt(4);
             auto* idx_result_ptr = &idx_result;
 
-            auto task = make_task(
+            auto task = run_coro_scope(
+                rt.executor(),
                 [io_gz, output_dir,
-                 idx_result_ptr](CoroScope&) -> coro::CoroTask<void> {
-                    IndexBuilderUtility builder;
+                 idx_result_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+                    auto builder = std::make_shared<IndexBuilderUtility>();
+                    UtilityExecutor<indexer::IndexBuildConfig,
+                                    indexer::IndexBuildResult,
+                                    tags::NeedsContext>
+                        exec(builder,
+                             BehaviorChain<indexer::IndexBuildConfig,
+                                           indexer::IndexBuildResult>{});
                     auto config = IndexBuildConfig::for_file(io_gz)
                                       .with_index_dir(output_dir)
                                       .with_manifest(true)
                                       .with_index_threshold(0);
-                    *idx_result_ptr = co_await builder.process(config);
-                    co_return;
-                },
-                "BuildOutputIdx");
+                    *idx_result_ptr =
+                        co_await exec.execute_with_context(scope, config);
+                });
 
-            pipeline.set_source(task);
-            pipeline.set_destination(task);
-            pipeline.execute();
+            rt.submit(std::move(task), "build-output-idx").wait();
+            rt.shutdown();
 
             CHECK(idx_result.success);
         }

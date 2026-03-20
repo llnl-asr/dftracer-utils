@@ -18,7 +18,7 @@
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_query_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>

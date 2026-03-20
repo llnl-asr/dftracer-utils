@@ -5,7 +5,7 @@ Unified indexing and reading infrastructure for compressed trace files. Builds s
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/indexer/index_builder.h>
+   #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
    #include <dftracer/utils/utilities/reader/trace_reader.h>
 
 Overview
@@ -32,7 +32,7 @@ Single-pass index builder. Decompresses each file once and builds all requested 
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/indexer/index_builder.h>
+   #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 
    using namespace dftracer::utils::utilities::indexer;
 
@@ -43,8 +43,8 @@ Single-pass index builder. Decompresses each file once and builds all requested 
        .with_checkpoint_size(32 * 1024 * 1024)
        .with_index_threshold(8 * 1024 * 1024);  // skip .idx for files < 8MB
 
-   IndexBuilder builder;
-   auto result = co_await builder.build(config);
+   IndexBuilderUtility builder;
+   auto result = co_await builder.process(config);
 
    // result.success, result.idx_path, result.total_lines, result.chunks_processed
 
@@ -54,15 +54,15 @@ Single-pass index builder. Decompresses each file once and builds all requested 
 
    // First run: checkpoints only
    auto config1 = IndexBuildConfig::for_file("trace.pfw.gz");
-   co_await builder.build(config1);
+   co_await builder.process(config1);
 
    // Later: add bloom (reuses existing checkpoints)
    auto config2 = IndexBuildConfig::for_file("trace.pfw.gz")
        .with_bloom(true);
-   co_await builder.build(config2);  // one decompression pass for bloom only
+   co_await builder.process(config2);  // one decompression pass for bloom only
 
    // Later: all features present, skips entirely
-   co_await builder.build(config2);  // "Skipping already-indexed file"
+   co_await builder.process(config2);  // "Skipping already-indexed file"
 
 IndexDatabase
 -------------
@@ -200,7 +200,7 @@ Built-in visitors:
 Low-level IndexerFactory
 ------------------------
 
-Creates checkpoint indexers with automatic format detection (GZIP vs TAR.GZ). Used internally by ``IndexBuilder``.
+Creates checkpoint indexers with automatic format detection (GZIP vs TAR.GZ). Used internally by ``IndexBuilderUtility``.
 
 .. code-block:: cpp
 
@@ -243,6 +243,18 @@ Python API
    # Incremental: add bloom to existing index
    with Indexer("trace.pfw.gz", build_bloom=True) as indexer:
        indexer.build()  # reuses checkpoints, adds bloom only
+
+   # With explicit Runtime for thread pool control
+   from dftracer.utils import Runtime
+
+   with Runtime(threads=8) as rt:
+       indexer = Indexer("trace.pfw.gz", build_bloom=True, runtime=rt)
+       indexer.build()  # uses rt's thread pool
+
+       # TraceReader can share the same Runtime
+       reader = TraceReader("trace.pfw.gz", runtime=rt)
+       for line in reader.iter_lines():
+           process(line)
 
 **TraceReader:**
 

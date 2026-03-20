@@ -7,7 +7,7 @@
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <argparse/argparse.hpp>

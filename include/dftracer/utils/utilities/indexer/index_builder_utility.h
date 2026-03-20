@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_BUILDER_H
-#define DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_BUILDER_H
+#ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_BUILDER_UTILITY_H
+#define DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_BUILDER_UTILITY_H
 
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
@@ -60,4 +60,4 @@ class IndexBuilderUtility
 
 }  // namespace dftracer::utils::utilities::indexer
 
-#endif  // DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_BUILDER_H
+#endif  // DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_BUILDER_UTILITY_H

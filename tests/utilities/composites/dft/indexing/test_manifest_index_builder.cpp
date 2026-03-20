@@ -6,7 +6,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
-#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>

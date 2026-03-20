@@ -30,15 +30,20 @@ FileMergeValidatorUtility::process(
             (input.file_path.size() >= 3 &&
              input.file_path.substr(input.file_path.size() - 3) == ".gz");
 
+        std::string effective_idx_path = input.index_path;
+
         if (is_compressed) {
             // Use IndexBuilderUtility for compressed files
+            using utilities::indexer::IndexBuildConfig;
+            using utilities::indexer::IndexBuilderUtility;
             auto index_input =
-                dft::IndexBuildUtilityInput::from_file(input.file_path)
-                    .with_index(input.index_path)
+                IndexBuildConfig::for_file(input.file_path)
+                    .with_index_dir(
+                        fs::path(input.index_path).parent_path().string())
                     .with_checkpoint_size(input.checkpoint_size)
                     .with_force_rebuild(input.force_rebuild);
 
-            dft::IndexBuilderUtility index_builder;
+            IndexBuilderUtility index_builder;
             auto index_result = co_await index_builder.process(index_input);
 
             if (!index_result.success) {
@@ -46,6 +51,8 @@ FileMergeValidatorUtility::process(
                                          input.file_path.c_str());
                 co_return result;
             }
+            // Use the actual idx path produced by the builder
+            effective_idx_path = index_result.idx_path;
         }
 
         // Step 2: Create line processor function that validates JSON
@@ -71,7 +78,7 @@ FileMergeValidatorUtility::process(
         fileio::lines::LineReadInput read_input;
         read_input.file_path = input.file_path;
         if (is_compressed) {
-            read_input.idx_path = input.index_path;
+            read_input.idx_path = effective_idx_path;
         }
 
         auto validated_events = co_await processor.process(read_input);
@@ -105,7 +112,7 @@ FileMergeValidatorUtility::process(
 
         if (is_compressed) {
             auto reader = dftracer::utils::utilities::reader::internal::
-                ReaderFactory::create(input.file_path, input.index_path);
+                ReaderFactory::create(input.file_path, effective_idx_path);
             if (reader) {
                 result.total_lines = reader->get_num_lines();
             }

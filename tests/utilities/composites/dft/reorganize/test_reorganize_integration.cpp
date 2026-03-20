@@ -10,7 +10,7 @@
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
-#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/provenance_database.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <doctest/doctest.h>

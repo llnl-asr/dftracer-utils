@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/utilities.h>
 #include <unistd.h>
@@ -107,30 +108,22 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
             .with_extensions({".pfw", ".pfw.gz"});
 
     using IndexBuildOutput = utilities::composites::BatchFileProcessOutput<
-        utilities::composites::dft::IndexBuildUtilityOutput>;
+        utilities::indexer::IndexBuildResult>;
 
     auto index_builder_processor = [checkpoint_size, force_rebuild, &index_dir](
                                        CoroScope& /*ctx*/,
                                        const std::string& file_path)
-        -> utilities::composites::dft::IndexBuildUtilityOutput {
-        std::string idx_path =
-            utilities::composites::dft::internal::determine_index_path(
-                file_path, index_dir);
-        auto input =
-            utilities::composites::dft::IndexBuildUtilityInput::from_file(
-                file_path)
-                .with_checkpoint_size(checkpoint_size)
-                .with_force_rebuild(force_rebuild)
-                .with_index(idx_path);
-        return utilities::composites::dft::IndexBuilderUtility{}
-            .process(input)
-            .get();
+        -> utilities::indexer::IndexBuildResult {
+        auto input = utilities::indexer::IndexBuildConfig::for_file(file_path)
+                         .with_checkpoint_size(checkpoint_size)
+                         .with_force_rebuild(force_rebuild)
+                         .with_index_dir(index_dir);
+        return utilities::indexer::IndexBuilderUtility{}.process(input).get();
     };
 
     auto index_workflow =
         std::make_shared<utilities::composites::DirectoryFileProcessorUtility<
-            utilities::composites::dft::IndexBuildUtilityOutput>>(
-            index_builder_processor);
+            utilities::indexer::IndexBuildResult>>(index_builder_processor);
 
     auto task1_build_indexes = utilities::use(index_workflow).as_task();
     task1_build_indexes->with_name("BuildIndexes");

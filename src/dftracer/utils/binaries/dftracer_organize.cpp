@@ -13,7 +13,7 @@
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>

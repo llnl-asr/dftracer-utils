@@ -4,7 +4,6 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
@@ -12,6 +11,7 @@
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
@@ -29,6 +29,8 @@ using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 namespace compression = dftracer::utils::utilities::compression;
 namespace util_io = dftracer::utils::utilities::fileio;
+using dftracer::utils::utilities::indexer::IndexBuildConfig;
+using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
@@ -224,10 +226,9 @@ static coro::CoroTask<int> run_verify(
 
         // 1. Build gzip index
         std::string idx_path = internal::determine_index_path(abs_path, "");
-        auto idx_input = IndexBuildUtilityInput::from_file(abs_path)
+        auto idx_input = IndexBuildConfig::for_file(abs_path)
                              .with_checkpoint_size(ckpt_size)
-                             .with_force_rebuild(true)
-                             .with_index(idx_path);
+                             .with_force_rebuild(true);
         co_await IndexBuilderUtility{}.process(idx_input);
 
         // 2. Collect metadata

@@ -1,8 +1,8 @@
-#include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
@@ -15,6 +15,8 @@ namespace dftracer::utils::utilities::composites::dft::reorganize {
 
 namespace {
 
+using dftracer::utils::utilities::indexer::IndexBuildConfig;
+using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using indexing::PredicateMap;
 using indexing::PredicateParserInput;
@@ -118,11 +120,8 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
 
         // Build .idx if needed
         IndexBuilderUtility idx_builder;
-        auto idx_input = IndexBuildUtilityInput::from_file(file_path);
-        if (!input.index_dir.empty()) {
-            idx_input.with_index(
-                internal::determine_index_path(file_path, input.index_dir));
-        }
+        auto idx_input = IndexBuildConfig::for_file(file_path).with_index_dir(
+            input.index_dir);
         if (input.checkpoint_size > 0) {
             idx_input.with_checkpoint_size(input.checkpoint_size);
         }

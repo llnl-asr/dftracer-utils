@@ -7,11 +7,11 @@
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
-#include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <dftracer/utils/utilities/composites/line_batch_processor_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 
 #include <atomic>
 #include <fstream>

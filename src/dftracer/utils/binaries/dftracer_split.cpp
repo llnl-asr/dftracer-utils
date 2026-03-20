@@ -9,6 +9,7 @@
 #include <dftracer/utils/utilities/composites/composites.h>
 #include <dftracer/utils/utilities/composites/dft/chunk_extractor_utility.h>
 #include <dftracer/utils/utilities/fileio/types/types.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <unistd.h>
 
@@ -250,13 +251,11 @@ int main(int argc, char** argv) {
 
             // Build index
             auto idx_input =
-                utilities::composites::dft::IndexBuildUtilityInput::from_file(
-                    file_path)
+                utilities::indexer::IndexBuildConfig::for_file(file_path)
                     .with_checkpoint_size(checkpoint_size)
                     .with_force_rebuild(force)
-                    .with_index(idx_path);
-            utilities::composites::dft::IndexBuilderUtility{}.process(
-                idx_input);
+                    .with_index_dir(index_dir);
+            utilities::indexer::IndexBuilderUtility{}.process(idx_input);
 
             // Collect metadata
             auto meta_input =

@@ -7,10 +7,10 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregators.h>
-#include <dftracer/utils/utilities/composites/dft/index_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <unistd.h>
 
@@ -263,13 +263,11 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
                             composites::dft::internal::determine_index_path(
                                 file_path, index_dir);
                         auto idx_input =
-                            composites::dft::IndexBuildUtilityInput::from_file(
-                                file_path)
+                            indexer::IndexBuildConfig::for_file(file_path)
                                 .with_checkpoint_size(checkpoint_size)
                                 .with_force_rebuild(force_rebuild)
-                                .with_index(idx_path);
-                        composites::dft::IndexBuilderUtility{}.process(
-                            idx_input);
+                                .with_index_dir(index_dir);
+                        indexer::IndexBuilderUtility{}.process(idx_input);
 
                         // Collect metadata
                         auto meta_input =

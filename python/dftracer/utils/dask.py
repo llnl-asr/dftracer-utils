@@ -1,9 +1,11 @@
 """Dask distributed integration for dftracer-utils."""
 
+from typing import Any, Optional
+
 try:
     from dask.distributed import WorkerPlugin
 except ImportError:
-    WorkerPlugin = None
+    WorkerPlugin: Optional[Any] = None
 
 from dftracer.utils import Runtime, get_default_runtime, set_default_runtime
 

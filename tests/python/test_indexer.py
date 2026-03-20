@@ -3,10 +3,12 @@
 Test cases for DFTracer indexer Python bindings
 """
 
-import pytest
 import os
 
+import pytest
+
 import dftracer.utils as dft_utils
+
 from .common import Environment
 
 
@@ -49,7 +51,7 @@ class TestIndexer:
         """Test indexer creation with non-existent file"""
         # Indexer creation doesn't fail, but building should fail
         with pytest.raises(RuntimeError):
-            indexer = dft_utils.Indexer("nonexistent_file.gz")
+            dft_utils.Indexer("nonexistent_file.gz")
 
     def test_indexer_build_and_rebuild(self):
         """Test indexer build and rebuild functionality"""
@@ -73,9 +75,7 @@ class TestIndexer:
             # Test force rebuild with a new indexer
             # Note: force_rebuild affects the build process, not need_rebuild() check
             # The need_rebuild() method checks file consistency, not force_rebuild flag
-            with dft_utils.Indexer(
-                gz_file, idx_file, force_rebuild=True
-            ) as indexer_force:
+            with dft_utils.Indexer(gz_file, idx_file, force_rebuild=True) as indexer_force:
                 # Since the index already exists and file hasn't changed, need_rebuild should be False
                 # But force_rebuild will cause a rebuild when build() is called
                 assert not indexer_force.need_rebuild()
@@ -210,8 +210,8 @@ class TestIndexerIntegration:
                 assert reader.get_max_bytes() > 0
                 assert reader.gz_path == gz_file
 
-    def test_indexer_with_reader_creation(self):
-        """Test using indexer with reader creation"""
+    def test_indexer_with_reader_creation_context_manager(self):
+        """Test using indexer with reader creation via context manager"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
 

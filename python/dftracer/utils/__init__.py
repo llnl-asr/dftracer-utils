@@ -1,11 +1,11 @@
+from importlib.metadata import PackageNotFoundError, version
 from typing import Optional, Union
-from importlib.metadata import version, PackageNotFoundError
 
 from .dftracer_utils_ext import (
-    Reader,  # noqa: F401
+    JSON,  # noqa: F401
     Indexer,  # noqa: F401
     IndexerCheckpoint,  # noqa: F401
-    JSON,  # noqa: F401
+    Reader,  # noqa: F401
     TraceReader,  # noqa: F401
 )
 from .dftracer_utils_ext import (
@@ -14,7 +14,6 @@ from .dftracer_utils_ext import (
 from .dftracer_utils_ext import (
     set_default_runtime as _set_default_native_runtime,
 )
-
 from .runtime import Runtime, TaskHandle  # noqa: F401
 
 _default_wrapper: Optional["Runtime"] = None
@@ -46,9 +45,7 @@ except PackageNotFoundError:
     __version__ = "0.0.0"
 
 
-def dft_reader(
-    gzip_path_or_indexer: Union[str, Indexer], index_path: Optional[str] = None
-):
+def dft_reader(gzip_path_or_indexer: Union[str, Indexer], index_path: Optional[str] = None):
     """Create a reader
 
     Args:

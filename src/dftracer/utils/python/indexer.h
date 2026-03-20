@@ -14,6 +14,7 @@ typedef struct {
     int build_bloom;
     int build_manifest;
     std::uint64_t index_threshold;
+    PyObject *runtime_obj;  // RuntimeObject* or NULL (uses default)
 } IndexerObject;
 
 extern PyTypeObject IndexerType;

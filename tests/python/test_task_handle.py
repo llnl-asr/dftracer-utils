@@ -1,9 +1,9 @@
 """Tests for TaskHandle and Runtime submit/wait_all functionality."""
 
 import time
-import threading
+
 import pytest
-import dftracer.utils as dft_utils
+
 from dftracer.utils import Runtime, TaskHandle
 
 
@@ -139,9 +139,7 @@ class TestWaitAll:
 
     def test_concurrent_submits_all_complete(self):
         with Runtime(threads=2, python_threads=4) as rt:
-            handles = [
-                rt.submit(lambda i=i: i * 2, name=f"task-{i}") for i in range(20)
-            ]
+            handles = [rt.submit(lambda i=i: i * 2, name=f"task-{i}") for i in range(20)]
             rt.wait_all()
             for i, h in enumerate(handles):
                 assert h.get() == i * 2

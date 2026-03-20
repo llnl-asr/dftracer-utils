@@ -1,6 +1,7 @@
 """Type stubs for dftracer_utils_ext module."""
 
-from typing import Optional, List, Any, Union, Iterator
+from types import TracebackType
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Type, Union
 
 # ========== INDEXER ==========
 
@@ -27,8 +28,21 @@ class Indexer:
         build_bloom: bool = False,
         build_manifest: bool = False,
         index_threshold: int = 8388608,
+        runtime: Optional["Runtime"] = None,
     ) -> None:
-        """Create an indexer for a gzip file."""
+        """Create an indexer for a gzip file.
+
+        Args:
+            gz_path: Path to the gzip trace file.
+            idx_path: Path to the index file. If None, uses gz_path + ".idx".
+            checkpoint_size: Checkpoint size in bytes for index building.
+            force_rebuild: If True, rebuild the index even if it exists.
+            build_bloom: If True, build bloom filter data in the index.
+            build_manifest: If True, build manifest data in the index.
+            index_threshold: Skip indexing for files smaller than this (bytes).
+            runtime: Runtime instance for thread pool control.
+                If None, uses the default global Runtime.
+        """
         ...
 
     def build(self) -> None:
@@ -88,7 +102,12 @@ class Indexer:
         """Enter the runtime context for the with statement."""
         ...
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         """Exit the runtime context for the with statement."""
         ...
 
@@ -168,11 +187,19 @@ class Reader:
         """Enter the runtime context for the with statement."""
         ...
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         """Exit the runtime context for the with statement."""
         ...
 
 # ========== JSON ==========
+
+# Type aliases for JSON values
+_JSONPrimitive = Union[str, int, float, bool, None]
 
 class JSON:
     """Lazy JSON object that parses on demand using yyjson.
@@ -199,7 +226,7 @@ class JSON:
         """Check if key exists in JSON object."""
         ...
 
-    def __getitem__(self, key: str) -> Union[str, int, float, bool, None, "JSON"]:
+    def __getitem__(self, key: str) -> Union[_JSONPrimitive, "JSON"]:
         """Get value by key, raises KeyError if not found.
 
         Returns:
@@ -214,8 +241,10 @@ class JSON:
         ...
 
     def get(
-        self, key: str, default: Any = None
-    ) -> Union[str, int, float, bool, None, "JSON", Any]:
+        self,
+        key: str,
+        default: Union[_JSONPrimitive, "JSON"] = None,
+    ) -> Union[_JSONPrimitive, "JSON"]:
         """Get value by key with optional default.
 
         Returns:
@@ -229,7 +258,7 @@ class JSON:
         """Get all keys from JSON object (only for object types)."""
         ...
 
-    def values(self) -> List[Union[str, int, float, bool, None, "JSON"]]:
+    def values(self) -> List[Union[_JSONPrimitive, "JSON"]]:
         """Get all values from JSON object (only for object types).
 
         Returns:
@@ -238,7 +267,7 @@ class JSON:
         """
         ...
 
-    def items(self) -> List[tuple[str, Union[str, int, float, bool, None, "JSON"]]]:
+    def items(self) -> List[Tuple[str, Union[_JSONPrimitive, "JSON"]]]:
         """Get all key-value pairs from JSON object (only for object types).
 
         Returns:
@@ -264,7 +293,7 @@ class JSON:
         """
         ...
 
-    def unwrap(self) -> Union[dict, list, Any]:
+    def unwrap(self) -> Union[Dict[str, Any], List[Any], _JSONPrimitive]:
         """Unwrap the lazy JSON object into native Python dict/list.
 
         Unlike lazy access via obj[key], this method fully converts the entire
@@ -340,17 +369,22 @@ class Runtime:
     def __init__(self, threads: int = 0) -> None: ...
     def shutdown(self) -> None: ...
     def wait_all(self) -> None: ...
-    def get_progress(self) -> dict: ...
+    def get_progress(self) -> Dict[str, Any]: ...
     def is_responsive(self) -> bool: ...
     def set_timeout(self, global_ms: int = 0) -> None: ...
     def set_default_task_timeout(self, ms: int = 0) -> None: ...
     @property
     def threads(self) -> int: ...
     def __enter__(self) -> "Runtime": ...
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None: ...
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None: ...
 
 def get_default_runtime() -> Runtime: ...
-def set_default_runtime(runtime: Runtime) -> None: ...
+def set_default_runtime(runtime: Optional[Runtime]) -> None: ...
 
 # ========== TRACE READER ==========
 
@@ -439,6 +473,11 @@ class TraceReader:
         """Enter the runtime context for the with statement."""
         ...
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         """Exit the runtime context for the with statement."""
         ...

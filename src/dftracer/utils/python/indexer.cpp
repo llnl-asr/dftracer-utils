@@ -1,10 +1,8 @@
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/indexer_checkpoint.h>
-#include <dftracer/utils/utilities/indexer/index_builder.h>
+#include <dftracer/utils/python/runtime.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <structmember.h>
@@ -17,6 +15,7 @@ static void Indexer_dealloc(IndexerObject *self) {
     }
     Py_XDECREF(self->gz_path);
     Py_XDECREF(self->idx_path);
+    Py_XDECREF(self->runtime_obj);
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -32,14 +31,16 @@ static PyObject *Indexer_new(PyTypeObject *type, PyObject *args,
         self->build_bloom = 0;
         self->build_manifest = 0;
         self->index_threshold = 8 * 1024 * 1024;
+        self->runtime_obj = NULL;
     }
     return (PyObject *)self;
 }
 
 static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     static const char *kwlist[] = {
-        "gz_path",     "idx_path",       "checkpoint_size", "force_rebuild",
-        "build_bloom", "build_manifest", "index_threshold", NULL};
+        "gz_path",         "idx_path",    "checkpoint_size",
+        "force_rebuild",   "build_bloom", "build_manifest",
+        "index_threshold", "runtime",     NULL};
     const char *gz_path;
     const char *idx_path = NULL;
     std::uint64_t checkpoint_size =
@@ -48,12 +49,30 @@ static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     int build_bloom = 0;
     int build_manifest = 0;
     std::uint64_t index_threshold = 8 * 1024 * 1024;
+    PyObject *runtime_arg = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|snpppn", (char **)kwlist,
-                                     &gz_path, &idx_path, &checkpoint_size,
-                                     &force_rebuild, &build_bloom,
-                                     &build_manifest, &index_threshold)) {
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "s|snpppnO", (char **)kwlist, &gz_path, &idx_path,
+            &checkpoint_size, &force_rebuild, &build_bloom, &build_manifest,
+            &index_threshold, &runtime_arg)) {
         return -1;
+    }
+
+    if (runtime_arg && runtime_arg != Py_None) {
+        if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
+            Py_INCREF(runtime_arg);
+            self->runtime_obj = runtime_arg;
+        } else {
+            PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
+            if (native && PyObject_TypeCheck(native, &RuntimeType)) {
+                self->runtime_obj = native;
+            } else {
+                Py_XDECREF(native);
+                PyErr_SetString(PyExc_TypeError,
+                                "runtime must be a Runtime instance or None");
+                return -1;
+            }
+        }
     }
 
     self->gz_path = PyUnicode_FromString(gz_path);
@@ -94,6 +113,13 @@ static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     return 0;
 }
 
+static dftracer::utils::Runtime *get_indexer_runtime(IndexerObject *self) {
+    if (self->runtime_obj) {
+        return ((RuntimeObject *)self->runtime_obj)->runtime.get();
+    }
+    return get_default_runtime();
+}
+
 static PyObject *Indexer_build(IndexerObject *self,
                                PyObject *Py_UNUSED(ignored)) {
     if (!self->handle) {
@@ -101,62 +127,50 @@ static PyObject *Indexer_build(IndexerObject *self,
         return NULL;
     }
 
-    if (self->build_bloom || self->build_manifest) {
-        using namespace dftracer::utils;
-        using namespace dftracer::utils::utilities::indexer;
+    using namespace dftracer::utils;
+    using namespace dftracer::utils::utilities::indexer;
 
-        const char *gz = PyUnicode_AsUTF8(self->gz_path);
-        const char *idx = PyUnicode_AsUTF8(self->idx_path);
-        if (!gz || !idx) {
-            return NULL;
-        }
+    const char *gz = PyUnicode_AsUTF8(self->gz_path);
+    const char *idx = PyUnicode_AsUTF8(self->idx_path);
+    if (!gz || !idx) {
+        return NULL;
+    }
 
-        auto config = IndexBuildConfig::for_file(gz)
-                          .with_checkpoint_size(
-                              static_cast<std::size_t>(self->checkpoint_size))
-                          .with_bloom(self->build_bloom != 0)
-                          .with_manifest(self->build_manifest != 0)
-                          .with_index_threshold(0);
+    auto config = IndexBuildConfig::for_file(gz)
+                      .with_checkpoint_size(
+                          static_cast<std::size_t>(self->checkpoint_size))
+                      .with_bloom(self->build_bloom != 0)
+                      .with_manifest(self->build_manifest != 0)
+                      .with_index_threshold(0);
 
-        std::string idx_str(idx);
-        auto pos = idx_str.find_last_of('/');
-        if (pos != std::string::npos) {
-            config.with_index_dir(idx_str.substr(0, pos));
-        }
+    std::string idx_str(idx);
+    auto pos = idx_str.find_last_of('/');
+    if (pos != std::string::npos) {
+        config.with_index_dir(idx_str.substr(0, pos));
+    }
 
-        IndexBuildResult build_result;
-        auto *result_ptr = &build_result;
+    Runtime *rt = get_indexer_runtime(self);
+    IndexBuildResult build_result;
 
-        auto pipeline_config = PipelineConfig()
-                                   .with_name("PythonIndexerBuild")
-                                   .with_compute_threads(2)
-                                   .with_watchdog(false);
-        Pipeline pipeline(pipeline_config);
+    try {
+        auto build_coro =
+            [](IndexBuildConfig cfg) -> coro::CoroTask<IndexBuildResult> {
+            IndexBuilderUtility builder;
+            co_return co_await builder.process(cfg);
+        };
 
-        auto task = make_task(
-            [config, result_ptr](CoroScope &) -> coro::CoroTask<void> {
-                IndexBuilderUtility builder;
-                *result_ptr = co_await builder.process(config);
-                co_return;
-            },
-            "Build");
-        pipeline.set_source(task);
-        pipeline.set_destination(task);
-
-        Py_BEGIN_ALLOW_THREADS pipeline.execute();
+        Py_BEGIN_ALLOW_THREADS auto handle =
+            rt->submit(build_coro(config), "indexer-build");
+        build_result = handle.get();
         Py_END_ALLOW_THREADS
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
 
-            if (!build_result.success) {
-            PyErr_SetString(PyExc_RuntimeError,
-                            build_result.error_message.c_str());
-            return NULL;
-        }
-    } else {
-        int result = dft_indexer_build(self->handle);
-        if (result != 0) {
-            PyErr_SetString(PyExc_RuntimeError, "Failed to build index");
-            return NULL;
-        }
+    if (!build_result.success) {
+        PyErr_SetString(PyExc_RuntimeError, build_result.error_message.c_str());
+        return NULL;
     }
 
     Py_RETURN_NONE;

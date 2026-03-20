@@ -13,9 +13,7 @@ except ImportError:
 import dftracer.utils as dft_utils
 
 
-@pytest.mark.skipif(
-    not DASK_DISTRIBUTED_AVAILABLE, reason="dask.distributed not available"
-)
+@pytest.mark.skipif(not DASK_DISTRIBUTED_AVAILABLE, reason="dask.distributed not available")
 class TestDaskWorkerPlugin:
     def test_import(self):
         from dftracer.utils.dask import DFTracerUtilsDaskWorkerPlugin
@@ -81,9 +79,7 @@ class TestDaskWorkerPlugin:
         dft_utils.set_default_runtime(original)
 
 
-@pytest.mark.skipif(
-    not DASK_DISTRIBUTED_AVAILABLE, reason="dask.distributed not available"
-)
+@pytest.mark.skipif(not DASK_DISTRIBUTED_AVAILABLE, reason="dask.distributed not available")
 class TestDaskWorkerPluginIntegration:
     """Integration tests with a real LocalCluster.
 
@@ -93,7 +89,9 @@ class TestDaskWorkerPluginIntegration:
 
     def test_plugin_with_local_cluster(self):
         from dask.distributed import Client, LocalCluster
+
         from dftracer.utils.dask import DFTracerUtilsDaskWorkerPlugin
+
         from .common import Environment
 
         with Environment(lines=20) as env:
@@ -119,7 +117,9 @@ class TestDaskWorkerPluginIntegration:
 
     def test_plugin_multiple_files(self):
         from dask.distributed import Client, LocalCluster
+
         from dftracer.utils.dask import DFTracerUtilsDaskWorkerPlugin
+
         from .common import Environment
 
         with Environment(lines=10) as env:

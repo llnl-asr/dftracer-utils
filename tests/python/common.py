@@ -3,11 +3,12 @@
 Common test utilities for  Python bindings tests
 """
 
-import pytest
-import os
-import tempfile
 import gzip
+import os
 import shutil
+import tempfile
+
+import pytest
 
 import dftracer.utils as dft_utils
 
@@ -86,9 +87,7 @@ class Environment:
         """Create a gzip file with complex nested JSON structures for testing"""
         import json
 
-        file_path = os.path.join(
-            self.temp_dir, f"nested_test_{len(self.test_files)}.pfw.gz"
-        )
+        file_path = os.path.join(self.temp_dir, f"nested_test_{len(self.test_files)}.pfw.gz")
 
         lines = []
         for i in range(self.lines):
@@ -188,7 +187,7 @@ class Environment:
                 indexer.build()
 
             if not os.path.exists(idx_file):
-                pytest.skip(f"Index file was not created")
+                pytest.skip("Index file was not created")
             return idx_file
         except Exception as e:
             pytest.skip(f"Failed to build index: {e}")
@@ -199,9 +198,7 @@ class Environment:
             checkpoint_size_bytes = 32 * 1024 * 1024  # 32MB default
 
         try:
-            indexer = dft_utils.Indexer(
-                gz_file_path, checkpoint_size=checkpoint_size_bytes
-            )
+            indexer = dft_utils.Indexer(gz_file_path, checkpoint_size=checkpoint_size_bytes)
             if indexer.need_rebuild():
                 indexer.build()
             return indexer

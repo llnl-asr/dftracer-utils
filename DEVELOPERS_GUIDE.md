@@ -83,6 +83,38 @@ The coverage report will be generated in `coverage/html/index.html`.
 
 The coverage script automatically detects and uses Ninja if available, falling back to Make otherwise. This provides faster builds when Ninja is installed.
 
+## Python Linting and Type Checking
+
+This project uses [ruff](https://docs.astral.sh/ruff/) for linting/formatting and [ty](https://docs.astral.sh/ty/) for type checking. Both are run via `uvx` (no install needed):
+
+```bash
+make lint        # ruff check + format check
+make typecheck   # ty type check
+```
+
+Or directly:
+```bash
+uvx ruff check python/ tests/python/
+uvx ruff format --check python/ tests/python/
+uvx ty check python/
+```
+
+These checks run automatically in the pre-commit hook when Python files are staged. They also run in CI for Python 3.9+ (ruff) and 3.12+ (ty).
+
+Configuration is in `pyproject.toml` under `[tool.ruff]`.
+
+## Git Hooks
+
+Install the project's pre-commit hooks:
+
+```bash
+./scripts/git-hooks.sh install
+```
+
+The pre-commit hook runs:
+- **C/C++**: `clang-format` on staged `.c/.cpp/.h/.hpp` files
+- **Python**: `ruff check`, `ruff format --check`, and `ty check` on staged `.py/.pyi` files (requires `uvx` or `ruff` in PATH; skipped gracefully if not available)
+
 ## Make Targets
 
 Run `make help` to see all available targets:
@@ -94,6 +126,8 @@ Run `make help` to see all available targets:
 - `make test` - Build and run tests without coverage (uses Ninja if available)
 - `make test-coverage` - Run tests with coverage (requires prior coverage build)
 - `make test-py` - Run Python tests in isolated environment
+- `make lint` - Run ruff linter on Python code
+- `make typecheck` - Run ty type checker on Python code
 - `make format` - Format code using clang-format
 - `make check-format` - Check code formatting
 - `make cmake-format` - Format CMake files

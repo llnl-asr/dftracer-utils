@@ -88,7 +88,13 @@ jobs:
         pip install --upgrade pip setuptools wheel
         pip install -e ".[dev]"
         pytest tests/python -v
-    
+
+    - name: Type check (ty)
+      if: matrix.python-version == '3.12' && runner.os == 'Linux'
+      run: |
+        pip install ty
+        ty check --python "$(which python)" python/
+
     - name: Upload coverage reports to Codecov (Unix)
       if: matrix.os == 'ubuntu-22.04'
       uses: codecov/codecov-action@v4

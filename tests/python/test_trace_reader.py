@@ -4,6 +4,7 @@
 import pytest
 
 import dftracer.utils as dft_utils
+
 from .common import Environment
 
 

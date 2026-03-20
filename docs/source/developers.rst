@@ -74,30 +74,66 @@ Code Style
 Python
 ~~~~~~
 
-This project uses ``ruff`` for Python code formatting:
+This project uses ``ruff`` for linting/formatting and ``ty`` for type checking.
+Both are run via ``uvx`` (no install needed):
 
 .. code-block:: bash
 
-   ruff check .
-   ruff format .
+   # Lint and format check
+   make lint
+
+   # Type check
+   make typecheck
+
+   # Or directly
+   uvx ruff check python/ tests/python/
+   uvx ruff format --check python/ tests/python/
+   uvx ty check python/
+
+   # Auto-fix lint issues
+   uvx ruff check --fix python/ tests/python/
+
+   # Auto-format
+   uvx ruff format python/ tests/python/
+
+Configuration is in ``pyproject.toml`` under ``[tool.ruff]``.
 
 C++
 ~~~
 
-This project uses ``clang-format`` for C++ code formatting:
+This project uses ``clang-format`` (v19.1.7) for C++ code formatting:
 
 .. code-block:: bash
 
-   clang-format -i src/**/*.cpp include/**/*.h
+   make format        # auto-fix
+   make check-format  # check only (CI uses this)
+
+Git Hooks
+~~~~~~~~~
+
+Install the project's pre-commit hooks:
+
+.. code-block:: bash
+
+   ./scripts/git-hooks.sh install
+
+The pre-commit hook runs:
+
+- **C/C++**: ``clang-format`` on staged ``.c/.cpp/.h/.hpp`` files
+- **Python**: ``ruff check``, ``ruff format --check``, and ``ty check`` on staged ``.py/.pyi`` files
+
+Python checks require ``uvx`` or ``ruff`` in PATH; they are skipped gracefully if not available.
 
 Contributing
 ------------
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Run tests and ensure they pass
-5. Submit a pull request
+3. Install git hooks: ``./scripts/git-hooks.sh install``
+4. Make your changes
+5. Run tests and ensure they pass (``make test && make test-py``)
+6. Run lint and type check (``make lint && make typecheck``)
+7. Submit a pull request
 
 Coding Guidelines
 -----------------
@@ -106,6 +142,8 @@ Coding Guidelines
 - Write tests for new functionality
 - Update documentation as needed
 - Keep commits atomic and well-described
+- All Python code must pass ``ruff check`` and ``ty check``
+- All C++ code must pass ``clang-format`` check
 
 Coroutine Development Guidelines
 ---------------------------------

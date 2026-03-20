@@ -1,4 +1,4 @@
-.PHONY: coverage coverage-clean coverage-view coverage-open test test-coverage test-py build clean format check-format cmake-format help
+.PHONY: coverage coverage-clean coverage-view coverage-open test test-coverage test-py build clean format check-format cmake-format lint typecheck help
 
 # Detect build system
 BUILD_GENERATOR := $(shell command -v ninja >/dev/null 2>&1 && echo "Ninja" || echo "Unix Makefiles")
@@ -18,6 +18,8 @@ help:
 	@echo "  format          - Format code using clang-format"
 	@echo "  check-format    - Check code formatting"
 	@echo "  cmake-format    - Format CMake files"
+	@echo "  lint            - Run ruff linter on Python code"
+	@echo "  typecheck       - Run ty type checker on Python code"
 	@echo "  clean           - Clean all build directories"
 	@echo "  help            - Show this help"
 	@echo ""
@@ -67,6 +69,19 @@ test-py:
 	@.venv_test_py/bin/pytest tests/python -v
 	@rm -rf .venv_test_py
 	@echo "Python tests completed successfully!"
+
+# Python linting
+lint:
+	@echo "Running ruff..."
+	@uvx ruff check python/ tests/python/
+	@uvx ruff format --check python/ tests/python/
+	@echo "Ruff passed!"
+
+# Python type checking
+typecheck:
+	@echo "Running ty..."
+	@uvx ty check python/
+	@echo "Type check passed!"
 
 # Code formatting
 format:

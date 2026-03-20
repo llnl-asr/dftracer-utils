@@ -102,6 +102,15 @@ test-requires = "pytest"
 [tool.cibuildwheel.macos.environment]
 MACOSX_DEPLOYMENT_TARGET = "11.3"
 
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+src = ["python", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
 [tool.setuptools_scm]
 local_scheme = "no-local-version"
 version_file = "python/dftracer/utils/_version.py"

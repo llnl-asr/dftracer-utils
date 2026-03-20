@@ -53,6 +53,8 @@ option(DFTRACER_UTILS_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(DFTRACER_UTILS_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(DFTRACER_UTILS_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
+option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow" ON)
+option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)
 
 if(DFTRACER_UTILS_TESTS)
   message(STATUS "Building tests")

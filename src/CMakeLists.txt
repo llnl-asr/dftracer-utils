@@ -13,6 +13,10 @@ need_yyjson()
 need_readerwriterqueue()
 need_concurrentqueue()
 
+if(DFTRACER_UTILS_ENABLE_ARROW)
+  need_nanoarrow()
+endif()
+
 # ##############################################################################
 # Libraries
 # ##############################################################################

@@ -1009,220 +1009,217 @@ function(need_concurrentqueue)
 endfunction()
 
 # ==============================================================================
-# Data Processing Dependencies
+# Arrow Data Interface Dependencies (nanoarrow)
 # ==============================================================================
 
-function(need_arrow)
-  find_package(Arrow 21.0.0 QUIET)
-  find_package(Parquet 21.0.0 QUIET)
+function(need_nanoarrow)
+  if(NOT nanoarrow_ADDED)
+    cpmaddpackage(
+      NAME
+      nanoarrow
+      GITHUB_REPOSITORY
+      apache/arrow-nanoarrow
+      VERSION
+      0.8.0
+      GIT_TAG
+      "apache-arrow-nanoarrow-0.8.0"
+      DOWNLOAD_ONLY
+      YES)
+  endif()
 
-  if(Arrow_FOUND AND Parquet_FOUND)
-    message(STATUS "Found system Arrow and Parquet")
-    set(Arrow_ADDED
-        TRUE
-        PARENT_SCOPE)
-  else()
-    if(NOT Arrow_ADDED)
-      # Use a known stable version with minimal config
-      cpmaddpackage(
-        NAME
-        Arrow
-        GITHUB_REPOSITORY
-        apache/arrow
-        VERSION
-        21.0.0
-        GIT_TAG
-        "apache-arrow-21.0.0"
-        SOURCE_SUBDIR
-        "./cpp"
-        EXCLUDE_FROM_ALL
-        YES
-        OPTIONS
-        "ARROW_DEFINE_OPTIONS ON"
-        "ARROW_BUILD_STATIC ON"
-        "ARROW_BUILD_SHARED ON"
-        "ARROW_PARQUET ON"
-        "ARROW_BUILD_TESTS OFF"
-        "ARROW_BUILD_BENCHMARKS OFF"
-        "ARROW_BUILD_EXAMPLES OFF"
-        "ARROW_WITH_BACKTRACE OFF"
-        # "ARROW_DEPENDENCY_SOURCE SYSTEM"
-        "ARROW_BOOST_USE_SHARED OFF"
-        "ARROW_ZSTD_USE_SHARED OFF"
-        "ARROW_JEMALLOC_USE_SHARED OFF"
-        "ARROW_PROTOBUF_USE_SHARED OFF"
-        "ARROW_WITH_THRIFT OFF"
-        "ARROW_COMPUTE OFF"
-        "ARROW_FLIGHT OFF"
-        "ARROW_WITH_GRPC OFF"
-        "ARROW_WITH_OPENTELEMETRY OFF"
-        "ARROW_IPC OFF"
-        "ARROW_DATASET OFF"
-        "ARROW_BUILD_CONFIG_SUMMARY_JSON OFF"
-        "ARROW_WITH_ZLIB OFF"
-        "ARROW_ENABLE_TIMING_TESTS OFF"
-        "ARROW_BROTLI_USE_SHARED OFF"
-        "ARROW_GFLAGS_USE_SHARED OFF"
-        "ARROW_GRPC_USE_SHARED OFF"
-        "ARROW_JEMALLOC_USE_SHARED OFF"
-        "ARROW_LLVM_USE_SHARED OFF"
-        "ARROW_LZ4_USE_SHARED OFF"
-        "ARROW_OPENSSL_USE_SHARED OFF"
-        "ARROW_SNAPPY_USE_SHARED OFF"
-        "ARROW_THRIFT_USE_SHARED OFF"
-        "ARROW_UTF8PROC_USE_SHARED OFF"
-        "ARROW_ZSTD_USE_SHARED OFF"
-        "ARROW_INSTALL_NAME_RPATH ON"
-        "ARROW_INSTALL ON"
-        "PARQUET_INSTALL ON"
-        "ARROW_NO_INSTALL OFF"
-        "ARROW_WITH_SNAPPY ON" # compression
-        FORCE
-        YES)
-      file(READ "${Arrow_SOURCE_DIR}/cmake_modules/ArrowTargets.cmake"
-           _arrow_targets_cmake)
-      string(REPLACE "install(EXPORT arrow_targets"
-                     "# install(EXPORT arrow_targets" _arrow_targets_cmake
-                     "${_arrow_targets_cmake}")
-      file(WRITE "${Arrow_SOURCE_DIR}/cmake_modules/ArrowTargets.cmake"
-           "${_arrow_targets_cmake}")
+  if(nanoarrow_ADDED)
+    set(NANOARROW_SOVERSION 0)
+    set(NANOARROW_SOURCES
+        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/common/array.c
+        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/common/array_stream.c
+        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/common/schema.c
+        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/common/utils.c)
+    set(NANOARROW_TARGETS)
+    set(NANOARROW_IPC_INCLUDE_DIRS)
+
+    # Arrow IPC support (reader/writer for .arrows files)
+    if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+      list(
+        APPEND
+        NANOARROW_SOURCES
+        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/decoder.c
+        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/encoder.c
+        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/reader.c
+        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/writer.c
+        ${nanoarrow_SOURCE_DIR}/src/nanoarrow/ipc/codecs.c
+        ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/builder.c
+        ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/emitter.c
+        ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/refmap.c
+        ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/verifier.c)
+      set(NANOARROW_FLATCC_INCLUDE
+          ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/include)
+      message(STATUS "nanoarrow IPC support enabled (reader + writer)")
     endif()
+
+    # Generate nanoarrow_config.h from template
+    set(NANOARROW_VERSION_MAJOR 0)
+    set(NANOARROW_VERSION_MINOR 8)
+    set(NANOARROW_VERSION_PATCH 0)
+    set(NANOARROW_VERSION "0.8.0")
+    set(NANOARROW_NAMESPACE_DEFINE "")
+    configure_file(
+      ${nanoarrow_SOURCE_DIR}/src/nanoarrow/nanoarrow_config.h.in
+      ${CMAKE_CURRENT_BINARY_DIR}/nanoarrow/nanoarrow_config.h)
+
+    if(DFTRACER_UTILS_BUILD_STATIC)
+      add_library(nanoarrow_static STATIC ${NANOARROW_SOURCES})
+      target_include_directories(
+        nanoarrow_static
+        PUBLIC $<BUILD_INTERFACE:${nanoarrow_SOURCE_DIR}/src>
+               $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+        target_include_directories(
+          nanoarrow_static
+          PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
+                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      endif()
+      target_compile_definitions(nanoarrow_static
+                                 PUBLIC DFTRACER_UTILS_ENABLE_ARROW)
+      if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+        target_compile_definitions(nanoarrow_static
+                                   PUBLIC DFTRACER_UTILS_ENABLE_ARROW_IPC)
+      endif()
+      set_target_properties(
+        nanoarrow_static
+        PROPERTIES VERSION ${PROJECT_VERSION}
+                   SOVERSION ${NANOARROW_SOVERSION}
+                   OUTPUT_NAME nanoarrow
+                   ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+      add_library(nanoarrow::nanoarrow_static ALIAS nanoarrow_static)
+      list(APPEND NANOARROW_TARGETS nanoarrow_static)
+      message(STATUS "Added nanoarrow static library")
+    endif()
+
+    if(DFTRACER_UTILS_BUILD_SHARED)
+      add_library(nanoarrow_shared SHARED ${NANOARROW_SOURCES})
+      target_include_directories(
+        nanoarrow_shared
+        PUBLIC $<BUILD_INTERFACE:${nanoarrow_SOURCE_DIR}/src>
+               $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+               $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+        target_include_directories(
+          nanoarrow_shared
+          PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
+                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      endif()
+      target_compile_definitions(nanoarrow_shared
+                                 PUBLIC DFTRACER_UTILS_ENABLE_ARROW)
+      if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+        target_compile_definitions(nanoarrow_shared
+                                   PUBLIC DFTRACER_UTILS_ENABLE_ARROW_IPC)
+      endif()
+      set_target_properties(
+        nanoarrow_shared
+        PROPERTIES VERSION ${PROJECT_VERSION}
+                   SOVERSION ${NANOARROW_SOVERSION}
+                   OUTPUT_NAME nanoarrow
+                   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+                   ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+      add_library(nanoarrow::nanoarrow ALIAS nanoarrow_shared)
+      list(APPEND NANOARROW_TARGETS nanoarrow_shared)
+      message(STATUS "Added nanoarrow shared library")
+    elseif(DFTRACER_UTILS_BUILD_STATIC)
+      add_library(nanoarrow::nanoarrow ALIAS nanoarrow_static)
+    endif()
+
+    # Install headers
+    install(
+      DIRECTORY ${nanoarrow_SOURCE_DIR}/src/nanoarrow/
+      DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nanoarrow
+      FILES_MATCHING
+      PATTERN "*.h"
+      PATTERN "*.hpp"
+      PATTERN "testing" EXCLUDE
+      PATTERN "integration" EXCLUDE
+      PATTERN "device" EXCLUDE)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/nanoarrow/nanoarrow_config.h
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/nanoarrow)
+    if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+      install(
+        DIRECTORY ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/include/flatcc/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/flatcc
+        FILES_MATCHING
+        PATTERN "*.h")
+    endif()
+
+    # Suppress warnings from nanoarrow headers (redundant redeclarations,
+    # shadow warnings in nanoarrow 0.8.0 internal headers)
+    foreach(_na_target ${NANOARROW_TARGETS})
+      get_target_property(_na_inc ${_na_target} INTERFACE_INCLUDE_DIRECTORIES)
+      if(_na_inc)
+        set_target_properties(${_na_target} PROPERTIES
+          INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_na_inc}")
+      endif()
+    endforeach()
+
+    if(NANOARROW_TARGETS)
+      install(
+        TARGETS ${NANOARROW_TARGETS}
+        EXPORT nanoarrowTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+      install(
+        EXPORT nanoarrowTargets
+        FILE nanoarrowTargets.cmake
+        NAMESPACE nanoarrow::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nanoarrow)
+    endif()
+
+    message(STATUS "Added nanoarrow 0.8.0 via CPM")
   endif()
 endfunction()
 
-function(link_arrow TARGET_NAME LIBRARY_TYPE)
-  # Validate parameters
+function(link_nanoarrow TARGET_NAME LIBRARY_TYPE)
   if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_arrow: TARGET_NAME is required")
+    message(FATAL_ERROR "link_nanoarrow: TARGET_NAME is required")
   endif()
 
   if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
     message(
-      FATAL_ERROR "link_arrow: LIBRARY_TYPE must be either STATIC or SHARED")
+      FATAL_ERROR
+        "link_nanoarrow: LIBRARY_TYPE must be either STATIC or SHARED")
   endif()
 
   if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_arrow: Target '${TARGET_NAME}' does not exist")
-  endif()
-
-  # Check if Arrow is available
-  set(ARROW_AVAILABLE FALSE)
-
-  # Check for CPM-built Arrow
-  if(TARGET arrow_shared OR TARGET arrow_static)
-    set(ARROW_AVAILABLE TRUE)
-  endif()
-
-  # Check for system Arrow
-  if(Arrow_FOUND)
-    set(ARROW_AVAILABLE TRUE)
-  endif()
-
-  if(NOT ARROW_AVAILABLE)
     message(
-      FATAL_ERROR
-        "link_arrow: No Arrow found! Call need_arrow() first or ensure system Arrow is available."
-    )
+      FATAL_ERROR "link_nanoarrow: Target '${TARGET_NAME}' does not exist")
   endif()
 
-  # Add Arrow include directories for CPM-built Arrow
-  if(TARGET arrow_shared OR TARGET arrow_static)
-    if(arrow_SOURCE_DIR)
-      target_include_directories(${TARGET_NAME} PRIVATE ${arrow_SOURCE_DIR}/src
-                                                        ${arrow_BINARY_DIR}/src)
-      message(
-        STATUS
-          "Added Arrow include directories to ${TARGET_NAME}: ${arrow_SOURCE_DIR}/src, ${arrow_BINARY_DIR}/src"
-      )
-    endif()
-  endif()
-
-  # Link appropriate Arrow variant based on LIBRARY_TYPE
   if(LIBRARY_TYPE STREQUAL "STATIC")
-    # For static libraries, prefer static Arrow if available
-    if(TARGET arrow_static)
-      target_link_libraries(${TARGET_NAME} PRIVATE arrow_static)
-      message(STATUS "Linked ${TARGET_NAME} to arrow_static")
-    elseif(TARGET arrow_shared)
-      target_link_libraries(${TARGET_NAME} PRIVATE arrow_shared)
+    if(TARGET nanoarrow_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC nanoarrow::nanoarrow_static)
+      message(STATUS "Linked ${TARGET_NAME} to nanoarrow_static")
+    elseif(TARGET nanoarrow_shared)
+      target_link_libraries(${TARGET_NAME} PUBLIC nanoarrow::nanoarrow)
+      message(STATUS "Linked ${TARGET_NAME} to nanoarrow (shared)")
+    else()
       message(
-        STATUS
-          "Linked ${TARGET_NAME} to arrow_shared (static requested but not available)"
-      )
-    elseif(TARGET Arrow::arrow_static)
-      target_link_libraries(${TARGET_NAME} PRIVATE Arrow::arrow_static)
-      message(STATUS "Linked ${TARGET_NAME} to Arrow::arrow_static")
-    elseif(TARGET Arrow::arrow_shared)
-      target_link_libraries(${TARGET_NAME} PRIVATE Arrow::arrow_shared)
-      message(
-        STATUS
-          "Linked ${TARGET_NAME} to Arrow::arrow_shared (static requested but not available)"
-      )
+        FATAL_ERROR
+          "link_nanoarrow: No nanoarrow found! Call need_nanoarrow() first.")
     endif()
-
-    # Link Parquet static variant
-    if(TARGET parquet_static)
-      target_link_libraries(${TARGET_NAME} PRIVATE parquet_static)
-      message(STATUS "Linked ${TARGET_NAME} to parquet_static")
-    elseif(TARGET parquet_shared)
-      target_link_libraries(${TARGET_NAME} PRIVATE parquet_shared)
+  else()
+    if(TARGET nanoarrow_shared)
+      target_link_libraries(${TARGET_NAME} PUBLIC nanoarrow::nanoarrow)
+      message(STATUS "Linked ${TARGET_NAME} to nanoarrow (shared)")
+    elseif(TARGET nanoarrow_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC nanoarrow::nanoarrow_static)
+      message(STATUS "Linked ${TARGET_NAME} to nanoarrow_static")
+    else()
       message(
-        STATUS
-          "Linked ${TARGET_NAME} to parquet_shared (static requested but not available)"
-      )
-    elseif(TARGET Parquet::parquet_static)
-      target_link_libraries(${TARGET_NAME} PRIVATE Parquet::parquet_static)
-      message(STATUS "Linked ${TARGET_NAME} to Parquet::parquet_static")
-    elseif(TARGET Parquet::parquet_shared)
-      target_link_libraries(${TARGET_NAME} PRIVATE Parquet::parquet_shared)
-      message(
-        STATUS
-          "Linked ${TARGET_NAME} to Parquet::parquet_shared (static requested but not available)"
-      )
-    endif()
-  else() # SHARED
-    # For shared libraries, prefer shared Arrow if available
-    if(TARGET arrow_shared)
-      target_link_libraries(${TARGET_NAME} PRIVATE arrow_shared)
-      message(STATUS "Linked ${TARGET_NAME} to arrow_shared")
-    elseif(TARGET arrow_static)
-      target_link_libraries(${TARGET_NAME} PRIVATE arrow_static)
-      message(
-        STATUS
-          "Linked ${TARGET_NAME} to arrow_static (shared requested but not available)"
-      )
-    elseif(TARGET Arrow::arrow_shared)
-      target_link_libraries(${TARGET_NAME} PRIVATE Arrow::arrow_shared)
-      message(STATUS "Linked ${TARGET_NAME} to Arrow::arrow_shared")
-    elseif(TARGET Arrow::arrow_static)
-      target_link_libraries(${TARGET_NAME} PRIVATE Arrow::arrow_static)
-      message(
-        STATUS
-          "Linked ${TARGET_NAME} to Arrow::arrow_static (shared requested but not available)"
-      )
-    endif()
-
-    # Link Parquet shared variant
-    if(TARGET parquet_shared)
-      target_link_libraries(${TARGET_NAME} PRIVATE parquet_shared)
-      message(STATUS "Linked ${TARGET_NAME} to parquet_shared")
-    elseif(TARGET parquet_static)
-      target_link_libraries(${TARGET_NAME} PRIVATE parquet_static)
-      message(
-        STATUS
-          "Linked ${TARGET_NAME} to parquet_static (shared requested but not available)"
-      )
-    elseif(TARGET Parquet::parquet_shared)
-      target_link_libraries(${TARGET_NAME} PRIVATE Parquet::parquet_shared)
-      message(STATUS "Linked ${TARGET_NAME} to Parquet::parquet_shared")
-    elseif(TARGET Parquet::parquet_static)
-      target_link_libraries(${TARGET_NAME} PRIVATE Parquet::parquet_static)
-      message(
-        STATUS
-          "Linked ${TARGET_NAME} to Parquet::parquet_static (shared requested but not available)"
-      )
+        FATAL_ERROR
+          "link_nanoarrow: No nanoarrow found! Call need_nanoarrow() first.")
     endif()
   endif()
+
 endfunction()
 
 # ==============================================================================

@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/runtime.h>
 
+#include <algorithm>
 #include <stdexcept>
 #include <thread>
 
@@ -44,55 +45,65 @@ Runtime::Runtime(const ExecutorConfig& config,
 
 Runtime::~Runtime() { shutdown(); }
 
-void Runtime::submit(std::string name, coro::CoroTask<void> task) {
+TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
         throw std::runtime_error("Runtime is shut down");
     }
+    if (name.empty()) {
+        name = "task-" + std::to_string(task_name_counter_++);
+    }
+
+    auto promise = std::make_shared<std::promise<void>>();
+    auto future = promise->get_future().share();
     auto tid = std::make_shared<std::atomic<TaskIndex>>(-1);
-    auto result = std::make_shared<SubmitResult>();
-    auto future = result->signal.get_future();
-    auto coro = make_submit_coro(std::move(task), result, executor_.get(), tid);
-    executor_->enqueue_tracked(std::move(coro), std::move(name), tid);
-    future.get();
-    if (result->exception) std::rethrow_exception(result->exception);
+
+    auto wrapper =
+        [](coro::CoroTask<void> t, std::shared_ptr<std::promise<void>> p,
+           Executor* exec,
+           std::shared_ptr<std::atomic<TaskIndex>> task_id) -> coro::Coro {
+        try {
+            co_await std::move(t);
+            exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
+        } catch (...) {
+            exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
+            p->set_exception(std::current_exception());
+            co_return;
+        }
+        p->set_value();
+    };
+
+    auto coro = wrapper(std::move(task), promise, executor_.get(), tid);
+    TaskIndex id = executor_->enqueue_tracked(std::move(coro), name, tid);
+
+    {
+        std::lock_guard<std::mutex> lock(futures_mutex_);
+        cleanup_completed_futures();
+        outstanding_futures_.push_back(future);
+    }
+
+    return TaskHandle{future, id, std::move(name)};
 }
 
-void Runtime::schedule(std::string name, coro::CoroTask<void> task) {
-    if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw std::runtime_error("Runtime is shut down");
+void Runtime::wait_all() {
+    std::vector<std::shared_future<void>> futures;
+    {
+        std::lock_guard<std::mutex> lock(futures_mutex_);
+        futures = std::move(outstanding_futures_);
+        outstanding_futures_.clear();
     }
-    auto tid = std::make_shared<std::atomic<TaskIndex>>(-1);
-    auto coro = make_schedule_coro(std::move(task), executor_.get(), tid);
-    executor_->enqueue_tracked(std::move(coro), std::move(name), tid);
+    for (auto& f : futures) {
+        f.wait();
+    }
 }
 
-coro::Coro Runtime::make_submit_coro(
-    coro::CoroTask<void> task, std::shared_ptr<SubmitResult> result,
-    Executor* exec, std::shared_ptr<std::atomic<TaskIndex>> tid) {
-    try {
-        co_await std::move(task);
-        exec->mark_coro_completed(tid->load(std::memory_order_acquire));
-    } catch (...) {
-        exec->mark_coro_completed(tid->load(std::memory_order_acquire));
-        result->exception = std::current_exception();
-    }
-    result->signal.set_value();
-}
-
-coro::Coro Runtime::make_schedule_coro(
-    coro::CoroTask<void> task, Executor* exec,
-    std::shared_ptr<std::atomic<TaskIndex>> tid) {
-    try {
-        co_await std::move(task);
-        exec->mark_coro_completed(tid->load(std::memory_order_acquire));
-    } catch (const std::exception& e) {
-        exec->mark_coro_completed(tid->load(std::memory_order_acquire));
-        DFTRACER_UTILS_LOG_ERROR("schedule() task threw: %s", e.what());
-    } catch (...) {
-        exec->mark_coro_completed(tid->load(std::memory_order_acquire));
-        DFTRACER_UTILS_LOG_ERROR("%s",
-                                 "schedule() task threw unknown exception");
-    }
+void Runtime::cleanup_completed_futures() {
+    outstanding_futures_.erase(
+        std::remove_if(outstanding_futures_.begin(), outstanding_futures_.end(),
+                       [](const std::shared_future<void>& f) {
+                           return f.wait_for(std::chrono::seconds(0)) ==
+                                  std::future_status::ready;
+                       }),
+        outstanding_futures_.end());
 }
 
 ExecutorProgress Runtime::get_progress() const {

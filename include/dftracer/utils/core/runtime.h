@@ -5,15 +5,17 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/watchdog.h>
+#include <dftracer/utils/core/task_handle.h>
 
-#include <any>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace dftracer::utils {
 
@@ -32,15 +34,15 @@ class Runtime {
     Runtime(Runtime&&) = delete;
     Runtime& operator=(Runtime&&) = delete;
 
-    /// Block until task completes, return its result (or rethrow).
+    /// Async submit returns immediately, task runs on executor.
+    TaskHandle submit(coro::CoroTask<void> task, std::string name = "");
+
+    /// Async submit with typed result.
     template <typename T>
-    T submit(std::string name, coro::CoroTask<T> task);
+    TypedTaskHandle<T> submit(coro::CoroTask<T> task, std::string name = "");
 
-    /// Block until void task completes (or rethrow).
-    void submit(std::string name, coro::CoroTask<void> task);
-
-    /// Fire-and-forget: enqueue task without waiting.
-    void schedule(std::string name, coro::CoroTask<void> task);
+    /// Wait for all outstanding tasks to complete.
+    void wait_all();
 
     ExecutorProgress get_progress() const;
     bool is_responsive() const;
@@ -53,61 +55,64 @@ class Runtime {
     Executor* executor() { return executor_.get(); }
     Watchdog* watchdog() { return watchdog_.get(); }
 
-    struct SubmitResult {
-        std::exception_ptr exception;
-        std::any value;
-        std::promise<void> signal;
-    };
-
    private:
-    coro::Coro make_submit_coro(coro::CoroTask<void> task,
-                                std::shared_ptr<SubmitResult> result,
-                                Executor* exec,
-                                std::shared_ptr<std::atomic<TaskIndex>> tid);
-
-    template <typename T>
-    coro::Coro make_submit_coro(coro::CoroTask<T> task,
-                                std::shared_ptr<SubmitResult> result,
-                                Executor* exec,
-                                std::shared_ptr<std::atomic<TaskIndex>> tid);
-
-    coro::Coro make_schedule_coro(coro::CoroTask<void> task, Executor* exec,
-                                  std::shared_ptr<std::atomic<TaskIndex>> tid);
+    void cleanup_completed_futures();
 
     std::unique_ptr<Executor> executor_;
     std::unique_ptr<Watchdog> watchdog_;
     std::size_t threads_;
     std::atomic<bool> shutdown_called_{false};
+    std::atomic<uint64_t> task_name_counter_{0};
+    std::vector<std::shared_future<void>> outstanding_futures_;
+    std::mutex futures_mutex_;
 };
 
 template <typename T>
-T Runtime::submit(std::string name, coro::CoroTask<T> task) {
+TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
         throw std::runtime_error("Runtime is shut down");
     }
-    auto tid = std::make_shared<std::atomic<TaskIndex>>(-1);
-    auto result = std::make_shared<SubmitResult>();
-    auto future = result->signal.get_future();
-    auto coro = make_submit_coro(std::move(task), result, executor_.get(), tid);
-    executor_->enqueue_tracked(std::move(coro), std::move(name), tid);
-    future.get();
-    if (result->exception) std::rethrow_exception(result->exception);
-    return std::any_cast<T>(std::move(result->value));
-}
-
-template <typename T>
-coro::Coro Runtime::make_submit_coro(
-    coro::CoroTask<T> task, std::shared_ptr<SubmitResult> result,
-    Executor* exec, std::shared_ptr<std::atomic<TaskIndex>> tid) {
-    try {
-        auto val = co_await std::move(task);
-        exec->mark_coro_completed(tid->load(std::memory_order_acquire));
-        result->value = std::move(val);
-    } catch (...) {
-        exec->mark_coro_completed(tid->load(std::memory_order_acquire));
-        result->exception = std::current_exception();
+    if (name.empty()) {
+        name = "task-" + std::to_string(task_name_counter_++);
     }
-    result->signal.set_value();
+
+    auto typed_promise = std::make_shared<std::promise<T>>();
+    auto typed_future = typed_promise->get_future().share();
+
+    // void future for outstanding_futures_ tracking
+    auto void_promise = std::make_shared<std::promise<void>>();
+    auto void_future = void_promise->get_future().share();
+
+    auto tid = std::make_shared<std::atomic<TaskIndex>>(-1);
+
+    auto wrapper =
+        [](coro::CoroTask<T> t, std::shared_ptr<std::promise<T>> tp,
+           std::shared_ptr<std::promise<void>> vp, Executor* exec,
+           std::shared_ptr<std::atomic<TaskIndex>> task_id) -> coro::Coro {
+        try {
+            T val = co_await std::move(t);
+            exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
+            tp->set_value(std::move(val));
+        } catch (...) {
+            exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
+            auto ex = std::current_exception();
+            tp->set_exception(ex);
+            vp->set_exception(ex);
+            co_return;
+        }
+        vp->set_value();
+    };
+
+    auto coro = wrapper(std::move(task), typed_promise, void_promise,
+                        executor_.get(), tid);
+    TaskIndex id = executor_->enqueue_tracked(std::move(coro), name, tid);
+
+    {
+        std::lock_guard<std::mutex> lock(futures_mutex_);
+        outstanding_futures_.push_back(void_future);
+    }
+
+    return TypedTaskHandle<T>{typed_future, id, std::move(name)};
 }
 
 }  // namespace dftracer::utils

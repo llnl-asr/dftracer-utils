@@ -170,13 +170,22 @@ static int TraceReader_init(TraceReaderObject *self, PyObject *args,
     }
 
     if (runtime_arg && runtime_arg != Py_None) {
-        if (!PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
-            PyErr_SetString(PyExc_TypeError,
-                            "runtime must be a Runtime instance or None");
-            return -1;
+        if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
+            // Direct C++ Runtime object
+            Py_INCREF(runtime_arg);
+            self->runtime_obj = runtime_arg;
+        } else {
+            // Python wrapper, extract _native attribute
+            PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
+            if (native && PyObject_TypeCheck(native, &RuntimeType)) {
+                self->runtime_obj = native;  // already incref'd by GetAttr
+            } else {
+                Py_XDECREF(native);
+                PyErr_SetString(PyExc_TypeError,
+                                "runtime must be a Runtime instance or None");
+                return -1;
+            }
         }
-        Py_INCREF(runtime_arg);
-        self->runtime_obj = runtime_arg;
     }
 
     self->file_path = PyUnicode_FromString(file_path);
@@ -254,7 +263,7 @@ static PyObject *TraceReader_iter_lines(TraceReaderObject *self, PyObject *args,
     auto state = std::make_shared<IteratorState>();
 
     Runtime *rt = get_runtime(self);
-    rt->schedule("iter_lines", produce_lines(state, cfg, rc));
+    rt->submit(produce_lines(state, cfg, rc), "iter_lines");
 
     TraceReaderIteratorObject *it = make_iterator(state, IteratorMode::LINES);
     return (PyObject *)it;
@@ -305,7 +314,7 @@ static PyObject *TraceReader_iter_raw(TraceReaderObject *self, PyObject *args,
     auto state = std::make_shared<IteratorState>();
 
     Runtime *rt = get_runtime(self);
-    rt->schedule("iter_raw", produce_raw(state, cfg, rc));
+    rt->submit(produce_raw(state, cfg, rc), "iter_raw");
 
     TraceReaderIteratorObject *it = make_iterator(state, IteratorMode::RAW);
     return (PyObject *)it;

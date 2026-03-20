@@ -289,6 +289,22 @@ static PyObject *Runtime_set_default_task_timeout(RuntimeObject *self,
     Py_END_ALLOW_THREADS Py_RETURN_NONE;
 }
 
+static PyObject *Runtime_wait_all(RuntimeObject *self,
+                                  PyObject *Py_UNUSED(ignored)) {
+    if (!self->runtime) {
+        PyErr_SetString(PyExc_RuntimeError, "Runtime not initialized");
+        return NULL;
+    }
+    try {
+        Py_BEGIN_ALLOW_THREADS self->runtime->wait_all();
+        Py_END_ALLOW_THREADS
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *Runtime_enter(RuntimeObject *self,
                                PyObject *Py_UNUSED(ignored)) {
     Py_INCREF(self);
@@ -359,6 +375,8 @@ static PyMethodDef Runtime_methods[] = {
     {"set_default_task_timeout", (PyCFunction)Runtime_set_default_task_timeout,
      METH_VARARGS | METH_KEYWORDS,
      "Set default per-task timeout in milliseconds (ms=0)"},
+    {"wait_all", (PyCFunction)Runtime_wait_all, METH_NOARGS,
+     "Wait for all outstanding submitted tasks to complete"},
     {"__enter__", (PyCFunction)Runtime_enter, METH_NOARGS,
      "Enter context manager"},
     {"__exit__", (PyCFunction)Runtime_exit, METH_VARARGS,

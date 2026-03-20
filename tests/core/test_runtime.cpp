@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::coro;
@@ -40,31 +41,32 @@ static CoroTask<void> throw_void_async() {
 
 TEST_CASE("Runtime - submit returns correct value") {
     Runtime rt(2);
-    auto result = rt.submit("add", add_async(3, 4));
+    auto result = rt.submit(add_async(3, 4), "add").get();
     CHECK(result == 7);
 }
 
 TEST_CASE("Runtime - submit void completes") {
     Runtime rt(2);
-    CHECK_NOTHROW(rt.submit("noop", noop_async()));
+    CHECK_NOTHROW(rt.submit(noop_async(), "noop").wait());
 }
 
 TEST_CASE("Runtime - submit propagates exception") {
     Runtime rt(2);
-    CHECK_THROWS_AS(rt.submit("throw", throw_async()), std::runtime_error);
+    CHECK_THROWS_AS(rt.submit(throw_async(), "throw").get(),
+                    std::runtime_error);
 }
 
 TEST_CASE("Runtime - submit string result") {
     Runtime rt(2);
-    auto result = rt.submit("string", string_async());
+    auto result = rt.submit(string_async(), "string").get();
     CHECK(result == "hello");
 }
 
-TEST_CASE("Runtime - schedule runs coroutine") {
+TEST_CASE("Runtime - submit runs async coroutine") {
     Runtime rt(2);
     auto p = std::make_shared<std::promise<void>>();
     auto f = p->get_future();
-    rt.schedule("fulfill", fulfill_async(std::move(p)));
+    rt.submit(fulfill_async(std::move(p)), "fulfill");
     auto status = f.wait_for(std::chrono::seconds(5));
     CHECK(status == std::future_status::ready);
 }
@@ -72,21 +74,21 @@ TEST_CASE("Runtime - schedule runs coroutine") {
 TEST_CASE("Runtime - multiple sequential submits") {
     Runtime rt(2);
     for (int i = 0; i < 10; ++i) {
-        auto result = rt.submit("add", add_async(i, i));
+        auto result = rt.submit(add_async(i, i), "add").get();
         CHECK(result == i * 2);
     }
 }
 
 TEST_CASE("Runtime - shutdown is idempotent") {
     Runtime rt(2);
-    rt.submit("noop", noop_async());
+    rt.submit(noop_async(), "noop").wait();
     rt.shutdown();
     CHECK_NOTHROW(rt.shutdown());
 }
 
 TEST_CASE("Runtime - get_progress reports completed task") {
     Runtime rt(2);
-    rt.submit("tracked", noop_async());
+    rt.submit(noop_async(), "tracked").wait();
     auto progress = rt.get_progress();
     CHECK(progress.total_tasks_submitted == 1);
     CHECK(progress.tasks_completed == 1);
@@ -104,31 +106,31 @@ TEST_CASE("Runtime - default threads uses hardware_concurrency") {
 
 TEST_CASE("Runtime - is_responsive after submit") {
     Runtime rt(2);
-    rt.submit("noop", noop_async());
+    rt.submit(noop_async(), "noop").wait();
     CHECK(rt.is_responsive());
 }
 
 TEST_CASE("Runtime - submit after shutdown throws") {
     Runtime rt(2);
-    rt.submit("noop", noop_async());
+    rt.submit(noop_async(), "noop").wait();
     rt.shutdown();
-    CHECK_THROWS_AS(rt.submit("fail", noop_async()), std::runtime_error);
+    CHECK_THROWS_AS(rt.submit(noop_async(), "fail"), std::runtime_error);
 }
 
-TEST_CASE("Runtime - schedule after shutdown throws") {
+TEST_CASE("Runtime - submit after shutdown throws (void)") {
     Runtime rt(2);
     rt.shutdown();
-    CHECK_THROWS_AS(rt.schedule("fail", noop_async()), std::runtime_error);
+    CHECK_THROWS_AS(rt.submit(noop_async(), "fail"), std::runtime_error);
 }
 
-TEST_CASE("Runtime - schedule exception does not crash") {
+TEST_CASE("Runtime - submit exception does not crash runtime") {
     Runtime rt(2);
-    rt.schedule("throw", throw_void_async());
+    rt.submit(throw_void_async(), "throw");
     auto p = std::make_shared<std::promise<void>>();
     auto f = p->get_future();
-    rt.schedule("after_throw", fulfill_async(std::move(p)));
+    rt.submit(fulfill_async(std::move(p)), "after_throw");
     f.wait_for(std::chrono::seconds(5));
-    CHECK_NOTHROW(rt.submit("noop", noop_async()));
+    CHECK_NOTHROW(rt.submit(noop_async(), "noop").wait());
 }
 
 TEST_CASE("Runtime - progress starts at zero") {
@@ -153,25 +155,25 @@ TEST_CASE("Runtime - progress workers present") {
 
 TEST_CASE("Runtime - progress accumulates across submits") {
     Runtime rt(2);
-    rt.submit("a", noop_async());
-    rt.submit("b", noop_async());
-    rt.submit("c", add_async(1, 2));
+    rt.submit(noop_async(), "a").wait();
+    rt.submit(noop_async(), "b").wait();
+    rt.submit(add_async(1, 2), "c").wait();
     auto p = rt.get_progress();
     CHECK(p.total_tasks_submitted == 3);
     CHECK(p.tasks_completed == 3);
     CHECK(p.tasks_failed == 0);
 }
 
-TEST_CASE("Runtime - progress tracks schedule") {
+TEST_CASE("Runtime - progress tracks async submit") {
     Runtime rt(2);
     auto pr = std::make_shared<std::promise<void>>();
     auto f = pr->get_future();
-    rt.schedule("bg", fulfill_async(std::move(pr)));
+    rt.submit(fulfill_async(std::move(pr)), "bg");
     auto status = f.wait_for(std::chrono::seconds(5));
     REQUIRE(status == std::future_status::ready);
-    // submit() acts as a barrier -- blocks until the executor processes it,
-    // ensuring the prior schedule()'s mark_coro_completed has run.
-    rt.submit("barrier", noop_async());
+    // wait() acts as a barrier -- ensures the prior submit()'s
+    // mark_coro_completed has run before we snapshot progress.
+    rt.submit(noop_async(), "barrier").wait();
     auto p = rt.get_progress();
     CHECK(p.total_tasks_submitted >= 2);
     CHECK(p.tasks_completed >= 2);
@@ -179,7 +181,7 @@ TEST_CASE("Runtime - progress tracks schedule") {
 
 TEST_CASE("Runtime - progress task details") {
     Runtime rt(2);
-    rt.submit("my_task", noop_async());
+    rt.submit(noop_async(), "my_task").wait();
     auto p = rt.get_progress();
     REQUIRE(p.root_tasks.size() == 1);
     CHECK(p.root_tasks[0].name == "my_task");
@@ -191,9 +193,9 @@ TEST_CASE("Runtime - progress task details") {
 
 TEST_CASE("Runtime - progress multiple tasks have names") {
     Runtime rt(2);
-    rt.submit("first", noop_async());
-    rt.submit("second", add_async(1, 2));
-    rt.submit("third", string_async());
+    rt.submit(noop_async(), "first").wait();
+    rt.submit(add_async(1, 2), "second").wait();
+    rt.submit(string_async(), "third").wait();
     auto p = rt.get_progress();
     REQUIRE(p.root_tasks.size() == 3);
     std::set<std::string> names;
@@ -209,10 +211,126 @@ TEST_CASE("Runtime - progress multiple tasks have names") {
 TEST_CASE("Runtime - progress no failures on success") {
     Runtime rt(2);
     for (int i = 0; i < 5; ++i) {
-        rt.submit("ok", noop_async());
+        rt.submit(noop_async(), "ok").wait();
     }
     auto p = rt.get_progress();
     CHECK(p.tasks_failed == 0);
     CHECK(p.tasks_completed == 5);
     CHECK(p.recent_errors.empty());
+}
+
+// ========================================================================
+// TaskHandle-specific tests
+// ========================================================================
+
+TEST_CASE("TaskHandle - done() returns true after wait") {
+    Runtime rt(2);
+    auto h = rt.submit(noop_async(), "done-check");
+    h.wait();
+    CHECK(h.done());
+}
+
+TEST_CASE("TaskHandle - name is preserved") {
+    Runtime rt(2);
+    auto h = rt.submit(noop_async(), "my-custom-name");
+    CHECK(h.name == "my-custom-name");
+    h.wait();
+}
+
+TEST_CASE("TaskHandle - auto-generated name when empty") {
+    Runtime rt(2);
+    auto h = rt.submit(noop_async());
+    CHECK(!h.name.empty());
+    CHECK(h.name.substr(0, 5) == "task-");
+    h.wait();
+}
+
+TEST_CASE("TaskHandle - task_id is assigned") {
+    Runtime rt(2);
+    auto h = rt.submit(noop_async(), "id-check");
+    h.wait();
+    // enqueue_tracked assigns ids via fetch_sub from -1000000; sentinel is -1
+    CHECK(h.id != -1);
+}
+
+TEST_CASE("TypedTaskHandle - get() returns correct value") {
+    Runtime rt(2);
+    auto h = rt.submit(add_async(10, 20), "typed-get");
+    CHECK(h.get() == 30);
+}
+
+TEST_CASE("TypedTaskHandle - get() propagates exception") {
+    Runtime rt(2);
+    auto h = rt.submit(throw_async(), "typed-throw");
+    CHECK_THROWS_AS(h.get(), std::runtime_error);
+}
+
+TEST_CASE("TypedTaskHandle - done() and name work") {
+    Runtime rt(2);
+    auto h = rt.submit(string_async(), "typed-name");
+    auto val = h.get();
+    CHECK(val == "hello");
+    CHECK(h.done());
+    CHECK(h.name == "typed-name");
+}
+
+TEST_CASE("Runtime - wait_all with no tasks is no-op") {
+    Runtime rt(2);
+    CHECK_NOTHROW(rt.wait_all());
+}
+
+TEST_CASE("Runtime - wait_all waits for multiple tasks") {
+    Runtime rt(4);
+    for (int i = 0; i < 20; ++i) {
+        rt.submit(add_async(i, i), "batch-" + std::to_string(i));
+    }
+    rt.wait_all();
+    auto p = rt.get_progress();
+    CHECK(p.tasks_completed == 20);
+}
+
+TEST_CASE("Runtime - concurrent submits complete correctly") {
+    Runtime rt(4);
+    std::vector<TypedTaskHandle<int>> handles;
+    for (int i = 0; i < 10; ++i) {
+        handles.push_back(
+            rt.submit(add_async(i, 100), "concurrent-" + std::to_string(i)));
+    }
+    for (int i = 0; i < 10; ++i) {
+        CHECK(handles[i].get() == i + 100);
+    }
+}
+
+TEST_CASE("Runtime - wait_all then submit again works") {
+    Runtime rt(2);
+    rt.submit(noop_async(), "first-batch");
+    rt.wait_all();
+
+    rt.submit(noop_async(), "second-batch");
+    rt.wait_all();
+
+    auto p = rt.get_progress();
+    CHECK(p.tasks_completed == 2);
+}
+
+TEST_CASE("Runtime - auto-generated names are unique") {
+    Runtime rt(2);
+    auto h1 = rt.submit(noop_async());
+    auto h2 = rt.submit(noop_async());
+    CHECK(h1.name != h2.name);
+    rt.wait_all();
+}
+
+TEST_CASE("TaskHandle - void exception via wait") {
+    Runtime rt(2);
+    auto h = rt.submit(throw_void_async(), "void-throw");
+    CHECK_THROWS_AS(h.wait(), std::runtime_error);
+    CHECK(h.done());
+}
+
+TEST_CASE("TaskHandle - void exception via get") {
+    Runtime rt(2);
+    auto h = rt.submit(throw_void_async(), "void-get-throw");
+    CHECK_THROWS_AS(h.get(), std::runtime_error);
+    CHECK(h.done());
 }

@@ -62,6 +62,67 @@ sequential or indexed reading and supports streaming iterators:
        # Check progress
        print(rt.get_progress())
 
+Async Task Submission
+~~~~~~~~~~~~~~~~~~~~~
+
+``Runtime.submit()`` runs tasks asynchronously and returns a ``TaskHandle``:
+
+.. code-block:: python
+
+   from dftracer.utils import Runtime
+
+   with Runtime(threads=8, python_threads=4) as rt:
+       # Submit Python callables -- runs on Python thread pool
+       h1 = rt.submit(process_file, "trace1.pfw.gz", name="proc-1")
+       h2 = rt.submit(process_file, "trace2.pfw.gz", name="proc-2")
+
+       # Wait for all tasks
+       rt.wait_all()
+
+       # Or get individual results
+       result = h1.get()  # blocks until h1 completes
+
+Task names are auto-derived from the callable when not provided:
+
+.. code-block:: python
+
+   rt.submit(my_function)           # name = "my_function"
+   rt.submit(obj.method)            # name = "MyClass.method"
+   rt.submit(lambda: None)          # name = "<lambda>"
+
+Composing tasks with dependency chains:
+
+.. code-block:: python
+
+   def compose(filename):
+       h1 = rt.submit(index_file, filename)
+       result = h1.get()                       # wait for index
+       h2 = rt.submit(query_index, result)     # use result
+       return h2.get()
+
+   h = rt.submit(compose, "trace.pfw.gz", name="compose")
+   print(h.get())
+
+Error handling:
+
+.. code-block:: python
+
+   # Per-task: .get() re-raises the original exception
+   try:
+       h.get()
+   except ValueError as e:
+       print(f"Task failed: {e}")
+
+   # Batch: wait_all(raise_on_error=True) raises after all complete
+   rt.wait_all(raise_on_error=True)
+
+   # Callback: async notification on failure
+   rt.set_error_callback(lambda h, e: log.error(f"{h.name}: {e}"))
+
+   # Inspect failures
+   for h in rt.get_failed():
+       print(f"{h.name}: {h.exception}")
+
 Using with Dask
 ~~~~~~~~~~~~~~~
 

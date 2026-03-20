@@ -301,13 +301,45 @@ class JSON:
         """Return string representation of the object."""
         ...
 
-# ========== RUNTIME ==========
+# ========== TASK HANDLE ==========
+
+class TaskHandle:
+    """Handle to a submitted C++ coroutine task."""
+
+    def get(self) -> Any:
+        """Block until task completes and return result. Raises on error."""
+        ...
+
+    def wait(self) -> None:
+        """Block until task completes. Raises on error."""
+        ...
+
+    def done(self) -> bool:
+        """Return True if task has completed."""
+        ...
+
+    @property
+    def name(self) -> str:
+        """Task name."""
+        ...
+
+    @property
+    def task_id(self) -> int:
+        """Task identifier."""
+        ...
+
+# ========== RUNTIME (C++ native) ==========
 
 class Runtime:
-    """Lightweight coroutine runtime wrapping Executor + Watchdog."""
+    """Lightweight coroutine runtime wrapping Executor + Watchdog.
+
+    Note: For user-facing API, use dftracer.utils.Runtime (Python wrapper)
+    which adds submit(), Python callable support, and error handling.
+    """
 
     def __init__(self, threads: int = 0) -> None: ...
     def shutdown(self) -> None: ...
+    def wait_all(self) -> None: ...
     def get_progress(self) -> dict: ...
     def is_responsive(self) -> bool: ...
     def set_timeout(self, global_ms: int = 0) -> None: ...

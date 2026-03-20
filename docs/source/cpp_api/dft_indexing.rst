@@ -321,7 +321,7 @@ IndexBuilder
 Single-pass index builder that decompresses once and builds all index
 data (checkpoints, bloom filters, manifest) via the visitor pattern.
 
-.. doxygenclass:: dftracer::utils::utilities::indexer::IndexBuilder
+.. doxygenclass:: dftracer::utils::utilities::indexer::IndexBuilderUtility
    :members:
 
 TraceReader

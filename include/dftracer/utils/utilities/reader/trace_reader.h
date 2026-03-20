@@ -54,14 +54,20 @@ class TraceReader {
         ReadConfig config = {});
 
     bool has_index() const;
+    std::size_t get_max_bytes();
+    std::size_t get_num_lines();
 
    private:
     TraceReaderConfig config_;
     bool has_index_ = false;
     std::string idx_path_;
     ArchiveFormat format_ = ArchiveFormat::UNKNOWN;
+    std::size_t cached_max_bytes_ = 0;
+    std::size_t cached_num_lines_ = 0;
+    bool metadata_cached_ = false;
 
     void probe_index();
+    void ensure_metadata_cached();
 
     std::shared_ptr<internal::Reader> create_indexed_reader();
 

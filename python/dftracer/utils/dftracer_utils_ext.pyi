@@ -111,91 +111,6 @@ class Indexer:
         """Exit the runtime context for the with statement."""
         ...
 
-# ========== READER ==========
-
-class Reader:
-    """Reader for reading from gzip files"""
-
-    def __init__(
-        self,
-        gz_path: str,
-        idx_path: Optional[str] = None,
-        checkpoint_size: int = 1048576,
-        indexer: Optional[Indexer] = None,
-    ) -> None:
-        """Create a  reader."""
-        ...
-
-    def get_max_bytes(self) -> int:
-        """Get the maximum byte position available in the file."""
-        ...
-
-    def get_num_lines(self) -> int:
-        """Get the number of lines in the file."""
-        ...
-
-    def reset(self) -> None:
-        """Reset the reader to initial state."""
-        ...
-
-    def read(self, start_bytes: int, end_bytes: int) -> bytes:
-        """Read raw bytes and return as bytes."""
-        ...
-
-    def read_lines(self, start_line: int, end_line: int) -> List[str]:
-        """Zero-copy read lines and return as list[str]."""
-        ...
-
-    def read_line_bytes(self, start_bytes: int, end_bytes: int) -> List[str]:
-        """Read line bytes and return as list[str]."""
-        ...
-
-    def read_lines_json(self, start_line: int, end_line: int) -> List[JSON]:
-        """Read lines and parse as JSON, return as list[JSON]."""
-        ...
-
-    def read_line_bytes_json(self, start_bytes: int, end_bytes: int) -> List[JSON]:
-        """Read line bytes and parse as JSON, return as list[JSON]."""
-        ...
-
-    @property
-    def gz_path(self) -> str:
-        """Path to the gzip file."""
-        ...
-
-    @property
-    def idx_path(self) -> str:
-        """Path to the index file."""
-        ...
-
-    @property
-    def checkpoint_size(self) -> int:
-        """Checkpoint size in bytes."""
-        ...
-
-    @property
-    def buffer_size(self) -> int:
-        """Internal buffer size for read operations."""
-        ...
-
-    @buffer_size.setter
-    def buffer_size(self, size: int) -> None:
-        """Set internal buffer size for read operations."""
-        ...
-
-    def __enter__(self) -> "Reader":
-        """Enter the runtime context for the with statement."""
-        ...
-
-    def __exit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
-    ) -> None:
-        """Exit the runtime context for the with statement."""
-        ...
-
 # ========== JSON ==========
 
 # Type aliases for JSON values
@@ -402,7 +317,21 @@ class TraceReader:
     ) -> None:
         """Create a TraceReader.
 
-        Raises RuntimeError if file_path does not exist or cannot be opened.
+        Args:
+            file_path: Path to the trace file (.pfw.gz or plain text).
+            index_dir: Directory to search for ``.idx`` sidecar files.
+                Empty string (default) searches next to the trace file.
+            checkpoint_size: Checkpoint interval in bytes for index
+                building (default 32 MB).
+            auto_build_index: If True, automatically build an index
+                when none exists and the file exceeds *index_threshold*.
+            index_threshold: Minimum file size in bytes before
+                auto-indexing is triggered (default 8 MB).
+            runtime: Runtime instance for thread pool control.
+                If None, uses the default global Runtime.
+
+        Raises:
+            RuntimeError: If *file_path* does not exist or cannot be opened.
         """
         ...
 
@@ -414,10 +343,11 @@ class TraceReader:
         end_byte: int = 0,
         buffer_size: int = 4194304,
     ) -> List[str]:
-        """Read lines from the trace file.
+        """Read lines from the trace file and return as a list.
 
-        Both start_line and end_line default to 0, which means read all lines.
-        Raises ValueError if either argument is negative.
+        Lines are 1-indexed. Pass ``start_line=0, end_line=0`` (the
+        defaults) to read all lines. Out-of-range values are clamped
+        to the actual file bounds.
         """
         ...
 
@@ -428,7 +358,14 @@ class TraceReader:
         start_byte: int = 0,
         end_byte: int = 0,
         buffer_size: int = 4194304,
-    ) -> Iterator[str]: ...
+    ) -> Iterator[str]:
+        """Return a streaming iterator over decoded lines.
+
+        The C++ coroutine runs on the Runtime thread pool and pushes
+        lines into a bounded queue; Python ``__next__`` pops from it.
+        """
+        ...
+
     def iter_raw(
         self,
         start_line: int = 0,
@@ -438,7 +375,10 @@ class TraceReader:
         line_aligned: bool = True,
         multi_line: bool = True,
         buffer_size: int = 4194304,
-    ) -> Iterator[bytes]: ...
+    ) -> Iterator[bytes]:
+        """Return a streaming iterator over raw byte chunks."""
+        ...
+
     def read_raw(
         self,
         start_line: int = 0,
@@ -448,7 +388,56 @@ class TraceReader:
         line_aligned: bool = True,
         multi_line: bool = True,
         buffer_size: int = 4194304,
-    ) -> List[bytes]: ...
+    ) -> List[bytes]:
+        """Read raw byte chunks and return as a list."""
+        ...
+
+    def iter_lines_json(
+        self,
+        start_line: int = 0,
+        end_line: int = 0,
+        start_byte: int = 0,
+        end_byte: int = 0,
+        buffer_size: int = 4194304,
+    ) -> Iterator["JSON"]:
+        """Return iterator over parsed JSON objects.
+
+        Skips non-JSON lines (array delimiters like ``[`` and ``]``).
+        Each yielded item is a lazy :class:`JSON` object.
+        """
+        ...
+
+    def read_lines_json(
+        self,
+        start_line: int = 0,
+        end_line: int = 0,
+        start_byte: int = 0,
+        end_byte: int = 0,
+        buffer_size: int = 4194304,
+    ) -> List["JSON"]:
+        """Read lines and return as list of parsed JSON objects.
+
+        Equivalent to ``list(self.iter_lines_json(...))``.
+        """
+        ...
+
+    def get_max_bytes(self) -> int:
+        """Get the maximum byte position in the decompressed trace.
+
+        Returns the decompressed size for indexed files, file size for
+        plain text files, or 0 for compressed files without an index.
+        """
+        ...
+
+    def get_num_lines(self) -> int:
+        """Get the total number of lines in the trace.
+
+        Returns the line count for indexed files, or 0 for files
+        without an index (use :attr:`num_lines` property for fallback
+        counting).
+        """
+        ...
+
     @property
     def file_path(self) -> str:
         """Path to the trace file."""

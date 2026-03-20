@@ -11,7 +11,7 @@
 #include <queue>
 #include <string>
 
-enum class IteratorMode { LINES, RAW };
+enum class IteratorMode { LINES, RAW, JSON };
 
 struct IteratorState {
     std::queue<std::optional<std::string>> queue;

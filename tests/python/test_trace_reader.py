@@ -456,5 +456,192 @@ class TestTraceReaderWithRuntime:
             assert len(lines) == 12
 
 
+class TestTraceReaderJSON:
+    """JSON reading tests."""
+
+    def test_read_lines_json_returns_list(self):
+        """read_lines_json returns a list of JSON objects."""
+        with Environment(lines=32) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            result = reader.read_lines_json()
+            assert isinstance(result, list)
+            assert len(result) == 32
+
+    def test_read_lines_json_objects_have_keys(self):
+        """Each JSON object has expected keys."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            result = reader.read_lines_json()
+            for obj in result:
+                assert "name" in obj
+                assert "cat" in obj
+                assert "dur" in obj
+
+    def test_read_lines_json_values_correct(self):
+        """JSON values match what was written."""
+        with Environment(lines=5) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            result = reader.read_lines_json()
+            assert result[0]["name"] == "name_1"
+            assert result[0]["cat"] == "cat_1"
+
+    def test_iter_lines_json_is_lazy(self):
+        """iter_lines_json returns an iterator, not a list."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            it = reader.iter_lines_json()
+            assert hasattr(it, "__iter__")
+            assert hasattr(it, "__next__")
+            items = list(it)
+            assert len(items) == 10
+
+    def test_iter_lines_json_partial_iteration(self):
+        """Can stop iterating early."""
+        with Environment(lines=100) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            it = reader.iter_lines_json()
+            first = next(it)
+            assert "name" in first
+            # Don't exhaust the iterator
+
+    def test_read_lines_json_with_line_range(self):
+        """read_lines_json respects start_line/end_line."""
+        with Environment(lines=50) as env:
+            gz_file = env.create_test_gzip_file()
+            env.build_index(gz_file)
+            reader = dft_utils.TraceReader(gz_file)
+            # Lines are 1-indexed; line 1 is "[", line 2 is first JSON, etc.
+            # But iter_lines_json skips non-JSON lines, so we get JSON objects
+            all_json = reader.read_lines_json()
+            subset = reader.read_lines_json(start_line=1, end_line=10)
+            assert len(subset) <= len(all_json)
+            assert len(subset) > 0
+
+    def test_read_lines_json_with_byte_range(self):
+        """read_lines_json respects start_byte/end_byte."""
+        with Environment(lines=50) as env:
+            gz_file = env.create_test_gzip_file()
+            env.build_index(gz_file)
+            reader = dft_utils.TraceReader(gz_file)
+            max_bytes = reader.get_max_bytes()
+            if max_bytes > 0:
+                half = max_bytes // 2
+                subset = reader.read_lines_json(start_byte=0, end_byte=half)
+                assert len(subset) > 0
+                assert len(subset) < 50
+
+
+class TestTraceReaderMetadata:
+    """get_max_bytes and get_num_lines tests."""
+
+    def test_get_max_bytes_indexed(self):
+        """get_max_bytes returns positive value for indexed files."""
+        with Environment(lines=32) as env:
+            gz_file = env.create_test_gzip_file()
+            env.build_index(gz_file)
+            reader = dft_utils.TraceReader(gz_file)
+            max_bytes = reader.get_max_bytes()
+            assert isinstance(max_bytes, int)
+            assert max_bytes > 0
+
+    def test_get_num_lines_indexed(self):
+        """get_num_lines returns correct count for indexed files."""
+        with Environment(lines=32) as env:
+            gz_file = env.create_test_gzip_file()
+            env.build_index(gz_file)
+            reader = dft_utils.TraceReader(gz_file)
+            num_lines = reader.get_num_lines()
+            assert isinstance(num_lines, int)
+            assert num_lines > 0
+
+    def test_get_max_bytes_unindexed_compressed(self):
+        """get_max_bytes returns 0 for compressed files without index."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            assert reader.get_max_bytes() == 0
+
+    def test_get_num_lines_unindexed(self):
+        """get_num_lines returns 0 for files without index."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            assert reader.get_num_lines() == 0
+
+    def test_num_lines_property_still_works(self):
+        """num_lines property falls back to counting for unindexed files."""
+        with Environment(lines=20) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            # Property should still work (falls back to reading all lines)
+            assert reader.num_lines > 0
+
+
+class TestTraceReaderClamping:
+    """Test that out-of-range requests are clamped, not errored."""
+
+    def test_end_line_beyond_total_clamped(self):
+        """Requesting more lines than exist returns what's available."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            env.build_index(gz_file)
+            reader = dft_utils.TraceReader(gz_file)
+            # Request way more lines than exist
+            result = reader.read_lines(start_line=1, end_line=99999)
+            assert len(result) > 0
+
+    def test_start_line_beyond_total_returns_empty(self):
+        """Requesting lines starting beyond total returns empty."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            env.build_index(gz_file)
+            reader = dft_utils.TraceReader(gz_file)
+            result = reader.read_lines(start_line=99999, end_line=100000)
+            assert len(result) == 0
+
+    def test_end_byte_beyond_max_clamped(self):
+        """Requesting bytes beyond max returns what's available."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            env.build_index(gz_file)
+            reader = dft_utils.TraceReader(gz_file)
+            max_bytes = reader.get_max_bytes()
+            result = reader.read_lines(start_byte=0, end_byte=max_bytes * 10)
+            assert len(result) > 0
+
+    def test_start_byte_beyond_max_returns_empty(self):
+        """Requesting bytes starting beyond max returns empty."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            env.build_index(gz_file)
+            reader = dft_utils.TraceReader(gz_file)
+            max_bytes = reader.get_max_bytes()
+            result = reader.read_lines(start_byte=max_bytes * 10, end_byte=max_bytes * 20)
+            assert len(result) == 0
+
+    def test_clamping_with_json(self):
+        """JSON reading also clamps correctly."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            env.build_index(gz_file)
+            reader = dft_utils.TraceReader(gz_file)
+            result = reader.read_lines_json(start_line=1, end_line=99999)
+            assert len(result) > 0
+            assert len(result) == 10
+
+    def test_streaming_clamping_no_index(self):
+        """Without index, requesting too many lines just returns what exists."""
+        with Environment(lines=10) as env:
+            gz_file = env.create_test_gzip_file()
+            reader = dft_utils.TraceReader(gz_file)
+            result = reader.read_lines(start_line=1, end_line=99999)
+            assert len(result) > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

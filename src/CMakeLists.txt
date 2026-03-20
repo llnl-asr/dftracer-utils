@@ -885,8 +885,6 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer_checkpoint.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer_checkpoint.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/reader.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/reader.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/runtime.cpp
@@ -906,5 +904,15 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
                                   "${CMAKE_BINARY_DIR}/dftracer/utils")
 
   install(TARGETS dftracer_utils_ext LIBRARY DESTINATION "dftracer/utils")
+
+  # Editable installs place the .so in site-packages but serve .py files
+  # from the source tree via .pth redirect. Install the .pyi stub next
+  # to the .so so sphinx-autodoc-typehints and IDEs can find it.
+  # (Production wheels already include these via wheel.packages.)
+  install(
+    FILES
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/dftracer_utils_ext.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/py.typed"
+    DESTINATION "dftracer/utils")
 
 endif()

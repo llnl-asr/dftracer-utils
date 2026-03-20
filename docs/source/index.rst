@@ -58,15 +58,14 @@ Quick Example
 
 .. code-block:: python
 
-   from dftracer.utils import Reader
+   from dftracer.utils import TraceReader
 
-   # Read a trace file
-   reader = Reader("path/to/trace.pfw.gz", "path/to/trace.pfw.gz.idx")
+   # Read a trace file (auto-detects index sidecar)
+   reader = TraceReader("path/to/trace.pfw.gz")
 
-   # Read specific lines
-   lines = reader.read_lines(0, 100)  # Read first 100 lines
-   for line in lines:
-       print(line)
+   # Read all lines as JSON
+   for obj in reader.iter_lines_json():
+       print(obj["name"], obj["dur"])
 
 Indices and tables
 ==================

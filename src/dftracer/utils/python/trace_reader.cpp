@@ -348,6 +348,66 @@ static PyObject *TraceReader_read_raw(TraceReaderObject *self, PyObject *args,
     return list;
 }
 
+static PyObject *TraceReader_iter_lines_json(TraceReaderObject *self,
+                                             PyObject *args, PyObject *kwds) {
+    static const char *kwlist[] = {"start_line", "end_line",    "start_byte",
+                                   "end_byte",   "buffer_size", NULL};
+    Py_ssize_t start_line = 0, end_line = 0;
+    Py_ssize_t start_byte = 0, end_byte = 0;
+    Py_ssize_t buffer_size = 4 * 1024 * 1024;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nnnnn", (char **)kwlist,
+                                     &start_line, &end_line, &start_byte,
+                                     &end_byte, &buffer_size)) {
+        return NULL;
+    }
+
+    if (start_line < 0 || end_line < 0 || start_byte < 0 || end_byte < 0 ||
+        buffer_size <= 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "range arguments must be >= 0; buffer_size must be > 0");
+        return NULL;
+    }
+
+    TraceReaderConfig cfg;
+    try {
+        cfg = build_config(self);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
+
+    ReadConfig rc;
+    rc.start_line = static_cast<std::size_t>(start_line);
+    rc.end_line = static_cast<std::size_t>(end_line);
+    rc.start_byte = static_cast<std::size_t>(start_byte);
+    rc.end_byte = static_cast<std::size_t>(end_byte);
+    rc.buffer_size = static_cast<std::size_t>(buffer_size);
+
+    auto state = std::make_shared<IteratorState>();
+
+    Runtime *rt = get_runtime(self);
+    try {
+        rt->submit(produce_lines(state, cfg, rc), "iter_lines_json");
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
+
+    TraceReaderIteratorObject *it = make_iterator(state, IteratorMode::JSON);
+    return (PyObject *)it;
+}
+
+static PyObject *TraceReader_read_lines_json(TraceReaderObject *self,
+                                             PyObject *args, PyObject *kwds) {
+    PyObject *iter = TraceReader_iter_lines_json(self, args, kwds);
+    if (!iter) return NULL;
+    PyObject *list = PySequence_List(iter);
+    Py_DECREF(iter);
+    return list;
+}
+
 static PyObject *TraceReader_enter(TraceReaderObject *self,
                                    PyObject *Py_UNUSED(ignored)) {
     Py_INCREF(self);
@@ -375,8 +435,15 @@ static PyObject *TraceReader_get_has_index(TraceReaderObject *self,
     return PyBool_FromLong(self->has_index);
 }
 
-static PyObject *TraceReader_get_num_lines(TraceReaderObject *self,
-                                           void *closure) {
+static PyObject *TraceReader_get_num_lines_prop(TraceReaderObject *self,
+                                                void *closure) {
+    try {
+        TraceReaderConfig cfg = build_config(self);
+        TraceReader reader(std::move(cfg));
+        std::size_t n = reader.get_num_lines();
+        if (n > 0) return PyLong_FromSize_t(n);
+    } catch (...) {
+    }
     PyObject *empty_args = PyTuple_New(0);
     if (!empty_args) return NULL;
     PyObject *list = TraceReader_read_lines(self, empty_args, NULL);
@@ -385,6 +452,30 @@ static PyObject *TraceReader_get_num_lines(TraceReaderObject *self,
     Py_ssize_t n = PyList_GET_SIZE(list);
     Py_DECREF(list);
     return PyLong_FromSsize_t(n);
+}
+
+static PyObject *TraceReader_get_max_bytes(TraceReaderObject *self,
+                                           PyObject *Py_UNUSED(ignored)) {
+    try {
+        TraceReaderConfig cfg = build_config(self);
+        TraceReader reader(std::move(cfg));
+        return PyLong_FromSize_t(reader.get_max_bytes());
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
+}
+
+static PyObject *TraceReader_get_num_lines(TraceReaderObject *self,
+                                           PyObject *Py_UNUSED(ignored)) {
+    try {
+        TraceReaderConfig cfg = build_config(self);
+        TraceReader reader(std::move(cfg));
+        return PyLong_FromSize_t(reader.get_num_lines());
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
 }
 
 static PyMethodDef TraceReader_methods[] = {
@@ -408,6 +499,22 @@ static PyMethodDef TraceReader_methods[] = {
      "Read raw chunks and return list[bytes] "
      "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
      "buffer_size=4M, line_aligned=True, multi_line=True)"},
+    {"iter_lines_json", (PyCFunction)TraceReader_iter_lines_json,
+     METH_VARARGS | METH_KEYWORDS,
+     "Return iterator over parsed JSON objects "
+     "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
+     "buffer_size=4M)"},
+    {"read_lines_json", (PyCFunction)TraceReader_read_lines_json,
+     METH_VARARGS | METH_KEYWORDS,
+     "Read lines and return list[JSON] "
+     "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
+     "buffer_size=4M)"},
+    {"get_max_bytes", (PyCFunction)TraceReader_get_max_bytes, METH_NOARGS,
+     "Get the maximum byte position (0 if unknown for compressed "
+     "files without index)"},
+    {"get_num_lines", (PyCFunction)TraceReader_get_num_lines, METH_NOARGS,
+     "Get the total number of lines (0 if unknown for files without "
+     "index)"},
     {"__enter__", (PyCFunction)TraceReader_enter, METH_NOARGS,
      "Enter the runtime context for the with statement"},
     {"__exit__", (PyCFunction)TraceReader_exit, METH_VARARGS,
@@ -421,7 +528,7 @@ static PyGetSetDef TraceReader_getsetters[] = {
      "Directory for index files", NULL},
     {"has_index", (getter)TraceReader_get_has_index, NULL,
      "True if a checkpoint index was found", NULL},
-    {"num_lines", (getter)TraceReader_get_num_lines, NULL,
+    {"num_lines", (getter)TraceReader_get_num_lines_prop, NULL,
      "Total line count (reads all lines if needed)", NULL},
     {NULL}};
 
@@ -445,7 +552,36 @@ PyTypeObject TraceReaderType = {
     0,                                        /* tp_setattro */
     0,                                        /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
-    "Smart trace file reader (auto-selects sequential vs indexed)", /* tp_doc */
+    "TraceReader(file_path: str, index_dir: str = '',\n"
+    "            checkpoint_size: int = 33554432,\n"
+    "            auto_build_index: bool = False,\n"
+    "            index_threshold: int = 8388608,\n"
+    "            runtime: Runtime | None = None)\n"
+    "--\n"
+    "\n"
+    "Smart trace file reader that auto-selects sequential or indexed\n"
+    "reading based on whether an ``.idx`` sidecar exists.\n"
+    "\n"
+    "Args:\n"
+    "    file_path (str): Path to the trace file (.pfw.gz or plain "
+    "text).\n"
+    "    index_dir (str): Directory to search for ``.idx`` sidecar "
+    "files.\n"
+    "        Empty string (default) searches next to the trace file.\n"
+    "    checkpoint_size (int): Checkpoint interval in bytes for index\n"
+    "        building (default 32 MB).\n"
+    "    auto_build_index (bool): If True, automatically build an "
+    "index\n"
+    "        when none exists and the file exceeds *index_threshold*.\n"
+    "    index_threshold (int): Minimum file size in bytes before\n"
+    "        auto-indexing is triggered (default 8 MB).\n"
+    "    runtime (Runtime or None): Runtime instance for thread pool "
+    "control.\n"
+    "        If None, uses the default global Runtime.\n"
+    "\n"
+    "Raises:\n"
+    "    RuntimeError: If *file_path* does not exist or cannot be "
+    "opened.\n",                /* tp_doc */
     0,                          /* tp_traverse */
     0,                          /* tp_clear */
     0,                          /* tp_richcompare */

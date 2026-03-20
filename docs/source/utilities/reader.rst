@@ -179,16 +179,16 @@ Python API
 
 .. code-block:: python
 
-   from dftracer.utils import Reader
+   from dftracer.utils import TraceReader
 
-   reader = Reader("trace.pfw.gz", "trace.pfw.gz.idx")
+   reader = TraceReader("trace.pfw.gz")
 
-   # Read specific lines
-   lines = reader.read_lines(0, 100)
+   # Read all lines
+   lines = reader.read_lines()
    for line in lines:
        print(line)
 
-   # Get metadata
+   # Get metadata (requires index sidecar)
    print(f"Total lines: {reader.get_num_lines()}")
    print(f"Total bytes: {reader.get_max_bytes()}")
 

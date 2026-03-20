@@ -17,7 +17,7 @@ Module Overview
 
 The dftracer utilities Python package provides the following main modules:
 
-- :doc:`trace_reader` - Streaming trace file reader (recommended)
+- :doc:`trace_reader` - Streaming trace file reader with JSON support
 - :doc:`runtime` - Coroutine runtime and Dask integration
-- :doc:`reader` - Low-level trace file reading
+- :doc:`reader` - Lazy JSON object type
 - :doc:`indexer` - Indexing and searching capabilities

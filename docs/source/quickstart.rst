@@ -13,20 +13,24 @@ The most common use case is reading trace files:
 
 .. code-block:: python
 
-   from dftracer.utils import Reader
+   from dftracer.utils import TraceReader
 
-   # Open a compressed trace file with index
-   reader = Reader("trace.pfw.gz", "trace.pfw.gz.idx")
+   # Open a compressed trace file (auto-detects index sidecar)
+   reader = TraceReader("trace.pfw.gz")
 
-   # Read lines by line range
-   lines = reader.read_lines(0, 100)  # Read first 100 lines
+   # Read all lines
+   lines = reader.read_lines()
    for line in lines:
        print(line)
 
-   # Or read lines as JSON objects
-   json_lines = reader.read_lines_json(0, 100)
-   for json_obj in json_lines:
-       print(json_obj['field'])
+   # Read lines as JSON objects
+   json_objects = reader.read_lines_json()
+   for obj in json_objects:
+       print(obj["name"], obj["dur"])
+
+   # Stream for memory efficiency
+   for obj in reader.iter_lines_json():
+       process(obj)
 
 Streaming with TraceReader
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -493,5 +497,5 @@ Key Resources:
 
 - **Pipeline patterns**: :doc:`pipeline` covers CoroScope, channels, fan-out/fan-in, async generators
 - **CLI tools**: :doc:`cli` lists all available command-line utilities
-- **Python bindings**: Use ``from dftracer.utils import Reader, Indexer`` for Python scripts
+- **Python bindings**: Use ``from dftracer.utils import TraceReader, Indexer`` for Python scripts
 - **C++ integration**: Link ``dftracer-utils`` library and include headers from ``include/dftracer/utils/``

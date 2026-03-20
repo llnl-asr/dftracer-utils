@@ -12,7 +12,7 @@ Runtime Class
    :members:
    :undoc-members:
    :show-inheritance:
-   :special-members: __init__, __enter__, __exit__
+   :special-members: __enter__, __exit__
 
 TaskHandle Class
 ----------------

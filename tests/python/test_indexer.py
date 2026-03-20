@@ -205,10 +205,10 @@ class TestIndexerIntegration:
                 if indexer.need_rebuild():
                     indexer.build()
 
-                # Test creating reader from indexer
-                reader = dft_utils.Reader(gz_file, indexer=indexer)
+                # Test creating reader after indexer builds sidecar
+                reader = dft_utils.TraceReader(gz_file)
                 assert reader.get_max_bytes() > 0
-                assert reader.gz_path == gz_file
+                assert reader.file_path == gz_file
 
     def test_indexer_with_reader_creation_context_manager(self):
         """Test using indexer with reader creation via context manager"""
@@ -220,8 +220,8 @@ class TestIndexerIntegration:
                 if indexer.need_rebuild():
                     indexer.build()
 
-                # Test creating reader with indexer
-                reader = dft_utils.Reader(gz_file, indexer=indexer)
+                # Test creating reader after indexer builds sidecar
+                reader = dft_utils.TraceReader(gz_file)
                 assert reader.get_max_bytes() > 0
 
     def test_multiple_readers_same_indexer(self):
@@ -234,10 +234,10 @@ class TestIndexerIntegration:
                 if indexer.need_rebuild():
                     indexer.build()
 
-                # Create multiple readers from same indexer
+                # Create multiple readers (all use same sidecar)
                 readers = []
                 for i in range(3):
-                    reader = dft_utils.Reader(gz_file, indexer=indexer)
+                    reader = dft_utils.TraceReader(gz_file)
                     assert reader.get_max_bytes() > 0
                     readers.append(reader)
 

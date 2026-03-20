@@ -646,24 +646,31 @@ PyTypeObject JSONType = {
     0,                                          /* tp_setattro */
     0,                                          /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,   /* tp_flags */
-    "Lazy JSON object that parses on demand",   /* tp_doc */
-    0,                                          /* tp_traverse */
-    0,                                          /* tp_clear */
-    0,                                          /* tp_richcompare */
-    0,                                          /* tp_weaklistoffset */
-    (getiterfunc)JSON_iter,                     /* tp_iter */
-    0,                                          /* tp_iternext */
-    JSON_methods,                               /* tp_methods */
-    0,                                          /* tp_members */
-    0,                                          /* tp_getset */
-    0,                                          /* tp_base */
-    0,                                          /* tp_dict */
-    0,                                          /* tp_descr_get */
-    0,                                          /* tp_descr_set */
-    0,                                          /* tp_dictoffset */
-    (initproc)JSON_init,                        /* tp_init */
-    0,                                          /* tp_alloc */
-    JSON_new,                                   /* tp_new */
+    "JSON(json_str: str)\n"
+    "--\n"
+    "\n"
+    "Lazy JSON object that parses on demand using yyjson.\n"
+    "\n"
+    "Args:\n"
+    "    json_str (str): A JSON string to wrap. Parsing is deferred\n"
+    "        until first attribute access.\n", /* tp_doc */
+    0,                                         /* tp_traverse */
+    0,                                         /* tp_clear */
+    0,                                         /* tp_richcompare */
+    0,                                         /* tp_weaklistoffset */
+    (getiterfunc)JSON_iter,                    /* tp_iter */
+    0,                                         /* tp_iternext */
+    JSON_methods,                              /* tp_methods */
+    0,                                         /* tp_members */
+    0,                                         /* tp_getset */
+    0,                                         /* tp_base */
+    0,                                         /* tp_dict */
+    0,                                         /* tp_descr_get */
+    0,                                         /* tp_descr_set */
+    0,                                         /* tp_dictoffset */
+    (initproc)JSON_init,                       /* tp_init */
+    0,                                         /* tp_alloc */
+    JSON_new,                                  /* tp_new */
 };
 
 int init_json(PyObject* m) {

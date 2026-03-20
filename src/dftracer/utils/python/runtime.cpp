@@ -390,42 +390,49 @@ static PyGetSetDef Runtime_getsetters[] = {
 
 PyTypeObject RuntimeType = {
     PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext.Runtime",
-    sizeof(RuntimeObject),                       /* tp_basicsize */
-    0,                                           /* tp_itemsize */
-    (destructor)Runtime_dealloc,                 /* tp_dealloc */
-    0,                                           /* tp_vectorcall_offset */
-    0,                                           /* tp_getattr */
-    0,                                           /* tp_setattr */
-    0,                                           /* tp_as_async */
-    0,                                           /* tp_repr */
-    0,                                           /* tp_as_number */
-    0,                                           /* tp_as_sequence */
-    0,                                           /* tp_as_mapping */
-    0,                                           /* tp_hash */
-    0,                                           /* tp_call */
-    0,                                           /* tp_str */
-    0,                                           /* tp_getattro */
-    0,                                           /* tp_setattro */
-    0,                                           /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,    /* tp_flags */
-    "Coroutine runtime backed by a thread pool", /* tp_doc */
-    0,                                           /* tp_traverse */
-    0,                                           /* tp_clear */
-    0,                                           /* tp_richcompare */
-    0,                                           /* tp_weaklistoffset */
-    0,                                           /* tp_iter */
-    0,                                           /* tp_iternext */
-    Runtime_methods,                             /* tp_methods */
-    0,                                           /* tp_members */
-    Runtime_getsetters,                          /* tp_getset */
-    0,                                           /* tp_base */
-    0,                                           /* tp_dict */
-    0,                                           /* tp_descr_get */
-    0,                                           /* tp_descr_set */
-    0,                                           /* tp_dictoffset */
-    (initproc)Runtime_init,                      /* tp_init */
-    0,                                           /* tp_alloc */
-    Runtime_new,                                 /* tp_new */
+    sizeof(RuntimeObject),                    /* tp_basicsize */
+    0,                                        /* tp_itemsize */
+    (destructor)Runtime_dealloc,              /* tp_dealloc */
+    0,                                        /* tp_vectorcall_offset */
+    0,                                        /* tp_getattr */
+    0,                                        /* tp_setattr */
+    0,                                        /* tp_as_async */
+    0,                                        /* tp_repr */
+    0,                                        /* tp_as_number */
+    0,                                        /* tp_as_sequence */
+    0,                                        /* tp_as_mapping */
+    0,                                        /* tp_hash */
+    0,                                        /* tp_call */
+    0,                                        /* tp_str */
+    0,                                        /* tp_getattro */
+    0,                                        /* tp_setattro */
+    0,                                        /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
+    "Runtime(threads: int = 0)\n"
+    "--\n"
+    "\n"
+    "Coroutine runtime backed by a thread pool.\n"
+    "\n"
+    "Args:\n"
+    "    threads (int): Number of worker threads. 0 (default) uses\n"
+    "        the hardware concurrency.\n", /* tp_doc */
+    0,                                     /* tp_traverse */
+    0,                                     /* tp_clear */
+    0,                                     /* tp_richcompare */
+    0,                                     /* tp_weaklistoffset */
+    0,                                     /* tp_iter */
+    0,                                     /* tp_iternext */
+    Runtime_methods,                       /* tp_methods */
+    0,                                     /* tp_members */
+    Runtime_getsetters,                    /* tp_getset */
+    0,                                     /* tp_base */
+    0,                                     /* tp_dict */
+    0,                                     /* tp_descr_get */
+    0,                                     /* tp_descr_set */
+    0,                                     /* tp_dictoffset */
+    (initproc)Runtime_init,                /* tp_init */
+    0,                                     /* tp_alloc */
+    Runtime_new,                           /* tp_new */
 };
 
 // Module-level function table (registered via PyModule_AddFunctions or

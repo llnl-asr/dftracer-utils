@@ -77,6 +77,9 @@ extensions = [
     "sphinx.ext.todo",
     "sphinx.ext.coverage",
     "sphinx.ext.mathjax",
+    # sphinx_autodoc_typehints disabled: it strips types from signatures
+    # and loses C extension __text_signature__. Sphinx's built-in autodoc
+    # handles both Python type hints and C extension __text_signature__.
     "myst_parser",  # For Markdown support
     "breathe",  # Always enable breathe
     "sphinx.ext.ifconfig",  # For conditional inclusion
@@ -97,9 +100,7 @@ if doxygen_xml_path.exists():
     breathe_default_project = "dftracer-utils"
 else:
     cpp_api_enabled = False
-    print(
-        "Warning: Doxygen XML output not found. C++ API documentation will be skipped."
-    )
+    print("Warning: Doxygen XML output not found. C++ API documentation will be skipped.")
     print(f"Expected path: {doxygen_xml_path}")
     print("Run 'doxygen Doxyfile' in the docs directory to generate C++ documentation.")
 
@@ -155,13 +156,12 @@ html_theme_options = {
 autodoc_default_options = {
     "members": True,
     "member-order": "bysource",
-    "special-members": "__init__",
     "undoc-members": True,
     "exclude-members": "__weakref__",
 }
 
-# Use type stubs (.pyi files) for documentation
-autodoc_typehints = "description"
+# Type annotations in both signature and description
+autodoc_typehints = "both"
 autodoc_typehints_description_target = "documented"
 
 # -- Options for todo extension ----------------------------------------------

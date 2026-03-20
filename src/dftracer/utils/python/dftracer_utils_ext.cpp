@@ -3,7 +3,6 @@
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/indexer_checkpoint.h>
 #include <dftracer/utils/python/json.h>
-#include <dftracer/utils/python/reader.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/task_handle.h>
 #include <dftracer/utils/python/trace_reader.h>
@@ -28,7 +27,6 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (m == NULL) return NULL;
     if (init_indexer_checkpoint(m) < 0) return NULL;
     if (init_json(m) < 0) return NULL;
-    if (init_reader(m) < 0) return NULL;
     if (init_indexer(m) < 0) return NULL;
     if (init_task_handle(m) < 0) return NULL;
     if (init_runtime(m) < 0) return NULL;

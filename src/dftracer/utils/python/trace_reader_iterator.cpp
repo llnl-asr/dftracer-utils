@@ -1,5 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 
 static void TraceReaderIterator_dealloc(TraceReaderIteratorObject *self) {
@@ -47,12 +49,31 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
         return NULL;
     }
 
-    if (self->mode == IteratorMode::LINES) {
-        return PyUnicode_FromStringAndSize(
-            item->data(), static_cast<Py_ssize_t>(item->size()));
+    switch (self->mode) {
+        case IteratorMode::LINES:
+            return PyUnicode_FromStringAndSize(
+                item->data(), static_cast<Py_ssize_t>(item->size()));
+        case IteratorMode::JSON: {
+            const char *trimmed;
+            std::size_t trimmed_length;
+            if (!dftracer::utils::json_trim_and_validate(
+                    item->data(), item->size(), trimmed, trimmed_length)) {
+                // Skip non-JSON lines (e.g. "[" or "]" array delimiters)
+                return TraceReaderIterator_next(self);
+            }
+            PyObject *json_obj = JSON_from_data(trimmed, trimmed_length);
+            if (!json_obj) {
+                // Skip unparseable lines
+                PyErr_Clear();
+                return TraceReaderIterator_next(self);
+            }
+            return json_obj;
+        }
+        case IteratorMode::RAW:
+        default:
+            return PyBytes_FromStringAndSize(
+                item->data(), static_cast<Py_ssize_t>(item->size()));
     }
-    return PyBytes_FromStringAndSize(item->data(),
-                                     static_cast<Py_ssize_t>(item->size()));
 }
 
 PyTypeObject TraceReaderIteratorType = {

@@ -33,6 +33,36 @@ void TraceReader::probe_index() {
 
 bool TraceReader::has_index() const { return has_index_; }
 
+void TraceReader::ensure_metadata_cached() {
+    if (metadata_cached_) return;
+
+    if (has_index_) {
+        auto reader = create_indexed_reader();
+        cached_max_bytes_ = reader->get_max_bytes();
+        cached_num_lines_ = reader->get_num_lines();
+    } else if (format_ == ArchiveFormat::GZIP ||
+               format_ == ArchiveFormat::TAR_GZ) {
+        cached_max_bytes_ = 0;
+        cached_num_lines_ = 0;
+    } else {
+        std::error_code ec;
+        auto size = fs::file_size(config_.file_path, ec);
+        cached_max_bytes_ = ec ? 0 : static_cast<std::size_t>(size);
+        cached_num_lines_ = 0;
+    }
+    metadata_cached_ = true;
+}
+
+std::size_t TraceReader::get_max_bytes() {
+    ensure_metadata_cached();
+    return cached_max_bytes_;
+}
+
+std::size_t TraceReader::get_num_lines() {
+    ensure_metadata_cached();
+    return cached_num_lines_;
+}
+
 std::shared_ptr<internal::Reader> TraceReader::create_indexed_reader() {
     auto indexer = IndexerFactory::create(config_.file_path, idx_path_,
                                           config_.checkpoint_size, false);
@@ -61,14 +91,15 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
         std::size_t end =
             config.has_line_range() ? config.end_line : config.end_byte;
 
-        if (end == 0 && range_type == internal::RangeType::LINE_RANGE) {
-            end = reader->get_num_lines();
-        }
-        if (end == 0 && range_type == internal::RangeType::BYTE_RANGE) {
-            end = reader->get_max_bytes();
-        }
-        if (start == 0 && range_type == internal::RangeType::LINE_RANGE) {
-            start = 1;
+        if (range_type == internal::RangeType::LINE_RANGE) {
+            auto total_lines = reader->get_num_lines();
+            if (start == 0) start = 1;
+            if (end == 0 || end > total_lines) end = total_lines;
+            if (start > total_lines) co_return;
+        } else {
+            auto max_bytes = reader->get_max_bytes();
+            if (end == 0 || end > max_bytes) end = max_bytes;
+            if (start >= max_bytes) co_return;
         }
 
         auto stream =
@@ -131,14 +162,15 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
         std::size_t end =
             config.has_line_range() ? config.end_line : config.end_byte;
 
-        if (end == 0 && range_type == internal::RangeType::LINE_RANGE) {
-            end = reader->get_num_lines();
-        }
-        if (end == 0 && range_type == internal::RangeType::BYTE_RANGE) {
-            end = reader->get_max_bytes();
-        }
-        if (start == 0 && range_type == internal::RangeType::LINE_RANGE) {
-            start = 1;
+        if (range_type == internal::RangeType::LINE_RANGE) {
+            auto total_lines = reader->get_num_lines();
+            if (start == 0) start = 1;
+            if (end == 0 || end > total_lines) end = total_lines;
+            if (start > total_lines) co_return;
+        } else {
+            auto max_bytes = reader->get_max_bytes();
+            if (end == 0 || end > max_bytes) end = max_bytes;
+            if (start >= max_bytes) co_return;
         }
 
         auto stream = reader->stream(internal::StreamConfig()

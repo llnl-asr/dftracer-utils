@@ -412,24 +412,49 @@ PyTypeObject IndexerType = {
     0,                                                /* tp_setattro */
     0,                                                /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,         /* tp_flags */
-    "DFTracerIndexer objects",                        /* tp_doc */
-    0,                                                /* tp_traverse */
-    0,                                                /* tp_clear */
-    0,                                                /* tp_richcompare */
-    0,                                                /* tp_weaklistoffset */
-    0,                                                /* tp_iter */
-    0,                                                /* tp_iternext */
-    Indexer_methods,                                  /* tp_methods */
-    0,                                                /* tp_members */
-    Indexer_getsetters,                               /* tp_getset */
-    0,                                                /* tp_base */
-    0,                                                /* tp_dict */
-    0,                                                /* tp_descr_get */
-    0,                                                /* tp_descr_set */
-    0,                                                /* tp_dictoffset */
-    (initproc)Indexer_init,                           /* tp_init */
-    0,                                                /* tp_alloc */
-    Indexer_new,                                      /* tp_new */
+    "Indexer(gz_path: str, idx_path: str | None = None,\n"
+    "       checkpoint_size: int = 1048576,\n"
+    "       force_rebuild: bool = False, build_bloom: bool = False,\n"
+    "       build_manifest: bool = False,\n"
+    "       index_threshold: int = 8388608,\n"
+    "       runtime: Runtime | None = None)\n"
+    "--\n"
+    "\n"
+    "Indexer for creating and managing gzip file indices.\n"
+    "\n"
+    "Args:\n"
+    "    gz_path (str): Path to the gzip trace file.\n"
+    "    idx_path (str or None): Path to the index file. If None,\n"
+    "        uses gz_path + \".idx\".\n"
+    "    checkpoint_size (int): Checkpoint size in bytes for index\n"
+    "        building (default 1 MB).\n"
+    "    force_rebuild (bool): If True, rebuild the index even if it\n"
+    "        exists.\n"
+    "    build_bloom (bool): If True, build bloom filter data in the\n"
+    "        index.\n"
+    "    build_manifest (bool): If True, build manifest data in the\n"
+    "        index.\n"
+    "    index_threshold (int): Skip indexing for files smaller than\n"
+    "        this (default 8 MB).\n"
+    "    runtime (Runtime or None): Runtime instance for thread pool\n"
+    "        control. If None, uses the default global Runtime.\n", /* tp_doc */
+    0,                      /* tp_traverse */
+    0,                      /* tp_clear */
+    0,                      /* tp_richcompare */
+    0,                      /* tp_weaklistoffset */
+    0,                      /* tp_iter */
+    0,                      /* tp_iternext */
+    Indexer_methods,        /* tp_methods */
+    0,                      /* tp_members */
+    Indexer_getsetters,     /* tp_getset */
+    0,                      /* tp_base */
+    0,                      /* tp_dict */
+    0,                      /* tp_descr_get */
+    0,                      /* tp_descr_set */
+    0,                      /* tp_dictoffset */
+    (initproc)Indexer_init, /* tp_init */
+    0,                      /* tp_alloc */
+    Indexer_new,            /* tp_new */
 };
 
 int init_indexer(PyObject *m) {

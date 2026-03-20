@@ -83,16 +83,14 @@ class TestDaskIntegration:
                 """Helper function to read a chunk - creates its own indexer for thread safety"""
                 try:
                     # Each task creates its own indexer instance to avoid sharing
-                    indexer = dft_utils.Indexer(gz_file_path, checkpoint_size=512 * 1024)
-
-                    reader = dft_utils.Reader(gz_file_path, indexer=indexer)
+                    reader = dft_utils.TraceReader(gz_file_path)
 
                     if reader_type == "bytes":
-                        data = reader.read(start_bytes, end_bytes)
+                        data = b"".join(reader.read_raw(start_byte=start_bytes, end_byte=end_bytes))
                     elif reader_type == "line_bytes":
-                        data = reader.read_line_bytes(start_bytes, end_bytes)
+                        data = reader.read_lines(start_byte=start_bytes, end_byte=end_bytes)
                     elif reader_type == "json_bytes":
-                        data = reader.read_line_bytes_json(start_bytes, end_bytes)
+                        data = reader.read_lines_json(start_byte=start_bytes, end_byte=end_bytes)
                     else:
                         raise ValueError(f"Unknown reader type: {reader_type}")
 
@@ -161,9 +159,10 @@ class TestDaskIntegration:
             def extract_json_data(gz_file_path, start_bytes, end_bytes):
                 """Extract JSON data and convert to DataFrame-friendly format"""
                 try:
-                    indexer = dft_utils.Indexer(gz_file_path, checkpoint_size=512 * 1024)
-                    reader = dft_utils.Reader(gz_file_path, indexer=indexer)
-                    json_objects = reader.read_line_bytes_json(start_bytes, end_bytes)
+                    reader = dft_utils.TraceReader(gz_file_path)
+                    json_objects = reader.read_lines_json(
+                        start_byte=start_bytes, end_byte=end_bytes
+                    )
 
                     # Convert to list of dictionaries suitable for DataFrame
                     records = []
@@ -247,9 +246,8 @@ class TestDaskIntegration:
             def process_batch(batch_info):
                 """Process one batch and return processed records"""
                 filename, start, end = batch_info
-                index_file = f"{filename}.idx"
-                reader = dft_utils.Reader(filename, index_file)
-                json_lines = reader.read_line_bytes_json(start, end)
+                reader = dft_utils.TraceReader(filename)
+                json_lines = reader.read_lines_json(start_byte=start, end_byte=end)
 
                 processed_records = []
                 for json_obj in json_lines:
@@ -267,8 +265,8 @@ class TestDaskIntegration:
                 return processed_records
 
             # Get reference data (full file read) and verify against environment
-            full_reader = dft_utils.Reader(gz_file, indexer=temp_indexer)
-            reference_data = full_reader.read_line_bytes_json(0, max_bytes)
+            full_reader = dft_utils.TraceReader(gz_file)
+            reference_data = full_reader.read_lines_json(start_byte=0, end_byte=max_bytes)
             reference_names = sorted(
                 [obj["name"] for obj in reference_data if obj and "name" in obj]
             )
@@ -371,9 +369,8 @@ class TestDaskIntegration:
             def process_batch(batch_info):
                 """Process one batch and return processed records"""
                 filename, start, end = batch_info
-                index_file = f"{filename}.idx"
-                reader = dft_utils.Reader(filename, index_file)
-                json_lines = reader.read_line_bytes_json(start, end)
+                reader = dft_utils.TraceReader(filename)
+                json_lines = reader.read_lines_json(start_byte=start, end_byte=end)
 
                 processed_records = []
                 for json_obj in json_lines:
@@ -388,8 +385,8 @@ class TestDaskIntegration:
                 return processed_records
 
             # Get reference data and verify against environment
-            full_reader = dft_utils.Reader(gz_file, indexer=temp_indexer)
-            reference_data = full_reader.read_line_bytes_json(0, max_bytes)
+            full_reader = dft_utils.TraceReader(gz_file)
+            reference_data = full_reader.read_lines_json(start_byte=0, end_byte=max_bytes)
             expected_count = len([obj for obj in reference_data if obj and "name" in obj])
 
             assert expected_count == env.lines, (

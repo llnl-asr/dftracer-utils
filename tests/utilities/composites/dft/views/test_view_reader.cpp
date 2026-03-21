@@ -1,5 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <doctest/doctest.h>
@@ -9,10 +11,39 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft::views;
 using namespace dft_utils_test;
+
+struct CollectedViewOutput {
+    std::vector<std::string> events;
+    std::uint64_t events_matched = 0;
+    std::uint64_t events_scanned = 0;
+};
+
+static CollectedViewOutput collect_view_output(ViewReaderUtility& reader,
+                                               const ViewReaderInput& input) {
+    CollectedViewOutput collected;
+    auto* cp = &collected;
+    auto* rp = &reader;
+    ViewReaderInput input_copy = input;
+
+    auto task = [cp, rp, input_copy]() -> coro::CoroTask<void> {
+        auto gen = rp->process(input_copy);
+        while (auto batch = co_await gen.next()) {
+            for (auto& ev : batch->events) {
+                cp->events.push_back(std::move(ev));
+            }
+            cp->events_matched += batch->events_matched;
+            cp->events_scanned += batch->events_scanned;
+        }
+    };
+
+    task().get();
+    return collected;
+}
 
 // Helper: write a custom DFTracer trace file with metadata and mixed categories
 // Returns the plain text file path
@@ -95,9 +126,8 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::io_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
+        auto output = collect_view_output(reader, input);
 
-        CHECK(output.success);
         // Should match: read, write, pread64, fwrite (4 I/O events)
         // + thread_name metadata (1) + referenced hash metadata (HH, FH x2)
         CHECK(output.events_scanned > 0);
@@ -126,9 +156,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::compute_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
-
-        CHECK(output.success);
+        auto output = collect_view_output(reader, input);
 
         std::uint64_t compute_events = 0;
         for (const auto& ev : output.events) {
@@ -154,9 +182,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::io_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
-
-        CHECK(output.success);
+        auto output = collect_view_output(reader, input);
 
         int fh_count = 0;
         for (const auto& ev : output.events) {
@@ -175,8 +201,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_byte_range(0, std::numeric_limits<std::size_t>::max())
             .with_view(ViewDefinition::compute_view());
 
-        auto compute_output = reader.process(compute_input).get();
-        CHECK(compute_output.success);
+        auto compute_output = collect_view_output(reader, compute_input);
 
         int compute_fh_count = 0;
         for (const auto& ev : compute_output.events) {
@@ -202,9 +227,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::compute_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
-
-        CHECK(output.success);
+        auto output = collect_view_output(reader, input);
 
         int sh_count = 0;
         for (const auto& ev : output.events) {
@@ -223,7 +246,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_byte_range(0, std::numeric_limits<std::size_t>::max())
             .with_view(ViewDefinition::io_view());
 
-        auto io_output = reader.process(io_input).get();
+        auto io_output = collect_view_output(reader, io_input);
         int io_sh_count = 0;
         for (const auto& ev : io_output.events) {
             if (ev.find("\"name\":\"SH\"") != std::string::npos) {
@@ -246,9 +269,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(ViewDefinition::compute_view());
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
-
-        CHECK(output.success);
+        auto output = collect_view_output(reader, input);
 
         int thread_name_count = 0;
         for (const auto& ev : output.events) {
@@ -275,9 +296,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(io_view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
-
-        CHECK(output.success);
+        auto output = collect_view_output(reader, input);
 
         // No metadata events should be present
         for (const auto& ev : output.events) {
@@ -307,9 +326,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
-
-        CHECK(output.success);
+        auto output = collect_view_output(reader, input);
 
         std::uint64_t matched_events = 0;
         for (const auto& ev : output.events) {
@@ -346,9 +363,7 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
-
-        CHECK(output.success);
+        auto output = collect_view_output(reader, input);
 
         // Only the checkpoint event has dur=500000
         for (const auto& ev : output.events) {
@@ -378,9 +393,8 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
+        auto output = collect_view_output(reader, input);
 
-        CHECK(output.success);
         // Events in this time range: forward (ts=1100000), backward
         // (ts=1150000)
         CHECK(output.events_matched == 2);
@@ -413,9 +427,8 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
+        auto output = collect_view_output(reader, input);
 
-        CHECK(output.success);
         // Pred1 matches: read (1 event)
         // Pred2 matches: forward, backward (2 events)
         // Total: 3 events
@@ -443,10 +456,80 @@ TEST_SUITE("ViewReaderUtility") {
             .with_view(view);
 
         ViewReaderUtility reader;
-        auto output = reader.process(input).get();
+        auto output = collect_view_output(reader, input);
 
-        CHECK(output.success);
         CHECK(output.events_matched == 0);
         CHECK(output.events.empty());
     }
+
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+    TEST_CASE("ViewReaderBatch - to_arrow converts events to Arrow") {
+        TestEnvironment env(100);
+        std::string plain = create_view_test_trace(env.get_dir());
+        auto [gz_path, idx_path] = compress_and_index(plain);
+
+        ViewDefinition view;
+        view.with_name("arrow_test");
+        view.with_include_metadata(false);
+        ViewPredicate pred;
+        pred.with_bloom_dim("cat", {"POSIX"});
+        view.with_predicate(std::move(pred));
+
+        ViewReaderInput input;
+        input.with_file_path(gz_path)
+            .with_idx_path(idx_path)
+            .with_checkpoint_size(1024)
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
+            .with_view(view);
+
+        // Collect batches directly
+        std::vector<ViewReaderBatch> batches;
+        auto* bp = &batches;
+        ViewReaderUtility reader;
+        auto* rp = &reader;
+        ViewReaderInput input_copy = input;
+
+        auto task = [bp, rp, input_copy]() -> coro::CoroTask<void> {
+            auto gen = rp->process(input_copy);
+            while (auto batch = co_await gen.next()) {
+                bp->push_back(std::move(*batch));
+            }
+        };
+        task().get();
+
+        REQUIRE(!batches.empty());
+
+        SUBCASE("to_arrow produces valid result") {
+            auto arrow = batches[0].to_arrow();
+            CHECK(arrow.valid());
+            CHECK(arrow.num_rows() > 0);
+            CHECK(arrow.num_columns() > 0);
+        }
+
+        SUBCASE("to_arrow row count matches events") {
+            std::size_t total_events = 0;
+            std::int64_t total_arrow_rows = 0;
+            for (const auto& batch : batches) {
+                total_events += batch.events.size();
+                auto arrow = batch.to_arrow();
+                total_arrow_rows += arrow.num_rows();
+            }
+            CHECK(total_arrow_rows == static_cast<std::int64_t>(total_events));
+        }
+
+        SUBCASE("to_arrow schema has expected columns") {
+            auto arrow = batches[0].to_arrow();
+            auto* schema = arrow.get_schema();
+            REQUIRE(schema != nullptr);
+            // Events have at least: name, cat, ph, pid, tid, ts, dur
+            CHECK(schema->n_children >= 3);
+        }
+    }
+
+    TEST_CASE("ViewReaderBatch - to_arrow on empty batch") {
+        ViewReaderBatch empty_batch;
+        auto arrow = empty_batch.to_arrow();
+        CHECK(arrow.num_rows() == 0);
+    }
+#endif  // DFTRACER_UTILS_ENABLE_ARROW
 }

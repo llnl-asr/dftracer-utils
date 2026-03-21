@@ -99,16 +99,14 @@ static coro::CoroTask<void> read_single_chunk(
         .with_view(vctx.view);
 
     ViewReaderUtility reader;
-    auto read_output = co_await reader.process(reader_input);
-
-    if (read_output.success) {
-        (*vctx.total_events_matched) += read_output.events_matched;
-        (*vctx.total_events_scanned) += read_output.events_scanned;
-        (*vctx.total_chunks_scanned)++;
+    auto gen = reader.process(reader_input);
+    while (auto batch = co_await gen.next()) {
+        (*vctx.total_events_matched) += batch->events_matched;
+        (*vctx.total_events_scanned) += batch->events_scanned;
 
         if (vctx.stream_mode) {
             std::lock_guard<std::mutex> lock(*vctx.output_mutex);
-            for (const auto& event : read_output.events) {
+            for (const auto& event : batch->events) {
                 if (vctx.out_file) {
                     std::fprintf(vctx.out_file, "%s\n", event.c_str());
                 } else {
@@ -117,11 +115,12 @@ static coro::CoroTask<void> read_single_chunk(
             }
         } else {
             std::lock_guard<std::mutex> lock(*vctx.output_mutex);
-            for (auto& event : read_output.events) {
+            for (auto& event : batch->events) {
                 vctx.all_events->push_back(std::move(event));
             }
         }
     }
+    (*vctx.total_chunks_scanned)++;
 }
 
 static coro::CoroTask<void> process_single_file(const std::string& file_path,

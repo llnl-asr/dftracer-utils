@@ -1,28 +1,25 @@
-"""DFTracer utility bindings for statistics, bloom queries, aggregation, and more."""
+"""DFTracer utility bindings for statistics, bloom queries, views, and reorganization."""
 
-try:
-    from .dftracer_utils_utilities_ext import (
-        AggregatorUtility,
-        BloomQueryUtility,
-        MetadataCollectorUtility,
-        ReconstructionPlannerUtility,
-        ReorganizationPlannerUtility,
-        StatisticsAggregatorUtility,
-        StatisticsQueryUtility,
-        ViewBuilderUtility,
-        ViewReaderUtility,
-    )
-except ImportError:
-    pass
+from ..dftracer_utils_ext import (
+    AggregatorUtility,
+    BloomQueryUtility,
+    MetadataCollectorUtility,
+    ReconstructionPlannerUtility,
+    ReorganizationPlannerUtility,
+    StatisticsAggregatorUtility,
+    StatisticsQueryUtility,
+    ViewBuilderUtility,
+    ViewReaderUtility,
+)
 
 __all__ = [
-    "StatisticsQueryUtility",
-    "BloomQueryUtility",
-    "StatisticsAggregatorUtility",
-    "MetadataCollectorUtility",
     "AggregatorUtility",
+    "BloomQueryUtility",
+    "MetadataCollectorUtility",
+    "ReconstructionPlannerUtility",
+    "ReorganizationPlannerUtility",
+    "StatisticsAggregatorUtility",
+    "StatisticsQueryUtility",
     "ViewBuilderUtility",
     "ViewReaderUtility",
-    "ReorganizationPlannerUtility",
-    "ReconstructionPlannerUtility",
 ]

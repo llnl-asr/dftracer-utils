@@ -32,6 +32,7 @@
  */
 
 // Core utility components
+#include <dftracer/utils/core/utilities/streaming_utility.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/core/utilities/utility_adapter.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>

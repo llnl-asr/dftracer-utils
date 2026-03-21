@@ -547,10 +547,9 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                         .with_view(view);
 
                     ViewReaderUtility reader;
-                    auto read_output = co_await reader.process(reader_input);
-
-                    if (read_output.success) {
-                        for (auto& event : read_output.events) {
+                    auto gen = reader.process(reader_input);
+                    while (auto batch = co_await gen.next()) {
+                        for (auto& event : batch->events) {
                             if (limit > 0 &&
                                 static_cast<int>(collected_events.size()) >=
                                     limit) {
@@ -559,6 +558,7 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                             }
                             collected_events.push_back(std::move(event));
                         }
+                        if (truncated) break;
                     }
                 }
             }
@@ -658,18 +658,18 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                                 .with_view(*view_ptr);
 
                             ViewReaderUtility reader;
-                            auto read_output =
-                                co_await reader.process(reader_input);
-
-                            if (read_output.success &&
-                                !read_output.events.empty()) {
-                                std::lock_guard<std::mutex> lock(
-                                    *collected_mutex);
-                                for (auto& event : read_output.events) {
-                                    collected_ptr->push_back(std::move(event));
+                            auto gen = reader.process(reader_input);
+                            while (auto batch = co_await gen.next()) {
+                                if (!batch->events.empty()) {
+                                    std::lock_guard<std::mutex> lock(
+                                        *collected_mutex);
+                                    for (auto& event : batch->events) {
+                                        collected_ptr->push_back(
+                                            std::move(event));
+                                    }
+                                    remaining->fetch_sub(
+                                        static_cast<int>(batch->events.size()));
                                 }
-                                remaining->fetch_sub(static_cast<int>(
-                                    read_output.events.size()));
                             }
                         }
                     }

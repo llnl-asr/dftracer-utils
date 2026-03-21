@@ -144,6 +144,41 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
 endif()
 
 # +++++++++++++++++++++++++++++++++++++++++
+# Arrow IPC Tests (optional, requires nanoarrow IPC)
+# +++++++++++++++++++++++++++++++++++++++++
+
+if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+  set(ARROW_IPC_TEST_SOURCE common/arrow/test_arrow_ipc_writer.cpp)
+  string(REPLACE ".cpp" "" arrow_ipc_bin_exec ${ARROW_IPC_TEST_SOURCE})
+  string(REPLACE "/" "_" arrow_ipc_target "utilities_${arrow_ipc_bin_exec}")
+
+  add_executable(${arrow_ipc_target} ${ARROW_IPC_TEST_SOURCE})
+  target_include_directories(${arrow_ipc_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+  target_link_libraries(${arrow_ipc_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
+  link_nanoarrow(${arrow_ipc_target} STATIC)
+  target_set_warnings(${arrow_ipc_target})
+
+  get_filename_component(arrow_ipc_bin_dir ${arrow_ipc_bin_exec} DIRECTORY)
+  get_filename_component(arrow_ipc_bin_name ${arrow_ipc_bin_exec} NAME)
+  if(arrow_ipc_bin_dir)
+    set_target_properties(${arrow_ipc_target} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${arrow_ipc_bin_dir}")
+  endif()
+  set_target_properties(${arrow_ipc_target} PROPERTIES OUTPUT_NAME ${arrow_ipc_bin_name})
+
+  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${arrow_ipc_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+    target_link_libraries(${arrow_ipc_target} PRIVATE --coverage)
+  endif()
+
+  set(arrow_ipc_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${arrow_ipc_target}")
+  file(MAKE_DIRECTORY "${arrow_ipc_workdir}")
+  add_test(NAME utilities/${arrow_ipc_bin_exec} COMMAND ${arrow_ipc_target})
+  set_tests_properties(utilities/${arrow_ipc_bin_exec} PROPERTIES
+                       WORKING_DIRECTORY "${arrow_ipc_workdir}")
+endif()
+
+# +++++++++++++++++++++++++++++++++++++++++
 # Build Configuration
 # +++++++++++++++++++++++++++++++++++++++++
 

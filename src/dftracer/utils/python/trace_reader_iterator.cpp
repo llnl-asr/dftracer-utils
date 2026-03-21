@@ -10,10 +10,6 @@
 using ArrowExportResult =
     dftracer::utils::utilities::common::arrow::ArrowExportResult;
 
-typedef struct {
-    PyObject_HEAD ArrowExportResult *result;  // owned, allocated with new
-} ArrowBatchCapsuleObject;
-
 static void release_arrow_schema(PyObject *capsule) {
     auto *schema = static_cast<ArrowSchema *>(
         PyCapsule_GetPointer(capsule, "arrow_schema"));
@@ -104,7 +100,7 @@ static PyGetSetDef ArrowBatchCapsule_getsetters[] = {
      "Number of columns", NULL},
     {NULL}};
 
-static PyTypeObject ArrowBatchCapsuleType = {
+PyTypeObject ArrowBatchCapsuleType = {
     PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext._ArrowBatchCapsule",
     sizeof(ArrowBatchCapsuleObject),       /* tp_basicsize */
     0,                                     /* tp_itemsize */

@@ -520,3 +520,128 @@ class TraceReader:
     ) -> None:
         """Exit the runtime context for the with statement."""
         ...
+
+class StatisticsQueryUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        file_path: str,
+        query_type: str = "summary",
+        top_n: int = 10,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+
+class BloomQueryUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        file_path: str,
+        predicates: Dict[str, List[str]],
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+
+class StatisticsAggregatorUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        file_path: str,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+
+class MetadataCollectorUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        file_path: str,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+
+class ViewBuilderUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        file_path: str,
+        predicates: Optional[Dict[str, List[str]]] = None,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+
+class ViewReaderUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        file_path: str,
+        predicates: Optional[Dict[str, List[str]]] = None,
+        index_dir: str = "",
+    ) -> Any: ...
+    def iter_arrow(
+        self,
+        file_path: str,
+        predicates: Optional[Dict[str, List[str]]] = None,
+        index_dir: str = "",
+        batch_size: int = 10000,
+    ) -> Iterator[Any]: ...
+
+class AggregatorUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        directory: str,
+        time_interval: float = 5.0,
+        group_keys: Optional[List[str]] = None,
+        categories: Optional[List[str]] = None,
+        names: Optional[List[str]] = None,
+        index_dir: str = "",
+        checkpoint_size: int = 33554432,
+        executor_threads: int = 4,
+        force_rebuild: bool = False,
+        chunk_size_mb: int = 64,
+        batch_size_mb: int = 4,
+        event_batch_size: int = 10000,
+    ) -> Any: ...
+    def __call__(
+        self,
+        directory: str,
+        time_interval: float = 5.0,
+        group_keys: Optional[List[str]] = None,
+        categories: Optional[List[str]] = None,
+        names: Optional[List[str]] = None,
+        index_dir: str = "",
+        checkpoint_size: int = 33554432,
+        executor_threads: int = 4,
+        force_rebuild: bool = False,
+        chunk_size_mb: int = 64,
+        batch_size_mb: int = 4,
+        event_batch_size: int = 10000,
+    ) -> Any: ...
+    def iter_arrow(
+        self,
+        directory: str,
+        time_interval: float = 5.0,
+        group_keys: Optional[List[str]] = None,
+        categories: Optional[List[str]] = None,
+        names: Optional[List[str]] = None,
+        index_dir: str = "",
+        checkpoint_size: int = 33554432,
+        executor_threads: int = 4,
+        force_rebuild: bool = False,
+        chunk_size_mb: int = 64,
+        batch_size_mb: int = 4,
+        event_batch_size: int = 10000,
+    ) -> Iterator[Any]: ...
+
+class ReorganizationPlannerUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        source_files: List[str],
+        groups: Optional[List[Dict[str, str]]] = None,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+
+class ReconstructionPlannerUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        reorganized_files: List[str],
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...

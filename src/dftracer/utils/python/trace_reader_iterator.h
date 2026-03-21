@@ -13,6 +13,13 @@
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+
+typedef struct {
+    PyObject_HEAD dftracer::utils::utilities::common::arrow::ArrowExportResult
+        *result;
+} ArrowBatchCapsuleObject;
+
+extern PyTypeObject ArrowBatchCapsuleType;
 #endif
 
 enum class IteratorMode {

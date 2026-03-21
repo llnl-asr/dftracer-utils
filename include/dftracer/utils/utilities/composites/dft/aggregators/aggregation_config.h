@@ -35,7 +35,26 @@ struct AggregationConfig {
     std::vector<BoundaryEventConfig> boundary_events;
     bool track_process_parents = true;
 
-    std::string output_format = "json";
+    std::string output_format = FORMAT_JSON;
+
+    static constexpr const char* FORMAT_JSON = "json";
+    static constexpr const char* FORMAT_ARROW = "arrow";
+
+    static bool is_valid_format(const std::string& fmt) {
+        return fmt == FORMAT_JSON
+#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+               || fmt == FORMAT_ARROW
+#endif
+            ;
+    }
+
+    static std::string supported_formats_str() {
+        std::string s = "'json'";
+#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+        s += " or 'arrow'";
+#endif
+        return s;
+    }
 
     bool passes_filters(const std::string& cat, const std::string& name) const {
         if (!include_categories.empty()) {

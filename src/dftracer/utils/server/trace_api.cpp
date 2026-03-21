@@ -419,12 +419,11 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
                         .with_view(view);
 
                     ViewReaderUtility reader;
-                    auto read_output = co_await reader.process(reader_input);
-
-                    if (read_output.success) {
-                        total_scanned += read_output.events_scanned;
-                        total_matched += read_output.events_matched;
-                        for (auto& event : read_output.events) {
+                    auto gen = reader.process(reader_input);
+                    while (auto batch = co_await gen.next()) {
+                        total_scanned += batch->events_scanned;
+                        total_matched += batch->events_matched;
+                        for (auto& event : batch->events) {
                             if (collected_events.size() >=
                                 static_cast<std::size_t>(limit)) {
                                 limit_reached = true;
@@ -432,6 +431,7 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
                             }
                             collected_events.push_back(std::move(event));
                         }
+                        if (limit_reached) break;
                     }
                 }
             }
@@ -535,23 +535,21 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
                                 .with_view(*view_ptr);
 
                             ViewReaderUtility reader;
-                            auto read_output =
-                                co_await reader.process(reader_input);
-
-                            if (read_output.success) {
+                            auto gen = reader.process(reader_input);
+                            while (auto batch = co_await gen.next()) {
                                 scanned_atomic->fetch_add(
-                                    read_output.events_scanned);
+                                    batch->events_scanned);
                                 matched_atomic->fetch_add(
-                                    read_output.events_matched);
-                                if (!read_output.events.empty()) {
+                                    batch->events_matched);
+                                if (!batch->events.empty()) {
                                     std::lock_guard<std::mutex> lock(
                                         *collected_mutex);
-                                    for (auto& event : read_output.events) {
+                                    for (auto& event : batch->events) {
                                         collected_ptr->push_back(
                                             std::move(event));
                                     }
-                                    remaining->fetch_sub(static_cast<int>(
-                                        read_output.events.size()));
+                                    remaining->fetch_sub(
+                                        static_cast<int>(batch->events.size()));
                                 }
                             }
                         }
@@ -688,10 +686,9 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
                         .with_view(view);
 
                     ViewReaderUtility reader;
-                    auto read_output = co_await reader.process(reader_input);
-
-                    if (read_output.success) {
-                        for (const auto& event : read_output.events) {
+                    auto gen = reader.process(reader_input);
+                    while (auto batch = co_await gen.next()) {
+                        for (const auto& event : batch->events) {
                             ndjson_body += event;
                             ndjson_body += '\n';
                         }
@@ -781,11 +778,9 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
                                 .with_view(*view_ptr);
 
                             ViewReaderUtility reader;
-                            auto read_output =
-                                co_await reader.process(reader_input);
-
-                            if (read_output.success) {
-                                for (const auto& event : read_output.events) {
+                            auto gen = reader.process(reader_input);
+                            while (auto batch = co_await gen.next()) {
+                                for (const auto& event : batch->events) {
                                     local_buf += event;
                                     local_buf += '\n';
                                 }

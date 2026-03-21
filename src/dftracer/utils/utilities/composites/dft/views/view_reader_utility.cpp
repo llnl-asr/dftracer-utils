@@ -17,7 +17,6 @@ namespace dftracer::utils::utilities::composites::dft::views {
 
 using dftracer::utils::utilities::common::json::JsonValue;
 
-// ViewReaderInput fluent builders
 ViewReaderInput& ViewReaderInput::with_file_path(const std::string& path) {
     file_path = path;
     return *this;
@@ -50,53 +49,50 @@ ViewReaderInput& ViewReaderInput::with_batch_size(std::size_t sz) {
     return *this;
 }
 
+ViewReaderInput& ViewReaderInput::with_event_batch_size(std::size_t sz) {
+    event_batch_size = sz;
+    return *this;
+}
+
 ViewReaderInput& ViewReaderInput::with_view(const ViewDefinition& v) {
     view = v;
     return *this;
 }
 
-// Hash metadata types that need smart filtering (FH, HH, SH)
-// These have a "value" field containing the hash string that other events
+// Hash metadata types that need smart filtering (FH, HH, SH).
+// These carry a "value" field containing the hash string that other events
 // reference via hhash/fhash/shash in their args.
 static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
                                                                     "SH"};
 
-// Extract hash references from a matched event's args
-static void collect_referenced_hashes(
+// Flush hash metadata entries referenced by a matched event into the batch.
+static void collect_referenced_hashes_batch(
     const JsonValue& json,
     std::unordered_map<std::string, std::string>& pending_metadata,
-    std::unordered_set<std::string>& emitted_hashes,
-    std::vector<std::string>& output_events, std::uint64_t& events_matched) {
+    std::unordered_set<std::string>& emitted_hashes, ViewReaderBatch& batch) {
     auto args = json["args"];
     if (!args.exists()) return;
 
-    // Check each hash dimension
     static const char* hash_fields[] = {"hhash", "fhash", "shash"};
     for (const char* field : hash_fields) {
         auto val = args[field];
         if (!val.exists()) continue;
 
         std::string hash_val = val.get<std::string>();
-
-        // Already emitted? Skip
         if (emitted_hashes.count(hash_val)) continue;
 
-        // In pending buffer? Flush it
         auto it = pending_metadata.find(hash_val);
         if (it != pending_metadata.end()) {
-            output_events.push_back(std::move(it->second));
-            events_matched++;
+            batch.events.push_back(std::move(it->second));
+            batch.events_matched++;
             emitted_hashes.insert(hash_val);
             pending_metadata.erase(it);
         }
     }
 }
 
-coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
+coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
     const ViewReaderInput& input) {
-    ViewReaderOutput output;
-
-    // Build predicate filters
     std::vector<PredicateFilter> filters;
     for (const auto& predicate : input.view.predicates) {
         filters.push_back(build_predicate_filter(predicate));
@@ -109,7 +105,6 @@ coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
     std::unordered_map<std::string, std::string> pending_metadata;
     std::unordered_set<std::string> emitted_hashes;
 
-    // Create indexed reader
     auto reader_input = composites::IndexedReadInput::from_file(input.file_path)
                             .with_index(input.idx_path);
     if (input.checkpoint_size > 0) {
@@ -125,6 +120,8 @@ coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
             .buffer_size(input.batch_size)
             .from(input.start_byte)
             .to(input.end_byte));
+
+    ViewReaderBatch batch;
 
     while (!stream->done()) {
         auto chunk = co_await stream->read_async();
@@ -142,10 +139,9 @@ coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
             std::size_t line_len = newline - line_start;
 
             if (line_len > 0) {
-                yyjson_read_flag flg = YYJSON_READ_NOFLAG;
                 yyjson_doc* doc =
                     yyjson_read_opts(const_cast<char*>(line_start), line_len,
-                                     flg, nullptr, nullptr);
+                                     YYJSON_READ_NOFLAG, nullptr, nullptr);
 
                 if (doc) {
                     yyjson_val* root = yyjson_doc_get_root(doc);
@@ -159,7 +155,6 @@ coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
                                 json["name"].get<std::string>();
 
                             if (HASH_METADATA_NAMES.count(name_str)) {
-                                // Hash metadata → buffer keyed by value
                                 auto args = json["args"];
                                 if (args.exists()) {
                                     auto val = args["value"];
@@ -174,28 +169,22 @@ coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
                                     }
                                 }
                             } else {
-                                // Non-hash metadata (thread_name, etc.)
-                                // Only emit if pid/tid match the
-                                // predicate (or no pid/tid filter).
                                 if (metadata_matches_identity(json, filters)) {
-                                    output.events.emplace_back(line_start,
-                                                               line_len);
-                                    output.events_matched++;
+                                    batch.events.emplace_back(line_start,
+                                                              line_len);
+                                    batch.events_matched++;
                                 }
                             }
                         } else if (ph != "M") {
-                            output.events_scanned++;
-                            // Check against predicate groups
+                            batch.events_scanned++;
                             if (matches_any_predicate(json, filters)) {
-                                // Flush any referenced hash metadata first
                                 if (input.view.include_metadata) {
-                                    collect_referenced_hashes(
+                                    collect_referenced_hashes_batch(
                                         json, pending_metadata, emitted_hashes,
-                                        output.events, output.events_matched);
+                                        batch);
                                 }
-                                output.events.emplace_back(line_start,
-                                                           line_len);
-                                output.events_matched++;
+                                batch.events.emplace_back(line_start, line_len);
+                                batch.events_matched++;
                             }
                         }
                     }
@@ -204,13 +193,95 @@ coro::CoroTask<ViewReaderOutput> ViewReaderUtility::process(
             }
 
             pos = (newline - data) + 1;
+
+            if (batch.events.size() >= input.event_batch_size) {
+                co_yield std::move(batch);
+                batch = ViewReaderBatch{};
+            }
         }
     }
 
-    // Pending metadata that was never referenced gets dropped
-
-    output.success = true;
-    co_return output;
+    if (!batch.events.empty()) {
+        co_yield std::move(batch);
+    }
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::views
+
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+
+#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+
+namespace dftracer::utils::utilities::composites::dft::views {
+
+using common::arrow::ArrowExportResult;
+using common::arrow::ColumnType;
+using common::arrow::RecordBatchBuilder;
+
+ArrowExportResult ViewReaderBatch::to_arrow() const {
+    RecordBatchBuilder builder;
+    builder.reserve(events.size());
+    std::vector<yyjson_doc*> held_docs;
+    std::vector<std::string> held_serialized;
+
+    for (const auto& event_str : events) {
+        yyjson_doc* doc = yyjson_read(event_str.data(), event_str.size(), 0);
+        if (!doc) continue;
+        yyjson_val* root = yyjson_doc_get_root(doc);
+        if (!root || !yyjson_is_obj(root)) {
+            yyjson_doc_free(doc);
+            continue;
+        }
+        held_docs.push_back(doc);
+
+        yyjson_obj_iter it;
+        yyjson_obj_iter_init(root, &it);
+        yyjson_val* key;
+        while ((key = yyjson_obj_iter_next(&it))) {
+            yyjson_val* val = yyjson_obj_iter_get_val(key);
+            std::string_view key_sv(yyjson_get_str(key), yyjson_get_len(key));
+
+            if (yyjson_is_int(val)) {
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::INT64);
+                builder.append_int64(ci, yyjson_get_sint(val));
+            } else if (yyjson_is_uint(val)) {
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::UINT64);
+                builder.append_uint64(ci, yyjson_get_uint(val));
+            } else if (yyjson_is_real(val)) {
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::DOUBLE);
+                builder.append_double(ci, yyjson_get_real(val));
+            } else if (yyjson_is_bool(val)) {
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::BOOL);
+                builder.append_bool(ci, yyjson_get_bool(val));
+            } else if (yyjson_is_str(val)) {
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
+                builder.append_string(
+                    ci,
+                    std::string_view(yyjson_get_str(val), yyjson_get_len(val)));
+            } else if (yyjson_is_null(val)) {
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
+                builder.append_null(ci);
+            } else {
+                auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
+                std::size_t jlen;
+                char* js = yyjson_val_write(val, 0, &jlen);
+                if (js) {
+                    held_serialized.emplace_back(js, jlen);
+                    free(js);
+                    builder.append_string(ci, held_serialized.back());
+                } else {
+                    builder.append_null(ci);
+                }
+            }
+        }
+        builder.end_row();
+    }
+
+    auto result = builder.finish();
+    for (auto* d : held_docs) yyjson_doc_free(d);
+    return result;
+}
+
+}  // namespace dftracer::utils::utilities::composites::dft::views
+
+#endif  // DFTRACER_UTILS_ENABLE_ARROW

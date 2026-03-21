@@ -111,6 +111,7 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/association_resolver_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/perfetto_trace_writer_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregator_summary_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregator_utility.cpp
 
     # DFT Indexing (bloom filters, statistics, queries)
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_filter.cpp
@@ -243,6 +244,12 @@ endif()
 if(DFTRACER_UTILS_ENABLE_ARROW)
   list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/column_builder.cpp
+  )
+endif()
+
+if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+  list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/ipc_writer.cpp
   )
 endif()
 
@@ -910,7 +917,25 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader_iterator.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/trace_reader_iterator.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_query.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_query.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/bloom_query.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/bloom_query.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_aggregator.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_aggregator.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/metadata_collector.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/metadata_collector.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_builder.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_builder.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_reader.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_reader.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reorganization_planner.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reorganization_planner.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reconstruction_planner.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reconstruction_planner.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/aggregator.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/aggregator.h)
 
   # Link to unified library to test if this fixes the bus error
   target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils::shared)
@@ -935,11 +960,18 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/py.typed"
     DESTINATION "dftracer/utils")
 
-  # Install .pyi and py.typed for utilities submodule (editable installs)
   install(
     FILES
-      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/dftracer_utils_utilities_ext.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/py.typed"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_statistics_query.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_bloom_query.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_statistics_aggregator.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_metadata_collector.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_view_builder.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_view_reader.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_reorganization_planner.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_reconstruction_planner.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_aggregator.pyi"
     DESTINATION "dftracer/utils/utilities")
 
 endif()

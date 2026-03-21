@@ -46,10 +46,10 @@ class TraceReader {
    public:
     explicit TraceReader(TraceReaderConfig config);
 
-    // Parsed lines — returns Line objects (string_view, zero-copy)
+    // Parsed lines
     coro::AsyncGenerator<Line> read_lines(ReadConfig config = {});
 
-    // Raw bytes — returns spans to internal buffer
+    // Raw bytes
     coro::AsyncGenerator<std::span<const char>> read_raw(
         ReadConfig config = {});
 

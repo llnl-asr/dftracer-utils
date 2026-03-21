@@ -12,6 +12,9 @@
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+#include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
+#endif
 #include <unistd.h>
 
 #include <argparse/argparse.hpp>
@@ -50,6 +53,14 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
     bool compute_percentiles = program.get<bool>("--compute-percentiles");
     std::string percentiles_str = program.get<std::string>("--percentiles");
     double relative_accuracy = program.get<double>("--relative-accuracy");
+    std::string output_format = program.get<std::string>("--format");
+
+    if (!AggregationConfig::is_valid_format(output_format)) {
+        DFTRACER_UTILS_LOG_ERROR(
+            "Invalid output format: %s (supported: %s)", output_format.c_str(),
+            AggregationConfig::supported_formats_str().c_str());
+        co_return 1;
+    }
 
     PerfettoEventFormat event_format = PerfettoEventFormat::COUNTER;
     if (event_format_str == "async") {
@@ -64,7 +75,13 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
         co_return 1;
     }
 
-    if (compress_output) {
+    if (output_format == AggregationConfig::FORMAT_ARROW) {
+        constexpr std::string_view ext = ".arrows";
+        if (output_file.size() < ext.size() ||
+            output_file.substr(output_file.size() - ext.size()) != ext) {
+            output_file += ext;
+        }
+    } else if (compress_output) {
         if (output_file.size() < 3 ||
             output_file.substr(output_file.size() - 3) != ".gz") {
             output_file += ".gz";
@@ -367,28 +384,78 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
             auto resolver_output = co_await resolver.process(resolver_input);
             agg_results = resolver_output.aggregations;
 
-            // Write output
-            DFTRACER_UTILS_LOG_INFO("Writing %zu aggregation keys to %s%s...",
-                                    agg_results.aggregations.size(),
-                                    output_file.c_str(),
-                                    compress_output ? " (compressed)" : "");
-
             if (agg_results.aggregations.empty()) {
                 DFTRACER_UTILS_LOG_WARN("No aggregations to write!");
                 co_return false;
             }
 
-            PerfettoTraceWriterUtility writer;
-            PerfettoTraceWriterInput writer_input{
-                output_file,
-                resolver_output,
-                agg_config.compute_statistics,
-                agg_config.compute_percentiles,
-                agg_config.percentiles,
-                compress_output,
-                compression_level,
-                event_format};
-            bool success = co_await writer.process(writer_input);
+            bool success = false;
+
+#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+            if (output_format == AggregationConfig::FORMAT_ARROW) {
+                using namespace utilities::common::arrow;
+
+                DFTRACER_UTILS_LOG_INFO(
+                    "Writing %zu aggregation keys to %s (Arrow IPC)...",
+                    agg_results.aggregations.size(), output_file.c_str());
+
+                IpcWriter ipc;
+                if (ipc.open(output_file) != 0) {
+                    DFTRACER_UTILS_LOG_ERROR(
+                        "Failed to open Arrow IPC file: %s",
+                        output_file.c_str());
+                    co_return false;
+                }
+
+                constexpr std::size_t kBatchRows = 10000;
+                AggregationBatch batch;
+                batch.entries.reserve(kBatchRows);
+
+                for (auto& [key, metrics] : agg_results.aggregations) {
+                    batch.entries.emplace_back(key, metrics);
+                    if (batch.entries.size() >= kBatchRows) {
+                        auto arrow_batch = batch.to_arrow();
+                        if (ipc.write_batch(arrow_batch) != 0) {
+                            DFTRACER_UTILS_LOG_ERROR(
+                                "Arrow IPC write_batch failed");
+                            ipc.close();
+                            co_return false;
+                        }
+                        batch.entries.clear();
+                    }
+                }
+                if (!batch.entries.empty()) {
+                    auto arrow_batch = batch.to_arrow();
+                    if (ipc.write_batch(arrow_batch) != 0) {
+                        DFTRACER_UTILS_LOG_ERROR(
+                            "Arrow IPC write_batch (final) failed");
+                        ipc.close();
+                        co_return false;
+                    }
+                }
+
+                success = (ipc.close() == 0);
+            } else
+#endif
+            {
+                // JSON / Perfetto output path
+                DFTRACER_UTILS_LOG_INFO(
+                    "Writing %zu aggregation keys to %s%s...",
+                    agg_results.aggregations.size(), output_file.c_str(),
+                    compress_output ? " (compressed)" : "");
+
+                PerfettoTraceWriterUtility writer;
+                PerfettoTraceWriterInput writer_input{
+                    output_file,
+                    resolver_output,
+                    agg_config.compute_statistics,
+                    agg_config.compute_percentiles,
+                    agg_config.percentiles,
+                    compress_output,
+                    compression_level,
+                    event_format};
+                success = co_await writer.process(writer_input);
+            }
 
             if (success) {
                 DFTRACER_UTILS_LOG_INFO("Output written successfully to: %s",
@@ -584,6 +651,12 @@ int main(int argc, char** argv) {
             "(default: 0.01 = 1%)")
         .scan<'g', double>()
         .default_value(0.01);
+
+    program.add_argument("--format")
+        .help(
+            "Output format: 'json' (Perfetto JSON, default) or "
+            "'arrow' (Arrow IPC file, .arrows extension)")
+        .default_value<std::string>("json");
 
     try {
         program.parse_args(argc, argv);

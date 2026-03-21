@@ -38,7 +38,9 @@ MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = NO
 SEARCH_INCLUDES        = YES
 INCLUDE_PATH           = ../include
-PREDEFINED             = __cplusplus
+PREDEFINED             = __cplusplus \
+                         DFTRACER_UTILS_ENABLE_ARROW \
+                         DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 # Warnings
 QUIET                  = NO

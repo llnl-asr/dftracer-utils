@@ -6,9 +6,7 @@ polars DataFrames.
 
 These wrappers are pure Python. The actual Arrow data is produced by the
 C extension (TraceReader.iter_arrow, utility to_arrow methods). Conversion
-to pandas requires pyarrow; conversion to polars requires polars. Neither
-is a hard dependency — a clear ImportError is raised if the library is
-not installed.
+to pandas requires pyarrow; conversion to polars requires polars.
 """
 
 

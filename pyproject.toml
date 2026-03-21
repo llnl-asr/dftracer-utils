@@ -29,6 +29,7 @@ classifiers = [
 dev = [
   "pytest>=6.0",
   "ruff",
+  "pyarrow>=14.0",
   "dask[bag,dataframe,distributed]>=2024.1.0; python_version >= '3.9'",
   "dask_jobqueue~=0.8.0; python_version >= '3.9'"
 ]

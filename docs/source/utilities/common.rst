@@ -1,7 +1,8 @@
 Common
-================
+======
 
-Shared utilities used across the library: JSON parsing and statistics collection.
+Shared utilities used across the library: JSON parsing, statistics collection,
+and Arrow data interchange.
 
 JSON
 ----
@@ -192,8 +193,152 @@ Fixed 65-bin logarithmic histogram covering the ``uint64_t`` range. Bin 0 holds 
    std::string json = a.to_json();
    Log2Histogram restored = Log2Histogram::from_json(json);
 
+Arrow
+-----
+
+Arrow data interchange via `nanoarrow <https://github.com/apache/nanoarrow>`_.
+Guarded by ``DFTRACER_UTILS_ENABLE_ARROW`` (ON by default).
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/common/arrow/arrow.h>
+
+RecordBatchBuilder
+~~~~~~~~~~~~~~~~~~
+
+Type-safe columnar builder with two modes:
+
+- **Static schema** — ``declare_schema()`` upfront, direct index append.
+  Best for utility ``to_arrow()`` methods with known column layouts.
+- **Dynamic schema** — ``add_or_get_column()`` discovers columns from data,
+  ``end_row()`` backfills nulls. Best for arbitrary JSON (e.g.,
+  ``TraceReader.iter_arrow()``).
+
+Column types: ``INT64``, ``UINT64``, ``DOUBLE``, ``STRING``, ``BOOL``.
+
+String columns store ``string_view`` into source data — zero copies during
+build, bulk copy only at ``finish()``. Caller must keep source data alive
+until ``finish()`` returns.
+
+**Static schema example:**
+
+.. code-block:: cpp
+
+   RecordBatchBuilder builder;
+   builder.declare_schema({
+       {"id", ColumnType::INT64},
+       {"name", ColumnType::STRING},
+       {"value", ColumnType::DOUBLE},
+   });
+   builder.reserve(1000);
+
+   builder.append_int64(0, 42);
+   builder.append_string(1, "hello");
+   builder.append_double(2, 3.14);
+   builder.end_row();
+
+   auto result = builder.finish();  // ArrowExportResult
+   // result.num_rows() == 1, result.num_columns() == 3
+
+   builder.reset(true);  // keep schema, clear data for next batch
+
+**Dynamic schema example:**
+
+.. code-block:: cpp
+
+   RecordBatchBuilder builder;
+
+   // Columns discovered from data
+   auto col_x = builder.add_or_get_column("x", ColumnType::INT64);
+   builder.append_int64(col_x, 1);
+   builder.end_row();  // row 0: x=1
+
+   auto col_y = builder.add_or_get_column("y", ColumnType::STRING);
+   // col_y is new — backfills null for row 0
+   builder.append_int64(col_x, 2);
+   builder.append_string(col_y, "hello");
+   builder.end_row();  // row 1: x=2, y="hello"
+
+   auto result = builder.finish();
+   // result.num_rows() == 2, result.num_columns() == 2
+   // column "y" has null in row 0
+
+ArrowExportResult
+~~~~~~~~~~~~~~~~~
+
+Move-only RAII wrapper holding ``nanoarrow::UniqueSchema`` +
+``nanoarrow::UniqueArray``. Self-contained, safe to send across threads
+and channels.
+
+.. code-block:: cpp
+
+   auto result = builder.finish();
+   assert(result.valid());
+   assert(result.num_rows() == 100);
+   assert(result.num_columns() == 5);
+
+   // Access raw Arrow C Data Interface pointers
+   ArrowSchema* schema = result.get_schema();
+   ArrowArray* array = result.get_array();
+
+   // Move ownership out
+   auto schema = result.release_schema();
+   auto array = result.release_array();
+
+IpcWriter
+~~~~~~~~~
+
+Streaming Arrow IPC file writer (``.arrows`` format). Writes files
+readable by pyarrow, polars, DuckDB, and any Arrow-compatible tool.
+
+Guarded by ``DFTRACER_UTILS_ENABLE_ARROW_IPC``.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
+
+   IpcWriter writer;
+   writer.open("output.arrows");
+
+   // Stream batches — schema written on first write_batch()
+   for (auto& batch : batches) {
+       auto arrow = batch.to_arrow();
+       writer.write_batch(arrow);
+   }
+
+   writer.close();  // writes footer, closes file
+
+Batch to_arrow() Pattern
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Streaming utilities yield batch structs with a ``to_arrow()`` method.
+This keeps Arrow conversion in C++ (not the Python binding) and allows
+both C++ and Python consumers to use Arrow output.
+
+.. code-block:: cpp
+
+   // ViewReaderBatch, AggregationBatch both follow this pattern
+   struct MyBatch {
+       std::vector<std::string> events;
+
+       ArrowExportResult to_arrow() const {
+           RecordBatchBuilder builder;
+           // ... parse events, append columns ...
+           return builder.finish();
+       }
+   };
+
+   // Consuming a StreamingUtility with Arrow output
+   MyStreamingUtility util;
+   auto gen = util.process(input);
+   while (auto batch = co_await gen.next()) {
+       auto arrow = batch->to_arrow();
+       ipc_writer.write_batch(arrow);
+   }
+
 See Also
 --------
 
 - :doc:`composites` - Composites that use DDSketch and Log2Histogram for chunk statistics
+- :doc:`/cpp_api/arrow` - Full C++ API reference for Arrow classes
 - :doc:`/cpp_api/index` - Full C++ API documentation

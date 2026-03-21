@@ -17,6 +17,7 @@ This section contains the C++ API documentation for dftracer utilities.
     coro
     task_graph
     utilities
+    arrow
     io
     sqlite
     scheduler
@@ -40,6 +41,7 @@ The dftracer utilities C++ library is organized into several namespaces:
 - ``dftracer::utils::sqlite`` - Async SQLite database operations
 - ``dftracer::utils::utilities::composites::dft::aggregators`` - Event aggregation pipeline
 - ``dftracer::utils::utilities::composites::dft::indexing`` - Bloom filter indexing system
+- ``dftracer::utils::utilities::common::arrow`` - Arrow data interchange (RecordBatchBuilder, IpcWriter)
 
 .. mermaid::
 
@@ -78,6 +80,7 @@ The dftracer utilities C++ library is organized into several namespaces:
            Text["Text"]
            Filesystem["Filesystem"]
            Statistics["Statistics"]
+           Arrow["Arrow"]
        end
 
        subgraph DFT["dftracer::utils::composites::dft"]

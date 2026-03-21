@@ -530,10 +530,23 @@ class StatisticsQueryUtility:
         top_n: int = 10,
         index_dir: str = "",
     ) -> Dict[str, Any]: ...
+    def __call__(
+        self,
+        file_path: str,
+        query_type: str = "summary",
+        top_n: int = 10,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
 
 class BloomQueryUtility:
     def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
     def process(
+        self,
+        file_path: str,
+        predicates: Dict[str, List[str]],
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+    def __call__(
         self,
         file_path: str,
         predicates: Dict[str, List[str]],
@@ -547,6 +560,11 @@ class StatisticsAggregatorUtility:
         file_path: str,
         index_dir: str = "",
     ) -> Dict[str, Any]: ...
+    def __call__(
+        self,
+        file_path: str,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
 
 class MetadataCollectorUtility:
     def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
@@ -555,10 +573,21 @@ class MetadataCollectorUtility:
         file_path: str,
         index_dir: str = "",
     ) -> Dict[str, Any]: ...
+    def __call__(
+        self,
+        file_path: str,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
 
 class ViewBuilderUtility:
     def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
     def process(
+        self,
+        file_path: str,
+        predicates: Optional[Dict[str, List[str]]] = None,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+    def __call__(
         self,
         file_path: str,
         predicates: Optional[Dict[str, List[str]]] = None,
@@ -573,6 +602,12 @@ class ViewReaderUtility:
         predicates: Optional[Dict[str, List[str]]] = None,
         index_dir: str = "",
     ) -> Any: ...
+    def __call__(
+        self,
+        file_path: str,
+        predicates: Optional[Dict[str, List[str]]] = None,
+        index_dir: str = "",
+    ) -> Any: ...
     def iter_arrow(
         self,
         file_path: str,
@@ -580,6 +615,34 @@ class ViewReaderUtility:
         index_dir: str = "",
         batch_size: int = 10000,
     ) -> Iterator[Any]: ...
+
+class ReorganizationPlannerUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        source_files: List[str],
+        groups: Optional[List[Dict[str, str]]] = None,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+    def __call__(
+        self,
+        source_files: List[str],
+        groups: Optional[List[Dict[str, str]]] = None,
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+
+class ReconstructionPlannerUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def process(
+        self,
+        reorganized_files: List[str],
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
+    def __call__(
+        self,
+        reorganized_files: List[str],
+        index_dir: str = "",
+    ) -> Dict[str, Any]: ...
 
 class AggregatorUtility:
     def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
@@ -628,20 +691,3 @@ class AggregatorUtility:
         batch_size_mb: int = 4,
         event_batch_size: int = 10000,
     ) -> Iterator[Any]: ...
-
-class ReorganizationPlannerUtility:
-    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
-    def process(
-        self,
-        source_files: List[str],
-        groups: Optional[List[Dict[str, str]]] = None,
-        index_dir: str = "",
-    ) -> Dict[str, Any]: ...
-
-class ReconstructionPlannerUtility:
-    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
-    def process(
-        self,
-        reorganized_files: List[str],
-        index_dir: str = "",
-    ) -> Dict[str, Any]: ...

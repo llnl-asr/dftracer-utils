@@ -246,7 +246,19 @@ static PyObject *ReorganizationPlanner_call(PyObject *self, PyObject *args,
 static PyMethodDef ReorganizationPlanner_methods[] = {
     {"process", (PyCFunction)ReorganizationPlanner_plan,
      METH_VARARGS | METH_KEYWORDS,
-     "Build an extraction plan for semantic reorganization"},
+     "process(source_files, groups=None, index_dir='')\n"
+     "--\n"
+     "\n"
+     "Build a reorganization plan for trace files.\n"
+     "\n"
+     "Args:\n"
+     "    source_files (list[str]): Paths to source trace files.\n"
+     "    groups (list[dict] or None): Predicate group definitions\n"
+     "        (default None).\n"
+     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "\n"
+     "Returns:\n"
+     "    dict: Extraction plan.\n"},
     {NULL} /* Sentinel */
 };
 
@@ -279,17 +291,10 @@ PyTypeObject ReorganizationPlannerType = {
     "\n"
     "Args:\n"
     "    runtime (Runtime or None): Runtime for thread pool control.\n"
-    "        If None, uses the default global Runtime.\n"
-    "\n"
-    "process(source_files, groups=None, index_dir='') -> dict\n"
-    "    source_files (list[str]): Paths to source trace files.\n"
-    "    groups (list[dict] or None): Predicate group definitions.\n"
-    "        Each dict has 'name' (str) and 'predicate' (str) keys.\n"
-    "    index_dir (str): Directory containing index sidecars.\n", /* tp_doc
-                                                                    */
-    0,                                    /* tp_traverse */
-    0,                                    /* tp_clear */
-    0,                                    /* tp_richcompare */
+    "        If None, uses the default global Runtime.\n", /* tp_doc */
+    0,                                                     /* tp_traverse */
+    0,                                                     /* tp_clear */
+    0,                                                     /* tp_richcompare */
     0,                                    /* tp_weaklistoffset */
     0,                                    /* tp_iter */
     0,                                    /* tp_iternext */

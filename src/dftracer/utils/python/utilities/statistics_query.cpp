@@ -239,9 +239,22 @@ static PyObject *StatisticsQuery_call(PyObject *self, PyObject *args,
 static PyMethodDef StatisticsQuery_methods[] = {
     {"process", (PyCFunction)StatisticsQuery_query,
      METH_VARARGS | METH_KEYWORDS,
-     "process(file_path, query_type='summary', top_n=10, index_dir='') -> "
-     "dict\n"
-     "Query pre-computed statistics from an indexed trace file."},
+     "process(file_path, query_type='summary', top_n=10, index_dir='')\n"
+     "--\n"
+     "\n"
+     "Query statistics from an indexed trace file.\n"
+     "\n"
+     "Args:\n"
+     "    file_path (str): Path to the trace file.\n"
+     "    query_type (str): Query type (default 'summary'). One of\n"
+     "        'summary', 'categories', 'names', 'pid_tids',\n"
+     "        'time_range', 'duration_stats', 'top_n_names',\n"
+     "        'top_n_categories', 'detailed'.\n"
+     "    top_n (int): Top results for ranked queries (default 10).\n"
+     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "\n"
+     "Returns:\n"
+     "    dict: Query results.\n"},
     {NULL}};
 
 PyTypeObject StatisticsQueryUtilityType = {

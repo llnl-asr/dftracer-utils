@@ -3,7 +3,97 @@ Utilities API
 
 Composable processing utilities. For usage examples, see :doc:`/utilities`.
 
-.. mermaid:: ../_generated/utility_hierarchy.mmd
+Base Classes
+------------
+
+All utilities inherit from ``UtilityBase``, which provides tag introspection,
+context management, and naming. Two derived templates define the ``process()``
+contract:
+
+- ``Utility<I, O, Tags...>`` — materialized output: ``process()`` returns
+  ``CoroTask<O>``
+- ``StreamingUtility<I, Batch, Tags...>`` — streaming output: ``process()``
+  returns ``AsyncGenerator<Batch>``
+
+.. mermaid::
+
+   classDiagram
+       class UtilityBase~I, Tags~ {
+           +has_tag~Tag~() bool
+           +get_tag~Tag~() Tag
+           +get_name() string
+           +set_name(string)
+           #context() CoroScope
+       }
+       class Utility~I, O, Tags~ {
+           +process(I) CoroTask~O~
+       }
+       class StreamingUtility~I, Batch, Tags~ {
+           +process(I) AsyncGenerator~Batch~
+       }
+       UtilityBase <|-- Utility
+       UtilityBase <|-- StreamingUtility
+
+UtilityBase
+~~~~~~~~~~~
+
+Shared base for all utilities. Provides tag introspection (``has_tag<>``,
+``get_tag<>``), context management (``context()`` for ``NeedsContext``
+utilities), and name/type signature generation.
+
+.. doxygenclass:: dftracer::utils::utilities::UtilityBase
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+Utility (Materialized)
+~~~~~~~~~~~~~~~~~~~~~~
+
+For utilities that compute a single result. ``process()`` returns
+``CoroTask<O>`` — the caller ``co_await``\ s the result.
+
+.. doxygenclass:: dftracer::utils::utilities::Utility
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+StreamingUtility
+~~~~~~~~~~~~~~~~
+
+For utilities that yield results incrementally. ``process()`` returns
+``AsyncGenerator<Batch>`` — the caller iterates with
+``co_await gen.next()``.
+
+Batch structs typically provide a ``to_arrow()`` method for Arrow
+conversion (e.g., ``ViewReaderBatch::to_arrow()``,
+``AggregationBatch::to_arrow()``).
+
+.. doxygenclass:: dftracer::utils::utilities::StreamingUtility
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. code-block:: cpp
+
+   // Consuming a StreamingUtility
+   ViewReaderUtility reader;
+   auto gen = reader.process(input);
+   while (auto batch = co_await gen.next()) {
+       // Use C++ data directly
+       for (const auto& event : batch->events) { ... }
+
+       // Or convert to Arrow
+       auto arrow = batch->to_arrow();
+   }
+
+Tags
+~~~~
+
+.. doxygenstruct:: dftracer::utils::utilities::tags::Parallelizable
+   :project: dftracer-utils
+
+.. doxygenstruct:: dftracer::utils::utilities::tags::NeedsContext
+   :project: dftracer-utils
 
 Call Tree
 ---------
@@ -74,7 +164,7 @@ File reading and writing utilities.
    :undoc-members:
 
 Async Generators
-^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~
 
 Non-blocking line and byte generators for coroutine-based pipelines.
 
@@ -144,7 +234,7 @@ Statistics
 Statistical data structures for percentile estimation and distribution tracking.
 
 DDSketch
-^^^^^^^^
+~~~~~~~~
 
 Deterministic percentile estimation with bounded relative error, merging is commutative.
 
@@ -154,7 +244,7 @@ Deterministic percentile estimation with bounded relative error, merging is comm
    :undoc-members:
 
 Log2Histogram
-^^^^^^^^^^^^^
+~~~~~~~~~~~~~
 
 Fixed 65-bin logarithmic histogram for compact distribution representation.
 
@@ -169,7 +259,7 @@ Indexing & Aggregation
 Indexing utilities for efficient trace querying and aggregation.
 
 Chunk Statistics & Bloom Filter Cache
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 See :doc:`dft_indexing` for full documentation of ``ChunkStatistics``,
 ``BloomFilter``, ``BloomFilterCache``, and the complete indexing pipeline.
@@ -179,8 +269,30 @@ Views & Predicates
 
 View query support with multi-dimensional filtering.
 
+ViewReaderUtility
+~~~~~~~~~~~~~~~~~
+
+``StreamingUtility`` that reads events from a trace file filtered by
+bloom-filter predicates. Yields ``ViewReaderBatch`` objects with
+``to_arrow()`` for Arrow conversion.
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::views::ViewReaderInput
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::views::ViewReaderBatch
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenclass:: dftracer::utils::utilities::composites::dft::views::ViewReaderUtility
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
 Predicate Filter
-^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~
 
 Efficiently filters events by dimension sets, time ranges, and duration bounds.
 

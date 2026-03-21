@@ -2,6 +2,7 @@
 #include <Python.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/python/arrow_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
@@ -296,6 +297,8 @@ static TraceReaderIteratorObject *make_arrow_iterator(
 #endif
 
 }  // namespace
+
+using dftracer::utils::python::wrap_arrow_table;
 
 static void TraceReader_dealloc(TraceReaderObject *self) {
     Py_XDECREF(self->file_path);
@@ -651,21 +654,7 @@ static PyObject *TraceReader_read_arrow(TraceReaderObject *self, PyObject *args,
     Py_DECREF(iter);
     if (!list) return NULL;
 
-    PyObject *arrow_mod = PyImport_ImportModule("dftracer.utils.arrow");
-    if (!arrow_mod) {
-        Py_DECREF(list);
-        return NULL;
-    }
-    PyObject *table_cls = PyObject_GetAttrString(arrow_mod, "ArrowTable");
-    Py_DECREF(arrow_mod);
-    if (!table_cls) {
-        Py_DECREF(list);
-        return NULL;
-    }
-    PyObject *result = PyObject_CallFunctionObjArgs(table_cls, list, NULL);
-    Py_DECREF(table_cls);
-    Py_DECREF(list);
-    return result;
+    return wrap_arrow_table(list);
 }
 
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
@@ -743,56 +732,102 @@ static PyObject *TraceReader_get_num_lines(TraceReaderObject *self,
 static PyMethodDef TraceReader_methods[] = {
     {"iter_lines", (PyCFunction)TraceReader_iter_lines,
      METH_VARARGS | METH_KEYWORDS,
-     "Return iterator over decoded lines "
-     "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
-     "buffer_size=4M)"},
+     "Return an iterator over decoded lines.\n"
+     "\n"
+     "Args:\n"
+     "    start_line (int): First line (0 = beginning).\n"
+     "    end_line (int): Last line (0 = end of file).\n"
+     "    start_byte (int): First byte offset (0 = beginning).\n"
+     "    end_byte (int): Last byte offset (0 = end of file).\n"
+     "    buffer_size (int): Internal read buffer size in bytes.\n"},
     {"iter_raw", (PyCFunction)TraceReader_iter_raw,
      METH_VARARGS | METH_KEYWORDS,
-     "Return iterator over raw byte chunks "
-     "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
-     "buffer_size=4M, line_aligned=True, multi_line=True)"},
+     "Return an iterator over raw byte chunks.\n"
+     "\n"
+     "Args:\n"
+     "    start_line (int): First line (0 = beginning).\n"
+     "    end_line (int): Last line (0 = end of file).\n"
+     "    start_byte (int): First byte offset (0 = beginning).\n"
+     "    end_byte (int): Last byte offset (0 = end of file).\n"
+     "    buffer_size (int): Internal read buffer size in bytes.\n"
+     "    line_aligned (bool): Align chunks to line boundaries.\n"
+     "    multi_line (bool): Allow multiple lines per chunk.\n"},
     {"read_lines", (PyCFunction)TraceReader_read_lines,
      METH_VARARGS | METH_KEYWORDS,
-     "Read lines and return list[str] "
-     "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
-     "buffer_size=4M)"},
+     "Read all lines and return as list.\n"
+     "\n"
+     "Args:\n"
+     "    start_line (int): First line (0 = beginning).\n"
+     "    end_line (int): Last line (0 = end of file).\n"
+     "    start_byte (int): First byte offset (0 = beginning).\n"
+     "    end_byte (int): Last byte offset (0 = end of file).\n"
+     "    buffer_size (int): Internal read buffer size in bytes.\n"},
     {"read_raw", (PyCFunction)TraceReader_read_raw,
      METH_VARARGS | METH_KEYWORDS,
-     "Read raw chunks and return list[bytes] "
-     "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
-     "buffer_size=4M, line_aligned=True, multi_line=True)"},
+     "Read all raw chunks and return as list.\n"
+     "\n"
+     "Args:\n"
+     "    start_line (int): First line (0 = beginning).\n"
+     "    end_line (int): Last line (0 = end of file).\n"
+     "    start_byte (int): First byte offset (0 = beginning).\n"
+     "    end_byte (int): Last byte offset (0 = end of file).\n"
+     "    buffer_size (int): Internal read buffer size in bytes.\n"
+     "    line_aligned (bool): Align chunks to line boundaries.\n"
+     "    multi_line (bool): Allow multiple lines per chunk.\n"},
     {"iter_lines_json", (PyCFunction)TraceReader_iter_lines_json,
      METH_VARARGS | METH_KEYWORDS,
-     "Return iterator over parsed JSON objects "
-     "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
-     "buffer_size=4M)"},
+     "Return an iterator over parsed JSON objects.\n"
+     "\n"
+     "Args:\n"
+     "    start_line (int): First line (0 = beginning).\n"
+     "    end_line (int): Last line (0 = end of file).\n"
+     "    start_byte (int): First byte offset (0 = beginning).\n"
+     "    end_byte (int): Last byte offset (0 = end of file).\n"
+     "    buffer_size (int): Internal read buffer size in bytes.\n"},
     {"read_lines_json", (PyCFunction)TraceReader_read_lines_json,
      METH_VARARGS | METH_KEYWORDS,
-     "Read lines and return list[JSON] "
-     "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
-     "buffer_size=4M)"},
+     "Read all lines as parsed JSON objects.\n"
+     "\n"
+     "Args:\n"
+     "    start_line (int): First line (0 = beginning).\n"
+     "    end_line (int): Last line (0 = end of file).\n"
+     "    start_byte (int): First byte offset (0 = beginning).\n"
+     "    end_byte (int): Last byte offset (0 = end of file).\n"
+     "    buffer_size (int): Internal read buffer size in bytes.\n"},
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     {"iter_arrow", (PyCFunction)TraceReader_iter_arrow,
      METH_VARARGS | METH_KEYWORDS,
-     "Return iterator over Arrow record batches "
-     "(batch_size=10000, start_line=0, end_line=0, start_byte=0, "
-     "end_byte=0, buffer_size=4M)"},
+     "Return an iterator over Arrow record batches.\n"
+     "\n"
+     "Args:\n"
+     "    batch_size (int): Maximum rows per Arrow batch.\n"
+     "    start_line (int): First line (0 = beginning).\n"
+     "    end_line (int): Last line (0 = end of file).\n"
+     "    start_byte (int): First byte offset (0 = beginning).\n"
+     "    end_byte (int): Last byte offset (0 = end of file).\n"
+     "    buffer_size (int): Internal read buffer size in bytes.\n"},
     {"read_arrow", (PyCFunction)TraceReader_read_arrow,
      METH_VARARGS | METH_KEYWORDS,
-     "Read all events as ArrowTable "
-     "(batch_size=10000, start_line=0, end_line=0, start_byte=0, "
-     "end_byte=0, buffer_size=4M)"},
+     "Read all events as a materialized ArrowTable.\n"
+     "\n"
+     "Args:\n"
+     "    batch_size (int): Maximum rows per Arrow batch.\n"
+     "    start_line (int): First line (0 = beginning).\n"
+     "    end_line (int): Last line (0 = end of file).\n"
+     "    start_byte (int): First byte offset (0 = beginning).\n"
+     "    end_byte (int): Last byte offset (0 = end of file).\n"
+     "    buffer_size (int): Internal read buffer size in bytes.\n"},
 #endif
     {"get_max_bytes", (PyCFunction)TraceReader_get_max_bytes, METH_NOARGS,
-     "Get the maximum byte position (0 if unknown for compressed "
-     "files without index)"},
+     "Get the maximum byte position (0 if unknown for compressed\n"
+     "files without index)."},
     {"get_num_lines", (PyCFunction)TraceReader_get_num_lines, METH_NOARGS,
-     "Get the total number of lines (0 if unknown for files without "
-     "index)"},
+     "Get the total number of lines (0 if unknown for files without\n"
+     "index)."},
     {"__enter__", (PyCFunction)TraceReader_enter, METH_NOARGS,
-     "Enter the runtime context for the with statement"},
+     "Enter the runtime context for the with statement."},
     {"__exit__", (PyCFunction)TraceReader_exit, METH_VARARGS,
-     "Exit the runtime context for the with statement"},
+     "Exit the runtime context for the with statement."},
     {NULL}};
 
 static PyGetSetDef TraceReader_getsetters[] = {

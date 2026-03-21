@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/python/arrow_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/utilities/view_reader.h>
@@ -17,6 +18,9 @@
 
 using dftracer::utils::Runtime;
 using namespace dftracer::utils::utilities::composites::dft::views;
+
+using dftracer::utils::python::wrap_arrow_result;
+using dftracer::utils::python::wrap_arrow_table;
 
 static Runtime *get_runtime(ViewReaderObject *self) {
     if (self->runtime_obj)
@@ -218,15 +222,6 @@ static bool build_batch(const std::vector<std::string> &events,
     return builder.num_rows() > 0;
 }
 
-static ArrowBatchCapsuleObject *make_capsule(ArrowExportResult result) {
-    ArrowBatchCapsuleObject *cap =
-        (ArrowBatchCapsuleObject *)ArrowBatchCapsuleType.tp_alloc(
-            &ArrowBatchCapsuleType, 0);
-    if (!cap) return NULL;
-    cap->result = new ArrowExportResult(std::move(result));
-    return cap;
-}
-
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 // ---------------------------------------------------------------------------
@@ -272,13 +267,12 @@ static PyObject *ViewReader_read_events(ViewReaderObject *self, PyObject *args,
             auto arrow_result = builder.finish();
             for (auto *d : held_docs) yyjson_doc_free(d);
 
-            ArrowBatchCapsuleObject *cap =
-                make_capsule(std::move(arrow_result));
+            PyObject *cap = wrap_arrow_result(std::move(arrow_result));
             if (!cap) {
                 Py_DECREF(batch_list);
                 return NULL;
             }
-            int rc = PyList_Append(batch_list, (PyObject *)cap);
+            int rc = PyList_Append(batch_list, cap);
             Py_DECREF(cap);
             if (rc < 0) {
                 Py_DECREF(batch_list);
@@ -289,22 +283,7 @@ static PyObject *ViewReader_read_events(ViewReaderObject *self, PyObject *args,
         }
     }
 
-    PyObject *arrow_mod = PyImport_ImportModule("dftracer.utils.arrow");
-    if (!arrow_mod) {
-        Py_DECREF(batch_list);
-        return NULL;
-    }
-    PyObject *table_cls = PyObject_GetAttrString(arrow_mod, "ArrowTable");
-    Py_DECREF(arrow_mod);
-    if (!table_cls) {
-        Py_DECREF(batch_list);
-        return NULL;
-    }
-    PyObject *result =
-        PyObject_CallFunctionObjArgs(table_cls, batch_list, NULL);
-    Py_DECREF(table_cls);
-    Py_DECREF(batch_list);
-    return result;
+    return wrap_arrow_table(batch_list);
 
 #else
     PyErr_SetString(PyExc_RuntimeError,
@@ -372,12 +351,12 @@ static PyObject *ViewReader_iter_arrow(ViewReaderObject *self, PyObject *args,
         auto arrow_result = builder.finish();
         for (auto *d : held_docs) yyjson_doc_free(d);
 
-        ArrowBatchCapsuleObject *cap = make_capsule(std::move(arrow_result));
+        PyObject *cap = wrap_arrow_result(std::move(arrow_result));
         if (!cap) {
             Py_DECREF(batch_list);
             return NULL;
         }
-        int rc = PyList_Append(batch_list, (PyObject *)cap);
+        int rc = PyList_Append(batch_list, cap);
         Py_DECREF(cap);
         if (rc < 0) {
             Py_DECREF(batch_list);
@@ -404,14 +383,36 @@ static PyObject *ViewReader_call(PyObject *self, PyObject *args,
 static PyMethodDef ViewReader_methods[] = {
     {"process", (PyCFunction)ViewReader_read_events,
      METH_VARARGS | METH_KEYWORDS,
-     "process(file_path, predicates=None, index_dir='') -> ArrowTable\n"
-     "Read events matching view predicates as a materialized Arrow table."},
+     "process(file_path, predicates=None, index_dir='')\n"
+     "--\n"
+     "\n"
+     "Read matching events as a materialized ArrowTable.\n"
+     "\n"
+     "Args:\n"
+     "    file_path (str): Path to the trace file.\n"
+     "    predicates (dict or None): Bloom dimension filters\n"
+     "        (default None, no filtering).\n"
+     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "\n"
+     "Returns:\n"
+     "    ArrowTable: Materialized table of matching events.\n"},
     {"iter_arrow", (PyCFunction)ViewReader_iter_arrow,
      METH_VARARGS | METH_KEYWORDS,
-     "iter_arrow(file_path, predicates=None, index_dir='', "
-     "batch_size=10000)\n"
-     "Stream matching events as Arrow batches (iterator of "
-     "_ArrowBatchCapsule)."},
+     "iter_arrow(file_path, predicates=None, index_dir='',\n"
+     "           batch_size=10000)\n"
+     "--\n"
+     "\n"
+     "Stream matching events as Arrow batches.\n"
+     "\n"
+     "Args:\n"
+     "    file_path (str): Path to the trace file.\n"
+     "    predicates (dict or None): Bloom dimension filters\n"
+     "        (default None, no filtering).\n"
+     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "    batch_size (int): Maximum rows per batch (default 10000).\n"
+     "\n"
+     "Returns:\n"
+     "    Iterator[ArrowBatch]: Arrow record batches.\n"},
     {NULL} /* Sentinel */
 };
 
@@ -443,22 +444,10 @@ PyTypeObject ViewReaderType = {
     "\n"
     "Args:\n"
     "    runtime (Runtime or None): Runtime for thread pool control.\n"
-    "        If None, uses the default global Runtime.\n"
-    "\n"
-    "process(file_path, predicates=None, index_dir='') -> ArrowTable\n"
-    "    file_path (str): Path to the trace file.\n"
-    "    predicates (dict or None): Bloom dimension filters.\n"
-    "        Keys are dimension names, values are lists of strings.\n"
-    "    index_dir (str): Directory containing the index sidecar.\n"
-    "    Returns a materialized ArrowTable (single batch).\n"
-    "\n"
-    "iter_arrow(file_path, predicates=None, index_dir='', "
-    "batch_size=10000)\n"
-    "    Stream matching events as Arrow batches. Returns an iterator\n"
-    "    of _ArrowBatchCapsule objects (batch_size rows each).\n", /* tp_doc */
-    0,                         /* tp_traverse */
-    0,                         /* tp_clear */
-    0,                         /* tp_richcompare */
+    "        If None, uses the default global Runtime.\n", /* tp_doc */
+    0,                                                     /* tp_traverse */
+    0,                                                     /* tp_clear */
+    0,                                                     /* tp_richcompare */
     0,                         /* tp_weaklistoffset */
     0,                         /* tp_iter */
     0,                         /* tp_iternext */

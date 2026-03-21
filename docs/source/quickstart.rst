@@ -127,6 +127,62 @@ Error handling:
    for h in rt.get_failed():
        print(f"{h.name}: {h.exception}")
 
+Arrow Data Interchange
+~~~~~~~~~~~~~~~~~~~~~~
+
+``TraceReader`` and several utilities support Arrow output for efficient
+columnar data access. Arrow batches implement the PyCapsule protocol for
+zero-copy interchange with pyarrow, polars, and DuckDB.
+
+.. code-block:: python
+
+   from dftracer.utils import TraceReader
+
+   reader = TraceReader("trace.pfw.gz")
+
+   # Stream Arrow batches
+   for batch in reader.iter_arrow(batch_size=10000):
+       df = pyarrow.record_batch(batch).to_pandas()
+
+   # Materialize as ArrowTable
+   table = reader.read_arrow()
+   df = table.to_pandas()
+
+Utility Bindings
+~~~~~~~~~~~~~~~~
+
+The ``dftracer.utils.utilities`` module provides Python bindings for
+DFTracer's C++ utility classes. Tabular utilities return Arrow;
+scalar utilities return dicts.
+
+.. code-block:: python
+
+   from dftracer.utils.utilities import (
+       AggregatorUtility,
+       ViewReaderUtility,
+       StatisticsQueryUtility,
+       MetadataCollectorUtility,
+   )
+
+   # Aggregation pipeline (returns Arrow)
+   agg = AggregatorUtility()
+   table = agg.process("./traces", time_interval=1.0)
+   df = table.to_pandas()
+
+   # View reader with bloom-filter predicates (returns Arrow)
+   vr = ViewReaderUtility()
+   table = vr.process("trace.pfw.gz", predicates={"cat": ["POSIX"]})
+
+   # Statistics query (returns dict)
+   sq = StatisticsQueryUtility()
+   stats = sq.process("trace.pfw.gz", query_type="summary")
+   print(f"Events: {stats['total_events']}")
+
+   # File metadata (returns dict)
+   mc = MetadataCollectorUtility()
+   meta = mc.process("trace.pfw.gz")
+   print(f"Size: {meta['size_mb']:.2f} MB")
+
 Using with Dask
 ~~~~~~~~~~~~~~~
 

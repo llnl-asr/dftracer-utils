@@ -364,23 +364,33 @@ static PyObject *set_default_runtime_py(PyObject *Py_UNUSED(module),
 
 static PyMethodDef Runtime_methods[] = {
     {"shutdown", (PyCFunction)Runtime_shutdown, METH_NOARGS,
-     "Shut down the runtime"},
+     "shutdown()\n"
+     "--\n"
+     "\n"
+     "Shut down the runtime.\n"},
     {"get_progress", (PyCFunction)Runtime_get_progress, METH_NOARGS,
-     "Return dict with keys: total, completed, running, queued, failed"},
+     "Return progress dict with keys: total, completed, running,\n"
+     "queued, failed."},
     {"is_responsive", (PyCFunction)Runtime_is_responsive, METH_NOARGS,
-     "Return True if the runtime is making progress"},
+     "Return True if the runtime is making progress."},
     {"set_timeout", (PyCFunction)Runtime_set_timeout,
      METH_VARARGS | METH_KEYWORDS,
-     "Set global timeout in milliseconds (global_ms=0)"},
+     "Set global timeout in milliseconds.\n"
+     "\n"
+     "Args:\n"
+     "    global_ms (int): Timeout in milliseconds (0 = no timeout).\n"},
     {"set_default_task_timeout", (PyCFunction)Runtime_set_default_task_timeout,
      METH_VARARGS | METH_KEYWORDS,
-     "Set default per-task timeout in milliseconds (ms=0)"},
+     "Set default per-task timeout in milliseconds.\n"
+     "\n"
+     "Args:\n"
+     "    ms (int): Timeout in milliseconds (0 = no timeout).\n"},
     {"wait_all", (PyCFunction)Runtime_wait_all, METH_NOARGS,
-     "Wait for all outstanding submitted tasks to complete"},
+     "Wait for all outstanding submitted tasks to complete."},
     {"__enter__", (PyCFunction)Runtime_enter, METH_NOARGS,
-     "Enter context manager"},
+     "Enter context manager."},
     {"__exit__", (PyCFunction)Runtime_exit, METH_VARARGS,
-     "Exit context manager (calls shutdown)"},
+     "Exit context manager (calls shutdown)."},
     {NULL}};
 
 static PyGetSetDef Runtime_getsetters[] = {
@@ -439,9 +449,12 @@ PyTypeObject RuntimeType = {
 // appended to the module's method table in init_runtime).
 static PyMethodDef runtime_module_methods[] = {
     {"get_default_runtime", get_default_runtime_py, METH_NOARGS,
-     "Return the module-level default Runtime (lazy-created)"},
+     "Return the module-level default Runtime (lazy-created)."},
     {"set_default_runtime", set_default_runtime_py, METH_VARARGS,
-     "Replace the module-level default Runtime (pass None to clear)"},
+     "Replace the module-level default Runtime (pass None to clear).\n"
+     "\n"
+     "Args:\n"
+     "    runtime (Runtime or None): New default runtime.\n"},
     {NULL}};
 
 int init_runtime(PyObject *m) {

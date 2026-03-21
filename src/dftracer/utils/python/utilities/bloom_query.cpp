@@ -210,8 +210,18 @@ static PyObject *BloomQuery_call(PyObject *self, PyObject *args,
 
 static PyMethodDef BloomQuery_methods[] = {
     {"process", (PyCFunction)BloomQuery_query, METH_VARARGS | METH_KEYWORDS,
-     "process(file_path, predicates: dict, index_dir='') -> dict\n"
-     "Query bloom filters to find candidate checkpoints."},
+     "process(file_path, predicates, index_dir='')\n"
+     "--\n"
+     "\n"
+     "Query bloom filters for matching checkpoints.\n"
+     "\n"
+     "Args:\n"
+     "    file_path (str): Path to the trace file.\n"
+     "    predicates (dict): Bloom dimension filters {dim: [values]}.\n"
+     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "\n"
+     "Returns:\n"
+     "    dict: Matching checkpoints and file_may_match flag.\n"},
     {NULL}};
 
 PyTypeObject BloomQueryType = {

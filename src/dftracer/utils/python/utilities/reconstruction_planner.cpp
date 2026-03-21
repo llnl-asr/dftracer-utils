@@ -203,7 +203,17 @@ static PyObject *ReconstructionPlanner_call(PyObject *self, PyObject *args,
 static PyMethodDef ReconstructionPlanner_methods[] = {
     {"process", (PyCFunction)ReconstructionPlanner_plan,
      METH_VARARGS | METH_KEYWORDS,
-     "Build a reconstruction plan from reorganized files"},
+     "process(reorganized_files, index_dir='')\n"
+     "--\n"
+     "\n"
+     "Build a reconstruction plan from reorganized files.\n"
+     "\n"
+     "Args:\n"
+     "    reorganized_files (list[str]): Paths to reorganized files.\n"
+     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "\n"
+     "Returns:\n"
+     "    dict: Reconstruction plan.\n"},
     {NULL} /* Sentinel */
 };
 

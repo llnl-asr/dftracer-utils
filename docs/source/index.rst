@@ -11,8 +11,11 @@ Features
 --------
 
 - **High-performance trace file reading**: Efficient reading of compressed trace files
-- **Indexing capabilities**: Fast indexing and searching of trace data
+- **Arrow data interchange**: Columnar Arrow output via nanoarrow for zero-copy access from pyarrow, polars, and DuckDB
+- **Utility bindings**: Python bindings for statistics, views, aggregation, bloom queries, and reorganization
+- **Indexing capabilities**: Fast indexing and searching of trace data with bloom filters
 - **Pipeline processing**: Parallel data processing with tasks, coroutines, and channels
+- **Arrow IPC file output**: Write results as Arrow IPC files for pyarrow, polars, and DuckDB
 - **Task graphs**: DAG-based workflow builder with fan-out, fan-in, map, reduce patterns
 - **Python bindings**: Easy-to-use Python interface
 - **Cross-platform**: Works on Linux, macOS, and other Unix-like systems
@@ -66,6 +69,15 @@ Quick Example
    # Read all lines as JSON
    for obj in reader.iter_lines_json():
        print(obj["name"], obj["dur"])
+
+   # Read as Arrow for columnar access
+   table = reader.read_arrow()
+   df = table.to_pandas()  # requires pyarrow
+
+   # Aggregate traces in a directory
+   from dftracer.utils.utilities import AggregatorUtility
+   agg = AggregatorUtility()
+   table = agg.process("./traces", time_interval=1.0)
 
 Indices and tables
 ==================

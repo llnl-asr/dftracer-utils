@@ -179,7 +179,19 @@ static PyObject *ViewBuilder_call(PyObject *self, PyObject *args,
 
 static PyMethodDef ViewBuilder_methods[] = {
     {"process", (PyCFunction)ViewBuilder_build, METH_VARARGS | METH_KEYWORDS,
-     "Build view candidates from the index"},
+     "process(file_path, predicates=None, index_dir='')\n"
+     "--\n"
+     "\n"
+     "Build view candidates from the bloom filter index.\n"
+     "\n"
+     "Args:\n"
+     "    file_path (str): Path to the trace file.\n"
+     "    predicates (dict or None): Bloom dimension filters\n"
+     "        (default None, no filtering).\n"
+     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "\n"
+     "Returns:\n"
+     "    dict: Candidate checkpoints.\n"},
     {NULL} /* Sentinel */
 };
 
@@ -211,17 +223,10 @@ PyTypeObject ViewBuilderType = {
     "\n"
     "Args:\n"
     "    runtime (Runtime or None): Runtime for thread pool control.\n"
-    "        If None, uses the default global Runtime.\n"
-    "\n"
-    "process(file_path, predicates=None, index_dir='') -> dict\n"
-    "    file_path (str): Path to the trace file.\n"
-    "    predicates (dict or None): Bloom dimension filters.\n"
-    "        Keys are dimension names, values are lists of strings.\n"
-    "    index_dir (str): Directory containing the index sidecar.\n", /* tp_doc
-                                                                       */
-    0,                          /* tp_traverse */
-    0,                          /* tp_clear */
-    0,                          /* tp_richcompare */
+    "        If None, uses the default global Runtime.\n", /* tp_doc */
+    0,                                                     /* tp_traverse */
+    0,                                                     /* tp_clear */
+    0,                                                     /* tp_richcompare */
     0,                          /* tp_weaklistoffset */
     0,                          /* tp_iter */
     0,                          /* tp_iternext */

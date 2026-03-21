@@ -358,24 +358,29 @@ static PyObject *Indexer_exit(IndexerObject *self, PyObject *args) {
 
 static PyMethodDef Indexer_methods[] = {
     {"build", (PyCFunction)Indexer_build, METH_NOARGS,
-     "Build or rebuild the index"},
+     "build()\n"
+     "--\n"
+     "\n"
+     "Build or rebuild the index.\n"},
     {"need_rebuild", (PyCFunction)Indexer_need_rebuild, METH_NOARGS,
-     "Check if a rebuild is needed"},
+     "Check if a rebuild is needed."},
     {"exists", (PyCFunction)Indexer_exists, METH_NOARGS,
-     "Check if the index file exists"},
+     "Check if the index file exists."},
     {"get_max_bytes", (PyCFunction)Indexer_get_max_bytes, METH_NOARGS,
-     "Get the maximum uncompressed bytes in the indexed file"},
+     "Get the maximum uncompressed bytes in the indexed file."},
     {"get_num_lines", (PyCFunction)Indexer_get_num_lines, METH_NOARGS,
-     "Get the total number of lines in the indexed file"},
+     "Get the total number of lines in the indexed file."},
     {"find_checkpoint", (PyCFunction)Indexer_find_checkpoint, METH_VARARGS,
-     "Find the best checkpoint for a given uncompressed offset"},
+     "Find the best checkpoint for a given uncompressed offset.\n"
+     "\n"
+     "Args:\n"
+     "    offset (int): Uncompressed byte offset.\n"},
     {"get_checkpoints", (PyCFunction)Indexer_get_checkpoints, METH_NOARGS,
-     "Get all checkpoints for this file as a list"},
-
+     "Get all checkpoints for this file as a list."},
     {"__enter__", (PyCFunction)Indexer_enter, METH_NOARGS,
-     "Enter the runtime context for the with statement"},
+     "Enter the runtime context for the with statement."},
     {"__exit__", (PyCFunction)Indexer_exit, METH_VARARGS,
-     "Exit the runtime context for the with statement"},
+     "Exit the runtime context for the with statement."},
     {NULL} /* Sentinel */
 };
 

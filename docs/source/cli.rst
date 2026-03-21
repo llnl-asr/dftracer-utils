@@ -401,6 +401,7 @@ dftracer_aggregator
 - ``--compute-percentiles`` - Enable percentile/quantile computation using DDSketch
 - ``--percentiles <vals>`` - Comma-separated percentiles to compute (e.g., 0.25,0.5,0.75,0.90)
 - ``--relative-accuracy <rate>`` - Relative accuracy for DDSketch percentile estimation (default: 0.01)
+- ``--format <fmt>`` - Output format: ``json`` (default, Perfetto trace) or ``arrow`` (``.arrows`` IPC file). Arrow format requires ``DFTRACER_UTILS_ENABLE_ARROW_IPC=ON`` at build time.
 
 **Example:**
 
@@ -414,6 +415,27 @@ dftracer_aggregator
 
     # Filter to specific categories with custom metrics
     dftracer_aggregator -d ./traces -c "POSIX,APP" -m "iter_count,epoch"
+
+    # Output as Arrow IPC file (readable by pyarrow, polars, DuckDB)
+    dftracer_aggregator -d ./traces -o agg.arrows --format arrow
+
+**Reading Arrow IPC output:**
+
+.. code-block:: python
+
+    # pyarrow
+    import pyarrow.ipc as ipc
+    reader = ipc.open_file("agg.arrows")
+    table = reader.read_all()
+    df = table.to_pandas()
+
+    # polars
+    import polars as pl
+    df = pl.read_ipc("agg.arrows")
+
+    # DuckDB
+    import duckdb
+    result = duckdb.sql("SELECT * FROM 'agg.arrows'")
 
 dftracer_organize
 -----------------

@@ -919,6 +919,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/json.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_query.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.cpp
+       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_query.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/bloom_query.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/bloom_query.h

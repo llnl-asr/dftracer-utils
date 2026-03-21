@@ -195,8 +195,11 @@ static PyObject *MetadataCollector_call(PyObject *self, PyObject *args,
 static PyMethodDef MetadataCollector_methods[] = {
     {"process", (PyCFunction)MetadataCollector_collect,
      METH_VARARGS | METH_KEYWORDS,
-     "process(file_path, index_dir='') -> dict\n"
-     "Collect metadata from a trace file."},
+     "Collect metadata from a trace file.\n"
+     "\n"
+     "Args:\n"
+     "    file_path (str): Path to the trace file.\n"
+     "    index_dir (str): Directory for index sidecars.\n"},
     {NULL}};
 
 PyTypeObject MetadataCollectorType = {

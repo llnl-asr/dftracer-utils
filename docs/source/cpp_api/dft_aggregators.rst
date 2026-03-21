@@ -274,6 +274,47 @@ and annotates aggregated events with their associations.
    :members:
    :undoc-members:
 
+High-Level Aggregator
+---------------------
+
+AggregatorUtility
+~~~~~~~~~~~~~~~~~
+
+High-level ``StreamingUtility`` that orchestrates the full aggregation
+pipeline: directory scan, index building, metadata collection, chunk
+mapping, parallel aggregation, merge, and association resolution.
+
+Yields ``AggregationBatch`` objects that can be converted to Arrow via
+``to_arrow()``.
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AggregatorInput
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AggregationBatch
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::AggregatorUtility
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. code-block:: cpp
+
+   AggregatorUtility util;
+   AggregatorInput input;
+   input.directory = "./traces";
+   input.config.time_interval_us = 1000000;
+
+   auto gen = util.process(input);
+   while (auto batch = co_await gen.next()) {
+       auto arrow = batch->to_arrow();  // 18-column Arrow batch
+       // write to IPC file, send to Python, etc.
+   }
+
 Output Utilities
 ----------------
 

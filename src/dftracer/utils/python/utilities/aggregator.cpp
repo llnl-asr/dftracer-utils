@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/python/arrow_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/utilities/aggregator.h>
@@ -12,6 +13,9 @@
 using dftracer::utils::Runtime;
 using dftracer::utils::coro::CoroTask;
 using namespace dftracer::utils::utilities::composites::dft::aggregators;
+
+using dftracer::utils::python::wrap_arrow_result;
+using dftracer::utils::python::wrap_arrow_table;
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 using dftracer::utils::utilities::common::arrow::ArrowExportResult;
@@ -191,52 +195,6 @@ static int run_aggregator_pipeline(AggregatorObject *self,
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
-static PyObject *batches_to_arrow_table(
-    const std::vector<AggregationBatch> &batches) {
-    PyObject *batch_list = PyList_New(0);
-    if (!batch_list) return NULL;
-
-    for (const auto &batch : batches) {
-        if (batch.entries.empty()) continue;
-
-        auto arrow_result = batch.to_arrow();
-        if (!arrow_result.valid()) continue;
-
-        ArrowBatchCapsuleObject *cap =
-            (ArrowBatchCapsuleObject *)ArrowBatchCapsuleType.tp_alloc(
-                &ArrowBatchCapsuleType, 0);
-        if (!cap) {
-            Py_DECREF(batch_list);
-            return NULL;
-        }
-        cap->result = new ArrowExportResult(std::move(arrow_result));
-
-        int rc = PyList_Append(batch_list, (PyObject *)cap);
-        Py_DECREF(cap);
-        if (rc < 0) {
-            Py_DECREF(batch_list);
-            return NULL;
-        }
-    }
-
-    PyObject *arrow_mod = PyImport_ImportModule("dftracer.utils.arrow");
-    if (!arrow_mod) {
-        Py_DECREF(batch_list);
-        return NULL;
-    }
-    PyObject *table_cls = PyObject_GetAttrString(arrow_mod, "ArrowTable");
-    Py_DECREF(arrow_mod);
-    if (!table_cls) {
-        Py_DECREF(batch_list);
-        return NULL;
-    }
-    PyObject *result =
-        PyObject_CallFunctionObjArgs(table_cls, batch_list, NULL);
-    Py_DECREF(table_cls);
-    Py_DECREF(batch_list);
-    return result;
-}
-
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 // ---------------------------------------------------------------------------
@@ -256,7 +214,29 @@ static PyObject *Aggregator_process(AggregatorObject *self, PyObject *args,
     }
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    return batches_to_arrow_table(batches);
+    PyObject *batch_list = PyList_New(0);
+    if (!batch_list) return NULL;
+
+    for (const auto &batch : batches) {
+        if (batch.entries.empty()) continue;
+
+        auto arrow_result = batch.to_arrow();
+        if (!arrow_result.valid()) continue;
+
+        PyObject *cap = wrap_arrow_result(std::move(arrow_result));
+        if (!cap) {
+            Py_DECREF(batch_list);
+            return NULL;
+        }
+        int rc = PyList_Append(batch_list, cap);
+        Py_DECREF(cap);
+        if (rc < 0) {
+            Py_DECREF(batch_list);
+            return NULL;
+        }
+    }
+
+    return wrap_arrow_table(batch_list);
 #else
     PyErr_SetString(PyExc_RuntimeError,
                     "dftracer-utils was built without Arrow support");
@@ -290,16 +270,13 @@ static PyObject *Aggregator_iter_arrow(AggregatorObject *self, PyObject *args,
         auto arrow_result = batch.to_arrow();
         if (!arrow_result.valid()) continue;
 
-        ArrowBatchCapsuleObject *cap =
-            (ArrowBatchCapsuleObject *)ArrowBatchCapsuleType.tp_alloc(
-                &ArrowBatchCapsuleType, 0);
+        PyObject *cap = wrap_arrow_result(std::move(arrow_result));
         if (!cap) {
             Py_DECREF(batch_list);
             return NULL;
         }
-        cap->result = new ArrowExportResult(std::move(arrow_result));
 
-        int rc = PyList_Append(batch_list, (PyObject *)cap);
+        int rc = PyList_Append(batch_list, cap);
         Py_DECREF(cap);
         if (rc < 0) {
             Py_DECREF(batch_list);
@@ -324,20 +301,58 @@ static PyObject *Aggregator_call(PyObject *self, PyObject *args,
 
 static PyMethodDef Aggregator_methods[] = {
     {"process", (PyCFunction)Aggregator_process, METH_VARARGS | METH_KEYWORDS,
-     "process(directory, time_interval=5.0, group_keys=None, "
-     "categories=None, names=None, index_dir='', "
-     "checkpoint_size=33554432, executor_threads=4, "
-     "force_rebuild=False, chunk_size_mb=64, batch_size_mb=4, "
-     "event_batch_size=10000) -> ArrowTable\n"
-     "Run aggregation pipeline and return materialized Arrow table."},
+     "process(directory, time_interval=5.0, group_keys=None,\n"
+     "        categories=None, names=None, index_dir='',\n"
+     "        checkpoint_size=33554432, executor_threads=4,\n"
+     "        force_rebuild=False, chunk_size_mb=64,\n"
+     "        batch_size_mb=4, event_batch_size=10000)\n"
+     "--\n"
+     "\n"
+     "Run aggregation pipeline, return materialized ArrowTable.\n"
+     "\n"
+     "Args:\n"
+     "    directory (str): Directory containing .pfw/.pfw.gz files.\n"
+     "    time_interval (float): Time bucket in seconds (default 5.0).\n"
+     "    group_keys (list[str] or None): Extra grouping dims (default None).\n"
+     "    categories (list[str] or None): Category filter (default None).\n"
+     "    names (list[str] or None): Name filter (default None).\n"
+     "    index_dir (str): Index sidecar directory (default '').\n"
+     "    checkpoint_size (int): Checkpoint size (default 33554432).\n"
+     "    executor_threads (int): Thread pool size (default 4).\n"
+     "    force_rebuild (bool): Force index rebuild (default False).\n"
+     "    chunk_size_mb (int): Target chunk size in MB (default 64).\n"
+     "    batch_size_mb (int): Batch read size in MB (default 4).\n"
+     "    event_batch_size (int): Entries per batch (default 10000).\n"
+     "\n"
+     "Returns:\n"
+     "    ArrowTable: Aggregated results.\n"},
     {"iter_arrow", (PyCFunction)Aggregator_iter_arrow,
      METH_VARARGS | METH_KEYWORDS,
-     "iter_arrow(directory, time_interval=5.0, group_keys=None, "
-     "categories=None, names=None, index_dir='', "
-     "checkpoint_size=33554432, executor_threads=4, "
-     "force_rebuild=False, chunk_size_mb=64, batch_size_mb=4, "
-     "event_batch_size=10000) -> Iterator[ArrowBatch]\n"
-     "Run aggregation pipeline and stream Arrow batches."},
+     "iter_arrow(directory, time_interval=5.0, group_keys=None,\n"
+     "           categories=None, names=None, index_dir='',\n"
+     "           checkpoint_size=33554432, executor_threads=4,\n"
+     "           force_rebuild=False, chunk_size_mb=64,\n"
+     "           batch_size_mb=4, event_batch_size=10000)\n"
+     "--\n"
+     "\n"
+     "Run aggregation pipeline, stream Arrow batches.\n"
+     "\n"
+     "Args:\n"
+     "    directory (str): Directory containing .pfw/.pfw.gz files.\n"
+     "    time_interval (float): Time bucket in seconds (default 5.0).\n"
+     "    group_keys (list[str] or None): Extra grouping dims (default None).\n"
+     "    categories (list[str] or None): Category filter (default None).\n"
+     "    names (list[str] or None): Name filter (default None).\n"
+     "    index_dir (str): Index sidecar directory (default '').\n"
+     "    checkpoint_size (int): Checkpoint size (default 33554432).\n"
+     "    executor_threads (int): Thread pool size (default 4).\n"
+     "    force_rebuild (bool): Force index rebuild (default False).\n"
+     "    chunk_size_mb (int): Target chunk size in MB (default 64).\n"
+     "    batch_size_mb (int): Batch read size in MB (default 4).\n"
+     "    event_batch_size (int): Entries per batch (default 10000).\n"
+     "\n"
+     "Returns:\n"
+     "    Iterator[ArrowBatch]: Arrow record batches.\n"},
     {NULL}};
 
 PyTypeObject AggregatorType = {

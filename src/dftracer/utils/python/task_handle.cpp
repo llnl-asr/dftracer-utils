@@ -112,9 +112,11 @@ static PyObject *TaskHandle_get_task_id(TaskHandleObject *self, void *) {
 
 static PyMethodDef TaskHandle_methods[] = {
     {"get", (PyCFunction)TaskHandle_get, METH_NOARGS,
-     "Block until task completes and return result. Raises on error."},
+     "Block until task completes and return result.\n"
+     "Raises RuntimeError if the task failed."},
     {"wait", (PyCFunction)TaskHandle_wait, METH_NOARGS,
-     "Block until task completes. Raises on error."},
+     "Block until task completes.\n"
+     "Raises RuntimeError if the task failed."},
     {"done", (PyCFunction)TaskHandle_done, METH_NOARGS,
      "Return True if task has completed."},
     {NULL}};

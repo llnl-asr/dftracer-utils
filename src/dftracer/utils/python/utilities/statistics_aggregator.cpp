@@ -192,8 +192,17 @@ static PyObject *StatisticsAggregator_call(PyObject *self, PyObject *args,
 static PyMethodDef StatisticsAggregator_methods[] = {
     {"process", (PyCFunction)StatisticsAggregator_compute,
      METH_VARARGS | METH_KEYWORDS,
-     "process(file_path, index_dir='') -> dict\n"
-     "Aggregate statistics from an indexed trace file."},
+     "process(file_path, index_dir='')\n"
+     "--\n"
+     "\n"
+     "Compute aggregated statistics from a trace file.\n"
+     "\n"
+     "Args:\n"
+     "    file_path (str): Path to the trace file.\n"
+     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "\n"
+     "Returns:\n"
+     "    dict: Aggregated statistics.\n"},
     {NULL}};
 
 PyTypeObject StatisticsAggregatorType = {

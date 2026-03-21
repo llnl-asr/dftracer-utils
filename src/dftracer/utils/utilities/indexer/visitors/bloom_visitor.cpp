@@ -21,6 +21,7 @@ static const std::string DIM_NAME = "name";
 static const std::string DIM_CAT = "cat";
 static const std::string DIM_PID = "pid";
 static const std::string DIM_TID = "tid";
+static const std::string DIM_PID_TID = "pid_tid";
 static const std::string DIM_HHASH = "hhash";
 static const std::string DIM_FHASH = "fhash";
 static const std::string DIM_SHASH = "shash";
@@ -54,6 +55,20 @@ void BloomVisitor::ensure_chunk(std::size_t checkpoint_idx) {
                     dim, BloomFilter(config_.expected_entries_per_chunk,
                                      config_.false_positive_rate));
             }
+        }
+        if (chunk.dimension_stats.empty()) {
+            for (const auto& dim : dimensions_) {
+                auto& ds = chunk.dimension_stats[dim];
+                ds.dimension = dim;
+                if (dim == DIM_PID || dim == DIM_TID) {
+                    ds.value_type = "uint";
+                } else {
+                    ds.value_type = "string";
+                }
+            }
+            auto& pt = chunk.dimension_stats[DIM_PID_TID];
+            pt.dimension = DIM_PID_TID;
+            pt.value_type = "string";
         }
     }
 }
@@ -106,58 +121,49 @@ void BloomVisitor::on_line(std::string_view line, std::size_t checkpoint_idx) {
 
         chunk.statistics.update_from_event(name_sv, cat_sv, pid, tid, ts, dur);
 
-        auto it = chunk.bloom_filters.find(DIM_NAME);
-        if (it != chunk.bloom_filters.end() && !name_sv.empty()) {
-            it->second.add(name_sv);
-        }
+        // Helper: add to bloom filter and observe dimension stats
+        auto observe = [&chunk](const std::string& dim, std::string_view val) {
+            if (val.empty()) return;
+            auto bf_it = chunk.bloom_filters.find(dim);
+            if (bf_it != chunk.bloom_filters.end()) {
+                bf_it->second.add(val);
+            }
+            auto ds_it = chunk.dimension_stats.find(dim);
+            if (ds_it != chunk.dimension_stats.end()) {
+                ds_it->second.observe(val);
+            }
+        };
 
-        it = chunk.bloom_filters.find(DIM_CAT);
-        if (it != chunk.bloom_filters.end() && !cat_sv.empty()) {
-            it->second.add(cat_sv);
-        }
+        observe(DIM_NAME, name_sv);
+        observe(DIM_CAT, cat_sv);
 
-        it = chunk.bloom_filters.find(DIM_PID);
-        if (it != chunk.bloom_filters.end()) {
-            it->second.add(std::to_string(pid));
-        }
+        auto pid_str = std::to_string(pid);
+        auto tid_str = std::to_string(tid);
+        observe(DIM_PID, pid_str);
+        observe(DIM_TID, tid_str);
 
-        it = chunk.bloom_filters.find(DIM_TID);
-        if (it != chunk.bloom_filters.end()) {
-            it->second.add(std::to_string(tid));
-        }
+        auto pid_tid_str = pid_str + ":" + tid_str;
+        observe(DIM_PID_TID, pid_tid_str);
 
         JsonValue args = json["args"];
         if (args.exists()) {
-            it = chunk.bloom_filters.find(DIM_HHASH);
-            if (it != chunk.bloom_filters.end()) {
-                std::string_view hhash = args["hhash"].get<std::string_view>();
-                if (!hhash.empty()) it->second.add(hhash);
-            }
+            std::string_view hhash = args["hhash"].get<std::string_view>();
+            observe(DIM_HHASH, hhash);
 
-            it = chunk.bloom_filters.find(DIM_FHASH);
-            if (it != chunk.bloom_filters.end()) {
-                std::string_view fhash = args["fhash"].get<std::string_view>();
-                if (!fhash.empty()) it->second.add(fhash);
-            }
+            std::string_view fhash = args["fhash"].get<std::string_view>();
+            observe(DIM_FHASH, fhash);
 
-            it = chunk.bloom_filters.find(DIM_SHASH);
-            if (it != chunk.bloom_filters.end()) {
-                std::string_view shash =
-                    args["cmd_hash"].get<std::string_view>();
-                if (shash.empty()) {
-                    shash = args["exec_hash"].get<std::string_view>();
-                }
-                if (!shash.empty()) it->second.add(shash);
+            std::string_view shash = args["cmd_hash"].get<std::string_view>();
+            if (shash.empty()) {
+                shash = args["exec_hash"].get<std::string_view>();
             }
+            observe(DIM_SHASH, shash);
 
             for (const auto& dim : config_.extra_dimensions) {
-                it = chunk.bloom_filters.find(dim);
-                if (it != chunk.bloom_filters.end()) {
-                    JsonValue val = args.at(dim.c_str());
-                    if (val.exists()) {
-                        std::string str_val = json_value_to_string(val);
-                        if (!str_val.empty()) it->second.add(str_val);
-                    }
+                JsonValue val = args.at(dim.c_str());
+                if (val.exists()) {
+                    std::string str_val = json_value_to_string(val);
+                    observe(dim, str_val);
                 }
             }
         }
@@ -197,6 +203,11 @@ void BloomVisitor::finalize(IndexDatabase& db, int file_id) {
 
         queries::insert_chunk_statistics(sql_db, file_id, checkpoint_idx,
                                          chunk.statistics);
+
+        for (const auto& [dim, ds] : chunk.dimension_stats) {
+            queries::insert_chunk_dimension_stats(
+                sql_db, file_id, checkpoint_idx, ds, config_.value_counts_cap);
+        }
 
         for (const auto& [dim, resolutions] : chunk.hash_resolutions) {
             for (const auto& [hash_val, resolved] : resolutions) {

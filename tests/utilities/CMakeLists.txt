@@ -34,7 +34,7 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/indexing/test_bloom_filter.cpp
     composites/dft/indexing/test_chunk_statistics.cpp
     composites/dft/indexing/test_chunk_indexer.cpp
-    composites/dft/indexing/test_bloom_query.cpp
+    composites/dft/indexing/test_chunk_pruner.cpp
     composites/dft/indexing/test_manifest_indexer.cpp
     composites/dft/indexing/test_manifest_index_builder.cpp
     composites/dft/indexing/test_manifest_queries.cpp
@@ -56,6 +56,11 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/statistics/test_statistics_query.cpp
     common/statistics/test_log2_histogram.cpp
     composites/dft/statistics/test_detailed_statistics.cpp
+
+    # Query language
+    common/query/test_parser.cpp
+    common/query/test_evaluator.cpp
+    common/query/test_query.cpp
 
     # DFT Aggregator Composites
     common/statistics/test_ddsketch.cpp

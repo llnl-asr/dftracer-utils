@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_DATABASE_H
 
 #include <dftracer/utils/core/sqlite/database.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
@@ -40,6 +41,9 @@ class IndexDatabase {
     using MetadataLinesResult =
         composites::dft::indexing::queries::MetadataLinesResult;
     using ChunkStatistics = composites::dft::indexing::ChunkStatistics;
+    using ChunkDimensionStats = composites::dft::indexing::ChunkDimensionStats;
+    using ChunkDimensionStatsResult =
+        composites::dft::indexing::ChunkDimensionStatsResult;
 
     explicit IndexDatabase(const std::string& idx_path);
 
@@ -104,6 +108,10 @@ class IndexDatabase {
                                 std::string_view hash_value,
                                 std::string_view resolved_value);
 
+    void insert_chunk_dimension_stats(int file_id, std::uint64_t checkpoint_idx,
+                                      const ChunkDimensionStats& stats,
+                                      std::size_t value_counts_cap = 4096);
+
     // -----------------------------------------------------------------------
     // Bloom query operations
     // -----------------------------------------------------------------------
@@ -131,6 +139,13 @@ class IndexDatabase {
 
     TimeBounds query_time_bounds(int file_id) const;
 
+    std::vector<ChunkDimensionStatsResult> query_chunk_dimension_stats(
+        int file_id) const;
+
+    std::vector<ChunkDimensionStatsResult>
+    query_chunk_dimension_stats_for_dimension(int file_id,
+                                              std::string_view dimension) const;
+
     // Global queries (search across all files)
     std::optional<std::string> query_resolved_by_hash(
         std::string_view dimension, std::string_view hash_value) const;
@@ -145,6 +160,7 @@ class IndexDatabase {
     void delete_chunk_bloom_filters(int file_id, std::string_view dimension);
     void delete_file_bloom_filter(int file_id, std::string_view dimension);
     void delete_chunk_statistics(int file_id);
+    void delete_chunk_dimension_stats(int file_id);
     void delete_hash_resolutions(int file_id);
 
     // -----------------------------------------------------------------------

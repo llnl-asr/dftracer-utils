@@ -49,6 +49,7 @@ coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
             .with_config(input.config)
             .with_checkpoint_size(input.checkpoint_size)
             .with_batch_size(input.batch_size);
+        chunk.query = input.query;
 
         chunks.push_back(std::move(chunk));
     }
@@ -77,6 +78,7 @@ coro::CoroTask<ChunkMapperOutput> ChunkMapperUtility::process(
                 .with_target_chunk_size(input.target_chunk_size_mb)
                 .with_batch_size(input.batch_size)
                 .with_start_chunk_index(global_chunk_index);
+        file_input.query = input.query;
 
         auto file_chunks = co_await file_mapper.process(file_input);
         global_chunk_index += static_cast<int>(file_chunks.size());

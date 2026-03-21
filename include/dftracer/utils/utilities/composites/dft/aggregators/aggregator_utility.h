@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATOR_UTILITY_H
 
 #include <dftracer/utils/core/utilities/streaming_utility.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
@@ -12,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,6 +23,7 @@ namespace dftracer::utils::utilities::composites::dft::aggregators {
 struct AggregatorInput {
     std::string directory;
     AggregationConfig config;
+    std::optional<common::query::Query> query;
     std::size_t checkpoint_size = 32 * 1024 * 1024;
     std::string index_dir;
     bool force_rebuild = false;

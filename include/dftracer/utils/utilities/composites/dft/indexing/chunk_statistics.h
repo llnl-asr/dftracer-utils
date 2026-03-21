@@ -53,9 +53,6 @@ struct ChunkStatistics {
     double duration_mean() const;
     double duration_variance() const;
 
-    std::string category_counts_json() const;
-    std::string name_counts_json() const;
-    std::string pid_tid_counts_json() const;
     std::string name_category_json() const;
     std::string name_duration_histograms_json() const;
     std::string name_duration_sums_json() const;
@@ -64,8 +61,6 @@ struct ChunkStatistics {
     /// Serialize per-name DDSketches to a single binary blob.
     std::vector<uint8_t> serialize_name_duration_sketches() const;
 
-    static std::unordered_map<std::string, std::uint64_t> parse_counts_json(
-        const std::string& json);
     static std::unordered_map<std::string, std::string> parse_string_map_json(
         const std::string& json);
     static std::unordered_map<std::string, double> parse_double_map_json(

@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_QUERIES_H
 
 #include <dftracer/utils/core/sqlite/database.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 
 #include <cstdint>
@@ -112,6 +113,23 @@ std::vector<std::string> query_hash_by_resolved(
 std::optional<std::string> query_resolved_by_hash(const SqliteDatabase& db,
                                                   std::string_view dimension,
                                                   std::string_view hash_value);
+
+// --- Chunk dimension stats ---
+
+void insert_chunk_dimension_stats(const SqliteDatabase& db, int file_info_id,
+                                  std::uint64_t checkpoint_idx,
+                                  const ChunkDimensionStats& stats,
+                                  std::size_t value_counts_cap = 4096);
+
+std::vector<ChunkDimensionStatsResult> query_chunk_dimension_stats(
+    const SqliteDatabase& db, int file_info_id);
+
+std::vector<ChunkDimensionStatsResult>
+query_chunk_dimension_stats_for_dimension(const SqliteDatabase& db,
+                                          int file_info_id,
+                                          std::string_view dimension);
+
+void delete_chunk_dimension_stats(const SqliteDatabase& db, int file_info_id);
 
 // --- Delete operations ---
 

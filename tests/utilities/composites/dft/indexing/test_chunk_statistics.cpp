@@ -63,32 +63,6 @@ TEST_SUITE("ChunkStatistics") {
         CHECK(doctest::Approx(stats.duration_variance()) == 250.0);
     }
 
-    TEST_CASE("ChunkStatistics - JSON serialization round-trip") {
-        ChunkStatistics stats;
-
-        stats.update_from_event("read", "POSIX", 1, 1, 1000, 100);
-        stats.update_from_event("write", "POSIX", 2, 2, 2000, 200);
-        stats.update_from_event("open", "storage", 1, 1, 3000, 50);
-
-        std::string cat_json = stats.category_counts_json();
-        std::string name_json = stats.name_counts_json();
-        std::string pt_json = stats.pid_tid_counts_json();
-
-        // Verify JSON round-trip
-        auto cat_parsed = ChunkStatistics::parse_counts_json(cat_json);
-        CHECK(cat_parsed["POSIX"] == 2);
-        CHECK(cat_parsed["storage"] == 1);
-
-        auto name_parsed = ChunkStatistics::parse_counts_json(name_json);
-        CHECK(name_parsed["read"] == 1);
-        CHECK(name_parsed["write"] == 1);
-        CHECK(name_parsed["open"] == 1);
-
-        auto pt_parsed = ChunkStatistics::parse_counts_json(pt_json);
-        CHECK(pt_parsed["1:1"] == 2);
-        CHECK(pt_parsed["2:2"] == 1);
-    }
-
     TEST_CASE("ChunkStatistics - Merge correctness") {
         ChunkStatistics a;
         ChunkStatistics b;
@@ -121,13 +95,5 @@ TEST_SUITE("ChunkStatistics") {
 
         CHECK(a.total_events == 1);
         CHECK(a.duration_count == 1);
-    }
-
-    TEST_CASE("ChunkStatistics - Empty JSON parse") {
-        auto result = ChunkStatistics::parse_counts_json("{}");
-        CHECK(result.empty());
-
-        auto result2 = ChunkStatistics::parse_counts_json("");
-        CHECK(result2.empty());
     }
 }

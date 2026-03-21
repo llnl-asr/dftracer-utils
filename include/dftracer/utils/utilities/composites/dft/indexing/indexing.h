@@ -10,8 +10,9 @@
  */
 
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 
 #endif  // DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_INDEXING_H

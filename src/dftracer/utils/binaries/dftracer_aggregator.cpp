@@ -6,6 +6,7 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregators.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
@@ -35,8 +36,7 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
         static_cast<std::uint64_t>(time_interval_seconds * 1000000.0);
     std::string group_keys_str = program.get<std::string>("--group-keys");
     std::string metric_fields_str = program.get<std::string>("--metric-fields");
-    std::string categories_str = program.get<std::string>("--categories");
-    std::string names_str = program.get<std::string>("--names");
+    std::string query_str = program.get<std::string>("--query");
     bool force_rebuild = program.get<bool>("--force");
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
@@ -103,9 +103,6 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
 
     std::vector<std::string> group_keys = split_string(group_keys_str);
     std::vector<std::string> metric_fields = split_string(metric_fields_str);
-    std::vector<std::string> include_categories = split_string(categories_str);
-    std::vector<std::string> include_names = split_string(names_str);
-
     std::vector<double> percentiles;
     if (compute_percentiles) {
         auto percentile_strs = split_string(percentiles_str);
@@ -217,14 +214,24 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
     agg_config.time_interval_us = time_interval_us;
     agg_config.extra_group_keys = group_keys;
     agg_config.custom_metric_fields = metric_fields;
-    agg_config.include_categories = include_categories;
-    agg_config.include_names = include_names;
     agg_config.compute_statistics = true;
     agg_config.compute_percentiles = compute_percentiles;
     agg_config.sketch_accuracy = relative_accuracy;
     agg_config.percentiles = percentiles;
     agg_config.boundary_events = boundary_events;
     agg_config.track_process_parents = !no_track_parents;
+
+    using common::query::Query;
+    std::optional<Query> query;
+    if (!query_str.empty()) {
+        auto result = Query::from_string(query_str);
+        if (!result) {
+            DFTRACER_UTILS_LOG_ERROR("Invalid --query: %s",
+                                     result.error().format().c_str());
+            co_return 1;
+        }
+        query = std::move(*result);
+    }
 
     // Discover input files
     filesystem::PatternDirectoryScannerUtility scanner;
@@ -270,8 +277,8 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
                     auto* global_chunk_idx_ptr = &global_chunk_idx;
                     scope.spawn([file_path, ch = chunk_chan->producer(),
                                  index_dir, checkpoint_size, force_rebuild,
-                                 agg_config, chunk_size_mb, batch_size_mb,
-                                 global_chunk_idx_ptr](
+                                 agg_config, query, chunk_size_mb,
+                                 batch_size_mb, global_chunk_idx_ptr](
                                     CoroScope& /*fctx*/) mutable
                                     -> coro::CoroTask<void> {
                         [[maybe_unused]] auto producer_guard = ch.guard();
@@ -305,12 +312,15 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
 
                         // Create chunks for this file
                         FileChunkMapperUtility file_mapper;
-                        auto file_chunks = co_await file_mapper.process(
+                        auto mapper_input =
                             FileChunkMapperInput::from_metadata(metadata)
                                 .with_config(agg_config)
                                 .with_checkpoint_size(checkpoint_size)
                                 .with_target_chunk_size(chunk_size_mb)
-                                .with_batch_size(batch_size_mb * 1024 * 1024));
+                                .with_batch_size(batch_size_mb * 1024 * 1024);
+                        mapper_input.query = query;
+                        auto file_chunks =
+                            co_await file_mapper.process(mapper_input);
 
                         int start_idx = global_chunk_idx_ptr->fetch_add(
                             static_cast<int>(file_chunks.size()));
@@ -562,12 +572,8 @@ int main(int argc, char** argv) {
             "iter_count,num_events)")
         .default_value<std::string>("");
 
-    program.add_argument("-c", "--categories")
-        .help("Include only these categories (comma-separated, empty = all)")
-        .default_value<std::string>("");
-
-    program.add_argument("-n", "--names")
-        .help("Include only these event names (comma-separated, empty = all)")
+    program.add_argument("--query")
+        .help("Query DSL filter (e.g., 'cat == \"POSIX\" and dur > 1000')")
         .default_value<std::string>("");
 
     program.add_argument("-f", "--force").help("Force index recreation").flag();

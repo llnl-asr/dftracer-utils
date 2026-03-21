@@ -2,11 +2,13 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_CHUNK_MAPPER_UTILITY_H
 
 #include <dftracer/utils/core/utilities/utility.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/chunk_aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,6 +17,7 @@ namespace dftracer::utils::utilities::composites::dft::aggregators {
 struct FileChunkMapperInput {
     utilities::composites::dft::MetadataCollectorUtilityOutput metadata;
     AggregationConfig config;
+    std::optional<common::query::Query> query;
     std::size_t checkpoint_size = 0;
     std::size_t target_chunk_size_mb = 4;
     std::size_t batch_size = 4 * 1024 * 1024;
@@ -67,6 +70,7 @@ struct ChunkMapperInput {
     std::vector<utilities::composites::dft::MetadataCollectorUtilityOutput>
         metadata;
     AggregationConfig config;
+    std::optional<common::query::Query> query;
     std::size_t checkpoint_size;
     std::size_t target_chunk_size_mb;
     std::size_t batch_size = 4 * 1024 * 1024;

@@ -25,18 +25,20 @@ struct TraceReaderConfig {
 };
 
 struct ReadConfig {
-    // Range (set one pair; line range takes priority if both set)
     std::size_t start_line = 0;
     std::size_t end_line = 0;
     std::size_t start_byte = 0;
     std::size_t end_byte = 0;
 
-    // Raw mode options (only used by read_raw)
-    bool line_aligned = true;  // true = respect line boundaries
-    bool multi_line = true;    // true = buffer multiple lines per yield
+    bool line_aligned = true;
+    bool multi_line = true;
 
-    // Performance
     std::size_t buffer_size = 4 * 1024 * 1024;
+
+    // Query DSL string for event filtering (empty = no filter).
+    // When set and an index exists, chunk pruning skips non-matching chunks.
+    // Per-event filtering always applies.
+    std::string query;
 
     bool has_line_range() const { return start_line > 0 || end_line > 0; }
     bool has_byte_range() const { return start_byte > 0 || end_byte > 0; }

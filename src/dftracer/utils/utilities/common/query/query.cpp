@@ -27,6 +27,10 @@ bool Query::evaluate(const json::JsonValue& event) const {
     return query::evaluate(*root_, event);
 }
 
+bool Query::evaluate(const ValueMap& fields) const {
+    return query::evaluate(*root_, fields);
+}
+
 std::string Query::to_string() const { return query::to_string(*root_); }
 
 Query parse_or_throw(std::string_view input) {

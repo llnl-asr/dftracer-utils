@@ -1,7 +1,6 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/common/query/evaluator.h>
-#include <dftracer/utils/utilities/composites/dft/views/predicate_filter.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
@@ -96,13 +95,6 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
     const ViewReaderInput& input) {
     bool use_query = input.query.has_value();
 
-    std::vector<PredicateFilter> filters;
-    if (!use_query) {
-        for (const auto& predicate : input.view.predicates) {
-            filters.push_back(build_predicate_filter(predicate));
-        }
-    }
-
     // Smart metadata buffering:
     // - Hash metadata (FH, HH, SH) → buffer keyed by hash value
     // - On matched event → flush referenced hashes from buffer
@@ -174,21 +166,13 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
                                     }
                                 }
                             } else {
-                                bool meta_match =
-                                    use_query ||
-                                    metadata_matches_identity(json, filters);
-                                if (meta_match) {
-                                    batch.events.emplace_back(line_start,
-                                                              line_len);
-                                    batch.events_matched++;
-                                }
+                                batch.events.emplace_back(line_start, line_len);
+                                batch.events_matched++;
                             }
                         } else if (ph != "M") {
                             batch.events_scanned++;
                             bool event_match =
-                                use_query
-                                    ? input.query->evaluate(json)
-                                    : matches_any_predicate(json, filters);
+                                !use_query || input.query->evaluate(json);
                             if (event_match) {
                                 if (input.view.include_metadata) {
                                     collect_referenced_hashes_batch(

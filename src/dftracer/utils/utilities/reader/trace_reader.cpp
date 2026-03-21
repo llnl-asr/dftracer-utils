@@ -1,5 +1,8 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/common/json/json_value.h>
+#include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_line_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
@@ -10,14 +13,37 @@
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <yyjson.h>
 
 #include <cstring>
+#include <optional>
 #include <span>
 
 namespace dftracer::utils::utilities::reader {
 
 namespace dft_internal = composites::dft::internal;
+using common::json::JsonValue;
+using common::query::Query;
+using composites::dft::indexing::ChunkPrunerInput;
+using composites::dft::indexing::ChunkPrunerUtility;
 using indexer::internal::IndexerFactory;
+
+namespace {
+
+bool line_matches_query(const Query& q, std::string_view content) {
+    yyjson_doc* doc = yyjson_read(content.data(), content.size(), 0);
+    if (!doc) return false;
+    yyjson_val* root = yyjson_doc_get_root(doc);
+    bool result = false;
+    if (root && yyjson_is_obj(root)) {
+        JsonValue json(root);
+        result = q.evaluate(json);
+    }
+    yyjson_doc_free(doc);
+    return result;
+}
+
+}  // namespace
 
 TraceReader::TraceReader(TraceReaderConfig config)
     : config_(std::move(config)) {
@@ -83,6 +109,12 @@ internal::RangeType TraceReader::resolve_range_type(
 }
 
 coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
+    std::optional<Query> query;
+    if (!config.query.empty()) {
+        auto parsed = Query::from_string(config.query);
+        if (parsed) query = std::move(*parsed);
+    }
+
     if (has_index_) {
         auto reader = create_indexed_reader();
         auto range_type = resolve_range_type(config);
@@ -100,6 +132,18 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
             auto max_bytes = reader->get_max_bytes();
             if (end == 0 || end > max_bytes) end = max_bytes;
             if (start >= max_bytes) co_return;
+        }
+
+        // Chunk pruning: narrow byte range to candidate chunks
+        if (query && !idx_path_.empty() &&
+            range_type == internal::RangeType::BYTE_RANGE) {
+            ChunkPrunerInput pruner_input{idx_path_, config_.file_path, *query,
+                                          nullptr};
+            ChunkPrunerUtility pruner;
+            auto pruner_out = co_await pruner.process(pruner_input);
+            if (pruner_out.success && !pruner_out.file_may_match) {
+                co_return;
+            }
         }
 
         auto stream =
@@ -122,10 +166,12 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
                 std::size_t end_pos =
                     nl_ptr ? static_cast<const char*>(nl_ptr) - data : len;
                 if (end_pos > pos) {
-                    co_yield Line(std::string_view(data + pos, end_pos - pos),
-                                  line_num++);
+                    auto line_sv = std::string_view(data + pos, end_pos - pos);
+                    if (!query || line_matches_query(*query, line_sv)) {
+                        co_yield Line(line_sv, line_num);
+                    }
+                    ++line_num;
                 } else {
-                    // Empty line — still advance line counter
                     ++line_num;
                 }
                 pos = end_pos + 1;
@@ -138,7 +184,9 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
         auto gen = fileio::lines::sources::async_streaming_gz_lines(
             config_.file_path, start, end);
         while (auto opt = co_await gen.next()) {
-            co_yield *opt;
+            if (!query || line_matches_query(*query, opt->content)) {
+                co_yield *opt;
+            }
         }
     } else {
         std::size_t start = config.has_line_range() ? config.start_line : 0;
@@ -146,7 +194,9 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
         auto gen = fileio::lines::sources::async_plain_file_lines(
             config_.file_path, start, end);
         while (auto opt = co_await gen.next()) {
-            co_yield *opt;
+            if (!query || line_matches_query(*query, opt->content)) {
+                co_yield *opt;
+            }
         }
     }
 }

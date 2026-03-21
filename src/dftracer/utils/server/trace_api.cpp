@@ -11,11 +11,10 @@
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/utilities/common/json/json_doc_guard.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_query_utility.h>
-#include <dftracer/utils/utilities/composites/dft/views/predicate_filter.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
@@ -68,28 +67,21 @@ static std::string json_escape(const std::string& s) {
 }
 
 using dftracer::utils::utilities::common::json::JsonValue;
-using dftracer::utils::utilities::composites::dft::views::
-    build_predicate_filter;
-using dftracer::utils::utilities::composites::dft::views::matches_any_predicate;
-using dftracer::utils::utilities::composites::dft::views::matches_predicate;
-using dftracer::utils::utilities::composites::dft::views::
-    metadata_matches_identity;
-using dftracer::utils::utilities::composites::dft::views::PredicateFilter;
 
 // Hash metadata types that need smart filtering (FH, HH, SH).
 static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
                                                                     "SH"};
 
 using dftracer::utils::utilities::common::json::JsonDocGuard;
+using dftracer::utils::utilities::common::query::Query;
 
 /// Direct-scan a small file without any sidecar index.
 /// Streams via async_streaming_gz_lines(), parses JSON, applies
 /// predicate filters, collects matching events as raw JSON strings.
 static coro::CoroTask<void> direct_scan_events(
-    const TraceIndex::FileInfo* file_info,
-    const std::vector<PredicateFilter>& filters, bool include_metadata,
-    std::vector<std::string>* collected_events, std::uint64_t* total_scanned,
-    std::uint64_t* total_matched, int limit) {
+    const TraceIndex::FileInfo* file_info, const Query* query,
+    bool include_metadata, std::vector<std::string>* collected_events,
+    std::uint64_t* total_scanned, std::uint64_t* total_matched, int limit) {
     using dftracer::utils::utilities::fileio::lines::sources::
         async_streaming_gz_lines;
 
@@ -136,15 +128,13 @@ static coro::CoroTask<void> direct_scan_events(
                             }
                         }
                     } else {
-                        if (metadata_matches_identity(json, filters)) {
-                            collected_events->emplace_back(
-                                line->content.data(), line->content.size());
-                            (*total_matched)++;
-                        }
+                        collected_events->emplace_back(line->content.data(),
+                                                       line->content.size());
+                        (*total_matched)++;
                     }
                 } else if (ph != "M") {
                     (*total_scanned)++;
-                    if (matches_any_predicate(json, filters)) {
+                    if (!query || query->evaluate(json)) {
                         // Flush referenced hash metadata first
                         if (include_metadata) {
                             auto args = json["args"];
@@ -254,66 +244,92 @@ static coro::CoroTask<HttpResponse> handle_file_info(const HttpRequest& /*req*/,
     co_return HttpResponse::ok(body);
 }
 
-// Build a ViewDefinition from query parameters.
+static std::vector<std::string> split_csv(std::string_view s) {
+    std::vector<std::string> result;
+    std::string token;
+    for (char c : s) {
+        if (c == ',') {
+            if (!token.empty()) result.push_back(token);
+            token.clear();
+        } else {
+            token += c;
+        }
+    }
+    if (!token.empty()) result.push_back(token);
+    return result;
+}
+
+static std::string format_in_clause(const std::string& field,
+                                    const std::vector<std::string>& vals) {
+    if (vals.size() == 1) return field + " == \"" + vals[0] + "\"";
+    std::string s = field + " in [";
+    for (std::size_t i = 0; i < vals.size(); ++i) {
+        if (i > 0) s += ", ";
+        s += "\"" + vals[i] + "\"";
+    }
+    s += "]";
+    return s;
+}
+
+static std::optional<Query> build_query_from_params(const QueryParams& params) {
+    std::string dsl;
+
+    auto cat = params.get("cat");
+    if (!cat.empty()) {
+        auto vals = split_csv(cat);
+        if (!vals.empty()) dsl += format_in_clause("cat", vals);
+    }
+
+    auto name = params.get("name");
+    if (!name.empty()) {
+        auto vals = split_csv(name);
+        if (!vals.empty()) {
+            if (!dsl.empty()) dsl += " and ";
+            dsl += format_in_clause("name", vals);
+        }
+    }
+
+    auto pid = params.get("pid");
+    if (!pid.empty()) {
+        if (!dsl.empty()) dsl += " and ";
+        dsl += "pid == " + std::string(pid);
+    }
+
+    double ts_min = params.get_double("ts_min", 0);
+    double ts_max = params.get_double("ts_max", 0);
+    if (ts_min > 0) {
+        if (!dsl.empty()) dsl += " and ";
+        dsl += "ts >= " + std::to_string(static_cast<uint64_t>(ts_min));
+    }
+    if (ts_max > 0) {
+        if (!dsl.empty()) dsl += " and ";
+        dsl += "ts <= " + std::to_string(static_cast<uint64_t>(ts_max));
+    }
+
+    double dur_min = params.get_double("dur_min", 0);
+    double dur_max = params.get_double("dur_max", 0);
+    if (dur_min > 0) {
+        if (!dsl.empty()) dsl += " and ";
+        dsl += "dur >= " + std::to_string(static_cast<uint64_t>(dur_min));
+    }
+    if (dur_max > 0) {
+        if (!dsl.empty()) dsl += " and ";
+        dsl += "dur <= " + std::to_string(static_cast<uint64_t>(dur_max));
+    }
+
+    if (dsl.empty()) return std::nullopt;
+    auto result = Query::from_string(dsl);
+    if (!result) return std::nullopt;
+    return std::move(*result);
+}
+
 static ViewDefinition build_view_from_params(const QueryParams& params) {
     ViewDefinition view;
     view.name = "api_query";
     view.description = "HTTP API query";
 
-    ViewPredicate pred;
-
-    auto cat = params.get("cat");
-    if (!cat.empty()) {
-        // Split comma-separated categories
-        std::vector<std::string> values;
-        std::string token;
-        for (char c : std::string(cat)) {
-            if (c == ',') {
-                if (!token.empty()) values.push_back(token);
-                token.clear();
-            } else {
-                token += c;
-            }
-        }
-        if (!token.empty()) values.push_back(token);
-        pred.with_bloom_dim("category", values);
-    }
-
-    auto name = params.get("name");
-    if (!name.empty()) {
-        std::vector<std::string> values;
-        std::string token;
-        for (char c : std::string(name)) {
-            if (c == ',') {
-                if (!token.empty()) values.push_back(token);
-                token.clear();
-            } else {
-                token += c;
-            }
-        }
-        if (!token.empty()) values.push_back(token);
-        pred.with_bloom_dim("name", values);
-    }
-
-    auto pid = params.get("pid");
-    if (!pid.empty()) {
-        pred.with_bloom_dim("process_id", {std::string(pid)});
-    }
-
-    double ts_min = params.get_double("ts_min", 0);
-    double ts_max = params.get_double("ts_max", 0);
-    if (ts_min > 0 || ts_max > 0) {
-        pred.with_time_range(ts_min, ts_max);
-    }
-
-    double dur_min = params.get_double("dur_min", 0);
-    double dur_max = params.get_double("dur_max", 0);
-    if (dur_min > 0) pred.with_min_duration(dur_min);
-    if (dur_max > 0) pred.with_max_duration(dur_max);
-
-    // Only add predicate if any filter was specified.
-    // If no filters, create an empty predicate (match all).
-    view.with_predicate(std::move(pred));
+    auto q = build_query_from_params(params);
+    if (q) view.with_query(std::move(*q));
     return view;
 }
 
@@ -327,12 +343,8 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
 
     auto view = build_view_from_params(params);
 
-    double query_ts_min = 0;
-    double query_ts_max = 0;
-    if (!view.predicates.empty() && view.predicates[0].time_range) {
-        query_ts_min = view.predicates[0].time_range->first;
-        query_ts_max = view.predicates[0].time_range->second;
-    }
+    double query_ts_min = params.get_double("ts_min", 0);
+    double query_ts_max = params.get_double("ts_max", 0);
 
     std::vector<const TraceIndex::FileInfo*> target_files;
     auto file_param = params.get("file");
@@ -368,10 +380,8 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
         target_files = std::move(filtered);
     }
 
-    std::vector<PredicateFilter> pred_filters;
-    for (const auto& predicate : view.predicates) {
-        pred_filters.push_back(build_predicate_filter(predicate));
-    }
+    auto query = build_query_from_params(params);
+    const Query* query_ptr = query ? &*query : nullptr;
 
     std::vector<std::string> collected_events;
     std::uint64_t total_scanned = 0;
@@ -383,7 +393,7 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
             if (limit_reached) break;
             if (file_info->is_small) {
                 co_await direct_scan_events(
-                    file_info, pred_filters, view.include_metadata,
+                    file_info, query_ptr, view.include_metadata,
                     &collected_events, &total_scanned, &total_matched, limit);
                 limit_reached =
                     collected_events.size() >= static_cast<std::size_t>(limit);
@@ -449,7 +459,6 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
 
         auto* target_files_ptr = &target_files;
         auto* collected_ptr = &collected_events;
-        auto* pred_filters_ptr = &pred_filters;
         auto* view_ptr = &view;
         auto* bloom_cache_ptr = &index.bloom_cache();
         double ev_ts_min = query_ts_min;
@@ -469,8 +478,8 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
         for (std::size_t w = 0; w < num_workers; ++w) {
             scope.spawn([file_chan, target_files_ptr, collected_mutex,
                          collected_ptr, remaining, scanned_atomic,
-                         matched_atomic, pred_filters_ptr, view_ptr,
-                         bloom_cache_ptr, ev_ts_min,
+                         matched_atomic, query_ptr, view_ptr, bloom_cache_ptr,
+                         ev_ts_min,
                          ev_ts_max](CoroScope&) -> coro::CoroTask<void> {
                 while (auto fi_opt = co_await file_chan->receive()) {
                     if (remaining->load(std::memory_order_relaxed) <= 0)
@@ -485,9 +494,9 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
                             remaining->load(std::memory_order_relaxed);
                         if (local_limit <= 0) co_return;
                         co_await direct_scan_events(
-                            file_info, *pred_filters_ptr,
-                            view_ptr->include_metadata, &local_events,
-                            &local_scanned, &local_matched, local_limit);
+                            file_info, query_ptr, view_ptr->include_metadata,
+                            &local_events, &local_scanned, &local_matched,
+                            local_limit);
                         scanned_atomic->fetch_add(local_scanned);
                         matched_atomic->fetch_add(local_matched);
                         if (!local_events.empty()) {
@@ -594,12 +603,8 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
     const HttpRequest& /*req*/, const QueryParams& params, TraceIndex& index) {
     auto view = build_view_from_params(params);
 
-    double stream_ts_min = 0;
-    double stream_ts_max = 0;
-    if (!view.predicates.empty() && view.predicates[0].time_range) {
-        stream_ts_min = view.predicates[0].time_range->first;
-        stream_ts_max = view.predicates[0].time_range->second;
-    }
+    double stream_ts_min = params.get_double("ts_min", 0);
+    double stream_ts_max = params.get_double("ts_max", 0);
 
     std::vector<const TraceIndex::FileInfo*> target_files;
     auto file_param = params.get("file");
@@ -635,10 +640,8 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
         target_files = std::move(filtered);
     }
 
-    std::vector<PredicateFilter> pred_filters;
-    for (const auto& predicate : view.predicates) {
-        pred_filters.push_back(build_predicate_filter(predicate));
-    }
+    auto stream_query = build_query_from_params(params);
+    const Query* stream_query_ptr = stream_query ? &*stream_query : nullptr;
 
     std::string ndjson_body;
 
@@ -649,7 +652,7 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
                 std::vector<std::string> events;
                 std::uint64_t scanned = 0;
                 std::uint64_t matched = 0;
-                co_await direct_scan_events(file_info, pred_filters,
+                co_await direct_scan_events(file_info, stream_query_ptr,
                                             view.include_metadata, &events,
                                             &scanned, &matched, 0);
                 for (const auto& event : events) {
@@ -705,7 +708,6 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
         auto body_mutex = std::make_shared<std::mutex>();
         auto* ndjson_ptr = &ndjson_body;
         auto* target_files_ptr = &target_files;
-        auto* pred_filters_ptr = &pred_filters;
         auto* view_ptr = &view;
         auto* bloom_cache_ptr = &index.bloom_cache();
         double st_ts_min = stream_ts_min;
@@ -726,7 +728,7 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
 
         for (std::size_t w = 0; w < num_workers; ++w) {
             scope.spawn([file_chan, target_files_ptr, body_mutex, ndjson_ptr,
-                         pred_filters_ptr, view_ptr, bloom_cache_ptr, st_ts_min,
+                         stream_query_ptr, view_ptr, bloom_cache_ptr, st_ts_min,
                          st_ts_max](CoroScope&) -> coro::CoroTask<void> {
                 while (auto fi_opt = co_await file_chan->receive()) {
                     auto* file_info = (*target_files_ptr)[*fi_opt];
@@ -736,10 +738,10 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
                         std::vector<std::string> events;
                         std::uint64_t scanned = 0;
                         std::uint64_t matched = 0;
-                        co_await direct_scan_events(
-                            file_info, *pred_filters_ptr,
-                            view_ptr->include_metadata, &events, &scanned,
-                            &matched, 0);
+                        co_await direct_scan_events(file_info, stream_query_ptr,
+                                                    view_ptr->include_metadata,
+                                                    &events, &scanned, &matched,
+                                                    0);
                         for (const auto& event : events) {
                             local_buf += event;
                             local_buf += '\n';

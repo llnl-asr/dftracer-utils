@@ -643,5 +643,121 @@ class TestTraceReaderClamping:
             assert len(result) > 0
 
 
+class TestTraceReaderQuery:
+    """Query filtering tests."""
+
+    @staticmethod
+    def _create_dft_trace(env):
+        """Create a .pfw.gz with DFTracer events for query testing."""
+        import gzip
+        import os
+
+        pfw_path = os.path.join(env.temp_dir, "query_test.pfw.gz")
+        with gzip.open(pfw_path, "wt") as f:
+            names = ["read", "write", "open", "close"]
+            cats = ["IO", "IO", "IO", "COMPUTE"]
+            for i in range(40):
+                name = names[i % len(names)]
+                cat = cats[i % len(cats)]
+                f.write(
+                    f'{{"ph":"X","name":"{name}","cat":"{cat}",'
+                    f'"pid":1,"tid":{1 + i % 3},"ts":{1000 + i * 100},'
+                    f'"dur":{10 + i},"args":{{}}}}\n'
+                )
+        return pfw_path
+
+    def test_query_filters_by_cat(self):
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            all_lines = reader.read_lines()
+            filtered = reader.read_lines(query='cat == "IO"')
+            assert len(filtered) > 0
+            assert len(filtered) < len(all_lines)
+
+    def test_query_no_match(self):
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            filtered = reader.read_lines(query='cat == "NONEXISTENT"')
+            assert len(filtered) == 0
+
+    def test_query_by_name(self):
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            filtered = reader.read_lines(query='name == "read"')
+            assert len(filtered) > 0
+            for line in filtered:
+                assert '"name":"read"' in line
+
+    def test_query_and(self):
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            cat_only = reader.read_lines(query='cat == "IO"')
+            both = reader.read_lines(query='cat == "IO" and name == "read"')
+            assert len(both) > 0
+            assert len(both) <= len(cat_only)
+
+    def test_query_or(self):
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            reads = reader.read_lines(query='name == "read"')
+            writes = reader.read_lines(query='name == "write"')
+            either = reader.read_lines(query='name == "read" or name == "write"')
+            assert len(either) == len(reads) + len(writes)
+
+    def test_query_with_range(self):
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            filtered = reader.read_lines(start_line=1, end_line=10, query='cat == "IO"')
+            assert len(filtered) <= 10
+
+    def test_empty_query_reads_all(self):
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            all_lines = reader.read_lines()
+            with_empty = reader.read_lines(query="")
+            assert len(all_lines) == len(with_empty)
+
+    def test_iter_lines_with_query(self):
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            lines = list(reader.iter_lines(query='name == "write"'))
+            assert len(lines) > 0
+            for line in lines:
+                assert '"name":"write"' in line
+
+    def test_iter_lines_json_with_query(self):
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            events = list(reader.iter_lines_json(query='cat == "COMPUTE"'))
+            assert len(events) > 0
+            for ev in events:
+                assert ev["cat"] == "COMPUTE"
+
+    def test_query_with_field_class(self):
+        from dftracer.utils.query import Field
+
+        cat = Field("cat")
+        name = Field("name")
+        q = (cat == "IO") & (name == "read")
+
+        with Environment() as env:
+            gz = self._create_dft_trace(env)
+            reader = dft_utils.TraceReader(gz)
+            filtered = reader.read_lines(query=str(q))
+            assert len(filtered) > 0
+            for line in filtered:
+                assert '"cat":"IO"' in line
+                assert '"name":"read"' in line
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

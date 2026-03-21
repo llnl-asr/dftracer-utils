@@ -57,6 +57,15 @@ static CoroTask<std::vector<std::size_t>> collect_line_numbers(
     co_return nums;
 }
 
+static CoroTask<std::vector<std::string>> collect_lines(
+    AsyncGenerator<dftracer::utils::utilities::fileio::lines::Line> gen) {
+    std::vector<std::string> lines;
+    while (auto line = co_await gen.next()) {
+        lines.emplace_back(line->content);
+    }
+    co_return lines;
+}
+
 }  // namespace
 
 TEST_SUITE("TraceReader") {
@@ -264,5 +273,133 @@ TEST_SUITE("TraceReader") {
         CHECK(large_chunks > 0);
         CHECK(small_chunks > 0);
         CHECK(small_chunks >= large_chunks);
+    }
+
+    TEST_CASE("Query filters matching events") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        auto all = count_lines(reader.read_lines()).get();
+        REQUIRE(all > 0);
+
+        ReadConfig rc;
+        rc.query = R"(cat == "IO")";
+        auto matched = count_lines(reader.read_lines(rc)).get();
+        CHECK(matched > 0);
+        CHECK(matched <= all);
+    }
+
+    TEST_CASE("Query with no matches returns zero lines") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        ReadConfig rc;
+        rc.query = R"(cat == "NONEXISTENT")";
+        auto matched = count_lines(reader.read_lines(rc)).get();
+        CHECK(matched == 0);
+    }
+
+    TEST_CASE("Query filters by name") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        ReadConfig rc;
+        rc.query = R"(name == "read")";
+        auto lines = collect_lines(reader.read_lines(rc)).get();
+        CHECK(lines.size() > 0);
+        for (const auto& line : lines) {
+            CHECK(line.find("\"name\":\"read\"") != std::string::npos);
+        }
+    }
+
+    TEST_CASE("Query with AND narrows results") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        ReadConfig rc_cat;
+        rc_cat.query = R"(cat == "IO")";
+        auto cat_count = count_lines(reader.read_lines(rc_cat)).get();
+
+        ReadConfig rc_both;
+        rc_both.query = R"(cat == "IO" and name == "read")";
+        auto both_count = count_lines(reader.read_lines(rc_both)).get();
+
+        CHECK(both_count > 0);
+        CHECK(both_count <= cat_count);
+    }
+
+    TEST_CASE("Query with OR widens results") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        ReadConfig rc_read;
+        rc_read.query = R"(name == "read")";
+        auto read_count = count_lines(reader.read_lines(rc_read)).get();
+
+        ReadConfig rc_write;
+        rc_write.query = R"(name == "write")";
+        auto write_count = count_lines(reader.read_lines(rc_write)).get();
+
+        ReadConfig rc_or;
+        rc_or.query = R"(name == "read" or name == "write")";
+        auto or_count = count_lines(reader.read_lines(rc_or)).get();
+
+        CHECK(or_count == read_count + write_count);
+    }
+
+    TEST_CASE("Query works with index") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        std::string index_dir = env.get_dir();
+        std::string idx_path = env.get_index_path(gz_file);
+
+        auto indexer =
+            IndexerFactory::create(gz_file, idx_path, 32 * 1024 * 1024, false);
+        REQUIRE(indexer != nullptr);
+        indexer->build();
+        REQUIRE(fs::exists(idx_path));
+
+        TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
+        CHECK(reader.has_index());
+
+        ReadConfig rc;
+        rc.query = R"(name == "read")";
+        auto lines = collect_lines(reader.read_lines(rc)).get();
+        CHECK(lines.size() > 0);
+        for (const auto& line : lines) {
+            CHECK(line.find("\"name\":\"read\"") != std::string::npos);
+        }
+    }
+
+    TEST_CASE("Query combines with line range") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        ReadConfig rc;
+        rc.start_line = 1;
+        rc.end_line = 20;
+        rc.query = R"(cat == "IO")";
+        auto matched = count_lines(reader.read_lines(rc)).get();
+        CHECK(matched <= 20);
+    }
+
+    TEST_CASE("Empty query string reads all") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        auto all = count_lines(reader.read_lines()).get();
+
+        ReadConfig rc;
+        rc.query = "";
+        auto with_empty = count_lines(reader.read_lines(rc)).get();
+
+        CHECK(all == with_empty);
     }
 }

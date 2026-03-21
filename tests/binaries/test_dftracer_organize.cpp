@@ -167,7 +167,7 @@ TEST_SUITE("DFTracerOrganize") {
 
         // Test data uses "cat":"IO" for all events.
         int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out_dir,
-                                     "--groups", "io:cat=IO"});
+                                     "--groups", R"(io:cat == "IO")"});
         CHECK(rc == 0);
 
         // At least one output file must exist (io.pfw.gz or io.pfw).
@@ -193,7 +193,7 @@ TEST_SUITE("DFTracerOrganize") {
         fs::create_directories(out_dir);
 
         int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out_dir,
-                                     "--groups", "io:cat=IO"});
+                                     "--groups", R"(io:cat == "IO")"});
         CHECK(rc == 0);
 
         // The organizer builds .pidx sidecars in the output directory.
@@ -222,7 +222,7 @@ TEST_SUITE("DFTracerOrganize") {
         fs::create_directories(rec_dir);
 
         int rc_org = run_binary(org_binary, {"-d", env.get_dir(), "-o", org_dir,
-                                             "--groups", "io:cat=IO"});
+                                             "--groups", R"(io:cat == "IO")"});
         REQUIRE(rc_org == 0);
 
         // Reconstruct needs the .pidx sidecars in the organized dir.
@@ -272,7 +272,7 @@ TEST_SUITE("DFTracerOrganize") {
         fs::create_directories(rec_dir);
 
         int rc_org = run_binary(org_binary, {"-d", env.get_dir(), "-o", org_dir,
-                                             "--groups", "io:cat=IO"});
+                                             "--groups", R"(io:cat == "IO")"});
         REQUIRE(rc_org == 0);
 
         int rc_rec = run_binary(

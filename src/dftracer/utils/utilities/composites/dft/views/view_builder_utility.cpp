@@ -1,7 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
@@ -62,64 +60,28 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
         (input.num_checkpoints == 0) ? 1 : input.num_checkpoints;
     output.total_checkpoints = total_checkpoints;
 
-    // Build bloom predicates from all predicate groups (union across groups)
-    std::unordered_map<std::string, std::vector<std::string>> bloom_predicates;
-    for (const auto& predicate : input.view.predicates) {
-        for (const auto& [dim, values] : predicate.bloom_dims) {
-            std::string resolved_dim = resolve_bloom_dimension(dim);
-            auto& target = bloom_predicates[resolved_dim];
-            for (const auto& val : values) {
-                target.push_back(val);
-            }
-        }
-    }
-
-    // Determine candidate checkpoints via bloom pre-filtering
     std::vector<std::uint64_t> candidate_checkpoints;
 
-    if (!bloom_predicates.empty() && !input.idx_path.empty()) {
-        // Convert bloom predicates to query DSL string
-        std::string query_dsl;
-        for (const auto& [dim, vals] : bloom_predicates) {
-            if (!query_dsl.empty()) query_dsl += " and ";
-            if (vals.size() == 1) {
-                query_dsl += dim + " == \"" + vals[0] + "\"";
-            } else {
-                query_dsl += dim + " in [";
-                for (std::size_t vi = 0; vi < vals.size(); ++vi) {
-                    if (vi > 0) query_dsl += ", ";
-                    query_dsl += "\"" + vals[vi] + "\"";
-                }
-                query_dsl += "]";
+    if (input.view.query && !input.idx_path.empty()) {
+        indexing::ChunkPrunerInput pruner_input{input.idx_path, input.file_path,
+                                                *input.view.query,
+                                                input.bloom_cache};
+        indexing::ChunkPrunerUtility pruner;
+        auto pruner_output = co_await pruner.process(pruner_input);
+
+        if (pruner_output.success) {
+            candidate_checkpoints = pruner_output.candidate_checkpoints;
+            if (pruner_output.total_checkpoints > 0) {
+                total_checkpoints = pruner_output.total_checkpoints;
+                output.total_checkpoints = total_checkpoints;
             }
-        }
 
-        auto parsed = common::query::Query::from_string(query_dsl);
-        if (parsed) {
-            indexing::ChunkPrunerInput pruner_input{
-                input.idx_path, input.file_path, std::move(*parsed),
-                input.bloom_cache};
-            indexing::ChunkPrunerUtility pruner;
-            auto pruner_output = co_await pruner.process(pruner_input);
-
-            if (pruner_output.success) {
-                candidate_checkpoints = pruner_output.candidate_checkpoints;
-                if (pruner_output.total_checkpoints > 0) {
-                    total_checkpoints = pruner_output.total_checkpoints;
-                    output.total_checkpoints = total_checkpoints;
-                }
-
-                if (!pruner_output.file_may_match &&
-                    candidate_checkpoints.empty()) {
-                    output.file_may_match = false;
-                    output.skipped_checkpoints = total_checkpoints;
-                    output.success = true;
-                    co_return output;
-                }
-            } else {
-                for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
-                    candidate_checkpoints.push_back(i);
-                }
+            if (!pruner_output.file_may_match &&
+                candidate_checkpoints.empty()) {
+                output.file_may_match = false;
+                output.skipped_checkpoints = total_checkpoints;
+                output.success = true;
+                co_return output;
             }
         } else {
             for (std::uint64_t i = 0; i < total_checkpoints; ++i) {

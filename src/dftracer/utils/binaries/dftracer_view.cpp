@@ -40,7 +40,6 @@ struct ViewContext {
     std::string index_dir;
     std::size_t checkpoint_size;
     ViewDefinition view;
-    const common::query::Query* query = nullptr;
     bool stream_mode;
     FILE* out_file;
     std::mutex* output_mutex;
@@ -84,9 +83,7 @@ static coro::CoroTask<void> read_single_chunk(
         .with_byte_range(candidate.start_byte, candidate.end_byte)
         .with_checkpoint_idx(candidate.checkpoint_idx)
         .with_view(vctx.view);
-    if (vctx.query) {
-        reader_input.query = *vctx.query;
-    }
+    reader_input.query = vctx.view.query;
 
     ViewReaderUtility reader;
     auto gen = reader.process(reader_input);
@@ -248,28 +245,40 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
     }
 
     if (time_range || min_duration > 0 || max_duration > 0) {
-        if (view.predicates.empty()) {
-            ViewPredicate pred;
-            if (time_range)
-                pred.with_time_range(time_range->first, time_range->second);
-            if (min_duration > 0) pred.with_min_duration(min_duration);
-            if (max_duration > 0) pred.with_max_duration(max_duration);
-            view.with_predicate(std::move(pred));
-        } else {
-            for (auto& pred : view.predicates) {
-                if (time_range)
-                    pred.with_time_range(time_range->first, time_range->second);
-                if (min_duration > 0) pred.with_min_duration(min_duration);
-                if (max_duration > 0) pred.with_max_duration(max_duration);
-            }
+        std::string extra;
+        if (time_range) {
+            extra += "ts >= " +
+                     std::to_string(static_cast<uint64_t>(time_range->first));
+            extra += " and ts <= " +
+                     std::to_string(static_cast<uint64_t>(time_range->second));
         }
+        if (min_duration > 0) {
+            if (!extra.empty()) extra += " and ";
+            extra +=
+                "dur >= " + std::to_string(static_cast<uint64_t>(min_duration));
+        }
+        if (max_duration > 0) {
+            if (!extra.empty()) extra += " and ";
+            extra +=
+                "dur <= " + std::to_string(static_cast<uint64_t>(max_duration));
+        }
+        if (query) {
+            std::string combined = "(" + query->source() + ") and " + extra;
+            query = common::query::parse_or_throw(combined);
+        } else {
+            query = common::query::parse_or_throw(extra);
+        }
+    }
+
+    if (query) {
+        view.with_query(std::move(*query));
     }
 
     if (no_metadata) {
         view.with_include_metadata(false);
     }
 
-    if (view.predicates.empty() && !query) {
+    if (!view.query) {
         DFTRACER_UTILS_LOG_ERROR(
             "%s", "No view specified. Use --preset, --recipe, or --query.");
         std::cerr << program;
@@ -363,7 +372,6 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
     ViewContext vctx{index_dir,
                      checkpoint_size,
                      view,
-                     query ? &*query : nullptr,
                      stream_mode,
                      out_file,
                      &output_mutex,

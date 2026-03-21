@@ -170,10 +170,7 @@ TEST_SUITE("ViewBuilderUtility") {
         populate_test_idx(idx_path, file_path);
 
         ViewDefinition view;
-        view.with_name("nonexistent");
-        ViewPredicate pred;
-        pred.with_bloom_dim("name", {"nonexistent_op"});
-        view.with_predicate(std::move(pred));
+        view.with_name("nonexistent").with_query(R"(cat == "NONEXISTENT")");
 
         ViewBuilderInput input;
         input.with_view(view)
@@ -203,12 +200,8 @@ TEST_SUITE("ViewBuilderUtility") {
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(idx_path, file_path);
 
-        // View with only time_range, no bloom dims
         ViewDefinition view;
-        view.with_name("time_only");
-        ViewPredicate pred;
-        pred.with_time_range(0.0, 100000.0);
-        view.with_predicate(std::move(pred));
+        view.with_name("time_only").with_query(R"(ts >= 0 and ts <= 100000)");
 
         ViewBuilderInput input;
         input.with_view(view)
@@ -231,9 +224,6 @@ TEST_SUITE("ViewBuilderUtility") {
     TEST_CASE("ViewBuilder - No bidx path returns all chunks") {
         ViewDefinition view;
         view.with_name("no_bidx");
-        ViewPredicate pred;
-        pred.with_bloom_dim("name", {"read"});
-        view.with_predicate(std::move(pred));
 
         ViewBuilderInput input;
         input.with_view(view)
@@ -340,9 +330,6 @@ TEST_SUITE("ViewBuilderUtility") {
         // Use "file" alias which should resolve to "fhash"
         ViewDefinition view;
         view.with_name("alias_test");
-        ViewPredicate pred;
-        pred.with_bloom_dim("file", {"/data/file.h5"});
-        view.with_predicate(std::move(pred));
 
         ViewBuilderInput input;
         input.with_view(view)

@@ -102,7 +102,7 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
             PyObject *item = PyList_GetItem(groups_obj, i);
             PredicateGroup g;
             PyObject *name = PyDict_GetItemString(item, "name");
-            PyObject *pred = PyDict_GetItemString(item, "predicate");
+            PyObject *pred = PyDict_GetItemString(item, "query");
             if (name) {
                 const char *ns = PyUnicode_AsUTF8(name);
                 if (!ns) return NULL;
@@ -111,7 +111,7 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
             if (pred) {
                 const char *ps = PyUnicode_AsUTF8(pred);
                 if (!ps) return NULL;
-                g.predicate = ps;
+                g.query = ps;
             }
             groups.push_back(std::move(g));
         }
@@ -157,8 +157,7 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
         PyDict_SetItemString(g, "name",
                              PyUnicode_FromString(plan.groups[i].name.c_str()));
         PyDict_SetItemString(
-            g, "predicate",
-            PyUnicode_FromString(plan.groups[i].predicate.c_str()));
+            g, "query", PyUnicode_FromString(plan.groups[i].query.c_str()));
         PyList_SetItem(py_groups, static_cast<Py_ssize_t>(i), g);
     }
 

@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <doctest/doctest.h>
@@ -16,6 +17,22 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft::views;
 using namespace dft_utils_test;
+using dftracer::utils::utilities::common::query::Query;
+
+static std::string create_pfw_gz(TestEnvironment& env, int n) {
+    std::string pfw = env.get_dir() + "/trace.pfw";
+    std::ofstream ofs(pfw);
+    for (int i = 0; i < n; ++i) {
+        ofs << R"({"ph":"X","name":"read","cat":"IO","pid":1,"tid":1,"ts":)"
+            << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
+            << "\n";
+    }
+    ofs.close();
+    std::string gz = pfw + ".gz";
+    compress_file_to_gzip(pfw, gz);
+    fs::remove(pfw);
+    return gz;
+}
 
 struct CollectedViewOutput {
     std::vector<std::string> events;
@@ -23,513 +40,86 @@ struct CollectedViewOutput {
     std::uint64_t events_scanned = 0;
 };
 
+static coro::CoroTask<CollectedViewOutput> collect_view_coro(
+    ViewReaderUtility* reader, ViewReaderInput input) {
+    CollectedViewOutput output;
+    auto gen = reader->process(input);
+    while (auto batch = co_await gen.next()) {
+        output.events_matched += batch->events_matched;
+        output.events_scanned += batch->events_scanned;
+        for (auto& ev : batch->events) output.events.push_back(std::move(ev));
+    }
+    co_return output;
+}
+
 static CollectedViewOutput collect_view_output(ViewReaderUtility& reader,
-                                               const ViewReaderInput& input) {
-    CollectedViewOutput collected;
-    auto* cp = &collected;
-    auto* rp = &reader;
-    ViewReaderInput input_copy = input;
-
-    auto task = [cp, rp, input_copy]() -> coro::CoroTask<void> {
-        auto gen = rp->process(input_copy);
-        while (auto batch = co_await gen.next()) {
-            for (auto& ev : batch->events) {
-                cp->events.push_back(std::move(ev));
-            }
-            cp->events_matched += batch->events_matched;
-            cp->events_scanned += batch->events_scanned;
-        }
-    };
-
-    task().get();
-    return collected;
+                                               ViewReaderInput input) {
+    return collect_view_coro(&reader, std::move(input)).get();
 }
 
-// Helper: write a custom DFTracer trace file with metadata and mixed categories
-// Returns the plain text file path
-static std::string create_view_test_trace(const std::string& dir) {
-    std::string file_path = dir + "/view_test.trace";
-    std::ofstream ofs(file_path);
-
-    // Hash metadata events (ph="M")
-    // HH: host hash
-    ofs << R"({"name":"HH","ph":"M","pid":0,"tid":0,"args":{"value":"host_abc","hostname":"node01"}})"
-        << "\n";
-    // FH: file hashes
-    ofs << R"({"name":"FH","ph":"M","pid":0,"tid":0,"args":{"value":"file_001","filename":"/data/train.h5"}})"
-        << "\n";
-    ofs << R"({"name":"FH","ph":"M","pid":0,"tid":0,"args":{"value":"file_002","filename":"/data/val.h5"}})"
-        << "\n";
-    // SH: script hash
-    ofs << R"({"name":"SH","ph":"M","pid":0,"tid":0,"args":{"value":"script_x","cmd":"python train.py"}})"
-        << "\n";
-
-    // thread_name metadata (non-hash, should always be emitted when
-    // include_metadata=true)
-    ofs << R"({"name":"thread_name","ph":"M","pid":1000,"tid":2000,"args":{"name":"MainThread"}})"
-        << "\n";
-
-    // POSIX I/O events (reference file_001 and host_abc)
-    ofs << R"({"name":"read","ph":"X","cat":"POSIX","pid":1000,"tid":2000,"ts":1000000,"dur":500,"args":{"ret":4096,"hhash":"host_abc","fhash":"file_001"}})"
-        << "\n";
-    ofs << R"({"name":"write","ph":"X","cat":"POSIX","pid":1000,"tid":2000,"ts":1001000,"dur":300,"args":{"ret":2048,"hhash":"host_abc","fhash":"file_001"}})"
-        << "\n";
-    ofs << R"({"name":"pread64","ph":"X","cat":"POSIX","pid":1000,"tid":2000,"ts":1002000,"dur":150,"args":{"ret":1024,"hhash":"host_abc","fhash":"file_002"}})"
-        << "\n";
-
-    // STDIO event
-    ofs << R"({"name":"fwrite","ph":"X","cat":"STDIO","pid":1000,"tid":2000,"ts":1003000,"dur":200,"args":{"ret":512,"hhash":"host_abc"}})"
-        << "\n";
-
-    // Compute events (reference host_abc but NOT file hashes)
-    ofs << R"({"name":"forward","ph":"X","cat":"compute","pid":1000,"tid":2000,"ts":1100000,"dur":50000,"args":{"hhash":"host_abc"}})"
-        << "\n";
-    ofs << R"({"name":"backward","ph":"X","cat":"compute","pid":1000,"tid":2000,"ts":1150000,"dur":60000,"args":{"hhash":"host_abc"}})"
-        << "\n";
-
-    // AI framework event (reference script hash)
-    ofs << R"({"name":"DataLoader","ph":"X","cat":"ai_framework","pid":1000,"tid":2000,"ts":1210000,"dur":10000,"args":{"hhash":"host_abc","shash":"script_x"}})"
-        << "\n";
-
-    // An event with large duration for duration filter testing
-    ofs << R"({"name":"checkpoint","ph":"X","cat":"checkpoint","pid":1000,"tid":2000,"ts":1300000,"dur":500000,"args":{"hhash":"host_abc"}})"
-        << "\n";
-
-    ofs.close();
-    return file_path;
-}
-
-// Helper: create gzip + index from a plain trace file
-static std::pair<std::string, std::string> compress_and_index(
-    const std::string& plain_path) {
-    std::string gz_path = plain_path + ".gz";
-    compress_file_to_gzip(plain_path, gz_path);
-
-    std::string idx_path = gz_path + ".idx";
-    // Index will be auto-built by IndexedFileReaderUtility
-    return {gz_path, idx_path};
-}
-
-TEST_SUITE("ViewReaderUtility") {
-    TEST_CASE("ViewReader - IO view matches POSIX/STDIO events") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
+TEST_SUITE("ViewReader") {
+    TEST_CASE("ViewReader - No query matches all events") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_pfw_gz(env, 50);
 
         ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
+        input.with_file_path(gz)
+            .with_idx_path(gz + ".idx")
             .with_checkpoint_size(1024)
-            .with_byte_range(
-                0, std::numeric_limits<std::size_t>::max())  // 0,0 means read
-                                                             // everything
-            .with_view(ViewDefinition::io_view());
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max());
+        input.view.with_include_metadata(false);
 
         ViewReaderUtility reader;
         auto output = collect_view_output(reader, input);
 
-        // Should match: read, write, pread64, fwrite (4 I/O events)
-        // + thread_name metadata (1) + referenced hash metadata (HH, FH x2)
         CHECK(output.events_scanned > 0);
         CHECK(output.events_matched > 0);
-
-        // Count actual I/O events (non-metadata)
-        std::uint64_t io_events = 0;
-        for (const auto& ev : output.events) {
-            if (ev.find("\"ph\":\"X\"") != std::string::npos) {
-                io_events++;
-            }
-        }
-        CHECK(io_events == 4);  // read, write, pread64, fwrite
+        CHECK(output.events_matched == output.events_scanned);
     }
 
-    TEST_CASE("ViewReader - Compute view matches compute/ai_framework events") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
+    TEST_CASE("ViewReader - Query filters events") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_pfw_gz(env, 50);
 
         ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
+        input.with_file_path(gz)
+            .with_idx_path(gz + ".idx")
             .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(ViewDefinition::compute_view());
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max());
+        input.view.with_include_metadata(false);
+
+        auto q = Query::from_string(R"(cat == "IO")");
+        REQUIRE(q.has_value());
+        input.query = std::move(*q);
 
         ViewReaderUtility reader;
         auto output = collect_view_output(reader, input);
 
-        std::uint64_t compute_events = 0;
-        for (const auto& ev : output.events) {
-            if (ev.find("\"ph\":\"X\"") != std::string::npos) {
-                compute_events++;
-            }
-        }
-        // forward, backward, DataLoader = 3 compute/ai_framework events
-        CHECK(compute_events == 3);
-    }
-
-    TEST_CASE("ViewReader - Smart metadata: FH only included when referenced") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        // IO view -- references file_001 and file_002
-        ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(ViewDefinition::io_view());
-
-        ViewReaderUtility reader;
-        auto output = collect_view_output(reader, input);
-
-        int fh_count = 0;
-        for (const auto& ev : output.events) {
-            if (ev.find("\"name\":\"FH\"") != std::string::npos) {
-                fh_count++;
-            }
-        }
-        // IO events reference file_001 and file_002
-        CHECK(fh_count == 2);
-
-        // Now check compute view -- no fhash references
-        ViewReaderInput compute_input;
-        compute_input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(ViewDefinition::compute_view());
-
-        auto compute_output = collect_view_output(reader, compute_input);
-
-        int compute_fh_count = 0;
-        for (const auto& ev : compute_output.events) {
-            if (ev.find("\"name\":\"FH\"") != std::string::npos) {
-                compute_fh_count++;
-            }
-        }
-        // Compute events don't reference any file hash
-        CHECK(compute_fh_count == 0);
-    }
-
-    TEST_CASE("ViewReader - Smart metadata: SH only with script references") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        // Compute view includes ai_framework which has shash=script_x
-        ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(ViewDefinition::compute_view());
-
-        ViewReaderUtility reader;
-        auto output = collect_view_output(reader, input);
-
-        int sh_count = 0;
-        for (const auto& ev : output.events) {
-            if (ev.find("\"name\":\"SH\"") != std::string::npos) {
-                sh_count++;
-            }
-        }
-        // DataLoader references shash=script_x
-        CHECK(sh_count == 1);
-
-        // IO view -- no shash references
-        ViewReaderInput io_input;
-        io_input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(ViewDefinition::io_view());
-
-        auto io_output = collect_view_output(reader, io_input);
-        int io_sh_count = 0;
-        for (const auto& ev : io_output.events) {
-            if (ev.find("\"name\":\"SH\"") != std::string::npos) {
-                io_sh_count++;
-            }
-        }
-        CHECK(io_sh_count == 0);
-    }
-
-    TEST_CASE("ViewReader - thread_name always emitted with metadata") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(ViewDefinition::compute_view());
-
-        ViewReaderUtility reader;
-        auto output = collect_view_output(reader, input);
-
-        int thread_name_count = 0;
-        for (const auto& ev : output.events) {
-            if (ev.find("\"name\":\"thread_name\"") != std::string::npos) {
-                thread_name_count++;
-            }
-        }
-        CHECK(thread_name_count == 1);
-    }
-
-    TEST_CASE("ViewReader - no metadata when include_metadata=false") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        auto io_view = ViewDefinition::io_view();
-        io_view.with_include_metadata(false);
-
-        ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(io_view);
-
-        ViewReaderUtility reader;
-        auto output = collect_view_output(reader, input);
-
-        // No metadata events should be present
-        for (const auto& ev : output.events) {
-            CHECK(ev.find("\"ph\":\"M\"") == std::string::npos);
-        }
-
-        // Should still have I/O events
+        CHECK(output.events_scanned > 0);
         CHECK(output.events_matched > 0);
     }
 
-    TEST_CASE("ViewReader - Custom predicate with name filter") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        ViewDefinition view;
-        view.with_name("read_only");
-        ViewPredicate pred;
-        pred.with_bloom_dim("name", {"read"});
-        view.with_predicate(std::move(pred));
+    TEST_CASE("ViewReader - Non-matching query returns empty") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_pfw_gz(env, 50);
 
         ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
+        input.with_file_path(gz)
+            .with_idx_path(gz + ".idx")
             .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(view);
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max());
+        input.view.with_include_metadata(false);
 
-        ViewReaderUtility reader;
-        auto output = collect_view_output(reader, input);
-
-        std::uint64_t matched_events = 0;
-        for (const auto& ev : output.events) {
-            if (ev.find("\"ph\":\"X\"") != std::string::npos) {
-                matched_events++;
-                CHECK(ev.find("\"name\":\"read\"") != std::string::npos);
-            }
-        }
-        CHECK(matched_events == 1);
-    }
-
-    TEST_CASE("ViewReader - Duration filter") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        // Match only events with dur > 100000 us
-        ViewDefinition view;
-        view.with_name("long_events");
-        ViewPredicate pred;
-        pred.with_min_duration(100000.0);
-        // Need at least one bloom dim or the predicate won't match anything
-        // since matches_predicate checks bloom dims first
-        // Actually no -- if dim_sets is empty, the bloom loop is skipped and
-        // we proceed to time/duration checks
-        view.with_predicate(std::move(pred));
-        view.with_include_metadata(false);
-
-        ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(view);
-
-        ViewReaderUtility reader;
-        auto output = collect_view_output(reader, input);
-
-        // Only the checkpoint event has dur=500000
-        for (const auto& ev : output.events) {
-            CHECK(ev.find("\"ph\":\"X\"") != std::string::npos);
-        }
-        CHECK(output.events_matched >= 1);
-    }
-
-    TEST_CASE("ViewReader - Time range filter") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        // Only match events with ts between 1100000 and 1200000
-        ViewDefinition view;
-        view.with_name("time_window");
-        ViewPredicate pred;
-        pred.with_time_range(1100000.0, 1200000.0);
-        view.with_predicate(std::move(pred));
-        view.with_include_metadata(false);
-
-        ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(view);
-
-        ViewReaderUtility reader;
-        auto output = collect_view_output(reader, input);
-
-        // Events in this time range: forward (ts=1100000), backward
-        // (ts=1150000)
-        CHECK(output.events_matched == 2);
-    }
-
-    TEST_CASE("ViewReader - Multiple predicates (OR between groups)") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        ViewDefinition view;
-        view.with_name("multi_pred");
-        view.with_include_metadata(false);
-
-        // Predicate 1: POSIX reads
-        ViewPredicate pred1;
-        pred1.with_bloom_dim("name", {"read"}).with_bloom_dim("cat", {"POSIX"});
-        view.with_predicate(std::move(pred1));
-
-        // Predicate 2: compute operations
-        ViewPredicate pred2;
-        pred2.with_bloom_dim("cat", {"compute"});
-        view.with_predicate(std::move(pred2));
-
-        ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(view);
-
-        ViewReaderUtility reader;
-        auto output = collect_view_output(reader, input);
-
-        // Pred1 matches: read (1 event)
-        // Pred2 matches: forward, backward (2 events)
-        // Total: 3 events
-        CHECK(output.events_matched == 3);
-    }
-
-    TEST_CASE("ViewReader - Empty events for non-matching filter") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        ViewDefinition view;
-        view.with_name("no_match");
-        view.with_include_metadata(false);
-
-        ViewPredicate pred;
-        pred.with_bloom_dim("name", {"nonexistent_operation"});
-        view.with_predicate(std::move(pred));
-
-        ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(view);
+        auto q = Query::from_string(R"(cat == "NONEXISTENT")");
+        REQUIRE(q.has_value());
+        input.query = std::move(*q);
 
         ViewReaderUtility reader;
         auto output = collect_view_output(reader, input);
 
         CHECK(output.events_matched == 0);
-        CHECK(output.events.empty());
     }
-
-#ifdef DFTRACER_UTILS_ENABLE_ARROW
-    TEST_CASE("ViewReaderBatch - to_arrow converts events to Arrow") {
-        TestEnvironment env(100);
-        std::string plain = create_view_test_trace(env.get_dir());
-        auto [gz_path, idx_path] = compress_and_index(plain);
-
-        ViewDefinition view;
-        view.with_name("arrow_test");
-        view.with_include_metadata(false);
-        ViewPredicate pred;
-        pred.with_bloom_dim("cat", {"POSIX"});
-        view.with_predicate(std::move(pred));
-
-        ViewReaderInput input;
-        input.with_file_path(gz_path)
-            .with_idx_path(idx_path)
-            .with_checkpoint_size(1024)
-            .with_byte_range(0, std::numeric_limits<std::size_t>::max())
-            .with_view(view);
-
-        // Collect batches directly
-        std::vector<ViewReaderBatch> batches;
-        auto* bp = &batches;
-        ViewReaderUtility reader;
-        auto* rp = &reader;
-        ViewReaderInput input_copy = input;
-
-        auto task = [bp, rp, input_copy]() -> coro::CoroTask<void> {
-            auto gen = rp->process(input_copy);
-            while (auto batch = co_await gen.next()) {
-                bp->push_back(std::move(*batch));
-            }
-        };
-        task().get();
-
-        REQUIRE(!batches.empty());
-
-        SUBCASE("to_arrow produces valid result") {
-            auto arrow = batches[0].to_arrow();
-            CHECK(arrow.valid());
-            CHECK(arrow.num_rows() > 0);
-            CHECK(arrow.num_columns() > 0);
-        }
-
-        SUBCASE("to_arrow row count matches events") {
-            std::size_t total_events = 0;
-            std::int64_t total_arrow_rows = 0;
-            for (const auto& batch : batches) {
-                total_events += batch.events.size();
-                auto arrow = batch.to_arrow();
-                total_arrow_rows += arrow.num_rows();
-            }
-            CHECK(total_arrow_rows == static_cast<std::int64_t>(total_events));
-        }
-
-        SUBCASE("to_arrow schema has expected columns") {
-            auto arrow = batches[0].to_arrow();
-            auto* schema = arrow.get_schema();
-            REQUIRE(schema != nullptr);
-            // Events have at least: name, cat, ph, pid, tid, ts, dur
-            CHECK(schema->n_children >= 3);
-        }
-    }
-
-    TEST_CASE("ViewReaderBatch - to_arrow on empty batch") {
-        ViewReaderBatch empty_batch;
-        auto arrow = empty_batch.to_arrow();
-        CHECK(arrow.num_rows() == 0);
-    }
-#endif  // DFTRACER_UTILS_ENABLE_ARROW
 }

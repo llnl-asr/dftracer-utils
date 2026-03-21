@@ -11,7 +11,6 @@ import pyarrow.ipc as ipc
 import dftracer.utils as dft_utils
 from dftracer.utils.dftracer_utils_ext import (
     AggregatorUtility,
-    ViewReaderUtility,
 )
 
 from .common import Environment
@@ -89,15 +88,12 @@ class TestArrowIpcReadback:
                 assert schema.field("count").type == pa.uint64()
                 assert schema.field("dur_mean").type == pa.float64()
 
-    def test_view_reader_roundtrip(self):
-        """ViewReaderUtility Arrow output is readable by pyarrow."""
+    def test_trace_reader_arrow_roundtrip(self):
+        """TraceReader Arrow output is readable by pyarrow."""
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
-            with dft_utils.Indexer(gz_file, idx_file, build_bloom=True) as indexer:
-                indexer.build()
-
-            table = ViewReaderUtility().process(gz_file, predicates={"cat": ["cat_1"]})
+            reader = dft_utils.TraceReader(gz_file)
+            table = reader.read_arrow()
 
             if table.num_rows > 0:
                 for batch in table.batches():

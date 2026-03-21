@@ -11,7 +11,6 @@
 
 namespace dftracer::utils::utilities::common::query {
 
-/// Owns a parsed query AST and provides evaluation against JSON.
 class Query {
    public:
     static dftracer::utils::expected<Query, QueryError> from_string(
@@ -23,6 +22,7 @@ class Query {
     Query& operator=(Query&&) = default;
 
     bool evaluate(const json::JsonValue& event) const;
+    bool evaluate(const ValueMap& fields) const;
     const QueryNode& root() const { return *root_; }
     const std::string& source() const { return source_; }
     std::string to_string() const;

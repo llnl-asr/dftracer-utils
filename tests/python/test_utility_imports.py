@@ -4,23 +4,19 @@
 class TestUtilityImports:
     def test_import_from_utilities_subpackage(self):
         from dftracer.utils.utilities import (
-            BloomQueryUtility,
+            AggregatorUtility,
             MetadataCollectorUtility,
             ReconstructionPlannerUtility,
             ReorganizationPlannerUtility,
             StatisticsAggregatorUtility,
             StatisticsQueryUtility,
-            ViewBuilderUtility,
-            ViewReaderUtility,
         )
 
         for cls in [
+            AggregatorUtility,
             StatisticsQueryUtility,
-            BloomQueryUtility,
             StatisticsAggregatorUtility,
             MetadataCollectorUtility,
-            ViewBuilderUtility,
-            ViewReaderUtility,
             ReorganizationPlannerUtility,
             ReconstructionPlannerUtility,
         ]:
@@ -32,3 +28,11 @@ class TestUtilityImports:
         )
 
         assert StatisticsQueryUtility is not None
+
+    def test_import_query_field(self):
+        from dftracer.utils.query import Expr, Field
+
+        cat = Field("cat")
+        q = cat == "POSIX"
+        assert isinstance(q, Expr)
+        assert 'cat == "POSIX"' in str(q)

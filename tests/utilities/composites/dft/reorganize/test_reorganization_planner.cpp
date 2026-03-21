@@ -92,28 +92,30 @@ static void build_idx(const std::string& trace_file,
 
 TEST_SUITE("ReorganizationPlanner") {
     TEST_CASE("parse_group_specs") {
-        SUBCASE("name:predicate format") {
-            auto groups =
-                parse_group_specs({"io:cat=POSIX", "compute:cat=APP"});
+        SUBCASE("name:query format") {
+            auto groups = parse_group_specs(
+                {"io:cat == \"POSIX\"", "compute:cat == \"APP\""});
             REQUIRE(groups.size() == 2);
             CHECK(groups[0].name == "io");
-            CHECK(groups[0].predicate == "cat=POSIX");
+            CHECK(groups[0].query == "cat == \"POSIX\"");
             CHECK(groups[1].name == "compute");
-            CHECK(groups[1].predicate == "cat=APP");
+            CHECK(groups[1].query == "cat == \"APP\"");
         }
 
         SUBCASE("name only (remainder)") {
             auto groups = parse_group_specs({"other"});
             REQUIRE(groups.size() == 1);
             CHECK(groups[0].name == "other");
-            CHECK(groups[0].predicate.empty());
+            CHECK(groups[0].query.empty());
         }
 
-        SUBCASE("complex predicate") {
-            auto groups = parse_group_specs({"io:cat=POSIX,name=read|write"});
+        SUBCASE("complex query") {
+            auto groups = parse_group_specs(
+                {"io:cat == \"POSIX\" and name in [\"read\", \"write\"]"});
             REQUIRE(groups.size() == 1);
             CHECK(groups[0].name == "io");
-            CHECK(groups[0].predicate == "cat=POSIX,name=read|write");
+            CHECK(groups[0].query ==
+                  "cat == \"POSIX\" and name in [\"read\", \"write\"]");
         }
 
         SUBCASE("empty input") {
@@ -134,7 +136,7 @@ TEST_SUITE("ReorganizationPlanner") {
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput input;
         input.source_files = {trace_file};
-        input.groups = {{"io", "cat=POSIX"}};
+        input.groups = {{"io", R"(cat == "POSIX")"}};
         input.index_dir = test_dir;
 
         auto plan = planner.process(input).get();
@@ -198,7 +200,8 @@ TEST_SUITE("ReorganizationPlanner") {
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput input;
         input.source_files = {trace_file};
-        input.groups = {{"io", "cat=POSIX"}, {"compute", "cat=APP"}};
+        input.groups = {{"io", R"(cat == "POSIX")"},
+                        {"compute", R"(cat == "APP")"}};
         input.index_dir = test_dir;
 
         auto plan = planner.process(input).get();
@@ -235,7 +238,8 @@ TEST_SUITE("ReorganizationPlanner") {
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput input;
         input.source_files = {trace_file};
-        input.groups = {{"io", "cat=POSIX"}, {"compute", "cat=APP"}};
+        input.groups = {{"io", R"(cat == "POSIX")"},
+                        {"compute", R"(cat == "APP")"}};
         input.index_dir = test_dir;
 
         auto plan = planner.process(input).get();
@@ -272,7 +276,7 @@ TEST_SUITE("ReorganizationPlanner") {
         pdb.insert_info("version", "1.0");
         pdb.insert_info("created_at", "2026-02-17");
         pdb.insert_source(fid, 0, "/data/trace.pfw.gz", 9, "abc123");
-        pdb.insert_group("io", "cat=POSIX");
+        pdb.insert_group("io", R"(cat == "POSIX")");
         pdb.insert_segment(0, 0, 0, 100, 50);
         pdb.insert_segment(0, 1, 100, 200, 45);
 
@@ -298,7 +302,7 @@ TEST_SUITE("ReorganizationPlanner") {
         CHECK(segments[1].source_checkpoint == 1);
 
         CHECK(pdb.query_group_name() == "io");
-        CHECK(pdb.query_group_predicate() == "cat=POSIX");
+        CHECK(pdb.query_group_predicate() == R"(cat == "POSIX")");
 
         fs::remove_all(test_dir);
     }

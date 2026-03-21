@@ -1,4 +1,4 @@
-#include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
@@ -15,43 +15,10 @@ namespace dftracer::utils::utilities::composites::dft::reorganize {
 
 namespace {
 
+using common::query::Query;
 using dftracer::utils::utilities::indexer::IndexBuildConfig;
 using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::IndexDatabase;
-using indexing::PredicateMap;
-using indexing::PredicateParserInput;
-using indexing::PredicateParserUtility;
-
-// Check if an event (cat, name) matches a parsed predicate
-// map. A predicate map has dimension -> values. An event
-// matches if for every dimension in the map, the event's
-// value for that dimension is in the values list. "cat"
-// matches against cat, "name" matches against name.
-bool matches_predicate(const std::string& cat, const std::string& name,
-                       const PredicateMap& pred) {
-    for (const auto& [dim, values] : pred) {
-        const std::string* event_val = nullptr;
-        if (dim == "cat") {
-            event_val = &cat;
-        } else if (dim == "name") {
-            event_val = &name;
-        } else {
-            // Unknown dimension -- no match
-            return false;
-        }
-        bool found = false;
-        for (const auto& v : values) {
-            if (*event_val == v) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            return false;
-        }
-    }
-    return true;
-}
 
 }  // namespace
 
@@ -65,7 +32,7 @@ std::vector<PredicateGroup> parse_group_specs(
             g.name = spec;
         } else {
             g.name = spec.substr(0, colon);
-            g.predicate = spec.substr(colon + 1);
+            g.query = spec.substr(colon + 1);
         }
         groups.push_back(std::move(g));
     }
@@ -77,16 +44,17 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
     ExtractionPlan plan;
     plan.groups = input.groups;
 
-    // Parse predicates for each group
-    PredicateParserUtility parser;
-    std::vector<PredicateMap> parsed_predicates;
+    std::vector<std::optional<Query>> parsed_queries;
     for (const auto& group : input.groups) {
-        if (group.predicate.empty()) {
-            parsed_predicates.emplace_back();
+        if (group.query.empty()) {
+            parsed_queries.emplace_back(std::nullopt);
         } else {
-            auto result = parser.process(
-                PredicateParserInput().with_predicate_string(group.predicate));
-            parsed_predicates.push_back(std::move(result.predicates));
+            auto result = Query::from_string(group.query);
+            if (result) {
+                parsed_queries.push_back(std::move(*result));
+            } else {
+                parsed_queries.emplace_back(std::nullopt);
+            }
         }
     }
 
@@ -94,7 +62,7 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
     // specified
     bool has_remainder = false;
     for (const auto& g : input.groups) {
-        if (g.predicate.empty()) {
+        if (g.query.empty()) {
             has_remainder = true;
             break;
         }
@@ -103,11 +71,10 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
     if (!has_remainder) {
         remainder_name = "remainder";
         plan.groups.push_back(PredicateGroup{remainder_name, ""});
-        parsed_predicates.emplace_back();
+        parsed_queries.emplace_back(std::nullopt);
     } else {
-        // Find the name of the group with empty predicate
         for (const auto& g : input.groups) {
-            if (g.predicate.empty()) {
+            if (g.query.empty()) {
                 remainder_name = g.name;
                 break;
             }
@@ -219,17 +186,15 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
 
             for (const auto& ev : events) {
                 bool matched = false;
-                for (std::size_t gi = 0; gi < parsed_predicates.size(); ++gi) {
-                    const auto& pred = parsed_predicates[gi];
-                    // Skip remainder group
-                    if (pred.empty()) {
-                        continue;
-                    }
-                    if (matches_predicate(ev.cat, ev.name, pred)) {
+                for (std::size_t gi = 0; gi < parsed_queries.size(); ++gi) {
+                    const auto& q = parsed_queries[gi];
+                    if (!q) continue;
+                    common::query::ValueMap fields = {{"cat", ev.cat},
+                                                      {"name", ev.name}};
+                    if (q->evaluate(fields)) {
                         group_lines[plan.groups[gi].name].insert(
                             ev.line_numbers.begin(), ev.line_numbers.end());
                         matched = true;
-                        // First match wins
                         break;
                     }
                 }

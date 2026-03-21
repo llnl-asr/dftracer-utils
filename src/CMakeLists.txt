@@ -169,7 +169,6 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/statistics/chunk_detail_scanner_utility.cpp
 
     # DFT Views (filtered lenses over trace files)
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/predicate_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/view_definition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/view_reader_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/view_builder_utility.cpp
@@ -934,16 +933,10 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.cpp
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_query.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/bloom_query.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/bloom_query.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_aggregator.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_aggregator.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/metadata_collector.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/metadata_collector.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_builder.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_builder.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_reader.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_reader.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reorganization_planner.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reorganization_planner.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reconstruction_planner.cpp
@@ -978,11 +971,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
     FILES
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/py.typed"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_statistics_query.pyi"
-      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_bloom_query.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_statistics_aggregator.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_metadata_collector.pyi"
-      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_view_builder.pyi"
-      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_view_reader.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_reorganization_planner.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_reconstruction_planner.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_aggregator.pyi"

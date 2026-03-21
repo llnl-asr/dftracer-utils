@@ -166,4 +166,78 @@ bool evaluate(const QueryNode& node, const JsonValue& event) {
     return eval_node(node, event);
 }
 
+namespace {
+
+std::optional<int> compare_literals(const LiteralValue& a,
+                                    const LiteralValue& b) {
+    return std::visit(
+        [](auto&& va, auto&& vb) -> std::optional<int> {
+            using A = std::decay_t<decltype(va)>;
+            using B = std::decay_t<decltype(vb)>;
+            if constexpr (std::is_same_v<A, B>) {
+                if (va < vb) return -1;
+                if (va > vb) return 1;
+                return 0;
+            } else if constexpr (std::is_arithmetic_v<A> &&
+                                 std::is_arithmetic_v<B>) {
+                double da = static_cast<double>(va);
+                double db = static_cast<double>(vb);
+                if (da < db) return -1;
+                if (da > db) return 1;
+                return 0;
+            } else {
+                return std::nullopt;
+            }
+        },
+        a, b);
+}
+
+bool eval_map_node(const QueryNode& node, const ValueMap& fields);
+
+bool eval_map_node(const QueryNode& node, const ValueMap& fields) {
+    return std::visit(
+        [&fields](auto&& n) -> bool {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, CompareNode>) {
+                auto it = fields.find(n.field.path);
+                if (it == fields.end()) return false;
+                auto cmp = compare_literals(it->second, n.value.value);
+                return apply_compare(n.op, cmp);
+            } else if constexpr (std::is_same_v<T, InNode>) {
+                auto it = fields.find(n.field.path);
+                if (it == fields.end()) return false;
+                for (const auto& elem : n.values.elements) {
+                    auto cmp = compare_literals(it->second, elem.value);
+                    if (cmp && *cmp == 0) return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<T, NotInNode>) {
+                auto it = fields.find(n.field.path);
+                if (it == fields.end()) return false;
+                for (const auto& elem : n.values.elements) {
+                    auto cmp = compare_literals(it->second, elem.value);
+                    if (cmp && *cmp == 0) return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<T, AndNode>) {
+                return eval_map_node(*n.left, fields) &&
+                       eval_map_node(*n.right, fields);
+            } else if constexpr (std::is_same_v<T, OrNode>) {
+                return eval_map_node(*n.left, fields) ||
+                       eval_map_node(*n.right, fields);
+            } else if constexpr (std::is_same_v<T, NotNode>) {
+                return !eval_map_node(*n.operand, fields);
+            } else {
+                return false;
+            }
+        },
+        node.data);
+}
+
+}  // namespace
+
+bool evaluate(const QueryNode& node, const ValueMap& fields) {
+    return eval_map_node(node, fields);
+}
+
 }  // namespace dftracer::utils::utilities::common::query

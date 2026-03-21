@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
@@ -11,6 +12,11 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/utilities/common/arrow/column_builder.h>
+#include <yyjson.h>
+#endif
 
 namespace {
 
@@ -92,6 +98,156 @@ CoroTask<void> produce_raw(std::shared_ptr<IteratorState> state,
     sp->cv_consumer.notify_one();
 }
 
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+
+using dftracer::utils::utilities::common::arrow::ColumnType;
+using dftracer::utils::utilities::common::arrow::RecordBatchBuilder;
+
+CoroTask<void> produce_arrow_batches(std::shared_ptr<ArrowIteratorState> state,
+                                     TraceReaderConfig cfg, ReadConfig rc,
+                                     std::size_t batch_size) {
+    auto *sp = state.get();
+    try {
+        TraceReader reader(std::move(cfg));
+        auto gen = reader.read_lines(rc);
+        RecordBatchBuilder builder;
+        builder.reserve(batch_size);
+
+        // Keep yyjson docs alive until finish() since string columns hold
+        // string_views into doc memory. Serialized object/array values are
+        // stored as owned strings in held_serialized.
+        std::vector<yyjson_doc *> held_docs;
+        std::vector<std::string> held_serialized;
+        held_docs.reserve(batch_size);
+
+        while (auto opt = co_await gen.next()) {
+            if (sp->cancelled.load(std::memory_order_acquire)) break;
+
+            const char *trimmed;
+            std::size_t trimmed_length;
+            if (!dftracer::utils::json_trim_and_validate(
+                    opt->content.data(), opt->content.size(), trimmed,
+                    trimmed_length)) {
+                continue;
+            }
+
+            yyjson_doc *doc = yyjson_read(trimmed, trimmed_length, 0);
+            if (!doc) continue;
+
+            yyjson_val *root = yyjson_doc_get_root(doc);
+            if (!root || !yyjson_is_obj(root)) {
+                yyjson_doc_free(doc);
+                continue;
+            }
+
+            yyjson_obj_iter iter;
+            yyjson_obj_iter_init(root, &iter);
+            yyjson_val *key;
+            while ((key = yyjson_obj_iter_next(&iter))) {
+                yyjson_val *val = yyjson_obj_iter_get_val(key);
+                const char *key_str = yyjson_get_str(key);
+                std::size_t key_len = yyjson_get_len(key);
+                std::string_view key_sv(key_str, key_len);
+
+                if (yyjson_is_int(val)) {
+                    std::size_t idx =
+                        builder.add_or_get_column(key_sv, ColumnType::INT64);
+                    builder.append_int64(idx, yyjson_get_sint(val));
+                } else if (yyjson_is_uint(val)) {
+                    std::size_t idx =
+                        builder.add_or_get_column(key_sv, ColumnType::UINT64);
+                    builder.append_uint64(idx, yyjson_get_uint(val));
+                } else if (yyjson_is_real(val)) {
+                    std::size_t idx =
+                        builder.add_or_get_column(key_sv, ColumnType::DOUBLE);
+                    builder.append_double(idx, yyjson_get_real(val));
+                } else if (yyjson_is_bool(val)) {
+                    std::size_t idx =
+                        builder.add_or_get_column(key_sv, ColumnType::BOOL);
+                    builder.append_bool(idx, yyjson_get_bool(val));
+                } else if (yyjson_is_str(val)) {
+                    std::size_t idx =
+                        builder.add_or_get_column(key_sv, ColumnType::STRING);
+                    // string_view into doc memory — doc kept alive in
+                    // held_docs until finish()
+                    builder.append_string(
+                        idx, std::string_view(yyjson_get_str(val),
+                                              yyjson_get_len(val)));
+                } else if (yyjson_is_null(val)) {
+                    std::size_t idx =
+                        builder.add_or_get_column(key_sv, ColumnType::STRING);
+                    builder.append_null(idx);
+                } else {
+                    // object/array: serialize to JSON string
+                    std::size_t json_len;
+                    char *json_str = yyjson_val_write(val, 0, &json_len);
+                    std::size_t idx =
+                        builder.add_or_get_column(key_sv, ColumnType::STRING);
+                    if (json_str) {
+                        held_serialized.emplace_back(json_str, json_len);
+                        free(json_str);
+                        builder.append_string(idx, held_serialized.back());
+                    } else {
+                        builder.append_null(idx);
+                    }
+                }
+            }
+            builder.end_row();
+            held_docs.push_back(doc);
+
+            if (builder.num_rows() >= batch_size) {
+                auto result = builder.finish();
+                for (auto *d : held_docs) yyjson_doc_free(d);
+                held_docs.clear();
+                held_serialized.clear();
+
+                {
+                    std::unique_lock<std::mutex> lock(sp->mtx);
+                    sp->cv_producer.wait(lock, [sp] {
+                        return sp->queue.size() < sp->max_queue_size ||
+                               sp->cancelled.load(std::memory_order_acquire);
+                    });
+                    if (sp->cancelled.load(std::memory_order_acquire)) break;
+                    sp->queue.push(std::move(result));
+                }
+                sp->cv_consumer.notify_one();
+                builder.reset(false);
+                builder.reserve(batch_size);
+            }
+        }
+
+        // Flush remaining rows
+        if (builder.num_rows() > 0) {
+            auto result = builder.finish();
+            for (auto *d : held_docs) yyjson_doc_free(d);
+            held_docs.clear();
+            held_serialized.clear();
+            {
+                std::lock_guard<std::mutex> lock(sp->mtx);
+                sp->queue.push(std::move(result));
+            }
+            sp->cv_consumer.notify_one();
+        } else {
+            for (auto *d : held_docs) yyjson_doc_free(d);
+        }
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(sp->mtx);
+        sp->error = std::current_exception();
+        sp->queue.push(std::nullopt);
+        sp->done.store(true, std::memory_order_release);
+        sp->cv_consumer.notify_one();
+        co_return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(sp->mtx);
+        sp->queue.push(std::nullopt);
+        sp->done.store(true, std::memory_order_release);
+    }
+    sp->cv_consumer.notify_one();
+}
+
+#endif  // DFTRACER_UTILS_ENABLE_ARROW
+
 TraceReaderConfig build_config(TraceReaderObject *self) {
     TraceReaderConfig cfg;
     cfg.file_path = PyUnicode_AsUTF8(self->file_path);
@@ -117,9 +273,27 @@ static TraceReaderIteratorObject *make_iterator(
             &TraceReaderIteratorType, 0);
     if (!it) return NULL;
     new (&it->state) std::shared_ptr<IteratorState>(std::move(state));
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+    new (&it->arrow_state) std::shared_ptr<ArrowIteratorState>();
+#endif
     it->mode = mode;
     return it;
 }
+
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+static TraceReaderIteratorObject *make_arrow_iterator(
+    std::shared_ptr<ArrowIteratorState> state) {
+    TraceReaderIteratorObject *it =
+        (TraceReaderIteratorObject *)TraceReaderIteratorType.tp_alloc(
+            &TraceReaderIteratorType, 0);
+    if (!it) return NULL;
+    new (&it->state) std::shared_ptr<IteratorState>();
+    new (&it->arrow_state)
+        std::shared_ptr<ArrowIteratorState>(std::move(state));
+    it->mode = IteratorMode::ARROW;
+    return it;
+}
+#endif
 
 }  // namespace
 
@@ -408,6 +582,94 @@ static PyObject *TraceReader_read_lines_json(TraceReaderObject *self,
     return list;
 }
 
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+
+static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
+                                        PyObject *kwds) {
+    static const char *kwlist[] = {"batch_size", "start_line", "end_line",
+                                   "start_byte", "end_byte",   "buffer_size",
+                                   NULL};
+    Py_ssize_t batch_size = 10000;
+    Py_ssize_t start_line = 0, end_line = 0;
+    Py_ssize_t start_byte = 0, end_byte = 0;
+    Py_ssize_t buffer_size = 4 * 1024 * 1024;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nnnnnn", (char **)kwlist,
+                                     &batch_size, &start_line, &end_line,
+                                     &start_byte, &end_byte, &buffer_size)) {
+        return NULL;
+    }
+
+    if (batch_size <= 0) {
+        PyErr_SetString(PyExc_ValueError, "batch_size must be > 0");
+        return NULL;
+    }
+    if (start_line < 0 || end_line < 0 || start_byte < 0 || end_byte < 0 ||
+        buffer_size <= 0) {
+        PyErr_SetString(
+            PyExc_ValueError,
+            "range arguments must be >= 0; buffer_size must be > 0");
+        return NULL;
+    }
+
+    TraceReaderConfig cfg;
+    try {
+        cfg = build_config(self);
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
+
+    ReadConfig rc;
+    rc.start_line = static_cast<std::size_t>(start_line);
+    rc.end_line = static_cast<std::size_t>(end_line);
+    rc.start_byte = static_cast<std::size_t>(start_byte);
+    rc.end_byte = static_cast<std::size_t>(end_byte);
+    rc.buffer_size = static_cast<std::size_t>(buffer_size);
+
+    auto state = std::make_shared<ArrowIteratorState>();
+
+    Runtime *rt = get_runtime(self);
+    try {
+        rt->submit(produce_arrow_batches(state, cfg, rc,
+                                         static_cast<std::size_t>(batch_size)),
+                   "iter_arrow");
+    } catch (const std::exception &e) {
+        PyErr_SetString(PyExc_RuntimeError, e.what());
+        return NULL;
+    }
+
+    TraceReaderIteratorObject *it = make_arrow_iterator(std::move(state));
+    return (PyObject *)it;
+}
+
+static PyObject *TraceReader_read_arrow(TraceReaderObject *self, PyObject *args,
+                                        PyObject *kwds) {
+    PyObject *iter = TraceReader_iter_arrow(self, args, kwds);
+    if (!iter) return NULL;
+    PyObject *list = PySequence_List(iter);
+    Py_DECREF(iter);
+    if (!list) return NULL;
+
+    PyObject *arrow_mod = PyImport_ImportModule("dftracer.utils.arrow");
+    if (!arrow_mod) {
+        Py_DECREF(list);
+        return NULL;
+    }
+    PyObject *table_cls = PyObject_GetAttrString(arrow_mod, "ArrowTable");
+    Py_DECREF(arrow_mod);
+    if (!table_cls) {
+        Py_DECREF(list);
+        return NULL;
+    }
+    PyObject *result = PyObject_CallFunctionObjArgs(table_cls, list, NULL);
+    Py_DECREF(table_cls);
+    Py_DECREF(list);
+    return result;
+}
+
+#endif  // DFTRACER_UTILS_ENABLE_ARROW
+
 static PyObject *TraceReader_enter(TraceReaderObject *self,
                                    PyObject *Py_UNUSED(ignored)) {
     Py_INCREF(self);
@@ -509,6 +771,18 @@ static PyMethodDef TraceReader_methods[] = {
      "Read lines and return list[JSON] "
      "(start_line=0, end_line=0, start_byte=0, end_byte=0, "
      "buffer_size=4M)"},
+#ifdef DFTRACER_UTILS_ENABLE_ARROW
+    {"iter_arrow", (PyCFunction)TraceReader_iter_arrow,
+     METH_VARARGS | METH_KEYWORDS,
+     "Return iterator over Arrow record batches "
+     "(batch_size=10000, start_line=0, end_line=0, start_byte=0, "
+     "end_byte=0, buffer_size=4M)"},
+    {"read_arrow", (PyCFunction)TraceReader_read_arrow,
+     METH_VARARGS | METH_KEYWORDS,
+     "Read all events as ArrowTable "
+     "(batch_size=10000, start_line=0, end_line=0, start_byte=0, "
+     "end_byte=0, buffer_size=4M)"},
+#endif
     {"get_max_bytes", (PyCFunction)TraceReader_get_max_bytes, METH_NOARGS,
      "Get the maximum byte position (0 if unknown for compressed "
      "files without index)"},

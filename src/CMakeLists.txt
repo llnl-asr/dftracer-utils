@@ -240,6 +240,12 @@ if(DFTRACER_UTILS_ENABLE_MPI)
   )
 endif()
 
+if(DFTRACER_UTILS_ENABLE_ARROW)
+  list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/column_builder.cpp
+  )
+endif()
+
 # Determine which dependencies to require based on what was found vs built with
 # CPM
 set(PKG_CONFIG_REQUIRES "")
@@ -434,6 +440,12 @@ foreach(variant shared static)
     if(COVERAGE_LINK_OPTIONS)
       target_link_libraries(dftracer_utils_utilities_${variant}
                             PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+
+    # Link nanoarrow for Arrow data interchange
+    if(DFTRACER_UTILS_ENABLE_ARROW)
+      string(TOUPPER ${variant} VARIANT_UPPER)
+      link_nanoarrow(dftracer_utils_utilities_${variant} ${VARIANT_UPPER})
     endif()
   endif()
 endforeach()
@@ -903,6 +915,10 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
   # Link to unified library to test if this fixes the bus error
   target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils::shared)
 
+  if(DFTRACER_UTILS_ENABLE_ARROW)
+    link_nanoarrow(dftracer_utils_ext SHARED)
+  endif()
+
   set_target_properties(
     dftracer_utils_ext PROPERTIES LIBRARY_OUTPUT_DIRECTORY
                                   "${CMAKE_BINARY_DIR}/dftracer/utils")
@@ -918,5 +934,12 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/dftracer_utils_ext.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/py.typed"
     DESTINATION "dftracer/utils")
+
+  # Install .pyi and py.typed for utilities submodule (editable installs)
+  install(
+    FILES
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/dftracer_utils_utilities_ext.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/py.typed"
+    DESTINATION "dftracer/utils/utilities")
 
 endif()

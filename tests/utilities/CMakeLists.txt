@@ -109,6 +109,41 @@ set(UTILITIES_TEST_SOURCES
 )
 
 # +++++++++++++++++++++++++++++++++++++++++
+# Arrow Tests (optional, requires nanoarrow)
+# +++++++++++++++++++++++++++++++++++++++++
+
+if(DFTRACER_UTILS_ENABLE_ARROW)
+  set(ARROW_TEST_SOURCE common/arrow/test_arrow_column_builder.cpp)
+  string(REPLACE ".cpp" "" arrow_bin_exec ${ARROW_TEST_SOURCE})
+  string(REPLACE "/" "_" arrow_target "utilities_${arrow_bin_exec}")
+
+  add_executable(${arrow_target} ${ARROW_TEST_SOURCE})
+  target_include_directories(${arrow_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+  target_link_libraries(${arrow_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
+  link_nanoarrow(${arrow_target} STATIC)
+  target_set_warnings(${arrow_target})
+
+  get_filename_component(arrow_bin_dir ${arrow_bin_exec} DIRECTORY)
+  get_filename_component(arrow_bin_name ${arrow_bin_exec} NAME)
+  if(arrow_bin_dir)
+    set_target_properties(${arrow_target} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${arrow_bin_dir}")
+  endif()
+  set_target_properties(${arrow_target} PROPERTIES OUTPUT_NAME ${arrow_bin_name})
+
+  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${arrow_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+    target_link_libraries(${arrow_target} PRIVATE --coverage)
+  endif()
+
+  set(arrow_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${arrow_target}")
+  file(MAKE_DIRECTORY "${arrow_workdir}")
+  add_test(NAME utilities/${arrow_bin_exec} COMMAND ${arrow_target})
+  set_tests_properties(utilities/${arrow_bin_exec} PROPERTIES
+                       WORKING_DIRECTORY "${arrow_workdir}")
+endif()
+
+# +++++++++++++++++++++++++++++++++++++++++
 # Build Configuration
 # +++++++++++++++++++++++++++++++++++++++++
 

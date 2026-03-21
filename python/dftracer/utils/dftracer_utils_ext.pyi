@@ -421,6 +421,56 @@ class TraceReader:
         """
         ...
 
+    def iter_arrow(
+        self,
+        batch_size: int = 10000,
+        start_line: int = 0,
+        end_line: int = 0,
+        start_byte: int = 0,
+        end_byte: int = 0,
+        buffer_size: int = 4194304,
+    ) -> Iterator[Any]:
+        """Return iterator over Arrow record batches.
+
+        Each batch is an ``_ArrowBatchCapsule`` implementing the Arrow
+        PyCapsule protocol (``__arrow_c_array__``).  Wrap with
+        :class:`~dftracer.utils.arrow.ArrowBatch` for convenience
+        methods, or pass directly to ``pyarrow.record_batch()``.
+
+        Args:
+            batch_size (int): Maximum rows per Arrow batch.
+            start_line (int): First line (0 = beginning).
+            end_line (int): Last line (0 = end of file).
+            start_byte (int): First byte offset (0 = beginning).
+            end_byte (int): Last byte offset (0 = end of file).
+            buffer_size (int): Internal read buffer size in bytes.
+        """
+        ...
+
+    def read_arrow(
+        self,
+        batch_size: int = 10000,
+        start_line: int = 0,
+        end_line: int = 0,
+        start_byte: int = 0,
+        end_byte: int = 0,
+        buffer_size: int = 4194304,
+    ) -> Any:
+        """Read all events as an ArrowTable.
+
+        Equivalent to collecting all batches from :meth:`iter_arrow`
+        into an :class:`~dftracer.utils.arrow.ArrowTable`.
+
+        Args:
+            batch_size (int): Maximum rows per Arrow batch.
+            start_line (int): First line (0 = beginning).
+            end_line (int): Last line (0 = end of file).
+            start_byte (int): First byte offset (0 = beginning).
+            end_byte (int): Last byte offset (0 = end of file).
+            buffer_size (int): Internal read buffer size in bytes.
+        """
+        ...
+
     def get_max_bytes(self) -> int:
         """Get the maximum byte position in the decompressed trace.
 

@@ -3,6 +3,7 @@
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #include <nanoarrow/nanoarrow.h>
 
+#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -87,6 +88,8 @@ size_t RecordBatchBuilder::add_or_get_column(std::string_view name,
                                              ColumnType type) {
     auto it = name_to_index_.find(std::string(name));
     if (it != name_to_index_.end()) {
+        // Existing column: type is ignored. Callers that need type-safe
+        // appends should use find_column() + column_type() first.
         return it->second;
     }
 
@@ -99,6 +102,17 @@ size_t RecordBatchBuilder::add_or_get_column(std::string_view name,
     name_to_index_[std::string(name)] = idx;
     touched_.push_back(false);
     return idx;
+}
+
+std::optional<size_t> RecordBatchBuilder::find_column(
+    std::string_view name) const {
+    auto it = name_to_index_.find(std::string(name));
+    if (it != name_to_index_.end()) return it->second;
+    return std::nullopt;
+}
+
+ColumnType RecordBatchBuilder::column_type(size_t col_idx) const noexcept {
+    return columns_[col_idx].type;
 }
 
 void RecordBatchBuilder::append_int64(size_t col_idx, int64_t value) {
@@ -168,13 +182,13 @@ void RecordBatchBuilder::append_null(size_t col_idx) {
 }
 
 void RecordBatchBuilder::end_row() {
-    if (!schema_declared_) {
-        for (size_t i = 0; i < columns_.size(); ++i) {
-            if (!touched_[i]) {
-                backfill_nulls(columns_[i], num_rows_ + 1);
-            }
-            touched_[i] = false;
+    // Backfill nulls for any column not appended to this row.
+    // In dynamic mode, use touched_ flags; in static mode, compare counts.
+    for (size_t i = 0; i < columns_.size(); ++i) {
+        if (columns_[i].count <= num_rows_) {
+            backfill_nulls(columns_[i], num_rows_ + 1);
         }
+        if (!schema_declared_) touched_[i] = false;
     }
     ++num_rows_;
 }

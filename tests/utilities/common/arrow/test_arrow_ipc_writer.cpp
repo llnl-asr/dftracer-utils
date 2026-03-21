@@ -1,14 +1,13 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/common/arrow/arrow.h>
 #include <doctest/doctest.h>
 
 #include <cstdio>
-#include <filesystem>
 #include <string>
 
-namespace fs = std::filesystem;
 using namespace dftracer::utils::utilities::common::arrow;
 
 // ---------------------------------------------------------------------------
@@ -16,7 +15,7 @@ using namespace dftracer::utils::utilities::common::arrow;
 // ---------------------------------------------------------------------------
 
 static std::string tmp_path(const char* name) {
-    return std::string("/tmp/") + name;
+    return (fs::temp_directory_path() / name).string();
 }
 
 // ---------------------------------------------------------------------------

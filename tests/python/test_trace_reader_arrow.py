@@ -149,6 +149,10 @@ class TestArrowBatchWrapper:
                 import pandas as pd
 
                 assert isinstance(df, pd.DataFrame)
-                assert len(df) == raw_batches[0].num_rows
+                assert len(df) == batch.num_rows  # safe: cached after export
+
+                # Verify multiple calls work (caching)
+                df2 = batch.to_pandas()
+                assert len(df2) == len(df)
             except ImportError:
                 pass  # Expected if pyarrow not installed

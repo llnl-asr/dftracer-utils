@@ -22,7 +22,6 @@ struct AggregatorInput {
     std::string directory;
     AggregationConfig config;
     std::size_t checkpoint_size = 32 * 1024 * 1024;
-    std::size_t executor_threads = 4;
     std::string index_dir;
     bool force_rebuild = false;
     std::size_t chunk_size_mb = 64;
@@ -32,7 +31,6 @@ struct AggregatorInput {
     AggregatorInput& with_directory(const std::string& dir);
     AggregatorInput& with_config(const AggregationConfig& cfg);
     AggregatorInput& with_checkpoint_size(std::size_t sz);
-    AggregatorInput& with_executor_threads(std::size_t n);
     AggregatorInput& with_index_dir(const std::string& dir);
     AggregatorInput& with_force_rebuild(bool force);
     AggregatorInput& with_chunk_size_mb(std::size_t mb);

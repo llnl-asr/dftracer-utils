@@ -259,8 +259,11 @@ ArrowExportResult ViewReaderBatch::to_arrow() const {
                     ci,
                     std::string_view(yyjson_get_str(val), yyjson_get_len(val)));
             } else if (yyjson_is_null(val)) {
-                auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
-                builder.append_null(ci);
+                // Only append null to an existing column; skip if new —
+                // we don't know the type yet and STRING would corrupt later
+                // typed appends.
+                auto existing = builder.find_column(key_sv);
+                if (existing) builder.append_null(*existing);
             } else {
                 auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
                 std::size_t jlen;

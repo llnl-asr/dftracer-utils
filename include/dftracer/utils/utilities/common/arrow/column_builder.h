@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -58,8 +59,18 @@ class RecordBatchBuilder {
 
     // Dynamic schema mode — returns column index.
     // Creates column (backfilling nulls) if it doesn't exist.
-    // Returns existing index if column already exists (type must match).
+    // Returns existing index if column already exists; type is ignored for
+    // existing columns — callers must use find_column() to check type before
+    // appending, and fall back to append_null() on mismatch.
     size_t add_or_get_column(std::string_view name, ColumnType type);
+
+    // Returns the index of an existing column, or std::nullopt if not found.
+    // Use before appending null values to avoid creating STRING-typed columns
+    // that may later receive typed values.
+    std::optional<size_t> find_column(std::string_view name) const;
+
+    // Returns the type of column at col_idx.
+    ColumnType column_type(size_t col_idx) const noexcept;
 
     // Append typed values by column index.
     void append_int64(size_t col_idx, int64_t value);

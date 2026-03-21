@@ -77,19 +77,10 @@ static int Aggregator_init(AggregatorObject *self, PyObject *args,
 
 static int parse_aggregator_args(PyObject *args, PyObject *kwds,
                                  AggregatorInput &input) {
-    static const char *kwlist[] = {"directory",
-                                   "time_interval",
-                                   "group_keys",
-                                   "categories",
-                                   "names",
-                                   "index_dir",
-                                   "checkpoint_size",
-                                   "executor_threads",
-                                   "force_rebuild",
-                                   "chunk_size_mb",
-                                   "batch_size_mb",
-                                   "event_batch_size",
-                                   NULL};
+    static const char *kwlist[] = {
+        "directory",     "time_interval", "group_keys",       "categories",
+        "names",         "index_dir",     "checkpoint_size",  "force_rebuild",
+        "chunk_size_mb", "batch_size_mb", "event_batch_size", NULL};
 
     const char *directory = NULL;
     double time_interval = 5.0;
@@ -98,17 +89,16 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
     PyObject *names_obj = Py_None;
     const char *index_dir = "";
     Py_ssize_t checkpoint_size = 32 * 1024 * 1024;
-    Py_ssize_t executor_threads = 4;
     int force_rebuild = 0;
     Py_ssize_t chunk_size_mb = 64;
     Py_ssize_t batch_size_mb = 4;
     Py_ssize_t event_batch_size = 10000;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "s|dOOOsnnpnnn", (char **)kwlist, &directory,
+            args, kwds, "s|dOOOsnpnnn", (char **)kwlist, &directory,
             &time_interval, &group_keys_obj, &categories_obj, &names_obj,
-            &index_dir, &checkpoint_size, &executor_threads, &force_rebuild,
-            &chunk_size_mb, &batch_size_mb, &event_batch_size))
+            &index_dir, &checkpoint_size, &force_rebuild, &chunk_size_mb,
+            &batch_size_mb, &event_batch_size))
         return -1;
 
     input.directory = directory;
@@ -116,7 +106,6 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
         static_cast<std::uint64_t>(time_interval * 1000000.0);
     input.index_dir = index_dir;
     input.checkpoint_size = static_cast<std::size_t>(checkpoint_size);
-    input.executor_threads = static_cast<std::size_t>(executor_threads);
     input.force_rebuild = force_rebuild != 0;
     input.chunk_size_mb = static_cast<std::size_t>(chunk_size_mb);
     input.batch_size_mb = static_cast<std::size_t>(batch_size_mb);
@@ -303,9 +292,8 @@ static PyMethodDef Aggregator_methods[] = {
     {"process", (PyCFunction)Aggregator_process, METH_VARARGS | METH_KEYWORDS,
      "process(directory, time_interval=5.0, group_keys=None,\n"
      "        categories=None, names=None, index_dir='',\n"
-     "        checkpoint_size=33554432, executor_threads=4,\n"
-     "        force_rebuild=False, chunk_size_mb=64,\n"
-     "        batch_size_mb=4, event_batch_size=10000)\n"
+     "        checkpoint_size=33554432, force_rebuild=False,\n"
+     "        chunk_size_mb=64, batch_size_mb=4, event_batch_size=10000)\n"
      "--\n"
      "\n"
      "Run aggregation pipeline, return materialized ArrowTable.\n"
@@ -318,7 +306,6 @@ static PyMethodDef Aggregator_methods[] = {
      "    names (list[str] or None): Name filter (default None).\n"
      "    index_dir (str): Index sidecar directory (default '').\n"
      "    checkpoint_size (int): Checkpoint size (default 33554432).\n"
-     "    executor_threads (int): Thread pool size (default 4).\n"
      "    force_rebuild (bool): Force index rebuild (default False).\n"
      "    chunk_size_mb (int): Target chunk size in MB (default 64).\n"
      "    batch_size_mb (int): Batch read size in MB (default 4).\n"
@@ -330,9 +317,8 @@ static PyMethodDef Aggregator_methods[] = {
      METH_VARARGS | METH_KEYWORDS,
      "iter_arrow(directory, time_interval=5.0, group_keys=None,\n"
      "           categories=None, names=None, index_dir='',\n"
-     "           checkpoint_size=33554432, executor_threads=4,\n"
-     "           force_rebuild=False, chunk_size_mb=64,\n"
-     "           batch_size_mb=4, event_batch_size=10000)\n"
+     "           checkpoint_size=33554432, force_rebuild=False,\n"
+     "           chunk_size_mb=64, batch_size_mb=4, event_batch_size=10000)\n"
      "--\n"
      "\n"
      "Run aggregation pipeline, stream Arrow batches.\n"
@@ -345,7 +331,6 @@ static PyMethodDef Aggregator_methods[] = {
      "    names (list[str] or None): Name filter (default None).\n"
      "    index_dir (str): Index sidecar directory (default '').\n"
      "    checkpoint_size (int): Checkpoint size (default 33554432).\n"
-     "    executor_threads (int): Thread pool size (default 4).\n"
      "    force_rebuild (bool): Force index rebuild (default False).\n"
      "    chunk_size_mb (int): Target chunk size in MB (default 64).\n"
      "    batch_size_mb (int): Batch read size in MB (default 4).\n"

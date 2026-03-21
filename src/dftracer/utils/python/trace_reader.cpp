@@ -175,9 +175,11 @@ CoroTask<void> produce_arrow_batches(std::shared_ptr<ArrowIteratorState> state,
                         idx, std::string_view(yyjson_get_str(val),
                                               yyjson_get_len(val)));
                 } else if (yyjson_is_null(val)) {
-                    std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::STRING);
-                    builder.append_null(idx);
+                    // Only append null to an existing column; skip if the
+                    // column is new — we don't know its type yet and creating
+                    // it as STRING would corrupt later typed appends.
+                    auto existing = builder.find_column(key_sv);
+                    if (existing) builder.append_null(*existing);
                 } else {
                     // object/array: serialize to JSON string
                     std::size_t json_len;

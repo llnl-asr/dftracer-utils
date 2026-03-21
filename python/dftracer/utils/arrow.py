@@ -6,8 +6,13 @@ polars DataFrames.
 
 These wrappers are pure Python. The actual Arrow data is produced by the
 C extension (TraceReader.iter_arrow, utility to_arrow methods). Conversion
-to pandas requires pyarrow; conversion to polars requires polars.
+to pandas requires pyarrow; conversion to polars requires polars. Neither
+is a required dependency.
 """
+
+from __future__ import annotations
+
+from typing import Any, Iterator, Optional, Tuple
 
 
 class ArrowBatch:
@@ -15,120 +20,180 @@ class ArrowBatch:
 
     Supports the Arrow PyCapsule protocol (__arrow_c_array__) for
     zero-copy interchange with pyarrow, polars, and DuckDB.
+
+    The underlying C data is exported via ownership transfer on first
+    use. The pyarrow RecordBatch is cached so subsequent calls to
+    ``to_pandas()``, ``to_polars()``, or ``__arrow_c_array__()`` are safe.
     """
 
-    def __init__(self, capsule):
+    def __init__(self, capsule: Any) -> None:
         self._capsule = capsule
+        self._pa_batch: Any = None  # cached pyarrow.RecordBatch
 
-    def __arrow_c_array__(self, requested_schema=None):
-        """Export via Arrow C Data Interface."""
-        return self._capsule.__arrow_c_array__(requested_schema)
+    def _to_pa_batch(self) -> Any:
+        """Convert to pyarrow RecordBatch, caching the result.
 
-    @property
-    def num_rows(self):
-        """Number of rows in this batch."""
-        return self._capsule.num_rows
+        Returns:
+            pyarrow.RecordBatch: The converted batch.
 
-    @property
-    def num_columns(self):
-        """Number of columns in this batch."""
-        return self._capsule.num_columns
-
-    def to_pandas(self):
-        """Convert to pandas DataFrame. Requires pyarrow."""
+        Raises:
+            ImportError: If pyarrow is not installed.
+        """
+        if self._pa_batch is not None:
+            return self._pa_batch
         try:
             import pyarrow as pa
         except ImportError:
-            raise ImportError(
-                "pyarrow is required for to_pandas(). Install with: pip install pyarrow"
-            ) from None
-        return pa.record_batch(self).to_pandas()
+            raise ImportError("pyarrow is required. Install with: pip install pyarrow") from None
+        self._pa_batch = pa.record_batch(self._capsule)
+        return self._pa_batch
 
-    def to_polars(self):
-        """Convert to polars DataFrame. Requires polars."""
+    def __arrow_c_array__(self, requested_schema: Any = None) -> Tuple[Any, Any]:
+        """Export via Arrow C Data Interface."""
+        return self._to_pa_batch().__arrow_c_array__(requested_schema)
+
+    @property
+    def num_rows(self) -> int:
+        """Number of rows in this batch."""
+        if self._pa_batch is not None:
+            return self._pa_batch.num_rows
+        return self._capsule.num_rows
+
+    @property
+    def num_columns(self) -> int:
+        """Number of columns in this batch."""
+        if self._pa_batch is not None:
+            return self._pa_batch.num_columns
+        return self._capsule.num_columns
+
+    def to_pandas(self) -> Any:
+        """Convert to pandas DataFrame.
+
+        Returns:
+            pandas.DataFrame: The converted DataFrame.
+
+        Raises:
+            ImportError: If pyarrow is not installed.
+        """
+        return self._to_pa_batch().to_pandas()
+
+    def to_polars(self) -> Any:
+        """Convert to polars DataFrame.
+
+        Returns:
+            polars.DataFrame: The converted DataFrame.
+
+        Raises:
+            ImportError: If polars is not installed.
+        """
         try:
             import polars as pl  # type: ignore[import-not-found]
         except ImportError:
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
             ) from None
-        return pl.from_arrow(self)
+        return pl.from_arrow(self._to_pa_batch())
 
 
 class ArrowTable:
     """Wrapper around a collection of Arrow RecordBatches.
 
-    Returned by read_arrow() and utility run() methods. Holds multiple
-    batches with a shared schema. Supports the Arrow PyCapsule stream
-    protocol (__arrow_c_stream__) for zero-copy interchange.
+    Returned by read_arrow() and utility process() methods. Holds
+    multiple batches with a shared schema. Supports the Arrow PyCapsule
+    stream protocol (__arrow_c_stream__) for zero-copy interchange.
+
+    The pyarrow Table is cached on first conversion so subsequent calls
+    to ``to_pandas()``, ``to_polars()``, or ``__arrow_c_stream__()``
+    are safe.
 
     Empty results (no events matched) return an ArrowTable with
     num_batches=0 and no columns.
     """
 
-    def __init__(self, batches, schema_capsule=None):
+    def __init__(
+        self,
+        batches: list[Any],
+        schema_capsule: Optional[Any] = None,
+    ) -> None:
         self._batches = list(batches)
         self._schema_capsule = schema_capsule
+        self._pa_table: Any = None  # cached pyarrow.Table
 
-    def __arrow_c_stream__(self, requested_schema=None):
-        """Arrow C Stream Interface -- yields batches to consumers."""
+    def _to_pa_table(self) -> Any:
+        """Convert to pyarrow Table, caching the result.
+
+        Arrow C Data Interface export is single-use (ownership transfer),
+        so we cache the pyarrow table on first conversion.
+
+        Returns:
+            pyarrow.Table: The converted table.
+
+        Raises:
+            ImportError: If pyarrow is not installed.
+        """
+        if self._pa_table is not None:
+            return self._pa_table
         try:
             import pyarrow as pa
         except ImportError:
-            raise ImportError(
-                "pyarrow is required for __arrow_c_stream__. Install with: pip install pyarrow"
-            ) from None
+            raise ImportError("pyarrow is required. Install with: pip install pyarrow") from None
         pa_batches = [pa.record_batch(b) for b in self._batches]
         if not pa_batches:
             schema = pa.schema([])
             if self._schema_capsule is not None:
                 schema = pa.Schema.from_arrow(self._schema_capsule)
-            table = pa.table({}, schema=schema)
+            self._pa_table = pa.table({}, schema=schema)
         else:
-            table = pa.Table.from_batches(pa_batches)
-        return table.__arrow_c_stream__(requested_schema)
+            self._pa_table = pa.Table.from_batches(pa_batches)
+        return self._pa_table
+
+    def __arrow_c_stream__(self, requested_schema: Any = None) -> Any:
+        """Arrow C Stream Interface -- yields batches to consumers."""
+        return self._to_pa_table().__arrow_c_stream__(requested_schema)
 
     @property
-    def num_batches(self):
+    def num_batches(self) -> int:
         """Number of batches."""
         return len(self._batches)
 
     @property
-    def num_rows(self):
+    def num_rows(self) -> int:
         """Total number of rows across all batches."""
         return sum(b.num_rows for b in self._batches)
 
     @property
-    def empty(self):
+    def empty(self) -> bool:
         """True if there are no batches."""
         return len(self._batches) == 0
 
-    def batch(self, i):
+    def batch(self, i: int) -> Any:
         """Get the i-th batch."""
         return self._batches[i]
 
-    def batches(self):
+    def batches(self) -> Iterator[Any]:
         """Iterate over batches."""
         return iter(self._batches)
 
-    def to_pandas(self):
-        """Convert all batches to a single pandas DataFrame. Requires pyarrow."""
-        try:
-            import pyarrow as pa
-        except ImportError:
-            raise ImportError(
-                "pyarrow is required for to_pandas(). Install with: pip install pyarrow"
-            ) from None
-        pa_batches = [pa.record_batch(b) for b in self._batches]
-        if not pa_batches:
-            if self._schema_capsule is not None:
-                schema = pa.Schema.from_arrow(self._schema_capsule)
-                return pa.table({}, schema=schema).to_pandas()
-            return pa.table({}).to_pandas()
-        return pa.Table.from_batches(pa_batches).to_pandas()
+    def to_pandas(self) -> Any:
+        """Convert all batches to a single pandas DataFrame.
 
-    def to_polars(self):
-        """Convert all batches to a single polars DataFrame. Requires polars."""
+        Returns:
+            pandas.DataFrame: The converted DataFrame.
+
+        Raises:
+            ImportError: If pyarrow is not installed.
+        """
+        return self._to_pa_table().to_pandas()
+
+    def to_polars(self) -> Any:
+        """Convert all batches to a single polars DataFrame.
+
+        Returns:
+            polars.DataFrame: The converted DataFrame.
+
+        Raises:
+            ImportError: If polars is not installed.
+        """
         try:
             import polars as pl  # type: ignore[import-not-found]
         except ImportError:
@@ -137,4 +202,4 @@ class ArrowTable:
             ) from None
         if not self._batches:
             return pl.DataFrame()
-        return pl.concat([b.to_polars() for b in self._batches])
+        return pl.concat([pl.from_arrow(self._to_pa_table())])

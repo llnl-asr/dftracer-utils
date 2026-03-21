@@ -41,11 +41,6 @@ AggregatorInput& AggregatorInput::with_checkpoint_size(std::size_t sz) {
     return *this;
 }
 
-AggregatorInput& AggregatorInput::with_executor_threads(std::size_t n) {
-    executor_threads = n;
-    return *this;
-}
-
 AggregatorInput& AggregatorInput::with_index_dir(const std::string& dir) {
     index_dir = dir;
     return *this;

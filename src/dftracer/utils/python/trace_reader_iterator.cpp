@@ -35,7 +35,8 @@ static PyObject *ArrowBatchCapsule_arrow_c_array(ArrowBatchCapsuleObject *self,
 
     if (!self->result || !self->result->valid()) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "ArrowBatchCapsule has no valid data");
+                        "Arrow data already exported via __arrow_c_array__. "
+                        "Each batch can only be exported once.");
         return NULL;
     }
 
@@ -72,13 +73,13 @@ static PyObject *ArrowBatchCapsule_arrow_c_array(ArrowBatchCapsuleObject *self,
 
 static PyObject *ArrowBatchCapsule_get_num_rows(ArrowBatchCapsuleObject *self,
                                                 void *) {
-    if (!self->result) return PyLong_FromLong(0);
+    if (!self->result || !self->result->valid()) return PyLong_FromLong(0);
     return PyLong_FromLongLong(self->result->num_rows());
 }
 
 static PyObject *ArrowBatchCapsule_get_num_columns(
     ArrowBatchCapsuleObject *self, void *) {
-    if (!self->result) return PyLong_FromLong(0);
+    if (!self->result || !self->result->valid()) return PyLong_FromLong(0);
     return PyLong_FromLongLong(self->result->num_columns());
 }
 
@@ -139,12 +140,14 @@ static void TraceReaderIterator_dealloc(TraceReaderIteratorObject *self) {
     if (self->arrow_state) {
         self->arrow_state->cancelled.store(true, std::memory_order_release);
         self->arrow_state->cv_producer.notify_all();
+        self->arrow_state->cv_consumer.notify_all();  // wake blocked __next__
         self->arrow_state.reset();
     }
 #endif
     if (self->state) {
         self->state->cancelled.store(true, std::memory_order_release);
         self->state->cv_producer.notify_all();
+        self->state->cv_consumer.notify_all();  // wake blocked __next__
         self->state.reset();
     }
     Py_TYPE(self)->tp_free((PyObject *)self);
@@ -160,15 +163,24 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
     if (self->mode == IteratorMode::ARROW) {
         auto *astate = self->arrow_state.get();
         ArrowIteratorState::BatchItem batch;
+        bool cancelled = false;
         {
             Py_BEGIN_ALLOW_THREADS std::unique_lock<std::mutex> lock(
                 astate->mtx);
-            astate->cv_consumer.wait(
-                lock, [astate] { return !astate->queue.empty(); });
-            batch = std::move(astate->queue.front());
-            astate->queue.pop();
+            astate->cv_consumer.wait(lock, [astate] {
+                return !astate->queue.empty() ||
+                       astate->cancelled.load(std::memory_order_acquire) ||
+                       astate->done.load(std::memory_order_acquire);
+            });
+            cancelled = astate->cancelled.load(std::memory_order_acquire) &&
+                        astate->queue.empty();
+            if (!cancelled) {
+                batch = std::move(astate->queue.front());
+                astate->queue.pop();
+            }
             Py_END_ALLOW_THREADS
         }
+        if (cancelled) return NULL;  // StopIteration
         astate->cv_producer.notify_one();
 
         if (!batch.has_value()) {
@@ -197,58 +209,71 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
 #endif
 
     auto *state = self->state.get();
-    std::optional<std::string> item;
 
-    {
-        Py_BEGIN_ALLOW_THREADS std::unique_lock<std::mutex> lock(state->mtx);
-        state->cv_consumer.wait(lock,
-                                [state] { return !state->queue.empty(); });
-        item = std::move(state->queue.front());
-        state->queue.pop();
-        Py_END_ALLOW_THREADS
-    }
-    state->cv_producer.notify_one();
+    // Loop to skip non-JSON lines without recursion (avoids stack overflow
+    // on files with many delimiter lines like "[" and "]").
+    while (true) {
+        std::optional<std::string> item;
+        bool cancelled = false;
 
-    if (!item.has_value()) {
-        if (state->error) {
-            try {
-                std::rethrow_exception(state->error);
-            } catch (const std::exception &e) {
-                PyErr_SetString(PyExc_RuntimeError, e.what());
-                return NULL;
-            } catch (...) {
-                PyErr_SetString(PyExc_RuntimeError,
-                                "Unknown error in TraceReaderIterator");
-                return NULL;
+        {
+            Py_BEGIN_ALLOW_THREADS std::unique_lock<std::mutex> lock(
+                state->mtx);
+            state->cv_consumer.wait(lock, [state] {
+                return !state->queue.empty() ||
+                       state->cancelled.load(std::memory_order_acquire) ||
+                       state->done.load(std::memory_order_acquire);
+            });
+            cancelled = state->cancelled.load(std::memory_order_acquire) &&
+                        state->queue.empty();
+            if (!cancelled) {
+                item = std::move(state->queue.front());
+                state->queue.pop();
             }
+            Py_END_ALLOW_THREADS
         }
-        return NULL;
-    }
+        if (cancelled) return NULL;  // StopIteration
+        state->cv_producer.notify_one();
 
-    switch (self->mode) {
-        case IteratorMode::LINES:
-            return PyUnicode_FromStringAndSize(
-                item->data(), static_cast<Py_ssize_t>(item->size()));
-        case IteratorMode::JSON: {
-            const char *trimmed;
-            std::size_t trimmed_length;
-            if (!dftracer::utils::json_trim_and_validate(
-                    item->data(), item->size(), trimmed, trimmed_length)) {
-                // Skip non-JSON lines (e.g. "[" or "]" array delimiters)
-                return TraceReaderIterator_next(self);
+        if (!item.has_value()) {
+            if (state->error) {
+                try {
+                    std::rethrow_exception(state->error);
+                } catch (const std::exception &e) {
+                    PyErr_SetString(PyExc_RuntimeError, e.what());
+                    return NULL;
+                } catch (...) {
+                    PyErr_SetString(PyExc_RuntimeError,
+                                    "Unknown error in TraceReaderIterator");
+                    return NULL;
+                }
             }
-            PyObject *json_obj = JSON_from_data(trimmed, trimmed_length);
-            if (!json_obj) {
-                // Skip unparseable lines
-                PyErr_Clear();
-                return TraceReaderIterator_next(self);
-            }
-            return json_obj;
+            return NULL;  // StopIteration
         }
-        case IteratorMode::RAW:
-        default:
-            return PyBytes_FromStringAndSize(
-                item->data(), static_cast<Py_ssize_t>(item->size()));
+
+        switch (self->mode) {
+            case IteratorMode::LINES:
+                return PyUnicode_FromStringAndSize(
+                    item->data(), static_cast<Py_ssize_t>(item->size()));
+            case IteratorMode::JSON: {
+                const char *trimmed;
+                std::size_t trimmed_length;
+                if (!dftracer::utils::json_trim_and_validate(
+                        item->data(), item->size(), trimmed, trimmed_length)) {
+                    continue;  // skip non-JSON delimiter lines
+                }
+                PyObject *json_obj = JSON_from_data(trimmed, trimmed_length);
+                if (!json_obj) {
+                    PyErr_Clear();
+                    continue;  // skip unparseable lines
+                }
+                return json_obj;
+            }
+            case IteratorMode::RAW:
+            default:
+                return PyBytes_FromStringAndSize(
+                    item->data(), static_cast<Py_ssize_t>(item->size()));
+        }
     }
 }
 

@@ -262,7 +262,8 @@ TEST_SUITE("ReconstructIntegration") {
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput planner_input;
         planner_input.source_files = {trace_file};
-        planner_input.groups = {{"io", "cat=POSIX"}, {"compute", "cat=APP"}};
+        planner_input.groups = {{"io", R"(cat == "POSIX")"},
+                                {"compute", R"(cat == "APP")"}};
         planner_input.index_dir = input_dir;
 
         auto plan = planner.process(planner_input).get();

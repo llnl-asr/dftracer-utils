@@ -93,7 +93,8 @@ static void collect_referenced_hashes_batch(
 
 coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
     const ViewReaderInput& input) {
-    bool use_query = input.query.has_value();
+    const auto& query = input.query ? input.query : input.view.query;
+    bool use_query = query.has_value();
 
     // Smart metadata buffering:
     // - Hash metadata (FH, HH, SH) → buffer keyed by hash value
@@ -172,7 +173,7 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
                         } else if (ph != "M") {
                             batch.events_scanned++;
                             bool event_match =
-                                !use_query || input.query->evaluate(json);
+                                !use_query || query->evaluate(json);
                             if (event_match) {
                                 if (input.view.include_metadata) {
                                     collect_referenced_hashes_batch(

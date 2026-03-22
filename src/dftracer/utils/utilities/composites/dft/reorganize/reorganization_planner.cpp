@@ -50,11 +50,12 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
             parsed_queries.emplace_back(std::nullopt);
         } else {
             auto result = Query::from_string(group.query);
-            if (result) {
-                parsed_queries.push_back(std::move(*result));
-            } else {
-                parsed_queries.emplace_back(std::nullopt);
+            if (!result) {
+                throw std::runtime_error("Invalid query for group '" +
+                                         group.name +
+                                         "': " + result.error().format());
             }
+            parsed_queries.push_back(std::move(*result));
         }
     }
 

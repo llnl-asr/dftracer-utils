@@ -96,6 +96,22 @@ std::optional<std::vector<uint8_t>> ChunkDimensionStats::compress_value_counts(
     return compressed;
 }
 
+namespace {
+uint16_t read_u16_le(const uint8_t* p) {
+    return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+}
+uint32_t read_u32_le(const uint8_t* p) {
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) |
+           (static_cast<uint32_t>(p[3]) << 24);
+}
+uint64_t read_u64_le(const uint8_t* p) {
+    uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[i]) << (i * 8);
+    return v;
+}
+}  // namespace
+
 std::unordered_map<std::string, std::uint64_t>
 ChunkDimensionStats::deserialize_value_counts(const uint8_t* data,
                                               std::size_t len) {
@@ -104,13 +120,11 @@ ChunkDimensionStats::deserialize_value_counts(const uint8_t* data,
 
     std::size_t pos = 0;
 
-    uint32_t num = 0;
-    std::memcpy(&num, data + pos, 4);
+    uint32_t num = read_u32_le(data + pos);
     pos += 4;
 
     for (uint32_t i = 0; i < num && pos + 2 <= len; ++i) {
-        uint16_t key_len = 0;
-        std::memcpy(&key_len, data + pos, 2);
+        uint16_t key_len = read_u16_le(data + pos);
         pos += 2;
 
         if (pos + key_len + 8 > len) break;
@@ -118,8 +132,7 @@ ChunkDimensionStats::deserialize_value_counts(const uint8_t* data,
         std::string key(reinterpret_cast<const char*>(data + pos), key_len);
         pos += key_len;
 
-        uint64_t count = 0;
-        std::memcpy(&count, data + pos, 8);
+        uint64_t count = read_u64_le(data + pos);
         pos += 8;
 
         result[std::move(key)] = count;

@@ -112,7 +112,8 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
     std::optional<Query> query;
     if (!config.query.empty()) {
         auto parsed = Query::from_string(config.query);
-        if (parsed) query = std::move(*parsed);
+        if (!parsed) throw common::query::QueryParseError(parsed.error());
+        query = std::move(*parsed);
     }
 
     if (has_index_) {
@@ -225,14 +226,13 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
         if (!config.query.empty() && !idx_path_.empty() &&
             range_type == internal::RangeType::BYTE_RANGE) {
             auto parsed = Query::from_string(config.query);
-            if (parsed) {
-                ChunkPrunerInput pruner_input{idx_path_, config_.file_path,
-                                              std::move(*parsed), nullptr};
-                ChunkPrunerUtility pruner;
-                auto pruner_out = co_await pruner.process(pruner_input);
-                if (pruner_out.success && !pruner_out.file_may_match) {
-                    co_return;
-                }
+            if (!parsed) throw common::query::QueryParseError(parsed.error());
+            ChunkPrunerInput pruner_input{idx_path_, config_.file_path,
+                                          std::move(*parsed), nullptr};
+            ChunkPrunerUtility pruner;
+            auto pruner_out = co_await pruner.process(pruner_input);
+            if (pruner_out.success && !pruner_out.file_may_match) {
+                co_return;
             }
         }
 

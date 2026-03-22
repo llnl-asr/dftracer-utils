@@ -946,6 +946,11 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
     link_nanoarrow(dftracer_utils_ext SHARED)
   endif()
 
+  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(dftracer_utils_ext PRIVATE --coverage)
+    target_link_options(dftracer_utils_ext PRIVATE --coverage)
+  endif()
+
   set_target_properties(
     dftracer_utils_ext PROPERTIES LIBRARY_OUTPUT_DIRECTORY
                                   "${CMAKE_BINARY_DIR}/dftracer/utils")

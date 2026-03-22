@@ -122,6 +122,7 @@ build_with_coverage() {
 		"-DCMAKE_BUILD_TYPE=Debug"
 		"-DDFTRACER_UTILS_TESTS=ON"
 		"-DDFTRACER_UTILS_COVERAGE=ON"
+		"-DDFTRACER_UTILS_BUILD_PYTHON=ON"
 		"-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 		"-G$generator"
 	)
@@ -166,6 +167,58 @@ run_tests() {
 }
 
 # ============================================================================
+# Python Binding Tests (coverage via gcov-instrumented .so)
+# ============================================================================
+
+run_python_tests() {
+	log_info "Running Python tests against coverage-instrumented build..."
+
+	# The coverage build places the gcov-instrumented .so under
+	# BUILD_DIR/dftracer/utils/. The extension has rpath set to
+	# $ORIGIN/../../lib (or @loader_path/../../lib on macOS), which
+	# resolves to BUILD_DIR/lib/ from that location.
+	#
+	# Strategy: symlink the instrumented .so into the Python source tree
+	# so `from .dftracer_utils_ext` resolves via PYTHONPATH, and symlink
+	# the shared libs into the matching rpath-relative location so the
+	# dynamic linker finds them without DYLD_LIBRARY_PATH (which macOS
+	# SIP can strip).
+	local ext_so
+	ext_so=$(find "$BUILD_DIR/dftracer/utils" -name 'dftracer_utils_ext*' \( -name '*.so' -o -name '*.dylib' \) -print -quit 2>/dev/null)
+	if [ -z "$ext_so" ]; then
+		log_warning "Could not find built dftracer_utils_ext .so — skipping Python coverage"
+		return
+	fi
+
+	# Symlink the instrumented extension into the Python source tree
+	ln -sf "${PWD}/${ext_so}" "python/dftracer/utils/$(basename "$ext_so")"
+
+	# Create lib/ at the rpath-relative location: python/dftracer/utils/../../lib -> python/lib
+	# This matches $ORIGIN/../../lib relative to python/dftracer/utils/
+	mkdir -p python/lib
+	for lib in "${BUILD_DIR}/lib"/*; do
+		[ -e "$lib" ] && ln -sf "${PWD}/${lib}" "python/lib/$(basename "$lib")"
+	done
+
+	# Install test dependencies only (not the package itself)
+	pip install pytest pyarrow
+
+	PYTHONPATH="${PWD}/python" pytest tests/python -v
+	local pytest_status=$?
+
+	# Clean up symlinks
+	rm -f "python/dftracer/utils/$(basename "$ext_so")"
+	rm -rf python/lib
+
+	if [ "$pytest_status" -ne 0 ]; then
+		log_error "Python tests failed"
+		exit "$pytest_status"
+	fi
+
+	log_success "Python coverage tests completed"
+}
+
+# ============================================================================
 # Coverage Generation
 # ============================================================================
 
@@ -174,17 +227,53 @@ generate_coverage_report() {
 
 	mkdir -p "$COVERAGE_DIR"
 
+	# lcov 2.x changed RC option names and added --ignore-errors.
+	# lcov 1.x (Ubuntu 22.04) only understands the old names and has no
+	# --ignore-errors flag.
+	local lcov_major
+	lcov_major=$(lcov --version | sed 's/[^0-9]*//' | cut -d. -f1)
+
+	local lcov_flags=()
+	local genhtml_flags=()
+	if [ "$lcov_major" -ge 2 ]; then
+		# Double-specify each category to fully suppress (not just downgrade to warning).
+		# Categories needed for macOS + LLVM gcov:
+		#   inconsistent  – Xcode libc++ headers have hit-line-without-branch data
+		#   gcov           – some constants-only TUs produce no .gcda data
+		#   format         – LLVM gcov emits line-number 0 for coroutine thunks
+		#   unsupported    – function begin/end lines not supported by this gcov
+		#   deprecated     – old RC option name warnings
+		lcov_flags=(
+			--rc branch_coverage=1
+			--ignore-errors inconsistent,inconsistent
+			--ignore-errors gcov,gcov
+			--ignore-errors format,format
+			--ignore-errors unsupported,unsupported
+			--ignore-errors unused,unused
+			--ignore-errors deprecated,deprecated
+		)
+		genhtml_flags=(
+			--ignore-errors inconsistent,inconsistent
+			--ignore-errors format,format
+			--ignore-errors unsupported,unsupported
+			--ignore-errors category,category
+			--ignore-errors deprecated,deprecated
+		)
+	else
+		lcov_flags=(--rc lcov_branch_coverage=1)
+	fi
+
 	# Capture coverage data
 	lcov --capture \
 		--directory "$BUILD_DIR" \
 		--output-file "$COVERAGE_DIR/coverage.info" \
-		--rc lcov_branch_coverage=1
+		"${lcov_flags[@]}"
 
 	# Filter to include only source files
 	lcov --extract "$COVERAGE_DIR/coverage.info" \
 		"*/src/*" \
 		--output-file "$COVERAGE_DIR/coverage_src.info" \
-		--rc lcov_branch_coverage=1
+		"${lcov_flags[@]}"
 
 	# Remove unwanted files
 	lcov --remove "$COVERAGE_DIR/coverage_src.info" \
@@ -193,7 +282,7 @@ generate_coverage_report() {
 		"*/external/*" \
 		"*/third_party/*" \
 		--output-file "$COVERAGE_DIR/coverage_filtered.info" \
-		--rc lcov_branch_coverage=1
+		"${lcov_flags[@]}"
 
 	# Generate HTML report
 	genhtml "$COVERAGE_DIR/coverage_filtered.info" \
@@ -204,7 +293,8 @@ generate_coverage_report() {
 		--function-coverage \
 		--branch-coverage \
 		--legend \
-		--demangle-cpp
+		--demangle-cpp \
+		"${genhtml_flags[@]}"
 
 	log_success "Coverage report generated in $COVERAGE_DIR/html/"
 }
@@ -218,7 +308,20 @@ show_coverage_summary() {
 	echo ""
 
 	local summary
-	summary=$(lcov --summary "$COVERAGE_DIR/coverage_filtered.info" 2>&1)
+	local lcov_major
+	lcov_major=$(lcov --version | sed 's/[^0-9]*//' | cut -d. -f1)
+
+	local summary_flags=()
+	if [ "$lcov_major" -ge 2 ]; then
+		summary_flags=(
+			--ignore-errors inconsistent,inconsistent
+			--ignore-errors format,format
+			--ignore-errors unsupported,unsupported
+		)
+	fi
+
+	summary=$(lcov --summary "$COVERAGE_DIR/coverage_filtered.info" \
+		"${summary_flags[@]}" 2>&1)
 
 	# Extract coverage percentages
 	local line_cov function_cov branch_cov
@@ -327,6 +430,7 @@ main() {
 
 	build_with_coverage
 	run_tests
+	run_python_tests
 	generate_coverage_report
 	show_coverage_summary
 

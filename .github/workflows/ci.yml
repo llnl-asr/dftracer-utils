@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop, initialize, 'feat/**', 'fix/**' ]
+    branches: [ main, develop, initialize, 'feat/**', 'fix/**', 'chore/**' ]
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
@@ -70,12 +70,12 @@ jobs:
         done
 
     - name: Run coverage
-      if: matrix.os == 'ubuntu-22.04'
+      if: (matrix.os == 'ubuntu-22.04' || matrix.os == 'macos-latest') && matrix.python-version == '3.12'
       run: |
         make coverage
 
     - name: Run test (Unix)
-      if: matrix.os != 'ubuntu-22.04'
+      if: "!((matrix.os == 'ubuntu-22.04' || matrix.os == 'macos-latest') && matrix.python-version == '3.12')"
       run: |
         make test
     
@@ -95,14 +95,27 @@ jobs:
         pip install ty
         ty check --python "$(which python)" python/
 
-    - name: Upload coverage reports to Codecov (Unix)
-      if: matrix.os == 'ubuntu-22.04'
-      uses: codecov/codecov-action@v4
+    - name: Upload coverage reports to Coveralls
+      if: (matrix.os == 'ubuntu-22.04' || matrix.os == 'macos-latest') && matrix.python-version == '3.12'
+      uses: coverallsapp/github-action@v2
+      continue-on-error: true
       with:
-        file: build-coverage/coverage/coverage_filtered.info
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
-        verbose: true
+        file: coverage/coverage_filtered.info
+        format: lcov
+        flag-name: ${{ matrix.os }}
+        parallel: true
       env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+
+  coverage-finish:
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+    - name: Coveralls finished
+      uses: coverallsapp/github-action@v2
+      continue-on-error: true
+      with:
+        parallel-finished: true
+      env:
+        COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}

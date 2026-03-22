@@ -121,6 +121,16 @@ foreach(test_file ${TEST_CPP_SOURCES})
                                            TIMEOUT ${heavy_thread_timeout}
                                            RESOURCE_LOCK heavy_threading)
   endif()
+
+  # Robustness test generates large (128 MB) gzip files; coverage
+  # instrumentation on macOS CI runners makes it significantly slower.
+  if(bin_exec STREQUAL "reader/test_reader_robustness")
+    set(robustness_timeout 600)
+    if(DFTRACER_UTILS_COVERAGE)
+      set(robustness_timeout 900)
+    endif()
+    set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${robustness_timeout})
+  endif()
 endforeach()
 
 # +++++++++++++++++++++++++++++++++++++++++

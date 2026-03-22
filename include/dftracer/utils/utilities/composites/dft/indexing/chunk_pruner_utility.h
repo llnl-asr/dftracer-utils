@@ -14,20 +14,25 @@ namespace dftracer::utils::utilities::composites::dft::indexing {
 
 using common::query::Query;
 
+/// Input for chunk pruning: index path, file path, query, optional cache.
 struct ChunkPrunerInput {
-    std::string idx_path;
-    std::string file_path;
-    Query query;
-    BloomFilterCache* cache = nullptr;
+    std::string idx_path;               ///< Path to .idx sidecar file.
+    std::string file_path;              ///< Path to trace file.
+    Query query;                        ///< Query to evaluate for pruning.
+    BloomFilterCache* cache = nullptr;  ///< Optional bloom filter cache.
 };
 
+/// Result of chunk pruning.
 struct ChunkPrunerOutput {
-    bool file_may_match = false;
-    std::vector<std::uint64_t> candidate_checkpoints;
-    std::uint64_t total_checkpoints = 0;
-    bool success = false;
+    bool file_may_match = false;          ///< True if any chunk may match.
+    std::vector<std::uint64_t>
+        candidate_checkpoints;            ///< Matching chunk indices.
+    std::uint64_t total_checkpoints = 0;  ///< Total chunks in file.
+    bool success = false;  ///< True if pruning completed without error.
 };
 
+/// Three-tier chunk pruner: dictionary → min/max range → bloom filter.
+/// Walks the Query AST recursively (AND=intersect, OR=union, NOT=complement).
 class ChunkPrunerUtility
     : public utilities::Utility<ChunkPrunerInput, ChunkPrunerOutput,
                                 utilities::tags::Parallelizable> {

@@ -22,14 +22,11 @@ All utilities are callable: ``util(...)`` is equivalent to
 
    from dftracer.utils.utilities import (
        AggregatorUtility,
-       BloomQueryUtility,
        MetadataCollectorUtility,
        ReconstructionPlannerUtility,
        ReorganizationPlannerUtility,
        StatisticsAggregatorUtility,
        StatisticsQueryUtility,
-       ViewBuilderUtility,
-       ViewReaderUtility,
    )
 
 Tabular Utilities (Arrow Output)
@@ -56,11 +53,7 @@ counters, and returns the result as Arrow.
    agg = AggregatorUtility()
 
    # Materialized
-   table = agg.process("./traces", time_interval=1.0, categories=["POSIX"])
-   # table is an ArrowTable with 18 columns:
-   # cat, name, pid, tid, hhash, fhash, time_bucket, count,
-   # dur_total, dur_min, dur_max, dur_mean,
-   # size_total, size_min, size_max, size_mean, ts, te
+   table = agg.process("./traces", time_interval=1.0)
 
    # Streaming
    for batch in agg.iter_arrow("./traces"):
@@ -69,28 +62,6 @@ counters, and returns the result as Arrow.
 
    # Callable shorthand
    table = agg("./traces")
-
-ViewReaderUtility
-~~~~~~~~~~~~~~~~~
-
-Read events from a trace file filtered by bloom-filter predicates.
-Returns matched events as Arrow columns (dynamic schema derived from
-JSON keys).
-
-.. autoclass:: dftracer.utils.dftracer_utils_ext.ViewReaderUtility(runtime: Runtime | None = None)
-   :members: process, iter_arrow
-   :undoc-members:
-
-.. code-block:: python
-
-   vr = ViewReaderUtility()
-
-   # Materialized
-   table = vr.process("trace.pfw.gz", predicates={"cat": ["POSIX"]})
-
-   # Streaming
-   for batch in vr.iter_arrow("trace.pfw.gz", predicates={"cat": ["POSIX"]}):
-       df = polars.from_arrow(batch)
 
 Scalar Utilities (Dict Output)
 ------------------------------
@@ -116,22 +87,6 @@ Query pre-computed statistics from an indexed trace file.
    result = sq.process("trace.pfw.gz", query_type="top_n_names", top_n=5)
    for name, count in result["results"]:
        print(f"  {name}: {count}")
-
-BloomQueryUtility
-~~~~~~~~~~~~~~~~~
-
-Query bloom filters in an index for fast event filtering.
-
-.. autoclass:: dftracer.utils.dftracer_utils_ext.BloomQueryUtility(runtime: Runtime | None = None)
-   :members: process
-   :undoc-members:
-
-.. code-block:: python
-
-   bq = BloomQueryUtility()
-   result = bq.process("trace.pfw.gz", predicates={"cat": ["POSIX"], "name": ["read"]})
-   print(result["file_may_match"])
-   print(result["candidate_checkpoints"])
 
 StatisticsAggregatorUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -166,24 +121,6 @@ Collect metadata from a DFTracer trace file.
    print(f"Format: {result['format']}")
    print(f"Events: {result['valid_events']}")
 
-ViewBuilderUtility
-~~~~~~~~~~~~~~~~~~
-
-Query the bloom-filter index to find candidate chunks matching
-predicates.
-
-.. autoclass:: dftracer.utils.dftracer_utils_ext.ViewBuilderUtility(runtime: Runtime | None = None)
-   :members: process
-   :undoc-members:
-
-.. code-block:: python
-
-   vb = ViewBuilderUtility()
-   result = vb.process("trace.pfw.gz", predicates={"cat": ["POSIX"]})
-   print(f"May match: {result['file_may_match']}")
-   for c in result["candidates"]:
-       print(f"  Checkpoint {c['checkpoint_idx']}: bytes {c['start_byte']}-{c['end_byte']}")
-
 ReorganizationPlannerUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -198,7 +135,7 @@ Plan semantic reorganization of trace files.
    rp = ReorganizationPlannerUtility()
    plan = rp.process(
        source_files=["trace1.pfw.gz", "trace2.pfw.gz"],
-       groups=[{"name": "posix", "predicate": "cat=POSIX"}],
+       groups=[{"name": "posix", "query": 'cat == "POSIX"'}],
    )
    print(f"Tasks: {len(plan['tasks'])}")
 

@@ -148,6 +148,37 @@ zero-copy interchange with pyarrow, polars, and DuckDB.
    table = reader.read_arrow()
    df = table.to_pandas()
 
+Query Filtering
+~~~~~~~~~~~~~~~
+
+``TraceReader`` supports a query DSL for filtering events. When an index
+exists, chunk pruning skips non-matching chunks automatically.
+
+.. code-block:: python
+
+   from dftracer.utils import TraceReader
+
+   reader = TraceReader("trace.pfw.gz")
+
+   # Filter by category
+   for line in reader.iter_lines(query='cat == "POSIX"'):
+       process(line)
+
+   # Combine filters
+   lines = reader.read_lines(query='cat == "POSIX" and dur > 1000')
+
+   # Arrow output with query
+   table = reader.read_arrow(query='name in ["read", "write"]')
+   df = table.to_pandas()
+
+   # Programmatic query building
+   from dftracer.utils.query import Field
+
+   cat = Field("cat")
+   dur = Field("dur")
+   q = (cat == "POSIX") & (dur > 1000)
+   lines = reader.read_lines(query=str(q))
+
 Utility Bindings
 ~~~~~~~~~~~~~~~~
 
@@ -159,7 +190,6 @@ scalar utilities return dicts.
 
    from dftracer.utils.utilities import (
        AggregatorUtility,
-       ViewReaderUtility,
        StatisticsQueryUtility,
        MetadataCollectorUtility,
    )
@@ -168,10 +198,6 @@ scalar utilities return dicts.
    agg = AggregatorUtility()
    table = agg.process("./traces", time_interval=1.0)
    df = table.to_pandas()
-
-   # View reader with bloom-filter predicates (returns Arrow)
-   vr = ViewReaderUtility()
-   table = vr.process("trace.pfw.gz", predicates={"cat": ["POSIX"]})
 
    # Statistics query (returns dict)
    sq = StatisticsQueryUtility()

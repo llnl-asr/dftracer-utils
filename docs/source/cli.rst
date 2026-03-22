@@ -264,7 +264,7 @@ dftracer_stats
 - ``--report <type>`` - Report type: summary, categories, names, pid_tids, time_range, duration, top-names, top-categories, detailed (default: summary)
 - ``--top-n <count>`` - Top N entries to show in detailed report (0=all, default: 10)
 - ``--top-n-pid-tid <count>`` - Top N PID:TID pairs to show (default: 10)
-- ``--query <query...>`` - Bloom filter queries for chunk-skipping (e.g., name=read,cat=POSIX)
+- ``--query <query>`` - Query DSL filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
 - ``--group-by <dims...>`` - Group-by dimensions: name, cat, pid, tid, fhash, hhash, pid_tid (default: name for detailed)
 - ``--json`` - Output in JSON format
 - ``--no-auto-index`` - Disable automatic bloom index building
@@ -285,12 +285,12 @@ dftracer_stats
     dftracer_stats -d ./traces --report detailed --group-by name --top-n 20
 
     # Filter to POSIX operations only
-    dftracer_stats -d ./traces --report duration --query cat=POSIX
+    dftracer_stats -d ./traces --report duration --query 'cat == "POSIX"'
 
 dftracer_view
 -------------
 
-**Description:** Extract filtered subsets of trace data using bloom-accelerated views and predicates
+**Description:** Extract filtered subsets of trace data using query-based filtering with chunk pruning
 
 **Usage:**
 
@@ -305,7 +305,7 @@ dftracer_view
 - ``--preset <name>`` - Predefined view: io, compute, dlio
 - ``--recipe <path>`` - Custom view JSON file path
 - ``--save-recipe <path>`` - Save the constructed view to a JSON file
-- ``--query <query...>`` - Inline query (e.g., cat=POSIX,name=read|write)
+- ``--query <query>`` - Query DSL filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
 - ``--time-range <min,max>`` - Timestamp filter in microseconds (e.g., 1000000,2000000)
 - ``--min-duration <us>`` - Minimum event duration in microseconds
 - ``--max-duration <us>`` - Maximum event duration in microseconds
@@ -325,7 +325,7 @@ dftracer_view
     dftracer_view --preset io -d ./traces -o io_events.pfw
 
     # Custom query: POSIX read/write operations
-    dftracer_view -d ./traces --query "cat=POSIX" "name=read|write" -o posix_rw.pfw
+    dftracer_view -d ./traces --query 'cat == "POSIX" and name in ["read", "write"]' -o posix_rw.pfw
 
     # Time-filtered view with output streaming
     dftracer_view -d ./traces --time-range 1000000,5000000 --stream
@@ -385,8 +385,7 @@ dftracer_aggregator
 - ``-t, --time-interval <sec>`` - Time interval in seconds for bucketing (default: 5.0)
 - ``-g, --group-keys <keys>`` - Comma-separated extra group keys from args (e.g., epoch,step,level)
 - ``-m, --metric-fields <fields>`` - Comma-separated custom metric fields from args (e.g., iter_count,num_events)
-- ``-c, --categories <cats>`` - Include only these categories (comma-separated, empty = all)
-- ``-n, --names <names>`` - Include only these event names (comma-separated, empty = all)
+- ``--query <query>`` - Query DSL filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
 - ``-f, --force`` - Force index recreation
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of executor threads for parallel processing (default: number of CPU cores)
@@ -440,20 +439,20 @@ dftracer_aggregator
 dftracer_organize
 -----------------
 
-**Description:** Reorganize traces by routing events to predicate-based groups with provenance tracking
+**Description:** Reorganize traces by routing events to query-based groups with provenance tracking
 
 **Usage:**
 
 .. code-block:: bash
 
-    dftracer_organize [OPTIONS] --output <dir> --groups <predicates...>
+    dftracer_organize [OPTIONS] --output <dir> --groups <groups...>
 
 **Options:**
 
 - ``--files <files...>`` - Input trace files (.pfw, .pfw.gz)
 - ``-d, --directory <path>`` - Directory containing trace files
 - ``-o, --output <dir>`` - Output directory [required]
-- ``--groups <predicates...>`` - Predicate groups: "io:cat=POSIX" "compute:cat=APP" [required]
+- ``--groups <groups...>`` - Query groups: ``'io:cat == "POSIX"'`` ``'compute:cat == "APP"'`` [required]
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--index-dir <path>`` - Directory for sidecar files
 - ``-f, --force`` - Force rebuild of indices
@@ -465,10 +464,12 @@ dftracer_organize
 .. code-block:: bash
 
     # Separate I/O and compute operations
-    dftracer_organize -d ./traces -o ./organized --groups "io:cat=POSIX" "compute:cat=APP"
+    dftracer_organize -d ./traces -o ./organized \
+        --groups 'io:cat == "POSIX"' 'compute:cat == "APP"'
 
     # Create multiple semantic views
-    dftracer_organize -d ./traces -o ./views --groups "read:name=read" "write:name=write" "other:"
+    dftracer_organize -d ./traces -o ./views \
+        --groups 'read:name == "read"' 'write:name == "write"' 'other:'
 
     # Keep uncompressed output
     dftracer_organize -d ./traces -o ./plain --groups "all:" --no-compress

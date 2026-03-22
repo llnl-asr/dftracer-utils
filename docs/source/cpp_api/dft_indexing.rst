@@ -28,8 +28,8 @@ per chunk, while chunk statistics enable predicate pushdown.
        end
 
        subgraph Query["Query Path"]
-           PP["PredicateParserUtility"]
-           BQ["BloomQueryUtility"]
+           QP["Query Parser"]
+           CP["ChunkPrunerUtility"]
            Cache["BloomFilterCache"]
        end
 
@@ -42,9 +42,9 @@ per chunk, while chunk statistics enable predicate pushdown.
        CI1 --> PIDX
        CI2 --> PIDX
        CIN --> PIDX
-       PP --> BQ
-       IDX --> BQ
-       Cache --> BQ
+       QP --> CP
+       IDX --> CP
+       Cache --> CP
 
 Bloom Filter
 ------------
@@ -112,11 +112,14 @@ is before the query range) and for summary queries without full scans.
 
 Includes:
 
-- Event counts by category, name, and pid:tid
 - Timestamp range (min/max)
 - Duration statistics (count, sum, min, max, variance via Welford's)
 - DDSketch and Log2Histogram for percentile estimation
 - Per-name duration breakdowns
+
+Event counts by category, name, and pid:tid are stored in the
+``chunk_dimension_stats`` table (see below) and reconstructed into
+``ChunkStatistics`` fields on read-back.
 
 .. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkStatistics
    :project: dftracer-utils
@@ -205,95 +208,126 @@ Supporting Types
    :members:
    :undoc-members:
 
+Chunk Dimension Stats
+---------------------
+
+Per-dimension per-chunk metadata stored in the ``chunk_dimension_stats``
+SQLite table. Each row tracks one dimension (e.g., "cat", "name", "pid")
+within one chunk.
+
+Stores:
+
+- ``distinct_count`` — number of unique values
+- ``min_value`` / ``max_value`` — range (numeric-aware comparison for uint/int/double types)
+- ``value_counts`` — compressed binary BLOB mapping values to counts (NULL when compressed size exceeds 4 KB cap)
+- ``value_type`` — "string", "uint", "int", or "double"
+
+Used by ``ChunkPrunerUtility`` for three-tier chunk skipping:
+dictionary lookup, range check, bloom filter fallback.
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkDimensionStats
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkDimensionStatsResult
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
 Index Builders
 --------------
 
-Query Utilities
----------------
+Query Language
+--------------
 
-PredicateParserUtility
-~~~~~~~~~~~~~~~~~~~~~~
+Generic JSON filtering via a recursive descent parser and AST evaluator.
+All classes are in the ``dftracer::utils::utilities::common::query`` namespace.
 
-Parses human-readable predicate strings into structured predicate maps.
+Query DSL syntax:
 
-Predicate format: ``dimension=value1,value2|dimension2=value3``
+- **Comparison**: ``field == "value"``, ``field != "value"``, ``field > 100``
+- **Logical**: ``expr and expr``, ``expr or expr``, ``not expr``
+- **Membership**: ``field in ["a", "b"]``, ``field not in ["a"]``
+- **Grouping**: ``(expr)``
+- **Field paths**: dotted notation for nested JSON (``args.level``)
 
-- Comma (``,``) separates values within a dimension (OR semantics)
-- Pipe (``|``) separates dimensions (AND semantics across dimensions)
+Keywords (``and``, ``or``, ``not``, ``in``, ``true``, ``false``) are
+case-insensitive. String values are case-sensitive.
 
 .. code-block:: cpp
 
-    PredicateParserInput input;
-    input.with_predicate_string("cat=POSIX,STDIO|name=read,write");
+    using namespace dftracer::utils::utilities::common::query;
 
-    PredicateParserUtility parser;
-    auto output = parser.process(input);
-    // output.predicates = {
-    //   "cat": ["POSIX", "STDIO"],
-    //   "name": ["read", "write"]
-    // }
+    // Parse a query string
+    auto result = Query::from_string(R"(cat == "POSIX" and dur > 1000)");
+    if (result) {
+        Query query = std::move(*result);
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::PredicateParserInput
+        // Evaluate against a JSON event
+        JsonValue event = ...;
+        bool matches = query.evaluate(event);
+
+        // Evaluate against a typed key-value map
+        ValueMap fields = {{"cat", std::string("POSIX")}, {"dur", uint64_t(2000)}};
+        bool matches2 = query.evaluate(fields);
+    }
+
+    // Throw on parse error
+    Query q = parse_or_throw(R"(name in ["read", "write"])");
+
+.. doxygenclass:: dftracer::utils::utilities::common::query::Query
    :project: dftracer-utils
    :members:
    :undoc-members:
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::PredicateParserOutput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
+ChunkPrunerUtility
+------------------
 
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::PredicateParserUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
+Replaces ``BloomQueryUtility``. Accepts a ``Query`` and determines which
+chunks are candidates using three-tier evaluation:
 
-BloomQueryUtility
-~~~~~~~~~~~~~~~~~
+1. **Dictionary** — exact lookup in ``chunk_dimension_stats.value_counts``
+2. **Min/Max range** — check against ``chunk_dimension_stats.min_value``/``max_value`` (numeric-aware)
+3. **Bloom filter** — probabilistic probe with hash resolution for fhash/hhash/shash
 
-Queries bloom indices to identify candidate chunks for a given predicate.
+The pruner walks the Query AST recursively:
 
-For each dimension in the predicate, checks the bloom filter for that
-dimension in each chunk. A chunk is a candidate only if ALL dimensions
-have at least one matching value (AND semantics across dimensions,
-OR semantics within a dimension).
-
-Returns the list of candidate checkpoint indices, enabling the caller
-to skip non-matching chunks entirely.
+- ``AND`` → intersect candidate sets
+- ``OR`` → union candidate sets
+- ``NOT`` → complement via dictionary exclusivity (requires value_counts; without dictionary, cannot safely skip)
 
 Tagged ``Parallelizable`` — can query multiple files concurrently.
 
 .. code-block:: cpp
 
-    BloomQueryInput input;
-    input.with_idx_path("trace.pfw.gz.idx")
-         .with_file_path("trace.pfw.gz")
-         .with_predicate("cat", {"POSIX"})
-         .with_predicate("name", {"read", "write"});
+    using namespace dftracer::utils::utilities::composites::dft::indexing;
 
-    BloomQueryUtility query;
-    auto output = co_await query.process(input);
+    auto query = common::query::parse_or_throw(R"(cat == "POSIX" and dur > 1000)");
+
+    ChunkPrunerInput input{idx_path, file_path, std::move(query), &cache};
+    ChunkPrunerUtility pruner;
+    auto output = co_await pruner.process(input);
 
     if (!output.file_may_match) {
         // Skip this file entirely
     } else {
-        // Only scan candidate checkpoints
         for (auto idx : output.candidate_checkpoints) {
-            // Process chunk at checkpoint idx
+            // Only scan candidate chunks
         }
     }
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::BloomQueryInput
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkPrunerInput
    :project: dftracer-utils
    :members:
    :undoc-members:
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::BloomQueryOutput
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkPrunerOutput
    :project: dftracer-utils
    :members:
    :undoc-members:
 
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::BloomQueryUtility
+.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::ChunkPrunerUtility
    :project: dftracer-utils
    :members:
    :undoc-members:
@@ -329,5 +363,26 @@ TraceReader
 Smart reader that auto-selects between sequential decompression and
 indexed random access based on ``.idx`` file presence.
 
+When ``ReadConfig.query`` is set, ``read_lines()`` parses the query once,
+runs ``ChunkPrunerUtility`` for chunk skipping (when an index exists),
+and evaluates per-event for all paths (indexed, gzip, plain file).
+
+.. code-block:: cpp
+
+    TraceReaderConfig cfg{.file_path = "trace.pfw.gz"};
+    TraceReader reader(cfg);
+
+    ReadConfig rc;
+    rc.query = R"(cat == "POSIX" and dur > 1000)";
+
+    auto gen = reader.read_lines(rc);
+    while (auto line = co_await gen.next()) {
+        // Only matching lines yielded
+    }
+
 .. doxygenclass:: dftracer::utils::utilities::reader::TraceReader
+   :members:
+
+.. doxygenstruct:: dftracer::utils::utilities::reader::ReadConfig
+   :project: dftracer-utils
    :members:

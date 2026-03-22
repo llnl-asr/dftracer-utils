@@ -1,8 +1,8 @@
 Common
 ======
 
-Shared utilities used across the library: JSON parsing, statistics collection,
-and Arrow data interchange.
+Shared utilities used across the library: JSON parsing, query language,
+statistics collection, and Arrow data interchange.
 
 JSON
 ----
@@ -99,6 +99,87 @@ Parses JSON strings with owned document lifetime. Safe for use across ``co_await
    auto json = co_await parser.process(input);
 
    parser.reset();  // Cleanup
+
+Query
+-----
+
+Query DSL for filtering JSON events. Recursive descent parser, AST evaluator,
+and ``Query`` class that owns a parsed AST.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/common/query/query.h>
+
+Query Class
+~~~~~~~~~~~
+
+Owns a parsed query AST. Provides evaluation against ``JsonValue`` (for JSON
+events) and ``ValueMap`` (for typed key-value maps).
+
+.. code-block:: cpp
+
+   using namespace dftracer::utils::utilities::common::query;
+
+   // Parse and evaluate against JSON
+   auto q = parse_or_throw(R"(cat == "POSIX" and dur > 1000)");
+   JsonValue event = ...;
+   if (q.evaluate(event)) { /* match */ }
+
+   // Evaluate against a typed map (no JSON needed)
+   ValueMap fields = {{"cat", std::string("POSIX")}, {"dur", uint64_t(2000)}};
+   if (q.evaluate(fields)) { /* match */ }
+
+   // Safe parsing with error handling
+   auto result = Query::from_string(R"(cat in ["POSIX", "STDIO"])");
+   if (!result) {
+       std::cerr << result.error().format();  // formatted error with column indicator
+   }
+
+Parser
+~~~~~~
+
+Tokenizes and parses query DSL strings into an AST. Keywords (``and``, ``or``,
+``not``, ``in``, ``true``, ``false``) are case-insensitive. String values are
+case-sensitive.
+
+.. code-block:: cpp
+
+   // Tokenize
+   auto tokens = tokenize(R"(cat == "POSIX" AND dur > 1000)");
+
+   // Parse tokens into AST
+   auto ast = parse(R"(name in ["read", "write"] or not cat == "MPI")");
+
+Evaluator
+~~~~~~~~~
+
+Evaluates an AST node against a ``JsonValue`` or ``ValueMap``. Missing fields
+and type mismatches evaluate to false.
+
+.. code-block:: cpp
+
+   // Direct AST evaluation (Query::evaluate wraps this)
+   bool match = evaluate(*ast, json_event);
+   bool match2 = evaluate(*ast, value_map);
+
+AST Types
+~~~~~~~~~
+
+The query AST uses ``std::variant``-based nodes:
+
+- ``CompareNode`` — field comparison (``==``, ``!=``, ``>``, ``<``, ``>=``, ``<=``)
+- ``InNode`` / ``NotInNode`` — set membership
+- ``AndNode`` / ``OrNode`` — logical connectives
+- ``NotNode`` — logical negation
+
+.. code-block:: cpp
+
+   // Programmatic AST construction
+   auto node = make_node(CompareNode{
+       FieldNode{"cat"}, CompareOp::EQ, LiteralNode{std::string("POSIX")}});
+
+   // AST to string (round-trip)
+   std::string s = to_string(*node);  // cat == "POSIX"
 
 Statistics
 ----------
@@ -339,6 +420,7 @@ both C++ and Python consumers to use Arrow output.
 See Also
 --------
 
-- :doc:`composites` - Composites that use DDSketch and Log2Histogram for chunk statistics
+- :doc:`composites` - Composites that use DDSketch, Log2Histogram, and Query for chunk statistics and filtering
+- :doc:`/cpp_api/dft_indexing` - ChunkPrunerUtility and ChunkDimensionStats that use Query for chunk skipping
 - :doc:`/cpp_api/arrow` - Full C++ API reference for Arrow classes
 - :doc:`/cpp_api/index` - Full C++ API documentation

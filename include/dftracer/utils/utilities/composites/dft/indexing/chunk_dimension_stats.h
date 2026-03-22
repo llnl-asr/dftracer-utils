@@ -9,16 +9,21 @@
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
+/// Per-dimension per-chunk metadata for query optimization.
 struct ChunkDimensionStats {
-    std::string dimension;
-    std::uint64_t distinct_count = 0;
-    std::string min_value;
-    std::string max_value;
-    std::string value_type = "string";
+    std::string dimension;  ///< Dimension name (e.g., "cat", "name").
+    std::uint64_t distinct_count = 0;  ///< Number of unique values.
+    std::string
+        min_value;  ///< Minimum value (numeric-aware for uint/int/double).
+    std::string max_value;  ///< Maximum value.
+    std::string value_type =
+        "string";           ///< "string", "uint", "int", or "double".
 
-    // NULL when compressed size exceeds cap
+    /// Value → count map. Nullopt when compressed size exceeds cap.
     std::optional<std::unordered_map<std::string, std::uint64_t>> value_counts;
 
+    /// Record a value observation. Updates min/max, distinct_count,
+    /// value_counts.
     void observe(std::string_view value);
 
     /// Serialize value_counts to binary format:

@@ -14,6 +14,7 @@ using json::JsonValue;
 /// Missing fields and type mismatches evaluate to false.
 bool evaluate(const QueryNode& node, const JsonValue& event);
 
+/// Typed key-value map for non-JSON evaluation contexts.
 using ValueMap = std::unordered_map<std::string, LiteralValue>;
 
 /// Evaluate against a typed key-value map.

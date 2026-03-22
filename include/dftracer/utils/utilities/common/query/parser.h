@@ -11,15 +11,18 @@
 
 namespace dftracer::utils::utilities::common::query {
 
+/// Structured parse error with source location.
 struct QueryError {
-    std::string message;
-    std::size_t column = 0;
-    std::string source;
-    std::string indicator;
+    std::string message;     ///< Error description.
+    std::size_t column = 0;  ///< Column position (0-indexed).
+    std::string source;      ///< Original query string.
+    std::string indicator;   ///< Caret/tilde indicator line.
 
+    /// Format as multi-line error message with source and indicator.
     std::string format() const;
 };
 
+/// Exception wrapping a QueryError.
 class QueryParseError : public std::runtime_error {
    public:
     explicit QueryParseError(QueryError err);
@@ -61,12 +64,15 @@ struct Token {
     std::size_t column;
 };
 
+/// Tokenize a query string. Keywords are case-insensitive.
 dftracer::utils::expected<std::vector<Token>, QueryError> tokenize(
     std::string_view input);
 
+/// Parse a pre-tokenized stream into an AST.
 dftracer::utils::expected<QueryNodePtr, QueryError> parse_tokens(
     const std::vector<Token>& tokens, std::string_view source);
 
+/// Tokenize and parse a query string into an AST.
 dftracer::utils::expected<QueryNodePtr, QueryError> parse(
     std::string_view input);
 

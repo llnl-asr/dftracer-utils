@@ -377,8 +377,13 @@ class TraceReader:
         line_aligned: bool = True,
         multi_line: bool = True,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> Iterator[bytes]:
-        """Return a streaming iterator over raw byte chunks."""
+        """Return a streaming iterator over raw byte chunks.
+
+        When ``query`` is set and an index exists, chunk-level pruning
+        skips non-matching chunks. No per-event filtering is applied.
+        """
         ...
 
     def read_raw(
@@ -390,8 +395,13 @@ class TraceReader:
         line_aligned: bool = True,
         multi_line: bool = True,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> List[bytes]:
-        """Read raw byte chunks and return as a list."""
+        """Read raw byte chunks and return as a list.
+
+        When ``query`` is set and an index exists, chunk-level pruning
+        skips non-matching chunks. No per-event filtering is applied.
+        """
         ...
 
     def iter_lines_json(

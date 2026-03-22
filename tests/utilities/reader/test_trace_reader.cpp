@@ -1,12 +1,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <cstddef>
+#include <fstream>
 #include <span>
 #include <string>
 #include <vector>
@@ -401,5 +403,101 @@ TEST_SUITE("TraceReader") {
         auto with_empty = count_lines(reader.read_lines(rc)).get();
 
         CHECK(all == with_empty);
+    }
+
+    TEST_CASE("Query with index filters events per-line") {
+        TestEnvironment env(100);
+        std::string pfw = env.get_dir() + "/multi_cat.pfw";
+        {
+            std::ofstream out(pfw);
+            for (int i = 0; i < 200; ++i) {
+                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    << (1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
+            }
+            for (int i = 0; i < 200; ++i) {
+                out << R"({"ph":"X","name":"train","cat":"COMPUTE","pid":1,"tid":1,"ts":)"
+                    << (100000 + i) << R"(,"dur":500,"args":{}})" << "\n";
+            }
+        }
+        std::string gz = pfw + ".gz";
+        REQUIRE(dft_utils_test::compress_file_to_gzip(pfw, gz));
+        fs::remove(pfw);
+
+        using dftracer::utils::utilities::indexer::IndexBuildConfig;
+        using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+        IndexBuilderUtility builder;
+        auto build_result = builder
+                                .process(IndexBuildConfig::for_file(gz)
+                                             .with_bloom(true)
+                                             .with_index_threshold(0))
+                                .get();
+        REQUIRE(build_result.success);
+
+        TraceReader reader({.file_path = gz});
+        REQUIRE(reader.has_index());
+
+        auto all = count_lines(reader.read_lines()).get();
+        REQUIRE(all == 400);
+
+        ReadConfig rc_posix;
+        rc_posix.query = R"(cat == "POSIX")";
+        auto posix_lines = collect_lines(reader.read_lines(rc_posix)).get();
+        CHECK(posix_lines.size() == 200);
+        for (const auto& line : posix_lines) {
+            CHECK(line.find("\"cat\":\"POSIX\"") != std::string::npos);
+        }
+
+        ReadConfig rc_compute;
+        rc_compute.query = R"(cat == "COMPUTE")";
+        auto compute_lines = collect_lines(reader.read_lines(rc_compute)).get();
+        CHECK(compute_lines.size() == 200);
+
+        ReadConfig rc_none;
+        rc_none.query = R"(cat == "NONEXISTENT")";
+        auto none_lines = count_lines(reader.read_lines(rc_none)).get();
+        CHECK(none_lines == 0);
+    }
+
+    TEST_CASE("Query file-level skip for raw bytes") {
+        TestEnvironment env(100);
+        std::string pfw = env.get_dir() + "/raw_skip.pfw";
+        {
+            std::ofstream out(pfw);
+            for (int i = 0; i < 100; ++i) {
+                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    << (1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
+            }
+        }
+        std::string gz = pfw + ".gz";
+        REQUIRE(dft_utils_test::compress_file_to_gzip(pfw, gz));
+        fs::remove(pfw);
+
+        using dftracer::utils::utilities::indexer::IndexBuildConfig;
+        using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+        IndexBuilderUtility builder;
+        auto build_result = builder
+                                .process(IndexBuildConfig::for_file(gz)
+                                             .with_bloom(true)
+                                             .with_index_threshold(0))
+                                .get();
+        REQUIRE(build_result.success);
+
+        TraceReader reader({.file_path = gz});
+        REQUIRE(reader.has_index());
+
+        auto all_bytes = count_raw_bytes(reader.read_raw()).get();
+        REQUIRE(all_bytes > 0);
+
+        // No match → file-level skip → zero bytes
+        ReadConfig rc_none;
+        rc_none.query = R"(cat == "NONEXISTENT")";
+        auto none_bytes = count_raw_bytes(reader.read_raw(rc_none)).get();
+        CHECK(none_bytes == 0);
+
+        // Match → all bytes (no per-event filtering for raw)
+        ReadConfig rc_posix;
+        rc_posix.query = R"(cat == "POSIX")";
+        auto posix_bytes = count_raw_bytes(reader.read_raw(rc_posix)).get();
+        CHECK(posix_bytes == all_bytes);
     }
 }

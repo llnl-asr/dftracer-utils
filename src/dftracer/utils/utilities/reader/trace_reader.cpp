@@ -134,7 +134,6 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
             if (start >= max_bytes) co_return;
         }
 
-        // Chunk pruning: narrow byte range to candidate chunks
         if (query && !idx_path_.empty() &&
             range_type == internal::RangeType::BYTE_RANGE) {
             ChunkPrunerInput pruner_input{idx_path_, config_.file_path, *query,
@@ -221,6 +220,20 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
             auto max_bytes = reader->get_max_bytes();
             if (end == 0 || end > max_bytes) end = max_bytes;
             if (start >= max_bytes) co_return;
+        }
+
+        if (!config.query.empty() && !idx_path_.empty() &&
+            range_type == internal::RangeType::BYTE_RANGE) {
+            auto parsed = Query::from_string(config.query);
+            if (parsed) {
+                ChunkPrunerInput pruner_input{idx_path_, config_.file_path,
+                                              std::move(*parsed), nullptr};
+                ChunkPrunerUtility pruner;
+                auto pruner_out = co_await pruner.process(pruner_input);
+                if (pruner_out.success && !pruner_out.file_may_match) {
+                    co_return;
+                }
+            }
         }
 
         auto stream = reader->stream(internal::StreamConfig()

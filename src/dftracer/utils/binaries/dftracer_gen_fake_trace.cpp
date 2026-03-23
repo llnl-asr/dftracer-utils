@@ -4,8 +4,8 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
@@ -373,14 +373,29 @@ static coro::CoroTask<int> run_verify(
                 internal::determine_index_path(abs_path, "");
 
             try {
-                BloomQueryInput input;
-                input.with_idx_path(idx_path_q).with_file_path(abs_path);
+                // Convert predicate map to query DSL string
+                std::string query_dsl;
                 for (const auto& [dim, vals] : q.predicates) {
-                    input.with_predicate(dim, vals);
+                    if (!query_dsl.empty()) query_dsl += " and ";
+                    if (vals.size() == 1) {
+                        query_dsl += dim + " == \"" + vals[0] + "\"";
+                    } else {
+                        query_dsl += dim + " in [";
+                        for (std::size_t vi = 0; vi < vals.size(); ++vi) {
+                            if (vi > 0) query_dsl += ", ";
+                            query_dsl += "\"" + vals[vi] + "\"";
+                        }
+                        query_dsl += "]";
+                    }
                 }
 
-                BloomQueryUtility query_util;
-                auto result = co_await query_util.process(input);
+                auto parsed = common::query::Query::from_string(query_dsl);
+                if (!parsed) continue;
+
+                ChunkPrunerInput pruner_input{idx_path_q, abs_path,
+                                              std::move(*parsed), nullptr};
+                ChunkPrunerUtility pruner;
+                auto result = co_await pruner.process(pruner_input);
 
                 total_chunks += result.total_checkpoints;
                 if (result.file_may_match) {

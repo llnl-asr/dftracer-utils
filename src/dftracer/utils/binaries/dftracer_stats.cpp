@@ -7,8 +7,8 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
+#include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
@@ -692,7 +692,7 @@ static coro::CoroTask<void> process_file_detailed(
     CoroScope& fctx, std::string file_path, std::size_t fi,
     std::string index_dir, std::size_t checkpoint_size,
     bool needs_hash_resolution, bool json_output, std::uint64_t top_n,
-    const PredicateMap* merged_predicates_ptr,
+    const common::query::Query* query_ptr,
     const std::vector<std::string>* filter_names_ptr,
     const std::vector<std::string>* filter_cats_ptr,
     const std::vector<std::string>* group_by_ptr,
@@ -721,19 +721,16 @@ static coro::CoroTask<void> process_file_detailed(
     std::vector<std::uint64_t> candidate_checkpoints;
     std::uint64_t total_checkpoints = (num_ckpts == 0) ? 1 : num_ckpts;
 
-    if (!merged_predicates_ptr->empty() && fs::exists(idx_path)) {
+    if (query_ptr && fs::exists(idx_path)) {
         try {
-            BloomQueryInput bq_input;
-            bq_input.idx_path = idx_path;
-            bq_input.file_path = file_path;
-            bq_input.predicates = *merged_predicates_ptr;
+            ChunkPrunerInput pruner_input{idx_path, file_path, *query_ptr,
+                                          nullptr};
+            ChunkPrunerUtility pruner;
+            auto pruner_output = co_await pruner.process(pruner_input);
 
-            BloomQueryUtility bloom_query;
-            auto bq_output = co_await bloom_query.process(bq_input);
-
-            if (bq_output.success) {
-                candidate_checkpoints = bq_output.candidate_checkpoints;
-                total_checkpoints = bq_output.total_checkpoints;
+            if (pruner_output.success) {
+                candidate_checkpoints = pruner_output.candidate_checkpoints;
+                total_checkpoints = pruner_output.total_checkpoints;
             } else {
                 for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
                     candidate_checkpoints.push_back(i);
@@ -741,7 +738,7 @@ static coro::CoroTask<void> process_file_detailed(
             }
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN(
-                "Bloom query failed for %s: %s, scanning all chunks",
+                "Chunk pruner failed for %s: %s, scanning all chunks",
                 file_path.c_str(), e.what());
             for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
                 candidate_checkpoints.push_back(i);
@@ -850,7 +847,7 @@ static void run_detailed_query_workers(
     const std::vector<std::string>* small_files_ptr,
     std::size_t executor_threads, std::string index_dir,
     std::size_t checkpoint_size, bool needs_hash_resolution, bool json_output,
-    std::size_t top_n, const PredicateMap* mp,
+    std::size_t top_n, const common::query::Query* qp,
     const std::vector<std::string>* fn, const std::vector<std::string>* fc,
     const std::vector<std::string>* gb, DetailedStatistics* ad, std::mutex* am,
     std::mutex* om, std::vector<std::pair<std::size_t, std::string>>* jr) {
@@ -872,7 +869,7 @@ static void run_detailed_query_workers(
 
     for (std::size_t w = 0; w < executor_threads; ++w) {
         scope.spawn([file_chan, files_ptr, index_dir, checkpoint_size,
-                     needs_hash_resolution, json_output, top_n, small_set, mp,
+                     needs_hash_resolution, json_output, top_n, small_set, qp,
                      fn, fc, gb, ad, am, om,
                      jr](CoroScope& fctx) -> coro::CoroTask<void> {
             while (auto fi_opt = co_await file_chan->receive()) {
@@ -891,7 +888,7 @@ static void run_detailed_query_workers(
                 }
                 co_await process_file_detailed(
                     fctx, file_path, fi, index_dir, checkpoint_size,
-                    needs_hash_resolution, json_output, top_n, mp, fn, fc, gb,
+                    needs_hash_resolution, json_output, top_n, qp, fn, fc, gb,
                     ad, am, om, jr);
             }
             co_return;
@@ -910,27 +907,22 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    auto query_strs = program.get<std::vector<std::string>>("--query");
+    auto query_str = program.get<std::string>("--query");
     auto group_by = program.get<std::vector<std::string>>("--group-by");
 
-    // Parse --query into unified predicates
-    PredicateParserInput parser_input;
-    parser_input.with_predicate_strings(query_strs);
-    auto parsed = PredicateParserUtility{}.process(parser_input);
-    PredicateMap merged_predicates =
-        parsed.success ? parsed.predicates : PredicateMap{};
-
-    // Extract filter_names and filter_cats from parsed predicates for
-    // event-level exact matching
+    using common::query::Query;
+    std::optional<Query> query;
     std::vector<std::string> filter_names;
     std::vector<std::string> filter_cats;
-    if (auto it = merged_predicates.find("name");
-        it != merged_predicates.end()) {
-        filter_names = it->second;
-    }
-    if (auto it = merged_predicates.find("cat");
-        it != merged_predicates.end()) {
-        filter_cats = it->second;
+
+    if (!query_str.empty()) {
+        auto result = Query::from_string(query_str);
+        if (!result) {
+            DFTRACER_UTILS_LOG_ERROR("Invalid --query: %s",
+                                     result.error().format().c_str());
+            co_return 1;
+        }
+        query = std::move(*result);
     }
 
     auto report_type = parse_report_type_str(report_str);
@@ -1161,8 +1153,8 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
                                 scope, &files, &small_files, executor_threads,
                                 index_dir, checkpoint_size,
                                 needs_hash_resolution, json_output, top_n,
-                                &merged_predicates, &filter_names, &filter_cats,
-                                &group_by, &aggregate_detailed,
+                                query ? &*query : nullptr, &filter_names,
+                                &filter_cats, &group_by, &aggregate_detailed,
                                 &aggregate_mutex, &output_mutex, &json_results);
                             co_return;
                         });
@@ -1425,12 +1417,8 @@ int main(int argc, char** argv) {
             static_cast<std::size_t>(std::thread::hardware_concurrency()));
 
     program.add_argument("--query")
-        .help(
-            "Inline query for event filtering (e.g., "
-            "cat=POSIX,name=read|write). Uses bloom pre-filtering + exact "
-            "match for --report detailed.")
-        .nargs(argparse::nargs_pattern::any)
-        .default_value<std::vector<std::string>>({});
+        .help("Query DSL filter (e.g., 'cat == \"POSIX\" and dur > 1000')")
+        .default_value<std::string>("");
 
     program.add_argument("--group-by")
         .help(

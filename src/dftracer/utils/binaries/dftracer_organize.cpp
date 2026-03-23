@@ -58,7 +58,7 @@ coro::CoroTask<int> run_organize(
     std::printf("  Groups: %zu\n", groups.size());
     for (const auto& g : groups) {
         std::printf("    %s: %s\n", g.name.c_str(),
-                    g.predicate.empty() ? "(remainder)" : g.predicate.c_str());
+                    g.query.empty() ? "(remainder)" : g.query.c_str());
     }
     std::printf(
         "========================================"
@@ -469,7 +469,7 @@ coro::CoroTask<int> run_organize(
             pdb.insert_info("version", "1.0");
             pdb.insert_info("tool", "dftracer_organize");
 
-            pdb.insert_group(g.name, g.predicate);
+            pdb.insert_group(g.name, g.query);
 
             for (std::size_t si = 0; si < plan.source_files.size(); ++si) {
                 const auto& src = plan.source_files[si];

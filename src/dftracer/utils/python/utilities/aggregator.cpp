@@ -125,32 +125,9 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
         }
     }
 
-    if (categories_obj && categories_obj != Py_None) {
-        if (!PyList_Check(categories_obj)) {
-            PyErr_SetString(PyExc_TypeError,
-                            "categories must be a list of str");
-            return -1;
-        }
-        Py_ssize_t n = PyList_Size(categories_obj);
-        for (Py_ssize_t i = 0; i < n; i++) {
-            const char *s = PyUnicode_AsUTF8(PyList_GetItem(categories_obj, i));
-            if (!s) return -1;
-            input.config.include_categories.emplace_back(s);
-        }
-    }
-
-    if (names_obj && names_obj != Py_None) {
-        if (!PyList_Check(names_obj)) {
-            PyErr_SetString(PyExc_TypeError, "names must be a list of str");
-            return -1;
-        }
-        Py_ssize_t n = PyList_Size(names_obj);
-        for (Py_ssize_t i = 0; i < n; i++) {
-            const char *s = PyUnicode_AsUTF8(PyList_GetItem(names_obj, i));
-            if (!s) return -1;
-            input.config.include_names.emplace_back(s);
-        }
-    }
+    // categories and names filtering is now handled via the query DSL.
+    // The categories_obj and names_obj parameters are accepted but ignored
+    // for backward compatibility. Use the query parameter instead.
 
     return 0;
 }

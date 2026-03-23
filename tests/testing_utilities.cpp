@@ -346,8 +346,6 @@ std::string TestEnvironment::create_dft_test_file(int num_events) {
         return "";
     }
 
-    // Create DFTracer JSON events
-    // Random name selection for variety
     const char* io_names[] = {"pread", "pwrite", "read", "write",
                               "fread", "fwrite", "open", "close"};
     const int num_names = sizeof(io_names) / sizeof(io_names[0]);

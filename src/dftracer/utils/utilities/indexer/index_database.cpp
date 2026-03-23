@@ -86,9 +86,6 @@ static const char* BLOOM_SCHEMA = R"(
         file_info_id INTEGER NOT NULL,
         checkpoint_idx INTEGER NOT NULL,
         total_events INTEGER NOT NULL DEFAULT 0,
-        category_counts TEXT NOT NULL DEFAULT '{}',
-        name_counts TEXT NOT NULL DEFAULT '{}',
-        pid_tid_counts TEXT NOT NULL DEFAULT '{}',
         min_timestamp_us INTEGER,
         max_timestamp_us INTEGER,
         duration_sum_us INTEGER NOT NULL DEFAULT 0,
@@ -122,10 +119,25 @@ static const char* BLOOM_SCHEMA = R"(
         UNIQUE(file_info_id, dimension, hash_value)
     );
 
+    CREATE TABLE IF NOT EXISTS chunk_dimension_stats (
+        id              INTEGER PRIMARY KEY,
+        file_info_id    INTEGER NOT NULL,
+        checkpoint_idx  INTEGER NOT NULL,
+        dimension       TEXT NOT NULL,
+        distinct_count  INTEGER NOT NULL DEFAULT 0,
+        value_counts    BLOB,
+        min_value       TEXT,
+        max_value       TEXT,
+        value_type      TEXT NOT NULL DEFAULT 'string',
+        UNIQUE(file_info_id, checkpoint_idx, dimension)
+    );
+
     CREATE INDEX IF NOT EXISTS chunk_bloom_file_dim_idx
         ON chunk_bloom_filters(file_info_id, dimension);
     CREATE INDEX IF NOT EXISTS chunk_stats_file_idx
         ON chunk_statistics(file_info_id, checkpoint_idx);
+    CREATE INDEX IF NOT EXISTS chunk_dim_stats_file_dim_idx
+        ON chunk_dimension_stats(file_info_id, dimension);
     CREATE INDEX IF NOT EXISTS hash_res_dim_val_idx
         ON hash_resolutions(dimension, resolved_value);
 )";
@@ -314,6 +326,13 @@ void IndexDatabase::insert_index_dimension(int file_id,
     queries::insert_index_dimension(db_, file_id, dimension);
 }
 
+void IndexDatabase::insert_chunk_dimension_stats(
+    int file_id, std::uint64_t checkpoint_idx, const ChunkDimensionStats& stats,
+    std::size_t value_counts_cap) {
+    queries::insert_chunk_dimension_stats(db_, file_id, checkpoint_idx, stats,
+                                          value_counts_cap);
+}
+
 void IndexDatabase::insert_hash_resolution(int file_id,
                                            std::string_view dimension,
                                            std::string_view hash_value,
@@ -369,6 +388,18 @@ IndexDatabase::TimeBounds IndexDatabase::query_time_bounds(int file_id) const {
     return queries::query_time_bounds(db_, file_id);
 }
 
+std::vector<IndexDatabase::ChunkDimensionStatsResult>
+IndexDatabase::query_chunk_dimension_stats(int file_id) const {
+    return queries::query_chunk_dimension_stats(db_, file_id);
+}
+
+std::vector<IndexDatabase::ChunkDimensionStatsResult>
+IndexDatabase::query_chunk_dimension_stats_for_dimension(
+    int file_id, std::string_view dimension) const {
+    return queries::query_chunk_dimension_stats_for_dimension(db_, file_id,
+                                                              dimension);
+}
+
 std::optional<std::string> IndexDatabase::query_resolved_by_hash(
     std::string_view dimension, std::string_view hash_value) const {
     return queries::query_resolved_by_hash(db_, dimension, hash_value);
@@ -395,6 +426,10 @@ void IndexDatabase::delete_file_bloom_filter(int file_id,
 
 void IndexDatabase::delete_chunk_statistics(int file_id) {
     queries::delete_chunk_statistics(db_, file_id);
+}
+
+void IndexDatabase::delete_chunk_dimension_stats(int file_id) {
+    queries::delete_chunk_dimension_stats(db_, file_id);
 }
 
 void IndexDatabase::delete_hash_resolutions(int file_id) {

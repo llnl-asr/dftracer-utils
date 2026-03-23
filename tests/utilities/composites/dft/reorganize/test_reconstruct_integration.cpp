@@ -262,7 +262,8 @@ TEST_SUITE("ReconstructIntegration") {
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput planner_input;
         planner_input.source_files = {trace_file};
-        planner_input.groups = {{"io", "cat=POSIX"}, {"compute", "cat=APP"}};
+        planner_input.groups = {{"io", R"(cat == "POSIX")"},
+                                {"compute", R"(cat == "APP")"}};
         planner_input.index_dir = input_dir;
 
         auto plan = planner.process(planner_input).get();
@@ -327,7 +328,7 @@ TEST_SUITE("ReconstructIntegration") {
 
             pdb.insert_info("version", "1.0");
             pdb.insert_info("tool", "dftracer_organize");
-            pdb.insert_group(g.name, g.predicate);
+            pdb.insert_group(g.name, g.query);
 
             for (std::size_t si = 0; si < plan.source_files.size(); ++si) {
                 const auto& src = plan.source_files[si];

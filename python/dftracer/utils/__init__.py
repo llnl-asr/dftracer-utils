@@ -13,6 +13,7 @@ from .dftracer_utils_ext import (
 from .dftracer_utils_ext import (
     set_default_runtime as _set_default_native_runtime,
 )
+from .query import Expr, Field  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
 
 _default_wrapper: Optional["Runtime"] = None
@@ -45,6 +46,8 @@ except PackageNotFoundError:
 
 
 __all__ = [
+    "Expr",
+    "Field",
     "Indexer",
     "IndexerCheckpoint",
     "TraceReader",

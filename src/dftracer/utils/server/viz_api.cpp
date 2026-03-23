@@ -9,7 +9,7 @@
 #include <dftracer/utils/server/viz_api.h>
 #include <dftracer/utils/utilities/common/json/json_doc_guard.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
-#include <dftracer/utils/utilities/composites/dft/views/predicate_filter.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
@@ -34,13 +34,7 @@ using namespace dftracer::utils::utilities::composites::dft::views;
 
 using dftracer::utils::utilities::common::json::JsonDocGuard;
 using dftracer::utils::utilities::common::json::JsonValue;
-using dftracer::utils::utilities::composites::dft::views::
-    build_predicate_filter;
-using dftracer::utils::utilities::composites::dft::views::matches_any_predicate;
-using dftracer::utils::utilities::composites::dft::views::matches_predicate;
-using dftracer::utils::utilities::composites::dft::views::
-    metadata_matches_identity;
-using dftracer::utils::utilities::composites::dft::views::PredicateFilter;
+using dftracer::utils::utilities::common::query::Query;
 
 static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
                                                                     "SH"};
@@ -94,15 +88,27 @@ static double duration_threshold(double begin, double end, unsigned level,
            (static_cast<double>(viewport_width) * static_cast<double>(level));
 }
 
-/// Parse the `lanes` query parameter and apply bloom filters to the
-/// predicate.  Accepts a JSON object with repeated field/value pairs
-/// for sequential filtering:
-///   lanes={"fields":"pid","value":1234,"fields":"tid","value":2345}
-///
-/// Since JSON objects cannot have duplicate keys, we also accept a
-/// JSON array of {field, value} pairs:
-///   lanes=[{"field":"pid","value":"1234"},{"field":"tid","value":"5678"}]
-static void apply_lanes(ViewPredicate& pred, std::string_view lanes_str) {
+static std::string extract_json_value(yyjson_val* val) {
+    if (yyjson_is_str(val)) return yyjson_get_str(val);
+    if (yyjson_is_int(val)) return std::to_string(yyjson_get_int(val));
+    if (yyjson_is_uint(val)) return std::to_string(yyjson_get_uint(val));
+    return {};
+}
+
+static void append_lane_clause(std::string& dsl, const char* field,
+                               const std::string& val) {
+    if (!dsl.empty()) dsl += " and ";
+    bool numeric =
+        !val.empty() && std::all_of(val.begin(), val.end(),
+                                    [](char c) { return std::isdigit(c); });
+    if (numeric) {
+        dsl += std::string(field) + " == " + val;
+    } else {
+        dsl += std::string(field) + " == \"" + val + "\"";
+    }
+}
+
+static void apply_lanes(std::string& dsl, std::string_view lanes_str) {
     if (lanes_str.empty()) return;
 
     std::string buf(lanes_str);
@@ -115,7 +121,6 @@ static void apply_lanes(ViewPredicate& pred, std::string_view lanes_str) {
     if (!root) return;
 
     if (yyjson_is_arr(root)) {
-        // Array format: [{"field":"pid","value":"1234"}, ...]
         yyjson_val* item;
         yyjson_arr_iter iter;
         yyjson_arr_iter_init(root, &iter);
@@ -125,56 +130,26 @@ static void apply_lanes(ViewPredicate& pred, std::string_view lanes_str) {
             if (!field_val) field_val = yyjson_obj_get(item, "fields");
             auto* value_val = yyjson_obj_get(item, "value");
             if (!field_val || !value_val) continue;
-
             const char* field = yyjson_get_str(field_val);
             if (!field) continue;
-
-            std::string val_str;
-            if (yyjson_is_str(value_val)) {
-                val_str = yyjson_get_str(value_val);
-            } else if (yyjson_is_int(value_val)) {
-                val_str = std::to_string(yyjson_get_int(value_val));
-            } else if (yyjson_is_uint(value_val)) {
-                val_str = std::to_string(yyjson_get_uint(value_val));
-            } else {
-                continue;
-            }
-
-            pred.with_bloom_dim(field, {val_str});
+            auto val = extract_json_value(value_val);
+            if (!val.empty()) append_lane_clause(dsl, field, val);
         }
     } else if (yyjson_is_obj(root)) {
-        // Object format (single field/value pair):
-        //   {"fields":"pid","value":1234}
         auto* field_val = yyjson_obj_get(root, "field");
         if (!field_val) field_val = yyjson_obj_get(root, "fields");
         auto* value_val = yyjson_obj_get(root, "value");
         if (field_val && value_val) {
             const char* field = yyjson_get_str(field_val);
             if (field) {
-                std::string val_str;
-                if (yyjson_is_str(value_val)) {
-                    val_str = yyjson_get_str(value_val);
-                } else if (yyjson_is_int(value_val)) {
-                    val_str = std::to_string(yyjson_get_int(value_val));
-                } else if (yyjson_is_uint(value_val)) {
-                    val_str = std::to_string(yyjson_get_uint(value_val));
-                }
-                if (!val_str.empty()) {
-                    pred.with_bloom_dim(field, {val_str});
-                }
+                auto val = extract_json_value(value_val);
+                if (!val.empty()) append_lane_clause(dsl, field, val);
             }
         }
     }
 }
 
-/// Parse the `filters` query parameter and apply matching bloom-dim
-/// or time/duration filters.  Format:
-///   filters=[{"field":"pid","op":"=","value":1234}, ...]
-///
-/// Supported ops:
-///   "="  — equality via bloom dimension (for pid, tid, cat, name, etc.)
-///   ">=", "<=" — for ts (maps to time_range) and dur (min/max duration)
-static void apply_filters(ViewPredicate& pred, std::string_view filters_str) {
+static void apply_filters(std::string& dsl, std::string_view filters_str) {
     if (filters_str.empty()) return;
 
     std::string buf(filters_str);
@@ -201,74 +176,35 @@ static void apply_filters(ViewPredicate& pred, std::string_view filters_str) {
         const char* op = yyjson_get_str(op_val);
         if (!field || !op) continue;
 
-        std::string field_str(field);
+        std::string val = extract_json_value(value_val);
+        if (val.empty()) continue;
+
         std::string op_str(op);
+        std::string field_str(field);
+        if (field_str == "begin") field_str = "ts";
+        if (field_str == "end") field_str = "ts";
+        if (field_str == "duration") field_str = "dur";
 
-        // Get a numeric value for range operators.
-        double num_val = 0;
-        bool has_num = false;
-        if (yyjson_is_int(value_val)) {
-            num_val = static_cast<double>(yyjson_get_int(value_val));
-            has_num = true;
-        } else if (yyjson_is_uint(value_val)) {
-            num_val = static_cast<double>(yyjson_get_uint(value_val));
-            has_num = true;
-        } else if (yyjson_is_real(value_val)) {
-            num_val = yyjson_get_real(value_val);
-            has_num = true;
-        }
+        std::string query_op;
+        if (op_str == "=")
+            query_op = "==";
+        else if (op_str == ">=")
+            query_op = ">=";
+        else if (op_str == "<=")
+            query_op = "<=";
+        else if (op_str == ">")
+            query_op = ">";
+        else if (op_str == "<")
+            query_op = "<";
+        else
+            continue;
 
-        // Get a string value for equality.
-        std::string str_val;
-        if (yyjson_is_str(value_val)) {
-            str_val = yyjson_get_str(value_val);
-        } else if (has_num) {
-            if (yyjson_is_int(value_val)) {
-                str_val = std::to_string(yyjson_get_int(value_val));
-            } else if (yyjson_is_uint(value_val)) {
-                str_val = std::to_string(yyjson_get_uint(value_val));
-            } else {
-                str_val = std::to_string(num_val);
-            }
-        }
-
-        if (op_str == "=") {
-            // Equality — use bloom dimension filtering.
-            if (!str_val.empty()) {
-                pred.with_bloom_dim(field_str, {str_val});
-            }
-        } else if (op_str == ">=" && has_num) {
-            if (field_str == "ts" || field_str == "begin") {
-                // Augment time range lower bound.
-                if (pred.time_range) {
-                    pred.time_range->first =
-                        std::max(pred.time_range->first, num_val);
-                } else {
-                    pred.with_time_range(num_val, 0);
-                }
-            } else if (field_str == "dur" || field_str == "duration") {
-                pred.with_min_duration(num_val);
-            }
-        } else if (op_str == "<=" && has_num) {
-            if (field_str == "ts" || field_str == "end") {
-                // Augment time range upper bound.
-                if (pred.time_range) {
-                    pred.time_range->second =
-                        std::min(pred.time_range->second, num_val);
-                } else {
-                    pred.with_time_range(0, num_val);
-                }
-            } else if (field_str == "dur" || field_str == "duration") {
-                pred.with_max_duration(num_val);
-            }
-        } else if (op_str == ">" && has_num) {
-            if (field_str == "dur" || field_str == "duration") {
-                pred.with_min_duration(num_val);
-            }
-        } else if (op_str == "<" && has_num) {
-            if (field_str == "dur" || field_str == "duration") {
-                pred.with_max_duration(num_val);
-            }
+        if (!dsl.empty()) dsl += " and ";
+        bool numeric = !val.empty() && (std::isdigit(val[0]) || val[0] == '-');
+        if (numeric || query_op != "==") {
+            dsl += field_str + " " + query_op + " " + val;
+        } else {
+            dsl += field_str + " " + query_op + " \"" + val + "\"";
         }
     }
 }
@@ -277,10 +213,9 @@ static void apply_filters(ViewPredicate& pred, std::string_view filters_str) {
 /// Streams via async_streaming_gz_lines(), parses JSON, applies
 /// predicate filters, collects matching events as raw JSON strings.
 static coro::CoroTask<void> direct_scan_events(
-    const TraceIndex::FileInfo* file_info,
-    const std::vector<PredicateFilter>& filters, bool include_metadata,
-    std::vector<std::string>* collected_events, std::uint64_t* total_scanned,
-    std::uint64_t* total_matched, int limit) {
+    const TraceIndex::FileInfo* file_info, const Query* query,
+    bool include_metadata, std::vector<std::string>* collected_events,
+    std::uint64_t* total_scanned, std::uint64_t* total_matched, int limit) {
     using dftracer::utils::utilities::fileio::lines::sources::
         async_streaming_gz_lines;
 
@@ -327,15 +262,13 @@ static coro::CoroTask<void> direct_scan_events(
                             }
                         }
                     } else {
-                        if (metadata_matches_identity(json, filters)) {
-                            collected_events->emplace_back(
-                                line->content.data(), line->content.size());
-                            (*total_matched)++;
-                        }
+                        collected_events->emplace_back(line->content.data(),
+                                                       line->content.size());
+                        (*total_matched)++;
                     }
                 } else if (ph != "M") {
                     (*total_scanned)++;
-                    if (matches_any_predicate(json, filters)) {
+                    if (!query || query->evaluate(json)) {
                         // Flush referenced hash metadata first
                         if (include_metadata) {
                             auto args = json["args"];
@@ -419,35 +352,32 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
     view.name = "viz_query";
     view.description = "Visualization query";
 
-    ViewPredicate pred;
-    pred.with_time_range(begin, end);
+    std::string dsl;
+    dsl += "ts >= " + std::to_string(static_cast<uint64_t>(begin));
+    dsl += " and ts <= " + std::to_string(static_cast<uint64_t>(end));
     if (min_dur > 0) {
-        pred.with_min_duration(min_dur);
+        dsl += " and dur >= " + std::to_string(static_cast<uint64_t>(min_dur));
     }
 
-    // Apply lanes param (JSON) for sequential pid/tid filtering.
-    apply_lanes(pred, params.get("lanes"));
+    apply_lanes(dsl, params.get("lanes"));
+    apply_filters(dsl, params.get("filters"));
 
-    // Apply filters param (JSON array of {field, op, value}).
-    apply_filters(pred, params.get("filters"));
-
-    // Backward-compatible individual query params (override lanes/filters).
     auto pid = params.get("pid");
     if (!pid.empty()) {
-        pred.with_bloom_dim("process_id", {std::string(pid)});
+        dsl += " and pid == " + std::string(pid);
     }
 
     auto tid = params.get("tid");
     if (!tid.empty()) {
-        pred.with_bloom_dim("thread_id", {std::string(tid)});
+        dsl += " and tid == " + std::string(tid);
     }
 
     auto cat = params.get("cat");
     if (!cat.empty()) {
-        pred.with_bloom_dim("category", {std::string(cat)});
+        dsl += " and cat == \"" + std::string(cat) + "\"";
     }
 
-    view.with_predicate(std::move(pred));
+    view.with_query(dsl);
 
     // Optional limit: 0 (default) means no limit.
     int limit = params.get_int("limit", 0);
@@ -487,10 +417,7 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
         target_files = std::move(filtered);
     }
 
-    std::vector<PredicateFilter> pred_filters;
-    for (const auto& predicate : view.predicates) {
-        pred_filters.push_back(build_predicate_filter(predicate));
-    }
+    const Query* viz_query_ptr = view.query ? &*view.query : nullptr;
 
     std::vector<std::string> collected_events;
 
@@ -507,7 +434,7 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                 std::uint64_t scanned = 0;
                 std::uint64_t matched = 0;
                 co_await direct_scan_events(
-                    file_info, pred_filters, view.include_metadata,
+                    file_info, viz_query_ptr, view.include_metadata,
                     &collected_events, &scanned, &matched, limit);
                 if (limit > 0 &&
                     static_cast<int>(collected_events.size()) >= limit)
@@ -575,7 +502,6 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
         auto* target_files_ptr = &target_files;
         auto* collected_ptr = &collected_events;
-        auto* pred_filters_ptr = &pred_filters;
         auto* view_ptr = &view;
         auto* bloom_cache_ptr = &index.bloom_cache();
         double t_begin = begin;
@@ -594,7 +520,7 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
         for (std::size_t w = 0; w < num_workers; ++w) {
             scope.spawn([file_chan, target_files_ptr, collected_mutex,
-                         collected_ptr, pred_filters_ptr, view_ptr,
+                         collected_ptr, viz_query_ptr, view_ptr,
                          bloom_cache_ptr, remaining, t_begin,
                          t_end](CoroScope&) -> coro::CoroTask<void> {
                 while (auto fi_opt = co_await file_chan->receive()) {
@@ -610,7 +536,7 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                             remaining->load(std::memory_order_relaxed);
                         if (local_limit <= 0) co_return;
                         co_await direct_scan_events(
-                            file_info, *pred_filters_ptr,
+                            file_info, viz_query_ptr,
                             view_ptr->include_metadata, &local_events,
                             &local_scanned, &local_matched, local_limit);
                         if (!local_events.empty()) {

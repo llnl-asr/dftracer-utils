@@ -12,6 +12,7 @@ need_cpplogger()
 need_yyjson()
 need_readerwriterqueue()
 need_concurrentqueue()
+need_tl_expected()
 
 if(DFTRACER_UTILS_ENABLE_ARROW)
   need_nanoarrow()
@@ -102,6 +103,11 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/ddsketch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/log2_histogram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/json/json_value.cpp
+    # Query language (generic JSON filtering)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/query/ast.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/query/parser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/query/evaluator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/query/query.cpp
     # DFT Aggregators
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/association_tracker.cpp
@@ -116,8 +122,9 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     # DFT Indexing (bloom filters, statistics, queries)
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_chunk_bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_file_bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_chunk_statistics.cpp
@@ -135,6 +142,9 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_chunk_statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_time_bounds.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_chunk_statistics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_chunk_dimension_stats.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_chunk_dimension_stats.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_chunk_dimension_stats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_hash_resolutions.cpp
     # Manifest index queries
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_event_range.cpp
@@ -159,7 +169,6 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/statistics/chunk_detail_scanner_utility.cpp
 
     # DFT Views (filtered lenses over trace files)
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/predicate_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/view_definition.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/view_reader_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/view_builder_utility.cpp
@@ -425,6 +434,8 @@ foreach(variant shared static)
   if(TARGET dftracer_utils_utilities_${variant})
     # No need to link dependencies here - they're inherited from core
 
+    # Link tl::expected for C++20/23 expected shim
+    link_tl_expected(dftracer_utils_utilities_${variant})
 
     # Add stdfs if needed
     add_stdfs_if_needed(dftracer_utils_utilities_${variant})
@@ -922,16 +933,10 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.cpp
        ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/arrow_helpers.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_query.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/bloom_query.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/bloom_query.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_aggregator.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/statistics_aggregator.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/metadata_collector.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/metadata_collector.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_builder.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_builder.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_reader.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/view_reader.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reorganization_planner.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reorganization_planner.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reconstruction_planner.cpp
@@ -971,11 +976,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
     FILES
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/py.typed"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_statistics_query.pyi"
-      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_bloom_query.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_statistics_aggregator.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_metadata_collector.pyi"
-      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_view_builder.pyi"
-      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_view_reader.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_reorganization_planner.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_reconstruction_planner.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_aggregator.pyi"

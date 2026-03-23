@@ -91,6 +91,90 @@ reading the full file (when an index exists):
            end = min((i + 1) * chunk_size, max_bytes)
            process(reader.read_lines_json(start_byte=start, end_byte=end))
 
+Query Filtering
+---------------
+
+All line-based reading methods (``read_lines``, ``iter_lines``,
+``iter_lines_json``, ``read_lines_json``, ``iter_arrow``, ``read_arrow``)
+accept an optional ``query`` parameter for event filtering:
+
+.. code-block:: python
+
+   reader = TraceReader("trace.pfw.gz")
+
+   # Filter by category
+   for line in reader.iter_lines(query='cat == "POSIX"'):
+       process(line)
+
+   # Combine filters with AND/OR
+   lines = reader.read_lines(query='cat == "POSIX" and dur > 1000')
+
+   # Use IN for multiple values
+   lines = reader.read_lines(query='name in ["read", "write", "open"]')
+
+   # NOT queries
+   lines = reader.read_lines(query='not cat == "MPI"')
+
+   # Nested field paths
+   lines = reader.read_lines(query='args.level == "DEBUG"')
+
+   # Combine with range parameters
+   lines = reader.read_lines(start_line=1, end_line=1000,
+                              query='cat == "POSIX"')
+
+   # Arrow output with query
+   table = reader.read_arrow(query='cat == "POSIX" and dur > 100')
+   df = table.to_pandas()
+
+When an index exists, the query is used for chunk pruning (skipping
+entire chunks that cannot match) before per-event filtering. This
+provides significant speedups on large indexed traces.
+
+Query DSL Syntax
+~~~~~~~~~~~~~~~~
+
+The query language supports:
+
+- **Comparison**: ``==``, ``!=``, ``>``, ``<``, ``>=``, ``<=``
+- **Logical**: ``and``, ``or``, ``not`` (case-insensitive)
+- **Membership**: ``in [...]``, ``not in [...]``
+- **Grouping**: parentheses ``(...)``
+- **Field paths**: dotted notation for nested JSON (``args.level``)
+- **Values**: strings (``"POSIX"``), integers (``1000``), floats (``3.14``), booleans (``true``/``false``)
+
+Keywords (``and``, ``or``, ``not``, ``in``, ``true``, ``false``) are
+case-insensitive: ``AND``, ``and``, ``And`` all work.
+String values are case-sensitive: ``cat == "POSIX"`` does not match ``"posix"``.
+
+Python Field DSL
+~~~~~~~~~~~~~~~~
+
+For programmatic query construction, use the ``Field`` class:
+
+.. code-block:: python
+
+   from dftracer.utils.query import Field
+
+   cat = Field("cat")
+   dur = Field("dur")
+   name = Field("name")
+
+   # Operators: ==, !=, >, <, >=, <=
+   q = cat == "POSIX"
+
+   # AND (&), OR (|), NOT (~)
+   q = (cat == "POSIX") & (dur > 1000)
+   q = (cat == "POSIX") | (cat == "STDIO")
+   q = ~(cat == "MPI")
+
+   # IN / NOT IN
+   q = name.is_in(["read", "write", "open"])
+   q = cat.not_in(["MPI"])
+
+   # Pass to TraceReader
+   reader = TraceReader("trace.pfw.gz")
+   lines = reader.read_lines(query=str(q))
+
 ReadConfig Parameters
 ---------------------
 
@@ -99,6 +183,7 @@ All reading methods accept these keyword arguments:
 - ``start_line`` / ``end_line`` -- line range (1-indexed; 0 = no limit)
 - ``start_byte`` / ``end_byte`` -- byte range (0 = no limit)
 - ``buffer_size`` -- internal buffer size in bytes (default 4 MB)
+- ``query`` -- query DSL string for event filtering (default None)
 
 ``iter_raw`` and ``read_raw`` additionally accept:
 

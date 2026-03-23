@@ -6,7 +6,7 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/predicate_parser_utility.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
@@ -33,22 +33,8 @@ using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::views;
 using namespace dftracer::utils::utilities::filesystem;
-using dftracer::utils::utilities::composites::dft::indexing::PredicateMap;
-using dftracer::utils::utilities::composites::dft::indexing::
-    PredicateParserInput;
-using dftracer::utils::utilities::composites::dft::indexing::
-    PredicateParserUtility;
 using dftracer::utils::utilities::indexer::IndexBuildConfig;
 using dftracer::utils::utilities::indexer::IndexBuilderUtility;
-
-// Convert parsed predicates to a ViewPredicate
-static ViewPredicate predicates_to_view_predicate(const PredicateMap& preds) {
-    ViewPredicate predicate;
-    for (const auto& [dim, values] : preds) {
-        predicate.with_bloom_dim(dim, values);
-    }
-    return predicate;
-}
 
 struct ViewContext {
     std::string index_dir;
@@ -97,6 +83,7 @@ static coro::CoroTask<void> read_single_chunk(
         .with_byte_range(candidate.start_byte, candidate.end_byte)
         .with_checkpoint_idx(candidate.checkpoint_idx)
         .with_view(vctx.view);
+    reader_input.query = vctx.view.query;
 
     ViewReaderUtility reader;
     auto gen = reader.process(reader_input);
@@ -197,7 +184,7 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
     std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
-    auto query_strs = program.get<std::vector<std::string>>("--query");
+    auto query_str = program.get<std::string>("--query");
 
     ViewDefinition view;
 
@@ -230,11 +217,16 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
         view.description = "Custom inline view";
     }
 
-    PredicateParserInput parser_input;
-    parser_input.with_predicate_strings(query_strs);
-    auto parsed = PredicateParserUtility{}.process(parser_input);
-    if (parsed.success && !parsed.predicates.empty()) {
-        view.with_predicate(predicates_to_view_predicate(parsed.predicates));
+    using common::query::Query;
+    std::optional<Query> query;
+    if (!query_str.empty()) {
+        auto result = Query::from_string(query_str);
+        if (!result) {
+            DFTRACER_UTILS_LOG_ERROR("Invalid --query: %s",
+                                     result.error().format().c_str());
+            co_return 1;
+        }
+        query = std::move(*result);
     }
 
     std::optional<std::pair<double, double>> time_range;
@@ -253,28 +245,40 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
     }
 
     if (time_range || min_duration > 0 || max_duration > 0) {
-        if (view.predicates.empty()) {
-            ViewPredicate pred;
-            if (time_range)
-                pred.with_time_range(time_range->first, time_range->second);
-            if (min_duration > 0) pred.with_min_duration(min_duration);
-            if (max_duration > 0) pred.with_max_duration(max_duration);
-            view.with_predicate(std::move(pred));
-        } else {
-            for (auto& pred : view.predicates) {
-                if (time_range)
-                    pred.with_time_range(time_range->first, time_range->second);
-                if (min_duration > 0) pred.with_min_duration(min_duration);
-                if (max_duration > 0) pred.with_max_duration(max_duration);
-            }
+        std::string extra;
+        if (time_range) {
+            extra += "ts >= " +
+                     std::to_string(static_cast<uint64_t>(time_range->first));
+            extra += " and ts <= " +
+                     std::to_string(static_cast<uint64_t>(time_range->second));
         }
+        if (min_duration > 0) {
+            if (!extra.empty()) extra += " and ";
+            extra +=
+                "dur >= " + std::to_string(static_cast<uint64_t>(min_duration));
+        }
+        if (max_duration > 0) {
+            if (!extra.empty()) extra += " and ";
+            extra +=
+                "dur <= " + std::to_string(static_cast<uint64_t>(max_duration));
+        }
+        if (query) {
+            std::string combined = "(" + query->source() + ") and " + extra;
+            query = common::query::parse_or_throw(combined);
+        } else {
+            query = common::query::parse_or_throw(extra);
+        }
+    }
+
+    if (query) {
+        view.with_query(std::move(*query));
     }
 
     if (no_metadata) {
         view.with_include_metadata(false);
     }
 
-    if (view.predicates.empty()) {
+    if (!view.query) {
         DFTRACER_UTILS_LOG_ERROR(
             "%s", "No view specified. Use --preset, --recipe, or --query.");
         std::cerr << program;
@@ -496,9 +500,8 @@ int main(int argc, char** argv) {
         .default_value<std::string>("");
 
     program.add_argument("--query")
-        .help("Inline query (e.g., cat=POSIX,name=read|write)")
-        .nargs(argparse::nargs_pattern::any)
-        .default_value<std::vector<std::string>>({});
+        .help("Query DSL filter (e.g., 'cat == \"POSIX\" and dur > 1000')")
+        .default_value<std::string>("");
 
     // Event-level filters
     program.add_argument("--time-range")

@@ -12,8 +12,7 @@ namespace dftracer::utils::utilities::composites::dft::reorganize {
 
 struct PredicateGroup {
     std::string name;
-    // "cat=POSIX|STDIO" or empty for remainder
-    std::string predicate;
+    std::string query;
 };
 
 struct SourceFileInfo {

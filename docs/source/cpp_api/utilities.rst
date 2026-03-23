@@ -264,17 +264,31 @@ Chunk Statistics & Bloom Filter Cache
 See :doc:`dft_indexing` for full documentation of ``ChunkStatistics``,
 ``BloomFilter``, ``BloomFilterCache``, and the complete indexing pipeline.
 
-Views & Predicates
-------------------
+Views
+-----
 
-View query support with multi-dimensional filtering.
+View definition and event reading with query-based filtering.
+
+ViewDefinition
+~~~~~~~~~~~~~~
+
+Defines a named view with an optional ``Query`` for event filtering.
+Preset views (``io_view()``, ``compute_view()``, ``dlio_view()``) provide
+common filter configurations. Serializable to/from JSON.
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::views::ViewDefinition
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
 
 ViewReaderUtility
 ~~~~~~~~~~~~~~~~~
 
-``StreamingUtility`` that reads events from a trace file filtered by
-bloom-filter predicates. Yields ``ViewReaderBatch`` objects with
-``to_arrow()`` for Arrow conversion.
+``StreamingUtility`` that reads events from a trace file. When
+``ViewReaderInput.query`` is set, events are filtered per-event via
+``Query::evaluate()``. Without a query, all events are yielded.
+
+Yields ``ViewReaderBatch`` objects with ``to_arrow()`` for Arrow conversion.
 
 .. doxygenstruct:: dftracer::utils::utilities::composites::dft::views::ViewReaderInput
    :project: dftracer-utils
@@ -290,21 +304,3 @@ bloom-filter predicates. Yields ``ViewReaderBatch`` objects with
    :project: dftracer-utils
    :members:
    :undoc-members:
-
-Predicate Filter
-~~~~~~~~~~~~~~~~
-
-Efficiently filters events by dimension sets, time ranges, and duration bounds.
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::views::PredicateFilter
-   :project: dftracer-utils
-   :members:
-
-.. doxygenfunction:: dftracer::utils::utilities::composites::dft::views::build_predicate_filter
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::utilities::composites::dft::views::matches_predicate
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::utilities::composites::dft::views::matches_any_predicate
-   :project: dftracer-utils

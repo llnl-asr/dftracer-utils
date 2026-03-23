@@ -8,14 +8,11 @@
 #include <dftracer/utils/python/trace_reader.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/utilities/aggregator.h>
-#include <dftracer/utils/python/utilities/bloom_query.h>
 #include <dftracer/utils/python/utilities/metadata_collector.h>
 #include <dftracer/utils/python/utilities/reconstruction_planner.h>
 #include <dftracer/utils/python/utilities/reorganization_planner.h>
 #include <dftracer/utils/python/utilities/statistics_aggregator.h>
 #include <dftracer/utils/python/utilities/statistics_query.h>
-#include <dftracer/utils/python/utilities/view_builder.h>
-#include <dftracer/utils/python/utilities/view_reader.h>
 
 static PyModuleDef dftracer_utils_module = {
     PyModuleDef_HEAD_INIT,
@@ -42,11 +39,8 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (init_trace_reader_iterator(m) < 0) return NULL;
     if (init_trace_reader(m) < 0) return NULL;
     if (init_statistics_query(m) < 0) return NULL;
-    if (init_bloom_query(m) < 0) return NULL;
     if (init_statistics_aggregator(m) < 0) return NULL;
     if (init_metadata_collector(m) < 0) return NULL;
-    if (init_view_builder(m) < 0) return NULL;
-    if (init_view_reader(m) < 0) return NULL;
     if (init_reorganization_planner(m) < 0) return NULL;
     if (init_reconstruction_planner(m) < 0) return NULL;
     if (init_aggregator(m) < 0) return NULL;

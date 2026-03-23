@@ -13,9 +13,29 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
+using namespace dftracer::utils::utilities::composites::dft::indexing::queries;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::internal::get_logical_path;
+
+static void write_chunk(
+    IndexDatabase& db, int fid, std::uint64_t checkpoint_idx,
+    ChunkStatistics& stats,
+    const std::vector<std::pair<std::string, std::string>>& dim_values) {
+    queries::insert_chunk_statistics(db.sql_db(), fid, checkpoint_idx, stats);
+
+    std::unordered_map<std::string, ChunkDimensionStats> dim_stats;
+    for (const auto& [dim, val] : dim_values) {
+        auto& ds = dim_stats[dim];
+        ds.dimension = dim;
+        ds.value_type = "string";
+        ds.observe(val);
+    }
+    for (const auto& [dim, ds] : dim_stats) {
+        queries::insert_chunk_dimension_stats(db.sql_db(), fid, checkpoint_idx,
+                                              ds);
+    }
+}
 
 static void populate_test_idx(const std::string& idx_path,
                               const std::string& file_path) {
@@ -33,14 +53,21 @@ static void populate_test_idx(const std::string& idx_path,
         ChunkStatistics stats;
         stats.update_from_event("read", "POSIX", 1, 1, 1000, 100);
         stats.update_from_event("write", "POSIX", 1, 2, 2000, 200);
-        queries::insert_chunk_statistics(idx_db.sql_db(), fid, 0, stats);
+        write_chunk(idx_db, fid, 0, stats,
+                    {{"cat", "POSIX"},
+                     {"cat", "POSIX"},
+                     {"name", "read"},
+                     {"name", "write"},
+                     {"pid_tid", "1:1"},
+                     {"pid_tid", "1:2"}});
     }
 
     // Chunk 1: 1 event
     {
         ChunkStatistics stats;
         stats.update_from_event("open", "storage", 2, 1, 5000, 50);
-        queries::insert_chunk_statistics(idx_db.sql_db(), fid, 1, stats);
+        write_chunk(idx_db, fid, 1, stats,
+                    {{"cat", "storage"}, {"name", "open"}, {"pid_tid", "2:1"}});
     }
 
     // Chunk 2: 2 events
@@ -48,7 +75,13 @@ static void populate_test_idx(const std::string& idx_path,
         ChunkStatistics stats;
         stats.update_from_event("read", "POSIX", 1, 1, 8000, 300);
         stats.update_from_event("stat", "POSIX", 3, 1, 9000, 10);
-        queries::insert_chunk_statistics(idx_db.sql_db(), fid, 2, stats);
+        write_chunk(idx_db, fid, 2, stats,
+                    {{"cat", "POSIX"},
+                     {"cat", "POSIX"},
+                     {"name", "read"},
+                     {"name", "stat"},
+                     {"pid_tid", "1:1"},
+                     {"pid_tid", "3:1"}});
     }
 
     idx_db.commit_transaction();
@@ -75,11 +108,8 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         CHECK(result.num_chunks == 3);
         CHECK(result.merged.total_events == 5);
 
-        // Category counts
         CHECK(result.merged.category_counts["POSIX"] == 4);
         CHECK(result.merged.category_counts["storage"] == 1);
-
-        // Name counts
         CHECK(result.merged.name_counts["read"] == 2);
         CHECK(result.merged.name_counts["write"] == 1);
         CHECK(result.merged.name_counts["open"] == 1);

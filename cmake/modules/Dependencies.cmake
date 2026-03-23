@@ -273,6 +273,85 @@ function(need_nonstd_span)
   endif()
 endfunction()
 
+function(need_tl_expected)
+  # tl::expected is only needed when C++23 std::expected is unavailable
+  if(CMAKE_CXX_STANDARD GREATER_EQUAL 23)
+    message(STATUS "C++23 detected: using std::expected (skipping tl::expected)")
+    return()
+  endif()
+
+  if(NOT tl_expected_ADDED)
+    cpmaddpackage(
+      NAME
+      tl_expected
+      GITHUB_REPOSITORY
+      TartanLlama/expected
+      VERSION
+      1.1.0
+      GIT_TAG
+      "v1.1.0"
+      OPTIONS
+      "EXPECTED_BUILD_TESTS OFF"
+      FORCE
+      YES)
+  endif()
+
+  if(tl_expected_ADDED)
+    if(NOT TARGET tl::expected)
+      add_library(tl_expected INTERFACE)
+      target_include_directories(
+        tl_expected
+        INTERFACE $<BUILD_INTERFACE:${tl_expected_SOURCE_DIR}/include>
+                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      add_library(tl::expected ALIAS tl_expected)
+
+      install(
+        DIRECTORY ${tl_expected_SOURCE_DIR}/include/tl/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tl
+        FILES_MATCHING
+        PATTERN "*.hpp")
+
+      install(TARGETS tl_expected EXPORT tl_expectedTargets)
+      install(
+        EXPORT tl_expectedTargets
+        FILE tl_expectedTargets.cmake
+        NAMESPACE tl::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tl_expected)
+    endif()
+
+    message(STATUS "Added tl::expected header-only library via CPM")
+  endif()
+endfunction()
+
+function(link_tl_expected TARGET_NAME)
+  if(NOT TARGET_NAME)
+    message(FATAL_ERROR "link_tl_expected: TARGET_NAME is required")
+  endif()
+
+  if(NOT TARGET ${TARGET_NAME})
+    message(
+      FATAL_ERROR "link_tl_expected: Target '${TARGET_NAME}' does not exist")
+  endif()
+
+  # C++23: std::expected is built-in, no linking needed
+  if(CMAKE_CXX_STANDARD GREATER_EQUAL 23)
+    return()
+  endif()
+
+  if(TARGET tl::expected)
+    target_link_libraries(${TARGET_NAME} PUBLIC tl::expected)
+    message(STATUS "Linked ${TARGET_NAME} to tl::expected")
+  elseif(TARGET tl_expected)
+    target_link_libraries(${TARGET_NAME} PUBLIC tl_expected)
+    message(STATUS "Linked ${TARGET_NAME} to tl_expected")
+  else()
+    message(
+      FATAL_ERROR
+        "link_tl_expected: No tl::expected found! Call need_tl_expected() first."
+    )
+  endif()
+endfunction()
+
 # ==============================================================================
 # JSON and Serialization Dependencies
 # ==============================================================================

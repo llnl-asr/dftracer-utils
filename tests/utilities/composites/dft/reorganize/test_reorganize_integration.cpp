@@ -234,7 +234,8 @@ TEST_SUITE("ReorganizeIntegration") {
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput planner_input;
         planner_input.source_files = {trace_file};
-        planner_input.groups = {{"io", "cat=POSIX"}, {"compute", "cat=APP"}};
+        planner_input.groups = {{"io", R"(cat == "POSIX")"},
+                                {"compute", R"(cat == "APP")"}};
         planner_input.index_dir = input_dir;
 
         auto plan = planner.process(planner_input).get();
@@ -320,7 +321,7 @@ TEST_SUITE("ReorganizeIntegration") {
         ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput planner_input;
         planner_input.source_files = {trace_file};
-        planner_input.groups = {{"io", "cat=POSIX"}};
+        planner_input.groups = {{"io", R"(cat == "POSIX")"}};
         planner_input.index_dir = input_dir;
 
         auto plan = planner.process(planner_input).get();
@@ -406,7 +407,7 @@ TEST_SUITE("ReorganizeIntegration") {
             pdb.begin_transaction();
             pdb.insert_info("version", "1.0");
             pdb.insert_info("tool", "dftracer_organize");
-            pdb.insert_group("io", "cat=POSIX");
+            pdb.insert_group("io", R"(cat == "POSIX")");
             pdb.insert_source(fid, 0, trace_file, 1, "");
             pdb.insert_segment(0, 0, 0, 5, 3);
             pdb.commit_transaction();
@@ -422,7 +423,7 @@ TEST_SUITE("ReorganizeIntegration") {
             CHECK(pdb.query_info("version") == "1.0");
             CHECK(pdb.query_info("tool") == "dftracer_organize");
             CHECK(pdb.query_group_name() == "io");
-            CHECK(pdb.query_group_predicate() == "cat=POSIX");
+            CHECK(pdb.query_group_predicate() == R"(cat == "POSIX")");
 
             auto sources = pdb.query_sources(fid);
             REQUIRE(sources.size() == 1);

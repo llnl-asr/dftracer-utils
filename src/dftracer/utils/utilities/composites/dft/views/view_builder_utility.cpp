@@ -1,6 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
@@ -61,53 +60,35 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
         (input.num_checkpoints == 0) ? 1 : input.num_checkpoints;
     output.total_checkpoints = total_checkpoints;
 
-    // Build bloom predicates from all predicate groups (union across groups)
-    std::unordered_map<std::string, std::vector<std::string>> bloom_predicates;
-    for (const auto& predicate : input.view.predicates) {
-        for (const auto& [dim, values] : predicate.bloom_dims) {
-            std::string resolved_dim = resolve_bloom_dimension(dim);
-            auto& target = bloom_predicates[resolved_dim];
-            for (const auto& val : values) {
-                target.push_back(val);
-            }
-        }
-    }
-
-    // Determine candidate checkpoints via bloom pre-filtering
     std::vector<std::uint64_t> candidate_checkpoints;
 
-    if (!bloom_predicates.empty() && !input.idx_path.empty()) {
-        indexing::BloomQueryInput bq_input;
-        bq_input.idx_path = input.idx_path;
-        bq_input.file_path = input.file_path;
-        bq_input.predicates = bloom_predicates;
-        bq_input.cache = input.bloom_cache;
+    if (input.view.query && !input.idx_path.empty()) {
+        indexing::ChunkPrunerInput pruner_input{input.idx_path, input.file_path,
+                                                *input.view.query,
+                                                input.bloom_cache};
+        indexing::ChunkPrunerUtility pruner;
+        auto pruner_output = co_await pruner.process(pruner_input);
 
-        indexing::BloomQueryUtility bloom_query;
-        auto bq_output = co_await bloom_query.process(bq_input);
-
-        if (bq_output.success) {
-            candidate_checkpoints = bq_output.candidate_checkpoints;
-            if (bq_output.total_checkpoints > 0) {
-                total_checkpoints = bq_output.total_checkpoints;
+        if (pruner_output.success) {
+            candidate_checkpoints = pruner_output.candidate_checkpoints;
+            if (pruner_output.total_checkpoints > 0) {
+                total_checkpoints = pruner_output.total_checkpoints;
                 output.total_checkpoints = total_checkpoints;
             }
 
-            if (!bq_output.file_may_match && candidate_checkpoints.empty()) {
-                // File definitely doesn't match
+            if (!pruner_output.file_may_match &&
+                candidate_checkpoints.empty()) {
                 output.file_may_match = false;
                 output.skipped_checkpoints = total_checkpoints;
                 output.success = true;
                 co_return output;
             }
         } else {
-            // Bloom query failed, fall back to scanning all chunks
             for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
                 candidate_checkpoints.push_back(i);
             }
         }
     } else {
-        // No bloom predicates or no idx: scan all chunks
         for (std::uint64_t i = 0; i < total_checkpoints; ++i) {
             candidate_checkpoints.push_back(i);
         }

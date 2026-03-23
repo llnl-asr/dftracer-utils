@@ -342,6 +342,7 @@ class TraceReader:
         start_byte: int = 0,
         end_byte: int = 0,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> List[str]:
         """Read lines from the trace file and return as a list.
 
@@ -358,6 +359,7 @@ class TraceReader:
         start_byte: int = 0,
         end_byte: int = 0,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> Iterator[str]:
         """Return a streaming iterator over decoded lines.
 
@@ -375,8 +377,13 @@ class TraceReader:
         line_aligned: bool = True,
         multi_line: bool = True,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> Iterator[bytes]:
-        """Return a streaming iterator over raw byte chunks."""
+        """Return a streaming iterator over raw byte chunks.
+
+        When ``query`` is set and an index exists, chunk-level pruning
+        skips non-matching chunks. No per-event filtering is applied.
+        """
         ...
 
     def read_raw(
@@ -388,8 +395,13 @@ class TraceReader:
         line_aligned: bool = True,
         multi_line: bool = True,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> List[bytes]:
-        """Read raw byte chunks and return as a list."""
+        """Read raw byte chunks and return as a list.
+
+        When ``query`` is set and an index exists, chunk-level pruning
+        skips non-matching chunks. No per-event filtering is applied.
+        """
         ...
 
     def iter_lines_json(
@@ -399,6 +411,7 @@ class TraceReader:
         start_byte: int = 0,
         end_byte: int = 0,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> Iterator["JSON"]:
         """Return iterator over parsed JSON objects.
 
@@ -414,6 +427,7 @@ class TraceReader:
         start_byte: int = 0,
         end_byte: int = 0,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> List["JSON"]:
         """Read lines and return as list of parsed JSON objects.
 
@@ -429,6 +443,7 @@ class TraceReader:
         start_byte: int = 0,
         end_byte: int = 0,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> Iterator[Any]:
         """Return iterator over Arrow record batches.
 
@@ -455,6 +470,7 @@ class TraceReader:
         start_byte: int = 0,
         end_byte: int = 0,
         buffer_size: int = 4194304,
+        query: Optional[str] = None,
     ) -> Any:
         """Read all events as an ArrowTable.
 
@@ -538,21 +554,6 @@ class StatisticsQueryUtility:
         index_dir: str = "",
     ) -> Dict[str, Any]: ...
 
-class BloomQueryUtility:
-    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
-    def process(
-        self,
-        file_path: str,
-        predicates: Dict[str, List[str]],
-        index_dir: str = "",
-    ) -> Dict[str, Any]: ...
-    def __call__(
-        self,
-        file_path: str,
-        predicates: Dict[str, List[str]],
-        index_dir: str = "",
-    ) -> Dict[str, Any]: ...
-
 class StatisticsAggregatorUtility:
     def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
     def process(
@@ -578,43 +579,6 @@ class MetadataCollectorUtility:
         file_path: str,
         index_dir: str = "",
     ) -> Dict[str, Any]: ...
-
-class ViewBuilderUtility:
-    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
-    def process(
-        self,
-        file_path: str,
-        predicates: Optional[Dict[str, List[str]]] = None,
-        index_dir: str = "",
-    ) -> Dict[str, Any]: ...
-    def __call__(
-        self,
-        file_path: str,
-        predicates: Optional[Dict[str, List[str]]] = None,
-        index_dir: str = "",
-    ) -> Dict[str, Any]: ...
-
-class ViewReaderUtility:
-    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
-    def process(
-        self,
-        file_path: str,
-        predicates: Optional[Dict[str, List[str]]] = None,
-        index_dir: str = "",
-    ) -> Any: ...
-    def __call__(
-        self,
-        file_path: str,
-        predicates: Optional[Dict[str, List[str]]] = None,
-        index_dir: str = "",
-    ) -> Any: ...
-    def iter_arrow(
-        self,
-        file_path: str,
-        predicates: Optional[Dict[str, List[str]]] = None,
-        index_dir: str = "",
-        batch_size: int = 10000,
-    ) -> Iterator[Any]: ...
 
 class ReorganizationPlannerUtility:
     def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...

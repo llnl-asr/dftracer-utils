@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_INDEXER_VISITORS_BLOOM_VISITOR_H
 
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 #include <dftracer/utils/utilities/indexer/index_visitor.h>
@@ -22,6 +23,8 @@ class BloomVisitor : public IndexVisitor {
         dftracer::utils::utilities::composites::dft::indexing::HashResolutions;
     using ChunkStatistics =
         dftracer::utils::utilities::composites::dft::indexing::ChunkStatistics;
+    using ChunkDimensionStats = dftracer::utils::utilities::composites::dft::
+        indexing::ChunkDimensionStats;
     using ChunkIndexerConfig = dftracer::utils::utilities::composites::dft::
         indexing::ChunkIndexerConfig;
 
@@ -29,6 +32,7 @@ class BloomVisitor : public IndexVisitor {
         BloomFilterMap bloom_filters;
         ChunkStatistics statistics;
         HashResolutions hash_resolutions;
+        std::unordered_map<std::string, ChunkDimensionStats> dimension_stats;
         std::size_t events_processed = 0;
     };
 

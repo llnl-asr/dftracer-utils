@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/utilities/streaming_utility.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
@@ -12,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -28,6 +30,7 @@ struct ViewReaderInput {
     std::size_t batch_size = 4 * 1024 * 1024;  // IO buffer size
     std::size_t event_batch_size = 10000;      // events per batch
     ViewDefinition view;
+    std::optional<common::query::Query> query;
 
     ViewReaderInput& with_file_path(const std::string& path);
     ViewReaderInput& with_idx_path(const std::string& path);

@@ -34,6 +34,9 @@ struct ChunkIndexerConfig {
     double false_positive_rate = 0.01;
     bool build_manifest = false;
 
+    // Max compressed size for value_counts BLOB (0 = disable dictionaries)
+    std::size_t value_counts_cap = 4096;
+
     // Compute a hash of this config for change detection
     std::size_t compute_hash() const {
         utilities::hash::HasherUtility hasher;

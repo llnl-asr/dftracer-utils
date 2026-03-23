@@ -405,14 +405,16 @@ static int TraceReader_init(TraceReaderObject *self, PyObject *args,
 static PyObject *TraceReader_iter_lines(TraceReaderObject *self, PyObject *args,
                                         PyObject *kwds) {
     static const char *kwlist[] = {"start_line", "end_line",    "start_byte",
-                                   "end_byte",   "buffer_size", NULL};
+                                   "end_byte",   "buffer_size", "query",
+                                   NULL};
     Py_ssize_t start_line = 0, end_line = 0;
     Py_ssize_t start_byte = 0, end_byte = 0;
     Py_ssize_t buffer_size = 4 * 1024 * 1024;
+    const char *query_str = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nnnnn", (char **)kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nnnnnz", (char **)kwlist,
                                      &start_line, &end_line, &start_byte,
-                                     &end_byte, &buffer_size)) {
+                                     &end_byte, &buffer_size, &query_str)) {
         return NULL;
     }
 
@@ -438,6 +440,7 @@ static PyObject *TraceReader_iter_lines(TraceReaderObject *self, PyObject *args,
     rc.start_byte = static_cast<std::size_t>(start_byte);
     rc.end_byte = static_cast<std::size_t>(end_byte);
     rc.buffer_size = static_cast<std::size_t>(buffer_size);
+    if (query_str) rc.query = query_str;
 
     auto state = std::make_shared<IteratorState>();
 
@@ -457,16 +460,18 @@ static PyObject *TraceReader_iter_raw(TraceReaderObject *self, PyObject *args,
                                       PyObject *kwds) {
     static const char *kwlist[] = {"start_line", "end_line",    "start_byte",
                                    "end_byte",   "buffer_size", "line_aligned",
-                                   "multi_line", NULL};
+                                   "multi_line", "query",       NULL};
     Py_ssize_t start_line = 0, end_line = 0;
     Py_ssize_t start_byte = 0, end_byte = 0;
     Py_ssize_t buffer_size = 4 * 1024 * 1024;
     int line_aligned = 1;
     int multi_line = 1;
+    const char *query_str = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|nnnnnpp", (char **)kwlist, &start_line, &end_line,
-            &start_byte, &end_byte, &buffer_size, &line_aligned, &multi_line)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nnnnnppz", (char **)kwlist,
+                                     &start_line, &end_line, &start_byte,
+                                     &end_byte, &buffer_size, &line_aligned,
+                                     &multi_line, &query_str)) {
         return NULL;
     }
 
@@ -494,6 +499,7 @@ static PyObject *TraceReader_iter_raw(TraceReaderObject *self, PyObject *args,
     rc.buffer_size = static_cast<std::size_t>(buffer_size);
     rc.line_aligned = line_aligned != 0;
     rc.multi_line = multi_line != 0;
+    if (query_str) rc.query = query_str;
 
     auto state = std::make_shared<IteratorState>();
 
@@ -530,14 +536,16 @@ static PyObject *TraceReader_read_raw(TraceReaderObject *self, PyObject *args,
 static PyObject *TraceReader_iter_lines_json(TraceReaderObject *self,
                                              PyObject *args, PyObject *kwds) {
     static const char *kwlist[] = {"start_line", "end_line",    "start_byte",
-                                   "end_byte",   "buffer_size", NULL};
+                                   "end_byte",   "buffer_size", "query",
+                                   NULL};
     Py_ssize_t start_line = 0, end_line = 0;
     Py_ssize_t start_byte = 0, end_byte = 0;
     Py_ssize_t buffer_size = 4 * 1024 * 1024;
+    const char *query_str = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nnnnn", (char **)kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nnnnnz", (char **)kwlist,
                                      &start_line, &end_line, &start_byte,
-                                     &end_byte, &buffer_size)) {
+                                     &end_byte, &buffer_size, &query_str)) {
         return NULL;
     }
 
@@ -563,6 +571,7 @@ static PyObject *TraceReader_iter_lines_json(TraceReaderObject *self,
     rc.start_byte = static_cast<std::size_t>(start_byte);
     rc.end_byte = static_cast<std::size_t>(end_byte);
     rc.buffer_size = static_cast<std::size_t>(buffer_size);
+    if (query_str) rc.query = query_str;
 
     auto state = std::make_shared<IteratorState>();
 
@@ -593,15 +602,16 @@ static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
                                         PyObject *kwds) {
     static const char *kwlist[] = {"batch_size", "start_line", "end_line",
                                    "start_byte", "end_byte",   "buffer_size",
-                                   NULL};
+                                   "query",      NULL};
     Py_ssize_t batch_size = 10000;
     Py_ssize_t start_line = 0, end_line = 0;
     Py_ssize_t start_byte = 0, end_byte = 0;
     Py_ssize_t buffer_size = 4 * 1024 * 1024;
+    const char *query_str = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nnnnnn", (char **)kwlist,
-                                     &batch_size, &start_line, &end_line,
-                                     &start_byte, &end_byte, &buffer_size)) {
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "|nnnnnnz", (char **)kwlist, &batch_size, &start_line,
+            &end_line, &start_byte, &end_byte, &buffer_size, &query_str)) {
         return NULL;
     }
 
@@ -631,6 +641,7 @@ static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
     rc.start_byte = static_cast<std::size_t>(start_byte);
     rc.end_byte = static_cast<std::size_t>(end_byte);
     rc.buffer_size = static_cast<std::size_t>(buffer_size);
+    if (query_str) rc.query = query_str;
 
     auto state = std::make_shared<ArrowIteratorState>();
 

@@ -56,6 +56,23 @@ coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
             for (std::size_t i = 1; i < chunks.size(); ++i) {
                 result.merged.merge_from(chunks[i].stats);
             }
+
+            auto dim_stats = indexing::queries::query_chunk_dimension_stats(
+                idx_db.sql_db(), fid);
+            for (const auto& ds : dim_stats) {
+                if (!ds.value_counts) continue;
+                if (ds.dimension == "cat") {
+                    for (const auto& [k, v] : *ds.value_counts)
+                        result.merged.category_counts[k] += v;
+                } else if (ds.dimension == "name") {
+                    for (const auto& [k, v] : *ds.value_counts)
+                        result.merged.name_counts[k] += v;
+                } else if (ds.dimension == "pid_tid") {
+                    for (const auto& [k, v] : *ds.value_counts)
+                        result.merged.pid_tid_counts[k] += v;
+                }
+            }
+
             result.success = true;
         } catch (const std::exception& e) {
             result.success = false;

@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
+#include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
@@ -13,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -30,9 +32,9 @@ struct ChunkAggregatorInput {
     std::size_t start_line;
     std::size_t end_line;
     AggregationConfig config;
+    std::optional<common::query::Query> query;
     std::size_t checkpoint_size;
     int chunk_index;
-    std::unordered_map<std::string, std::vector<std::string>> bloom_predicates;
 
     std::size_t batch_size = 4 * 1024 * 1024;
 
@@ -75,12 +77,6 @@ struct ChunkAggregatorInput {
 
     ChunkAggregatorInput& with_batch_size(std::size_t size) {
         batch_size = size;
-        return *this;
-    }
-
-    ChunkAggregatorInput& with_bloom_predicate(
-        const std::string& dimension, const std::vector<std::string>& values) {
-        bloom_predicates[dimension] = values;
         return *this;
     }
 };

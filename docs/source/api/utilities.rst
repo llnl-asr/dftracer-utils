@@ -73,6 +73,9 @@ StatisticsQueryUtility
 ~~~~~~~~~~~~~~~~~~~~~~
 
 Query pre-computed statistics from an indexed trace file.
+When bloom/chunk statistics are not available (e.g. file was below
+``index_threshold``), the utility falls back to streaming the file
+sequentially and computing statistics on-the-fly.
 
 .. autoclass:: dftracer.utils.dftracer_utils_ext.StatisticsQueryUtility(runtime: Runtime | None = None)
    :members: process
@@ -91,7 +94,11 @@ Query pre-computed statistics from an indexed trace file.
 StatisticsAggregatorUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Aggregate statistics from a trace file via full scan.
+Aggregate statistics from a trace file. Uses pre-computed chunk
+statistics from the ``.idx`` sidecar when available. When chunk
+statistics are absent (e.g. file was below ``index_threshold``),
+falls back to streaming the ``.pfw.gz`` line-by-line and computing
+statistics on-the-fly.
 
 .. autoclass:: dftracer.utils.dftracer_utils_ext.StatisticsAggregatorUtility(runtime: Runtime | None = None)
    :members: process
@@ -124,7 +131,11 @@ Collect metadata from a DFTracer trace file.
 ReorganizationPlannerUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Plan semantic reorganization of trace files.
+Plan semantic reorganization of trace files. When manifest data is
+available in the ``.idx`` sidecar, produces per-checkpoint extraction
+tasks. When manifest tables are absent (e.g. file was below
+``index_threshold``), falls back to streaming the file line-by-line
+and emitting one whole-file extraction task per query group.
 
 .. autoclass:: dftracer.utils.dftracer_utils_ext.ReorganizationPlannerUtility(runtime: Runtime | None = None)
    :members: process

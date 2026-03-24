@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_BUILDER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_BUILDER_UTILITY_H
 
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
 #include <dftracer/utils/core/utilities/utility.h>
@@ -20,7 +21,8 @@ struct IndexBuildConfig {
     std::string file_path;
     std::string index_dir;
     std::size_t checkpoint_size = 32 * 1024 * 1024;
-    std::size_t index_threshold = 8 * 1024 * 1024;
+    std::size_t index_threshold =
+        constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
     bool force_rebuild = false;
     bool build_bloom = false;
     bool build_manifest = false;

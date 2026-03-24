@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_READER_TRACE_READER_H
 
 #include <dftracer/utils/core/common/archive_format.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -23,7 +24,8 @@ struct TraceReaderConfig {
     std::size_t checkpoint_size = 32 * 1024 * 1024;  ///< Checkpoint interval.
     bool auto_build_index = false;  ///< Auto-build index if missing.
     std::size_t index_threshold =
-        8 * 1024 * 1024;            ///< Min size for auto-index.
+        constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;  ///< Min size for
+                                                           ///< auto-index.
 };
 
 /// Per-read configuration for range, buffering, and query filtering.

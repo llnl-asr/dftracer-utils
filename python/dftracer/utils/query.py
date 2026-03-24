@@ -111,10 +111,10 @@ class Field:
     def __init__(self, name: str) -> None:
         self._name = name
 
-    def __eq__(self, other: Value) -> Expr:  # type: ignore[override]
+    def __eq__(self, other: Value) -> Expr:  # type: ignore[override]  # ty: ignore[invalid-method-override]
         return _CompareExpr(self._name, "==", other)
 
-    def __ne__(self, other: Value) -> Expr:  # type: ignore[override]
+    def __ne__(self, other: Value) -> Expr:  # type: ignore[override]  # ty: ignore[invalid-method-override]
         return _CompareExpr(self._name, "!=", other)
 
     def __gt__(self, other: Value) -> Expr:

@@ -317,7 +317,8 @@ static PyObject *TraceReader_new(PyTypeObject *type, PyObject *args,
         self->index_dir = NULL;
         self->checkpoint_size = 32 * 1024 * 1024;
         self->auto_build_index = 0;
-        self->index_threshold = 8 * 1024 * 1024;
+        self->index_threshold =
+            dftracer::utils::constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
         self->has_index = 0;
         self->runtime_obj = NULL;
     }
@@ -338,7 +339,8 @@ static int TraceReader_init(TraceReaderObject *self, PyObject *args,
     const char *index_dir = "";
     std::size_t checkpoint_size = 32 * 1024 * 1024;
     int auto_build_index = 0;
-    std::size_t index_threshold = 8 * 1024 * 1024;
+    std::size_t index_threshold =
+        dftracer::utils::constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
     PyObject *runtime_arg = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|snpnO", (char **)kwlist,

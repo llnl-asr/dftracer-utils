@@ -73,7 +73,7 @@ class TaskHandle(Generic[T]):
             return self._native.get()
         if self._future is not None:
             return self._future.result()
-        return None  # type: ignore[return-value]  # no backing future
+        return None  # type: ignore[return-value]  # ty: ignore[invalid-return-type]  # no backing future
 
     def wait(self) -> None:
         """Block until task completes. Raises on error."""

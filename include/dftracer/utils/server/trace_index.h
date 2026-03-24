@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_SERVER_TRACE_INDEX_H
 #define DFTRACER_UTILS_SERVER_TRACE_INDEX_H
 
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
 
@@ -23,7 +24,8 @@ class TraceIndex {
     // (~160 MB uncompressed with typical 20x JSON compression), a file
     // has only a handful of 32 MB checkpoints -- the indexing overhead
     // exceeds the benefit of bloom-filter skip.
-    static constexpr std::size_t INDEX_SIZE_THRESHOLD = 8 * 1024 * 1024;
+    static constexpr std::size_t INDEX_SIZE_THRESHOLD =
+        constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
 
     struct FileInfo {
         std::string path;

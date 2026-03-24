@@ -56,7 +56,8 @@ using dftracer::utils::utilities::indexer::IndexDatabase;
 // uncompressed with typical 20x JSON compression), a file has only a
 // handful of 32 MB checkpoints — the indexing overhead exceeds the
 // benefit of bloom-filter skip.
-static constexpr std::size_t INDEX_SIZE_THRESHOLD = 8 * 1024 * 1024;
+static constexpr std::size_t INDEX_SIZE_THRESHOLD =
+    constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
 
 static StatisticsQueryType parse_report_type_str(const std::string& s) {
     if (s == "summary") return StatisticsQueryType::SUMMARY;

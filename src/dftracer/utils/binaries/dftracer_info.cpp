@@ -352,7 +352,8 @@ int main(int argc, char** argv) {
 
     // Small files skip indexing to avoid creating sidecar files on
     // metadata-sensitive filesystems (e.g. Lustre).
-    static constexpr std::size_t INDEX_SIZE_THRESHOLD = 8 * 1024 * 1024;
+    static constexpr std::size_t INDEX_SIZE_THRESHOLD =
+        constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
     std::unordered_set<std::string> small_files;
     for (const auto& file_path : files) {
         std::error_code ec;

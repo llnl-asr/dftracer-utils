@@ -116,15 +116,18 @@ std::string fmt_size(double bytes) {
 // Returns "" for standalone metrics (no prefix, or known atomic names).
 std::string metric_group(const std::string& name) {
     // Atomic metric names that must not be split on '_'.
-    if (name == "transfer_size" || name == "bandwidth") return "";
+    if (name == "transfer_size" || name == "bandwidth" || name == "total_bytes")
+        return "";
     auto pos = name.find('_');
     if (pos == std::string::npos) return "";
     return name.substr(0, pos);
 }
 
 // Strip the group prefix: "dur_mean" -> "mean", "size_p50" -> "p50".
-// Returns the full name when there is no prefix.
+// Returns the full name when there is no prefix (or atomic).
 std::string strip_prefix(const std::string& name) {
+    if (name == "transfer_size" || name == "bandwidth" || name == "total_bytes")
+        return name;
     auto pos = name.find('_');
     if (pos == std::string::npos) return name;
     return name.substr(pos + 1);
@@ -192,9 +195,11 @@ std::string TreeTableFormatter::format_value(double v,
     std::string grp = metric_group(m);
     if (grp == "dur") return fmt_duration(v);
     if (grp == "size") return fmt_size(v);
-    if (m == "transfer_size") return fmt_size(v);
+    if (grp == "time") return fmt_duration(v);
+    if (m == "transfer_size" || m == "total_bytes") return fmt_size(v);
     if (m == "bandwidth") return fmt_bandwidth(v);
-    if (m == "count") return fmt_with_commas(v);
+    if (m == "count" || m == "files" || m == "processes" || m == "threads")
+        return fmt_with_commas(v);
     return fmt_generic(v);
 }
 
@@ -202,15 +207,16 @@ std::string TreeTableFormatter::format_delta(double d,
                                              const std::string& m) const {
     std::string base;
     std::string grp = metric_group(m);
-    if (grp == "dur") {
+    if (grp == "dur" || grp == "time") {
         base = fmt_duration(std::abs(d));
     } else if (grp == "size") {
         base = fmt_size(std::abs(d));
-    } else if (m == "transfer_size") {
+    } else if (m == "transfer_size" || m == "total_bytes") {
         base = fmt_size(std::abs(d));
     } else if (m == "bandwidth") {
         base = fmt_bandwidth(std::abs(d));
-    } else if (m == "count") {
+    } else if (m == "count" || m == "files" || m == "processes" ||
+               m == "threads") {
         base = fmt_with_commas(std::abs(d));
     } else {
         base = fmt_generic(std::abs(d));
@@ -554,61 +560,6 @@ void TreeTableFormatter::render(std::FILE* out,
     std::fprintf(out, "Comparison:\n");
     std::fprintf(out, "  baseline: %s\n", output.baseline_path.c_str());
     std::fprintf(out, "  variant:  %s\n", output.variant_path.c_str());
-    std::fprintf(out, "\n");
-
-    auto fmt_meta = [](const TraceMetadata& m) -> std::string {
-        std::string s;
-        s += std::to_string(m.file_count) + " files, ";
-        s += std::to_string(m.process_count) + " procs, ";
-        s += std::to_string(m.thread_count) + " threads";
-        if (m.makespan_us > 0.0) {
-            char buf[32];
-            if (m.makespan_us < 1000.0)
-                std::snprintf(buf, sizeof(buf), "%.1f us", m.makespan_us);
-            else if (m.makespan_us < 1e6)
-                std::snprintf(buf, sizeof(buf), "%.2f ms", m.makespan_us / 1e3);
-            else
-                std::snprintf(buf, sizeof(buf), "%.3f s", m.makespan_us / 1e6);
-            s += ", makespan ";
-            s += buf;
-        }
-        if (m.total_bytes > 0.0) {
-            char buf[32];
-            double b = m.total_bytes;
-            if (b < 1024.0)
-                std::snprintf(buf, sizeof(buf), "%.0f B", b);
-            else if (b < 1024.0 * 1024.0)
-                std::snprintf(buf, sizeof(buf), "%.1f KB", b / 1024.0);
-            else if (b < 1024.0 * 1024.0 * 1024.0)
-                std::snprintf(buf, sizeof(buf), "%.2f MB",
-                              b / (1024.0 * 1024.0));
-            else
-                std::snprintf(buf, sizeof(buf), "%.2f GB",
-                              b / (1024.0 * 1024.0 * 1024.0));
-            s += ", ";
-            s += buf;
-            s += " transferred";
-        }
-        if (m.total_io_time_us > 0.0) {
-            char buf[32];
-            double t = m.total_io_time_us;
-            if (t < 1000.0)
-                std::snprintf(buf, sizeof(buf), "%.1f us", t);
-            else if (t < 1e6)
-                std::snprintf(buf, sizeof(buf), "%.2f ms", t / 1e3);
-            else
-                std::snprintf(buf, sizeof(buf), "%.3f s", t / 1e6);
-            s += ", ";
-            s += buf;
-            s += " I/O time";
-        }
-        return s;
-    };
-
-    std::fprintf(out, "  baseline: %s\n",
-                 fmt_meta(output.baseline_meta).c_str());
-    std::fprintf(out, "  variant:  %s\n",
-                 fmt_meta(output.variant_meta).c_str());
     std::fprintf(out, "\n");
 
     // Pre-pass: compute all column widths.

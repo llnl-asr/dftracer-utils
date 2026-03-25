@@ -52,6 +52,40 @@ TraceMetadata extract_metadata(
     return meta;
 }
 
+std::vector<MetricComparison> build_metadata_metrics(
+    const TraceMetadata& baseline, const TraceMetadata& variant) {
+    std::vector<MetricComparison> out;
+
+    auto make = [](const std::string& name, double bval,
+                   double vval) -> MetricComparison {
+        MetricComparison mc;
+        mc.metric_name = name;
+        mc.baseline_value = bval;
+        mc.variant_value = vval;
+        mc.delta = vval - bval;
+        mc.pct_change = bval == 0.0 ? (vval != 0.0 ? 100.0 : 0.0)
+                                    : (vval - bval) / bval * 100.0;
+        mc.significance = Significance::NEGLIGIBLE;
+        mc.is_regression = false;
+        return mc;
+    };
+
+    out.push_back(make("files", static_cast<double>(baseline.file_count),
+                       static_cast<double>(variant.file_count)));
+    out.push_back(make("processes", static_cast<double>(baseline.process_count),
+                       static_cast<double>(variant.process_count)));
+    out.push_back(make("threads", static_cast<double>(baseline.thread_count),
+                       static_cast<double>(variant.thread_count)));
+    out.push_back(
+        make("time_pipeline", baseline.makespan_us, variant.makespan_us));
+    out.push_back(
+        make("time_io", baseline.total_io_time_us, variant.total_io_time_us));
+    out.push_back(
+        make("total_bytes", baseline.total_bytes, variant.total_bytes));
+
+    return out;
+}
+
 double compute_cohens_d(const MetricStats& base, std::uint64_t n_base,
                         const MetricStats& var, std::uint64_t n_var) {
     if (n_base < 2 || n_var < 2) return 0.0;
@@ -362,7 +396,9 @@ const char* sig_to_str(Significance s) {
 
 // Metric names that are atomic (not group_prefix + leaf).
 bool is_atomic_metric(const std::string& name) {
-    return name == "count" || name == "transfer_size" || name == "bandwidth";
+    return name == "count" || name == "transfer_size" || name == "bandwidth" ||
+           name == "files" || name == "processes" || name == "threads" ||
+           name == "total_bytes";
 }
 
 // Extract metric group prefix: "dur_mean" -> "dur", "count" -> ""

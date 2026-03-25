@@ -491,6 +491,14 @@ static int run_comparison_pipeline(ComparatorObject *self,
                 output_ptr->nodes.push_back(std::move(cmp_output.result));
             }
 
+            // Inject metadata rows into root SUMMARY.
+            auto meta_rows = build_metadata_metrics(output_ptr->baseline_meta,
+                                                    output_ptr->variant_meta);
+            for (auto &node : output_ptr->nodes) {
+                node.summary.metrics.insert(node.summary.metrics.begin(),
+                                            meta_rows.begin(), meta_rows.end());
+            }
+
             auto end_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double, std::milli> duration =
                 end_time - start_time;

@@ -8,6 +8,7 @@
 #include <dftracer/utils/python/trace_reader.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/utilities/aggregator.h>
+#include <dftracer/utils/python/utilities/comparator.h>
 #include <dftracer/utils/python/utilities/metadata_collector.h>
 #include <dftracer/utils/python/utilities/reconstruction_planner.h>
 #include <dftracer/utils/python/utilities/reorganization_planner.h>
@@ -44,5 +45,6 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (init_reorganization_planner(m) < 0) return NULL;
     if (init_reconstruction_planner(m) < 0) return NULL;
     if (init_aggregator(m) < 0) return NULL;
+    if (init_comparator(m) < 0) return NULL;
     return m;
 }

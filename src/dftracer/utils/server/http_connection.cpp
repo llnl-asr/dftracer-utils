@@ -18,14 +18,14 @@ coro::CoroTask<void> handle_connection(int client_fd,
                                        Router& router) {
     // 8 KiB receive buffer. For HTTP/1.1 GET requests this is plenty.
     // Requests larger than this are rejected as "too large".
-    constexpr std::size_t kBufSize = 8192;
-    char buf[kBufSize];
+    constexpr std::size_t BUF_SIZE = 8192;
+    char buf[BUF_SIZE];
     std::size_t buf_used = 0;
 
     while (true) {
         // Read data from socket.
         ssize_t n = co_await io::recv(client_fd, buf + buf_used,
-                                      kBufSize - buf_used, 0);
+                                      BUF_SIZE - buf_used, 0);
         if (n <= 0) break;  // Connection closed or error
         buf_used += static_cast<std::size_t>(n);
 
@@ -34,7 +34,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
         int parsed = req.parse(buf, buf_used);
         if (parsed == -2) {
             // Incomplete — need more data.
-            if (buf_used >= kBufSize) {
+            if (buf_used >= BUF_SIZE) {
                 // Buffer full but still no complete request.
                 auto resp = HttpResponse::bad_request("Request too large");
                 auto out = resp.serialize();

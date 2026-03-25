@@ -68,6 +68,11 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/aggregators/test_aggregation_key.cpp
     composites/dft/aggregators/test_aggregation_config.cpp
 
+    # DFT Comparator Composites
+    composites/dft/comparator/test_comparison_result.cpp
+    composites/dft/comparator/test_comparison_config.cpp
+    composites/dft/comparator/test_is_data_transfer_op.cpp
+
     # Indexer
     indexer/test_index_database.cpp
     indexer/test_provenance_database.cpp

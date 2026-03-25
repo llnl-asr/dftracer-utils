@@ -2,8 +2,13 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INTERNAL_UTILS_H
 
 #include <string>
+#include <string_view>
 
 namespace dftracer::utils::utilities::composites::dft::internal {
+
+// True when the event's return value represents bytes transferred.
+// Checks both category (POSIX/STDIO) and function name.
+bool is_data_transfer_op(std::string_view cat, std::string_view name);
 
 /**
  * @brief Determine the index file path for a given data file.

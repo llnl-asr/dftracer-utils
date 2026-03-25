@@ -111,6 +111,18 @@
         "DFTRACER_UTILS_ENABLE_UBSAN": "ON",
         "DFTRACER_UTILS_COVERAGE": "OFF"
       }
+    },
+    {
+      "name": "asan-ubsan",
+      "displayName": "ASAN + UBSAN (Debug)",
+      "description": "Debug build with Address and UndefinedBehavior Sanitizers",
+      "inherits": "debug",
+      "cacheVariables": {
+        "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_ENABLE_ASAN": "ON",
+        "DFTRACER_UTILS_ENABLE_UBSAN": "ON",
+        "DFTRACER_UTILS_COVERAGE": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -173,6 +185,12 @@
       "displayName": "UBSAN Build",
       "configurePreset": "ubsan",
       "jobs": 0
+    },
+    {
+      "name": "asan-ubsan",
+      "displayName": "ASAN+UBSAN Build",
+      "configurePreset": "asan-ubsan",
+      "jobs": 0
     }
   ],
   "testPresets": [
@@ -213,6 +231,17 @@
       "name": "ubsan",
       "displayName": "Run UBSAN Tests",
       "configurePreset": "ubsan",
+      "execution": {
+        "jobs": 0
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "asan-ubsan",
+      "displayName": "Run ASAN+UBSAN Tests",
+      "configurePreset": "asan-ubsan",
       "execution": {
         "jobs": 0
       },

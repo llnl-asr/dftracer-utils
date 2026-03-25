@@ -669,3 +669,81 @@ dftracer_call_tree
 
     # Analyze with detailed statistics
     dftracer_call_tree ./traces --analyze --verbose --max-depth 5
+
+dftracer_comparator
+-------------------
+
+**Description:** Compare DFTracer trace metrics between a baseline and a variant run. Produces a hierarchical tree table showing per-category and per-operation deltas with Cohen's d significance classification.
+
+**Usage:**
+
+.. code-block:: bash
+
+    dftracer_comparator [OPTIONS]
+
+**Options:**
+
+- ``--baseline <path>`` - Baseline trace file or directory [required unless --config]
+- ``--variant <path>`` - Variant trace file or directory [required unless --config]
+- ``--config <path>`` - JSON config file for hierarchical comparison (replaces --baseline/--variant)
+- ``--query <query>`` - Query DSL filter (default: ``'cat == "POSIX" OR cat == "STDIO"'``)
+- ``--group-by <keys>`` - Comma-separated group keys (default: cat,name)
+- ``--format <fmt>`` - Output format: ``table`` (default) or ``json``
+- ``-t, --time-interval <ms>`` - Time interval in milliseconds for bucketing (default: 5000)
+- ``--threshold <pct>`` - Hide changes below this percentage (default: 0.0)
+- ``--no-color`` - Disable ANSI color output
+- ``--executor-threads <count>`` - Number of parallel threads (default: auto)
+- ``--index-dir <path>`` - Directory for index sidecar files (default: system temp)
+- ``--force`` - Force index rebuild
+- ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
+
+**Example:**
+
+.. code-block:: bash
+
+    # Quick comparison of two trace files
+    dftracer_comparator --baseline run_v1.pfw.gz --variant run_v2.pfw.gz
+
+    # Compare directories with 1-second buckets
+    dftracer_comparator --baseline ./traces_v1 --variant ./traces_v2 -t 1000
+
+    # JSON output for programmatic consumption
+    dftracer_comparator --baseline run_v1.pfw.gz --variant run_v2.pfw.gz --format json
+
+    # Filter to specific operations
+    dftracer_comparator --baseline a.pfw.gz --variant b.pfw.gz \
+        --query 'cat == "POSIX" AND name == "write"'
+
+    # Hierarchical comparison via JSON config
+    dftracer_comparator --config compare.json
+
+**Output columns:**
+
+- **Baseline / Variant** - Metric values for each side
+- **Delta** - Absolute difference (variant - baseline)
+- **Pct** - Percentage change
+- **Sig** - Cohen's d significance: ``NEGLIGIBLE``, ``SMALL``, ``MEDIUM``, ``LARGE``
+
+**JSON config format:**
+
+.. code-block:: json
+
+    {
+        "baseline": "./traces_v1",
+        "variant": "./traces_v2",
+        "defaults": {
+            "time_interval_ms": 5000,
+            "threshold_pct": 1.0,
+            "percentiles": [0.5, 0.95, 0.99]
+        },
+        "nodes": [
+            {
+                "name": "POSIX I/O",
+                "query": "cat == \"POSIX\"",
+                "children": [
+                    {"name": "reads", "query": "name == \"read\""},
+                    {"name": "writes", "query": "name == \"write\""}
+                ]
+            }
+        ]
+    }

@@ -63,6 +63,53 @@ counters, and returns the result as Arrow.
    # Callable shorthand
    table = agg("./traces")
 
+ComparatorUtility
+~~~~~~~~~~~~~~~~~
+
+Compare trace metrics between a baseline and variant run. Returns a
+hierarchical comparison with per-category and per-operation deltas,
+Cohen's d significance, and regression detection.
+
+Three output methods:
+
+- ``compare()`` returns a materialized :class:`~dftracer.utils.arrow.ArrowTable`
+  with columns: ``node_path``, ``metric_group``, ``metric_name``, ``baseline``,
+  ``variant``, ``baseline_stdev``, ``variant_stdev``, ``delta``, ``pct_change``,
+  ``cohens_d``, ``significance``, ``is_regression``.
+- ``compare_json()`` returns a JSON string with the full hierarchical tree.
+- ``compare_table()`` returns a formatted ASCII table string.
+
+.. autoclass:: dftracer.utils.dftracer_utils_ext.ComparatorUtility(runtime: Runtime | None = None)
+   :members: compare, compare_json, compare_table
+   :undoc-members:
+
+.. code-block:: python
+
+   from dftracer.utils.utilities import ComparatorUtility
+
+   cmp = ComparatorUtility()
+
+   # Arrow table for programmatic analysis
+   table = cmp.compare("./traces_v1/run.pfw.gz", "./traces_v2/run.pfw.gz")
+
+   # JSON for serialization
+   json_str = cmp.compare_json("./traces_v1", "./traces_v2")
+
+   # Formatted table for display
+   print(cmp.compare_table("./baseline.pfw.gz", "./variant.pfw.gz"))
+
+   # With options
+   table = cmp.compare(
+       "./baseline.pfw.gz",
+       "./variant.pfw.gz",
+       query='cat == "POSIX"',
+       time_interval_ms=1000.0,
+       threshold=1.0,
+   )
+
+   # Callable shorthand (delegates to compare)
+   table = cmp("./baseline.pfw.gz", "./variant.pfw.gz")
+
 Scalar Utilities (Dict Output)
 ------------------------------
 

@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/chunk_aggregator_utility.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
@@ -86,7 +87,7 @@ void ChunkAggregatorUtility::process_event(
     metrics.update_timestamp(timestamp, duration);
 
     JsonValue ret = args["ret"];
-    if (ret.exists()) {
+    if (ret.exists() && internal::is_data_transfer_op(key.cat, key.name)) {
         std::uint64_t size = ret.get<std::uint64_t>();
         metrics.update_size(size, config.compute_percentiles);
     }

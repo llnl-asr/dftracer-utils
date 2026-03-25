@@ -203,6 +203,7 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_view.cpp
     binaries/test_dftracer_tar.cpp
     binaries/test_dftracer_replay.cpp
+    binaries/test_dftracer_comparator.cpp
     )
 
 foreach(test_file ${TEST_BINARY_SOURCES})
@@ -288,6 +289,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_replay")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_REPLAY_PATH=$<TARGET_FILE:dftracer_replay>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_comparator")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>")
   endif()
 
 endforeach()

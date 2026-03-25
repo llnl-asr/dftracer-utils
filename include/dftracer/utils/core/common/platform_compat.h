@@ -60,4 +60,14 @@
 #define DFTRACER_ALIGNED_BUFFER(type, name, size) \
     alignas(DFTRACER_OPTIMAL_ALIGNMENT) type name[size]
 
+// std::thread::hardware_concurrency() may return 0 on some platforms.
+// Use this wrapper to guarantee at least 1 thread.
+#include <cstddef>
+#include <thread>
+
+inline std::size_t dftracer_utils_hardware_concurrency() {
+    auto n = std::thread::hardware_concurrency();
+    return n == 0 ? 1u : static_cast<std::size_t>(n);
+}
+
 #endif  // DFTRACER_UTILS_CORE_COMMON_PLATFORM_COMPAT_H

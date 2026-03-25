@@ -28,7 +28,7 @@ std::string base64_encode(const void* data, std::size_t len) {
 }
 
 std::optional<std::string> base64_decode(std::string_view sv) {
-    static constexpr unsigned char kDecTable[256] = {
+    static constexpr unsigned char DEC_TABLE[256] = {
         // clang-format off
         64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
         64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
@@ -53,10 +53,10 @@ std::optional<std::string> base64_decode(std::string_view sv) {
     std::string out;
     out.reserve(sv.size() / 4 * 3);
     for (std::size_t i = 0; i < sv.size(); i += 4) {
-        auto a = kDecTable[static_cast<unsigned char>(sv[i])];
-        auto b = kDecTable[static_cast<unsigned char>(sv[i + 1])];
-        auto c = kDecTable[static_cast<unsigned char>(sv[i + 2])];
-        auto d = kDecTable[static_cast<unsigned char>(sv[i + 3])];
+        auto a = DEC_TABLE[static_cast<unsigned char>(sv[i])];
+        auto b = DEC_TABLE[static_cast<unsigned char>(sv[i + 1])];
+        auto c = DEC_TABLE[static_cast<unsigned char>(sv[i + 2])];
+        auto d = DEC_TABLE[static_cast<unsigned char>(sv[i + 3])];
         if (a == 64 || b == 64) return std::nullopt;
         unsigned val = (a << 18) | (b << 12);
         out.push_back(static_cast<char>(val >> 16));
@@ -76,19 +76,19 @@ std::optional<std::string> base64_decode(std::string_view sv) {
 
 // Wire format: 8 bytes file_index + 4 bytes chunk_index + 4 bytes line_offset
 // (all little-endian), base64-encoded.
-static constexpr std::size_t kCursorBytes = 16;
+static constexpr std::size_t CURSOR_BYTES = 16;
 
 std::string QueryCursor::encode() const {
-    unsigned char raw[kCursorBytes];
+    unsigned char raw[CURSOR_BYTES];
     std::memcpy(raw, &file_index, 8);
     std::memcpy(raw + 8, &chunk_index, 4);
     std::memcpy(raw + 12, &line_offset, 4);
-    return base64_encode(raw, kCursorBytes);
+    return base64_encode(raw, CURSOR_BYTES);
 }
 
 std::optional<QueryCursor> QueryCursor::decode(std::string_view cursor) {
     auto raw = base64_decode(cursor);
-    if (!raw || raw->size() != kCursorBytes) return std::nullopt;
+    if (!raw || raw->size() != CURSOR_BYTES) return std::nullopt;
     QueryCursor c;
     std::memcpy(&c.file_index, raw->data(), 8);
     std::memcpy(&c.chunk_index, raw->data() + 8, 4);

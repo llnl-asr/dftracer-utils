@@ -173,6 +173,12 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/view_reader_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/views/view_builder_utility.cpp
 
+    # DFT Comparator
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/comparator/comparison_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/comparator/comparison_result.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/comparator/comparison_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/comparator/tree_table_formatter.cpp
+
     # Indexer
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_database.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_builder_utility.cpp
@@ -801,7 +807,8 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_view.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_organize.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_reconstruct.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_server.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_server.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_comparator.cpp)
 
   foreach(bin ${DFTRACER_BINARIES})
     string(REPLACE ".cpp" "" bin_exec ${bin})
@@ -942,7 +949,9 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reconstruction_planner.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/reconstruction_planner.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/aggregator.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/aggregator.h)
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/aggregator.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/comparator.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/utilities/comparator.h)
 
   # Link to unified library to test if this fixes the bus error
   target_link_libraries(dftracer_utils_ext PRIVATE dftracer_utils::shared)
@@ -981,6 +990,7 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_reorganization_planner.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_reconstruction_planner.pyi"
       "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_aggregator.pyi"
+      "${CMAKE_SOURCE_DIR}/python/dftracer/utils/utilities/_comparator.pyi"
     DESTINATION "dftracer/utils/utilities")
 
 endif()

@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <sstream>
+#include <unordered_set>
 
 namespace dftracer::utils::utilities::composites::dft::internal {
 
@@ -30,6 +31,18 @@ std::string determine_provenance_index_path(const std::string& data_path,
     }
 
     return (path.parent_path() / base_name).string();
+}
+
+bool is_data_transfer_op(std::string_view cat, std::string_view name) {
+    if (cat != "POSIX" && cat != "STDIO") return false;
+    static const std::unordered_set<std::string_view> OPS = {
+        "read",     "write",    "pread",           "pwrite",  "pread64",
+        "pwrite64", "readv",    "writev",          "preadv",  "pwritev",
+        "preadv2",  "pwritev2", "fread",           "fwrite",  "recv",
+        "send",     "recvfrom", "sendto",          "recvmsg", "sendmsg",
+        "splice",   "sendfile", "copy_file_range",
+    };
+    return OPS.count(name) > 0;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::internal

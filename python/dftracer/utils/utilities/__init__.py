@@ -1,7 +1,8 @@
-"""DFTracer utility bindings for statistics, aggregation, and reorganization."""
+"""DFTracer utility bindings for statistics, aggregation, comparison, and reorganization."""
 
 from ..dftracer_utils_ext import (
     AggregatorUtility,
+    ComparatorUtility,
     MetadataCollectorUtility,
     ReconstructionPlannerUtility,
     ReorganizationPlannerUtility,
@@ -11,6 +12,7 @@ from ..dftracer_utils_ext import (
 
 __all__ = [
     "AggregatorUtility",
+    "ComparatorUtility",
     "MetadataCollectorUtility",
     "ReconstructionPlannerUtility",
     "ReorganizationPlannerUtility",

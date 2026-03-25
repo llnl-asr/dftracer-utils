@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/runtime.h>
 
 #include <algorithm>
@@ -8,7 +9,7 @@
 namespace dftracer::utils {
 
 Runtime::Runtime(std::size_t threads)
-    : threads_(threads == 0 ? std::thread::hardware_concurrency() : threads) {
+    : threads_(threads == 0 ? dftracer_utils_hardware_concurrency() : threads) {
     ExecutorConfig config;
     config.num_threads = threads_;
     executor_ = std::make_unique<Executor>(config);
@@ -19,7 +20,7 @@ Runtime::Runtime(std::size_t threads)
 }
 
 Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
-    : threads_(config.num_threads == 0 ? std::thread::hardware_concurrency()
+    : threads_(config.num_threads == 0 ? dftracer_utils_hardware_concurrency()
                                        : config.num_threads) {
     executor_ = std::make_unique<Executor>(config);
     executor_->start();
@@ -32,7 +33,7 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
 
 Runtime::Runtime(const ExecutorConfig& config,
                  std::unique_ptr<Watchdog> watchdog)
-    : threads_(config.num_threads == 0 ? std::thread::hardware_concurrency()
+    : threads_(config.num_threads == 0 ? dftracer_utils_hardware_concurrency()
                                        : config.num_threads) {
     executor_ = std::make_unique<Executor>(config);
     executor_->start();

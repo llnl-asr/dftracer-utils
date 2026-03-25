@@ -304,3 +304,119 @@ Yields ``ViewReaderBatch`` objects with ``to_arrow()`` for Arrow conversion.
    :project: dftracer-utils
    :members:
    :undoc-members:
+
+Comparator
+----------
+
+Hierarchical comparison of trace metrics between baseline and variant
+runs. Aggregates events into time-bucketed windows, computes per-window
+max across processes, then mean +/- stdev across windows, and classifies
+deltas using Cohen's d (NEGLIGIBLE / SMALL / MEDIUM / LARGE).
+
+ComparisonConfig
+~~~~~~~~~~~~~~~~
+
+Configuration for the comparison pipeline. Can be constructed from CLI
+arguments (``from_cli()``) or loaded from a JSON file
+(``from_json_file()``). Supports hierarchical node trees with query
+inheritance and per-node percentile overrides.
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::ComparisonDefaults
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::ComparisonNode
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::ComparisonConfig
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+ComparisonResult
+~~~~~~~~~~~~~~~~
+
+Result types for the comparison pipeline. ``CollapsedMetrics`` holds
+per-window-max, cross-window mean/stdev values for a single metric
+group. ``ComparisonOutput`` is the top-level result containing the
+hierarchical tree of comparison nodes and metadata.
+
+.. doxygenenum:: dftracer::utils::utilities::composites::dft::comparator::Significance
+   :project: dftracer-utils
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::MetricComparison
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::GroupComparison
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::NodeResult
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::TraceMetadata
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::CollapsedMetrics
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::ComparisonOutput
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+ComparisonUtility
+~~~~~~~~~~~~~~~~~
+
+Joins baseline and variant aggregation outputs, builds the hierarchical
+comparison tree (root -> categories -> operations), and computes deltas
+with significance classification.
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::ComparisonVisitorPair
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::ComparisonUtilityInput
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::ComparisonUtilityOutput
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenclass:: dftracer::utils::utilities::composites::dft::comparator::ComparisonUtility
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+TreeTableFormatter
+~~~~~~~~~~~~~~~~~~
+
+Renders ``ComparisonOutput`` as an ASCII tree table (``render()``) or
+JSON (``render_json()``). The table output uses dynamic column alignment
+with UTF-8 display width awareness.
+
+.. doxygenstruct:: dftracer::utils::utilities::composites::dft::comparator::FormatterOptions
+   :project: dftracer-utils
+   :members:
+   :undoc-members:
+
+.. doxygenclass:: dftracer::utils::utilities::composites::dft::comparator::TreeTableFormatter
+   :project: dftracer-utils
+   :members:
+   :undoc-members:

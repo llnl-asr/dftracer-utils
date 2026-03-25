@@ -210,7 +210,7 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
     out.minor_version = minor_ver;
     out.headers.clear();
 
-    constexpr std::size_t kMaxHeaders = 64;
+    constexpr std::size_t MAX_HEADERS = 64;
 
     while (!c.eof()) {
         // Empty line = end of headers
@@ -219,7 +219,7 @@ int parse_request(const char* buf, std::size_t len, ParsedRequest& out) {
             break;
         }
 
-        if (out.headers.size() >= kMaxHeaders) return -1;
+        if (out.headers.size() >= MAX_HEADERS) return -1;
 
         // Header name
         const char* name_start = nullptr;

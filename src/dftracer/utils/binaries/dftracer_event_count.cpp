@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
@@ -51,7 +52,7 @@ int main(int argc, char** argv) {
             "number of CPU cores)")
         .scan<'d', std::size_t>()
         .default_value(
-            static_cast<std::size_t>(std::thread::hardware_concurrency()));
+            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
 
     program.add_argument("--index-dir")
         .help("Directory to store index files (default: system temp directory)")

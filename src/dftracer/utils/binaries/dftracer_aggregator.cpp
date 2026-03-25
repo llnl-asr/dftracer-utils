@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
@@ -417,13 +418,13 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
                     co_return false;
                 }
 
-                constexpr std::size_t kBatchRows = 10000;
+                constexpr std::size_t BATCH_ROWS = 10000;
                 AggregationBatch batch;
-                batch.entries.reserve(kBatchRows);
+                batch.entries.reserve(BATCH_ROWS);
 
                 for (auto& [key, metrics] : agg_results.aggregations) {
                     batch.entries.emplace_back(key, metrics);
-                    if (batch.entries.size() >= kBatchRows) {
+                    if (batch.entries.size() >= BATCH_ROWS) {
                         auto arrow_batch = batch.to_arrow();
                         if (ipc.write_batch(arrow_batch) != 0) {
                             DFTRACER_UTILS_LOG_ERROR(
@@ -591,7 +592,7 @@ int main(int argc, char** argv) {
             "number of CPU cores)")
         .scan<'d', std::size_t>()
         .default_value(
-            static_cast<std::size_t>(std::thread::hardware_concurrency()));
+            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
 
     program.add_argument("--index-dir")
         .help("Directory to store index files (default: system temp directory)")

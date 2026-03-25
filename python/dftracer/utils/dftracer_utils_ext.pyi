@@ -652,3 +652,62 @@ class AggregatorUtility:
         batch_size_mb: int = 4,
         event_batch_size: int = 10000,
     ) -> Iterator[Any]: ...
+
+class ComparatorUtility:
+    def __init__(self, runtime: Optional["Runtime"] = None) -> None: ...
+    def compare(
+        self,
+        baseline: str,
+        variant: str,
+        query: str = "",
+        group_by: str = "",
+        format: str = "table",
+        time_interval_ms: float = 5000.0,
+        threshold: float = 0.0,
+        executor_threads: int = 0,
+        index_dir: str = "",
+        force_rebuild: bool = False,
+        config: str = "",
+    ) -> Any: ...
+    def __call__(
+        self,
+        baseline: str,
+        variant: str,
+        query: str = "",
+        group_by: str = "",
+        format: str = "table",
+        time_interval_ms: float = 5000.0,
+        threshold: float = 0.0,
+        executor_threads: int = 0,
+        index_dir: str = "",
+        force_rebuild: bool = False,
+        config: str = "",
+    ) -> Any: ...
+    def compare_json(
+        self,
+        baseline: str,
+        variant: str,
+        query: str = "",
+        group_by: str = "",
+        format: str = "table",
+        time_interval_ms: float = 5000.0,
+        threshold: float = 0.0,
+        executor_threads: int = 0,
+        index_dir: str = "",
+        force_rebuild: bool = False,
+        config: str = "",
+    ) -> str: ...
+    def compare_table(
+        self,
+        baseline: str,
+        variant: str,
+        query: str = "",
+        group_by: str = "",
+        format: str = "table",
+        time_interval_ms: float = 5000.0,
+        threshold: float = 0.0,
+        executor_threads: int = 0,
+        index_dir: str = "",
+        force_rebuild: bool = False,
+        config: str = "",
+    ) -> str: ...

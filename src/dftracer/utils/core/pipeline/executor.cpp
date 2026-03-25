@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/yield.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/sqlite/vfs.h>
@@ -61,8 +62,9 @@ void drain_thread_local_destroys() {
 }
 
 Executor::Executor(const ExecutorConfig& config)
-    : num_threads_(config.num_threads == 0 ? std::thread::hardware_concurrency()
-                                           : config.num_threads),
+    : num_threads_(config.num_threads == 0
+                       ? dftracer_utils_hardware_concurrency()
+                       : config.num_threads),
       last_activity_time_(std::chrono::steady_clock::now()),
       idle_timeout_(config.idle_timeout),
       deadlock_timeout_(config.deadlock_timeout),

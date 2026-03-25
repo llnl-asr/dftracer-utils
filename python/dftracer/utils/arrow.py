@@ -87,7 +87,7 @@ class ArrowBatch:
             ImportError: If polars is not installed.
         """
         try:
-            import polars as pl  # type: ignore[import-not-found]
+            import polars as pl  # type: ignore[import-not-found]  # ty: ignore[unresolved-import]
         except ImportError:
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"
@@ -195,7 +195,7 @@ class ArrowTable:
             ImportError: If polars is not installed.
         """
         try:
-            import polars as pl  # type: ignore[import-not-found]
+            import polars as pl  # type: ignore[import-not-found]  # ty: ignore[unresolved-import]
         except ImportError:
             raise ImportError(
                 "polars is required for to_polars(). Install with: pip install polars"

@@ -190,9 +190,10 @@ TEST_SUITE("StatisticsAggregatorUtility") {
 
         auto result = aggregator.process(input).get();
 
-        CHECK(result.success == true);
-        CHECK(result.num_chunks == 0);
-        CHECK(result.merged.total_events == 0);
+        // Trace file doesn't exist, so the streaming fallback
+        // correctly reports failure.
+        CHECK(result.success == false);
+        CHECK(result.error_message.find("not found") != std::string::npos);
 
         fs::remove_all(test_dir);
     }

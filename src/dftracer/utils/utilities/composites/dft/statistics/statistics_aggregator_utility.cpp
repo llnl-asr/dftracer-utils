@@ -1,15 +1,20 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/sqlite/async.h>
+#include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
+#include <yyjson.h>
 
 namespace dftracer::utils::utilities::composites::dft::statistics {
 
+using dftracer::utils::utilities::common::json::JsonValue;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::internal::get_logical_path;
+using fileio::lines::sources::async_streaming_gz_lines;
 
 coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
     const StatisticsAggregatorInput& input) {
@@ -29,7 +34,10 @@ coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
         co_return result;
     }
 
-    auto do_query = [&input, &result]() -> TraceStatistics {
+    bool needs_streaming_fallback = false;
+
+    auto do_query = [&input, &result,
+                     &needs_streaming_fallback]() -> TraceStatistics {
         try {
             IndexDatabase idx_db(result.idx_path);
 
@@ -38,16 +46,21 @@ coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
             if (fid < 0) {
                 result.success = false;
                 result.error_message =
-                    "File not found in bloom index: " + input.file_path;
+                    "File not found in index: " + input.file_path;
                 return result;
             }
 
-            auto chunks =
-                indexing::queries::query_chunk_statistics(idx_db.sql_db(), fid);
+            std::vector<indexing::queries::ChunkStatisticsResult> chunks;
+            try {
+                chunks = indexing::queries::query_chunk_statistics(
+                    idx_db.sql_db(), fid);
+            } catch (const std::exception&) {
+                needs_streaming_fallback = true;
+                return result;
+            }
 
             if (chunks.empty()) {
-                result.success = true;
-                result.num_chunks = 0;
+                needs_streaming_fallback = true;
                 return result;
             }
 
@@ -81,7 +94,69 @@ coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
         return result;
     };
 
-    co_return co_await sqlite::run(do_query);
+    result = co_await sqlite::run(do_query);
+
+    if (!needs_streaming_fallback) {
+        co_return result;
+    }
+
+    if (!fs::exists(input.file_path)) {
+        result.success = false;
+        result.error_message = "Trace file not found: " + input.file_path;
+        co_return result;
+    }
+
+    /// Sequential fallback: stream the file line-by-line and compute
+    /// statistics on-the-fly when the index has no chunk_statistics
+    /// (e.g. file was below the index_threshold).
+    try {
+        indexing::ChunkStatistics stats;
+        auto gen = async_streaming_gz_lines(input.file_path);
+        while (auto line_opt = co_await gen.next()) {
+            const auto& line = *line_opt;
+            if (line.content.empty()) continue;
+
+            yyjson_doc* doc = yyjson_read(
+                line.content.data(), line.content.size(), YYJSON_READ_NOFLAG);
+            if (!doc) continue;
+
+            yyjson_val* root = yyjson_doc_get_root(doc);
+            if (!root || !yyjson_is_obj(root)) {
+                yyjson_doc_free(doc);
+                continue;
+            }
+
+            try {
+                JsonValue json(root);
+                std::string_view ph = json["ph"].get<std::string_view>();
+
+                if (ph != "M") {
+                    std::string_view name =
+                        json["name"].get<std::string_view>();
+                    std::string_view cat = json["cat"].get<std::string_view>();
+                    std::uint64_t pid = json["pid"].get<std::uint64_t>();
+                    std::uint64_t tid = json["tid"].get<std::uint64_t>();
+                    std::uint64_t ts = json["ts"].get<std::uint64_t>();
+                    std::uint64_t dur = json["dur"].get<std::uint64_t>();
+                    stats.update_from_event(name, cat, pid, tid, ts, dur);
+                }
+            } catch (const std::exception&) {
+                // Skip malformed or partial events without
+                // aborting the entire aggregation.
+            }
+
+            yyjson_doc_free(doc);
+        }
+
+        result.merged = std::move(stats);
+        result.num_chunks = 0;
+        result.success = true;
+    } catch (const std::exception& e) {
+        result.success = false;
+        result.error_message = e.what();
+    }
+
+    co_return result;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::statistics

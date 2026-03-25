@@ -1,9 +1,16 @@
 """Tests for ReorganizationPlannerUtility."""
 
+import sys
+
 import dftracer.utils as dft_utils
 from dftracer.utils.dftracer_utils_ext import ReorganizationPlannerUtility
 
 from .common import Environment
+
+# Threshold large enough to guarantee bloom/manifest are skipped for any
+# test fixture, making WithoutIndex tests deterministic regardless of
+# fixture size.
+_SKIP_INDEX_THRESHOLD = sys.maxsize
 
 
 class TestReorganizationPlannerUtility:
@@ -12,10 +19,14 @@ class TestReorganizationPlannerUtility:
             gz_file = env.create_test_gzip_file()
             idx_file = gz_file + ".idx"
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, build_manifest=True
+                gz_file,
+                idx_file,
+                build_bloom=True,
+                build_manifest=True,
+                index_threshold=0,
             ) as indexer:
                 indexer.build()
-            groups = [{"name": "posix", "predicate": "cat=cat_1"}]
+            groups = [{"name": "posix", "query": 'cat == "cat_1"'}]
             result = ReorganizationPlannerUtility().process(source_files=[gz_file], groups=groups)
             assert isinstance(result, dict)
             assert "groups" in result
@@ -28,11 +39,61 @@ class TestReorganizationPlannerUtility:
             gz_file = env.create_test_gzip_file()
             idx_file = gz_file + ".idx"
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, build_manifest=True
+                gz_file,
+                idx_file,
+                build_bloom=True,
+                build_manifest=True,
+                index_threshold=0,
             ) as indexer:
                 indexer.build()
             util = ReorganizationPlannerUtility()
-            groups = [{"name": "posix", "predicate": "cat=cat_1"}]
+            groups = [{"name": "posix", "query": 'cat == "cat_1"'}]
             result = util(source_files=[gz_file], groups=groups)
             assert isinstance(result, dict)
             assert "tasks" in result
+
+
+class TestReorganizationPlannerWithoutIndex:
+    """Reorganization planner falls back to whole-file streaming without manifest."""
+
+    def test_plan_succeeds_without_manifest(self):
+        """Without manifest the planner streams the file and succeeds."""
+        with Environment(lines=20) as env:
+            gz_file = env.create_test_gzip_file()
+            idx_file = gz_file + ".idx"
+            with dft_utils.Indexer(
+                gz_file,
+                idx_file,
+                build_bloom=True,
+                build_manifest=True,
+                index_threshold=_SKIP_INDEX_THRESHOLD,
+            ) as indexer:
+                indexer.build()
+                assert not indexer.has_manifest
+            groups = [{"name": "posix", "query": 'cat == "cat_1"'}]
+            result = ReorganizationPlannerUtility().process(source_files=[gz_file], groups=groups)
+            assert isinstance(result, dict)
+            assert "tasks" in result
+            assert "total_events" in result
+            assert result["total_events"] > 0
+
+    def test_plan_has_tasks_without_manifest(self):
+        """Whole-file fallback produces extraction tasks."""
+        with Environment(lines=20) as env:
+            gz_file = env.create_test_gzip_file()
+            idx_file = gz_file + ".idx"
+            with dft_utils.Indexer(
+                gz_file,
+                idx_file,
+                build_bloom=True,
+                build_manifest=True,
+                index_threshold=_SKIP_INDEX_THRESHOLD,
+            ) as indexer:
+                indexer.build()
+                assert not indexer.has_manifest
+            groups = [{"name": "posix", "query": 'cat == "cat_1"'}]
+            result = ReorganizationPlannerUtility().process(source_files=[gz_file], groups=groups)
+            assert len(result["tasks"]) > 0
+            for task in result["tasks"]:
+                assert task["start_byte"] == 0
+                assert task["end_byte"] > 0

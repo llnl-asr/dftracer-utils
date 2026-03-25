@@ -39,7 +39,9 @@ class Indexer:
             force_rebuild: If True, rebuild the index even if it exists.
             build_bloom: If True, build bloom filter data in the index.
             build_manifest: If True, build manifest data in the index.
-            index_threshold: Skip indexing for files smaller than this (bytes).
+            index_threshold: Skip bloom/manifest for files smaller than this
+                (bytes). Set to 0 to disable the threshold and force
+                indexing regardless of file size.
             runtime: Runtime instance for thread pool control.
                 If None, uses the default global Runtime.
         """
@@ -326,7 +328,8 @@ class TraceReader:
             auto_build_index: If True, automatically build an index
                 when none exists and the file exceeds *index_threshold*.
             index_threshold: Minimum file size in bytes before
-                auto-indexing is triggered (default 8 MB).
+                auto-indexing is triggered (default 8 MB). Set to 0
+                to disable the threshold and always build an index.
             runtime: Runtime instance for thread pool control.
                 If None, uses the default global Runtime.
 

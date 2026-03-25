@@ -65,7 +65,6 @@ class GzipIndexer : public Indexer {
     }
 
    private:
-    // Direct member variables - eliminates impl layer indirection
     std::string gz_path;
     std::string gz_path_logical_path;
     std::string idx_path;

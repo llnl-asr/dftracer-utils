@@ -30,7 +30,8 @@ static PyObject *Indexer_new(PyTypeObject *type, PyObject *args,
         self->checkpoint_size = 0;
         self->build_bloom = 0;
         self->build_manifest = 0;
-        self->index_threshold = 8 * 1024 * 1024;
+        self->index_threshold =
+            dftracer::utils::constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
         self->runtime_obj = NULL;
     }
     return (PyObject *)self;
@@ -48,7 +49,8 @@ static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     int force_rebuild = 0;
     int build_bloom = 0;
     int build_manifest = 0;
-    std::uint64_t index_threshold = 8 * 1024 * 1024;
+    std::uint64_t index_threshold =
+        dftracer::utils::constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
     PyObject *runtime_arg = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(
@@ -141,7 +143,8 @@ static PyObject *Indexer_build(IndexerObject *self,
                           static_cast<std::size_t>(self->checkpoint_size))
                       .with_bloom(self->build_bloom != 0)
                       .with_manifest(self->build_manifest != 0)
-                      .with_index_threshold(0);
+                      .with_index_threshold(
+                          static_cast<std::size_t>(self->index_threshold));
 
     std::string idx_str(idx);
     auto pos = idx_str.find_last_of('/');

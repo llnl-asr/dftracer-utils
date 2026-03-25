@@ -501,3 +501,117 @@ Complete example of gathering statistics from a DFTracer trace file:
     std::cout << "Total events: " << stats.merged.total_events << std::endl;
     std::cout << "Duration p99: " << stats.merged.duration_sketch.quantile(0.99)
               << " us" << std::endl;
+
+Comparison
+----------
+
+Compare trace metrics between a baseline and variant run. Aggregates
+events into time-bucketed windows, computes per-window max across
+processes, then mean +/- stdev across windows, and classifies deltas
+using Cohen's d effect size (NEGLIGIBLE / SMALL / MEDIUM / LARGE).
+
+ComparisonConfig
+~~~~~~~~~~~~~~~~
+
+Configuration can be built from CLI arguments or loaded from a JSON
+file with hierarchical node trees. Nodes inherit query filters,
+metrics, and percentiles from their parent unless overridden.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/composites/dft/comparator/comparison_config.h>
+
+    using namespace dftracer::utils::utilities::composites::dft::comparator;
+
+    // Quick mode from CLI arguments
+    auto config = ComparisonConfig::from_cli(
+        "./traces_v1", "./traces_v2",
+        R"(cat == "POSIX" OR cat == "STDIO")",  // query
+        "");                                      // group_by
+    config.defaults.time_interval_ms = 1000.0;
+    config.resolve();  // propagate defaults down the tree
+
+    // Or load from JSON config file
+    std::string error;
+    auto config = ComparisonConfig::from_json_file("compare.json", error);
+    if (!config) {
+        // handle error
+    }
+    config->resolve();
+
+ComparisonUtility
+~~~~~~~~~~~~~~~~~
+
+Joins baseline and variant aggregation outputs, builds the hierarchical
+comparison tree (root -> categories -> operations), and computes deltas
+with significance classification.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/composites/dft/comparator/comparison_utility.h>
+
+    using namespace dftracer::utils::utilities::composites::dft::comparator;
+
+    // Prepare visitor pairs (one per flattened node)
+    ComparisonVisitorPair pair;
+    pair.baseline = baseline_aggregation_output;
+    pair.variant = variant_aggregation_output;
+    pair.node = resolved_config_node;
+
+    ComparisonUtilityInput input;
+    input.visitors = {pair};
+    input.root_node = config.nodes[0];
+    input.baseline_file_count = 3;
+    input.variant_file_count = 3;
+
+    ComparisonUtility cmp;
+    auto output = co_await cmp.process(input);
+    // output.result contains the hierarchical NodeResult tree
+
+TreeTableFormatter
+~~~~~~~~~~~~~~~~~~
+
+Renders ``ComparisonOutput`` as an ASCII tree table or JSON string.
+The table uses dynamic column alignment with UTF-8 display width
+awareness.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/composites/dft/comparator/tree_table_formatter.h>
+
+    using namespace dftracer::utils::utilities::composites::dft::comparator;
+
+    // Table output to stdout
+    FormatterOptions opts;
+    opts.use_color = true;
+    opts.use_unicode = true;
+    TreeTableFormatter formatter(opts);
+    formatter.render(stdout, comparison_output);
+
+    // JSON output
+    std::string json = formatter.render_json(comparison_output);
+
+    // No-color output (for piping or logging)
+    FormatterOptions plain{.use_color = false, .use_unicode = false};
+    TreeTableFormatter plain_fmt(plain);
+    plain_fmt.render(log_file, comparison_output);
+
+Arrow Export
+~~~~~~~~~~~~
+
+``ComparisonOutput::to_arrow()`` flattens the hierarchical tree into a
+single Arrow record batch for programmatic analysis. Requires
+``DFTRACER_UTILS_ENABLE_ARROW=ON`` at build time.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/composites/dft/comparator/comparison_result.h>
+
+    // After running the comparison pipeline:
+    auto arrow_result = comparison_output.to_arrow();
+    // Columns: node_path, metric_group, metric_name, baseline, variant,
+    //          baseline_stdev, variant_stdev, delta, pct_change,
+    //          cohens_d, significance, is_regression
+
+See :doc:`/cpp_api/utilities` for the full API reference of all
+comparator types.

@@ -93,14 +93,14 @@ int count_gz_lines(const std::string& gz_path) {
     return count;
 }
 
-// Count non-empty lines in a plain text file.
+// Count JSON event lines in a plain text file (lines starting with '{').
 int count_lines(const std::string& path) {
     std::ifstream ifs(path);
     if (!ifs.is_open()) return -1;
     int n = 0;
     std::string line;
     while (std::getline(ifs, line)) {
-        if (!line.empty()) ++n;
+        if (!line.empty() && line[0] == '{') ++n;
     }
     return n;
 }
@@ -108,7 +108,7 @@ int count_lines(const std::string& path) {
 // Check whether any file matching a glob-like suffix exists in a directory.
 bool any_file_with_suffix(const std::string& dir, const std::string& suffix) {
     if (!fs::exists(dir)) return false;
-    for (const auto& entry : fs::directory_iterator(dir)) {
+    for (const auto& entry : fs::recursive_directory_iterator(dir)) {
         if (entry.is_regular_file()) {
             const auto name = entry.path().filename().string();
             if (name.size() >= suffix.size() &&
@@ -165,14 +165,13 @@ TEST_SUITE("DFTracerOrganize") {
         std::string out_dir = env.get_dir() + "/organized";
         fs::create_directories(out_dir);
 
-        // Test data uses "cat":"IO" for all events.
+        // Test data uses "cat":"POSIX" / "cat":"STDIO" for events.
         int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out_dir,
-                                     "--groups", R"(io:cat == "IO")"});
+                                     "--groups", R"(io:cat == "POSIX")"});
         CHECK(rc == 0);
 
-        // At least one output file must exist (io.pfw.gz or io.pfw).
-        bool has_output = fs::exists(out_dir + "/io.pfw.gz") ||
-                          fs::exists(out_dir + "/io.pfw");
+        bool has_output = any_file_with_suffix(out_dir, ".pfw.gz") ||
+                          any_file_with_suffix(out_dir, ".pfw");
         CHECK(has_output);
     }
 
@@ -193,7 +192,7 @@ TEST_SUITE("DFTracerOrganize") {
         fs::create_directories(out_dir);
 
         int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out_dir,
-                                     "--groups", R"(io:cat == "IO")"});
+                                     "--groups", R"(io:cat == "POSIX")"});
         CHECK(rc == 0);
 
         // The organizer builds .pidx sidecars in the output directory.
@@ -221,8 +220,9 @@ TEST_SUITE("DFTracerOrganize") {
         fs::create_directories(org_dir);
         fs::create_directories(rec_dir);
 
-        int rc_org = run_binary(org_binary, {"-d", env.get_dir(), "-o", org_dir,
-                                             "--groups", R"(io:cat == "IO")"});
+        int rc_org =
+            run_binary(org_binary, {"-d", env.get_dir(), "-o", org_dir,
+                                    "--groups", R"(io:cat == "POSIX")"});
         REQUIRE(rc_org == 0);
 
         // Reconstruct needs the .pidx sidecars in the organized dir.
@@ -271,8 +271,9 @@ TEST_SUITE("DFTracerOrganize") {
         fs::create_directories(org_dir);
         fs::create_directories(rec_dir);
 
-        int rc_org = run_binary(org_binary, {"-d", env.get_dir(), "-o", org_dir,
-                                             "--groups", R"(io:cat == "IO")"});
+        int rc_org =
+            run_binary(org_binary, {"-d", env.get_dir(), "-o", org_dir,
+                                    "--groups", R"(io:cat == "POSIX")"});
         REQUIRE(rc_org == 0);
 
         int rc_rec = run_binary(

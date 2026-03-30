@@ -91,6 +91,7 @@ endif()
 
 set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/metadata_collector_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/fileio/chunk_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/chunk_extractor_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/chunk_manifest_mapper_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_id_extractor_utility.cpp
@@ -159,6 +160,8 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     # DFT Reorganization
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/reorganize/provenance_tracker.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/reorganize/event_router.cpp
 
     # DFT Statistics (trace statistics, aggregation, querying)
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/statistics/trace_statistics.cpp

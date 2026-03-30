@@ -18,15 +18,38 @@
 
 namespace {
 
-std::string create_pfw_gz(dft_utils_test::TestEnvironment& env, int num_events,
-                          int id) {
-    auto trace_gz = env.create_dft_test_gzip_file(num_events);
-    if (trace_gz.empty()) return "";
+std::string find_gen_binary() {
+    const char* env_path = std::getenv("DFTRACER_GEN_FAKE_TRACE_PATH");
+    if (env_path && ::access(env_path, X_OK) == 0) return env_path;
+    std::vector<std::string> candidates = {
+        "./dftracer_gen_fake_trace",         "../dftracer_gen_fake_trace",
+        "../../dftracer_gen_fake_trace",     "../bin/dftracer_gen_fake_trace",
+        "../../bin/dftracer_gen_fake_trace",
+    };
+    for (const auto& p : candidates) {
+        if (::access(p.c_str(), X_OK) == 0) return p;
+    }
+    return "";
+}
 
-    std::string pfw_path =
+std::string create_pfw_gz(dft_utils_test::TestEnvironment& env,
+                          int /* num_events */, int id) {
+    auto gen = find_gen_binary();
+    if (gen.empty()) return "";
+
+    std::string out_dir = env.get_dir() + "/gen_" + std::to_string(id);
+    // Generate a tiny trace: 1 rank, 1 epoch, 2 steps
+    std::string cmd = gen + " -o '" + out_dir +
+                      "' -p 1 -e 1 -s 2 --num-train-files 1"
+                      " --num-val-files 1 --seed 42 2>/dev/null";
+    if (std::system(cmd.c_str()) != 0) return "";
+
+    std::string src = out_dir + "/rank_0.pfw.gz";
+    std::string dst =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    fs::rename(trace_gz, pfw_path);
-    return pfw_path;
+    if (!fs::exists(src)) return "";
+    fs::rename(src, dst);
+    return dst;
 }
 
 std::string find_comparator_binary() {
@@ -135,7 +158,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_output.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
-                                 "--query", R"(cat == "IO")"},
+                                 "--query", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -165,7 +188,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_diff.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", baseline, "--variant", variant,
-                                 "--no-color", "--query", R"(cat == "IO")"},
+                                 "--no-color", "--query", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -207,7 +230,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_dir.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", base_dir, "--variant", var_dir,
-                                 "--no-color", "--query", R"(cat == "IO")"},
+                                 "--no-color", "--query", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -233,7 +256,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_json.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
-                                 "json", "--query", R"(cat == "IO")"},
+                                 "json", "--query", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -325,7 +348,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_json_zero.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--format",
-                                 "json", "--query", R"(cat == "IO")"},
+                                 "json", "--query", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
 
@@ -368,7 +391,7 @@ TEST_SUITE("DFTracerComparator") {
         std::string output = env.get_dir() + "/cmp_interval.txt";
         int rc = run_comparator(binary,
                                 {"--baseline", f, "--variant", f, "--no-color",
-                                 "-t", "1000", "--query", R"(cat == "IO")"},
+                                 "-t", "1000", "--query", R"(cat == "POSIX")"},
                                 output);
         CHECK(rc == 0);
     }

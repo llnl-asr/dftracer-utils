@@ -114,7 +114,7 @@ foreach(test_file ${TEST_CPP_SOURCES})
   if(bin_exec STREQUAL "pipeline/test_task_scope"
      OR bin_exec STREQUAL "coro/test_channel")
     set(heavy_thread_timeout 180)
-    if(DFTRACER_UTILS_ENABLE_TSAN)
+    if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_ENABLE_COVERAGE)
       set(heavy_thread_timeout 600)
     endif()
     set_tests_properties(${bin_exec} PROPERTIES

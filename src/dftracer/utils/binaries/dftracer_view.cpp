@@ -96,15 +96,18 @@ static coro::CoroTask<void> read_single_chunk(
             std::lock_guard<std::mutex> lock(*vctx.output_mutex);
             for (const auto& event : batch->events) {
                 if (vctx.out_file) {
-                    std::fprintf(vctx.out_file, "%s\n", event.c_str());
+                    std::fprintf(vctx.out_file, "%.*s\n",
+                                 static_cast<int>(event.size()), event.data());
                 } else {
-                    std::printf("%s\n", event.c_str());
+                    std::printf("%.*s\n", static_cast<int>(event.size()),
+                                event.data());
                 }
             }
         } else {
+            // Non-stream: must copy since string_view won't outlive chunk
             std::lock_guard<std::mutex> lock(*vctx.output_mutex);
-            for (auto& event : batch->events) {
-                vctx.all_events->push_back(std::move(event));
+            for (const auto& event : batch->events) {
+                vctx.all_events->emplace_back(event);
             }
         }
     }

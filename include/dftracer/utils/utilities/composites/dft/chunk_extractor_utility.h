@@ -145,17 +145,6 @@ class ChunkExtractorUtility
    private:
     coro::CoroTask<ChunkExtractorUtilityOutput> extract_and_write(
         const ChunkExtractorUtilityInput& input);
-
-    // Write raw bytes to fd, or compress-then-write when compressor != nullptr.
-    coro::CoroTask<void> write_data(
-        int fd, const char* data, std::size_t len,
-        compression::zlib::ManualStreamingCompressorUtility* compressor);
-
-    // Flush accumulated buffer to fd (optionally through compressor).
-    // Clears buffer after flushing.
-    coro::CoroTask<void> flush_buffer(
-        int fd, std::vector<char>& buffer,
-        compression::zlib::ManualStreamingCompressorUtility* compressor);
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft

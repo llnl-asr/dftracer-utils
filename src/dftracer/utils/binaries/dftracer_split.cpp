@@ -302,13 +302,17 @@ int main(int argc, char** argv) {
     auto* output_dir_ptr = &output_dir;
 
     auto task_extract_chunks = make_task(
-        [app_name_ptr, output_dir_ptr, compress, verify](
+        [app_name_ptr, output_dir_ptr, compress, verify, executor_threads](
             CoroScope& scope, std::vector<ChunkManifest> manifests)
             -> coro::CoroTask<ExtractChunksOutput> {
             DFTRACER_UTILS_LOG_INFO("Extracting %zu chunks in parallel...",
                                     manifests.size());
 
-            // Spawn all chunk extractions in parallel
+            auto permits = coro::make_channel<bool>(executor_threads * 2);
+            for (std::size_t i = 0; i < executor_threads * 2; ++i) {
+                permits->try_send(true);
+            }
+
             std::vector<coro::SpawnFuture<ExtractResult>> futures;
             futures.reserve(manifests.size());
 
@@ -321,15 +325,22 @@ int main(int argc, char** argv) {
                                  .with_compute_hash(verify);
 
                 futures.push_back(scope.spawn(
-                    [input = std::move(input)](
-                        CoroScope&) -> coro::CoroTask<ExtractResult> {
-                        utilities::composites::dft::ChunkExtractorUtility
-                            extractor;
-                        co_return co_await extractor.process(input);
+                    [input = std::move(input),
+                     permits](CoroScope& s) -> coro::CoroTask<ExtractResult> {
+                        co_await s.receive(permits);
+                        try {
+                            utilities::composites::dft::ChunkExtractorUtility
+                                extractor;
+                            auto result = co_await extractor.process(input);
+                            permits->try_send(true);
+                            co_return result;
+                        } catch (...) {
+                            permits->try_send(true);
+                            throw;
+                        }
                     }));
             }
 
-            // Collect results
             ExtractChunksOutput results;
             results.reserve(futures.size());
             for (auto& future : futures) {

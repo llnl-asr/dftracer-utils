@@ -147,7 +147,7 @@ TEST_SUITE("DFTracerAggregator") {
 
         std::string output = env.get_dir() + "/agg_interval.json";
         int rc = run_aggregator(
-            binary, {"-d", env.get_dir(), "-o", output, "-t", "1.0"});
+            binary, {"-d", env.get_dir(), "-o", output, "-t", "1000"});
         CHECK(rc == 0);
     }
 

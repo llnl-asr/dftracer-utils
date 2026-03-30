@@ -3,6 +3,7 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 namespace dftracer::utils::utilities::indexer {
 
@@ -231,7 +232,7 @@ bool IndexDatabase::has_manifest_data(int file_id) const {
     return sqlite3_step(stmt) == SQLITE_ROW;
 }
 
-int IndexDatabase::get_or_create_file_info(const std::string& path,
+int IndexDatabase::get_or_create_file_info(std::string_view path,
                                            std::uint64_t file_hash) {
     {
         SqliteStmt stmt(db_.get(),
@@ -262,7 +263,7 @@ int IndexDatabase::get_or_create_file_info(const std::string& path,
     return static_cast<int>(sqlite3_last_insert_rowid(db_.get()));
 }
 
-int IndexDatabase::get_file_info_id(const std::string& path) const {
+int IndexDatabase::get_file_info_id(std::string_view path) const {
     SqliteStmt stmt(db_.get(), "SELECT id FROM files WHERE logical_name=?;");
     stmt.bind_text(1, path);
     if (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -506,6 +507,59 @@ void IndexDatabase::delete_event_ranges(int file_id) {
 
 void IndexDatabase::delete_metadata_lines(int file_id) {
     queries::delete_metadata_lines(db_, file_id);
+}
+
+std::uint64_t IndexDatabase::get_total_events(int file_id) const {
+    // Exact count from chunk_statistics (populated when bloom was built)
+    try {
+        SqliteStmt stmt(db_,
+                        "SELECT SUM(total_events) FROM chunk_statistics "
+                        "WHERE file_info_id = ?;");
+        stmt.bind_int(1, file_id);
+        if (sqlite3_step(stmt) == SQLITE_ROW &&
+            sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            auto val = sqlite3_column_int64(stmt, 0);
+            if (val > 0) return static_cast<std::uint64_t>(val);
+        }
+    } catch (...) {
+        // Table may not exist if bloom was never built
+    }
+    // Fallback: num_lines (approximate, might include array delimiters)
+    return get_num_lines(file_id);
+}
+
+int IndexDatabase::find_file(std::string_view file_path) const {
+    auto logical = internal::get_logical_path(file_path);
+    return get_file_info_id(logical);
+}
+
+std::uint64_t IndexDatabase::get_num_lines(int file_id) const {
+    SqliteStmt stmt(db_, "SELECT total_lines FROM metadata WHERE file_id = ?;");
+    stmt.bind_int(1, file_id);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        return static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 0));
+    }
+    return 0;
+}
+
+std::uint64_t IndexDatabase::get_max_bytes(int file_id) const {
+    // Primary: metadata table has the authoritative total uncompressed size
+    SqliteStmt stmt(db_,
+                    "SELECT total_uc_size FROM metadata WHERE file_id = ?;");
+    stmt.bind_int(1, file_id);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        auto val = sqlite3_column_int64(stmt, 0);
+        if (val > 0) return static_cast<std::uint64_t>(val);
+    }
+    // Fallback: sum from checkpoints
+    SqliteStmt stmt2(
+        db_,
+        "SELECT MAX(uc_offset + uc_size) FROM checkpoints WHERE file_id = ?;");
+    stmt2.bind_int(1, file_id);
+    if (sqlite3_step(stmt2) == SQLITE_ROW) {
+        return static_cast<std::uint64_t>(sqlite3_column_int64(stmt2, 0));
+    }
+    return 0;
 }
 
 }  // namespace dftracer::utils::utilities::indexer

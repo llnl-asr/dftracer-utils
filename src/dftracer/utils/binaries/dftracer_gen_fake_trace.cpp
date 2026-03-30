@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
@@ -49,18 +50,23 @@ class TraceWriter {
     TraceWriter& operator=(const TraceWriter&) = delete;
 
     void write(const std::string& s) {
-        util_io::RawData raw(s);
-        auto compressed_chunks = compressor_.process(raw).get();
-        for (const auto& chunk : compressed_chunks) {
-            writer_.process(util_io::RawData(chunk.data)).get();
-        }
+        [this, &s]() -> coro::CoroTask<void> {
+            auto gen = compressor_.compress(ByteView(s));
+            while (auto chunk = co_await gen.next()) {
+                co_await writer_.process(*chunk);
+            }
+        }()
+                            .get();
     }
 
     void close() {
-        auto final_chunks = compressor_.finalize();
-        for (const auto& chunk : final_chunks) {
-            writer_.process(util_io::RawData(chunk.data)).get();
-        }
+        [this]() -> coro::CoroTask<void> {
+            auto gen = compressor_.finalize_stream();
+            while (auto chunk = co_await gen.next()) {
+                co_await writer_.process(*chunk);
+            }
+        }()
+                        .get();
         writer_.close();
     }
 
@@ -134,12 +140,14 @@ static void emit_metadata(TraceWriter& w, const std::string& kind,
 
 // Regular event (duration, ph=X)
 struct EventArgs {
+    std::uint64_t id = 0;
     std::uint64_t pid = 0;
     std::uint64_t tid = 0;
     std::string name;
     std::string cat;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
+    int level = 0;
     std::string hhash;
     std::string fhash;
     std::string cmd_hash;
@@ -148,11 +156,16 @@ struct EventArgs {
 };
 
 static void emit_event(TraceWriter& w, const EventArgs& a) {
-    char num_buf[64];
+    char num_buf[128];
     std::string buf;
     buf.reserve(512);
 
-    buf += R"({"name":")";
+    buf += R"({"id":)";
+    std::snprintf(num_buf, sizeof(num_buf), "%llu",
+                  static_cast<unsigned long long>(a.id));
+    buf += num_buf;
+
+    buf += R"(,"name":")";
     json_escape(buf, a.name);
     buf += R"(","cat":")";
     json_escape(buf, a.cat);
@@ -170,6 +183,9 @@ static void emit_event(TraceWriter& w, const EventArgs& a) {
     buf += R"("hhash":")";
     json_escape(buf, a.hhash);
     buf += '"';
+
+    std::snprintf(num_buf, sizeof(num_buf), R"(,"level":%d)", a.level);
+    buf += num_buf;
 
     if (!a.fhash.empty()) {
         buf += R"(,"fhash":")";
@@ -664,7 +680,27 @@ int main(int argc, char** argv) {
                               *sref_ptr);
 
                 std::size_t rank_events = 0;
+                std::uint64_t next_id = 0;
                 std::uint64_t ts = 1000000000ULL;  // 1 second in us
+
+                // Helper: fill common fields and auto-assign id
+                auto make_event =
+                    [&](const std::string& name, const std::string& cat,
+                        std::uint64_t event_tid, std::uint64_t event_ts,
+                        std::uint64_t dur, int level) {
+                        EventArgs a;
+                        a.id = next_id++;
+                        a.pid = pid;
+                        a.tid = event_tid;
+                        a.name = name;
+                        a.cat = cat;
+                        a.ts = event_ts;
+                        a.dur = dur;
+                        a.level = level;
+                        a.hhash = my_hhash;
+                        a.cmd_hash = sref;
+                        return a;
+                    };
 
                 // -------------------------------------------------------------------
                 // Per epoch
@@ -673,8 +709,10 @@ int main(int argc, char** argv) {
                     // Training steps
                     for (int step = 0; step < steps_per_epoch; ++step) {
                         char extra[256];
+                        std::uint64_t step_start = ts;
 
-                        // -- Data loading I/O (5-7 events on io thread) --
+                        // -- Data loading I/O (on io thread, level=2) --
+                        std::uint64_t io_start = ts;
                         int shard_idx =
                             my_train_shards[step % static_cast<int>(
                                                        my_train_shards.size())];
@@ -684,16 +722,9 @@ int main(int argc, char** argv) {
 
                         // open
                         {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_io;
-                            a.name = "open";
-                            a.cat = "POSIX";
-                            a.ts = ts;
-                            a.dur = jitter(rng, 5);
-                            a.hhash = my_hhash;
+                            auto a = make_event("open", "POSIX", tid_io, ts,
+                                                jitter(rng, 5), 2);
                             a.fhash = data_fhash;
-                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":3)");
                             a.extra = extra;
                             emit_event(writer, a);
@@ -705,16 +736,9 @@ int main(int argc, char** argv) {
                         int num_reads = 3 + static_cast<int>(rng() % 3);
                         const char* read_ops[] = {"pread", "read", "fread"};
                         for (int r = 0; r < num_reads; ++r) {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_io;
-                            a.name = read_ops[r % 3];
-                            a.cat = "POSIX";
-                            a.ts = ts;
-                            a.dur = jitter(rng, 20);
-                            a.hhash = my_hhash;
+                            auto a = make_event(read_ops[r % 3], "POSIX",
+                                                tid_io, ts, jitter(rng, 20), 2);
                             a.fhash = data_fhash;
-                            a.cmd_hash = sref;
                             std::uint64_t offset =
                                 static_cast<std::uint64_t>(r) * io_size;
                             std::snprintf(
@@ -731,16 +755,9 @@ int main(int argc, char** argv) {
 
                         // close
                         {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_io;
-                            a.name = "close";
-                            a.cat = "POSIX";
-                            a.ts = ts;
-                            a.dur = jitter(rng, 3);
-                            a.hhash = my_hhash;
+                            auto a = make_event("close", "POSIX", tid_io, ts,
+                                                jitter(rng, 3), 2);
                             a.fhash = data_fhash;
-                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":0)");
                             a.extra = extra;
                             emit_event(writer, a);
@@ -748,19 +765,26 @@ int main(int argc, char** argv) {
                             ++rank_events;
                         }
 
-                        // -- Forward pass (5 events on main thread) --
+                        // Emit data_loading wrapper (level=1, spans all I/O)
+                        {
+                            auto a = make_event("data_loading", "IO", tid_io,
+                                                io_start, ts - io_start, 1);
+                            std::snprintf(extra, sizeof(extra),
+                                          R"("epoch":%d,"step":%d)", epoch,
+                                          step);
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ++rank_events;
+                        }
+
+                        // -- Forward pass (5 events on main thread, level=2) --
+                        std::uint64_t fwd_start = ts;
                         const char* fwd_ops[] = {"conv3d", "batch_norm", "relu",
                                                  "max_pool", "upsample"};
                         for (int f = 0; f < 5; ++f) {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_main;
-                            a.name = fwd_ops[f];
-                            a.cat = "APP";
-                            a.ts = ts;
-                            a.dur = jitter(rng, step_dur_us / 5);
-                            a.hhash = my_hhash;
-                            a.cmd_hash = sref;
+                            auto a =
+                                make_event(fwd_ops[f], "APP", tid_main, ts,
+                                           jitter(rng, step_dur_us / 5), 2);
                             std::snprintf(extra, sizeof(extra),
                                           R"("epoch":%d,"step":%d)", epoch,
                                           step);
@@ -770,19 +794,26 @@ int main(int argc, char** argv) {
                             ++rank_events;
                         }
 
-                        // -- Loss + backward (3 events) --
+                        // Emit forward wrapper (level=1)
+                        {
+                            auto a = make_event("forward", "APP", tid_main,
+                                                fwd_start, ts - fwd_start, 1);
+                            std::snprintf(extra, sizeof(extra),
+                                          R"("epoch":%d,"step":%d)", epoch,
+                                          step);
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ++rank_events;
+                        }
+
+                        // -- Loss + backward (3 events, level=2) --
+                        std::uint64_t back_start = ts;
                         const char* back_ops[] = {"dice_loss", "backward",
                                                   "allreduce"};
                         for (int b = 0; b < 3; ++b) {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_main;
-                            a.name = back_ops[b];
-                            a.cat = "APP";
-                            a.ts = ts;
-                            a.dur = jitter(rng, step_dur_us / 4);
-                            a.hhash = my_hhash;
-                            a.cmd_hash = sref;
+                            auto a =
+                                make_event(back_ops[b], "APP", tid_main, ts,
+                                           jitter(rng, step_dur_us / 4), 2);
                             std::snprintf(extra, sizeof(extra),
                                           R"("epoch":%d,"step":%d)", epoch,
                                           step);
@@ -792,23 +823,43 @@ int main(int argc, char** argv) {
                             ++rank_events;
                         }
 
-                        // -- Optimizer step (1 event) --
+                        // Emit backward wrapper (level=1)
                         {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_main;
-                            a.name = "optimizer_step";
-                            a.cat = "APP";
-                            a.ts = ts;
-                            a.dur = jitter(rng, step_dur_us / 8);
-                            a.hhash = my_hhash;
-                            a.cmd_hash = sref;
+                            auto a =
+                                make_event("backward_pass", "APP", tid_main,
+                                           back_start, ts - back_start, 1);
+                            std::snprintf(extra, sizeof(extra),
+                                          R"("epoch":%d,"step":%d)", epoch,
+                                          step);
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ++rank_events;
+                        }
+
+                        // -- Optimizer step (1 event, level=1) --
+                        {
+                            auto a =
+                                make_event("optimizer_step", "APP", tid_main,
+                                           ts, jitter(rng, step_dur_us / 8), 1);
                             std::snprintf(extra, sizeof(extra),
                                           R"("epoch":%d,"step":%d)", epoch,
                                           step);
                             a.extra = extra;
                             emit_event(writer, a);
                             ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // Emit train_step wrapper (level=0, spans
+                        // entire step)
+                        {
+                            auto a = make_event("train_step", "APP", tid_main,
+                                                step_start, ts - step_start, 0);
+                            std::snprintf(extra, sizeof(extra),
+                                          R"("epoch":%d,"step":%d)", epoch,
+                                          step);
+                            a.extra = extra;
+                            emit_event(writer, a);
                             ++rank_events;
                         }
                     }
@@ -816,6 +867,7 @@ int main(int argc, char** argv) {
                     // Validation (every validation_every epochs)
                     if (validation_every > 0 &&
                         (epoch + 1) % validation_every == 0) {
+                        std::uint64_t val_phase_start = ts;
                         const int val_steps = 10;
                         for (int vs = 0; vs < val_steps; ++vs) {
                             char extra[256];
@@ -823,19 +875,13 @@ int main(int argc, char** argv) {
                             const std::string& vf_hash =
                                 (*val_file_hashes_ptr)[vf_idx];
                             std::uint64_t vio_size = jitter(rng, 4096);
+                            std::uint64_t val_step_start = ts;
 
-                            // open
+                            // open (level=2)
                             {
-                                EventArgs a;
-                                a.pid = pid;
-                                a.tid = tid_io;
-                                a.name = "open";
-                                a.cat = "POSIX";
-                                a.ts = ts;
-                                a.dur = jitter(rng, 5);
-                                a.hhash = my_hhash;
+                                auto a = make_event("open", "POSIX", tid_io, ts,
+                                                    jitter(rng, 5), 2);
                                 a.fhash = vf_hash;
-                                a.cmd_hash = sref;
                                 std::snprintf(extra, sizeof(extra),
                                               R"("ret":4)");
                                 a.extra = extra;
@@ -844,20 +890,14 @@ int main(int argc, char** argv) {
                                 ++rank_events;
                             }
 
-                            // read calls (2-3)
+                            // read calls (2-3, level=2)
                             int num_reads = 2 + static_cast<int>(rng() % 2);
                             const char* read_ops[] = {"pread", "read", "fread"};
                             for (int r = 0; r < num_reads; ++r) {
-                                EventArgs a;
-                                a.pid = pid;
-                                a.tid = tid_io;
-                                a.name = read_ops[r % 3];
-                                a.cat = "POSIX";
-                                a.ts = ts;
-                                a.dur = jitter(rng, 20);
-                                a.hhash = my_hhash;
+                                auto a =
+                                    make_event(read_ops[r % 3], "POSIX", tid_io,
+                                               ts, jitter(rng, 20), 2);
                                 a.fhash = vf_hash;
-                                a.cmd_hash = sref;
                                 std::snprintf(
                                     extra, sizeof(extra),
                                     R"("ret":%llu,"count":%llu,"offset":%llu)",
@@ -872,18 +912,11 @@ int main(int argc, char** argv) {
                                 ++rank_events;
                             }
 
-                            // close
+                            // close (level=2)
                             {
-                                EventArgs a;
-                                a.pid = pid;
-                                a.tid = tid_io;
-                                a.name = "close";
-                                a.cat = "POSIX";
-                                a.ts = ts;
-                                a.dur = jitter(rng, 3);
-                                a.hhash = my_hhash;
+                                auto a = make_event("close", "POSIX", tid_io,
+                                                    ts, jitter(rng, 3), 2);
                                 a.fhash = vf_hash;
-                                a.cmd_hash = sref;
                                 std::snprintf(extra, sizeof(extra),
                                               R"("ret":0)");
                                 a.extra = extra;
@@ -892,17 +925,11 @@ int main(int argc, char** argv) {
                                 ++rank_events;
                             }
 
-                            // val_forward
+                            // val_forward (level=2)
                             {
-                                EventArgs a;
-                                a.pid = pid;
-                                a.tid = tid_main;
-                                a.name = "val_forward";
-                                a.cat = "APP";
-                                a.ts = ts;
-                                a.dur = jitter(rng, step_dur_us / 3);
-                                a.hhash = my_hhash;
-                                a.cmd_hash = sref;
+                                auto a = make_event(
+                                    "val_forward", "APP", tid_main, ts,
+                                    jitter(rng, step_dur_us / 3), 2);
                                 std::snprintf(extra, sizeof(extra),
                                               R"("epoch":%d,"step":%d)", epoch,
                                               vs);
@@ -912,17 +939,11 @@ int main(int argc, char** argv) {
                                 ++rank_events;
                             }
 
-                            // val_loss
+                            // val_loss (level=2)
                             {
-                                EventArgs a;
-                                a.pid = pid;
-                                a.tid = tid_main;
-                                a.name = "val_loss";
-                                a.cat = "APP";
-                                a.ts = ts;
-                                a.dur = jitter(rng, step_dur_us / 6);
-                                a.hhash = my_hhash;
-                                a.cmd_hash = sref;
+                                auto a =
+                                    make_event("val_loss", "APP", tid_main, ts,
+                                               jitter(rng, step_dur_us / 6), 2);
                                 std::snprintf(extra, sizeof(extra),
                                               R"("epoch":%d,"step":%d)", epoch,
                                               vs);
@@ -931,6 +952,32 @@ int main(int argc, char** argv) {
                                 ts += a.dur;
                                 ++rank_events;
                             }
+
+                            // val_step wrapper (level=1)
+                            {
+                                auto a = make_event("val_step", "APP", tid_main,
+                                                    val_step_start,
+                                                    ts - val_step_start, 1);
+                                std::snprintf(extra, sizeof(extra),
+                                              R"("epoch":%d,"step":%d)", epoch,
+                                              vs);
+                                a.extra = extra;
+                                emit_event(writer, a);
+                                ++rank_events;
+                            }
+                        }
+
+                        // validation wrapper (level=0)
+                        {
+                            char extra[256];
+                            auto a = make_event("validation", "APP", tid_main,
+                                                val_phase_start,
+                                                ts - val_phase_start, 0);
+                            std::snprintf(extra, sizeof(extra), R"("epoch":%d)",
+                                          epoch);
+                            a.extra = extra;
+                            emit_event(writer, a);
+                            ++rank_events;
                         }
                     }
 
@@ -938,19 +985,13 @@ int main(int argc, char** argv) {
                     if (checkpoint_every > 0 &&
                         (epoch + 1) % checkpoint_every == 0) {
                         char extra[256];
+                        std::uint64_t ckpt_start = ts;
 
-                        // open checkpoint file
+                        // open checkpoint file (level=1)
                         {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_io;
-                            a.name = "open";
-                            a.cat = "POSIX";
-                            a.ts = ts;
-                            a.dur = jitter(rng, 10);
-                            a.hhash = my_hhash;
+                            auto a = make_event("open", "POSIX", tid_io, ts,
+                                                jitter(rng, 10), 1);
                             a.fhash = ckref;
-                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":5)");
                             a.extra = extra;
                             emit_event(writer, a);
@@ -958,19 +999,13 @@ int main(int argc, char** argv) {
                             ++rank_events;
                         }
 
-                        // pwrite calls (10-20)
+                        // pwrite calls (10-20, level=1)
                         int num_writes = 10 + static_cast<int>(rng() % 11);
                         for (int wr = 0; wr < num_writes; ++wr) {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_io;
-                            a.name = (wr % 2 == 0) ? "pwrite" : "write";
-                            a.cat = "POSIX";
-                            a.ts = ts;
-                            a.dur = jitter(rng, 50);
-                            a.hhash = my_hhash;
+                            auto a = make_event(
+                                (wr % 2 == 0) ? "pwrite" : "write", "POSIX",
+                                tid_io, ts, jitter(rng, 50), 1);
                             a.fhash = ckref;
-                            a.cmd_hash = sref;
                             std::uint64_t wr_size =
                                 jitter(rng, 1048576);  // ~1 MB
                             std::snprintf(
@@ -986,18 +1021,11 @@ int main(int argc, char** argv) {
                             ++rank_events;
                         }
 
-                        // fsync
+                        // fsync (level=1)
                         {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_io;
-                            a.name = "fsync";
-                            a.cat = "POSIX";
-                            a.ts = ts;
-                            a.dur = jitter(rng, 200);
-                            a.hhash = my_hhash;
+                            auto a = make_event("fsync", "POSIX", tid_io, ts,
+                                                jitter(rng, 200), 1);
                             a.fhash = ckref;
-                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":0)");
                             a.extra = extra;
                             emit_event(writer, a);
@@ -1005,22 +1033,26 @@ int main(int argc, char** argv) {
                             ++rank_events;
                         }
 
-                        // close
+                        // close (level=1)
                         {
-                            EventArgs a;
-                            a.pid = pid;
-                            a.tid = tid_io;
-                            a.name = "close";
-                            a.cat = "POSIX";
-                            a.ts = ts;
-                            a.dur = jitter(rng, 3);
-                            a.hhash = my_hhash;
+                            auto a = make_event("close", "POSIX", tid_io, ts,
+                                                jitter(rng, 3), 1);
                             a.fhash = ckref;
-                            a.cmd_hash = sref;
                             std::snprintf(extra, sizeof(extra), R"("ret":0)");
                             a.extra = extra;
                             emit_event(writer, a);
                             ts += a.dur;
+                            ++rank_events;
+                        }
+
+                        // checkpoint wrapper (level=0)
+                        {
+                            auto a = make_event("checkpoint", "IO", tid_io,
+                                                ckpt_start, ts - ckpt_start, 0);
+                            std::snprintf(extra, sizeof(extra), R"("epoch":%d)",
+                                          epoch);
+                            a.extra = extra;
+                            emit_event(writer, a);
                             ++rank_events;
                         }
                     }

@@ -2,18 +2,233 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/core/coro/channel.h>
+#include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/utility_adapter.h>
-#include <dftracer/utils/utilities/composites/composites.h>
+#include <dftracer/utils/utilities/compression/zlib/types.h>
+#include <zlib.h>
 
 #include <argparse/argparse.hpp>
 #include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <vector>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
-using namespace dftracer::utils::utilities::composites;
+
+namespace {
+
+struct FileResult {
+    std::string input_path;
+    std::string output_path;
+    bool success = false;
+    std::size_t original_size = 0;
+    std::size_t compressed_size = 0;
+    std::string error_message;
+};
+
+struct ChunkWork {
+    std::size_t index;
+    std::string data;
+};
+
+struct CompressedChunk {
+    std::size_t index;
+    std::string data;
+};
+
+// Top-level coroutine: reads file and sends chunks to channel.
+static coro::CoroTask<void> chunk_reader(
+    coro::ChannelProducer<ChunkWork> producer, const std::string* file_path,
+    std::size_t chunk_size) {
+    auto guard = producer.guard();
+
+    std::ifstream ifs(*file_path, std::ios::binary);
+    if (!ifs.is_open()) co_return;
+
+    std::string buffer(chunk_size, '\0');
+    std::size_t idx = 0;
+
+    while (ifs) {
+        ifs.read(buffer.data(), static_cast<std::streamsize>(chunk_size));
+        auto bytes_read = static_cast<std::size_t>(ifs.gcount());
+        if (bytes_read == 0) break;
+
+        ChunkWork work;
+        work.index = idx++;
+        work.data.assign(buffer.data(), bytes_read);
+
+        if (!co_await producer.send(std::move(work))) break;
+    }
+    co_return;
+}
+
+// Top-level coroutine: compresses chunks and sends to output channel.
+static coro::CoroTask<void> chunk_compressor(
+    std::shared_ptr<coro::Channel<ChunkWork>> input_chan,
+    coro::ChannelProducer<CompressedChunk> out_producer,
+    int compression_level) {
+    auto guard = out_producer.guard();
+
+    z_stream strm{};
+    using dftracer::utils::utilities::compression::zlib::CompressionFormat;
+    int rc = deflateInit2(&strm, compression_level, Z_DEFLATED,
+                          static_cast<int>(CompressionFormat::GZIP), 8,
+                          Z_DEFAULT_STRATEGY);
+    if (rc != Z_OK) co_return;
+
+    std::string out_buf(64 * 1024, '\0');
+
+    while (auto work = co_await input_chan->receive()) {
+        std::string compressed;
+        compressed.reserve(work->data.size());
+
+        strm.next_in =
+            reinterpret_cast<Bytef*>(const_cast<char*>(work->data.data()));
+        strm.avail_in = static_cast<uInt>(work->data.size());
+
+        do {
+            strm.next_out = reinterpret_cast<Bytef*>(out_buf.data());
+            strm.avail_out = static_cast<uInt>(out_buf.size());
+
+            rc = deflate(&strm, Z_FINISH);
+
+            std::size_t have = out_buf.size() - strm.avail_out;
+            if (have > 0) {
+                compressed.append(out_buf.data(),
+                                  static_cast<std::ptrdiff_t>(have));
+            }
+        } while (rc == Z_OK);
+
+        deflateReset(&strm);
+
+        CompressedChunk result;
+        result.index = work->index;
+        result.data = std::move(compressed);
+
+        if (!co_await out_producer.send(std::move(result))) break;
+    }
+
+    deflateEnd(&strm);
+    co_return;
+}
+
+// Top-level coroutine: receives compressed chunks and writes in order.
+static coro::CoroTask<void> chunk_writer(
+    std::shared_ptr<coro::Channel<CompressedChunk>> output_chan,
+    const std::string* output_path) {
+    std::ofstream ofs(*output_path, std::ios::binary);
+    if (!ofs.is_open()) co_return;
+
+    std::size_t next_expected = 0;
+    std::map<std::size_t, std::string> pending;
+
+    while (auto chunk = co_await output_chan->receive()) {
+        if (chunk->index == next_expected) {
+            ofs.write(chunk->data.data(),
+                      static_cast<std::streamsize>(chunk->data.size()));
+            ++next_expected;
+
+            while (true) {
+                auto it = pending.find(next_expected);
+                if (it == pending.end()) break;
+                ofs.write(it->second.data(),
+                          static_cast<std::streamsize>(it->second.size()));
+                pending.erase(it);
+                ++next_expected;
+            }
+        } else {
+            pending.emplace(chunk->index, std::move(chunk->data));
+        }
+    }
+
+    ofs.close();
+    co_return;
+}
+
+// Compress a single file using parallel chunk compression.
+static coro::CoroTask<FileResult> compress_file_parallel(
+    CoroScope& ctx, const std::string& file_path, int compression_level,
+    std::size_t num_workers, std::size_t chunk_size) {
+    FileResult result;
+    result.input_path = file_path;
+    result.output_path = file_path + ".gz";
+
+    try {
+        if (!fs::exists(file_path)) {
+            result.error_message = "File does not exist: " + file_path;
+            co_return result;
+        }
+
+        auto file_size = fs::file_size(file_path);
+        result.original_size = file_size;
+
+        if (file_size == 0) {
+            result.error_message = "Empty file: " + file_path;
+            co_return result;
+        }
+
+        if (file_size <= chunk_size) {
+            num_workers = 1;
+        }
+
+        auto input_chan = coro::make_channel<ChunkWork>(num_workers * 2);
+        auto output_chan = coro::make_channel<CompressedChunk>(num_workers * 2);
+
+        const auto* file_path_ptr = &file_path;
+        const auto* output_path_ptr = &result.output_path;
+
+        co_await ctx.scope([input_chan, output_chan, file_path_ptr,
+                            output_path_ptr, compression_level, num_workers,
+                            chunk_size](
+                               CoroScope& scope) -> coro::CoroTask<void> {
+            scope.spawn([input_chan, file_path_ptr,
+                         chunk_size](CoroScope&) -> coro::CoroTask<void> {
+                co_await chunk_reader(input_chan->producer(), file_path_ptr,
+                                      chunk_size);
+            });
+
+            for (std::size_t w = 0; w < num_workers; ++w) {
+                scope.spawn([input_chan, output_chan, compression_level](
+                                CoroScope&) -> coro::CoroTask<void> {
+                    co_await chunk_compressor(
+                        input_chan, output_chan->producer(), compression_level);
+                });
+            }
+
+            scope.spawn([output_chan,
+                         output_path_ptr](CoroScope&) -> coro::CoroTask<void> {
+                co_await chunk_writer(output_chan, output_path_ptr);
+            });
+
+            co_return;
+        });
+
+        if (fs::exists(result.output_path)) {
+            result.compressed_size = fs::file_size(result.output_path);
+            result.success = true;
+        } else {
+            result.error_message = "Output file not created";
+        }
+
+    } catch (const std::exception& e) {
+        result.error_message = std::string("Compression failed: ") + e.what();
+        if (fs::exists(result.output_path)) {
+            try {
+                fs::remove(result.output_path);
+            } catch (...) {
+            }
+        }
+    }
+
+    co_return result;
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
@@ -21,8 +236,9 @@ int main(int argc, char** argv) {
     argparse::ArgumentParser program("dftracer_pgzip",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(
-        "Parallel gzip compression for DFTracer .pfw files using composable "
-        "utilities and pipeline processing");
+        "Parallel gzip compression for DFTracer .pfw files. "
+        "Splits each file into chunks and compresses them in parallel "
+        "as independent gzip members.");
 
     program.add_argument("-d", "--directory")
         .help("Directory containing .pfw files")
@@ -33,9 +249,7 @@ int main(int argc, char** argv) {
         .flag();
 
     program.add_argument("--executor-threads")
-        .help(
-            "Number of executor threads for parallel processing (default: "
-            "number of CPU cores)")
+        .help("Number of worker threads (default: number of CPU cores)")
         .scan<'d', std::size_t>()
         .default_value(
             static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
@@ -45,14 +259,17 @@ int main(int argc, char** argv) {
         .scan<'d', int>()
         .default_value(Z_DEFAULT_COMPRESSION);
 
+    program.add_argument("--chunk-size")
+        .help("Chunk size in bytes for parallel compression (default: 4MB)")
+        .scan<'d', std::size_t>()
+        .default_value(static_cast<std::size_t>(4 * 1024 * 1024));
+
     program.add_argument("--disable-watchdog")
         .help("Disable watchdog for hang detection")
         .flag();
 
     program.add_argument("--watchdog-global-timeout")
-        .help(
-            "Watchdog global timeout for pipeline execution in seconds (0 = no "
-            "timeout)")
+        .help("Watchdog global timeout in seconds (0 = no timeout)")
         .scan<'d', int>()
         .default_value(0);
 
@@ -60,16 +277,6 @@ int main(int argc, char** argv) {
         .help("Watchdog default task timeout in seconds (0 = no timeout)")
         .scan<'d', int>()
         .default_value(0);
-
-    program.add_argument("--watchdog-interval")
-        .help("Watchdog check interval in seconds")
-        .scan<'d', int>()
-        .default_value(1);
-
-    program.add_argument("--watchdog-warning-threshold")
-        .help("Watchdog long-running task warning threshold in seconds")
-        .scan<'d', int>()
-        .default_value(300);
 
     program.add_argument("--watchdog-idle-timeout")
         .help("Watchdog idle timeout in seconds (0 = use default)")
@@ -89,28 +296,42 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Parse arguments
     std::string input_dir = program.get<std::string>("--directory");
     bool verbose = program.get<bool>("--verbose");
     std::size_t executor_threads =
         program.get<std::size_t>("--executor-threads");
     int compression_level = program.get<int>("--compression-level");
+    std::size_t chunk_size = program.get<std::size_t>("--chunk-size");
     bool disable_watchdog = program.get<bool>("--disable-watchdog");
     int global_timeout = program.get<int>("--watchdog-global-timeout");
     int task_timeout = program.get<int>("--watchdog-task-timeout");
-    int watchdog_interval = program.get<int>("--watchdog-interval");
-    int warning_threshold = program.get<int>("--watchdog-warning-threshold");
     int idle_timeout = program.get<int>("--watchdog-idle-timeout");
     int deadlock_timeout = program.get<int>("--watchdog-deadlock-timeout");
 
     input_dir = fs::absolute(input_dir).string();
 
+    std::vector<std::string> input_files;
+    for (const auto& entry : fs::directory_iterator(input_dir)) {
+        if (!entry.is_regular_file()) continue;
+        auto ext = entry.path().extension().string();
+        if (ext == ".pfw") {
+            input_files.push_back(entry.path().string());
+        }
+    }
+
+    if (input_files.empty()) {
+        std::printf("No .pfw files found in %s\n", input_dir.c_str());
+        return 0;
+    }
+
     std::printf("==========================================\n");
-    std::printf("DFTracer Parallel Gzip (Pipeline Processing)\n");
+    std::printf("DFTracer Parallel Gzip\n");
     std::printf("==========================================\n");
     std::printf("Arguments:\n");
     std::printf("  Input dir: %s\n", input_dir.c_str());
+    std::printf("  Files: %zu\n", input_files.size());
     std::printf("  Compression level: %d\n", compression_level);
+    std::printf("  Chunk size: %zu bytes\n", chunk_size);
     std::printf("  Executor threads: %zu\n", executor_threads);
     std::printf("  Verbose: %s\n", verbose ? "true" : "false");
     std::printf("==========================================\n\n");
@@ -124,123 +345,131 @@ int main(int argc, char** argv) {
             .with_watchdog(!disable_watchdog)
             .with_global_timeout(std::chrono::seconds(global_timeout))
             .with_task_timeout(std::chrono::seconds(task_timeout))
-            .with_watchdog_interval(std::chrono::seconds(watchdog_interval))
-            .with_warning_threshold(std::chrono::seconds(warning_threshold))
             .with_executor_idle_timeout(std::chrono::seconds(idle_timeout))
             .with_executor_deadlock_timeout(
                 std::chrono::seconds(deadlock_timeout));
 
     Pipeline pipeline(pipeline_config);
 
-    // Task 1: Compress Files
-    DFTRACER_UTILS_LOG_INFO("%s", "Task 1: Compressing files...");
+    std::vector<FileResult> results;
+    std::mutex results_mutex;
 
-    auto dir_input =
-        DirectoryProcessInput::from_directory(input_dir).with_extensions(
-            {".pfw"});
+    auto* files_ptr = &input_files;
+    auto* results_ptr = &results;
+    auto* mutex_ptr = &results_mutex;
 
-    using CompressFilesOutput =
-        BatchFileProcessOutput<FileCompressionUtilityOutput>;
+    auto compress_task = make_task(
+        [files_ptr, results_ptr, mutex_ptr, compression_level, executor_threads,
+         chunk_size, verbose](CoroScope& ctx) -> coro::CoroTask<void> {
+            auto file_chan =
+                coro::make_channel<std::size_t>(executor_threads * 2);
 
-    auto file_compressor =
-        [compression_level](
-            CoroScope& /*ctx*/,
-            const std::string& file_path) -> FileCompressionUtilityOutput {
-        auto input = FileCompressionUtilityInput::from_file(file_path,
-                                                            compression_level);
-        FileCompressorUtility compressor;
-        return compressor.process(input).get();
-    };
+            co_await ctx.scope([file_chan, files_ptr, results_ptr, mutex_ptr,
+                                compression_level, executor_threads, chunk_size,
+                                verbose](
+                                   CoroScope& scope) -> coro::CoroTask<void> {
+                scope.spawn(
+                    [ch = file_chan->producer(), num_files = files_ptr->size()](
+                        CoroScope&) mutable -> coro::CoroTask<void> {
+                        auto guard = ch.guard();
+                        for (std::size_t i = 0; i < num_files; ++i) {
+                            if (!co_await ch.send(i)) co_return;
+                        }
+                        co_return;
+                    });
 
-    auto compress_workflow = std::make_shared<
-        DirectoryFileProcessorUtility<FileCompressionUtilityOutput>>(
-        file_compressor);
+                for (std::size_t w = 0; w < executor_threads; ++w) {
+                    scope.spawn([file_chan, files_ptr, results_ptr, mutex_ptr,
+                                 compression_level, executor_threads,
+                                 chunk_size, verbose](
+                                    CoroScope& wctx) -> coro::CoroTask<void> {
+                        while (auto fi_opt = co_await file_chan->receive()) {
+                            const auto& path = (*files_ptr)[*fi_opt];
 
-    auto task1_compress_files = utilities::use(compress_workflow).as_task();
-    task1_compress_files->with_name("CompressFiles");
+                            auto result = co_await compress_file_parallel(
+                                wctx, path, compression_level, executor_threads,
+                                chunk_size);
 
-    // Task 2: Cleanup Original Files and Report Results
-    DFTRACER_UTILS_LOG_INFO("%s",
-                            "Task 2: Setting up cleanup and reporting...");
+                            if (verbose && result.success) {
+                                double ratio =
+                                    result.original_size > 0
+                                        ? static_cast<double>(
+                                              result.compressed_size) /
+                                              static_cast<double>(
+                                                  result.original_size) *
+                                              100.0
+                                        : 0.0;
+                                DFTRACER_UTILS_LOG_INFO(
+                                    "Compressed %s: %zu -> %zu "
+                                    "bytes (%.1f%%)",
+                                    fs::path(path).filename().c_str(),
+                                    result.original_size,
+                                    result.compressed_size, ratio);
+                            }
 
-    using CleanupInput = CompressFilesOutput;
+                            if (result.success) {
+                                try {
+                                    fs::remove(path);
+                                } catch (const std::exception& e) {
+                                    DFTRACER_UTILS_LOG_ERROR(
+                                        "Failed to remove %s: %s", path.c_str(),
+                                        e.what());
+                                }
+                            }
 
-    struct CleanupOutput {
-        std::size_t successful = 0;
-        std::size_t total_files = 0;
-        std::size_t total_original_size = 0;
-        std::size_t total_compressed_size = 0;
-    };
-
-    auto cleanup_and_report_func =
-        [verbose](const CleanupInput& batch_result) -> CleanupOutput {
-        CleanupOutput output;
-        output.total_files = batch_result.results.size();
-
-        for (const auto& result : batch_result.results) {
-            if (result.success) {
-                output.successful++;
-                output.total_original_size += result.original_size;
-                output.total_compressed_size += result.compressed_size;
-
-                // Remove original file after successful compression
-                try {
-                    fs::remove(result.input_path);
-                } catch (const std::exception& e) {
-                    DFTRACER_UTILS_LOG_ERROR(
-                        "Failed to remove original file %s: %s",
-                        result.input_path.c_str(), e.what());
+                            {
+                                std::lock_guard<std::mutex> lock(*mutex_ptr);
+                                results_ptr->push_back(std::move(result));
+                            }
+                        }
+                        co_return;
+                    });
                 }
 
-                if (verbose) {
-                    double ratio = result.compression_ratio() * 100.0;
-                    DFTRACER_UTILS_LOG_INFO(
-                        "Compressed %s: %zu -> %zu bytes (%.1f%%)",
-                        fs::path(result.input_path).filename().c_str(),
-                        result.original_size, result.compressed_size, ratio);
-                }
-            } else {
-                DFTRACER_UTILS_LOG_ERROR("Failed to compress %s: %s",
-                                         result.input_path.c_str(),
-                                         result.error_message.c_str());
-            }
-        }
+                co_return;
+            });
 
-        return output;
-    };
+            co_return;
+        },
+        "ParallelGzip");
 
-    auto task2_cleanup = make_task(cleanup_and_report_func, "CleanupAndReport");
-
-    // Execute Pipeline
-    task2_cleanup->depends_on(task1_compress_files);
-
-    pipeline.set_source(task1_compress_files);
-    pipeline.set_destination(task2_cleanup);
-    pipeline.execute(dir_input);
-
-    auto cleanup_result = task2_cleanup->get<CleanupOutput>();
+    pipeline.set_source(compress_task);
+    pipeline.set_destination(compress_task);
+    pipeline.execute();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
-    double overall_ratio =
-        cleanup_result.total_original_size > 0
-            ? static_cast<double>(cleanup_result.total_compressed_size) /
-                  static_cast<double>(cleanup_result.total_original_size) *
-                  100.0
-            : 0.0;
+    std::size_t successful = 0;
+    std::size_t total_original = 0;
+    std::size_t total_compressed = 0;
+
+    for (const auto& r : results) {
+        if (r.success) {
+            successful++;
+            total_original += r.original_size;
+            total_compressed += r.compressed_size;
+        } else {
+            DFTRACER_UTILS_LOG_ERROR("Failed to compress %s: %s",
+                                     r.input_path.c_str(),
+                                     r.error_message.c_str());
+        }
+    }
+
+    double overall_ratio = total_original > 0
+                               ? static_cast<double>(total_compressed) /
+                                     static_cast<double>(total_original) * 100.0
+                               : 0.0;
 
     std::printf("\n");
     std::printf("==========================================\n");
     std::printf("Gzip Results\n");
     std::printf("==========================================\n");
     std::printf("  Execution time: %.2f seconds\n", duration.count() / 1000.0);
-    std::printf("  Processed: %zu/%zu files\n", cleanup_result.successful,
-                cleanup_result.total_files);
+    std::printf("  Processed: %zu/%zu files\n", successful, input_files.size());
     std::printf("  Total: %zu -> %zu bytes (%.1f%% compression ratio)\n",
-                cleanup_result.total_original_size,
-                cleanup_result.total_compressed_size, overall_ratio);
+                total_original, total_compressed, overall_ratio);
     std::printf("==========================================\n");
 
-    return cleanup_result.successful == cleanup_result.total_files ? 0 : 1;
+    return successful == input_files.size() ? 0 : 1;
 }

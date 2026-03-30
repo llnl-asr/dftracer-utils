@@ -63,9 +63,9 @@ int main(int argc, char** argv) {
         .default_value(static_cast<std::size_t>(100));
 
     program.add_argument("--batch-size")
-        .help("Number of events per batch (default: 1000)")
+        .help("Batch byte budget in KB (default: 256)")
         .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(1000));
+        .default_value(static_cast<std::size_t>(256));
 
     program.add_argument("--disable-watchdog")
         .help("Disable watchdog for hang detection")
@@ -122,7 +122,8 @@ int main(int argc, char** argv) {
         program.get<std::size_t>("--executor-threads");
     std::size_t channel_capacity =
         program.get<std::size_t>("--channel-capacity");
-    std::size_t batch_size = program.get<std::size_t>("--batch-size");
+    std::size_t batch_size_kb = program.get<std::size_t>("--batch-size");
+    std::size_t batch_byte_budget = batch_size_kb * 1024;
     bool disable_watchdog = program.get<bool>("--disable-watchdog");
     int global_timeout = program.get<int>("--watchdog-global-timeout");
     int task_timeout = program.get<int>("--watchdog-task-timeout");
@@ -191,16 +192,25 @@ int main(int argc, char** argv) {
     std::printf("  Override: %s\n", force_override ? "true" : "false");
     std::printf("  Compress: %s\n", compress_output ? "true" : "false");
     std::printf("  Verify: %s\n", verify ? "true" : "false");
-    std::printf("  Channel capacity: %zu batches\n", channel_capacity);
-    std::printf("  Batch size: %zu events\n", batch_size);
+    std::printf("  Channel capacity: %zu\n", channel_capacity);
+    std::printf("  Batch size: %zu KB\n", batch_size_kb);
     std::printf("  Executor threads: %zu\n", executor_threads);
     std::printf("==========================================\n\n");
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Step 1: Create channel for streaming batches
-    auto channel =
-        coro::make_channel<StreamingMergeBatchUtility>(channel_capacity);
+    // Step 1: Create channel and buffer pool for streaming batches
+    auto channel = coro::make_channel<StreamingMergeBatch>(channel_capacity);
+    // Pool size = channel capacity + num producers, so producers never block
+    // waiting for buffers (avoids deadlock when all executor threads are
+    // producers and the consumer can't run to release buffers).
+    std::size_t pool_size = channel_capacity + input_files.size();
+    auto buf_pool =
+        make_buffer_pool<std::string>(pool_size, [batch_byte_budget]() {
+            std::string s;
+            s.reserve(batch_byte_budget);
+            return s;
+        });
 
     std::vector<StreamingFileProducerOutput> producer_results;
     producer_results.resize(input_files.size());
@@ -228,16 +238,16 @@ int main(int argc, char** argv) {
         auto* input_files_ptr = &input_files;
         auto* producer_results_ptr = &producer_results;
         auto producer_task = make_task(
-            [i, input_files_ptr, batch_size, verify, channel,
+            [i, input_files_ptr, verify, batch_byte_budget, channel, buf_pool,
              ch = channel->producer(),
              producer_results_ptr]([[maybe_unused]] CoroScope& ctx) mutable
                 -> coro::CoroTask<StreamingFileProducerOutput> {
                 auto guard = ch.guard();
 
-                StreamingFileProducerUtility producer(channel);
+                StreamingFileProducerUtility producer(channel, buf_pool);
                 auto input =
                     StreamingFileProducerInput::from_file((*input_files_ptr)[i])
-                        .with_batch_size(batch_size)
+                        .with_batch_byte_budget(batch_byte_budget)
                         .with_verify(verify);
 
                 auto result = co_await producer.process_async(ctx, input);
@@ -252,10 +262,10 @@ int main(int argc, char** argv) {
     // Step 4: Create consumer task
     auto* consumer_result_ptr = &consumer_result;
     auto consumer_task = make_task(
-        [channel, output_file, compress_output,
+        [channel, buf_pool, output_file, compress_output,
          consumer_result_ptr]([[maybe_unused]] CoroScope& ctx)
             -> coro::CoroTask<StreamingFileConsumerOutput> {
-            StreamingFileConsumerUtility consumer(channel);
+            StreamingFileConsumerUtility consumer(channel, buf_pool);
 
             auto input = StreamingFileConsumerInput::with_output(output_file)
                              .with_compression(compress_output);

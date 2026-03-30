@@ -32,9 +32,9 @@ using namespace dftracer::utils::utilities::composites::dft::aggregators;
 static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
     std::string log_dir = program.get<std::string>("--directory");
     std::string output_file = program.get<std::string>("--output");
-    double time_interval_seconds = program.get<double>("--time-interval");
+    double time_interval_ms = program.get<double>("--time-interval");
     std::uint64_t time_interval_us =
-        static_cast<std::uint64_t>(time_interval_seconds * 1000000.0);
+        static_cast<std::uint64_t>(time_interval_ms * 1000.0);
     std::string group_keys_str = program.get<std::string>("--group-keys");
     std::string metric_fields_str = program.get<std::string>("--metric-fields");
     std::string query_str = program.get<std::string>("--query");
@@ -165,8 +165,7 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
     std::printf("Arguments:\n");
     std::printf("  Input directory: %s\n", log_dir.c_str());
     std::printf("  Output file: %s\n", output_file.c_str());
-    std::printf("  Time interval: %.2f seconds (%llu us)\n",
-                time_interval_seconds,
+    std::printf("  Time interval: %.2f ms (%llu us)\n", time_interval_ms,
                 static_cast<unsigned long long>(time_interval_us));
     std::printf("  Force rebuild: %s\n", force_rebuild ? "true" : "false");
     std::printf("  Checkpoint size: %zu bytes (%.2f MB)\n", checkpoint_size,
@@ -270,7 +269,7 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
     auto streaming_task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
             auto chunk_chan = coro::make_channel<ChunkAggregatorInput>(0);
-            auto result_chan = coro::make_channel<ChunkAggregationOutput>(8);
+            auto result_chan = coro::make_channel<ChunkAggregationOutput>(2);
 
             co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
                 // File producers: one per input file
@@ -387,13 +386,14 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
 
             // Resolve associations
             AssociationResolverInput resolver_input;
-            resolver_input.aggregations = agg_results;
-            resolver_input.trackers = agg_results.trackers;
+            resolver_input.trackers = std::move(agg_results.trackers);
+            resolver_input.aggregations = std::move(agg_results);
             resolver_input.config = agg_config;
 
             AssociationResolverUtility resolver;
-            auto resolver_output = co_await resolver.process(resolver_input);
-            agg_results = resolver_output.aggregations;
+            auto resolver_output =
+                co_await resolver.process(std::move(resolver_input));
+            agg_results = std::move(resolver_output.aggregations);
 
             if (agg_results.aggregations.empty()) {
                 DFTRACER_UTILS_LOG_WARN("No aggregations to write!");
@@ -422,6 +422,7 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
                 AggregationBatch batch;
                 batch.entries.reserve(BATCH_ROWS);
 
+                bool arrow_write_failed = false;
                 for (auto& [key, metrics] : agg_results.aggregations) {
                     batch.entries.emplace_back(key, metrics);
                     if (batch.entries.size() >= BATCH_ROWS) {
@@ -429,11 +430,15 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
                         if (ipc.write_batch(arrow_batch) != 0) {
                             DFTRACER_UTILS_LOG_ERROR(
                                 "Arrow IPC write_batch failed");
-                            ipc.close();
-                            co_return false;
+                            arrow_write_failed = true;
+                            break;
                         }
                         batch.entries.clear();
                     }
+                }
+                if (arrow_write_failed) {
+                    ipc.close();
+                    co_return false;
                 }
                 if (!batch.entries.empty()) {
                     auto arrow_batch = batch.to_arrow();
@@ -458,7 +463,7 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
                 PerfettoTraceWriterUtility writer;
                 PerfettoTraceWriterInput writer_input{
                     output_file,
-                    resolver_output,
+                    std::move(resolver_output),
                     agg_config.compute_statistics,
                     agg_config.compute_percentiles,
                     agg_config.percentiles,
@@ -557,9 +562,9 @@ int main(int argc, char** argv) {
         .default_value<std::string>("aggregated_output.json");
 
     program.add_argument("-t", "--time-interval")
-        .help("Time interval in seconds for bucketing (default: 5.0)")
+        .help("Time interval in milliseconds for bucketing (default: 5000)")
         .scan<'g', double>()
-        .default_value(5.0);
+        .default_value(5000.0);
 
     program.add_argument("-g", "--group-keys")
         .help(

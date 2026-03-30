@@ -66,7 +66,7 @@ class CoroScope {
     Executor* executor_;
     coro::JoinHandle join_handle_;
     std::vector<coro::Coro> coroutines_;
-    bool joined_ = false;
+    std::atomic<bool> joined_{false};
 
     // Cancellation support
     std::shared_ptr<std::atomic<bool>> cancellation_requested_{
@@ -457,10 +457,9 @@ class CoroScope {
     /// Must be called before CoroScope is destroyed.
     /// Idempotent: calling join() a second time is a no-op.
     coro::CoroTask<void> join() {
-        if (joined_) {
+        if (joined_.exchange(true, std::memory_order_acq_rel)) {
             co_return;
         }
-        joined_ = true;
         co_await join_handle_.join();
         // Frames were released in enqueue_coro() and will be
         // destroyed by workers via thread-local destroy lists

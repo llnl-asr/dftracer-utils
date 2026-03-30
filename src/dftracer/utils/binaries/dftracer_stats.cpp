@@ -7,8 +7,10 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/utilities/common/json/json.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/event.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
@@ -30,11 +32,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
-#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -46,6 +46,8 @@ using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
+using common::query::Query;
+using dftracer::utils::utilities::composites::dft::DFTracerEvent;
 using dftracer::utils::utilities::fileio::lines::sources::
     async_streaming_gz_lines;
 using dftracer::utils::utilities::indexer::IndexBuildConfig;
@@ -476,17 +478,10 @@ static coro::CoroTask<TraceStatistics> direct_scan_trace_statistics(
 
             yyjson_val* root = yyjson_doc_get_root(doc);
             if (root && yyjson_is_obj(root)) {
-                using dftracer::utils::utilities::common::json::JsonValue;
-                JsonValue json(root);
-                std::string_view ph = json["ph"].get<std::string_view>();
-                if (ph != "M") {
-                    stats.update_from_event(
-                        json["name"].get<std::string_view>(),
-                        json["cat"].get<std::string_view>(),
-                        json["pid"].get<std::uint64_t>(),
-                        json["tid"].get<std::uint64_t>(),
-                        json["ts"].get<std::uint64_t>(),
-                        json["dur"].get<std::uint64_t>());
+                DFTracerEvent ev;
+                if (DFTracerEvent::parse(root, ev) && !ev.is_metadata()) {
+                    stats.update_from_event(ev.name, ev.cat, ev.pid, ev.tid,
+                                            ev.ts, ev.dur);
                 }
             }
             yyjson_doc_free(doc);
@@ -543,15 +538,10 @@ static coro::CoroTask<DetailedStatistics> direct_scan_detailed_statistics(
 
             yyjson_val* root = yyjson_doc_get_root(doc);
             if (root && yyjson_is_obj(root)) {
-                using dftracer::utils::utilities::common::json::JsonValue;
-                JsonValue json(root);
-                std::string_view ph = json["ph"].get<std::string_view>();
-
-                if (ph != "M") {
-                    std::string_view name_sv =
-                        json["name"].get<std::string_view>();
-                    std::string_view cat_sv =
-                        json["cat"].get<std::string_view>();
+                DFTracerEvent ev;
+                if (DFTracerEvent::parse(root, ev) && !ev.is_metadata()) {
+                    std::string_view name_sv = ev.name;
+                    std::string_view cat_sv = ev.cat;
 
                     bool passes = true;
                     if (has_name_filter &&
@@ -564,43 +554,61 @@ static coro::CoroTask<DetailedStatistics> direct_scan_detailed_statistics(
                     }
 
                     if (passes) {
-                        double dur = static_cast<double>(
-                            json["dur"].get<std::uint64_t>());
+                        double dur = static_cast<double>(ev.dur);
                         result.duration.update(dur);
 
-                        JsonValue args = json["args"];
                         std::string io_key;
 
                         if (has_grouping) {
                             // Build group key inline (same logic as
                             // chunk_detail_scanner_utility.cpp)
-                            std::string key;
-                            key.reserve(128);
+                            constexpr std::size_t KEY_BUF_SIZE =
+                                utilities::common::json::YYJSON_LINE_POOL_SIZE;
+                            char buf[KEY_BUF_SIZE];
+                            char* p = buf;
+                            char* end = buf + KEY_BUF_SIZE - 1;
+
+                            auto append_sv = [&](std::string_view sv) {
+                                std::size_t n =
+                                    std::min(sv.size(),
+                                             static_cast<std::size_t>(end - p));
+                                std::memcpy(p, sv.data(), n);
+                                p += n;
+                            };
+                            auto append_uint = [&](std::uint64_t v) {
+                                p += std::snprintf(
+                                    p, static_cast<std::size_t>(end - p + 1),
+                                    "%llu", static_cast<unsigned long long>(v));
+                            };
+
                             for (std::size_t i = 0; i < group_by_ptr->size();
                                  ++i) {
-                                if (i > 0) key.push_back('|');
+                                if (p >= end) break;
+                                if (i > 0) *p++ = '|';
                                 const auto& dim = (*group_by_ptr)[i];
                                 if (dim == "name") {
-                                    key += json["name"].get<std::string>();
+                                    append_sv(ev.name);
                                 } else if (dim == "cat") {
-                                    key += json["cat"].get<std::string>();
-                                } else if (dim == "pid" || dim == "tid") {
-                                    key += std::to_string(
-                                        json[dim].get<std::uint64_t>());
+                                    append_sv(ev.cat);
+                                } else if (dim == "pid") {
+                                    append_uint(ev.pid);
+                                } else if (dim == "tid") {
+                                    append_uint(ev.tid);
                                 } else if (dim == "pid_tid") {
-                                    key += std::to_string(
-                                        json["pid"].get<std::uint64_t>());
-                                    key.push_back(':');
-                                    key += std::to_string(
-                                        json["tid"].get<std::uint64_t>());
+                                    append_uint(ev.pid);
+                                    if (p < end) *p++ = ':';
+                                    append_uint(ev.tid);
                                 } else if (dim == "fhash") {
-                                    if (args.exists())
-                                        key += args["fhash"].get<std::string>();
+                                    if (ev.args.exists())
+                                        append_sv(ev.args["fhash"]
+                                                      .get<std::string_view>());
                                 } else if (dim == "hhash") {
-                                    if (args.exists())
-                                        key += args["hhash"].get<std::string>();
+                                    if (ev.args.exists())
+                                        append_sv(ev.args["hhash"]
+                                                      .get<std::string_view>());
                                 }
                             }
+                            std::string key(buf, p);
                             result.grouped_duration[key].update(dur);
                             result.group_key_category.emplace(
                                 key, std::string(cat_sv));
@@ -609,9 +617,9 @@ static coro::CoroTask<DetailedStatistics> direct_scan_detailed_statistics(
                             io_key = "__global__";
                         }
 
-                        if (is_io(name_sv) && args.exists()) {
+                        if (is_io(name_sv) && ev.args.exists()) {
                             auto ret_opt =
-                                args["ret"].get_optional<std::int64_t>();
+                                ev.args["ret"].get_optional<std::int64_t>();
                             if (ret_opt.has_value() && ret_opt.value() > 0) {
                                 double ret =
                                     static_cast<double>(ret_opt.value());
@@ -622,7 +630,7 @@ static coro::CoroTask<DetailedStatistics> direct_scan_detailed_statistics(
                                     io.bandwidth.update(ret * 1e6 / dur);
                                 }
                                 auto offset_opt =
-                                    args["offset"]
+                                    ev.args["offset"]
                                         .get_optional<std::uint64_t>();
                                 if (offset_opt.has_value()) {
                                     io.offset.update(static_cast<double>(
@@ -673,9 +681,9 @@ static coro::CoroTask<void> scan_chunk_detailed(
     scan_input.start_byte = start_byte;
     scan_input.end_byte = end_byte;
     scan_input.checkpoint_idx = ckpt_idx;
-    scan_input.filter_names = *filter_names_ptr;
-    scan_input.filter_categories = *filter_cats_ptr;
-    scan_input.group_by = *group_by_ptr;
+    scan_input.filter_names = filter_names_ptr;
+    scan_input.filter_categories = filter_cats_ptr;
+    scan_input.group_by = group_by_ptr;
 
     ChunkDetailScannerUtility scanner;
     auto scan_output = co_await scanner.process(scan_input);
@@ -912,7 +920,6 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
     auto query_str = program.get<std::string>("--query");
     auto group_by = program.get<std::vector<std::string>>("--group-by");
 
-    using common::query::Query;
     std::optional<Query> query;
     std::vector<std::string> filter_names;
     std::vector<std::string> filter_cats;

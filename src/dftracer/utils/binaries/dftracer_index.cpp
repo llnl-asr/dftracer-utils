@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
@@ -127,43 +128,70 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
                 auto* total_processed_ptr = &total_files_processed;
                 auto* total_skipped_ptr = &total_files_skipped;
                 auto* all_dims_ptr = &all_dimensions;
-                for (std::size_t i = 0; i < input_files.size(); ++i) {
-                    const auto file_path = input_files[i];
-                    scope.spawn([indexer_config, file_path, build_manifest,
-                                 index_dir, checkpoint_size, force_rebuild,
-                                 all_dims_ptr, total_events_ptr,
+                auto* files_ptr = &input_files;
+                auto* index_dir_ptr = &index_dir;
+
+                // Bounded fan-out: channel limits concurrent file processing
+                // to avoid memory pressure from unbounded coroutine spawning.
+                auto file_chan =
+                    coro::make_channel<std::size_t>(executor_threads * 2);
+
+                // Producer: push file indices into channel
+                scope.spawn([ch = file_chan->producer(),
+                             num_files = input_files.size()](
+                                CoroScope&) mutable -> coro::CoroTask<void> {
+                    auto guard = ch.guard();
+                    for (std::size_t i = 0; i < num_files; ++i) {
+                        if (!co_await ch.send(i)) {
+                            co_return;
+                        }
+                    }
+                    co_return;
+                });
+
+                // Workers: consume from channel, process one file at a time
+                for (std::size_t w = 0; w < executor_threads; ++w) {
+                    scope.spawn([file_chan, files_ptr, indexer_config,
+                                 build_manifest, index_dir_ptr, checkpoint_size,
+                                 force_rebuild, all_dims_ptr, total_events_ptr,
                                  total_checkpoints_ptr, total_processed_ptr,
                                  total_skipped_ptr](
                                     CoroScope&) -> coro::CoroTask<void> {
-                        IndexBuilderUtility builder;
-                        auto config = IndexBuildConfig::for_file(file_path)
-                                          .with_index_dir(index_dir)
-                                          .with_checkpoint_size(checkpoint_size)
-                                          .with_force_rebuild(force_rebuild)
-                                          .with_bloom(true)
-                                          .with_manifest(build_manifest)
-                                          .with_index_threshold(0)
-                                          .with_bloom_config(indexer_config)
-                                          .with_bloom_dimensions(*all_dims_ptr);
+                        while (auto fi_opt = co_await file_chan->receive()) {
+                            std::size_t fi = *fi_opt;
+                            const auto& file_path = (*files_ptr)[fi];
 
-                        auto result = co_await builder.process(config);
+                            IndexBuilderUtility builder;
+                            auto config =
+                                IndexBuildConfig::for_file(file_path)
+                                    .with_index_dir(*index_dir_ptr)
+                                    .with_checkpoint_size(checkpoint_size)
+                                    .with_force_rebuild(force_rebuild)
+                                    .with_bloom(true)
+                                    .with_manifest(build_manifest)
+                                    .with_index_threshold(0)
+                                    .with_bloom_config(indexer_config)
+                                    .with_bloom_dimensions(*all_dims_ptr);
 
-                        if (result.was_skipped) {
-                            (*total_skipped_ptr)++;
-                        } else if (result.success) {
-                            (*total_processed_ptr)++;
-                            (*total_events_ptr) += result.events_processed;
-                            (*total_checkpoints_ptr) += result.chunks_processed;
-                        } else {
-                            (*total_skipped_ptr)++;
-                            if (!result.error_message.empty()) {
-                                DFTRACER_UTILS_LOG_ERROR(
-                                    "Index failed for %s: %s",
-                                    file_path.c_str(),
-                                    result.error_message.c_str());
+                            auto result = co_await builder.process(config);
+
+                            if (result.was_skipped) {
+                                (*total_skipped_ptr)++;
+                            } else if (result.success) {
+                                (*total_processed_ptr)++;
+                                (*total_events_ptr) += result.events_processed;
+                                (*total_checkpoints_ptr) +=
+                                    result.chunks_processed;
+                            } else {
+                                (*total_skipped_ptr)++;
+                                if (!result.error_message.empty()) {
+                                    DFTRACER_UTILS_LOG_ERROR(
+                                        "Index failed for %s: %s",
+                                        file_path.c_str(),
+                                        result.error_message.c_str());
+                                }
                             }
                         }
-
                         co_return;
                     });
                 }

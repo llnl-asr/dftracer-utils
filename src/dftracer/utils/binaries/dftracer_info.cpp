@@ -12,6 +12,8 @@
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <dftracer/utils/utilities/indexer/index_builder_utility.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
@@ -25,7 +27,11 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft;
+using dftracer::utils::utilities::indexer::IndexBuildConfig;
+using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::internal::Indexer;
+using dftracer::utils::utilities::indexer::internal::IndexerFactory;
 
 static std::string format_size(std::uint64_t bytes) {
     const char* units[] = {"B", "KB", "MB", "GB", "TB"};
@@ -41,6 +47,53 @@ static std::string format_size(std::uint64_t bytes) {
     oss << std::fixed << std::setprecision(2) << size << " "
         << units[unit_index];
     return oss.str();
+}
+
+/// Fast path: read metadata from the .idx database.
+/// Returns success=false if index doesn't exist, letting the caller
+/// fall back to direct_scan_info for small/unindexed files.
+static MetadataCollectorUtilityOutput index_based_info(
+    const std::string& file_path) {
+    using utilities::indexer::IndexDatabase;
+
+    MetadataCollectorUtilityOutput meta;
+    meta.file_path = file_path;
+
+    try {
+        std::string idx_path = file_path + constants::indexer::EXTENSION;
+        if (!fs::exists(idx_path)) {
+            meta.success = false;
+            return meta;
+        }
+
+        IndexDatabase db(idx_path);
+        int fid = db.find_file(file_path);
+        if (fid < 0) {
+            meta.success = false;
+            return meta;
+        }
+
+        meta.format = IndexerFactory::detect_format(file_path);
+        meta.compressed_size = fs::file_size(file_path);
+        meta.num_lines = db.get_num_lines(fid);
+        meta.uncompressed_size = db.get_max_bytes(fid);
+        meta.valid_events = db.get_total_events(fid);
+        meta.has_index = true;
+        meta.index_valid = true;
+        meta.size_mb =
+            static_cast<double>(meta.compressed_size) / (1024.0 * 1024.0);
+        meta.start_line = 1;
+        meta.end_line = meta.num_lines;
+        meta.size_per_line =
+            (meta.valid_events > 0)
+                ? meta.size_mb / static_cast<double>(meta.valid_events)
+                : 0;
+        meta.success = true;
+    } catch (...) {
+        meta.success = false;
+    }
+
+    return meta;
 }
 
 /// One streaming decompress pass, count lines with JSON validation,
@@ -424,8 +477,23 @@ int main(int argc, char** argv) {
                                         std::size_t fi = *fi_opt;
                                         const auto& fp = (*files_ptr)[fi];
 
-                                        auto info =
-                                            co_await direct_scan_info(fp);
+                                        // Phase 1: build index if
+                                        // needed (skips small files
+                                        // and already-indexed files)
+                                        IndexBuilderUtility builder;
+                                        auto build_config =
+                                            IndexBuildConfig::for_file(fp)
+                                                .with_force_rebuild(false);
+                                        co_await builder.process(build_config);
+
+                                        // Phase 2: read from index,
+                                        // fall back to direct scan
+                                        // for small/unindexed files
+                                        auto info = index_based_info(fp);
+                                        if (!info.success) {
+                                            info =
+                                                co_await direct_scan_info(fp);
+                                        }
 
                                         if (info.success) {
                                             total_compressed_ptr->fetch_add(

@@ -64,9 +64,19 @@ class IndexDatabase {
     bool has_bloom_data(int file_id) const;
     bool has_manifest_data(int file_id) const;
 
-    int get_or_create_file_info(const std::string& path,
-                                std::uint64_t file_hash);
-    int get_file_info_id(const std::string& path) const;
+    int get_or_create_file_info(std::string_view path, std::uint64_t file_hash);
+    int get_file_info_id(std::string_view path) const;
+
+    // Convenience: resolve file path to file_id (handles logical path)
+    int find_file(std::string_view file_path) const;
+
+    // Metadata queries
+    std::uint64_t get_num_lines(int file_id) const;
+    std::uint64_t get_max_bytes(int file_id) const;
+
+    // Returns exact event count from chunk_statistics if bloom was built,
+    // otherwise falls back to num_lines (approximate).
+    std::uint64_t get_total_events(int file_id) const;
 
     void begin_transaction();
     void commit_transaction();

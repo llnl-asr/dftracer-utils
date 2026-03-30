@@ -105,7 +105,7 @@ TEST_SUITE("DFTracerView") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        int rc = run_view(binary, {"--query", R"(cat == "IO")", "--stream",
+        int rc = run_view(binary, {"--query", R"(cat == "POSIX")", "--stream",
                                    "--no-metadata", "-d", env.get_dir()});
         CHECK(rc == 0);
     }
@@ -123,7 +123,7 @@ TEST_SUITE("DFTracerView") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        int rc = run_view(binary, {"--query", R"(cat == "IO")", "--stream",
+        int rc = run_view(binary, {"--query", R"(cat == "POSIX")", "--stream",
                                    "--no-metadata", "-d", env.get_dir()});
         CHECK(rc == 0);
     }
@@ -142,9 +142,9 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(!f.empty());
 
         std::string output = env.get_dir() + "/view_output.ndjson";
-        int rc = run_view(
-            binary, {"--query", R"(cat == "IO")", "--stream", "--no-metadata",
-                     "-d", env.get_dir(), "-o", output});
+        int rc = run_view(binary,
+                          {"--query", R"(cat == "POSIX")", "--stream",
+                           "--no-metadata", "-d", env.get_dir(), "-o", output});
         CHECK(rc == 0);
         REQUIRE(fs::exists(output));
         // Output file must be non-empty (events were matched).
@@ -164,10 +164,10 @@ TEST_SUITE("DFTracerView") {
         auto f = create_pfw_gz(env, 50, 0);
         REQUIRE(!f.empty());
 
-        int rc =
-            run_view(binary, {"--query",
-                              R"(cat == "IO" and name in ["pread", "pwrite"])",
-                              "--stream", "-d", env.get_dir()});
+        int rc = run_view(
+            binary,
+            {"--query", R"(cat == "POSIX" and name in ["pread", "pwrite"])",
+             "--stream", "-d", env.get_dir()});
         CHECK(rc == 0);
     }
 }

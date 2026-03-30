@@ -1,6 +1,32 @@
 DFTracer Aggregation Pipeline
 =============================
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference <api/utilities/composites/dft/aggregators>`.
+
+Getting Started
+---------------
+
+Minimal example using the high-level ``AggregatorUtility``:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/composites/dft/aggregators/aggregator_utility.h>
+
+   AggregatorUtility util;
+   AggregatorInput input;
+   input.directory = "./traces";
+   input.config.time_interval_us = 5000000;  // 5-second buckets
+   input.config.compute_percentiles = true;
+
+   auto gen = util.process(input);
+   while (auto batch = co_await gen.next()) {
+       auto arrow = batch->to_arrow();  // 18-column Arrow batch
+       // process arrow data...
+   }
+
 Event aggregation pipeline for computing statistics over DFTracer trace files.
 All classes are in the ``dftracer::utils::utilities::composites::dft::aggregators`` namespace.
 
@@ -78,16 +104,6 @@ boundary event tracking, and output format.
         .output_name = "epoch"
     });
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AggregationConfig
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::BoundaryEventConfig
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 Grouping Keys
 -------------
 
@@ -99,15 +115,24 @@ Composite key for grouping events during aggregation.
 Events are grouped by category, name, process/thread IDs, host/function hashes,
 time bucket, and any extra grouping dimensions specified in the config.
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AggregationKey
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
+String fields (``cat``, ``name``, ``hhash``, ``fhash``) are stored as interned
+``uint32_t`` IDs via a global ``StringIntern`` table (see :doc:`core_infrastructure`),
+reducing memory usage and enabling faster hashing. Accessor methods (``.cat()``,
+``.name()``, etc.) resolve IDs back to ``string_view``.
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AggregationKeyHash
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
+Extra key-value pairs use a lazily-allocated ``unique_ptr<vector<pair<uint32_t, uint32_t>>>``
+to avoid heap allocation for the common case of no extra keys.
+
+AggregationMap
+~~~~~~~~~~~~~~
+
+Type alias for the map from aggregation keys to metrics:
+
+.. code-block:: cpp
+
+   using AggregationMap =
+       std::unordered_map<AggregationKey, AggregationMetrics,
+                          AggregationKeyHash, AggregationKeyEqual>;
 
 Metrics
 -------
@@ -120,11 +145,6 @@ stable variance computation and DDSketch for percentile estimation.
 
 Supports incremental updates and merging across chunks.
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AggregationMetrics
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 MetricStats
 ~~~~~~~~~~~
 
@@ -133,10 +153,9 @@ Single-metric statistics using Welford's online algorithm.
 Tracks count, min, max, mean, variance (M2), skewness (M3), kurtosis (M4),
 and a DDSketch for percentile estimation. All operations are O(1) per update.
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::MetricStats
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
+The DDSketch uses a collapsing dense store with 128 fixed bins (``uint16_t``
+counters), giving ~256 bytes per sketch. When the bin range exceeds
+``MAX_BINS``, the oldest bins are collapsed into bin[0].
 
 Pipeline Stages
 ---------------
@@ -150,30 +169,6 @@ Takes file metadata (from ``MetadataCollectorUtility``) and splits each file
 into chunks based on checkpoint boundaries. Each chunk becomes a
 ``ChunkAggregatorInput`` for parallel processing.
 
-**Single-file variant:**
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::FileChunkMapperInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::FileChunkMapperUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-**Multi-file variant:**
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::ChunkMapperInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::ChunkMapperUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 ChunkAggregatorUtility
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -185,21 +180,6 @@ predicates for early chunk skipping when available.
 
 Tagged ``Parallelizable`` — multiple instances run concurrently across chunks.
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::ChunkAggregatorInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::ChunkAggregationOutput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::ChunkAggregatorUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 EventAggregatorUtility
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -207,21 +187,6 @@ Merges per-chunk aggregation results into a unified output.
 
 Combines metrics from all chunks, deduplicates file counts, and
 collects association trackers for downstream resolution.
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::EventAggregatorUtilityInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::EventAggregatorUtilityOutput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::EventAggregatorUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 Association Tracking
 --------------------
@@ -240,16 +205,6 @@ a process tree. Used to annotate aggregated events with their root process.
 matching start/end events. Aggregated events are associated with the
 boundary interval that contains their timestamp.
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::BoundaryInterval
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::AssociationTracker
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 AssociationResolverUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -258,21 +213,6 @@ Resolves process hierarchy and boundary associations across all chunks.
 Merges all per-chunk ``AssociationTracker`` instances, resolves parent PIDs
 to root processes, computes trace-wide metadata (duration, boundary ranges),
 and annotates aggregated events with their associations.
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AssociationResolverInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AssociationResolverOutput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::AssociationResolverUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 High-Level Aggregator
 ---------------------
@@ -286,21 +226,6 @@ mapping, parallel aggregation, merge, and association resolution.
 
 Yields ``AggregationBatch`` objects that can be converted to Arrow via
 ``to_arrow()``.
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AggregatorInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::AggregationBatch
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::AggregatorUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 .. code-block:: cpp
 
@@ -323,11 +248,6 @@ AggregatorSummaryUtility
 
 Outputs a human-readable summary of aggregation results to stdout.
 
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::AggregatorSummaryUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 PerfettoTraceWriterUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -340,15 +260,3 @@ Supports three event formats:
 - ``ASYNC`` — Async slice events (shows duration spans)
 - ``REGULAR`` — Regular slice events
 
-.. doxygenenum:: dftracer::utils::utilities::composites::dft::aggregators::PerfettoEventFormat
-   :project: dftracer-utils
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::aggregators::PerfettoTraceWriterInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::aggregators::PerfettoTraceWriterUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:

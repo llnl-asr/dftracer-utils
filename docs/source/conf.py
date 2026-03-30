@@ -31,6 +31,23 @@ if _script.exists() and _xml_dir.exists():
         check=False,
     )
 
+# Auto-generate C++ API reference pages from Doxygen XML
+_api_script = _docs_dir / "scripts" / "generate_api_index.py"
+_api_out = _docs_dir / "source" / "cpp_api" / "api"
+if _api_script.exists() and _xml_dir.exists():
+    print("Generating C++ API reference pages from Doxygen XML...")
+    subprocess.run(
+        [
+            sys.executable,
+            str(_api_script),
+            "--xml-dir",
+            str(_xml_dir),
+            "--output-dir",
+            str(_api_out),
+        ],
+        check=False,
+    )
+
 # Mock imports for packages that may not be available during doc build
 autodoc_mock_imports = []
 

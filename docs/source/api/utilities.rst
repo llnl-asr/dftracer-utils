@@ -53,7 +53,7 @@ counters, and returns the result as Arrow.
    agg = AggregatorUtility()
 
    # Materialized
-   table = agg.process("./traces", time_interval=1.0)
+   table = agg.process("./traces", time_interval_ms=1000.0)
 
    # Streaming
    for batch in agg.iter_arrow("./traces"):

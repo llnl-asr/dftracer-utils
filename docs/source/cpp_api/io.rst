@@ -1,6 +1,12 @@
 Async I/O API
 =============
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference <api/io>`.
+
+
 High-performance, platform-optimized asynchronous file and socket I/O. All classes and functions are in the ``dftracer::utils::io`` namespace.
 
 Overview
@@ -18,9 +24,6 @@ Backend Selection
 -----------------
 
 The I/O backend is selected at runtime (or forced via configuration). Available backends are exposed via the ``IoBackendType`` enum:
-
-.. doxygenenum:: dftracer::utils::io::IoBackendType
-   :project: dftracer-utils
 
 Platform Support
 ~~~~~~~~~~~~~~~~
@@ -64,98 +67,77 @@ Sequential I/O
 
 Read and write operations that respect file position:
 
-.. doxygenfunction:: dftracer::utils::io::read
-   :project: dftracer-utils
+.. code-block:: cpp
 
-.. doxygenfunction:: dftracer::utils::io::write
-   :project: dftracer-utils
+   IoAwaitable read(int fd, void* buf, std::size_t len) noexcept;
+   IoAwaitable write(int fd, const void* buf, std::size_t len) noexcept;
 
 Positional I/O
 ~~~~~~~~~~~~~~
 
 Positional variants that do not affect the file offset pointer (seekable files only):
 
-.. doxygenfunction:: dftracer::utils::io::pread
-   :project: dftracer-utils
+.. code-block:: cpp
 
-.. doxygenfunction:: dftracer::utils::io::pwrite
-   :project: dftracer-utils
+   IoAwaitable pread(int fd, void* buf, std::size_t len, off_t offset) noexcept;
+   IoAwaitable pwrite(int fd, const void* buf, std::size_t len, off_t offset) noexcept;
 
 File Management
 ~~~~~~~~~~~~~~~
 
 Open, close, and introspection:
 
-.. doxygenfunction:: dftracer::utils::io::open
-   :project: dftracer-utils
+.. code-block:: cpp
 
-.. doxygenfunction:: dftracer::utils::io::close
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::io::fsync
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::io::ftruncate
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::io::fstat
-   :project: dftracer-utils
+   IoAwaitable open(const char* path, int flags, mode_t mode = 0644) noexcept;
+   IoAwaitable close(int fd) noexcept;
 
 Seek Operations
 ~~~~~~~~~~~~~~~
 
 Reposition the file pointer:
 
-.. doxygenfunction:: dftracer::utils::io::lseek
-   :project: dftracer-utils
+.. code-block:: cpp
+
+   IoAwaitable lseek(int fd, off_t offset, int whence) noexcept;
 
 Scatter-Gather I/O
 ~~~~~~~~~~~~~~~~~~~
 
 Efficient multi-buffer operations (readv/writev family):
 
-.. doxygenfunction:: dftracer::utils::io::readv
-   :project: dftracer-utils
+.. code-block:: cpp
 
-.. doxygenfunction:: dftracer::utils::io::writev
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::io::preadv
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::io::pwritev
-   :project: dftracer-utils
+   IoAwaitable readv(int fd, const struct iovec* iov, int iovcnt) noexcept;
+   IoAwaitable writev(int fd, const struct iovec* iov, int iovcnt) noexcept;
+   IoAwaitable preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) noexcept;
+   IoAwaitable pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) noexcept;
 
 Zero-Copy Transfer
 ~~~~~~~~~~~~~~~~~~~
 
 Efficient file-to-file/socket transfer without buffering in userspace:
 
-.. doxygenfunction:: dftracer::utils::io::sendfile
-   :project: dftracer-utils
+.. code-block:: cpp
+
+   IoAwaitable sendfile(int out_fd, int in_fd, off_t offset, std::size_t len) noexcept;
 
 Socket Operations
 ~~~~~~~~~~~~~~~~~
 
 Non-blocking accept and data transfer on connected sockets:
 
-.. doxygenfunction:: dftracer::utils::io::accept
-   :project: dftracer-utils
+.. code-block:: cpp
 
-.. doxygenfunction:: dftracer::utils::io::recv
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::io::send
-   :project: dftracer-utils
+   IoAwaitable accept(int listen_fd, struct sockaddr* addr = nullptr,
+                      socklen_t* addrlen = nullptr) noexcept;
+   IoAwaitable recv(int fd, void* buf, std::size_t len, int flags = 0) noexcept;
+   IoAwaitable send(int fd, const void* buf, std::size_t len, int flags = 0) noexcept;
 
 The Awaitable Type
 -------------------
 
 All I/O operations return an ``IoAwaitable`` object. It is a standard C++20 awaitable that suspends the coroutine until the operation completes:
-
-.. doxygenstruct:: dftracer::utils::io::IoAwaitable
-   :project: dftracer-utils
-   :members:
 
 Result Handling
 ~~~~~~~~~~~~~~~
@@ -219,8 +201,13 @@ Example
 Sync Fallback Behavior
 ~~~~~~~~~~~~~~~~~~~~~~
 
-When an I/O operation is called outside an executor context (e.g., in a regular synchronous function or test), it automatically falls back to blocking I/O:
+When an I/O operation is called outside an executor context (no active ``Executor`` on the current thread), it automatically falls back to synchronous blocking I/O. This allows the same code to work in both coroutine and non-coroutine contexts:
 
 .. code-block:: cpp
 
    #include <dftracer/utils/core/io/io.h>
+
+   // Works both inside and outside coroutines:
+   auto result = co_await io::read(fd, buf, len);
+   // Inside executor: async submission via io_uring/epoll/kqueue
+   // Outside executor: direct blocking read() syscall

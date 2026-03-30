@@ -66,9 +66,10 @@ class CallTreeImpl;
 }
 
 /**
- * CallTree - Simple, clean API for working with call trees from DFTracer traces
+ * @brief Simple, clean API for working with call trees from DFTracer traces.
  *
  * Usage:
+ * @code
  *   CallTree tree;
  *   tree.load_from_directory("/path/to/traces");
  *   tree.generate();
@@ -76,6 +77,7 @@ class CallTreeImpl;
  *   auto nodes = tree.get_nodes_depth_first();
  *   auto stats = tree.get_statistics();
  *   tree.save_to_file("output.calltree");
+ * @endcode
  */
 class CallTree {
    public:

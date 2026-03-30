@@ -502,6 +502,66 @@ Complete example of gathering statistics from a DFTracer trace file:
     std::cout << "Duration p99: " << stats.merged.duration_sketch.quantile(0.99)
               << " us" << std::endl;
 
+Reorganization Pipeline
+-----------------------
+
+Parallel event routing for reorganizing traces by query-based groups.
+
+ChunkWriter
+~~~~~~~~~~~
+
+Streaming file writer that automatically splits output into chunked files.
+Supports optional gzip compression and JSON array wrapping.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/fileio/chunk_writer.h>
+
+    using dftracer::utils::utilities::fileio::ChunkWriter;
+    using dftracer::utils::utilities::fileio::ChunkWriterConfig;
+
+    ChunkWriterConfig config;
+    config.output_dir = "./output";
+    config.base_name = "io_events";
+    config.chunk_size_bytes = 256 * 1024 * 1024;  // 256 MB per chunk
+    config.compress = true;
+    config.json_array_wrapper = true;
+
+    ChunkWriter writer(config);
+    // Write events — automatically rolls to new chunk file when size exceeded
+    // Each chunk is a separate .pfw.gz file
+
+EventRouter
+~~~~~~~~~~~
+
+Routes events from source trace files to output groups in parallel using
+``AsyncMutex``-protected ``ChunkWriter`` instances. Each group is defined by
+a query predicate (from ``ExtractionPlan``), and events matching a group are
+written to that group's chunked output.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/composites/dft/reorganize/event_router.h>
+
+    using namespace dftracer::utils::utilities::composites::dft::reorganize;
+
+    EventRouterConfig config;
+    config.plan = extraction_plan;   // from ReorganizationPlanner
+    config.output_dir = "./organized";
+    config.chunk_size_bytes = 256 * 1024 * 1024;
+    config.compress = true;
+    config.executor_threads = 8;
+
+    auto result = co_await route_events(scope, config);
+    // result.total_events_written, result.chunks_created, result.output_files
+
+ProvenanceTracker
+~~~~~~~~~~~~~~~~~
+
+Tracks source-to-output mapping during reorganization. Records which source
+file and line produced each output event, enabling reconstruction of original
+traces from reorganized files via ``dftracer_reconstruct``.
+
 Comparison
 ----------
 

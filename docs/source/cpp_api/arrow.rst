@@ -1,6 +1,12 @@
 Arrow Data Infrastructure
 =========================
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference <api/utilities/common/arrow>`.
+
+
 Arrow data interchange infrastructure using nanoarrow. All classes are in
 the ``dftracer::utils::utilities::common::arrow`` namespace.
 
@@ -40,25 +46,12 @@ String columns store ``string_view`` into source data for zero-copy during
 build; bulk copy only at ``finish()``. Caller must keep source data alive
 until ``finish()`` returns.
 
-.. doxygenclass:: dftracer::utils::utilities::common::arrow::RecordBatchBuilder
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenenum:: dftracer::utils::utilities::common::arrow::ColumnType
-   :project: dftracer-utils
-
 ArrowExportResult
 -----------------
 
 Move-only RAII wrapper holding ``nanoarrow::UniqueSchema`` and
 ``nanoarrow::UniqueArray``. Self-contained and safe to send across
 threads and channels.
-
-.. doxygenclass:: dftracer::utils::utilities::common::arrow::ArrowExportResult
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 IpcWriter
 ---------
@@ -67,11 +60,6 @@ Streaming Arrow IPC file writer. Writes ``.arrows`` files that can be
 read by pyarrow, polars, DuckDB, and any Arrow-compatible tool.
 
 Guarded by ``DFTRACER_UTILS_ENABLE_ARROW_IPC``.
-
-.. doxygenclass:: dftracer::utils::utilities::common::arrow::IpcWriter
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 Usage Example
 -------------

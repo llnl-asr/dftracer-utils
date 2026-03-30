@@ -1,97 +1,75 @@
 Compression
 =====================
 
-Zlib compression and decompression utilities supporting GZIP, ZLIB, and DEFLATE formats.
+Streaming zlib compression and decompression utilities supporting GZIP, ZLIB, and DEFLATE formats.
+All compression operates in streaming mode using zero-copy ``ByteView`` chunks.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/compression/zlib/compressor.h>
-   #include <dftracer/utils/utilities/compression/zlib/decompressor.h>
-   #include <dftracer/utils/utilities/compression/zlib/streaming_compressor.h>
-   #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor.h>
+   #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
+   #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
+   #include <dftracer/utils/utilities/compression/zlib/types.h>
 
 Types
 -----
 
 .. code-block:: cpp
 
-   // Binary data
-   struct RawData {
-       std::vector<unsigned char> data;
-   };
-
-   // Compressed data with metadata
-   struct CompressedData {
-       std::vector<unsigned char> data;
-       std::size_t original_size;
-   };
-
    // Compression format
-   enum class CompressionFormat {
-       DEFLATE_RAW,
-       ZLIB,
-       GZIP,
-       AUTO
+   enum class CompressionFormat : int32_t {
+       DEFLATE_RAW = -15,   // Raw deflate (no header/trailer)
+       ZLIB = 15,           // zlib format
+       GZIP = 15 + 16,      // gzip format (default)
+       AUTO = 15 + 32,      // Auto-detect gzip/zlib
    };
 
-CompressorUtility
------------------
+   // Decompression format
+   enum class DecompressionFormat : int32_t {
+       DEFLATE_RAW = -15,
+       ZLIB = 15,
+       GZIP = 15 + 16,
+       AUTO = 15 + 32       // Auto-detect (default)
+   };
 
-In-memory compression.
+ManualStreamingCompressorUtility
+---------------------------------
 
-.. code-block:: cpp
-
-   CompressorUtility compressor;
-   compressor.set_compression_level(6);  // 0-9, higher = better ratio
-
-   RawData input{/* ... */};
-   CompressedData output = compressor.process(input);
-
-   double ratio = static_cast<double>(output.data.size()) / input.data.size();
-
-DecompressorUtility
--------------------
-
-In-memory decompression.
+Zero-copy streaming compression using ``AsyncGenerator<ByteView>``.
+Yields compressed chunks as ``ByteView`` references into an internal buffer.
 
 .. code-block:: cpp
 
-   DecompressorUtility decompressor;
+   ManualStreamingCompressorUtility compressor(Z_DEFAULT_COMPRESSION,
+                                               CompressionFormat::GZIP);
 
-   CompressedData input{/* ... */};
-   RawData output = decompressor.process(input);
-
-StreamingCompressorUtility
---------------------------
-
-Chunk-by-chunk compression with constant memory usage.
-
-.. code-block:: cpp
-
-   StreamingCompressorUtility compressor;
-
-   for (const auto& chunk : input_chunks) {
-       CompressedData compressed = compressor.process(chunk);
-       write_to_file(compressed);
+   // Compress input chunks, yielding zero-copy ByteView results
+   auto gen = compressor.compress(input_bytes);
+   while (auto view = co_await gen.next()) {
+       co_await writer.process(*view);
    }
 
-   // Finalize to flush remaining data
-   auto remaining = compressor.finalize();
-   for (const auto& chunk : remaining) {
-       write_to_file(chunk);
+   // Finalize to flush remaining compressed data
+   auto fin = compressor.finalize_stream();
+   while (auto view = co_await fin.next()) {
+       co_await writer.process(*view);
    }
+
+   // Query statistics
+   std::size_t bytes_in = compressor.total_bytes_in();
+   std::size_t bytes_out = compressor.total_bytes_out();
+   double ratio = compressor.compression_ratio();
 
 StreamingDecompressorUtility
 ----------------------------
 
-Chunk-by-chunk decompression.
+Streaming decompression with zlib stream reuse and lazy initialization.
 
 .. code-block:: cpp
 
    StreamingDecompressorUtility decompressor;
 
    for (const auto& compressed_chunk : compressed_data) {
-       std::vector<RawData> decompressed = decompressor.process(compressed_chunk);
+       auto decompressed = decompressor.process(compressed_chunk);
        for (const auto& chunk : decompressed) {
            process(chunk);
        }

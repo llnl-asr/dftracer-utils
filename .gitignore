@@ -82,6 +82,7 @@ docs/build/
 docs/doxygen/
 docs/source/**/_autosummary/
 docs/source/_generated/
+docs/source/cpp_api/api/
 
 # LSP
 compile_commands.json
@@ -91,3 +92,5 @@ uv.lock
 
 PLANS.md
 docs/plans
+
+profiling-results*/

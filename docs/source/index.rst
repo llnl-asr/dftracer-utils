@@ -21,13 +21,6 @@ Features
 - **Cross-platform**: Works on Linux, macOS, and other Unix-like systems
 
 .. toctree::
-   :maxdepth: 1
-   :caption: Links:
-
-   DFTracer Documentation <https://dftracer.readthedocs.io/>
-   DFTracer GitHub <https://github.com/LLNL/dftracer>
-
-.. toctree::
     :maxdepth: 2
     :caption: Contents:
 
@@ -40,6 +33,13 @@ Features
     api/index
     cpp_api/index
     developers
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Links:
+
+   DFTracer Documentation <https://dftracer.readthedocs.io/>
+   DFTracer GitHub <https://github.com/LLNL/dftracer>
 
 Getting Started
 ---------------
@@ -77,7 +77,7 @@ Quick Example
    # Aggregate traces in a directory
    from dftracer.utils.utilities import AggregatorUtility
    agg = AggregatorUtility()
-   table = agg.process("./traces", time_interval=1.0)
+   table = agg.process("./traces", time_interval_ms=1000.0)
 
 Indices and tables
 ==================

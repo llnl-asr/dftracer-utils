@@ -24,8 +24,10 @@ namespace dftracer::utils::mpi {
  * MPIUtils - Singleton class for MPI utilities
  *
  * Usage:
+ * @code
  *   // Initialize (call once after MPI_Init)
  *   MPIUtils::instance().initialize();
+ * @endcode
  *
  *   // Use throughout application
  *   int rank = MPIUtils::instance().get_rank();

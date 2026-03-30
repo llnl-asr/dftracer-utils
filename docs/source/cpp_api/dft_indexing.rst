@@ -1,6 +1,12 @@
 DFTracer Indexing System
 ========================
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference <api/utilities/composites/dft/indexing>`.
+
+
 Bloom filter indexing and manifest building for fast event lookup in trace files.
 All classes are in the ``dftracer::utils::utilities::composites::dft::indexing`` namespace.
 
@@ -83,11 +89,6 @@ Usage example:
     // Deserialize from storage
     auto restored = BloomFilter::from_blob(blob.data(), blob.size());
 
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::BloomFilter
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 BloomFilterCache
 ~~~~~~~~~~~~~~~~
 
@@ -97,11 +98,6 @@ Avoids repeated deserialization of bloom filters from the ``.idx`` database
 during query execution. Cache keys are ``(idx_path, dimension, checkpoint_idx)``.
 
 When the cache is full, all entries are evicted (simple reset strategy).
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::BloomFilterCache
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 Chunk Statistics
 ----------------
@@ -120,11 +116,6 @@ Includes:
 Event counts by category, name, and pid:tid are stored in the
 ``chunk_dimension_stats`` table (see below) and reconstructed into
 ``ChunkStatistics`` fields on read-back.
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkStatistics
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 Chunk Indexer
 -------------
@@ -151,11 +142,6 @@ bloom filter parameters, and whether to build manifest indices.
     // Add custom dimensions (dot-path into JSON events)
     config.extra_dimensions = {"args.filename", "args.size"};
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkIndexerConfig
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 ChunkIndexerUtility
 ~~~~~~~~~~~~~~~~~~~
 
@@ -170,43 +156,8 @@ missing dimensions are indexed (detected via config hash comparison).
 
 Tagged ``Parallelizable`` — multiple instances run concurrently across chunks.
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkIndexerInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkIndexerOutput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::ChunkIndexerUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 Supporting Types
 ~~~~~~~~~~~~~~~~
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::IndexedDimensions
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkIndexState
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::EventLineGroup
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::MetadataLineGroup
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 Chunk Dimension Stats
 ---------------------
@@ -224,16 +175,6 @@ Stores:
 
 Used by ``ChunkPrunerUtility`` for three-tier chunk skipping:
 dictionary lookup, range check, bloom filter fallback.
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkDimensionStats
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkDimensionStatsResult
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 Index Builders
 --------------
@@ -276,11 +217,6 @@ case-insensitive. String values are case-sensitive.
     // Throw on parse error
     Query q = parse_or_throw(R"(name in ["read", "write"])");
 
-.. doxygenclass:: dftracer::utils::utilities::common::query::Query
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 ChunkPrunerUtility
 ------------------
 
@@ -317,21 +253,6 @@ Tagged ``Parallelizable`` — can query multiple files concurrently.
         }
     }
 
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkPrunerInput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::utilities::composites::dft::indexing::ChunkPrunerOutput
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenclass:: dftracer::utils::utilities::composites::dft::indexing::ChunkPrunerUtility
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 Database Schemas
 ----------------
 
@@ -340,23 +261,14 @@ IndexDatabase
 Manages the unified ``.idx`` SQLite sidecar file with additive schema
 (checkpoints + bloom filters + statistics + manifest).
 
-.. doxygenclass:: dftracer::utils::utilities::indexer::IndexDatabase
-   :members:
-
 ProvenanceDatabase
 ~~~~~~~~~~~~~~~~~~
 Manages the ``.pidx`` SQLite sidecar file for reorganization provenance.
-
-.. doxygenclass:: dftracer::utils::utilities::indexer::ProvenanceDatabase
-   :members:
 
 IndexBuilder
 ~~~~~~~~~~~~
 Single-pass index builder that decompresses once and builds all index
 data (checkpoints, bloom filters, manifest) via the visitor pattern.
-
-.. doxygenclass:: dftracer::utils::utilities::indexer::IndexBuilderUtility
-   :members:
 
 TraceReader
 ~~~~~~~~~~~
@@ -380,9 +292,3 @@ and evaluates per-event for all paths (indexed, gzip, plain file).
         // Only matching lines yielded
     }
 
-.. doxygenclass:: dftracer::utils::utilities::reader::TraceReader
-   :members:
-
-.. doxygenstruct:: dftracer::utils::utilities::reader::ReadConfig
-   :project: dftracer-utils
-   :members:

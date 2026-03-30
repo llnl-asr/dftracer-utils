@@ -1,6 +1,12 @@
 Task Graph API
 ==============
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference <api/task_graph>`.
+
+
 DAG-based task graph builder for constructing parallel computation graphs. All classes are in the ``dftracer::utils::task_graph`` namespace.
 
 .. mermaid::
@@ -405,10 +411,6 @@ TaskGraphConfig
 
 Global configuration for task graph execution.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphConfig
-   :project: dftracer-utils
-   :members:
-
 Controls graph-level settings including:
 
 - ``name``: Identifier for the task graph
@@ -420,141 +422,82 @@ that can override the graph-level ``max_concurrency`` when set to a non-zero val
 TaskGraphSourceConfig
 ^^^^^^^^^^^^^^^^^^^^^
 
-Configuration for source operations.
+Configuration for ``source()`` operations.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphSourceConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the source task (default: ``"Source"``)
 
 TaskGraphParallelConfig
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-Configuration for parallel task execution.
+Configuration for ``parallel()`` task execution.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphParallelConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the parallel group (default: ``"Parallel"``)
+- ``max_concurrency``: Override graph-level concurrency for this group (0 = use graph default)
 
 TaskGraphFanOutConfig
 ^^^^^^^^^^^^^^^^^^^^^
 
-Configuration for fan-out operations.
+Configuration for ``fan_out()`` operations.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphFanOutConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the fan-out group (default: ``"FanOut"``)
+- ``max_concurrency``: Override graph-level concurrency for this group (0 = use graph default)
 
 TaskGraphFanInConfig
 ^^^^^^^^^^^^^^^^^^^^
 
-Configuration for fan-in operations.
+Configuration for ``fan_in()`` operations.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphFanInConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the fan-in task (default: ``"FanIn"``)
 
 TaskGraphMapConfig
 ^^^^^^^^^^^^^^^^^^
 
-Configuration for map operations.
+Configuration for ``map()`` operations.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphMapConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the map group (default: ``"Map"``)
+- ``max_concurrency``: Override graph-level concurrency for this group (0 = use graph default)
 
 TaskGraphReduceConfig
 ^^^^^^^^^^^^^^^^^^^^^
 
-Configuration for reduce operations.
+Configuration for ``reduce()`` operations.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphReduceConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the reduce task (default: ``"Reduce"``)
 
 TaskGraphFoldConfig
 ^^^^^^^^^^^^^^^^^^^
 
-Configuration for fold operations.
+Configuration for ``fold()`` operations.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphFoldConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the fold task (default: ``"Fold"``)
 
 TaskGraphAggregateConfig
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-Configuration for aggregate operations.
+Configuration for ``aggregate()`` operations.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphAggregateConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the aggregate task (default: ``"Aggregate"``)
 
 TaskGraphPartitionConfig
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-Configuration for partition operations.
+Configuration for ``partition()`` operations.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphPartitionConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the partition task (default: ``"Partition"``)
 
 TaskGraphConcatConfig
 ^^^^^^^^^^^^^^^^^^^^^
 
-Configuration for concat operations.
+Configuration for ``concat_partitions()`` operations.
 
-.. doxygenstruct:: dftracer::utils::task_graph::TaskGraphConcatConfig
-   :project: dftracer-utils
-   :members:
+- ``name``: Identifier for the concat task (default: ``"Concat"``)
 
+.. tip::
 
-TaskGraph
----------
+   All config structs share a common ``name`` field for identifying the operation in
+   logs and diagnostics. Operations that support parallelism (``parallel``, ``fan_out``,
+   ``map``) additionally expose ``max_concurrency`` to override the graph-level setting.
 
-Builder for constructing task DAGs with fan-in, fan-out, map, and reduce patterns.
+   For complete struct definitions including default values, see the
+   :doc:`API Reference <api/task_graph>`.
 
-.. doxygenclass:: dftracer::utils::task_graph::TaskGraph
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-TaskGroup
----------
-
-Handle to a collection of tasks that produce a specific type.
-
-.. doxygenclass:: dftracer::utils::task_graph::TaskGroup
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-Type Tags
----------
-
-Strong types for specifying operation parameters.
-
-.. doxygenstruct:: dftracer::utils::task_graph::split_every
-   :project: dftracer-utils
-   :members:
-
-.. doxygenstruct:: dftracer::utils::task_graph::num_outputs
-   :project: dftracer-utils
-   :members:
-
-.. doxygenstruct:: dftracer::utils::task_graph::num_partitions
-   :project: dftracer-utils
-   :members:
-
-Factory Functions
------------------
-
-Standalone functions for creating task patterns.
-
-.. doxygenfunction:: dftracer::utils::task_graph::make_fan_out
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::task_graph::make_fan_in
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::task_graph::make_tree_reduce
-   :project: dftracer-utils

@@ -1,6 +1,11 @@
 Task System
 ===========
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference </cpp_api/api/core>`.
+
 Task-based DAG execution and coroutine scoping for structured concurrency.
 
 .. mermaid:: ../../_generated/pipeline_tasks.mmd
@@ -82,11 +87,6 @@ Check ``is_cancellation_requested()`` to support graceful cancellation::
         co_await maybe_yield();
     }
 
-.. doxygenclass:: dftracer::utils::CoroScope
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 TaskResult
 ----------
 
@@ -131,11 +131,6 @@ Smart value release via reader tracking:
 
 Value is automatically freed when last reader releases, except for terminal tasks
 (no children) where the value persists for user get().
-
-.. doxygenclass:: dftracer::utils::TaskResult
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 Task
 ----
@@ -187,19 +182,10 @@ Custom combiner for typed inputs::
 6. Result stored in TaskResult
 7. Children are enqueued when all parents complete
 
-.. doxygenclass:: dftracer::utils::Task
-   :project: dftracer-utils
-   :members:
-   :protected-members:
-   :undoc-members:
-
 make_task
 ---------
 
 Create a new Task with a given function.
-
-.. doxygenfunction:: dftracer::utils::make_task
-   :project: dftracer-utils
 
 Migration from Old API
 ----------------------

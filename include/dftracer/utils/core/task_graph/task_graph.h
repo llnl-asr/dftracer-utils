@@ -152,7 +152,7 @@ std::shared_ptr<Task> make_tree_reduce(
 // ============================================================================
 
 /**
- * TaskGraph - Builder for constructing task DAGs
+ * @brief Builder for constructing task DAGs.
  *
  * Features:
  * - Fluent API for building task graphs
@@ -162,6 +162,7 @@ std::shared_ptr<Task> make_tree_reduce(
  * - Configurable max_concurrency to limit in-flight parallel tasks
  *
  * Usage:
+ * @code
  *   Pipeline pipeline(config);
  *   auto graph = TaskGraph::builder({.name = "MyGraph",
  *                                    .max_concurrency = 128});
@@ -171,6 +172,7 @@ std::shared_ptr<Task> make_tree_reduce(
  *                                    {.name = "Merge"});
  *   pipeline.set_source(readers.tasks()[0]);
  *   pipeline.execute();
+ * @endcode
  */
 class TaskGraph {
    public:

@@ -27,9 +27,11 @@ Types
 
 .. code-block:: cpp
 
-   // Binary data
-   struct RawData {
-       std::vector<unsigned char> data;
+   // Zero-copy byte span (see core_infrastructure)
+   class ByteView {
+       const void* data();
+       std::size_t size();
+       template <typename T> const T* as() const;
    };
 
    // Text content
@@ -58,12 +60,14 @@ Reads entire file into memory as text.
 BinaryFileReaderUtility
 -----------------------
 
-Reads entire file as binary data.
+Streaming binary file reader yielding zero-copy ``ByteView`` chunks.
 
 .. code-block:: cpp
 
-   BinaryFileReaderUtility reader;
-   RawData data = reader.process(FileEntry{"/path/to/file.bin"});
+   auto gen = read_binary_file("/path/to/file.bin");
+   while (auto chunk = co_await gen.next()) {
+       process(chunk->as<char>(), chunk->size());
+   }
 
 StreamingFileReaderUtility
 --------------------------

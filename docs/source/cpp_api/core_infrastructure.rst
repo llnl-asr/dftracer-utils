@@ -1,10 +1,34 @@
-Core Common Utilities
-=====================
+Core Infrastructure
+===================
 
-Thread-safe data structures and services used throughout the runtime.
-All classes are in the ``dftracer::utils`` namespace.
+.. seealso::
 
-.. mermaid:: ../_generated/pipeline_executor.mmd
+   For complete class and member documentation, see the
+   :doc:`API Reference <api/core>`.
+
+
+Core infrastructure: thread-safe data structures, services, and memory utilities used throughout the runtime. All classes are in the ``dftracer::utils`` namespace.
+
+.. mermaid::
+
+   graph LR
+       subgraph Concurrency["Concurrency"]
+           SM["ShardedMutex&lt;T&gt;<br/>sharded locking"]
+       end
+
+       subgraph Scheduling["Scheduling"]
+           TS["TimerService<br/>timeout callbacks"]
+       end
+
+       subgraph Memory["Memory & Strings"]
+           SI["StringIntern<br/>string dedup → uint32 IDs"]
+           BP["BufferPool&lt;T&gt;<br/>zero-alloc reuse"]
+       end
+
+       SM --> |used by| Scheduler["Scheduler"]
+       TS --> |used by| Watchdog["Watchdog"]
+       SI --> |used by| AggKey["AggregationKey"]
+       BP --> |used by| Pipeline["Pipeline stages"]
 
 ShardedMutex
 ------------
@@ -52,11 +76,6 @@ Usage example:
     bool empty = sharded_map.empty();    // true if all shards empty
     sharded_map.clear();                 // clear all shards
 
-.. doxygenclass:: dftracer::utils::ShardedMutex
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 TimerService
 ------------
 
@@ -87,11 +106,6 @@ Usage example:
 
     timer_service.stop();
 
-.. doxygenclass:: dftracer::utils::TimerService
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 CoroPromise
 -----------
 
@@ -107,15 +121,62 @@ CoroPromise manages the lifecycle of a ``Coro`` coroutine:
 Users typically do not interact with CoroPromise directly. It is the
 ``promise_type`` for ``Coro`` and is managed by the coroutine machinery.
 
-.. doxygenstruct:: dftracer::utils::coro::CoroPromise
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
+StringIntern
+------------
 
-Type Definitions
-----------------
+Thread-safe string interning table for deduplicating strings into compact integer IDs.
 
-Core type aliases used throughout the runtime.
+Used by ``AggregationKey`` to store category, name, hhash, and fhash fields as
+``uint32_t`` IDs instead of full strings, reducing memory usage and enabling
+faster hashing.
 
-.. doxygentypedef:: dftracer::utils::TaskIndex
-   :project: dftracer-utils
+.. code-block:: cpp
+
+    #include <dftracer/utils/core/common/string_intern.h>
+
+    StringIntern intern;
+
+    // Intern strings — returns stable uint32_t IDs
+    uint32_t id = intern.get_or_insert("POSIX");   // first call: stores string
+    uint32_t id2 = intern.get_or_insert("POSIX");  // cache hit: no alloc
+    assert(id == id2);
+
+    // Resolve ID back to string_view
+    assert(intern.resolve(id) == "POSIX");
+
+    // Convenience: intern and return string_view in one call
+    std::string_view sv = intern.intern("STDIO");
+
+    // Thread safety: uses shared_mutex (concurrent reads, exclusive writes)
+    std::size_t count = intern.size();
+
+BufferPool
+----------
+
+Thread-safe typed buffer pool for zero-allocation buffer reuse after warmup.
+
+Pre-allocates buffers on construction. ``acquire()`` returns a buffer from the
+pool (or creates a new one if empty). ``release()`` returns a buffer to the pool
+after applying a reset callable.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/core/common/buffer_pool.h>
+
+    // Create a pool of 8 reusable string buffers
+    auto pool = make_buffer_pool<std::string>(8,
+        []() { std::string s; s.reserve(4096); return s; });
+
+    // Acquire a buffer (O(1) from pool, no allocation)
+    auto buf = pool->acquire();
+    buf += "data";
+
+    // Release back to pool (calls clear() by default)
+    pool->release(std::move(buf));
+
+    // Custom reset callable
+    auto pool2 = make_buffer_pool<std::vector<int>>(4,
+        []() { return std::vector<int>(); },           // init
+        [](std::vector<int>& v) { v.clear(); });       // reset
+
+

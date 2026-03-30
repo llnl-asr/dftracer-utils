@@ -196,7 +196,7 @@ scalar utilities return dicts.
 
    # Aggregation pipeline (returns Arrow)
    agg = AggregatorUtility()
-   table = agg.process("./traces", time_interval=1.0)
+   table = agg.process("./traces", time_interval_ms=1000.0)
    df = table.to_pandas()
 
    # Statistics query (returns dict)

@@ -58,11 +58,12 @@ dftracer_info
 
 - ``--files <files...>`` - Compressed files to inspect (GZIP, TAR.GZ)
 - ``-d, --directory <path>`` - Directory containing files to inspect
+- ``--query <type>`` - Query type: ``summary`` (aggregate all files, default) or ``detailed`` (per-file output)
 - ``-v, --verbose`` - Show detailed information including index details
 - ``-f, --force-rebuild`` - Force rebuild index files
 - ``-c, --checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
-- ``--threads <count>`` - Number of threads for parallel processing (default: number of CPU cores)
+- ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 
 **Example:**
 
@@ -74,8 +75,11 @@ dftracer_info
    # Show info for specific files with verbose output
    dftracer_info --files trace1.pfw.gz trace2.pfw.gz -v
 
+   # Per-file detailed output
+   dftracer_info -d ./traces --query detailed
+
    # Analyze with 4 threads
-   dftracer_info --threads 4 -d ./traces
+   dftracer_info --executor-threads 4 -d ./traces
 
 dftracer_merge
 --------------
@@ -97,7 +101,7 @@ dftracer_merge
 - ``-v, --verbose`` - Enable verbose mode
 - ``-g, --gzip-only`` - Process only .pfw.gz files
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
-- ``--threads <count>`` - Number of threads for parallel processing (default: number of CPU cores)
+- ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 
 **Example:**
@@ -111,7 +115,7 @@ dftracer_merge
    dftracer_merge -d ./logs -o output.pfw -c
 
    # Merge with parallel processing and verbose output
-   dftracer_merge -d ./traces -o combined.pfw --threads 8 -v
+   dftracer_merge -d ./traces -o combined.pfw --executor-threads 8 -v
 
 dftracer_split
 --------------
@@ -134,7 +138,7 @@ dftracer_split
 - ``-c, --compress`` - Compress output files with gzip (default: true)
 - ``-v, --verbose`` - Enable verbose mode
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
-- ``--threads <count>`` - Number of threads for parallel processing (default: number of CPU cores)
+- ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 - ``--verify`` - Verify output chunks match input by comparing event IDs
 
@@ -167,7 +171,7 @@ dftracer_event_count
 - ``-d, --directory <path>`` - Directory containing .pfw or .pfw.gz files (default: .)
 - ``-f, --force`` - Force index recreation
 - ``-c, --checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
-- ``--threads <count>`` - Number of threads for parallel processing (default: number of CPU cores)
+- ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 
 **Example:**
@@ -178,7 +182,7 @@ dftracer_event_count
    dftracer_event_count
 
    # Count events in specific directory with 8 threads
-   dftracer_event_count -d ./traces --threads 8
+   dftracer_event_count -d ./traces --executor-threads 8
 
    # Force index rebuild
    dftracer_event_count -d ./logs -f
@@ -198,7 +202,7 @@ dftracer_pgzip
 
 - ``-d, --directory <path>`` - Directory containing .pfw files (default: .)
 - ``-v, --verbose`` - Enable verbose output
-- ``--threads <count>`` - Number of threads for parallel processing (default: number of CPU cores)
+- ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 
 **Example:**
 
@@ -211,7 +215,7 @@ dftracer_pgzip
     dftracer_pgzip -d ./logs -v
 
     # Compress with 16 threads
-    dftracer_pgzip -d ./traces --threads 16
+    dftracer_pgzip -d ./traces --executor-threads 16
 
 dftracer_server
 ---------------
@@ -382,7 +386,7 @@ dftracer_aggregator
 
 - ``-d, --directory <path>`` - Input directory containing .pfw or .pfw.gz files (default: .)
 - ``-o, --output <path>`` - Output file path for aggregated counters (default: aggregated_output.json)
-- ``-t, --time-interval <sec>`` - Time interval in seconds for bucketing (default: 5.0)
+- ``-t, --time-interval <ms>`` - Time interval in milliseconds for bucketing (default: 5000)
 - ``-g, --group-keys <keys>`` - Comma-separated extra group keys from args (e.g., epoch,step,level)
 - ``-m, --metric-fields <fields>`` - Comma-separated custom metric fields from args (e.g., iter_count,num_events)
 - ``--query <query>`` - Query DSL filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
@@ -406,8 +410,8 @@ dftracer_aggregator
 
 .. code-block:: bash
 
-    # Basic aggregation with 1-second buckets
-    dftracer_aggregator -d ./traces -o agg.json -t 1.0
+    # Basic aggregation with 1-second (1000ms) buckets
+    dftracer_aggregator -d ./traces -o agg.json -t 1000
 
     # Aggregation with percentiles and compression
     dftracer_aggregator -d ./traces -o agg.json --compute-percentiles --compress
@@ -453,6 +457,7 @@ dftracer_organize
 - ``-d, --directory <path>`` - Directory containing trace files
 - ``-o, --output <dir>`` - Output directory [required]
 - ``--groups <groups...>`` - Query groups: ``'io:cat == "POSIX"'`` ``'compute:cat == "APP"'`` [required]
+- ``--chunk-size <MB>`` - Target chunk size in MB for output files (default: 256)
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--index-dir <path>`` - Directory for sidecar files
 - ``-f, --force`` - Force rebuild of indices

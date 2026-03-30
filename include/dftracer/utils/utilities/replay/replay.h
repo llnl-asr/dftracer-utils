@@ -195,8 +195,10 @@ class ReplayLineProcessor;
  * Main replay engine that coordinates trace reading and execution
  *
  * Usage:
+ * @code
  *   ReplayConfig config;
  *   config.dftracer_mode = true;
+ * @endcode
  *
  *   ReplayEngine engine(config);
  *   auto result = engine.replay("trace.pfw.gz");

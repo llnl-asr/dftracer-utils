@@ -11,6 +11,7 @@ This section contains the C++ API documentation for dftracer utilities.
     :maxdepth: 2
     :caption: C++ Components:
 
+    core_infrastructure
     reader
     indexer
     pipeline
@@ -21,9 +22,9 @@ This section contains the C++ API documentation for dftracer utilities.
     io
     sqlite
     scheduler
-    core_common
     dft_aggregators
     dft_indexing
+    api/index
 
 Overview
 --------

@@ -1,6 +1,12 @@
 Scheduler & Watchdog
 ====================
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference <api/core>`.
+
+
 Task scheduling, dependency tracking, and timeout monitoring.
 All classes are in the ``dftracer::utils`` namespace.
 
@@ -79,11 +85,6 @@ Usage example:
     });
     scheduler.schedule(task, std::any{});
 
-.. doxygenclass:: dftracer::utils::Scheduler
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 Watchdog
 --------
 
@@ -129,21 +130,14 @@ Usage example:
     // ... run pipeline ...
     watchdog.stop();
 
-.. doxygenclass:: dftracer::utils::Watchdog
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 TaskExecution
 ~~~~~~~~~~~~~
 
-Active task execution metadata tracked by the Watchdog. This is a nested
-struct within ``Watchdog`` and is included in the Watchdog class documentation
-above.
+Active task execution metadata tracked by the Watchdog:
 
-Fields:
-
-- ``task`` — Shared pointer to the tracked Task
+- ``task`` — Shared pointer to the tracked ``Task``
 - ``start_time`` — When the task started executing
 - ``timeout`` — Task-specific timeout (0 = no timeout)
 - ``warning_logged`` — Whether a slow-task warning has been logged
+
+See :doc:`api/core` for full struct definition.

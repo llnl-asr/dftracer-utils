@@ -1,6 +1,12 @@
 Coroutine API
 =============
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference <api/coro>`.
+
+
 C++20 coroutine primitives for asynchronous task execution. All classes are in the ``dftracer::utils::coro`` namespace.
 
 For usage examples and task scheduling, see :doc:`/pipeline` and :doc:`pipeline/tasks`.
@@ -21,11 +27,6 @@ Coro is the internal execution primitive used by the runtime. Unlike CoroTask<T>
 
 Users typically interact with Task and CoroScope instead of using Coro directly.
 
-.. doxygenclass:: dftracer::utils::coro::Coro
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 JoinHandle
 ----------
 
@@ -45,11 +46,6 @@ Usage example:
    jh.track(coro2);
    // ... enqueue coroutines to executor ...
    co_await jh.join();  // suspends until all tracked coroutines complete
-
-.. doxygenclass:: dftracer::utils::coro::JoinHandle
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
 
 SpawnFuture
 -----------
@@ -97,11 +93,6 @@ Usage examples:
        co_return;
    });
 
-.. doxygenclass:: dftracer::utils::coro::SpawnFuture
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
 Yield Primitives
 ----------------
 
@@ -137,16 +128,6 @@ Usage example:
         co_await maybe_yield();  // Yields after 5ms instead of 10ms
     }
 
-.. doxygenstruct:: dftracer::utils::coro::YieldAwaitable
-    :project: dftracer-utils
-    :members:
-
-.. doxygenfunction:: dftracer::utils::coro::yield
-    :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::coro::maybe_yield
-    :project: dftracer-utils
-
 CoroTask
 --------
 
@@ -172,11 +153,6 @@ Usage example:
         // result == 42
         co_return;
     }
-
-.. doxygenclass:: dftracer::utils::coro::CoroTask
-    :project: dftracer-utils
-    :members:
-    :undoc-members:
 
 Channel
 -------
@@ -239,11 +215,6 @@ Usage example:
         });
     }
 
-.. doxygenclass:: dftracer::utils::coro::Channel
-    :project: dftracer-utils
-    :members:
-    :undoc-members:
-
 Generator
 ---------
 
@@ -267,11 +238,6 @@ Usage example:
     for (int fib : fibonacci(10)) {
         std::cout << fib << " ";  // 0 1 1 2 3 5 8 13 21 34
     }
-
-.. doxygenclass:: dftracer::utils::coro::Generator
-    :project: dftracer-utils
-    :members:
-    :undoc-members:
 
 AsyncGenerator
 --------------
@@ -299,11 +265,6 @@ Usage example:
         process(*line);
     }
 
-.. doxygenclass:: dftracer::utils::coro::AsyncGenerator
-    :project: dftracer-utils
-    :members:
-    :undoc-members:
-
 when_all
 --------
 
@@ -330,15 +291,6 @@ Usage example:
     }
     auto results = co_await when_all(std::move(tasks));
     // results is std::vector<int>
-
-.. doxygenfunction:: dftracer::utils::coro::when_all(std::vector<Awaitable> awaitables)
-    :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::coro::when_all(std::initializer_list<Awaitable> awaitables)
-    :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::coro::when_all(Awaitables&&... awaitables)
-    :project: dftracer-utils
 
 when_any
 --------
@@ -372,19 +324,6 @@ Usage example:
             break;
     }
     process(result.result);
-
-.. doxygenstruct:: dftracer::utils::coro::WhenAnyResult
-    :project: dftracer-utils
-    :members:
-
-.. doxygenfunction:: dftracer::utils::coro::when_any(std::vector<Awaitable> awaitables)
-    :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::coro::when_any(std::initializer_list<Awaitable> awaitables)
-    :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::coro::when_any(A1 &&a1, A2 &&a2, Rest&&... rest)
-    :project: dftracer-utils
 
 Heterogeneous when_all and when_any
 ------------------------------------
@@ -461,6 +400,39 @@ The correct overload is selected automatically via ``requires`` constraints:
 No explicit template arguments are needed; the compiler resolves the overload
 based on the argument types.
 
+AsyncMutex
+----------
+
+Lock-free async mutex for coroutines. Ownership is not tied to any thread —
+a coroutine holding the lock can migrate freely. Waiting coroutines suspend
+without blocking the OS thread and are resumed in approximate FIFO order.
+
+Used by the reorganization pipeline for serializing writes to shared
+``ChunkWriter`` instances across parallel event routing coroutines.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/core/coro/async_mutex.h>
+
+    AsyncMutex mutex;
+
+    // Manual lock/unlock
+    co_await mutex.lock();
+    co_await writer.write_line(data);
+    mutex.unlock();
+
+    // RAII scoped lock (recommended)
+    {
+        auto guard = co_await mutex.scoped_lock();
+        co_await writer.write_line(data);
+    }  // automatically unlocks
+
+    // Non-blocking try_lock
+    if (mutex.try_lock()) {
+        // acquired
+        mutex.unlock();
+    }
+
 TimeoutAwaitable
 ----------------
 
@@ -486,10 +458,3 @@ Usage example:
         process(result.result);
     }
 
-.. doxygenclass:: dftracer::utils::coro::TimeoutAwaitable
-    :project: dftracer-utils
-    :members:
-    :undoc-members:
-
-.. doxygenfunction:: dftracer::utils::coro::timeout
-    :project: dftracer-utils

@@ -1,6 +1,12 @@
 Async SQLite API
 ================
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference <api/sqlite>`.
+
+
 Asynchronous SQLite database operations integrated with the dftracer executor and coroutine system. All classes and functions are in the ``dftracer::utils::sqlite`` namespace.
 
 Overview
@@ -36,10 +42,6 @@ Database Management
 -------------------
 
 The ``SqliteDatabase`` class wraps a SQLite connection:
-
-.. doxygenclass:: dftracer::utils::sqlite::SqliteDatabase
-   :project: dftracer-utils
-   :members:
 
 Opening a Database
 ~~~~~~~~~~~~~~~~~~~
@@ -90,30 +92,10 @@ The ``DfTracerSqliteVfs`` is a custom SQLite Virtual File System that:
 - Handles WAL mode, synchronization, and shared memory regions
 - Integrates with the Executor to resume coroutines on completion
 
-.. doxygenstruct:: dftracer::utils::sqlite::DfTracerSqliteVfsAppData
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenstruct:: dftracer::utils::sqlite::DfTracerSqliteVfsFile
-   :project: dftracer-utils
-   :members:
-   :undoc-members:
-
-.. doxygenfunction:: dftracer::utils::sqlite::register_dftracer_sqlite_vfs
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::unregister_dftracer_sqlite_vfs
-   :project: dftracer-utils
-
 Prepared Statements
 -------------------
 
 The ``SqliteStmt`` class wraps a compiled SQL statement:
-
-.. doxygenclass:: dftracer::utils::sqlite::SqliteStmt
-   :project: dftracer-utils
-   :members:
 
 Binding Parameters
 ~~~~~~~~~~~~~~~~~~~
@@ -135,55 +117,15 @@ SQLite uses placeholders (``?``, ``?1``, ``:name``) in SQL. Bind values before e
 Binding Functions
 ~~~~~~~~~~~~~~~~~
 
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_int
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_int64
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_double
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_text(int index, const std::string &text)
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_text(int index, const char *text, int length, void (*destructor)(void*))
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_blob(int index, const void *blob, int length)
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_blob(int index, std::span<const std::byte> data)
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_blob(int index, std::span<const unsigned char> data)
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::bind_null
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::reset
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::SqliteStmt::clear_bindings
-   :project: dftracer-utils
-
 Statement Execution (Async)
 ---------------------------
 
 Use the ``SqliteAwaitable<T>`` template to execute arbitrary database operations asynchronously:
 
-.. doxygenclass:: dftracer::utils::sqlite::SqliteAwaitable
-   :project: dftracer-utils
-   :members:
-
 The Generic ``run()`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For simple async database work that doesn't require a ``SqliteDatabase`` object:
-
-.. doxygenfunction:: dftracer::utils::sqlite::run
-   :project: dftracer-utils
 
 Example: Async Query
 ^^^^^^^^^^^^^^^^^^^^
@@ -221,26 +163,10 @@ Async Submission Helpers
 
 Low-level helpers for integrating with the executor and thread pool:
 
-.. doxygenfunction:: dftracer::utils::sqlite::get_sqlite_pool
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::get_current_executor_opaque
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::sqlite_async_submit
-   :project: dftracer-utils
-
-.. doxygenfunction:: dftracer::utils::sqlite::sqlite_async_resume_on
-   :project: dftracer-utils
-
 Error Handling
 --------------
 
 The ``SqliteError`` exception class represents database errors:
-
-.. doxygenclass:: dftracer::utils::sqlite::SqliteError
-   :project: dftracer-utils
-   :members:
 
 Error Types
 ~~~~~~~~~~~
@@ -380,3 +306,32 @@ For advanced use cases, you can access the underlying SQLite C API directly:
 
 Sync Operations Outside Executor
 ---------------------------------
+
+``SqliteDatabase`` can be used outside the coroutine executor for synchronous
+operations. When ``SqliteAwaitable`` detects no executor thread pool
+(``pool_ == nullptr``), it executes the operation inline in ``await_ready()``
+without suspending the coroutine.
+
+For fully synchronous usage (no executor at all), use ``SqliteDatabase``
+directly with the raw SQLite C API:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/core/sqlite/database.h>
+
+   sqlite::SqliteDatabase db("data.db");
+
+   // Use sqlite3 C API directly
+   sqlite3 *raw = db.get();
+
+   sqlite3_exec(raw, "CREATE TABLE IF NOT EXISTS kv (k TEXT, v TEXT)",
+                nullptr, nullptr, nullptr);
+
+   sqlite3_stmt *stmt = nullptr;
+   sqlite3_prepare_v2(raw, "INSERT INTO kv VALUES (?, ?)", -1, &stmt, nullptr);
+   sqlite3_bind_text(stmt, 1, "key", -1, SQLITE_STATIC);
+   sqlite3_bind_text(stmt, 2, "value", -1, SQLITE_STATIC);
+   sqlite3_step(stmt);
+   sqlite3_finalize(stmt);
+
+   db.close();

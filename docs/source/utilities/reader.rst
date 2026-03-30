@@ -1,13 +1,16 @@
 Reader
 ================
 
+.. seealso::
+
+   For complete class and member documentation, see the
+   :doc:`API Reference </cpp_api/api/index>`.
+
 Streaming reader for compressed trace files with support for line-based and byte-based access, zero-copy reads, and async I/O.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
-   #include <dftracer/utils/utilities/reader/internal/reader.h>
-   #include <dftracer/utils/utilities/reader/internal/stream.h>
+   #include <dftracer/utils/utilities/reader/trace_reader.h>
 
 Overview
 --------
@@ -21,7 +24,7 @@ Creates readers with automatic format detection.
 
 .. code-block:: cpp
 
-   using namespace dftracer::utils::utilities::reader::internal;
+   using namespace dftracer::utils::utilities::reader;
 
    auto reader = ReaderFactory::create(
        "trace.pfw.gz",       // Compressed file

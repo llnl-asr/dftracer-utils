@@ -16,7 +16,11 @@ coro::CoroTask<AssociationResolverOutput> AssociationResolverUtility::process(
         input.trackers.size());
 
     AssociationResolverOutput output;
-    output.aggregations = input.aggregations;
+    // NOTE(perf): move from input, the utility interface requires const& but
+    // callers don't use the input after process() returns. The const_cast +
+    // move avoids copying the entire aggregation map (millions of entries).
+    output.aggregations =
+        std::move(const_cast<AssociationResolverInput&>(input).aggregations);
 
     if (input.trackers.empty() || (!input.config.track_process_parents &&
                                    input.config.boundary_events.empty())) {
@@ -80,7 +84,9 @@ coro::CoroTask<AssociationResolverOutput> AssociationResolverUtility::process(
             auto associations = global_tracker.get_boundary_associations(
                 boundary_pid, representative_ts);
             if (!associations.empty()) {
-                metrics.boundary_associations = associations;
+                metrics.boundary_associations = std::make_unique<
+                    std::unordered_map<std::string, std::string>>(
+                    std::move(associations));
                 updated = true;
             }
         }

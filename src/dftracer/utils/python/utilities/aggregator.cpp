@@ -77,13 +77,21 @@ static int Aggregator_init(AggregatorObject *self, PyObject *args,
 
 static int parse_aggregator_args(PyObject *args, PyObject *kwds,
                                  AggregatorInput &input) {
-    static const char *kwlist[] = {
-        "directory",     "time_interval", "group_keys",       "categories",
-        "names",         "index_dir",     "checkpoint_size",  "force_rebuild",
-        "chunk_size_mb", "batch_size_mb", "event_batch_size", NULL};
+    static const char *kwlist[] = {"directory",
+                                   "time_interval_ms",
+                                   "group_keys",
+                                   "categories",
+                                   "names",
+                                   "index_dir",
+                                   "checkpoint_size",
+                                   "force_rebuild",
+                                   "chunk_size_mb",
+                                   "batch_size_mb",
+                                   "event_batch_size",
+                                   NULL};
 
     const char *directory = NULL;
-    double time_interval = 5.0;
+    double time_interval_ms = 5000.0;
     PyObject *group_keys_obj = Py_None;
     PyObject *categories_obj = Py_None;
     PyObject *names_obj = Py_None;
@@ -96,14 +104,14 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
 
     if (!PyArg_ParseTupleAndKeywords(
             args, kwds, "s|dOOOsnpnnn", (char **)kwlist, &directory,
-            &time_interval, &group_keys_obj, &categories_obj, &names_obj,
+            &time_interval_ms, &group_keys_obj, &categories_obj, &names_obj,
             &index_dir, &checkpoint_size, &force_rebuild, &chunk_size_mb,
             &batch_size_mb, &event_batch_size))
         return -1;
 
     input.directory = directory;
     input.config.time_interval_us =
-        static_cast<std::uint64_t>(time_interval * 1000000.0);
+        static_cast<std::uint64_t>(time_interval_ms * 1000.0);
     input.index_dir = index_dir;
     input.checkpoint_size = static_cast<std::size_t>(checkpoint_size);
     input.force_rebuild = force_rebuild != 0;
@@ -267,7 +275,7 @@ static PyObject *Aggregator_call(PyObject *self, PyObject *args,
 
 static PyMethodDef Aggregator_methods[] = {
     {"process", (PyCFunction)Aggregator_process, METH_VARARGS | METH_KEYWORDS,
-     "process(directory, time_interval=5.0, group_keys=None,\n"
+     "process(directory, time_interval_ms=5000.0, group_keys=None,\n"
      "        categories=None, names=None, index_dir='',\n"
      "        checkpoint_size=33554432, force_rebuild=False,\n"
      "        chunk_size_mb=64, batch_size_mb=4, event_batch_size=10000)\n"
@@ -277,7 +285,8 @@ static PyMethodDef Aggregator_methods[] = {
      "\n"
      "Args:\n"
      "    directory (str): Directory containing .pfw/.pfw.gz files.\n"
-     "    time_interval (float): Time bucket in seconds (default 5.0).\n"
+     "    time_interval_ms (float): Time bucket in milliseconds (default "
+     "5000).\n"
      "    group_keys (list[str] or None): Extra grouping dims (default None).\n"
      "    categories (list[str] or None): Category filter (default None).\n"
      "    names (list[str] or None): Name filter (default None).\n"
@@ -292,7 +301,7 @@ static PyMethodDef Aggregator_methods[] = {
      "    ArrowTable: Aggregated results.\n"},
     {"iter_arrow", (PyCFunction)Aggregator_iter_arrow,
      METH_VARARGS | METH_KEYWORDS,
-     "iter_arrow(directory, time_interval=5.0, group_keys=None,\n"
+     "iter_arrow(directory, time_interval_ms=5000.0, group_keys=None,\n"
      "           categories=None, names=None, index_dir='',\n"
      "           checkpoint_size=33554432, force_rebuild=False,\n"
      "           chunk_size_mb=64, batch_size_mb=4, event_batch_size=10000)\n"
@@ -302,7 +311,8 @@ static PyMethodDef Aggregator_methods[] = {
      "\n"
      "Args:\n"
      "    directory (str): Directory containing .pfw/.pfw.gz files.\n"
-     "    time_interval (float): Time bucket in seconds (default 5.0).\n"
+     "    time_interval_ms (float): Time bucket in milliseconds (default "
+     "5000).\n"
      "    group_keys (list[str] or None): Extra grouping dims (default None).\n"
      "    categories (list[str] or None): Category filter (default None).\n"
      "    names (list[str] or None): Name filter (default None).\n"
@@ -344,9 +354,10 @@ PyTypeObject AggregatorType = {
     "Args:\n"
     "    runtime (Runtime or None): Runtime for thread pool control.\n"
     "        If None, uses the default global Runtime.\n\n"
-    "process(directory, time_interval=5.0, ...) -> ArrowTable\n"
+    "process(directory, time_interval_ms=5000.0, ...) -> ArrowTable\n"
     "    Run aggregation and return a materialized Arrow table.\n\n"
-    "iter_arrow(directory, time_interval=5.0, ...) -> Iterator[ArrowBatch]\n"
+    "iter_arrow(directory, time_interval_ms=5000.0, ...) -> "
+    "Iterator[ArrowBatch]\n"
     "    Run aggregation and stream Arrow batches.\n", /* tp_doc */
     0,                                                 /* tp_traverse */
     0,                                                 /* tp_clear */

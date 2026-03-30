@@ -32,11 +32,11 @@ double vec_mean(const std::vector<double>& v) {
 // Merge entries from a CollapsedMap into a single CollapsedMetrics.
 // If cat_filter is non-empty, only include entries matching that cat.
 CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
-                                 const std::string& cat_filter = "") {
+                                 std::string_view cat_filter = "") {
     CollapsedMetrics total;
     std::vector<double> counts, dur_means, size_means, xfers, bws;
     for (const auto& [key, entry] : cm) {
-        if (!cat_filter.empty() && key.cat != cat_filter) continue;
+        if (!cat_filter.empty() && key.cat() != cat_filter) continue;
         total.merged.merge_from(entry.merged);
         counts.push_back(entry.count_mean);
         dur_means.push_back(entry.dur_mean_of_means);
@@ -58,7 +58,7 @@ CollapsedMetrics merge_all(const CollapsedMap& cm) {
     return merge_collapsed(cm);
 }
 
-CollapsedMetrics merge_by_cat(const CollapsedMap& cm, const std::string& cat) {
+CollapsedMetrics merge_by_cat(const CollapsedMap& cm, std::string_view cat) {
     return merge_collapsed(cm, cat);
 }
 
@@ -73,7 +73,7 @@ double worst_regression(const std::vector<MetricComparison>& metrics) {
     return worst;
 }
 
-GroupComparison make_group(const std::string& label,
+GroupComparison make_group(std::string_view label,
                            const CollapsedMetrics& base_cm,
                            const CollapsedMetrics& var_cm, bool base_present,
                            bool var_present,
@@ -93,10 +93,11 @@ GroupComparison make_group(const std::string& label,
 // Build per-(cat,name) GroupComparison entries, grouped by cat.
 // Returns a map: cat -> vector of (name, GroupComparison).
 // Also fills all_cats in stable insertion order.
-static std::map<std::string, std::vector<GroupComparison>> build_per_cat_groups(
-    const CollapsedMap& base_collapsed, const CollapsedMap& var_collapsed,
-    const std::vector<std::string>& metrics,
-    const std::vector<double>& percentiles) {
+static std::map<std::string_view, std::vector<GroupComparison>>
+build_per_cat_groups(const CollapsedMap& base_collapsed,
+                     const CollapsedMap& var_collapsed,
+                     const std::vector<std::string>& metrics,
+                     const std::vector<double>& percentiles) {
     static const CollapsedMetrics EMPTY{};
 
     KeySet all_keys;
@@ -105,7 +106,7 @@ static std::map<std::string, std::vector<GroupComparison>> build_per_cat_groups(
     for (const auto& [k, _] : var_collapsed) all_keys.insert(k);
 
     // cat -> list of (name, GroupComparison)
-    std::map<std::string, std::vector<GroupComparison>> by_cat;
+    std::map<std::string_view, std::vector<GroupComparison>> by_cat;
 
     for (const auto& key : all_keys) {
         auto base_it = base_collapsed.find(key);
@@ -117,10 +118,10 @@ static std::map<std::string, std::vector<GroupComparison>> build_per_cat_groups(
             (var_it != var_collapsed.end()) ? var_it->second : EMPTY;
 
         GroupComparison gc = make_group(
-            key.name, base_cm, var_cm, base_it != base_collapsed.end(),
+            key.name(), base_cm, var_cm, base_it != base_collapsed.end(),
             var_it != var_collapsed.end(), metrics, percentiles);
 
-        by_cat[key.cat].push_back(std::move(gc));
+        by_cat[key.cat()].push_back(std::move(gc));
     }
 
     return by_cat;

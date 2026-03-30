@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_COMPARATOR_COMPARISON_RESULT_H
 
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_map.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -17,7 +18,9 @@
 namespace dftracer::utils::utilities::composites::dft::comparator {
 
 using aggregators::AggregationKey;
+using aggregators::AggregationKeyEqual;
 using aggregators::AggregationKeyHash;
+using aggregators::AggregationMap;
 using aggregators::AggregationMetrics;
 using aggregators::MetricStats;
 
@@ -161,20 +164,17 @@ struct CollapsedMetrics {
 
 /// Map from (category, operation) key to collapsed metrics.
 using CollapsedMap =
-    std::unordered_map<AggregationKey, CollapsedMetrics, AggregationKeyHash>;
+    std::unordered_map<AggregationKey, CollapsedMetrics, AggregationKeyHash,
+                       AggregationKeyEqual>;
 
 /// Extract trace metadata (unique PIDs, TIDs, makespan) from raw
 /// aggregation output.
-TraceMetadata extract_metadata(
-    const std::unordered_map<AggregationKey, AggregationMetrics,
-                             AggregationKeyHash>& aggregations,
-    std::size_t file_count);
+TraceMetadata extract_metadata(const AggregationMap& aggregations,
+                               std::size_t file_count);
 
 /// Collapse aggregation output by grouping on (category, name) and
 /// merging across time windows.
-CollapsedMap collapse_by_group(
-    const std::unordered_map<AggregationKey, AggregationMetrics,
-                             AggregationKeyHash>& aggregations);
+CollapsedMap collapse_by_group(const AggregationMap& aggregations);
 
 /// Compute Cohen's d effect size from two MetricStats with sample
 /// counts.

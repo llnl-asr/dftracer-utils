@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
@@ -32,7 +33,7 @@ class PerfettoTraceWriterUtility
                                 PerfettoTraceWriterOutput> {
    private:
     std::uint64_t generate_synthetic_tid(const AggregationKey& key) const;
-    void append_json_string(std::string& buffer, const std::string& str) const;
+    void append_json_string(std::string& buffer, std::string_view str) const;
     void append_double(std::string& buffer, double value) const;
     void append_metric_stats(std::string& buffer, const MetricStats& stats,
                              std::uint64_t count, bool compute_statistics,

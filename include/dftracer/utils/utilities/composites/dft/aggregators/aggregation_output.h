@@ -1,8 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_OUTPUT_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_OUTPUT_H
 
-#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
-#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_map.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -25,9 +24,8 @@ using BoundaryTimeRangesMap =
     std::unordered_map<std::string, BoundaryTimeRangeMap>;
 
 struct ChunkAggregationOutput {
-    std::unordered_map<AggregationKey, AggregationMetrics, AggregationKeyHash>
-        aggregations;
     int chunk_index = 0;
+    AggregationMap aggregations;
     std::size_t events_processed = 0;
     std::size_t bytes_processed = 0;
     std::string file_path;
@@ -36,8 +34,7 @@ struct ChunkAggregationOutput {
 };
 
 struct EventAggregatorUtilityOutput {
-    std::unordered_map<AggregationKey, AggregationMetrics, AggregationKeyHash>
-        aggregations;
+    AggregationMap aggregations;
     std::size_t total_events_processed = 0;
     std::size_t total_files_processed = 0;
     std::size_t total_bytes_processed = 0;

@@ -7,13 +7,29 @@
 using namespace dftracer::utils::utilities::composites::dft::aggregators;
 
 static AggregationKey make_key(
-    const std::string& cat = "cat1", const std::string& name = "name1",
+    std::string_view cat = "cat1", std::string_view name = "name1",
     std::uint64_t pid = 1, std::uint64_t tid = 1,
-    const std::string& hhash = "hh1", const std::string& fhash = "fh1",
+    std::string_view hhash = "hh1", std::string_view fhash = "fh1",
     std::uint64_t time_bucket = 0,
-    const std::unordered_map<std::string, std::string>& extra = {}) {
-    return AggregationKey{cat,   name,  pid,         tid,
-                          hhash, fhash, time_bucket, extra};
+    std::vector<std::pair<std::string_view, std::string_view>> extra = {}) {
+    auto& intern = aggregation_intern();
+    AggregationKey k;
+    k.cat_id = intern.get_or_insert(cat);
+    k.name_id = intern.get_or_insert(name);
+    k.pid = pid;
+    k.tid = tid;
+    k.hhash_id = intern.get_or_insert(hhash);
+    k.fhash_id = intern.get_or_insert(fhash);
+    k.time_bucket = time_bucket;
+    if (!extra.empty()) {
+        k.extra_keys = std::make_unique<
+            std::vector<std::pair<std::uint32_t, std::uint32_t>>>();
+        for (const auto& [ek, ev] : extra) {
+            k.extra_keys->emplace_back(intern.get_or_insert(ek),
+                                       intern.get_or_insert(ev));
+        }
+    }
+    return k;
 }
 
 TEST_SUITE("AggregationKey") {
@@ -108,7 +124,9 @@ TEST_SUITE("AggregationKey") {
     }
 
     TEST_CASE("AggregationKey - Use in unordered_map") {
-        std::unordered_map<AggregationKey, int, AggregationKeyHash> map;
+        std::unordered_map<AggregationKey, int, AggregationKeyHash,
+                           AggregationKeyEqual>
+            map;
 
         auto k1 = make_key("cat1", "read");
         auto k2 = make_key("cat2", "write");

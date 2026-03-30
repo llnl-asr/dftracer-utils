@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
 
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>

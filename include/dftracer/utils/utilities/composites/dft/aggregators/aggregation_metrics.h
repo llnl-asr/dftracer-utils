@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -21,10 +22,42 @@ struct MetricStats {
     double m2 = 0.0;
     double m3 = 0.0;
     double m4 = 0.0;
-    DDSketch sketch;
+    std::unique_ptr<DDSketch> sketch;
+    double sketch_accuracy_ = 0.01;
 
     explicit MetricStats(double relative_accuracy = 0.01)
-        : sketch(relative_accuracy) {}
+        : sketch_accuracy_(relative_accuracy) {}
+
+    MetricStats(const MetricStats& other)
+        : total(other.total),
+          min(other.min),
+          max(other.max),
+          mean(other.mean),
+          m2(other.m2),
+          m3(other.m3),
+          m4(other.m4),
+          sketch(other.sketch ? std::make_unique<DDSketch>(*other.sketch)
+                              : nullptr),
+          sketch_accuracy_(other.sketch_accuracy_) {}
+
+    MetricStats& operator=(const MetricStats& other) {
+        if (this != &other) {
+            total = other.total;
+            min = other.min;
+            max = other.max;
+            mean = other.mean;
+            m2 = other.m2;
+            m3 = other.m3;
+            m4 = other.m4;
+            sketch = other.sketch ? std::make_unique<DDSketch>(*other.sketch)
+                                  : nullptr;
+            sketch_accuracy_ = other.sketch_accuracy_;
+        }
+        return *this;
+    }
+
+    MetricStats(MetricStats&&) = default;
+    MetricStats& operator=(MetricStats&&) = default;
 
     void update(std::uint64_t value, std::uint64_t count,
                 bool compute_percentiles = false);
@@ -44,10 +77,12 @@ struct AggregationMetrics {
     std::uint64_t ts = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t te = 0;
 
-    std::unordered_map<std::string, std::string> boundary_associations;
+    std::unique_ptr<std::unordered_map<std::string, std::string>>
+        boundary_associations;
     std::uint64_t parent_pid = 0;
 
-    std::unordered_map<std::string, MetricStats> custom_metrics;
+    std::unique_ptr<std::unordered_map<std::string, MetricStats>>
+        custom_metrics;
 
     double sketch_accuracy = 0.01;
 
@@ -55,6 +90,55 @@ struct AggregationMetrics {
         : duration(relative_accuracy),
           size(relative_accuracy),
           sketch_accuracy(relative_accuracy) {}
+
+    AggregationMetrics(const AggregationMetrics& other)
+        : count(other.count),
+          duration(other.duration),
+          size(other.size),
+          ts(other.ts),
+          te(other.te),
+          boundary_associations(
+              other.boundary_associations
+                  ? std::make_unique<
+                        std::unordered_map<std::string, std::string>>(
+                        *other.boundary_associations)
+                  : nullptr),
+          parent_pid(other.parent_pid),
+          custom_metrics(
+              other.custom_metrics
+                  ? std::make_unique<
+                        std::unordered_map<std::string, MetricStats>>(
+                        *other.custom_metrics)
+                  : nullptr),
+          sketch_accuracy(other.sketch_accuracy) {}
+
+    AggregationMetrics& operator=(const AggregationMetrics& other) {
+        if (this != &other) {
+            count = other.count;
+            duration = other.duration;
+            size = other.size;
+            ts = other.ts;
+            te = other.te;
+            boundary_associations =
+                other.boundary_associations
+                    ? std::make_unique<
+                          std::unordered_map<std::string, std::string>>(
+                          *other.boundary_associations)
+                    : nullptr;
+            parent_pid = other.parent_pid;
+            custom_metrics =
+                other.custom_metrics
+                    ? std::make_unique<
+                          std::unordered_map<std::string, MetricStats>>(
+                          *other.custom_metrics)
+                    : nullptr;
+            sketch_accuracy = other.sketch_accuracy;
+        }
+        return *this;
+    }
+
+    AggregationMetrics(AggregationMetrics&&) = default;
+    AggregationMetrics& operator=(AggregationMetrics&&) = default;
 
     void update_duration(std::uint64_t dur, bool compute_percentiles = false);
     void update_size(std::uint64_t sz, bool compute_percentiles = false);

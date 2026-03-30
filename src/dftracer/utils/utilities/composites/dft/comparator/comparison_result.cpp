@@ -14,10 +14,8 @@
 
 namespace dftracer::utils::utilities::composites::dft::comparator {
 
-TraceMetadata extract_metadata(
-    const std::unordered_map<AggregationKey, AggregationMetrics,
-                             AggregationKeyHash>& aggregations,
-    std::size_t file_count) {
+TraceMetadata extract_metadata(const AggregationMap& aggregations,
+                               std::size_t file_count) {
     TraceMetadata meta;
     meta.file_count = file_count;
 
@@ -35,7 +33,7 @@ TraceMetadata extract_metadata(
 
         meta.total_io_time_us += static_cast<double>(metrics.duration.total);
 
-        if (internal::is_data_transfer_op(key.cat, key.name)) {
+        if (internal::is_data_transfer_op(key.cat(), key.name())) {
             meta.total_bytes += static_cast<double>(metrics.size.total);
         }
 
@@ -113,7 +111,8 @@ double safe_pct_change(double baseline, double variant) {
 }
 
 double safe_quantile(const MetricStats& stats, double p) {
-    double v = stats.sketch.quantile(p);
+    if (!stats.sketch) return 0.0;
+    double v = stats.sketch->quantile(p);
     return std::isnan(v) ? 0.0 : v;
 }
 
@@ -121,10 +120,11 @@ std::string percentile_label(const std::string& prefix, double p) {
     return prefix + "_p" + std::to_string(static_cast<int>(p * 100.0));
 }
 
-// Key for (cat, name, time_bucket) — used to group within a window.
+// Key for (cat, name, time_bucket), uses string_view pointing into the
+// caller's StringIntern table (or string literals in tests).
 struct WindowKey {
-    std::string cat;
-    std::string name;
+    std::string_view cat;
+    std::string_view name;
     std::uint64_t time_bucket;
     bool operator==(const WindowKey& o) const {
         return cat == o.cat && name == o.name && time_bucket == o.time_bucket;
@@ -133,9 +133,9 @@ struct WindowKey {
 
 struct WindowKeyHash {
     std::size_t operator()(const WindowKey& k) const {
-        std::size_t h = std::hash<std::string>{}(k.cat);
-        h ^=
-            std::hash<std::string>{}(k.name) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        std::size_t h = std::hash<std::string_view>{}(k.cat);
+        h ^= std::hash<std::string_view>{}(k.name) + 0x9e3779b9 + (h << 6) +
+             (h >> 2);
         h ^= std::hash<std::uint64_t>{}(k.time_bucket) + 0x9e3779b9 + (h << 6) +
              (h >> 2);
         return h;
@@ -156,14 +156,12 @@ double safe_div(double a, double b) { return b > 0.0 ? a / b : 0.0; }
 
 }  // anonymous namespace
 
-CollapsedMap collapse_by_group(
-    const std::unordered_map<AggregationKey, AggregationMetrics,
-                             AggregationKeyHash>& aggregations) {
+CollapsedMap collapse_by_group(const AggregationMap& aggregations) {
     // Step 1: For each (cat, name, time_bucket), take max across pids.
     std::unordered_map<WindowKey, WindowMax, WindowKeyHash> windows;
 
     for (const auto& [key, m] : aggregations) {
-        WindowKey wk{key.cat, key.name, key.time_bucket};
+        WindowKey wk{key.cat(), key.name(), key.time_bucket};
         auto& w = windows[wk];
 
         double cnt = static_cast<double>(m.count);
@@ -174,7 +172,7 @@ CollapsedMap collapse_by_group(
         if (sm > w.size_mean) w.size_mean = sm;
 
         // Only compute transfer_size/bandwidth for actual I/O ops
-        if (internal::is_data_transfer_op(key.cat, key.name)) {
+        if (internal::is_data_transfer_op(key.cat(), key.name())) {
             double total_bytes = static_cast<double>(m.size.total);
             double total_dur_us = static_cast<double>(m.duration.total);
             double xfer = safe_div(total_bytes, cnt);
@@ -194,12 +192,14 @@ CollapsedMap collapse_by_group(
         std::vector<double> bws;
         AggregationMetrics merged{0.01};
     };
-    std::unordered_map<AggregationKey, GroupAccum, AggregationKeyHash> groups;
+    std::unordered_map<AggregationKey, GroupAccum, AggregationKeyHash,
+                       AggregationKeyEqual>
+        groups;
 
     for (auto& [wk, w] : windows) {
         AggregationKey gk;
-        gk.cat = wk.cat;
-        gk.name = wk.name;
+        gk.cat_id = aggregators::aggregation_intern().get_or_insert(wk.cat);
+        gk.name_id = aggregators::aggregation_intern().get_or_insert(wk.name);
         gk.pid = 0;
         gk.tid = 0;
         gk.time_bucket = 0;

@@ -24,7 +24,10 @@ void MetricStats::update(std::uint64_t value, std::uint64_t count,
     mean += delta_n;
 
     if (compute_percentiles) {
-        sketch.add(static_cast<double>(value));
+        if (!sketch) {
+            sketch = std::make_unique<DDSketch>(sketch_accuracy_);
+        }
+        sketch->add(static_cast<double>(value));
     }
 }
 
@@ -62,8 +65,11 @@ void MetricStats::merge_from(const MetricStats& other, std::uint64_t n1,
         mean = mean_new;
     }
 
-    if (!other.sketch.empty()) {
-        sketch.merge(other.sketch);
+    if (other.sketch) {
+        if (!sketch) {
+            sketch = std::make_unique<DDSketch>(sketch_accuracy_);
+        }
+        sketch->merge(*other.sketch);
     }
 }
 
@@ -119,10 +125,14 @@ void AggregationMetrics::update_timestamp_clamped(std::uint64_t event_ts,
 void AggregationMetrics::update_custom_metric(const std::string& name,
                                               std::uint64_t value,
                                               bool compute_percentiles) {
-    if (custom_metrics.find(name) == custom_metrics.end()) {
-        custom_metrics.emplace(name, MetricStats(sketch_accuracy));
+    if (!custom_metrics) {
+        custom_metrics =
+            std::make_unique<std::unordered_map<std::string, MetricStats>>();
     }
-    custom_metrics[name].update(value, count, compute_percentiles);
+    if (custom_metrics->find(name) == custom_metrics->end()) {
+        custom_metrics->emplace(name, MetricStats(sketch_accuracy));
+    }
+    (*custom_metrics)[name].update(value, count, compute_percentiles);
 }
 
 double AggregationMetrics::get_stddev_duration() const {
@@ -134,8 +144,9 @@ double AggregationMetrics::get_stddev_size() const {
 }
 
 double AggregationMetrics::get_custom_stddev(const std::string& name) const {
-    auto it = custom_metrics.find(name);
-    if (it == custom_metrics.end()) return 0.0;
+    if (!custom_metrics) return 0.0;
+    auto it = custom_metrics->find(name);
+    if (it == custom_metrics->end()) return 0.0;
     return it->second.get_stddev(count);
 }
 
@@ -152,8 +163,14 @@ void AggregationMetrics::merge_from(const AggregationMetrics& other) {
     ts = std::min(ts, other.ts);
     te = std::max(te, other.te);
 
-    for (const auto& [name, other_metric] : other.custom_metrics) {
-        custom_metrics[name].merge_from(other_metric, n1, n2, n);
+    if (other.custom_metrics) {
+        if (!custom_metrics) {
+            custom_metrics = std::make_unique<
+                std::unordered_map<std::string, MetricStats>>();
+        }
+        for (const auto& [name, other_metric] : *other.custom_metrics) {
+            (*custom_metrics)[name].merge_from(other_metric, n1, n2, n);
+        }
     }
 }
 

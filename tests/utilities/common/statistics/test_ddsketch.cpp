@@ -203,10 +203,10 @@ TEST_SUITE("DDSketch") {
     TEST_CASE("DDSketch - Memory usage") {
         DDSketch sketch;
         std::size_t base = sketch.memory_usage();
-        CHECK(base >= sizeof(DDSketch));
+        CHECK(base == sizeof(DDSketch));
 
         for (int i = 1; i <= 1000; ++i) sketch.add(static_cast<double>(i));
-        CHECK(sketch.memory_usage() > sizeof(DDSketch));
+        CHECK(sketch.memory_usage() == sizeof(DDSketch));
     }
 
     TEST_CASE("DDSketch - Relative accuracy") {

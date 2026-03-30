@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/perfetto_trace_writer_utility.h>
@@ -10,22 +11,30 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <string_view>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
 std::uint64_t PerfettoTraceWriterUtility::generate_synthetic_tid(
     const AggregationKey& key) const {
     dftracer::utils::utilities::hash::HasherUtility hasher;
-    std::string key_str = key.cat + ":" + key.name + ":" +
-                          std::to_string(key.pid) + ":" +
-                          std::to_string(key.time_bucket);
+    std::string key_str =
+        std::string(key.cat()) + ":" + std::string(key.name()) + ":" +
+        std::to_string(key.pid) + ":" + std::to_string(key.time_bucket);
 
-    if (!key.fhash.empty()) {
-        key_str += ":" + key.fhash;
+    if (!key.fhash().empty()) {
+        key_str += ":";
+        key_str += key.fhash();
     }
 
-    for (const auto& [k, v] : key.extra_keys) {
-        key_str += ":" + k + "=" + v;
+    if (key.extra_keys) {
+        auto& intern = aggregation_intern();
+        for (const auto& [k, v] : *key.extra_keys) {
+            key_str += ":";
+            key_str += intern.resolve(k);
+            key_str += "=";
+            key_str += intern.resolve(v);
+        }
     }
 
     // CPU-bound hash — .get() intentional
@@ -34,7 +43,7 @@ std::uint64_t PerfettoTraceWriterUtility::generate_synthetic_tid(
 }
 
 void PerfettoTraceWriterUtility::append_json_string(
-    std::string& buffer, const std::string& str) const {
+    std::string& buffer, std::string_view str) const {
     for (char c : str) {
         switch (c) {
             case '"':
@@ -122,9 +131,9 @@ void PerfettoTraceWriterUtility::append_metric_stats(
         append_double(buffer, stats.get_kurtosis(count));
     }
 
-    if (compute_percentiles && (!stats.sketch.empty())) {
+    if (compute_percentiles && stats.sketch && !stats.sketch->empty()) {
         for (double p : percentiles) {
-            double percentile_value = stats.sketch.quantile(p);
+            double percentile_value = stats.sketch->quantile(p);
             int p_percent = static_cast<int>(p * 100);
             std::snprintf(temp, sizeof(temp), ",\"p%d\":", p_percent);
             buffer += temp;
@@ -141,7 +150,7 @@ void PerfettoTraceWriterUtility::append_event_args(
     char temp[512];
 
     buffer += "\"hhash\":\"";
-    append_json_string(buffer, key.hhash);
+    append_json_string(buffer, key.hhash());
     buffer += "\"";
 
     if (real_tid > 0) {
@@ -150,18 +159,21 @@ void PerfettoTraceWriterUtility::append_event_args(
         buffer += temp;
     }
 
-    if (!key.fhash.empty()) {
+    if (!key.fhash().empty()) {
         buffer += ",\"fhash\":\"";
-        append_json_string(buffer, key.fhash);
+        append_json_string(buffer, key.fhash());
         buffer += "\"";
     }
 
-    for (const auto& [k, v] : key.extra_keys) {
-        buffer += ",\"";
-        append_json_string(buffer, k);
-        buffer += "\":\"";
-        append_json_string(buffer, v);
-        buffer += "\"";
+    if (key.extra_keys) {
+        auto& intern = aggregation_intern();
+        for (const auto& [k, v] : *key.extra_keys) {
+            buffer += ",\"";
+            append_json_string(buffer, intern.resolve(k));
+            buffer += "\":\"";
+            append_json_string(buffer, intern.resolve(v));
+            buffer += "\"";
+        }
     }
 
     std::snprintf(temp, sizeof(temp), ",\"count\":%llu",
@@ -181,15 +193,17 @@ void PerfettoTraceWriterUtility::append_event_args(
         buffer += "}";
     }
 
-    for (const auto& [metric_name, metric_stats] : metrics.custom_metrics) {
-        buffer += ",\"";
-        append_json_string(buffer, metric_name);
-        buffer += "\":{";
-        append_metric_stats(buffer, metric_stats, metrics.count,
-                            compute_statistics, compute_percentiles,
-                            percentiles);
-        buffer += "}";
-    }
+    if (metrics.custom_metrics)
+        for (const auto& [metric_name, metric_stats] :
+             *metrics.custom_metrics) {
+            buffer += ",\"";
+            append_json_string(buffer, metric_name);
+            buffer += "\":{";
+            append_metric_stats(buffer, metric_stats, metrics.count,
+                                compute_statistics, compute_percentiles,
+                                percentiles);
+            buffer += "}";
+        }
 
     buffer += ",\"ts\":";
     std::snprintf(temp, sizeof(temp), "%llu",
@@ -200,14 +214,15 @@ void PerfettoTraceWriterUtility::append_event_args(
                   static_cast<unsigned long long>(metrics.te));
     buffer += temp;
 
-    for (const auto& [assoc_name, assoc_value] :
-         metrics.boundary_associations) {
-        buffer += ",\"";
-        append_json_string(buffer, assoc_name);
-        buffer += "\":\"";
-        append_json_string(buffer, assoc_value);
-        buffer += "\"";
-    }
+    if (metrics.boundary_associations)
+        for (const auto& [assoc_name, assoc_value] :
+             *metrics.boundary_associations) {
+            buffer += ",\"";
+            append_json_string(buffer, assoc_name);
+            buffer += "\":\"";
+            append_json_string(buffer, assoc_value);
+            buffer += "\"";
+        }
 
     if (metrics.parent_pid > 0) {
         std::snprintf(temp, sizeof(temp), ",\"parent_pid\":%llu",
@@ -299,9 +314,9 @@ coro::CoroTask<bool> PerfettoTraceWriterUtility::process(
 
         if (input.format == PerfettoEventFormat::COUNTER) {
             buffer += "{\"name\":\"";
-            append_json_string(buffer, key.name);
+            append_json_string(buffer, key.name());
             buffer += "\",\"cat\":\"";
-            append_json_string(buffer, key.cat);
+            append_json_string(buffer, key.cat());
             std::snprintf(temp, sizeof(temp),
                           "\",\"ts\":%llu,\"ph\":\"C\",\"pid\":%llu,"
                           "\"tid\":%llu,\"args\":{",
@@ -317,9 +332,9 @@ coro::CoroTask<bool> PerfettoTraceWriterUtility::process(
             std::uint64_t duration = metrics.te - metrics.ts;
 
             buffer += "{\"name\":\"";
-            append_json_string(buffer, key.name);
+            append_json_string(buffer, key.name());
             buffer += "\",\"cat\":\"";
-            append_json_string(buffer, key.cat);
+            append_json_string(buffer, key.cat());
             std::snprintf(
                 temp, sizeof(temp),
                 "\",\"ts\":%llu,\"dur\":%llu,\"ph\":\"X\",\"pid\":%llu,"
@@ -335,19 +350,27 @@ coro::CoroTask<bool> PerfettoTraceWriterUtility::process(
 
         } else {
             std::string event_id =
-                key.cat + ":" + key.name + ":" + std::to_string(key.pid) + ":" +
-                std::to_string(key.tid) + ":" + std::to_string(key.time_bucket);
-            if (!key.fhash.empty()) {
-                event_id += ":" + key.fhash;
+                std::string(key.cat()) + ":" + std::string(key.name()) + ":" +
+                std::to_string(key.pid) + ":" + std::to_string(key.tid) + ":" +
+                std::to_string(key.time_bucket);
+            if (!key.fhash().empty()) {
+                event_id += ":";
+                event_id += key.fhash();
             }
-            for (const auto& [k, v] : key.extra_keys) {
-                event_id += ":" + k + "=" + v;
+            if (key.extra_keys) {
+                auto& intern = aggregation_intern();
+                for (const auto& [k, v] : *key.extra_keys) {
+                    event_id += ":";
+                    event_id += intern.resolve(k);
+                    event_id += "=";
+                    event_id += intern.resolve(v);
+                }
             }
 
             buffer += "{\"name\":\"";
-            append_json_string(buffer, key.name);
+            append_json_string(buffer, key.name());
             buffer += "\",\"cat\":\"";
-            append_json_string(buffer, key.cat);
+            append_json_string(buffer, key.cat());
             std::snprintf(temp, sizeof(temp),
                           "\",\"ts\":%llu,\"ph\":\"b\",\"pid\":%llu,"
                           "\"tid\":%llu,\"id\":\"",
@@ -362,9 +385,9 @@ coro::CoroTask<bool> PerfettoTraceWriterUtility::process(
             buffer += "}}\n";
 
             buffer += "{\"name\":\"";
-            append_json_string(buffer, key.name);
+            append_json_string(buffer, key.name());
             buffer += "\",\"cat\":\"";
-            append_json_string(buffer, key.cat);
+            append_json_string(buffer, key.cat());
             std::snprintf(temp, sizeof(temp),
                           "\",\"ts\":%llu,\"ph\":\"e\",\"pid\":%llu,"
                           "\"tid\":%llu,\"id\":\"",
@@ -389,19 +412,17 @@ coro::CoroTask<bool> PerfettoTraceWriterUtility::process(
 
             fileio::StreamingFileWriterUtility writer(input.output_path);
 
-            fileio::RawData raw_data;
-            raw_data.data.assign(buffer.begin(), buffer.end());
-            auto compressed_chunks = co_await compressor.process(raw_data);
-
-            for (const auto& chunk : compressed_chunks) {
-                fileio::RawData raw_chunk{chunk.data};
-                co_await writer.process(raw_chunk);
+            {
+                auto gen = compressor.compress(ByteView(buffer));
+                while (auto chunk = co_await gen.next()) {
+                    co_await writer.process(*chunk);
+                }
             }
-
-            auto final_chunks = compressor.finalize();
-            for (const auto& chunk : final_chunks) {
-                fileio::RawData raw_chunk{chunk.data};
-                co_await writer.process(raw_chunk);
+            {
+                auto gen = compressor.finalize_stream();
+                while (auto chunk = co_await gen.next()) {
+                    co_await writer.process(*chunk);
+                }
             }
 
             writer.close();

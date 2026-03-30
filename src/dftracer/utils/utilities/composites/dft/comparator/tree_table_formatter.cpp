@@ -627,13 +627,14 @@ const char* sig_str(Significance s) {
 
 yyjson_mut_val* build_metric_json(yyjson_mut_doc* doc,
                                   const MetricComparison& mc) {
+    auto safe = [](double v) { return std::isfinite(v) ? v : 0.0; };
     yyjson_mut_val* obj = yyjson_mut_obj(doc);
     yyjson_mut_obj_add_str(doc, obj, "name", mc.metric_name.c_str());
-    yyjson_mut_obj_add_real(doc, obj, "baseline", mc.baseline_value);
-    yyjson_mut_obj_add_real(doc, obj, "variant", mc.variant_value);
-    yyjson_mut_obj_add_real(doc, obj, "delta", mc.delta);
-    yyjson_mut_obj_add_real(doc, obj, "pct_change", mc.pct_change);
-    yyjson_mut_obj_add_real(doc, obj, "cohens_d", mc.cohens_d);
+    yyjson_mut_obj_add_real(doc, obj, "baseline", safe(mc.baseline_value));
+    yyjson_mut_obj_add_real(doc, obj, "variant", safe(mc.variant_value));
+    yyjson_mut_obj_add_real(doc, obj, "delta", safe(mc.delta));
+    yyjson_mut_obj_add_real(doc, obj, "pct_change", safe(mc.pct_change));
+    yyjson_mut_obj_add_real(doc, obj, "cohens_d", safe(mc.cohens_d));
     yyjson_mut_obj_add_str(doc, obj, "significance", sig_str(mc.significance));
     yyjson_mut_obj_add_bool(doc, obj, "is_regression", mc.is_regression);
     return obj;
@@ -728,8 +729,17 @@ std::string TreeTableFormatter::render_json(
     }
     yyjson_mut_obj_add_val(doc, root, "nodes", nodes_arr);
 
-    char* json = yyjson_mut_write(doc, YYJSON_WRITE_PRETTY, nullptr);
-    std::string result(json);
+    yyjson_write_err write_err = {};
+    std::size_t json_len = 0;
+    char* json = yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, nullptr,
+                                       &json_len, &write_err);
+    if (!json) {
+        yyjson_mut_doc_free(doc);
+        throw std::runtime_error(
+            std::string("JSON serialization failed: ") +
+            (write_err.msg ? write_err.msg : "unknown error"));
+    }
+    std::string result(json, json_len);
     free(json);  // NOLINT(cppcoreguidelines-no-malloc)
     yyjson_mut_doc_free(doc);
 

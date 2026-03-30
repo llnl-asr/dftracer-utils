@@ -13,7 +13,9 @@ DDSketch::DDSketch(double relative_accuracy)
       min_(std::numeric_limits<double>::infinity()),
       max_(-std::numeric_limits<double>::infinity()),
       count_(0),
-      zero_count_(0) {}
+      zero_count_(0) {
+    store_.fill(0);
+}
 
 int DDSketch::bin_index(double value) const {
     return static_cast<int>(std::ceil(std::log(value) / log_gamma_));
@@ -27,22 +29,151 @@ double DDSketch::bin_upper_bound(int index) const {
     return std::pow(gamma_, index);
 }
 
-void DDSketch::add_to_bin(int index, uint64_t count) {
-    auto it = std::lower_bound(bins_.begin(), bins_.end(), index,
-                               [](const std::pair<int, uint64_t>& bin,
-                                  int idx) { return bin.first < idx; });
-
-    if (it != bins_.end() && it->first == index) {
-        it->second += count;
-    } else {
-        bins_.insert(it, {index, count});
+void DDSketch::add_to_bin(int index, std::uint16_t count) {
+    if (!initialized_) {
+        offset_ = index;
+        min_key_ = index;
+        max_key_ = index;
+        store_[0] = count;
+        num_bins_ = 1;
+        initialized_ = true;
+        return;
     }
+
+    if (index >= min_key_ && index <= max_key_) {
+        int pos = index - offset_;
+        if (pos >= 0 && pos < MAX_BINS) {
+            std::uint16_t old = store_[pos];
+            store_[pos] = (old > UINT16_MAX - count) ? UINT16_MAX : old + count;
+        }
+        return;
+    }
+
+    if (index > max_key_) {
+        int needed = index - min_key_ + 1;
+        if (needed > MAX_BINS) {
+            collapse_to_fit(index);
+        }
+        max_key_ = index;
+        num_bins_ = max_key_ - min_key_ + 1;
+        int pos = index - offset_;
+        if (pos >= 0 && pos < MAX_BINS) {
+            std::uint16_t old = store_[pos];
+            store_[pos] = (old > UINT16_MAX - count) ? UINT16_MAX : old + count;
+        }
+        return;
+    }
+
+    // index < min_key_
+    if (collapsed_) {
+        std::uint16_t old = store_[0];
+        store_[0] = (old > UINT16_MAX - count) ? UINT16_MAX : old + count;
+        return;
+    }
+
+    int needed = max_key_ - index + 1;
+    if (needed > MAX_BINS) {
+        std::uint16_t old = store_[0];
+        store_[0] = (old > UINT16_MAX - count) ? UINT16_MAX : old + count;
+        collapsed_ = true;
+        return;
+    }
+
+    int shift = min_key_ - index;
+    if (shift > 0 && num_bins_ > 0) {
+        std::memmove(
+            &store_[shift], &store_[0],
+            static_cast<std::size_t>(std::min(num_bins_, MAX_BINS - shift)) *
+                sizeof(std::uint16_t));
+        std::memset(&store_[0], 0,
+                    static_cast<std::size_t>(shift) * sizeof(std::uint16_t));
+    }
+    offset_ = index;
+    min_key_ = index;
+    num_bins_ = max_key_ - min_key_ + 1;
+    store_[0] = count;
+}
+
+void DDSketch::collapse_to_fit(int new_max_key) {
+    int new_min_key = new_max_key - MAX_BINS + 1;
+
+    if (new_min_key >= max_key_) {
+        std::uint16_t total = 0;
+        for (int i = 0; i < num_bins_ && i < MAX_BINS; ++i) {
+            total = (total > UINT16_MAX - store_[i]) ? UINT16_MAX
+                                                     : total + store_[i];
+        }
+        store_.fill(0);
+        store_[0] = total;
+        offset_ = new_min_key;
+        min_key_ = new_min_key;
+        max_key_ = new_max_key;
+        num_bins_ = MAX_BINS;
+        collapsed_ = true;
+        return;
+    }
+
+    int collapse_count_bins = new_min_key - min_key_;
+    if (collapse_count_bins > 0) {
+        // Collapse bins below new_min_key into bin[0]
+        std::uint16_t collapsed = 0;
+        for (int i = 0; i < collapse_count_bins && i < MAX_BINS; ++i) {
+            collapsed = (collapsed > UINT16_MAX - store_[i])
+                            ? UINT16_MAX
+                            : collapsed + store_[i];
+            store_[i] = 0;
+        }
+
+        int remaining = num_bins_ - collapse_count_bins;
+        if (remaining > 0 && collapse_count_bins > 0) {
+            std::memmove(
+                &store_[0], &store_[collapse_count_bins],
+                static_cast<std::size_t>(std::min(remaining, MAX_BINS)) *
+                    sizeof(std::uint16_t));
+            int clear_start = std::min(remaining, MAX_BINS);
+            int clear_count =
+                std::min(collapse_count_bins, MAX_BINS - clear_start);
+            if (clear_count > 0) {
+                std::memset(&store_[clear_start], 0,
+                            static_cast<std::size_t>(clear_count) *
+                                sizeof(std::uint16_t));
+            }
+        }
+
+        store_[0] = (store_[0] > UINT16_MAX - collapsed)
+                        ? UINT16_MAX
+                        : store_[0] + collapsed;
+        offset_ = new_min_key;
+        min_key_ = new_min_key;
+    } else {
+        // new_min_key <= min_key_: data needs to shift right to make
+        // room for the extended range below
+        int shift = min_key_ - new_min_key;
+        if (shift > 0 && num_bins_ > 0) {
+            int to_move = std::min(num_bins_, MAX_BINS - shift);
+            if (to_move > 0) {
+                std::memmove(
+                    &store_[shift], &store_[0],
+                    static_cast<std::size_t>(to_move) * sizeof(std::uint16_t));
+            }
+            std::memset(
+                &store_[0], 0,
+                static_cast<std::size_t>(shift) * sizeof(std::uint16_t));
+        }
+        offset_ = new_min_key;
+        min_key_ = new_min_key;
+    }
+
+    max_key_ = new_max_key;
+    num_bins_ = std::min(max_key_ - min_key_ + 1, MAX_BINS);
+    collapsed_ = true;
 }
 
 void DDSketch::add(double value, double weight) {
     if (weight <= 0.0) return;
 
-    uint64_t w = static_cast<uint64_t>(weight);
+    std::uint16_t w = static_cast<std::uint16_t>(
+        std::min(weight, static_cast<double>(UINT16_MAX)));
     if (w == 0) w = 1;
 
     if (value < min_) min_ = value;
@@ -55,9 +186,6 @@ void DDSketch::add(double value, double weight) {
         return;
     }
 
-    // DDSketch handles positive values natively. For negative values,
-    // we treat them as their absolute value -- appropriate since our
-    // use case (durations, sizes) only produces non-negative values.
     double abs_value = std::abs(value);
     int idx = bin_index(abs_value);
     add_to_bin(idx, w);
@@ -72,29 +200,65 @@ void DDSketch::merge(const DDSketch& other) {
     count_ += other.count_;
     zero_count_ += other.zero_count_;
 
-    // Merge sorted bin vectors: walk both in order, sum matching indices.
-    std::vector<std::pair<int, uint64_t>> merged;
-    merged.reserve(bins_.size() + other.bins_.size());
+    if (!other.initialized_) return;
 
-    auto it1 = bins_.begin();
-    auto it2 = other.bins_.begin();
-
-    while (it1 != bins_.end() && it2 != other.bins_.end()) {
-        if (it1->first < it2->first) {
-            merged.push_back(*it1++);
-        } else if (it1->first > it2->first) {
-            merged.push_back(*it2++);
-        } else {
-            merged.push_back({it1->first, it1->second + it2->second});
-            ++it1;
-            ++it2;
-        }
+    if (!initialized_) {
+        store_ = other.store_;
+        offset_ = other.offset_;
+        min_key_ = other.min_key_;
+        max_key_ = other.max_key_;
+        num_bins_ = other.num_bins_;
+        initialized_ = other.initialized_;
+        collapsed_ = other.collapsed_;
+        return;
     }
 
-    while (it1 != bins_.end()) merged.push_back(*it1++);
-    while (it2 != other.bins_.end()) merged.push_back(*it2++);
+    int merged_min = std::min(min_key_, other.min_key_);
+    int merged_max = std::max(max_key_, other.max_key_);
 
-    bins_ = std::move(merged);
+    if (merged_max - merged_min + 1 > MAX_BINS) {
+        collapse_to_fit(merged_max);
+        merged_min = min_key_;
+    }
+
+    if (merged_min < min_key_) {
+        int shift = min_key_ - merged_min;
+        if (shift > 0 && num_bins_ > 0) {
+            int to_move = std::min(num_bins_, MAX_BINS - shift);
+            if (to_move > 0) {
+                std::memmove(
+                    &store_[shift], &store_[0],
+                    static_cast<std::size_t>(to_move) * sizeof(std::uint16_t));
+            }
+            std::memset(
+                &store_[0], 0,
+                static_cast<std::size_t>(shift) * sizeof(std::uint16_t));
+        }
+        offset_ = merged_min;
+        min_key_ = merged_min;
+    }
+
+    if (merged_max > max_key_) {
+        max_key_ = merged_max;
+    }
+    num_bins_ = std::min(max_key_ - min_key_ + 1, MAX_BINS);
+
+    for (int k = other.min_key_; k <= other.max_key_; ++k) {
+        int other_pos = k - other.offset_;
+        if (other_pos < 0 || other_pos >= MAX_BINS) continue;
+        std::uint16_t v = other.store_[other_pos];
+        if (v == 0) continue;
+
+        int my_pos = k - offset_;
+        if (my_pos < 0) {
+            store_[0] =
+                (store_[0] > UINT16_MAX - v) ? UINT16_MAX : store_[0] + v;
+        } else if (my_pos < MAX_BINS) {
+            store_[my_pos] = (store_[my_pos] > UINT16_MAX - v)
+                                 ? UINT16_MAX
+                                 : store_[my_pos] + v;
+        }
+    }
 }
 
 double DDSketch::quantile(double q) const {
@@ -103,35 +267,21 @@ double DDSketch::quantile(double q) const {
     if (q >= 1.0) return max_;
 
     double target_rank = q * static_cast<double>(count_);
-    double cumulative = 0.0;
-
-    // Account for zero-valued entries first
-    cumulative += static_cast<double>(zero_count_);
+    double cumulative = static_cast<double>(zero_count_);
     if (cumulative >= target_rank && zero_count_ > 0) {
         return 0.0;
     }
 
-    // Walk bins returning bin midpoint for normal cases.
-    // At gap boundaries (target rank near top of bin, next occupied bin is
-    // non-adjacent), average the current bin's upper edge with the next
-    // bin's lower edge -- analogous to standard quantile averaging of
-    // boundary values in sorted data.
-    for (std::size_t i = 0; i < bins_.size(); ++i) {
-        auto [idx, bin_count] = bins_[i];
-        cumulative += static_cast<double>(bin_count);
+    if (!initialized_) return 0.0;
+
+    for (int i = 0; i < num_bins_ && i < MAX_BINS; ++i) {
+        if (store_[i] == 0) continue;
+        cumulative += static_cast<double>(store_[i]);
 
         if (cumulative >= target_rank) {
+            int idx = i + offset_;
             double lower = bin_lower_bound(idx);
             double upper = bin_upper_bound(idx);
-
-            if (cumulative - target_rank < 1.0 && i + 1 < bins_.size()) {
-                int next_idx = bins_[i + 1].first;
-                if (next_idx > idx + 1) {
-                    double next_lower = bin_lower_bound(next_idx);
-                    return (upper + next_lower) / 2.0;
-                }
-            }
-
             return (lower + upper) / 2.0;
         }
     }
@@ -140,29 +290,37 @@ double DDSketch::quantile(double q) const {
 }
 
 void DDSketch::reset() {
-    bins_.clear();
+    store_.fill(0);
+    offset_ = 0;
+    min_key_ = 0;
+    max_key_ = 0;
+    num_bins_ = 0;
+    initialized_ = false;
+    collapsed_ = false;
     min_ = std::numeric_limits<double>::infinity();
     max_ = -std::numeric_limits<double>::infinity();
     count_ = 0;
     zero_count_ = 0;
 }
 
-std::size_t DDSketch::memory_usage() const {
-    return sizeof(DDSketch) +
-           bins_.capacity() * sizeof(std::pair<int, uint64_t>);
+std::size_t DDSketch::memory_usage() const { return sizeof(DDSketch); }
+
+std::vector<std::uint8_t> DDSketch::serialize() const {
+    std::vector<std::uint8_t> buf;
+    serialize_into(buf);
+    return buf;
 }
 
-std::vector<uint8_t> DDSketch::serialize() const {
-    // Header: gamma(f64) min(f64) max(f64) count(u64) zero_count(u64)
-    //         num_bins(u32)
-    // Bins:   num_bins × (index(i32) count(u64))
+void DDSketch::serialize_into(std::vector<std::uint8_t>& buf) const {
     constexpr std::size_t HEADER_SIZE =
-        sizeof(double) * 3 + sizeof(uint64_t) * 2 + sizeof(uint32_t);
-    constexpr std::size_t BIN_SIZE = sizeof(int32_t) + sizeof(uint64_t);
+        sizeof(double) * 3 + sizeof(std::uint64_t) * 2 + sizeof(std::int32_t) +
+        sizeof(std::uint16_t);
 
-    auto num_bins = static_cast<uint32_t>(bins_.size());
-    std::vector<uint8_t> buf(HEADER_SIZE + num_bins * BIN_SIZE);
-    uint8_t* p = buf.data();
+    auto num = static_cast<std::uint32_t>(
+        std::min(num_bins_, static_cast<int>(MAX_BINS)));
+    std::size_t total = HEADER_SIZE + num * sizeof(std::uint16_t);
+    buf.resize(total);
+    std::uint8_t* p = buf.data();
 
     std::memcpy(p, &gamma_, sizeof(double));
     p += sizeof(double);
@@ -170,35 +328,31 @@ std::vector<uint8_t> DDSketch::serialize() const {
     p += sizeof(double);
     std::memcpy(p, &max_, sizeof(double));
     p += sizeof(double);
-    std::memcpy(p, &count_, sizeof(uint64_t));
-    p += sizeof(uint64_t);
-    std::memcpy(p, &zero_count_, sizeof(uint64_t));
-    p += sizeof(uint64_t);
-    std::memcpy(p, &num_bins, sizeof(uint32_t));
-    p += sizeof(uint32_t);
+    std::memcpy(p, &count_, sizeof(std::uint64_t));
+    p += sizeof(std::uint64_t);
+    std::memcpy(p, &zero_count_, sizeof(std::uint64_t));
+    p += sizeof(std::uint64_t);
 
-    for (const auto& [idx, cnt] : bins_) {
-        auto idx32 = static_cast<int32_t>(idx);
-        std::memcpy(p, &idx32, sizeof(int32_t));
-        p += sizeof(int32_t);
-        std::memcpy(p, &cnt, sizeof(uint64_t));
-        p += sizeof(uint64_t);
-    }
+    auto off32 = static_cast<std::int32_t>(offset_);
+    std::memcpy(p, &off32, sizeof(std::int32_t));
+    p += sizeof(std::int32_t);
+    std::memcpy(p, &num, sizeof(std::uint16_t));
+    p += sizeof(std::uint16_t);
 
-    return buf;
+    std::memcpy(p, store_.data(), num * sizeof(std::uint16_t));
 }
 
-DDSketch DDSketch::deserialize(const uint8_t* data, std::size_t len) {
+DDSketch DDSketch::deserialize(const std::uint8_t* data, std::size_t len) {
     constexpr std::size_t HEADER_SIZE =
-        sizeof(double) * 3 + sizeof(uint64_t) * 2 + sizeof(uint32_t);
-    constexpr std::size_t BIN_SIZE = sizeof(int32_t) + sizeof(uint64_t);
+        sizeof(double) * 3 + sizeof(std::uint64_t) * 2 + sizeof(std::int32_t) +
+        sizeof(std::uint16_t);
 
     if (len < HEADER_SIZE) {
         return DDSketch{};
     }
 
     DDSketch s;
-    const uint8_t* p = data;
+    const std::uint8_t* p = data;
 
     std::memcpy(&s.gamma_, p, sizeof(double));
     p += sizeof(double);
@@ -207,29 +361,31 @@ DDSketch DDSketch::deserialize(const uint8_t* data, std::size_t len) {
     p += sizeof(double);
     std::memcpy(&s.max_, p, sizeof(double));
     p += sizeof(double);
-    std::memcpy(&s.count_, p, sizeof(uint64_t));
-    p += sizeof(uint64_t);
-    std::memcpy(&s.zero_count_, p, sizeof(uint64_t));
-    p += sizeof(uint64_t);
+    std::memcpy(&s.count_, p, sizeof(std::uint64_t));
+    p += sizeof(std::uint64_t);
+    std::memcpy(&s.zero_count_, p, sizeof(std::uint64_t));
+    p += sizeof(std::uint64_t);
 
-    uint32_t num_bins = 0;
-    std::memcpy(&num_bins, p, sizeof(uint32_t));
-    p += sizeof(uint32_t);
+    std::int32_t off32 = 0;
+    std::memcpy(&off32, p, sizeof(std::int32_t));
+    p += sizeof(std::int32_t);
+    s.offset_ = static_cast<int>(off32);
 
-    if (len < HEADER_SIZE + num_bins * BIN_SIZE) {
+    std::uint32_t num = 0;
+    std::memcpy(&num, p, sizeof(std::uint16_t));
+    p += sizeof(std::uint16_t);
+
+    if (num > MAX_BINS) num = MAX_BINS;
+    if (len < HEADER_SIZE + num * sizeof(std::uint16_t)) {
         return DDSketch{};
     }
 
-    s.bins_.reserve(num_bins);
-    for (uint32_t i = 0; i < num_bins; ++i) {
-        int32_t idx = 0;
-        uint64_t cnt = 0;
-        std::memcpy(&idx, p, sizeof(int32_t));
-        p += sizeof(int32_t);
-        std::memcpy(&cnt, p, sizeof(uint64_t));
-        p += sizeof(uint64_t);
-        s.bins_.emplace_back(static_cast<int>(idx), cnt);
-    }
+    s.store_.fill(0);
+    std::memcpy(s.store_.data(), p, num * sizeof(std::uint16_t));
+    s.min_key_ = s.offset_;
+    s.max_key_ = s.offset_ + static_cast<int>(num) - 1;
+    s.num_bins_ = static_cast<int>(num);
+    s.initialized_ = s.count_ > 0;
 
     return s;
 }

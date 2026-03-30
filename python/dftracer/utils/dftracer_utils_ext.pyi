@@ -616,7 +616,7 @@ class AggregatorUtility:
     def process(
         self,
         directory: str,
-        time_interval: float = 5.0,
+        time_interval_ms: float = 5000.0,
         group_keys: Optional[List[str]] = None,
         categories: Optional[List[str]] = None,
         names: Optional[List[str]] = None,
@@ -630,7 +630,7 @@ class AggregatorUtility:
     def __call__(
         self,
         directory: str,
-        time_interval: float = 5.0,
+        time_interval_ms: float = 5000.0,
         group_keys: Optional[List[str]] = None,
         categories: Optional[List[str]] = None,
         names: Optional[List[str]] = None,
@@ -644,7 +644,7 @@ class AggregatorUtility:
     def iter_arrow(
         self,
         directory: str,
-        time_interval: float = 5.0,
+        time_interval_ms: float = 5000.0,
         group_keys: Optional[List[str]] = None,
         categories: Optional[List[str]] = None,
         names: Optional[List[str]] = None,

@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_map.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_result.h>
 #include <doctest/doctest.h>
 
@@ -20,11 +21,11 @@ static MetricStats make_stats(double mean, double m2, uint64_t total,
     return s;
 }
 
-static AggregationKey make_key(const std::string& cat, const std::string& name,
+static AggregationKey make_key(std::string_view cat, std::string_view name,
                                uint64_t pid, uint64_t time_bucket) {
     AggregationKey k;
-    k.cat = cat;
-    k.name = name;
+    k.cat_id = aggregation_intern().get_or_insert(cat);
+    k.name_id = aggregation_intern().get_or_insert(name);
     k.pid = pid;
     k.tid = 0;
     k.time_bucket = time_bucket;
@@ -121,9 +122,7 @@ TEST_SUITE("ClassifySignificance") {
 
 TEST_SUITE("CollapseByGroup") {
     TEST_CASE("collapse_by_group - single entry") {
-        std::unordered_map<AggregationKey, AggregationMetrics,
-                           AggregationKeyHash>
-            agg;
+        AggregationMap agg;
         agg[make_key("POSIX", "lseek64", 1, 0)] = make_metrics(5, 500, 0);
 
         auto result = collapse_by_group(agg);
@@ -134,9 +133,7 @@ TEST_SUITE("CollapseByGroup") {
     }
 
     TEST_CASE("collapse_by_group - merges time windows") {
-        std::unordered_map<AggregationKey, AggregationMetrics,
-                           AggregationKeyHash>
-            agg;
+        AggregationMap agg;
         // Same (cat, name, pid=1) across 3 time windows
         agg[make_key("POSIX", "open", 1, 0)] = make_metrics(10, 1000, 0);
         agg[make_key("POSIX", "open", 1, 1)] = make_metrics(20, 2000, 0);
@@ -151,9 +148,7 @@ TEST_SUITE("CollapseByGroup") {
     }
 
     TEST_CASE("collapse_by_group - max across pids") {
-        std::unordered_map<AggregationKey, AggregationMetrics,
-                           AggregationKeyHash>
-            agg;
+        AggregationMap agg;
         // Same (cat, name, time_bucket=0) with different pids
         agg[make_key("POSIX", "close", 1, 0)] = make_metrics(5, 500, 0);
         agg[make_key("POSIX", "close", 2, 0)] = make_metrics(15, 1500, 0);
@@ -168,9 +163,7 @@ TEST_SUITE("CollapseByGroup") {
     }
 
     TEST_CASE("collapse_by_group - separate cat/name") {
-        std::unordered_map<AggregationKey, AggregationMetrics,
-                           AggregationKeyHash>
-            agg;
+        AggregationMap agg;
         agg[make_key("POSIX", "read", 1, 0)] = make_metrics(10, 1000, 4096);
         agg[make_key("POSIX", "write", 1, 0)] = make_metrics(5, 500, 2048);
         agg[make_key("STDIO", "fread", 1, 0)] = make_metrics(3, 300, 1024);
@@ -180,9 +173,7 @@ TEST_SUITE("CollapseByGroup") {
     }
 
     TEST_CASE("collapse_by_group - bandwidth only for I/O ops") {
-        std::unordered_map<AggregationKey, AggregationMetrics,
-                           AggregationKeyHash>
-            agg;
+        AggregationMap agg;
         // read is a data transfer op -> bw_mean > 0
         agg[make_key("POSIX", "read", 1, 0)] = make_metrics(10, 1000, 40960);
         // lseek64 is not -> bw_mean = 0
@@ -192,7 +183,7 @@ TEST_SUITE("CollapseByGroup") {
         REQUIRE(result.size() == 2);
 
         for (const auto& [k, cm] : result) {
-            if (k.name == "read") {
+            if (k.name() == "read") {
                 CHECK(cm.bw_mean > 0.0);
             } else {
                 CHECK(cm.bw_mean == doctest::Approx(0.0).epsilon(1e-10));

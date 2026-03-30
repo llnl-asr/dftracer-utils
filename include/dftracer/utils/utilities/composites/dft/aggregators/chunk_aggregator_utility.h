@@ -7,9 +7,11 @@
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_map.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
+#include <dftracer/utils/utilities/composites/dft/event.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +25,7 @@ namespace dftracer::utils::utilities::composites::dft::aggregators {
 
 // Import JsonValue from common json namespace
 using dftracer::utils::utilities::common::json::JsonValue;
+using dftracer::utils::utilities::composites::dft::DFTracerEvent;
 
 struct ChunkAggregatorInput {
     std::string file_path;
@@ -89,16 +92,11 @@ class ChunkAggregatorUtility
                                       std::uint64_t duration,
                                       const AggregationConfig& config) const;
 
-    AggregationKey build_key(
-        const JsonValue& json, const JsonValue& args, std::uint64_t timestamp,
-        std::uint64_t duration, const AggregationConfig& config,
-        const std::shared_ptr<AssociationTracker>& local_tracker) const;
+    AggregationKey build_key(const DFTracerEvent& ev,
+                             const AggregationConfig& config) const;
 
-    void process_event(
-        yyjson_val* event, const AggregationConfig& config,
-        std::unordered_map<AggregationKey, AggregationMetrics,
-                           AggregationKeyHash>& local_aggregations,
-        const std::shared_ptr<AssociationTracker>& local_tracker);
+    void update_entry(const DFTracerEvent& ev, const AggregationConfig& config,
+                      AggregationMap& aggregations, const AggregationKey& key);
 
    public:
     ChunkAggregatorUtility() = default;

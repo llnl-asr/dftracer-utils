@@ -19,6 +19,7 @@ TEST_SUITE("DistributionStats") {
         CHECK(dist.sum == doctest::Approx(600.0));
         CHECK(dist.mean() == doctest::Approx(200.0));
         CHECK(!dist.sketch.empty());
+        REQUIRE(!dist.sketch.empty());
         CHECK(dist.sketch.count() == 3);
     }
 
@@ -90,6 +91,7 @@ TEST_SUITE("DetailedStatistics") {
 
         CHECK(stats.duration.count() == 3);
         CHECK(!stats.duration.sketch.empty());
+        REQUIRE(!stats.duration.sketch.empty());
         CHECK(stats.duration.sketch.count() == 3);
     }
 
@@ -139,6 +141,7 @@ TEST_SUITE("DetailedStatistics") {
         a.merge(b);
 
         CHECK(a.duration.count() == 3);
+        REQUIRE(!a.duration.sketch.empty());
         CHECK(a.duration.sketch.count() == 3);
         CHECK(a.grouped_duration["read"].count() == 2);
         CHECK(a.grouped_duration["write"].count() == 1);

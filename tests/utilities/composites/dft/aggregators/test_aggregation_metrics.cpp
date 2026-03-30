@@ -118,9 +118,11 @@ TEST_SUITE("MetricStats") {
             stats.update(i, i, true);  // compute_percentiles = true
         }
 
-        CHECK_FALSE(stats.sketch.empty());
-        CHECK(stats.sketch.count() == 100);
-        double p50 = stats.sketch.quantile(0.5);
+        CHECK(stats.sketch != nullptr);
+        CHECK_FALSE(stats.sketch->empty());
+        REQUIRE(stats.sketch != nullptr);
+        CHECK(stats.sketch->count() == 100);
+        double p50 = stats.sketch->quantile(0.5);
         CHECK(p50 == doctest::Approx(50.0).epsilon(0.05));
     }
 }
@@ -192,13 +194,14 @@ TEST_SUITE("AggregationMetrics") {
         // First call creates the metric
         metrics.update_duration(100);  // increment count to 1
         metrics.update_custom_metric("bytes_read", 1024);
-        CHECK(metrics.custom_metrics.count("bytes_read") == 1);
-        CHECK(metrics.custom_metrics["bytes_read"].total == 1024);
+        REQUIRE(metrics.custom_metrics != nullptr);
+        CHECK(metrics.custom_metrics->count("bytes_read") == 1);
+        CHECK((*metrics.custom_metrics)["bytes_read"].total == 1024);
 
         // Subsequent call updates it
         metrics.update_duration(200);  // count = 2
         metrics.update_custom_metric("bytes_read", 2048);
-        CHECK(metrics.custom_metrics["bytes_read"].total == 3072);
+        CHECK((*metrics.custom_metrics)["bytes_read"].total == 3072);
     }
 
     TEST_CASE("AggregationMetrics - merge_from") {
@@ -224,7 +227,8 @@ TEST_SUITE("AggregationMetrics") {
         CHECK(a.size.total == 450);      // 50+150+250
         CHECK(a.ts == 500);              // min of 1000, 500
         CHECK(a.te == 1100);             // max of 1100, 700
-        CHECK(a.custom_metrics["io_ops"].total == 60);
+        REQUIRE(a.custom_metrics != nullptr);
+        CHECK((*a.custom_metrics)["io_ops"].total == 60);
     }
 
     TEST_CASE("AggregationMetrics - get_stddev delegates") {

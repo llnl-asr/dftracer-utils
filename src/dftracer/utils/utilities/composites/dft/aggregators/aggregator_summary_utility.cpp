@@ -23,7 +23,7 @@ coro::CoroTask<void> AggregatorSummaryUtility::process(
 
     std::unordered_map<std::string, std::uint64_t> category_counts;
     for (const auto& [key, metrics] : aggregations) {
-        category_counts[key.cat] += metrics.count;
+        category_counts[std::string(key.cat())] += metrics.count;
     }
 
     std::printf("\nEvents by category:\n");

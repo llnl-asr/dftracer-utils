@@ -100,12 +100,12 @@ ArrowExportResult AggregationBatch::to_arrow() const {
     builder.reserve(entries.size());
 
     for (const auto& [key, metrics] : entries) {
-        builder.append_string(0, key.cat);
-        builder.append_string(1, key.name);
+        builder.append_string(0, key.cat());
+        builder.append_string(1, key.name());
         builder.append_uint64(2, key.pid);
         builder.append_uint64(3, key.tid);
-        builder.append_string(4, key.hhash);
-        builder.append_string(5, key.fhash);
+        builder.append_string(4, key.hhash());
+        builder.append_string(5, key.fhash());
         builder.append_uint64(6, key.time_bucket);
         builder.append_uint64(7, metrics.count);
         builder.append_uint64(8, metrics.duration.total);
@@ -218,7 +218,6 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
             file_chunks[i].chunk_index = start_idx + i;
         }
 
-        // Aggregate each chunk and merge incrementally.
         for (auto& chunk : file_chunks) {
             ChunkAggregatorUtility agg;
             auto output = co_await agg.process(chunk);
@@ -231,8 +230,8 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
 
     // Resolve process-parent associations and boundary events.
     AssociationResolverInput resolver_input;
-    resolver_input.aggregations = agg_results;
-    resolver_input.trackers = agg_results.trackers;
+    resolver_input.trackers = std::move(agg_results.trackers);
+    resolver_input.aggregations = std::move(agg_results);
     resolver_input.config = input.config;
 
     AssociationResolverUtility resolver;
@@ -240,6 +239,7 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
 
     // Yield the resolved aggregations in bounded batches.
     const std::size_t batch_sz = input.event_batch_size;
+
     AggregationBatch batch;
     batch.total_events_processed =
         resolver_output.aggregations.total_events_processed;

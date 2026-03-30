@@ -60,7 +60,7 @@ class TestAggregatorUtility:
         with Environment(lines=20) as env:
             env.create_test_gzip_file()
             directory = env.temp_dir
-            result = AggregatorUtility().process(directory, time_interval=1.0)
+            result = AggregatorUtility().process(directory, time_interval_ms=1000.0)
             assert isinstance(result, ArrowTable)
             assert result.num_rows > 0
 

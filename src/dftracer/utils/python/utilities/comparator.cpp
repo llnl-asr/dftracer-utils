@@ -183,7 +183,7 @@ CoroTask<EventAggregatorUtilityOutput> run_aggregation(
     auto streaming_task = make_task(
         [&](CoroScope &ctx) -> CoroTask<void> {
             auto chunk_chan = coro::make_channel<ChunkAggregatorInput>(0);
-            auto result_chan = coro::make_channel<ChunkAggregationOutput>(8);
+            auto result_chan = coro::make_channel<ChunkAggregationOutput>(2);
 
             co_await ctx.scope([&](CoroScope &scope) -> CoroTask<void> {
                 for (const auto &file_path : input_files) {

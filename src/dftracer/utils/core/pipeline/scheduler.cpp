@@ -26,11 +26,11 @@ Scheduler::Scheduler(Executor* executor) : executor_(executor) {
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Exception in on_task_completed for task '%s': %s",
-                task->get_name().c_str(), e.what());
+                task->get_name(), e.what());
         } catch (...) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Unknown exception in on_task_completed for task '%s'",
-                task->get_name().c_str());
+                task->get_name());
         }
     });
 
@@ -62,11 +62,11 @@ Scheduler::Scheduler(Executor* executor, Watchdog* watchdog,
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Exception in on_task_completed for task '%s': %s",
-                task->get_name().c_str(), e.what());
+                task->get_name(), e.what());
         } catch (...) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Unknown exception in on_task_completed for task '%s'",
-                task->get_name().c_str());
+                task->get_name());
         }
     });
 
@@ -167,7 +167,7 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
         submit_task_to_executor(source, src_input);
     } catch (...) {
         DFTRACER_UTILS_LOG_ERROR("Failed to prepare source task ID %d ('%s')",
-                                 source->get_id(), source->get_name().c_str());
+                                 source->get_id(), source->get_name());
         source->set_exception(std::current_exception());
         handle_task_error(source);
     }
@@ -254,7 +254,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
     }
 
     DFTRACER_UTILS_LOG_DEBUG("Task ID %d ('%s') completed notification",
-                             task->get_id(), task->get_name().c_str());
+                             task->get_id(), task->get_name());
 
     // Unregister from watchdog
     if (watchdog_) {
@@ -277,7 +277,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
         DFTRACER_UTILS_LOG_DEBUG(
             "Skipping child scheduling for task '%s' due to shutdown or "
             "FAIL_FAST",
-            task->get_name().c_str());
+            task->get_name());
         return;
     }
 
@@ -314,7 +314,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
                 DFTRACER_UTILS_LOG_WARN(
                     "Skipping child task ID %d ('%s') because parent failed "
                     "(CONTINUE policy)",
-                    child->get_id(), child->get_name().c_str());
+                    child->get_id(), child->get_name());
 
                 // Mark child as failed and propagate to its children
                 skip_task_and_descendants(child);
@@ -342,12 +342,12 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
 
                 DFTRACER_UTILS_LOG_DEBUG(
                     "Directly submitted child task '%s' to executor",
-                    child->get_name().c_str());
+                    child->get_name());
             } catch (...) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "Failed to prepare input for child task ID %d "
                     "('%s')",
-                    child->get_id(), child->get_name().c_str());
+                    child->get_id(), child->get_name());
 
                 child->set_exception(std::current_exception());
                 handle_task_error(child);
@@ -484,7 +484,7 @@ std::any Scheduler::prepare_input_for_task(std::shared_ptr<Task> task) {
 void Scheduler::submit_task_to_executor(std::shared_ptr<Task> task,
                                         const std::any& input) {
     DFTRACER_UTILS_LOG_DEBUG("Submitting task ID %ld ('%s') to executor",
-                             task->get_id(), task->get_name().c_str());
+                             task->get_id(), task->get_name());
 
     // @Note: pending_count_ is incremented before this call,
     // not here, to avoid race condition with wait predicate
@@ -548,7 +548,7 @@ void Scheduler::initialize_pending_counts_dfs(
 
 void Scheduler::handle_task_error(std::shared_ptr<Task> task) {
     DFTRACER_UTILS_LOG_ERROR("Task ID %d ('%s') failed", task->get_id(),
-                             task->get_name().c_str());
+                             task->get_name());
 
     has_error_ = true;
 
@@ -621,15 +621,16 @@ void Scheduler::validate_task_types(std::shared_ptr<Task> task) {
                     (parent->get_output_type() == typeid(std::any));
 
                 if (!types_match) {
-                    std::string parent_type =
-                        Task::demangle_type_name(parent->get_output_type());
-                    std::string task_type =
-                        Task::demangle_type_name(current->get_input_type());
-                    throw PipelineError(
-                        PipelineError::TYPE_MISMATCH,
-                        "Type mismatch: task '" + current->get_name() +
-                            "' expects " + task_type + " but parent '" +
-                            parent->get_name() + "' outputs " + parent_type);
+                    auto& cloc = current->get_location();
+                    auto& ploc = parent->get_location();
+                    char buf[1024];
+                    std::snprintf(buf, sizeof(buf),
+                                  "Type mismatch: task '%s' at %s:%u "
+                                  "incompatible with parent '%s' at %s:%u",
+                                  current->get_name(), cloc.file_name(),
+                                  cloc.line(), parent->get_name(),
+                                  ploc.file_name(), ploc.line());
+                    throw PipelineError(PipelineError::TYPE_MISMATCH, buf);
                 }
             }
         }
@@ -659,7 +660,7 @@ void Scheduler::skip_task_and_descendants(std::shared_ptr<Task> task) {
         PipelineError(PipelineError::EXECUTION_ERROR, "Parent task failed")));
 
     DFTRACER_UTILS_LOG_DEBUG("Skipped task ID %d ('%s') due to failed parent",
-                             task->get_id(), task->get_name().c_str());
+                             task->get_id(), task->get_name());
 
     // Recursively skip all children
     // Make a copy to avoid iterator invalidation during recursion

@@ -6,6 +6,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task_traits.h>
 
+#include <cstdio>
 #include <type_traits>
 
 namespace dftracer::utils {
@@ -225,10 +226,11 @@ std::shared_ptr<Task> Task::with_combiner(
     input_combiner_ =
         [combiner](const std::vector<std::any>& inputs) -> std::any {
         if (inputs.size() != sizeof...(Args)) {
-            std::ostringstream oss;
-            oss << "Combiner expects " << sizeof...(Args)
-                << " inputs but received " << inputs.size();
-            throw PipelineError(PipelineError::VALIDATION_ERROR, oss.str());
+            char buf[128];
+            std::snprintf(buf, sizeof(buf),
+                          "Combiner expects %zu inputs but received %zu",
+                          sizeof...(Args), inputs.size());
+            throw PipelineError(PipelineError::VALIDATION_ERROR, buf);
         }
 
         if constexpr (sizeof...(Args) == 1) {

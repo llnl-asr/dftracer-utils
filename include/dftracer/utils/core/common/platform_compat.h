@@ -37,23 +37,36 @@
 
 #endif
 
-// Memory alignment constants for optimal performance
-#ifdef __APPLE__
-// Apple Silicon (M1/M2/M3) has 128-byte cache lines for optimal performance
+// Memory alignment constants for optimal performance.
+// For false-sharing avoidance, use the spatial prefetch unit size (not just
+// the L1 cache line) since adjacent-line prefetchers can cause cross-core
+// invalidation even on separate cache lines.
+//
+// HPC targets: Intel Xeon, AMD EPYC, Apple Silicon, ARM Graviton,
+// Fujitsu A64FX (Fugaku), IBM POWER.
+#if defined(__A64FX__)
+// Fujitsu A64FX (Fugaku): 256-byte cache lines
+#define DFTRACER_CACHE_LINE_SIZE 256
+#define DFTRACER_OPTIMAL_ALIGNMENT 256
+#elif defined(__APPLE__) || defined(__ppc64__) || defined(__PPC64__) || \
+    defined(_ARCH_PPC64)
+// Apple Silicon: 128-byte cache lines
+// IBM POWER9/10: 128-byte cache lines
 #define DFTRACER_CACHE_LINE_SIZE 128
 #define DFTRACER_OPTIMAL_ALIGNMENT 128
 #elif defined(__x86_64__) || defined(_M_X64)
-// x86_64 systems typically have 64-byte cache lines
+// Intel/AMD x86_64: 64-byte cache lines, 128-byte spatial prefetch pairs.
+// Use 128 to avoid false sharing from adjacent-line prefetcher.
 #define DFTRACER_CACHE_LINE_SIZE 64
-#define DFTRACER_OPTIMAL_ALIGNMENT 64
-#elif defined(__aarch64__) && !defined(__APPLE__)
-// ARM64 Linux systems typically have 64-byte cache lines
+#define DFTRACER_OPTIMAL_ALIGNMENT 128
+#elif defined(__aarch64__)
+// ARM64 Linux (Graviton, Neoverse, etc.): 64-byte cache lines
 #define DFTRACER_CACHE_LINE_SIZE 64
 #define DFTRACER_OPTIMAL_ALIGNMENT 64
 #else
-// Conservative default for other architectures
+// Conservative default
 #define DFTRACER_CACHE_LINE_SIZE 64
-#define DFTRACER_OPTIMAL_ALIGNMENT 64
+#define DFTRACER_OPTIMAL_ALIGNMENT 128
 #endif
 
 // Convenience macro for aligned buffer declarations
@@ -69,5 +82,29 @@ inline std::size_t dftracer_utils_hardware_concurrency() {
     auto n = std::thread::hardware_concurrency();
     return n == 0 ? 1u : static_cast<std::size_t>(n);
 }
+
+// ThreadSanitizer annotations for custom synchronization primitives.
+#if defined(__SANITIZE_THREAD__)
+#define DFTRACER_TSAN_ENABLED 1
+#endif
+#if !defined(DFTRACER_TSAN_ENABLED) && defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define DFTRACER_TSAN_ENABLED 1
+#endif
+#endif
+
+#if defined(DFTRACER_TSAN_ENABLED)
+#if __has_include(<sanitizer/tsan_interface.h>)
+#include <sanitizer/tsan_interface.h>
+#else
+extern "C" void __tsan_acquire(void*);
+extern "C" void __tsan_release(void*);
+#endif
+#define DFTRACER_TSAN_ACQUIRE(addr) __tsan_acquire(addr)
+#define DFTRACER_TSAN_RELEASE(addr) __tsan_release(addr)
+#else
+#define DFTRACER_TSAN_ACQUIRE(addr) ((void)0)
+#define DFTRACER_TSAN_RELEASE(addr) ((void)0)
+#endif
 
 #endif  // DFTRACER_UTILS_CORE_COMMON_PLATFORM_COMPAT_H

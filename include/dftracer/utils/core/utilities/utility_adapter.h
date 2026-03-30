@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_CORE_UTILITIES_UTILITY_ADAPTER_H
 #define DFTRACER_UTILS_CORE_UTILITIES_UTILITY_ADAPTER_H
 
-#include <dftracer/utils/core/common/type_name.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
@@ -91,9 +90,8 @@ class UtilityAdapter {
             // Special handling for Monitored tag - inject utility class name
             if constexpr (std::is_same_v<FirstTag, tags::Monitored>) {
                 if (tag.utility_name == "Utility") {
-                    // Extract and set the actual utility class name
-                    std::string full_name = get_type_name(*utility_);
-                    tag.utility_name = extract_class_name(full_name);
+                    tag.utility_name =
+                        std::string(utility_->get_type_signature());
                 }
             }
 
@@ -199,12 +197,6 @@ class UtilityAdapter {
             std::make_shared<behaviors::UtilityExecutor<I, O, Tags...>>(
                 utility_, behavior_chain_);
 
-        // Get utility name for task naming
-        std::string task_name = utility_->get_name();
-        if (task_name.empty()) {
-            task_name = "Utility";
-        }
-
         // Create task based on whether utility needs context
         if constexpr (UtilityType::template has_tag<tags::NeedsContext>() ||
                       detail::has_process_with_context_v<ConcreteType, I, O>) {
@@ -213,13 +205,13 @@ class UtilityAdapter {
                     co_return co_await executor->execute_with_context(ctx,
                                                                       input);
                 },
-                task_name);
+                UtilityType::get_name());
         } else {
             return make_task(
                 [executor](I input) -> coro::CoroTask<O> {
                     co_return co_await executor->execute(input);
                 },
-                task_name);
+                UtilityType::get_name());
         }
     }
 

@@ -347,12 +347,13 @@ bool Pipeline::validate_types() {
                     (parent->get_output_type() == typeid(std::any));
 
                 if (!types_match) {
-                    std::ostringstream oss;
-                    oss << "Type mismatch: task '" << task->get_name()
-                        << "' expects " << task->get_input_type().name()
-                        << " but parent '" << parent->get_name() << "' outputs "
-                        << parent->get_output_type().name();
-                    DFTRACER_UTILS_LOG_ERROR("%s", oss.str().c_str());
+                    auto& tloc = task->get_location();
+                    auto& ploc = parent->get_location();
+                    DFTRACER_UTILS_LOG_ERROR(
+                        "Type mismatch: task '%s' at %s:%u incompatible "
+                        "with parent '%s' at %s:%u",
+                        task->get_name(), tloc.file_name(), tloc.line(),
+                        parent->get_name(), ploc.file_name(), ploc.line());
                     return false;
                 }
             }
@@ -390,7 +391,7 @@ bool Pipeline::has_cycles_dfs(std::shared_ptr<Task> task,
     if (rec_stack.find(id) != rec_stack.end()) {
         // Found cycle
         DFTRACER_UTILS_LOG_ERROR("Cycle detected at task '%s'",
-                                 task->get_name().c_str());
+                                 task->get_name());
         return true;
     }
 

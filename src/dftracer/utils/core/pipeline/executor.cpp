@@ -1,6 +1,8 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/yield.h>
+#include <dftracer/utils/core/io/io_backend_factory.h>
+#include <dftracer/utils/core/io/io_thread_pool.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/sqlite/vfs.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -10,9 +12,6 @@
 #include <coroutine>
 #include <exception>
 #include <vector>
-
-#include "../io/io_backend_factory.h"
-#include "../io/io_thread_pool.h"
 
 namespace dftracer::utils {
 
@@ -236,6 +235,7 @@ void Executor::worker_thread(WorkerContext* context) {
                         ++tasks_started_;
                     }
                 }
+                DFTRACER_TSAN_ACQUIRE(pending_resume.address());
                 pending_resume.resume();
             }
             // Destroy coroutine frames that FinalAwaiter deferred to this
@@ -305,7 +305,10 @@ void Executor::schedule_coroutine_resumption(std::coroutine_handle<> handle) {
 
 void Executor::signal_global_work() {
     work_signal_.fetch_add(1, std::memory_order_acq_rel);
-    wake_all_workers();
+    // Wake one worker, not all. Each enqueue adds one unit of work,
+    // so one worker is sufficient. Avoids thundering herd where all
+    // N threads wake, N-1 find no work, and go back to sleep.
+    wake_one_worker();
 }
 
 void Executor::wake_one_worker() {
@@ -358,6 +361,7 @@ void Executor::enqueue(std::coroutine_handle<> handle) {
         return;  // Invalid or already completed
     }
 
+    DFTRACER_TSAN_RELEASE(handle.address());
     run_queue_.enqueue(handle);
     signal_global_work();
 }
@@ -641,7 +645,7 @@ coro::Coro Executor::run_task(std::shared_ptr<Task> task,
 
         DFTRACER_UTILS_LOG_DEBUG("Worker %zu executing task ID %ld ('%s')",
                                  context->worker_id, task->get_id(),
-                                 task->get_name().c_str());
+                                 task->get_name());
 
         try {
             auto coro_task = task->execute(scope, *input);
@@ -667,7 +671,7 @@ coro::Coro Executor::run_task(std::shared_ptr<Task> task,
         if (!task_error) {
             DFTRACER_UTILS_LOG_DEBUG(
                 "Task ID %ld ('%s') completed successfully", task->get_id(),
-                task->get_name().c_str());
+                task->get_name());
 
             // Mark task completion
             mark_activity();
@@ -702,8 +706,8 @@ coro::Coro Executor::run_task(std::shared_ptr<Task> task,
                 std::rethrow_exception(task_error);
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_ERROR("Task ID %ld ('%s') failed: %s",
-                                         task->get_id(),
-                                         task->get_name().c_str(), e.what());
+                                         task->get_id(), task->get_name(),
+                                         e.what());
 
                 task->set_exception(task_error);
 
@@ -728,7 +732,7 @@ coro::Coro Executor::run_task(std::shared_ptr<Task> task,
             } catch (...) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "Task ID %ld ('%s') failed with unknown exception",
-                    task->get_id(), task->get_name().c_str());
+                    task->get_id(), task->get_name());
 
                 task->set_exception(task_error);
 

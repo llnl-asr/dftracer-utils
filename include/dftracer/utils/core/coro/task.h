@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_TASK_H
 #define DFTRACER_UTILS_CORE_CORO_TASK_H
 
+#include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/coro/yield.h>
 
@@ -27,6 +28,13 @@ struct PromiseBase {
     Executor* executor_{nullptr};
     std::atomic<bool>* cancellation_token_{nullptr};
     PromiseBase* root_promise_{nullptr};
+
+    static void* operator new(std::size_t size) {
+        return ObjectPool::instance().allocate(size);
+    }
+    static void operator delete(void* ptr, std::size_t size) {
+        ObjectPool::instance().deallocate(ptr, size);
+    }
 
     void set_awaited_task_id(TaskIndex id) { awaited_task_id_ = id; }
     TaskIndex get_awaited_task_id() const { return awaited_task_id_; }

@@ -1,15 +1,14 @@
 #ifndef DFTRACER_UTILS_CORE_UTILITIES_UTILITY_H
 #define DFTRACER_UTILS_CORE_UTILITIES_UTILITY_H
 
+#include <dftracer/utils/core/common/const_string.h>
 #include <dftracer/utils/core/common/type_name.h>
 #include <dftracer/utils/core/coro/task.h>
 
-#include <sstream>
 #include <stdexcept>
-#include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
-#include <typeindex>
 
 namespace dftracer::utils {
 class CoroScope;
@@ -27,11 +26,30 @@ template <typename I, typename O, typename... Tags>
 class UtilityExecutor;
 }
 
+template <typename I>
+consteval auto make_input_signature() {
+    return ConstString<512>()
+        .append("Utility[")
+        .append(get_type_name<I>())
+        .append("]");
+}
+
+template <typename I, typename O>
+consteval auto make_utility_signature() {
+    return ConstString<512>()
+        .append("Utility[")
+        .append(get_type_name<I>())
+        .append("->")
+        .append(get_type_name<O>())
+        .append("]");
+}
+
 /**
  * @brief Shared machinery for all utility variants.
  *
- * Holds tags, context pointer, name, and type signature. Subclasses
- * (Utility, StreamingUtility) add their specific process() signatures.
+ * Holds tags and context pointer.
+ * Type signature is generated at compile time and stored as a static constexpr
+ * string_view.
  *
  * @tparam I Input type
  * @tparam Tags Variadic tag types for opt-in features
@@ -41,27 +59,25 @@ class UtilityBase {
    private:
     std::tuple<Tags...> tags_;
     CoroScope* ctx_ = nullptr;
-    std::string name_;
-    std::string type_signature_;
+
+    static constexpr auto sig_ = make_input_signature<I>();
 
    public:
     using Input = I;
     using TagsTuple = std::tuple<Tags...>;
 
-    UtilityBase() : name_(), type_signature_(make_input_signature()) {}
+    UtilityBase() = default;
 
     template <typename Dummy = void,
               typename = std::enable_if_t<(sizeof...(Tags) > 0) &&
                                           std::is_void_v<Dummy>>>
     explicit UtilityBase(Tags... tags)
-        : tags_(std::make_tuple(std::move(tags)...)),
-          name_(),
-          type_signature_(make_input_signature()) {}
+        : tags_(std::make_tuple(std::move(tags)...)) {}
 
     virtual ~UtilityBase() = default;
 
-    UtilityBase(const UtilityBase&) = delete;
-    UtilityBase& operator=(const UtilityBase&) = delete;
+    UtilityBase(const UtilityBase&) = default;
+    UtilityBase& operator=(const UtilityBase&) = default;
     UtilityBase(UtilityBase&&) = default;
     UtilityBase& operator=(UtilityBase&&) = default;
 
@@ -85,14 +101,8 @@ class UtilityBase {
         std::get<Tag>(tags_) = std::move(tag);
     }
 
-    std::string get_name() const {
-        if (name_.empty()) return type_signature_;
-        return name_ + " " + type_signature_;
-    }
-
-    const std::string& get_user_name() const { return name_; }
-    const std::string& get_type_signature() const { return type_signature_; }
-    void set_name(std::string name) { name_ = std::move(name); }
+    static constexpr std::string_view get_type_signature() { return sig_; }
+    static constexpr std::string_view get_name() { return sig_; }
 
    protected:
     /**
@@ -114,41 +124,6 @@ class UtilityBase {
 
     void set_context(CoroScope& ctx) { ctx_ = &ctx; }
     void clear_context() { ctx_ = nullptr; }
-
-    /**
-     * @brief Override the auto-generated type signature.
-     *
-     * Called by derived class constructors to set the full I->O form.
-     */
-    void set_type_signature(std::string sig) {
-        type_signature_ = std::move(sig);
-    }
-
-    /**
-     * @brief Build "Utility[I->O]" signature from two pre-formatted names.
-     */
-    static std::string make_signature(const std::string& input_name,
-                                      const std::string& output_name) {
-        std::ostringstream oss;
-        oss << "Utility[" << input_name << "->" << output_name << "]";
-        return oss.str();
-    }
-
-   private:
-    static std::string make_input_signature() {
-        std::ostringstream oss;
-        oss << "Utility[" << type_label<I>() << "]";
-        return oss.str();
-    }
-
-    template <typename T>
-    static std::string type_label() {
-        if constexpr (std::is_void_v<T>) {
-            return "void";
-        } else {
-            return extract_class_name(get_type_name<T>());
-        }
-    }
 };
 
 /**
@@ -160,24 +135,22 @@ class UtilityBase {
  */
 template <typename I, typename O, typename... Tags>
 class Utility : public UtilityBase<I, Tags...> {
+   private:
+    static constexpr auto sig_ = make_utility_signature<I, O>();
+
    public:
     using Output = O;
 
-    Utility() : UtilityBase<I, Tags...>() {
-        this->set_type_signature(UtilityBase<I, Tags...>::make_signature(
-            extract_class_name(get_type_name<I>()),
-            extract_class_name(get_type_name<O>())));
-    }
+    Utility() : UtilityBase<I, Tags...>() {}
 
     template <typename Dummy = void,
               typename = std::enable_if_t<(sizeof...(Tags) > 0) &&
                                           std::is_void_v<Dummy>>>
     explicit Utility(Tags... tags)
-        : UtilityBase<I, Tags...>(std::move(tags)...) {
-        this->set_type_signature(UtilityBase<I, Tags...>::make_signature(
-            extract_class_name(get_type_name<I>()),
-            extract_class_name(get_type_name<O>())));
-    }
+        : UtilityBase<I, Tags...>(std::move(tags)...) {}
+
+    static constexpr std::string_view get_type_signature() { return sig_; }
+    static constexpr std::string_view get_name() { return sig_; }
 
     // UtilityExecutor accesses protected set_context/clear_context through
     // this derived class pointer — valid per [class.access.base]/5.

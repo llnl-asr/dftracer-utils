@@ -40,14 +40,14 @@ class ShardedMutex {
     static_assert((NUM_SHARDS & (NUM_SHARDS - 1)) == 0,
                   "NUM_SHARDS must be power of 2 for fast modulo");
 
-   private:
+   protected:
     struct Shard {
         T data;
         mutable std::mutex mutex;
 
         // Padding to prevent false sharing between adjacent shards
-        // Cache lines are typically 64 bytes
-        alignas(64) char padding_[DFTRACER_CACHE_LINE_SIZE];
+        alignas(
+            DFTRACER_CACHE_LINE_SIZE) char padding_[DFTRACER_CACHE_LINE_SIZE];
     };
 
     std::array<Shard, NUM_SHARDS> shards_;
@@ -70,6 +70,28 @@ class ShardedMutex {
 
    public:
     ShardedMutex() = default;
+
+    // Move only transfers shard data, not mutexes. std::mutex is
+    // non-movable (OS handle tied to address). The destination gets
+    // fresh mutexes. Only safe when no thread holds any lock on either
+    // the source or destination (e.g., after all parallel work is done).
+    ShardedMutex(ShardedMutex&& other) noexcept {
+        for (std::size_t i = 0; i < NUM_SHARDS; ++i) {
+            shards_[i].data = std::move(other.shards_[i].data);
+        }
+    }
+
+    ShardedMutex& operator=(ShardedMutex&& other) noexcept {
+        if (this != &other) {
+            for (std::size_t i = 0; i < NUM_SHARDS; ++i) {
+                shards_[i].data = std::move(other.shards_[i].data);
+            }
+        }
+        return *this;
+    }
+
+    ShardedMutex(const ShardedMutex&) = delete;
+    ShardedMutex& operator=(const ShardedMutex&) = delete;
 
     /**
      * Execute function with exclusive access to shard
@@ -124,6 +146,24 @@ class ShardedMutex {
     void for_each_shard(Func&& func) const {
         for (const auto& shard : shards_) {
             std::lock_guard<std::mutex> lock(shard.mutex);
+            func(shard.data);
+        }
+    }
+
+    /**
+     * Execute function on ALL shards without locking.
+     * Only safe when no concurrent access is possible.
+     */
+    template <typename Func>
+    void for_each_shard_unlocked(Func&& func) {
+        for (auto& shard : shards_) {
+            func(shard.data);
+        }
+    }
+
+    template <typename Func>
+    void for_each_shard_unlocked(Func&& func) const {
+        for (const auto& shard : shards_) {
             func(shard.data);
         }
     }

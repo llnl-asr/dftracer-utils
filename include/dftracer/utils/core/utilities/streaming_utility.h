@@ -6,6 +6,16 @@
 
 namespace dftracer::utils::utilities {
 
+template <typename I, typename Batch>
+consteval auto make_streaming_signature() {
+    return ConstString<512>()
+        .append("Utility[")
+        .append(get_type_name<I>())
+        .append("->")
+        .append(get_type_name<Batch>())
+        .append("*]");
+}
+
 /**
  * @brief Streaming utility: process() yields batches via AsyncGenerator<Batch>.
  *
@@ -15,45 +25,25 @@ namespace dftracer::utils::utilities {
  * @tparam I     Input type
  * @tparam Batch Element type yielded per iteration
  * @tparam Tags  Variadic tag types for opt-in features
- *
- * Usage:
- * @code
- * class MyStreamer
- *     : public StreamingUtility<FileInput, std::vector<Event>> {
- *     coro::AsyncGenerator<std::vector<Event>>
- *     process(const FileInput& input) override {
- *         while (has_more(input)) {
- *             co_yield read_batch(input);
- *         }
- *     }
- * };
- *
- * auto gen = streamer.process(file_input);
- * while (auto batch = co_await gen.next()) {
- *     handle(*batch);
- * }
- * @endcode
  */
 template <typename I, typename Batch, typename... Tags>
 class StreamingUtility : public UtilityBase<I, Tags...> {
+   private:
+    static constexpr auto sig_ = make_streaming_signature<I, Batch>();
+
    public:
     using BatchType = Batch;
 
-    StreamingUtility() : UtilityBase<I, Tags...>() {
-        this->set_type_signature(UtilityBase<I, Tags...>::make_signature(
-            extract_class_name(get_type_name<I>()),
-            extract_class_name(get_type_name<Batch>()) + "*"));
-    }
+    StreamingUtility() : UtilityBase<I, Tags...>() {}
 
     template <typename Dummy = void,
               typename = std::enable_if_t<(sizeof...(Tags) > 0) &&
                                           std::is_void_v<Dummy>>>
     explicit StreamingUtility(Tags... tags)
-        : UtilityBase<I, Tags...>(std::move(tags)...) {
-        this->set_type_signature(UtilityBase<I, Tags...>::make_signature(
-            extract_class_name(get_type_name<I>()),
-            extract_class_name(get_type_name<Batch>()) + "*"));
-    }
+        : UtilityBase<I, Tags...>(std::move(tags)...) {}
+
+    static constexpr std::string_view get_type_signature() { return sig_; }
+    static constexpr std::string_view get_name() { return sig_; }
 
     virtual coro::AsyncGenerator<Batch> process(const I& input) = 0;
 };

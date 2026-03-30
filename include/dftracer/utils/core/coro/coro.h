@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_CORO_H
 #define DFTRACER_UTILS_CORE_CORO_CORO_H
 
+#include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/common/typedefs.h>
 
 #include <atomic>
@@ -67,6 +68,13 @@ class Coro {
 };
 
 struct CoroPromise {
+    static void* operator new(std::size_t size) {
+        return ObjectPool::instance().allocate(size);
+    }
+    static void operator delete(void* ptr, std::size_t size) {
+        ObjectPool::instance().deallocate(ptr, size);
+    }
+
     std::exception_ptr exception{nullptr};
 
     /// Join group: points to JoinHandle's atomic counter.

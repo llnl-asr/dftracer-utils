@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_CORE_PIPELINE_EXECUTOR_H
 
 #include <concurrentqueue.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/common/timer_service.h>
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/coro/coro.h>
@@ -149,8 +150,9 @@ class Executor {
     using CompletionCallback = std::function<void(std::shared_ptr<Task>)>;
 
    private:
-    // Worker context for per-thread state
-    struct WorkerContext {
+    // Worker context for per-thread state.
+    // Aligned to avoid false sharing between adjacent workers.
+    struct alignas(DFTRACER_OPTIMAL_ALIGNMENT) WorkerContext {
         std::size_t worker_id;
         // queue_mutex + cv: used for worker sleep/wake protocol.
         // Workers sleep on cv; wake_one_worker/wake_all_workers
@@ -186,10 +188,14 @@ class Executor {
     // Reference to scheduler for dynamic task context
     Scheduler* scheduler_{nullptr};
 
-    // Global tracking
-    std::atomic<std::size_t> tasks_completed_{0};
-    std::atomic<std::size_t> tasks_started_{0};
-    std::atomic<std::size_t> total_tasks_submitted_{0};
+    // Global tracking, padded to avoid false sharing between counters
+    // and with work_signal_ below.
+    alignas(DFTRACER_OPTIMAL_ALIGNMENT)
+        std::atomic<std::size_t> tasks_completed_{0};
+    alignas(DFTRACER_OPTIMAL_ALIGNMENT) std::atomic<std::size_t> tasks_started_{
+        0};
+    alignas(DFTRACER_OPTIMAL_ALIGNMENT)
+        std::atomic<std::size_t> total_tasks_submitted_{0};
 
     std::chrono::steady_clock::time_point last_activity_time_;
     mutable std::mutex activity_mutex_;
@@ -213,7 +219,8 @@ class Executor {
     // Global run queue (coroutine handles only).
     // Primary submission path for all task execution.
     moodycamel::ConcurrentQueue<std::coroutine_handle<>> run_queue_;
-    std::atomic<std::uint64_t> work_signal_{0};
+    alignas(DFTRACER_OPTIMAL_ALIGNMENT) std::atomic<std::uint64_t> work_signal_{
+        0};
 
     // Deferred destruction queue for released Coro handles.
     // FinalAwaiter pushes here; worker loop drains periodically.

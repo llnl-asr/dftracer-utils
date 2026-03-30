@@ -81,7 +81,7 @@ void Watchdog::register_task_start(TaskIndex task_id,
 
     DFTRACER_UTILS_LOG_DEBUG(
         "Watchdog: registered task '%s' (ID: %llu) with timeout: %lld ms",
-        task->get_name().c_str(), task_id, effective_timeout.count());
+        task->get_name(), task_id, effective_timeout.count());
 }
 
 void Watchdog::unregister_task(TaskIndex task_id) {
@@ -90,7 +90,7 @@ void Watchdog::unregister_task(TaskIndex task_id) {
     auto it = active_tasks_.find(task_id);
     if (it != active_tasks_.end()) {
         DFTRACER_UTILS_LOG_DEBUG("Watchdog: unregistered task '%s' (ID: %llu)",
-                                 it->second.task->get_name().c_str(), task_id);
+                                 it->second.task->get_name(), task_id);
 
         active_tasks_.erase(it);
     }
@@ -200,13 +200,19 @@ bool Watchdog::check_task_timeouts() {
             DFTRACER_UTILS_LOG_ERROR(
                 "Task timeout: '%s' (ID: %llu) ran for %lld ms (limit: %lld "
                 "ms)",
-                execution.task->get_name().c_str(), task_id, elapsed_ms.count(),
+                execution.task->get_name(), task_id, elapsed_ms.count(),
                 execution.timeout.count());
 
-            trigger_timeout(
-                "Task '" + execution.task->get_name() + "' timed out after " +
-                std::to_string(elapsed_ms.count()) + " ms (limit: " +
-                std::to_string(execution.timeout.count()) + " ms)");
+            {
+                char buf[1024];
+                std::snprintf(
+                    buf, sizeof(buf),
+                    "Task '%s' timed out after %lld ms (limit: %lld ms)",
+                    execution.task->get_name(),
+                    static_cast<long long>(elapsed_ms.count()),
+                    static_cast<long long>(execution.timeout.count()));
+                trigger_timeout(buf);
+            }
 
             return true;
         }
@@ -219,8 +225,7 @@ bool Watchdog::check_task_timeouts() {
             DFTRACER_UTILS_LOG_WARN(
                 "Long-running task: '%s' (ID: %llu) has been running for %lld "
                 "ms",
-                execution.task->get_name().c_str(), task_id,
-                elapsed_ms.count());
+                execution.task->get_name(), task_id, elapsed_ms.count());
 
             trigger_warning(execution.task->get_name(), elapsed_ms.count());
         }

@@ -55,8 +55,8 @@ coro::CoroTask<std::any> Task::execute(CoroScope& context,
         std::any result = co_await func_(context, input);
         co_return result;
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Task '%s' execution failed: %s",
-                                 name_.c_str(), e.what());
+        DFTRACER_UTILS_LOG_ERROR("Task '%s' execution failed: %s", get_name(),
+                                 e.what());
         throw;
     }
 }

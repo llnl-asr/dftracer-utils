@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_TASK_H
 #define DFTRACER_UTILS_CORE_TASKS_TASK_H
 
-#include <dftracer/utils/core/common/type_name.h>
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/task_result.h>
@@ -14,16 +13,11 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <sstream>
+#include <source_location>
 #include <string>
+#include <string_view>
 #include <typeindex>
 #include <vector>
-
-#ifdef __GNUG__
-#include <cxxabi.h>
-
-#include <cstdlib>
-#endif
 
 namespace dftracer::utils {
 
@@ -32,7 +26,9 @@ class Task;
 
 // Forward declaration for use in template methods
 template <typename Func>
-std::shared_ptr<Task> make_task(Func&& func, std::string name = "");
+std::shared_ptr<Task> make_task(
+    Func&& func, std::string_view name = "",
+    std::source_location loc = std::source_location::current());
 
 /**
  * Task - Self-contained DAG node with dependencies
@@ -47,8 +43,8 @@ std::shared_ptr<Task> make_task(Func&& func, std::string name = "");
  */
 class Task : public std::enable_shared_from_this<Task> {
    private:
-    std::string name_;            // User-provided name (or empty)
-    std::string type_signature_;  // Auto-generated type representation
+    std::string name_;          // User-provided name (or empty)
+    std::source_location loc_;  // Caller location
 
     std::function<coro::CoroTask<std::any>(CoroScope&, const std::any&)> func_;
 
@@ -78,13 +74,13 @@ class Task : public std::enable_shared_from_this<Task> {
      * Constructor with function that takes input and CoroScope
      */
     template <typename Func>
-    explicit Task(Func&& func, std::string name = "")
-        : name_(std::move(name)),
+    explicit Task(Func&& func, std::string_view name = "",
+                  std::source_location loc = std::source_location::current())
+        : name_(name),
+          loc_(loc),
           func_(wrap_function(std::forward<Func>(func))),
           input_type_(deduce_input_type<Func>()),
-          output_type_(deduce_output_type<Func>()) {
-        type_signature_ = generate_type_signature();
-    }
+          output_type_(deduce_output_type<Func>()) {}
 
     virtual ~Task() = default;
 
@@ -253,42 +249,18 @@ class Task : public std::enable_shared_from_this<Task> {
     std::type_index get_output_type() const { return output_type_; }
 
     /**
-     * Set input type (for special cases like tap with std::any)
+     * Get task name. Returns user name if set, otherwise caller's
+     * function name from source_location (const char*, zero allocation).
      */
-    void set_input_type(std::type_index type) {
-        input_type_ = type;
-        type_signature_ = generate_type_signature();
+    const char* get_name() const {
+        if (!name_.empty()) return name_.data();
+        return loc_.function_name();
     }
 
     /**
-     * Set output type (for special cases like tap with std::any)
+     * Get source location where the task was created.
      */
-    void set_output_type(std::type_index type) {
-        output_type_ = type;
-        type_signature_ = generate_type_signature();
-    }
-
-    /**
-     * Get task name formatted as: "NAME (type_signature)" or just
-     * "(type_signature)"
-     */
-    std::string get_name() const {
-        if (name_.empty()) {
-            return type_signature_;
-        } else {
-            return name_ + " " + type_signature_;
-        }
-    }
-
-    /**
-     * Get raw user-provided name (empty if not provided)
-     */
-    const std::string& get_user_name() const { return name_; }
-
-    /**
-     * Get type signature (always available)
-     */
-    const std::string& get_type_signature() const { return type_signature_; }
+    const std::source_location& get_location() const { return loc_; }
 
     /**
      * Check if task has custom combiner
@@ -497,36 +469,6 @@ class Task : public std::enable_shared_from_this<Task> {
     std::type_index deduce_output_type();
 
     /**
-     * Generate type signature from input/output types
-     */
-    std::string generate_type_signature() const {
-        std::ostringstream oss;
-
-        // Get input type name
-        std::string input_name;
-        if (input_type_ == typeid(void)) {
-            input_name = "void";
-        } else {
-            // Demangle the type name and extract class name
-            std::string full_input = demangle_type_name(input_type_);
-            input_name = extract_class_name(full_input);
-        }
-
-        // Get output type name
-        std::string output_name;
-        if (output_type_ == typeid(void)) {
-            output_name = "void";
-        } else {
-            std::string full_output = demangle_type_name(output_type_);
-            output_name = extract_class_name(full_output);
-        }
-
-        oss << "Task[" << input_name << "->" << output_name << "]";
-
-        return oss.str();
-    }
-
-    /**
      * Helper to unpack vector<any> into tuple and call function
      */
     template <typename... Args, std::size_t... Is>
@@ -534,21 +476,6 @@ class Task : public std::enable_shared_from_this<Task> {
         const std::function<std::any(Args...)>& func,
         const std::vector<std::any>& inputs, std::index_sequence<Is...>) {
         return func(std::any_cast<Args>(inputs[Is])...);
-    }
-
-    /**
-     * Helper to demangle a type_index name
-     */
-    static std::string demangle_type_name(std::type_index type) {
-#ifdef __GNUG__
-        int status = -1;
-        std::unique_ptr<char, void (*)(void*)> res{
-            abi::__cxa_demangle(type.name(), nullptr, nullptr, &status),
-            std::free};
-        return (status == 0) ? res.get() : type.name();
-#else
-        return type.name();
-#endif
     }
 
     // Friends for internal access
@@ -560,8 +487,9 @@ class Task : public std::enable_shared_from_this<Task> {
  * Helper function to create a shared_ptr<Task>
  */
 template <typename Func>
-std::shared_ptr<Task> make_task(Func&& func, std::string name) {
-    return std::make_shared<Task>(std::forward<Func>(func), std::move(name));
+std::shared_ptr<Task> make_task(Func&& func, std::string_view name,
+                                std::source_location loc) {
+    return std::make_shared<Task>(std::forward<Func>(func), name, loc);
 }
 
 /**

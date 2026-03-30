@@ -348,6 +348,8 @@ std::string TestEnvironment::create_dft_test_file(int num_events) {
 
     const char* io_names[] = {"pread", "pwrite", "read", "write",
                               "fread", "fwrite", "open", "close"};
+    const char* io_cats[] = {"POSIX", "POSIX", "POSIX", "POSIX",
+                             "STDIO", "STDIO", "POSIX", "POSIX"};
     const int num_names = sizeof(io_names) / sizeof(io_names[0]);
 
     ofs << "[\n";
@@ -356,14 +358,14 @@ std::string TestEnvironment::create_dft_test_file(int num_events) {
             1000000000ULL + static_cast<uint64_t>(i * 100000);
         int size = 1024 * i;
         const char* op_name = io_names[i % num_names];
+        const char* op_cat = io_cats[i % num_names];
 
         ofs << R"({"id":)" << i << R"(,"pid":)" << (1000 + i) << R"(,"tid":)"
             << (2000 + i) << R"(,"name":")" << op_name << R"(")"
-            << R"(,"cat":"IO")"
-            << R"(,"ph":"C")"
+            << R"(,"cat":")" << op_cat << R"(")"
+            << R"(,"ph":"X")"
             << R"(,"ts":)" << timestamp_us << R"(,"dur":)" << (100 + i * 10)
-            << R"(,"args":{"ret":)" << size << R"(,"file":"test_)" << i
-            << R"(.dat"})"
+            << R"(,"args":{"ret":)" << size << R"(,"hhash":"abc123"})"
             << R"(})" << "\n";
     }
     ofs << "]\n";

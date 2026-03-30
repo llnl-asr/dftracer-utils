@@ -440,18 +440,19 @@ function(need_sqlite3)
   if(SQLite3_FOUND)
     message(STATUS "Found system SQLite3: ${SQLite3_LIBRARIES}")
 
-    # Create alias for system SQLite3 if it doesn't exist
-    if(NOT TARGET SQLite::SQLite3)
-      # Create imported target for system SQLite3
-      add_library(SQLite::SQLite3 UNKNOWN IMPORTED)
-      set_target_properties(
-        SQLite::SQLite3
-        PROPERTIES IMPORTED_LOCATION "${SQLite3_LIBRARIES}"
-                   INTERFACE_INCLUDE_DIRECTORIES "${SQLite3_INCLUDE_DIRS}")
-    endif()
-
-    if(NOT TARGET SQLite::SQLite3_static)
-      add_library(SQLite::SQLite3_static ALIAS SQLite::SQLite3)
+    # Prefer the modern target name (SQLite3::SQLite3).
+    # Older CMake versions only provide SQLite::SQLite3 (now deprecated).
+    if(NOT TARGET SQLite3::SQLite3)
+      if(TARGET SQLite::SQLite3)
+        # Wrap the deprecated target
+        add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
+      else()
+        add_library(SQLite3::SQLite3 UNKNOWN IMPORTED)
+        set_target_properties(
+          SQLite3::SQLite3
+          PROPERTIES IMPORTED_LOCATION "${SQLite3_LIBRARIES}"
+                     INTERFACE_INCLUDE_DIRECTORIES "${SQLite3_INCLUDE_DIRS}")
+      endif()
     endif()
 
     # Set variables in parent scope so they persist outside the function
@@ -609,16 +610,16 @@ function(link_sqlite3 TARGET_NAME LIBRARY_TYPE)
   if(LIBRARY_TYPE STREQUAL "STATIC")
     # For static libraries, prefer static SQLite3
     if(TARGET sqlite3_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC sqlite3_static)
       message(
-        STATUS "Linked ${TARGET_NAME} to CPM-built SQLite::SQLite3_static")
-    elseif(TARGET SQLite::SQLite3_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3_static)
-      message(STATUS "Linked ${TARGET_NAME} to SQLite::SQLite3_static")
+        STATUS "Linked ${TARGET_NAME} to CPM-built sqlite3_static")
     elseif(TARGET sqlite3_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3)
+      target_link_libraries(${TARGET_NAME} PUBLIC sqlite3_shared)
       message(
-        STATUS "Linked ${TARGET_NAME} to CPM-built SQLite::SQLite3 (shared)")
+        STATUS "Linked ${TARGET_NAME} to CPM-built sqlite3_shared")
+    elseif(TARGET SQLite3::SQLite3)
+      target_link_libraries(${TARGET_NAME} PUBLIC SQLite3::SQLite3)
+      message(STATUS "Linked ${TARGET_NAME} to SQLite3::SQLite3")
     elseif(TARGET SQLite::SQLite3)
       target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3)
       message(STATUS "Linked ${TARGET_NAME} to SQLite::SQLite3")
@@ -626,19 +627,19 @@ function(link_sqlite3 TARGET_NAME LIBRARY_TYPE)
   else()
     # For shared libraries, prefer shared SQLite3
     if(TARGET sqlite3_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3)
+      target_link_libraries(${TARGET_NAME} PUBLIC sqlite3_shared)
       message(
-        STATUS "Linked ${TARGET_NAME} to CPM-built SQLite::SQLite3 (shared)")
+        STATUS "Linked ${TARGET_NAME} to CPM-built sqlite3_shared")
+    elseif(TARGET sqlite3_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC sqlite3_static)
+      message(
+        STATUS "Linked ${TARGET_NAME} to CPM-built sqlite3_static")
+    elseif(TARGET SQLite3::SQLite3)
+      target_link_libraries(${TARGET_NAME} PUBLIC SQLite3::SQLite3)
+      message(STATUS "Linked ${TARGET_NAME} to SQLite3::SQLite3")
     elseif(TARGET SQLite::SQLite3)
       target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3)
       message(STATUS "Linked ${TARGET_NAME} to SQLite::SQLite3")
-    elseif(TARGET sqlite3_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3_static)
-      message(
-        STATUS "Linked ${TARGET_NAME} to CPM-built SQLite::SQLite3_static")
-    elseif(TARGET SQLite::SQLite3_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3_static)
-      message(STATUS "Linked ${TARGET_NAME} to SQLite::SQLite3_static")
     endif()
   endif()
 endfunction()

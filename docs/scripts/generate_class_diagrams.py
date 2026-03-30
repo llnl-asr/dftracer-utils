@@ -30,9 +30,7 @@ class ClassInfo:
     refid: str
     bases: list[str] = field(default_factory=list)
     derived: list[str] = field(default_factory=list)
-    members: list[tuple[str, str, str]] = field(
-        default_factory=list
-    )  # (visibility, type, name)
+    members: list[tuple[str, str, str]] = field(default_factory=list)  # (visibility, type, name)
     is_abstract: bool = False
     is_template: bool = False
     template_params: str = ""
@@ -353,9 +351,7 @@ def classify_class(name: str) -> list[str]:
     return groups
 
 
-def collect_group_classes(
-    classes: dict[str, ClassInfo], group_name: str
-) -> list[ClassInfo]:
+def collect_group_classes(classes: dict[str, ClassInfo], group_name: str) -> list[ClassInfo]:
     """Collect non-internal classes belonging to a component group."""
     # Find the prefixes for this group
     prefixes: list[str] = []
@@ -430,9 +426,7 @@ def generate_mermaid_classdiagram(
 
     # External base classes (skip std:: and boost:: internals)
     external_refs = {
-        e
-        for e in external_refs
-        if not e.startswith("std::") and not e.startswith("boost::")
+        e for e in external_refs if not e.startswith("std::") and not e.startswith("boost::")
     }
     for ext in sorted(external_refs):
         sname = short_name(ext)
@@ -515,8 +509,7 @@ def generate_utility_hierarchy_mermaid(
 
     # Tags note
     lines.append(
-        '    Tags["<b>Tags</b><br/>NeedsContext<br/>Parallelizable'
-        '<br/>Cacheable<br/>Retryable"]'
+        '    Tags["<b>Tags</b><br/>NeedsContext<br/>Parallelizable<br/>Cacheable<br/>Retryable"]'
     )
     lines.append("    Utility -.- Tags")
 

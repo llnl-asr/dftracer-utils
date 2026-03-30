@@ -376,30 +376,38 @@ class TestIndexerThreshold:
     """Test that index_threshold skips bloom/manifest for small files"""
 
     def test_threshold_skips_bloom_for_small_file(self):
-        """Small file with default threshold should not build bloom"""
-        with Environment() as env:
-            gz_file = env.create_test_gzip_file()
+        """Explicit large threshold should skip bloom for small files"""
+        with Environment(lines=5) as env:
+            gz_file = env.create_test_gzip_file(bytes_per_line=128)
             idx_file = gz_file + ".idx"
-            with dft_utils.Indexer(gz_file, idx_file, build_bloom=True) as indexer:
+            with dft_utils.Indexer(
+                gz_file, idx_file, build_bloom=True, index_threshold=10 * 1024 * 1024
+            ) as indexer:
                 indexer.build()
                 assert not indexer.has_bloom
 
     def test_threshold_skips_manifest_for_small_file(self):
-        """Small file with default threshold should not build manifest"""
-        with Environment() as env:
-            gz_file = env.create_test_gzip_file()
+        """Explicit large threshold should skip manifest for small files"""
+        with Environment(lines=5) as env:
+            gz_file = env.create_test_gzip_file(bytes_per_line=128)
             idx_file = gz_file + ".idx"
-            with dft_utils.Indexer(gz_file, idx_file, build_manifest=True) as indexer:
+            with dft_utils.Indexer(
+                gz_file, idx_file, build_manifest=True, index_threshold=10 * 1024 * 1024
+            ) as indexer:
                 indexer.build()
                 assert not indexer.has_manifest
 
     def test_threshold_skips_bloom_and_manifest_for_small_file(self):
-        """Small file with default threshold should not build bloom or manifest"""
-        with Environment() as env:
-            gz_file = env.create_test_gzip_file()
+        """Explicit large threshold should skip bloom and manifest for small files"""
+        with Environment(lines=5) as env:
+            gz_file = env.create_test_gzip_file(bytes_per_line=128)
             idx_file = gz_file + ".idx"
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, build_manifest=True
+                gz_file,
+                idx_file,
+                build_bloom=True,
+                build_manifest=True,
+                index_threshold=10 * 1024 * 1024,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_bloom

@@ -26,7 +26,7 @@ class TestReorganizationPlannerUtility:
                 index_threshold=0,
             ) as indexer:
                 indexer.build()
-            groups = [{"name": "posix", "query": 'cat == "cat_1"'}]
+            groups = [{"name": "posix", "query": 'cat == "POSIX"'}]
             result = ReorganizationPlannerUtility().process(source_files=[gz_file], groups=groups)
             assert isinstance(result, dict)
             assert "groups" in result
@@ -47,7 +47,7 @@ class TestReorganizationPlannerUtility:
             ) as indexer:
                 indexer.build()
             util = ReorganizationPlannerUtility()
-            groups = [{"name": "posix", "query": 'cat == "cat_1"'}]
+            groups = [{"name": "posix", "query": 'cat == "POSIX"'}]
             result = util(source_files=[gz_file], groups=groups)
             assert isinstance(result, dict)
             assert "tasks" in result
@@ -58,8 +58,8 @@ class TestReorganizationPlannerWithoutIndex:
 
     def test_plan_succeeds_without_manifest(self):
         """Without manifest the planner streams the file and succeeds."""
-        with Environment(lines=20) as env:
-            gz_file = env.create_test_gzip_file()
+        with Environment(lines=5) as env:
+            gz_file = env.create_test_gzip_file(bytes_per_line=128)
             idx_file = gz_file + ".idx"
             with dft_utils.Indexer(
                 gz_file,
@@ -70,7 +70,7 @@ class TestReorganizationPlannerWithoutIndex:
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_manifest
-            groups = [{"name": "posix", "query": 'cat == "cat_1"'}]
+            groups = [{"name": "posix", "query": 'cat == "POSIX"'}]
             result = ReorganizationPlannerUtility().process(source_files=[gz_file], groups=groups)
             assert isinstance(result, dict)
             assert "tasks" in result
@@ -79,8 +79,8 @@ class TestReorganizationPlannerWithoutIndex:
 
     def test_plan_has_tasks_without_manifest(self):
         """Whole-file fallback produces extraction tasks."""
-        with Environment(lines=20) as env:
-            gz_file = env.create_test_gzip_file()
+        with Environment(lines=5) as env:
+            gz_file = env.create_test_gzip_file(bytes_per_line=128)
             idx_file = gz_file + ".idx"
             with dft_utils.Indexer(
                 gz_file,
@@ -91,7 +91,7 @@ class TestReorganizationPlannerWithoutIndex:
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_manifest
-            groups = [{"name": "posix", "query": 'cat == "cat_1"'}]
+            groups = [{"name": "posix", "query": 'cat == "POSIX"'}]
             result = ReorganizationPlannerUtility().process(source_files=[gz_file], groups=groups)
             assert len(result["tasks"]) > 0
             for task in result["tasks"]:

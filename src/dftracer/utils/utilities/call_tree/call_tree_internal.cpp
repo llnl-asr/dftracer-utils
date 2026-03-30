@@ -486,6 +486,7 @@ bool TraceReader::read_multiple(const std::vector<std::string>& trace_files,
     DFTRACER_UTILS_LOG_INFO("reading %zu trace files...", trace_files.size());
 
     size_t file_num = 0;
+    (void)file_num;
     for (const auto& file : trace_files) {
         file_num++;
         DFTRACER_UTILS_LOG_DEBUG("[%zu/%zu] ", file_num, trace_files.size());

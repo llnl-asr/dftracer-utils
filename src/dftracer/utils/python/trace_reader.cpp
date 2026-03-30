@@ -879,7 +879,7 @@ PyTypeObject TraceReaderType = {
     "TraceReader(file_path: str, index_dir: str = '',\n"
     "            checkpoint_size: int = 33554432,\n"
     "            auto_build_index: bool = False,\n"
-    "            index_threshold: int = 8388608,\n"
+    "            index_threshold: int = 1048576,\n"
     "            runtime: Runtime | None = None)\n"
     "--\n"
     "\n"

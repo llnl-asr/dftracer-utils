@@ -485,8 +485,9 @@ class TestTraceReaderJSON:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             result = reader.read_lines_json()
-            assert result[0]["name"] == "name_1"
-            assert result[0]["cat"] == "cat_1"
+            assert result[0]["name"] == "write"
+            assert result[0]["cat"] == "POSIX"
+            assert result[0]["ph"] == "X"
 
     def test_iter_lines_json_is_lazy(self):
         """iter_lines_json returns an iterator, not a list."""

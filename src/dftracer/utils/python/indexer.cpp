@@ -424,7 +424,7 @@ PyTypeObject IndexerType = {
     "       checkpoint_size: int = 1048576,\n"
     "       force_rebuild: bool = False, build_bloom: bool = False,\n"
     "       build_manifest: bool = False,\n"
-    "       index_threshold: int = 8388608,\n"
+    "       index_threshold: int = 1048576,\n"
     "       runtime: Runtime | None = None)\n"
     "--\n"
     "\n"
@@ -443,7 +443,7 @@ PyTypeObject IndexerType = {
     "    build_manifest (bool): If True, build manifest data in the\n"
     "        index.\n"
     "    index_threshold (int): Skip indexing for files smaller than\n"
-    "        this (default 8 MB).\n"
+    "        this (default 1 MB).\n"
     "    runtime (Runtime or None): Runtime instance for thread pool\n"
     "        control. If None, uses the default global Runtime.\n", /* tp_doc */
     0,                      /* tp_traverse */

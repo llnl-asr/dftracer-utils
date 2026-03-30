@@ -51,15 +51,25 @@ class Environment:
                 pass
 
     def create_test_gzip_file(self, filename="test_data.pfw.gz", bytes_per_line=1024):
-        """Create a test gzip file with sample trace-like data"""
+        """Create a test gzip file with valid DFTracer trace events"""
         file_path = os.path.join(self.temp_dir, filename)
+
+        io_names = ["read", "write", "open", "close", "pread", "pwrite", "fread", "fwrite"]
+        cats = ["POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "STDIO", "STDIO"]
 
         # Generate test data
         lines = []
         closing_len = 3  # len('"}\n')
         for i in range(1, self.lines + 1):
-            # Build the JSON line up to the "data" key
-            line = f'{{"name":"name_{i}","cat":"cat_{i}","dur":{(i * 123 % 10000)},"data":"'
+            name = io_names[i % len(io_names)]
+            cat = cats[i % len(cats)]
+            # Build the JSON line with proper DFTracer fields + padding in args.data
+            line = (
+                f'{{"name":"{name}","cat":"{cat}",'
+                f'"pid":{1000 + i % 4},"tid":{2000 + i % 8},'
+                f'"ts":{1000000 + i * 1000},"dur":{(i * 123 % 10000)},'
+                f'"ph":"X","args":{{"ret":{1024 * i},"hhash":"abc123","data":"'
+            )
             current_size = len(line)
             needed_padding = 0
             if bytes_per_line > current_size + closing_len:
@@ -72,7 +82,7 @@ class Environment:
                     needed_padding -= len(pad_chunk)
                 if needed_padding:
                     line += "x" * needed_padding
-            line += '"}\n'
+            line += '"}}\n'
             lines.append(line)
 
         with gzip.open(file_path, "wt", encoding="utf-8") as f:
@@ -80,6 +90,24 @@ class Environment:
             f.writelines(lines)
             f.write("]\n")
 
+        self.test_files.append(file_path)
+        return file_path
+
+    def create_dft_trace_file(self, filename="dft_trace.pfw.gz", num_events=None):
+        """Create a gzip file with valid DFTracer trace events."""
+        file_path = os.path.join(self.temp_dir, filename)
+        n = num_events if num_events is not None else self.lines
+        io_names = ["read", "write", "open", "close", "pread", "pwrite", "fread", "fwrite"]
+        cats = ["POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "STDIO", "STDIO"]
+        with gzip.open(file_path, "wt", encoding="utf-8") as f:
+            for i in range(n):
+                name = io_names[i % len(io_names)]
+                cat = cats[i % len(cats)]
+                f.write(
+                    f'{{"name":"{name}","cat":"{cat}","pid":1,"tid":{1 + i % 3},'
+                    f'"ts":{1000000 + i * 1000},"dur":{100 + i * 10},'
+                    f'"ph":"X","args":{{"ret":{1024 * (i + 1)},"hhash":"abc123"}}}}\n'
+                )
         self.test_files.append(file_path)
         return file_path
 

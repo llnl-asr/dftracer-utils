@@ -30,8 +30,8 @@ def _create_posix_trace(env, filename="posix_trace.pfw.gz", num_events=40):
         ts = i * 5000
         line = (
             f'{{"name":"{name}","cat":"{cat}","pid":{pid},"tid":{tid},'
-            f'"ts":{ts},"dur":{dur},"tinterval":0,"phase":"X",'
-            f'"size":{size},"data":"x"}}\n'
+            f'"ts":{ts},"dur":{dur},"ph":"X",'
+            f'"args":{{"ret":{size}}}}}\n'
         )
         lines.append(line)
 

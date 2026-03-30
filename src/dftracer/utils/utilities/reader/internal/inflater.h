@@ -170,6 +170,7 @@ class ReaderInflater : public Inflater {
         unsigned char skip_buffer[BUFFER_SIZE];
         std::size_t remaining_skip = bytes_to_skip;
         std::size_t total_skipped = 0;
+        (void)total_skipped;
 
         while (remaining_skip > 0) {
             std::size_t to_skip = std::min(remaining_skip, sizeof(skip_buffer));

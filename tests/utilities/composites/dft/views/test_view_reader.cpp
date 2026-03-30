@@ -23,7 +23,7 @@ static std::string create_pfw_gz(TestEnvironment& env, int n) {
     std::string pfw = env.get_dir() + "/trace.pfw";
     std::ofstream ofs(pfw);
     for (int i = 0; i < n; ++i) {
-        ofs << R"({"ph":"X","name":"read","cat":"IO","pid":1,"tid":1,"ts":)"
+        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
             << "\n";
     }
@@ -47,7 +47,7 @@ static coro::CoroTask<CollectedViewOutput> collect_view_coro(
     while (auto batch = co_await gen.next()) {
         output.events_matched += batch->events_matched;
         output.events_scanned += batch->events_scanned;
-        for (auto& ev : batch->events) output.events.push_back(std::move(ev));
+        for (const auto& ev : batch->events) output.events.emplace_back(ev);
     }
     co_return output;
 }
@@ -90,7 +90,7 @@ TEST_SUITE("ViewReader") {
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
         input.view.with_include_metadata(false);
 
-        auto q = Query::from_string(R"(cat == "IO")");
+        auto q = Query::from_string(R"(cat == "POSIX")");
         REQUIRE(q.has_value());
         input.query = std::move(*q);
 

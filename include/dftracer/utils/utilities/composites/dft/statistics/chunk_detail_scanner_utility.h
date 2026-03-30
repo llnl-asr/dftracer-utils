@@ -20,9 +20,9 @@ struct ChunkDetailScanInput {
     std::size_t end_byte = 0;
     std::uint64_t checkpoint_idx = 0;
     std::size_t batch_size = 4 * 1024 * 1024;
-    std::vector<std::string> filter_names;
-    std::vector<std::string> filter_categories;
-    std::vector<std::string> group_by;
+    const std::vector<std::string>* filter_names = nullptr;
+    const std::vector<std::string>* filter_categories = nullptr;
+    const std::vector<std::string>* group_by = nullptr;
 };
 
 struct ChunkDetailScanOutput {

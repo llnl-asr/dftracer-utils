@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/utilities/common/json/json_value.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/utilities/common/json/json.h>
 #include <dftracer/utils/utilities/common/query/evaluator.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
@@ -62,14 +63,18 @@ ViewReaderInput& ViewReaderInput::with_view(const ViewDefinition& v) {
 // Hash metadata types that need smart filtering (FH, HH, SH).
 // These carry a "value" field containing the hash string that other events
 // reference via hhash/fhash/shash in their args.
-static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
-                                                                    "SH"};
+static const std::unordered_set<std::string_view> HASH_METADATA_NAMES = {
+    "FH", "HH", "SH"};
 
 // Flush hash metadata entries referenced by a matched event into the batch.
 static void collect_referenced_hashes_batch(
     const JsonValue& json,
-    std::unordered_map<std::string, std::string>& pending_metadata,
-    std::unordered_set<std::string>& emitted_hashes, ViewReaderBatch& batch) {
+    std::unordered_map<
+        std::string, std::string, dftracer::utils::TransparentStringHash,
+        dftracer::utils::TransparentStringEqual>& pending_metadata,
+    std::unordered_set<std::string, dftracer::utils::TransparentStringHash,
+                       dftracer::utils::TransparentStringEqual>& emitted_hashes,
+    ViewReaderBatch& batch) {
     auto args = json["args"];
     if (!args.exists()) return;
 
@@ -78,14 +83,17 @@ static void collect_referenced_hashes_batch(
         auto val = args[field];
         if (!val.exists()) continue;
 
-        std::string hash_val = val.get<std::string>();
-        if (emitted_hashes.count(hash_val)) continue;
+        std::string_view hash_sv = val.get<std::string_view>();
+        if (hash_sv.empty() || emitted_hashes.count(hash_sv)) continue;
 
-        auto it = pending_metadata.find(hash_val);
+        auto it = pending_metadata.find(hash_sv);
         if (it != pending_metadata.end()) {
-            batch.events.push_back(std::move(it->second));
+            // Metadata events are owned strings (from earlier chunks).
+            // Move into owned_events and add string_view pointing there.
+            batch.owned_events.push_back(std::move(it->second));
+            batch.events.push_back(batch.owned_events.back());
             batch.events_matched++;
-            emitted_hashes.insert(hash_val);
+            emitted_hashes.insert(std::string(hash_sv));
             pending_metadata.erase(it);
         }
     }
@@ -100,8 +108,13 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
     // - Hash metadata (FH, HH, SH) → buffer keyed by hash value
     // - On matched event → flush referenced hashes from buffer
     // - thread_name/process_name → emit immediately (universal context)
-    std::unordered_map<std::string, std::string> pending_metadata;
-    std::unordered_set<std::string> emitted_hashes;
+    std::unordered_map<std::string, std::string,
+                       dftracer::utils::TransparentStringHash,
+                       dftracer::utils::TransparentStringEqual>
+        pending_metadata;
+    std::unordered_set<std::string, dftracer::utils::TransparentStringHash,
+                       dftracer::utils::TransparentStringEqual>
+        emitted_hashes;
 
     auto reader_input = composites::IndexedReadInput::from_file(input.file_path)
                             .with_index(input.idx_path);
@@ -121,6 +134,11 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
 
     ViewReaderBatch batch;
 
+    // NOTE(perf): reusable yyjson allocator
+    char yy_buf[common::json::YYJSON_LINE_POOL_SIZE];
+    yyjson_alc yy_alc;
+    yyjson_alc_pool_init(&yy_alc, yy_buf, sizeof(yy_buf));
+
     while (!stream->done()) {
         auto chunk = co_await stream->read_async();
         if (chunk.empty()) break;
@@ -139,7 +157,7 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
             if (line_len > 0) {
                 yyjson_doc* doc =
                     yyjson_read_opts(const_cast<char*>(line_start), line_len,
-                                     YYJSON_READ_NOFLAG, nullptr, nullptr);
+                                     YYJSON_READ_NOFLAG, &yy_alc, nullptr);
 
                 if (doc) {
                     yyjson_val* root = yyjson_doc_get_root(doc);
@@ -149,24 +167,26 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
                             json["ph"].get<std::string_view>();
 
                         if (ph == "M" && input.view.include_metadata) {
-                            std::string name_str =
-                                json["name"].get<std::string>();
+                            std::string_view name_sv =
+                                json["name"].get<std::string_view>();
 
-                            if (HASH_METADATA_NAMES.count(name_str)) {
+                            if (HASH_METADATA_NAMES.count(name_sv)) {
                                 auto args = json["args"];
                                 if (args.exists()) {
                                     auto val = args["value"];
                                     if (val.exists()) {
-                                        std::string hash_val =
-                                            val.get<std::string>();
-                                        if (!emitted_hashes.count(hash_val)) {
-                                            pending_metadata[hash_val] =
+                                        std::string_view hash_sv =
+                                            val.get<std::string_view>();
+                                        if (!emitted_hashes.count(hash_sv)) {
+                                            pending_metadata[std::string(
+                                                hash_sv)] =
                                                 std::string(line_start,
                                                             line_len);
                                         }
                                     }
                                 }
                             } else {
+                                // Non-hash metadata: string_view into chunk
                                 batch.events.emplace_back(line_start, line_len);
                                 batch.events_matched++;
                             }
@@ -180,6 +200,7 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
                                         json, pending_metadata, emitted_hashes,
                                         batch);
                                 }
+                                // Zero-copy: string_view into chunk data
                                 batch.events.emplace_back(line_start, line_len);
                                 batch.events_matched++;
                             }
@@ -190,14 +211,17 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
             }
 
             pos = (newline - data) + 1;
+        }
 
-            if (batch.events.size() >= input.event_batch_size) {
-                co_yield std::move(batch);
-                batch = ViewReaderBatch{};
-            }
+        // Yield at end of each chunk, string_view events point into
+        // chunk data which is valid until the next co_await read_async().
+        if (!batch.events.empty()) {
+            co_yield std::move(batch);
+            batch = ViewReaderBatch{};
         }
     }
 
+    // Final batch (shouldn't normally have leftovers since we yield per-chunk)
     if (!batch.events.empty()) {
         co_yield std::move(batch);
     }

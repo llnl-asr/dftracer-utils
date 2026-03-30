@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <vector>
@@ -43,7 +44,13 @@ struct ViewReaderInput {
 };
 
 struct ViewReaderBatch {
-    std::vector<std::string> events;
+    /// Event lines. In stream mode these are string_view into the
+    /// decompressed chunk (zero copy, valid until next generator resume).
+    /// Metadata events use owned strings stored in owned_events.
+    std::vector<std::string_view> events;
+    /// Owned storage for metadata events that outlive their source chunk.
+    /// Uses deque so push_back doesn't invalidate string_view refs.
+    std::deque<std::string> owned_events;
     std::uint64_t events_matched = 0;
     std::uint64_t events_scanned = 0;
 

@@ -286,7 +286,7 @@ TEST_SUITE("TraceReader") {
         REQUIRE(all > 0);
 
         ReadConfig rc;
-        rc.query = R"(cat == "IO")";
+        rc.query = R"(cat == "POSIX")";
         auto matched = count_lines(reader.read_lines(rc)).get();
         CHECK(matched > 0);
         CHECK(matched <= all);
@@ -323,11 +323,11 @@ TEST_SUITE("TraceReader") {
         TraceReader reader({.file_path = gz_file});
 
         ReadConfig rc_cat;
-        rc_cat.query = R"(cat == "IO")";
+        rc_cat.query = R"(cat == "POSIX")";
         auto cat_count = count_lines(reader.read_lines(rc_cat)).get();
 
         ReadConfig rc_both;
-        rc_both.query = R"(cat == "IO" and name == "read")";
+        rc_both.query = R"(cat == "POSIX" and name == "read")";
         auto both_count = count_lines(reader.read_lines(rc_both)).get();
 
         CHECK(both_count > 0);
@@ -386,7 +386,7 @@ TEST_SUITE("TraceReader") {
         ReadConfig rc;
         rc.start_line = 1;
         rc.end_line = 20;
-        rc.query = R"(cat == "IO")";
+        rc.query = R"(cat == "POSIX")";
         auto matched = count_lines(reader.read_lines(rc)).get();
         CHECK(matched <= 20);
     }

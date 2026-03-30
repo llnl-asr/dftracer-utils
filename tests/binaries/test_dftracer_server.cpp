@@ -158,7 +158,31 @@ int extract_status_code(const std::string& response) {
 std::string extract_body(const std::string& response) {
     auto pos = response.find("\r\n\r\n");
     if (pos == std::string::npos) return "";
-    return response.substr(pos + 4);
+    std::string raw = response.substr(pos + 4);
+
+    // Decode chunked transfer encoding if present
+    if (response.find("Transfer-Encoding: chunked") != std::string::npos) {
+        std::string decoded;
+        std::size_t i = 0;
+        while (i < raw.size()) {
+            auto crlf = raw.find("\r\n", i);
+            if (crlf == std::string::npos) break;
+            std::size_t chunk_size = 0;
+            try {
+                chunk_size = std::stoul(raw.substr(i, crlf - i), nullptr, 16);
+            } catch (...) {
+                break;
+            }
+            if (chunk_size == 0) break;
+            i = crlf + 2;
+            if (i + chunk_size > raw.size()) break;
+            decoded.append(raw, i, chunk_size);
+            i += chunk_size + 2;  // skip data + \r\n
+        }
+        return decoded;
+    }
+
+    return raw;
 }
 
 /// Pick a random port in the ephemeral range.
@@ -311,7 +335,7 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         CHECK(extract_status_code(resp) == 400);
     }
 
-    // -- GET /api/v1/events returns 200 with JSON object --
+    // -- GET /api/v1/events returns 200 with NDJSON --
     {
         auto resp = http_request(port,
                                  "GET /api/v1/events?limit=10 HTTP/1.1\r\n"
@@ -325,7 +349,6 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         auto body = extract_body(resp);
         CHECK(!body.empty());
         CHECK(body.front() == '{');
-        CHECK(body.find("\"events\"") != std::string::npos);
     }
 
     // -- GET /api/v1/events/stream returns NDJSON --

@@ -483,7 +483,7 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                                 truncated = true;
                                 break;
                             }
-                            collected_events.push_back(std::move(event));
+                            collected_events.emplace_back(event);
                         }
                         if (truncated) break;
                     }
@@ -590,8 +590,7 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                                     std::lock_guard<std::mutex> lock(
                                         *collected_mutex);
                                     for (auto& event : batch->events) {
-                                        collected_ptr->push_back(
-                                            std::move(event));
+                                        collected_ptr->emplace_back(event);
                                     }
                                     remaining->fetch_sub(
                                         static_cast<int>(batch->events.size()));

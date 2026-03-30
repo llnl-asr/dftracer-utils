@@ -4,6 +4,7 @@
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/router.h>
+#include <sys/uio.h>
 
 #include <cstring>
 
@@ -61,8 +62,50 @@ coro::CoroTask<void> handle_connection(int client_fd,
             DFTRACER_UTILS_LOG_ERROR("Handler threw unknown exception");
             resp = HttpResponse::internal_error("Internal server error");
         }
-        auto out = resp.serialize();
-        co_await io::send(client_fd, out.data(), out.size(), 0);
+        if (resp.is_streaming()) {
+            auto hdrs = resp.serialize_headers();
+            auto hdr_rc =
+                co_await io::send(client_fd, hdrs.data(), hdrs.size(), 0);
+            if (hdr_rc < 0) goto stream_done;
+
+            {
+                static constexpr char newline_ch = '\n';
+                static constexpr char crlf[] = "\r\n";
+                char hex[24];
+                std::vector<struct iovec> iovs;
+
+                while (auto chunk = co_await resp.stream->next()) {
+                    if (chunk->views.empty()) continue;
+
+                    std::size_t payload_size = 0;
+                    for (const auto& sv : chunk->views) {
+                        payload_size += sv.size() + 1;
+                    }
+
+                    int hex_len = std::snprintf(hex, sizeof(hex), "%zx\r\n",
+                                                payload_size);
+
+                    iovs.clear();
+                    iovs.reserve(chunk->views.size() * 2 + 2);
+                    iovs.push_back({hex, static_cast<std::size_t>(hex_len)});
+                    for (const auto& sv : chunk->views) {
+                        iovs.push_back(
+                            {const_cast<char*>(sv.data()), sv.size()});
+                        iovs.push_back({const_cast<char*>(&newline_ch), 1});
+                    }
+                    iovs.push_back({const_cast<char*>(crlf), 2});
+
+                    auto rc = co_await io::writev(
+                        client_fd, iovs.data(), static_cast<int>(iovs.size()));
+                    if (rc < 0) break;
+                }
+            }
+            co_await io::send(client_fd, "0\r\n\r\n", 5, 0);
+        stream_done:;
+        } else {
+            auto out = resp.serialize();
+            co_await io::send(client_fd, out.data(), out.size(), 0);
+        }
 
         // Consume parsed bytes; shift any remaining data.
         auto consumed = static_cast<std::size_t>(parsed);

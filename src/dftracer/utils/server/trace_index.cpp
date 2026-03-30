@@ -120,8 +120,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     auto file_chan =
                         coro::make_channel<std::size_t>(max_concurrent * 2);
 
+                    const auto* index_dir_ptr = &index_dir;
                     co_await ctx.scope([file_chan, files_ptr, needs_build_ptr,
-                                        index_dir,
+                                        index_dir_ptr,
                                         max_concurrent](CoroScope& scope)
                                            -> coro::CoroTask<void> {
                         scope.spawn(
@@ -136,7 +137,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
                         for (std::size_t w = 0; w < max_concurrent; ++w) {
                             scope.spawn(
-                                [file_chan, files_ptr, index_dir](
+                                [file_chan, files_ptr, index_dir_ptr](
                                     CoroScope&) -> coro::CoroTask<void> {
                                     while (auto fi_opt =
                                                co_await file_chan->receive()) {
@@ -147,7 +148,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                         auto config =
                                             indexer::IndexBuildConfig::for_file(
                                                 info->path)
-                                                .with_index_dir(index_dir)
+                                                .with_index_dir(*index_dir_ptr)
                                                 .with_bloom(true)
                                                 .with_index_threshold(0);
                                         auto result =
@@ -156,7 +157,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                         if (result.success) {
                                             info->idx_path =
                                                 internal::determine_index_path(
-                                                    info->path, index_dir);
+                                                    info->path, *index_dir_ptr);
                                             info->has_bloom_data = true;
                                             info->has_checkpoint_index =
                                                 fs::exists(info->idx_path);

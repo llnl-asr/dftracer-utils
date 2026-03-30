@@ -1,7 +1,12 @@
 #ifndef DFTRACER_UTILS_SERVER_HTTP_RESPONSE_H
 #define DFTRACER_UTILS_SERVER_HTTP_RESPONSE_H
 
+#include <dftracer/utils/core/coro/async_generator.h>
+
+#include <memory>
+#include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -12,6 +17,15 @@ struct HttpResponse {
     std::string status_text = "OK";
     std::vector<std::pair<std::string, std::string>> headers;
     std::string body;
+
+    struct StreamChunk {
+        std::span<const std::string_view> views;
+    };
+
+    using StreamGenerator = coro::AsyncGenerator<StreamChunk>;
+    std::unique_ptr<StreamGenerator> stream;
+
+    bool is_streaming() const { return stream != nullptr; }
 
     /// Serialize HTTP response headers to string
     /// (CRLF-terminated). Automatically adds Content-Length
@@ -28,6 +42,10 @@ struct HttpResponse {
     static HttpResponse not_found();
     static HttpResponse bad_request(const std::string &msg);
     static HttpResponse internal_error(const std::string &msg);
+
+    static HttpResponse streaming(
+        std::unique_ptr<StreamGenerator> gen,
+        const std::string &content_type = "application/x-ndjson");
 };
 
 }  // namespace dftracer::utils::server

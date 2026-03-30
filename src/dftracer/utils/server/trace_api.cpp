@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -333,6 +334,126 @@ static ViewDefinition build_view_from_params(const QueryParams& params) {
     return view;
 }
 
+// ============================================================================
+// Shared helpers for event streaming endpoints
+// ============================================================================
+
+static std::vector<const TraceIndex::FileInfo*> resolve_target_files(
+    TraceIndex& index, const QueryParams& params, double ts_min = 0,
+    double ts_max = 0) {
+    std::vector<const TraceIndex::FileInfo*> files;
+    auto file_param = params.get("file");
+    if (!file_param.empty()) {
+        auto* f = index.find_file(std::string(file_param));
+        if (f) files.push_back(f);
+    } else {
+        for (const auto& f : index.files()) {
+            files.push_back(&f);
+        }
+    }
+
+    if (ts_min > 0 || ts_max > 0) {
+        std::vector<const TraceIndex::FileInfo*> filtered;
+        filtered.reserve(files.size());
+        for (auto* fi : files) {
+            if (fi->is_small) {
+                filtered.push_back(fi);
+                continue;
+            }
+            if (fi->min_timestamp_us == 0 && fi->max_timestamp_us == 0) {
+                filtered.push_back(fi);
+                continue;
+            }
+            double fi_min = static_cast<double>(fi->min_timestamp_us);
+            double fi_max = static_cast<double>(fi->max_timestamp_us);
+            if (fi_max < ts_min || (ts_max > 0 && fi_min > ts_max)) continue;
+            filtered.push_back(fi);
+        }
+        files = std::move(filtered);
+    }
+
+    return files;
+}
+
+using StreamChunk = HttpResponse::StreamChunk;
+
+static coro::AsyncGenerator<StreamChunk> stream_events(
+    std::vector<const TraceIndex::FileInfo*> files, ViewDefinition ev_view,
+    std::optional<Query> query_opt, double ts_min, double ts_max,
+    BloomFilterCache* bloom_cache, int limit) {
+    int emitted = 0;
+    const Query* query_ptr = query_opt ? &*query_opt : nullptr;
+
+    for (auto* file_info : files) {
+        if (limit > 0 && emitted >= limit) break;
+
+        if (file_info->is_small) {
+            std::vector<std::string> events;
+            std::uint64_t scanned = 0;
+            std::uint64_t matched = 0;
+            co_await direct_scan_events(
+                file_info, query_ptr, ev_view.include_metadata, &events,
+                &scanned, &matched, limit > 0 ? limit - emitted : 0);
+            std::vector<std::string_view> views;
+            for (const auto& event : events) {
+                if (limit > 0 && emitted >= limit) break;
+                views.push_back(event);
+                emitted++;
+            }
+            if (!views.empty()) {
+                co_yield StreamChunk{views};
+            }
+            continue;
+        }
+
+        if (file_info->uncompressed_size == 0 &&
+            file_info->num_checkpoints == 0)
+            continue;
+
+        ViewBuilderInput builder_input;
+        builder_input.with_view(ev_view)
+            .with_file_path(file_info->path)
+            .with_idx_path(file_info->has_bloom_data ? file_info->idx_path : "")
+            .with_uncompressed_size(file_info->uncompressed_size)
+            .with_num_checkpoints(file_info->num_checkpoints)
+            .with_bloom_cache(bloom_cache)
+            .with_time_range(ts_min, ts_max);
+
+        ViewBuilderUtility builder;
+        auto build_output = co_await builder.process(builder_input);
+        if (!build_output.success || !build_output.file_may_match) continue;
+
+        for (const auto& candidate : build_output.candidates) {
+            if (limit > 0 && emitted >= limit) break;
+
+            ViewReaderInput reader_input;
+            reader_input.with_file_path(file_info->path)
+                .with_idx_path(file_info->idx_path)
+                .with_byte_range(candidate.start_byte, candidate.end_byte)
+                .with_checkpoint_idx(candidate.checkpoint_idx)
+                .with_view(ev_view);
+
+            ViewReaderUtility reader;
+            auto event_gen = reader.process(reader_input);
+            while (auto batch = co_await event_gen.next()) {
+                int count = std::min(
+                    static_cast<int>(batch->events.size()),
+                    limit > 0 ? limit - emitted
+                              : static_cast<int>(batch->events.size()));
+                if (count > 0) {
+                    co_yield StreamChunk{std::span<const std::string_view>(
+                        batch->events.data(), static_cast<std::size_t>(count))};
+                    emitted += count;
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Event endpoints
+// ============================================================================
+
 // --- GET /api/v1/events ---
 static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
                                                   const QueryParams& params,
@@ -341,474 +462,56 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
     if (limit <= 0) limit = 1000;
     if (limit > 100000) limit = 100000;
 
+    double ts_min = params.get_double("ts_min", 0);
+    double ts_max = params.get_double("ts_max", 0);
+    auto files = resolve_target_files(index, params, ts_min, ts_max);
     auto view = build_view_from_params(params);
-
-    double query_ts_min = params.get_double("ts_min", 0);
-    double query_ts_max = params.get_double("ts_max", 0);
-
-    std::vector<const TraceIndex::FileInfo*> target_files;
-    auto file_param = params.get("file");
-    if (!file_param.empty()) {
-        auto* f = index.find_file(std::string(file_param));
-        if (f) target_files.push_back(f);
-    } else {
-        for (const auto& f : index.files()) {
-            target_files.push_back(&f);
-        }
-    }
-
-    // File-level time range skip
-    if (query_ts_min > 0 || query_ts_max > 0) {
-        std::vector<const TraceIndex::FileInfo*> filtered;
-        filtered.reserve(target_files.size());
-        for (auto* fi : target_files) {
-            if (fi->is_small) {
-                filtered.push_back(fi);
-                continue;
-            }
-            if (fi->min_timestamp_us == 0 && fi->max_timestamp_us == 0) {
-                filtered.push_back(fi);
-                continue;
-            }
-            double fi_min = static_cast<double>(fi->min_timestamp_us);
-            double fi_max = static_cast<double>(fi->max_timestamp_us);
-            if (fi_max < query_ts_min ||
-                (query_ts_max > 0 && fi_min > query_ts_max))
-                continue;
-            filtered.push_back(fi);
-        }
-        target_files = std::move(filtered);
-    }
-
     auto query = build_query_from_params(params);
-    const Query* query_ptr = query ? &*query : nullptr;
 
-    std::vector<std::string> collected_events;
-    std::uint64_t total_scanned = 0;
-    std::uint64_t total_matched = 0;
+    auto gen = std::make_unique<HttpResponse::StreamGenerator>(
+        stream_events(std::move(files), std::move(view), std::move(query),
+                      ts_min, ts_max, &index.bloom_cache(), limit));
 
-    if (target_files.size() <= 1) {
-        bool limit_reached = false;
-        for (auto* file_info : target_files) {
-            if (limit_reached) break;
-            if (file_info->is_small) {
-                co_await direct_scan_events(
-                    file_info, query_ptr, view.include_metadata,
-                    &collected_events, &total_scanned, &total_matched, limit);
-                limit_reached =
-                    collected_events.size() >= static_cast<std::size_t>(limit);
-            } else {
-                if (file_info->uncompressed_size == 0 &&
-                    file_info->num_checkpoints == 0)
-                    continue;
-
-                ViewBuilderInput builder_input;
-                builder_input.with_view(view)
-                    .with_file_path(file_info->path)
-                    .with_idx_path(
-                        file_info->has_bloom_data ? file_info->idx_path : "")
-                    .with_uncompressed_size(file_info->uncompressed_size)
-                    .with_num_checkpoints(file_info->num_checkpoints)
-                    .with_bloom_cache(&index.bloom_cache())
-                    .with_time_range(query_ts_min, query_ts_max);
-
-                ViewBuilderUtility builder;
-                auto build_output = co_await builder.process(builder_input);
-                if (!build_output.success || !build_output.file_may_match)
-                    continue;
-
-                for (const auto& candidate : build_output.candidates) {
-                    if (limit_reached) break;
-
-                    ViewReaderInput reader_input;
-                    reader_input.with_file_path(file_info->path)
-                        .with_idx_path(file_info->idx_path)
-                        .with_byte_range(candidate.start_byte,
-                                         candidate.end_byte)
-                        .with_checkpoint_idx(candidate.checkpoint_idx)
-                        .with_view(view);
-
-                    ViewReaderUtility reader;
-                    auto gen = reader.process(reader_input);
-                    while (auto batch = co_await gen.next()) {
-                        total_scanned += batch->events_scanned;
-                        total_matched += batch->events_matched;
-                        for (auto& event : batch->events) {
-                            if (collected_events.size() >=
-                                static_cast<std::size_t>(limit)) {
-                                limit_reached = true;
-                                break;
-                            }
-                            collected_events.push_back(std::move(event));
-                        }
-                        if (limit_reached) break;
-                    }
-                }
-            }
-        }
-    } else {
-        std::size_t num_workers =
-            std::min(index.max_concurrent(), target_files.size());
-        auto* executor = Executor::current();
-
-        auto file_chan = coro::make_channel<std::size_t>(num_workers * 2);
-        auto collected_mutex = std::make_shared<std::mutex>();
-        auto remaining = std::make_shared<std::atomic<int>>(limit);
-        auto scanned_atomic = std::make_shared<std::atomic<std::uint64_t>>(0);
-        auto matched_atomic = std::make_shared<std::atomic<std::uint64_t>>(0);
-
-        auto* target_files_ptr = &target_files;
-        auto* collected_ptr = &collected_events;
-        auto* view_ptr = &view;
-        auto* bloom_cache_ptr = &index.bloom_cache();
-        double ev_ts_min = query_ts_min;
-        double ev_ts_max = query_ts_max;
-
-        CoroScope scope(executor);
-
-        scope.spawn([ch = file_chan->producer(), target_files_ptr](
-                        CoroScope&) mutable -> coro::CoroTask<void> {
-            auto guard = ch.guard();
-            for (std::size_t i = 0; i < target_files_ptr->size(); ++i) {
-                if (!co_await ch.send(i)) co_return;
-            }
-            co_return;
-        });
-
-        for (std::size_t w = 0; w < num_workers; ++w) {
-            scope.spawn([file_chan, target_files_ptr, collected_mutex,
-                         collected_ptr, remaining, scanned_atomic,
-                         matched_atomic, query_ptr, view_ptr, bloom_cache_ptr,
-                         ev_ts_min,
-                         ev_ts_max](CoroScope&) -> coro::CoroTask<void> {
-                while (auto fi_opt = co_await file_chan->receive()) {
-                    if (remaining->load(std::memory_order_relaxed) <= 0)
-                        co_return;
-                    auto* file_info = (*target_files_ptr)[*fi_opt];
-
-                    if (file_info->is_small) {
-                        std::vector<std::string> local_events;
-                        std::uint64_t local_scanned = 0;
-                        std::uint64_t local_matched = 0;
-                        int local_limit =
-                            remaining->load(std::memory_order_relaxed);
-                        if (local_limit <= 0) co_return;
-                        co_await direct_scan_events(
-                            file_info, query_ptr, view_ptr->include_metadata,
-                            &local_events, &local_scanned, &local_matched,
-                            local_limit);
-                        scanned_atomic->fetch_add(local_scanned);
-                        matched_atomic->fetch_add(local_matched);
-                        if (!local_events.empty()) {
-                            std::lock_guard<std::mutex> lock(*collected_mutex);
-                            for (auto& ev : local_events) {
-                                collected_ptr->push_back(std::move(ev));
-                            }
-                            remaining->fetch_sub(
-                                static_cast<int>(local_events.size()));
-                        }
-                    } else {
-                        if (file_info->uncompressed_size == 0 &&
-                            file_info->num_checkpoints == 0)
-                            continue;
-
-                        ViewBuilderInput builder_input;
-                        builder_input.with_view(*view_ptr)
-                            .with_file_path(file_info->path)
-                            .with_idx_path(file_info->has_bloom_data
-                                               ? file_info->idx_path
-                                               : "")
-                            .with_uncompressed_size(
-                                file_info->uncompressed_size)
-                            .with_num_checkpoints(file_info->num_checkpoints)
-                            .with_bloom_cache(bloom_cache_ptr)
-                            .with_time_range(ev_ts_min, ev_ts_max);
-
-                        ViewBuilderUtility builder;
-                        auto build_output =
-                            co_await builder.process(builder_input);
-                        if (!build_output.success ||
-                            !build_output.file_may_match)
-                            continue;
-
-                        for (const auto& candidate : build_output.candidates) {
-                            if (remaining->load(std::memory_order_relaxed) <= 0)
-                                break;
-
-                            ViewReaderInput reader_input;
-                            reader_input.with_file_path(file_info->path)
-                                .with_idx_path(file_info->idx_path)
-                                .with_byte_range(candidate.start_byte,
-                                                 candidate.end_byte)
-                                .with_checkpoint_idx(candidate.checkpoint_idx)
-                                .with_view(*view_ptr);
-
-                            ViewReaderUtility reader;
-                            auto gen = reader.process(reader_input);
-                            while (auto batch = co_await gen.next()) {
-                                scanned_atomic->fetch_add(
-                                    batch->events_scanned);
-                                matched_atomic->fetch_add(
-                                    batch->events_matched);
-                                if (!batch->events.empty()) {
-                                    std::lock_guard<std::mutex> lock(
-                                        *collected_mutex);
-                                    for (auto& event : batch->events) {
-                                        collected_ptr->push_back(
-                                            std::move(event));
-                                    }
-                                    remaining->fetch_sub(
-                                        static_cast<int>(batch->events.size()));
-                                }
-                            }
-                        }
-                    }
-                }
-                co_return;
-            });
-        }
-
-        co_await scope.join();
-
-        total_scanned = scanned_atomic->load();
-        total_matched = matched_atomic->load();
-        if (collected_events.size() > static_cast<std::size_t>(limit)) {
-            collected_events.resize(static_cast<std::size_t>(limit));
-        }
-    }
-
-    std::size_t body_size = 64;
-    for (const auto& ev : collected_events) body_size += ev.size() + 1;
-    std::string body;
-    body.reserve(body_size);
-    body += "{\"events\":[";
-    for (std::size_t i = 0; i < collected_events.size(); ++i) {
-        if (i > 0) body += ',';
-        body += collected_events[i];
-    }
-    body += "],\"total_scanned\":";
-    body += std::to_string(total_scanned);
-    body += ",\"total_matched\":";
-    body += std::to_string(total_matched);
-    body += ",\"count\":";
-    body += std::to_string(collected_events.size());
-    body += '}';
-
-    co_return HttpResponse::ok(body);
+    auto resp = HttpResponse::streaming(std::move(gen));
+    resp.headers.push_back({"X-Limit", std::to_string(limit)});
+    co_return resp;
 }
 
 // --- GET /api/v1/events/stream ---
-// Returns all matching events as NDJSON (newline-delimited JSON).
 static coro::CoroTask<HttpResponse> handle_events_stream(
     const HttpRequest& /*req*/, const QueryParams& params, TraceIndex& index) {
+    double ts_min = params.get_double("ts_min", 0);
+    double ts_max = params.get_double("ts_max", 0);
+    auto files = resolve_target_files(index, params, ts_min, ts_max);
     auto view = build_view_from_params(params);
+    auto query = build_query_from_params(params);
+    int limit = params.get_int("limit", 0);
 
-    double stream_ts_min = params.get_double("ts_min", 0);
-    double stream_ts_max = params.get_double("ts_max", 0);
+    auto gen = std::make_unique<HttpResponse::StreamGenerator>(
+        stream_events(std::move(files), std::move(view), std::move(query),
+                      ts_min, ts_max, &index.bloom_cache(), limit));
 
-    std::vector<const TraceIndex::FileInfo*> target_files;
-    auto file_param = params.get("file");
-    if (!file_param.empty()) {
-        auto* f = index.find_file(std::string(file_param));
-        if (f) target_files.push_back(f);
-    } else {
-        for (const auto& f : index.files()) {
-            target_files.push_back(&f);
-        }
-    }
-
-    // File-level time range skip
-    if (stream_ts_min > 0 || stream_ts_max > 0) {
-        std::vector<const TraceIndex::FileInfo*> filtered;
-        filtered.reserve(target_files.size());
-        for (auto* fi : target_files) {
-            if (fi->is_small) {
-                filtered.push_back(fi);
-                continue;
-            }
-            if (fi->min_timestamp_us == 0 && fi->max_timestamp_us == 0) {
-                filtered.push_back(fi);
-                continue;
-            }
-            double fi_min = static_cast<double>(fi->min_timestamp_us);
-            double fi_max = static_cast<double>(fi->max_timestamp_us);
-            if (fi_max < stream_ts_min ||
-                (stream_ts_max > 0 && fi_min > stream_ts_max))
-                continue;
-            filtered.push_back(fi);
-        }
-        target_files = std::move(filtered);
-    }
-
-    auto stream_query = build_query_from_params(params);
-    const Query* stream_query_ptr = stream_query ? &*stream_query : nullptr;
-
-    std::string ndjson_body;
-
-    if (target_files.size() <= 1) {
-        ndjson_body.reserve(64 * 1024);
-        for (auto* file_info : target_files) {
-            if (file_info->is_small) {
-                std::vector<std::string> events;
-                std::uint64_t scanned = 0;
-                std::uint64_t matched = 0;
-                co_await direct_scan_events(file_info, stream_query_ptr,
-                                            view.include_metadata, &events,
-                                            &scanned, &matched, 0);
-                for (const auto& event : events) {
-                    ndjson_body += event;
-                    ndjson_body += '\n';
-                }
-            } else {
-                if (file_info->uncompressed_size == 0 &&
-                    file_info->num_checkpoints == 0)
-                    continue;
-
-                ViewBuilderInput builder_input;
-                builder_input.with_view(view)
-                    .with_file_path(file_info->path)
-                    .with_idx_path(
-                        file_info->has_bloom_data ? file_info->idx_path : "")
-                    .with_uncompressed_size(file_info->uncompressed_size)
-                    .with_num_checkpoints(file_info->num_checkpoints)
-                    .with_bloom_cache(&index.bloom_cache())
-                    .with_time_range(stream_ts_min, stream_ts_max);
-
-                ViewBuilderUtility builder;
-                auto build_output = co_await builder.process(builder_input);
-                if (!build_output.success || !build_output.file_may_match)
-                    continue;
-
-                for (const auto& candidate : build_output.candidates) {
-                    ViewReaderInput reader_input;
-                    reader_input.with_file_path(file_info->path)
-                        .with_idx_path(file_info->idx_path)
-                        .with_byte_range(candidate.start_byte,
-                                         candidate.end_byte)
-                        .with_checkpoint_idx(candidate.checkpoint_idx)
-                        .with_view(view);
-
-                    ViewReaderUtility reader;
-                    auto gen = reader.process(reader_input);
-                    while (auto batch = co_await gen.next()) {
-                        for (const auto& event : batch->events) {
-                            ndjson_body += event;
-                            ndjson_body += '\n';
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        std::size_t num_workers =
-            std::min(index.max_concurrent(), target_files.size());
-        auto* executor = Executor::current();
-
-        auto file_chan = coro::make_channel<std::size_t>(num_workers * 2);
-        auto body_mutex = std::make_shared<std::mutex>();
-        auto* ndjson_ptr = &ndjson_body;
-        auto* target_files_ptr = &target_files;
-        auto* view_ptr = &view;
-        auto* bloom_cache_ptr = &index.bloom_cache();
-        double st_ts_min = stream_ts_min;
-        double st_ts_max = stream_ts_max;
-
-        ndjson_body.reserve(64 * 1024);
-
-        CoroScope scope(executor);
-
-        scope.spawn([ch = file_chan->producer(), target_files_ptr](
-                        CoroScope&) mutable -> coro::CoroTask<void> {
-            auto guard = ch.guard();
-            for (std::size_t i = 0; i < target_files_ptr->size(); ++i) {
-                if (!co_await ch.send(i)) co_return;
-            }
-            co_return;
-        });
-
-        for (std::size_t w = 0; w < num_workers; ++w) {
-            scope.spawn([file_chan, target_files_ptr, body_mutex, ndjson_ptr,
-                         stream_query_ptr, view_ptr, bloom_cache_ptr, st_ts_min,
-                         st_ts_max](CoroScope&) -> coro::CoroTask<void> {
-                while (auto fi_opt = co_await file_chan->receive()) {
-                    auto* file_info = (*target_files_ptr)[*fi_opt];
-                    std::string local_buf;
-
-                    if (file_info->is_small) {
-                        std::vector<std::string> events;
-                        std::uint64_t scanned = 0;
-                        std::uint64_t matched = 0;
-                        co_await direct_scan_events(file_info, stream_query_ptr,
-                                                    view_ptr->include_metadata,
-                                                    &events, &scanned, &matched,
-                                                    0);
-                        for (const auto& event : events) {
-                            local_buf += event;
-                            local_buf += '\n';
-                        }
-                    } else {
-                        if (file_info->uncompressed_size == 0 &&
-                            file_info->num_checkpoints == 0)
-                            continue;
-
-                        ViewBuilderInput builder_input;
-                        builder_input.with_view(*view_ptr)
-                            .with_file_path(file_info->path)
-                            .with_idx_path(file_info->has_bloom_data
-                                               ? file_info->idx_path
-                                               : "")
-                            .with_uncompressed_size(
-                                file_info->uncompressed_size)
-                            .with_num_checkpoints(file_info->num_checkpoints)
-                            .with_bloom_cache(bloom_cache_ptr)
-                            .with_time_range(st_ts_min, st_ts_max);
-
-                        ViewBuilderUtility builder;
-                        auto build_output =
-                            co_await builder.process(builder_input);
-                        if (!build_output.success ||
-                            !build_output.file_may_match)
-                            continue;
-
-                        for (const auto& candidate : build_output.candidates) {
-                            ViewReaderInput reader_input;
-                            reader_input.with_file_path(file_info->path)
-                                .with_idx_path(file_info->idx_path)
-                                .with_byte_range(candidate.start_byte,
-                                                 candidate.end_byte)
-                                .with_checkpoint_idx(candidate.checkpoint_idx)
-                                .with_view(*view_ptr);
-
-                            ViewReaderUtility reader;
-                            auto gen = reader.process(reader_input);
-                            while (auto batch = co_await gen.next()) {
-                                for (const auto& event : batch->events) {
-                                    local_buf += event;
-                                    local_buf += '\n';
-                                }
-                            }
-                        }
-                    }
-
-                    if (!local_buf.empty()) {
-                        std::lock_guard<std::mutex> lock(*body_mutex);
-                        ndjson_ptr->append(local_buf);
-                    }
-                }
-                co_return;
-            });
-        }
-
-        co_await scope.join();
-    }
-
-    co_return HttpResponse::ok(ndjson_body, "application/x-ndjson");
+    co_return HttpResponse::streaming(std::move(gen));
 }
 
 // --- GET /api/v1/stats ---
-static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& /*req*/,
+static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& req,
                                                  const QueryParams& /*params*/,
                                                  TraceIndex& index) {
+    static std::mutex cache_mutex;
+    static std::unordered_map<std::string, std::string,
+                              dftracer::utils::TransparentStringHash,
+                              dftracer::utils::TransparentStringEqual>
+        stats_cache;
+
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        auto it = stats_cache.find(req.path);
+        if (it != stats_cache.end()) {
+            co_return HttpResponse::ok(it->second);
+        }
+    }
+
     std::vector<TraceStatistics> all_stats;
     std::size_t skipped_small = 0;
 
@@ -845,6 +548,7 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& /*req*/,
         auto* all_stats_ptr = &all_stats;
         auto* stat_files_ptr = &stat_files;
         std::string index_dir = index.index_dir();
+        const auto* index_dir_ptr = &index_dir;
 
         CoroScope scope(executor);
 
@@ -859,14 +563,14 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& /*req*/,
 
         for (std::size_t w = 0; w < num_workers; ++w) {
             scope.spawn([file_chan, stat_files_ptr, stats_mutex, all_stats_ptr,
-                         index_dir](CoroScope&) -> coro::CoroTask<void> {
+                         index_dir_ptr](CoroScope&) -> coro::CoroTask<void> {
                 while (auto fi_opt = co_await file_chan->receive()) {
                     auto* file_info = (*stat_files_ptr)[*fi_opt];
 
                     StatisticsAggregatorInput agg_input;
                     agg_input.file_path = file_info->path;
                     agg_input.idx_path = file_info->idx_path;
-                    agg_input.index_dir = index_dir;
+                    agg_input.index_dir = *index_dir_ptr;
 
                     StatisticsAggregatorUtility aggregator;
                     auto stats = co_await aggregator.process(agg_input);
@@ -904,6 +608,10 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& /*req*/,
     }
     body += "]}";
 
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        stats_cache.emplace(std::string(req.path), body);
+    }
     co_return HttpResponse::ok(body);
 }
 

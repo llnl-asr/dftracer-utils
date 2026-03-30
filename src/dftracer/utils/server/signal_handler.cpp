@@ -33,6 +33,10 @@ void install_signal_handlers() {
     sa.sa_flags = 0;  // no SA_RESTART — accept() must return EINTR
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
+
+    // Ignore SIGPIPE so broken client connections don't kill the server.
+    // The send() call will return EPIPE instead.
+    std::signal(SIGPIPE, SIG_IGN);
 }
 
 }  // namespace dftracer::utils::server

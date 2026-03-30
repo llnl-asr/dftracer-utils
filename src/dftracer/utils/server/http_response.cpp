@@ -91,4 +91,15 @@ HttpResponse HttpResponse::internal_error(const std::string &msg) {
                         .body = msg};
 }
 
+HttpResponse HttpResponse::streaming(std::unique_ptr<StreamGenerator> gen,
+                                     const std::string &content_type) {
+    HttpResponse resp;
+    resp.status_code = 200;
+    resp.status_text = "OK";
+    resp.headers = {{"Content-Type", content_type},
+                    {"Transfer-Encoding", "chunked"}};
+    resp.stream = std::move(gen);
+    return resp;
+}
+
 }  // namespace dftracer::utils::server

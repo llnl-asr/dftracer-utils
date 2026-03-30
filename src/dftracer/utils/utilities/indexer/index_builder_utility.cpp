@@ -221,6 +221,7 @@ coro::CoroTask<IndexBuildResult> IndexBuilderUtility::process(
             try {
                 if (config.build_bloom && bloom_visitor) {
                     db.init_bloom_schema();
+                    db.delete_chunk_statistics(fid);
                     bloom_visitor->finalize(db, fid);
                 }
                 if (config.build_manifest && manifest_visitor) {

@@ -167,16 +167,20 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
         }
     }
 
-    // Initialize statistics and hash resolutions
+    // Initialize hash resolutions from existing state (additive, no
+    // double-count risk).  Statistics and event counts are recomputed from
+    // scratch during the re-scan to avoid inflating totals.
     if (existing) {
-        // Start with existing statistics and resolutions
-        output.statistics = existing->statistics;
         output.hash_resolutions = existing->hash_resolutions;
-        output.events_processed = existing->events_processed;
     }
 
     if (!need_rescan) {
-        // Nothing to do - all dimensions already indexed
+        // Nothing to do - all dimensions already indexed.
+        // Safe to carry over existing statistics verbatim.
+        if (existing) {
+            output.statistics = existing->statistics;
+            output.events_processed = existing->events_processed;
+        }
         output.success = true;
         co_return output;
     }

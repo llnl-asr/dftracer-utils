@@ -9,8 +9,10 @@
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -73,13 +75,14 @@ class GzipIndexer : public Indexer {
     SqliteDatabase db;
     VisitorList visitors_;
 
-    // Cached values
-    mutable bool cached_is_valid;
-    mutable int cached_file_id;
-    mutable std::uint64_t cached_max_bytes;
-    mutable std::uint64_t cached_num_lines;
-    mutable std::uint64_t cached_checkpoint_size;
+    // Cached values (atomic for thread-safe lazy initialization)
+    mutable std::atomic<bool> cached_is_valid{false};
+    mutable std::atomic<int> cached_file_id{-1};
+    mutable std::atomic<std::uint64_t> cached_max_bytes{0};
+    mutable std::atomic<std::uint64_t> cached_num_lines{0};
+    mutable std::atomic<std::uint64_t> cached_checkpoint_size{0};
     mutable std::vector<IndexerCheckpoint> cached_checkpoints;
+    mutable std::mutex cached_checkpoints_mutex;
 
     // Internal methods
     void open();

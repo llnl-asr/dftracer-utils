@@ -120,6 +120,27 @@ void SqliteStmt::bind_blob(int index, std::span<const unsigned char> data) {
     bind_blob(index, data.data(), static_cast<int>(data.size()));
 }
 
+void SqliteStmt::bind_blob_static(int index, const void *blob, int length) {
+    validate_parameter_index(index);
+    int rc = sqlite3_bind_blob(stmt_, index, blob, length, SQLITE_STATIC);
+    if (rc != SQLITE_OK) {
+        throw SqliteError(
+            SqliteError::Type::STATEMENT_ERROR,
+            "Failed to bind blob parameter at index " + std::to_string(index));
+    }
+}
+
+void SqliteStmt::bind_text_static(int index, std::string_view text) {
+    validate_parameter_index(index);
+    int rc = sqlite3_bind_text(stmt_, index, text.data(),
+                               static_cast<int>(text.size()), SQLITE_STATIC);
+    if (rc != SQLITE_OK) {
+        throw SqliteError(
+            SqliteError::Type::STATEMENT_ERROR,
+            "Failed to bind text parameter at index " + std::to_string(index));
+    }
+}
+
 void SqliteStmt::bind_null(int index) {
     validate_parameter_index(index);
     int rc = sqlite3_bind_null(stmt_, index);

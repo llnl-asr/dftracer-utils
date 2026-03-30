@@ -14,17 +14,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <chrono>
-#include <functional>
-#include <iomanip>
-#include <sstream>
 #include <string_view>
-#include <vector>
 
 namespace dftracer::utils::utilities::indexer::internal {
 
-std::string get_logical_path(const std::string &path) {
-    auto fs_path = fs::path(path);
+std::string get_logical_path(std::string_view path) {
+    auto fs_path = fs::path(std::string(path));
     return fs_path.filename().string();
 }
 
@@ -55,8 +50,8 @@ time_t get_file_modification_time(const std::string &file_path) {
 }
 
 std::uint64_t calculate_file_hash(const std::string &file_path) {
-    // Use much larger buffer for better I/O performance on large files
-    constexpr size_t HASH_BUFFER_SIZE = 1024 * 1024;  // 1MB buffer
+    // Fast fingerprint: hash file_size + first 64KB + last 64KB.
+    constexpr std::size_t SAMPLE_SIZE = 64 * 1024;
 
     int fd = ::open(file_path.c_str(), O_RDONLY);
     if (fd < 0) {
@@ -65,17 +60,44 @@ std::uint64_t calculate_file_hash(const std::string &file_path) {
         return 0;
     }
 
-    dftracer::utils::utilities::hash::HasherUtility hasher;
-    std::vector<unsigned char> buffer(HASH_BUFFER_SIZE);
-
-    ssize_t bytes_read = 0;
-    while ((bytes_read = ::read(fd, buffer.data(), buffer.size())) > 0) {
-        std::string_view chunk(reinterpret_cast<const char *>(buffer.data()),
-                               static_cast<std::size_t>(bytes_read));
-        hasher.update(chunk);
+    struct stat st{};
+    if (::fstat(fd, &st) != 0) {
+        ::close(fd);
+        return 0;
     }
-    ::close(fd);
+    auto file_size = static_cast<std::size_t>(st.st_size);
 
+    static thread_local dftracer::utils::utilities::hash::HasherUtility hasher;
+    hasher.reset();
+
+    // Hash the file size itself
+    char size_buf[32];
+    int n = std::snprintf(size_buf, sizeof(size_buf), "%zu", file_size);
+    hasher.update(std::string_view(size_buf, static_cast<std::size_t>(n)));
+
+    unsigned char buf[SAMPLE_SIZE];
+
+    // Hash first SAMPLE_SIZE bytes
+    std::size_t head_bytes = std::min(file_size, SAMPLE_SIZE);
+    ssize_t rd = ::pread(fd, buf, head_bytes, 0);
+    if (rd > 0) {
+        hasher.update(std::string_view(reinterpret_cast<const char *>(buf),
+                                       static_cast<std::size_t>(rd)));
+    }
+
+    // Hash last SAMPLE_SIZE bytes, only if file is large enough such that they
+    // don't overlap with the head
+    if (file_size > SAMPLE_SIZE) {
+        off_t tail_off =
+            static_cast<off_t>(file_size - std::min(file_size, SAMPLE_SIZE));
+        rd = ::pread(fd, buf, SAMPLE_SIZE, tail_off);
+        if (rd > 0) {
+            hasher.update(std::string_view(reinterpret_cast<const char *>(buf),
+                                           static_cast<std::size_t>(rd)));
+        }
+    }
+
+    ::close(fd);
     return static_cast<std::uint64_t>(hasher.get_hash().value);
 }
 

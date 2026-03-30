@@ -1,4 +1,5 @@
 #include <dftracer/utils/utilities/common/json/json_value.h>
+#include <dftracer/utils/utilities/composites/dft/event.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
@@ -6,9 +7,12 @@
 #include <dftracer/utils/utilities/indexer/visitors/bloom_visitor.h>
 #include <yyjson.h>
 
+#include <charconv>
+#include <cstring>
 #include <string>
 
 using dftracer::utils::utilities::common::json::JsonValue;
+using dftracer::utils::utilities::composites::dft::DFTracerEvent;
 using dftracer::utils::utilities::composites::dft::indexing::BloomFilter;
 namespace queries =
     dftracer::utils::utilities::composites::dft::indexing::queries;
@@ -47,29 +51,27 @@ void BloomVisitor::on_checkpoint(std::size_t /*checkpoint_idx*/) {}
 
 void BloomVisitor::ensure_chunk(std::size_t checkpoint_idx) {
     if (checkpoint_idx < chunks_.size()) return;
+    auto old_size = chunks_.size();
     chunks_.resize(checkpoint_idx + 1);
-    for (auto& chunk : chunks_) {
-        if (chunk.bloom_filters.empty()) {
-            for (const auto& dim : dimensions_) {
-                chunk.bloom_filters.emplace(
-                    dim, BloomFilter(config_.expected_entries_per_chunk,
-                                     config_.false_positive_rate));
+    for (std::size_t i = old_size; i < chunks_.size(); ++i) {
+        auto& chunk = chunks_[i];
+        for (const auto& dim : dimensions_) {
+            chunk.bloom_filters.emplace(
+                dim, BloomFilter(config_.expected_entries_per_chunk,
+                                 config_.false_positive_rate));
+        }
+        for (const auto& dim : dimensions_) {
+            auto& ds = chunk.dimension_stats[dim];
+            ds.dimension = dim;
+            if (dim == DIM_PID || dim == DIM_TID) {
+                ds.value_type = "uint";
+            } else {
+                ds.value_type = "string";
             }
         }
-        if (chunk.dimension_stats.empty()) {
-            for (const auto& dim : dimensions_) {
-                auto& ds = chunk.dimension_stats[dim];
-                ds.dimension = dim;
-                if (dim == DIM_PID || dim == DIM_TID) {
-                    ds.value_type = "uint";
-                } else {
-                    ds.value_type = "string";
-                }
-            }
-            auto& pt = chunk.dimension_stats[DIM_PID_TID];
-            pt.dimension = DIM_PID_TID;
-            pt.value_type = "string";
-        }
+        auto& pt = chunk.dimension_stats[DIM_PID_TID];
+        pt.dimension = DIM_PID_TID;
+        pt.value_type = "string";
     }
 }
 
@@ -79,9 +81,14 @@ void BloomVisitor::on_line(std::string_view line, std::size_t checkpoint_idx) {
 
     ChunkState& chunk = chunks_[checkpoint_idx];
 
+    if (!yy_alc_initialized_) {
+        yyjson_alc_pool_init(&yy_alc_, yy_buf_.data(), yy_buf_.size());
+        yy_alc_initialized_ = true;
+    }
+
     yyjson_doc* doc =
         yyjson_read_opts(const_cast<char*>(line.data()), line.size(),
-                         YYJSON_READ_NOFLAG, nullptr, nullptr);
+                         YYJSON_READ_NOFLAG, &yy_alc_, nullptr);
     if (!doc) return;
 
     yyjson_val* root = yyjson_doc_get_root(doc);
@@ -91,35 +98,30 @@ void BloomVisitor::on_line(std::string_view line, std::size_t checkpoint_idx) {
     }
 
     JsonValue json(root);
-    std::string_view ph = json["ph"].get<std::string_view>();
+    DFTracerEvent ev;
+    if (!DFTracerEvent::parse(json, ev)) {
+        yyjson_doc_free(doc);
+        return;
+    }
 
-    if (ph == "M") {
-        std::string_view name_sv = json["name"].get<std::string_view>();
-        JsonValue args = json["args"];
-
-        if (args.exists()) {
-            std::string hash_val = args["value"].get<std::string>();
-            std::string resolved = args["name"].get<std::string>();
+    if (ev.is_metadata()) {
+        if (ev.args.exists()) {
+            std::string hash_val = ev.args["value"].get<std::string>();
+            std::string resolved = ev.args["name"].get<std::string>();
 
             if (!hash_val.empty() && !resolved.empty()) {
-                if (name_sv == "HH") {
+                if (ev.name == "HH") {
                     chunk.hash_resolutions[DIM_HHASH][hash_val] = resolved;
-                } else if (name_sv == "FH") {
+                } else if (ev.name == "FH") {
                     chunk.hash_resolutions[DIM_FHASH][hash_val] = resolved;
-                } else if (name_sv == "SH") {
+                } else if (ev.name == "SH") {
                     chunk.hash_resolutions[DIM_SHASH][hash_val] = resolved;
                 }
             }
         }
     } else {
-        std::string_view name_sv = json["name"].get<std::string_view>();
-        std::string_view cat_sv = json["cat"].get<std::string_view>();
-        std::uint64_t pid = json["pid"].get<std::uint64_t>();
-        std::uint64_t tid = json["tid"].get<std::uint64_t>();
-        std::uint64_t ts = json["ts"].get<std::uint64_t>();
-        std::uint64_t dur = json["dur"].get<std::uint64_t>();
-
-        chunk.statistics.update_from_event(name_sv, cat_sv, pid, tid, ts, dur);
+        chunk.statistics.update_from_event(ev.name, ev.cat, ev.pid, ev.tid,
+                                           ev.ts, ev.dur);
 
         // Helper: add to bloom filter and observe dimension stats
         auto observe = [&chunk](const std::string& dim, std::string_view val) {
@@ -134,33 +136,43 @@ void BloomVisitor::on_line(std::string_view line, std::size_t checkpoint_idx) {
             }
         };
 
-        observe(DIM_NAME, name_sv);
-        observe(DIM_CAT, cat_sv);
+        observe(DIM_NAME, ev.name);
+        observe(DIM_CAT, ev.cat);
 
-        auto pid_str = std::to_string(pid);
-        auto tid_str = std::to_string(tid);
-        observe(DIM_PID, pid_str);
-        observe(DIM_TID, tid_str);
+        char pid_buf[24], tid_buf[24], pt_buf[52];
+        auto [pp, _1] =
+            std::to_chars(pid_buf, pid_buf + sizeof(pid_buf), ev.pid);
+        std::string_view pid_sv(pid_buf, pp - pid_buf);
+        auto [tp, _2] =
+            std::to_chars(tid_buf, tid_buf + sizeof(tid_buf), ev.tid);
+        std::string_view tid_sv(tid_buf, tp - tid_buf);
 
-        auto pid_tid_str = pid_str + ":" + tid_str;
-        observe(DIM_PID_TID, pid_tid_str);
+        observe(DIM_PID, pid_sv);
+        observe(DIM_TID, tid_sv);
 
-        JsonValue args = json["args"];
-        if (args.exists()) {
-            std::string_view hhash = args["hhash"].get<std::string_view>();
+        auto len = pp - pid_buf;
+        std::memcpy(pt_buf, pid_buf, len);
+        pt_buf[len] = ':';
+        std::memcpy(pt_buf + len + 1, tid_buf, tp - tid_buf);
+        std::string_view pt_sv(pt_buf, len + 1 + (tp - tid_buf));
+        observe(DIM_PID_TID, pt_sv);
+
+        if (ev.args.exists()) {
+            std::string_view hhash = ev.args["hhash"].get<std::string_view>();
             observe(DIM_HHASH, hhash);
 
-            std::string_view fhash = args["fhash"].get<std::string_view>();
+            std::string_view fhash = ev.args["fhash"].get<std::string_view>();
             observe(DIM_FHASH, fhash);
 
-            std::string_view shash = args["cmd_hash"].get<std::string_view>();
+            std::string_view shash =
+                ev.args["cmd_hash"].get<std::string_view>();
             if (shash.empty()) {
-                shash = args["exec_hash"].get<std::string_view>();
+                shash = ev.args["exec_hash"].get<std::string_view>();
             }
             observe(DIM_SHASH, shash);
 
             for (const auto& dim : config_.extra_dimensions) {
-                JsonValue val = args.at(dim.c_str());
+                JsonValue val = ev.args.at(dim.c_str());
                 if (val.exists()) {
                     std::string str_val = json_value_to_string(val);
                     observe(dim, str_val);
@@ -183,6 +195,12 @@ void BloomVisitor::finalize(IndexDatabase& db, int file_id) {
                                              config_.false_positive_rate));
     }
 
+    auto bloom_stmt = queries::prepare_insert_chunk_bloom_filter(sql_db);
+    auto dim_stats_stmt = queries::prepare_insert_chunk_dimension_stats(sql_db);
+    auto hash_stmt = queries::prepare_insert_hash_resolution(sql_db);
+
+    std::vector<unsigned char> blob;
+
     for (std::size_t i = 0; i < chunks_.size(); ++i) {
         ChunkState& chunk = chunks_[i];
         auto checkpoint_idx = static_cast<std::uint64_t>(i);
@@ -192,9 +210,9 @@ void BloomVisitor::finalize(IndexDatabase& db, int file_id) {
             if (it == chunk.bloom_filters.end()) continue;
 
             const BloomFilter& bf = it->second;
-            auto blob = bf.serialize();
+            bf.serialize_into(blob);
             queries::insert_chunk_bloom_filter(
-                sql_db, file_id, checkpoint_idx, dim, blob.data(),
+                bloom_stmt, file_id, checkpoint_idx, dim, blob.data(),
                 static_cast<int>(blob.size()),
                 static_cast<std::uint64_t>(bf.num_entries()));
 
@@ -205,21 +223,22 @@ void BloomVisitor::finalize(IndexDatabase& db, int file_id) {
                                          chunk.statistics);
 
         for (const auto& [dim, ds] : chunk.dimension_stats) {
-            queries::insert_chunk_dimension_stats(
-                sql_db, file_id, checkpoint_idx, ds, config_.value_counts_cap);
+            queries::insert_chunk_dimension_stats(dim_stats_stmt, file_id,
+                                                  checkpoint_idx, ds,
+                                                  config_.value_counts_cap);
         }
 
         for (const auto& [dim, resolutions] : chunk.hash_resolutions) {
             for (const auto& [hash_val, resolved] : resolutions) {
-                queries::insert_hash_resolution(sql_db, file_id, dim, hash_val,
-                                                resolved);
+                queries::insert_hash_resolution(hash_stmt, file_id, dim,
+                                                hash_val, resolved);
             }
         }
     }
 
     for (const auto& dim : dimensions_) {
         const BloomFilter& bf = file_blooms.at(dim);
-        auto blob = bf.serialize();
+        bf.serialize_into(blob);
         queries::insert_file_bloom_filter(
             sql_db, file_id, dim, blob.data(), static_cast<int>(blob.size()),
             static_cast<std::uint64_t>(bf.num_entries()));

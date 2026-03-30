@@ -20,6 +20,17 @@ class SqliteStmt {
 
     SqliteStmt(const SqliteStmt &) = delete;
     SqliteStmt &operator=(const SqliteStmt &) = delete;
+    SqliteStmt(SqliteStmt &&other) noexcept : stmt_(other.stmt_) {
+        other.stmt_ = nullptr;
+    }
+    SqliteStmt &operator=(SqliteStmt &&other) noexcept {
+        if (this != &other) {
+            if (stmt_) sqlite3_finalize(stmt_);
+            stmt_ = other.stmt_;
+            other.stmt_ = nullptr;
+        }
+        return *this;
+    }
 
     operator sqlite3_stmt *();
     sqlite3_stmt *get();
@@ -36,6 +47,8 @@ class SqliteStmt {
     void bind_blob(int index, const void *blob, int length);
     void bind_blob(int index, std::span<const std::byte> data);
     void bind_blob(int index, std::span<const unsigned char> data);
+    void bind_blob_static(int index, const void *blob, int length);
+    void bind_text_static(int index, std::string_view text);
     void bind_null(int index);
 
     void clear_bindings();

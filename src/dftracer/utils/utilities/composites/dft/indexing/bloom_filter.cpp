@@ -1,10 +1,8 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
-#include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <functional>
 #include <stdexcept>
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
@@ -85,9 +83,9 @@ BloomFilter BloomFilter::from_blob(const unsigned char* data,
 
 void BloomFilter::compute_hashes(std::string_view value, std::uint64_t& h1,
                                  std::uint64_t& h2) const {
-    dftracer::utils::utilities::hash::HasherUtility hasher;
-    hasher.update(value);
-    h1 = hasher.get_hash().value;
+    hasher_.reset();
+    hasher_.update(value);
+    h1 = hasher_.get_hash().value;
     // Second hash: mix with a different seed using FNV-like mixing
     std::uint64_t seed = 0x517cc1b727220a95ULL;
     h2 = h1 * seed + 0x9e3779b97f4a7c15ULL;
@@ -108,7 +106,7 @@ void BloomFilter::add(std::string_view value) {
 
     for (std::size_t i = 0; i < num_hashes_; ++i) {
         std::size_t bit_pos = nth_hash(h1, h2, i);
-        bits_[bit_pos / 8] |= (1u << (bit_pos % 8));
+        bits_[bit_pos / 8] |= static_cast<std::uint8_t>(1u << (bit_pos % 8));
     }
     ++num_entries_;
 }
@@ -140,12 +138,17 @@ void BloomFilter::merge_from(const BloomFilter& other) {
 }
 
 std::vector<unsigned char> BloomFilter::serialize() const {
-    std::vector<unsigned char> result(HEADER_SIZE + bits_.size());
+    std::vector<unsigned char> result;
+    serialize_into(result);
+    return result;
+}
+
+void BloomFilter::serialize_into(std::vector<unsigned char>& result) const {
+    result.resize(HEADER_SIZE + bits_.size());
     write_u32_le(result.data(), static_cast<std::uint32_t>(num_hashes_));
     write_u32_le(result.data() + 4, static_cast<std::uint32_t>(num_entries_));
     write_u32_le(result.data() + 8, static_cast<std::uint32_t>(num_bits_));
     std::memcpy(result.data() + HEADER_SIZE, bits_.data(), bits_.size());
-    return result;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

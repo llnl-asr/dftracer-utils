@@ -272,11 +272,11 @@ GzipIndexer::GzipIndexer(GzipIndexer &&other) noexcept
       force_rebuild(other.force_rebuild),
       db(std::move(other.db)),
       visitors_(std::move(other.visitors_)),
-      cached_is_valid(other.cached_is_valid),
-      cached_file_id(other.cached_file_id),
-      cached_max_bytes(other.cached_max_bytes),
-      cached_num_lines(other.cached_num_lines),
-      cached_checkpoint_size(other.cached_checkpoint_size),
+      cached_is_valid(other.cached_is_valid.load()),
+      cached_file_id(other.cached_file_id.load()),
+      cached_max_bytes(other.cached_max_bytes.load()),
+      cached_num_lines(other.cached_num_lines.load()),
+      cached_checkpoint_size(other.cached_checkpoint_size.load()),
       cached_checkpoints(std::move(other.cached_checkpoints)) {}
 
 GzipIndexer &GzipIndexer::operator=(GzipIndexer &&other) noexcept {
@@ -288,11 +288,12 @@ GzipIndexer &GzipIndexer::operator=(GzipIndexer &&other) noexcept {
         force_rebuild = other.force_rebuild;
         db = std::move(other.db);
         visitors_ = std::move(other.visitors_);
-        cached_is_valid = other.cached_is_valid;
-        cached_file_id = other.cached_file_id;
-        cached_max_bytes = other.cached_max_bytes;
-        cached_num_lines = other.cached_num_lines;
-        cached_checkpoint_size = other.cached_checkpoint_size;
+        cached_is_valid.store(other.cached_is_valid.load());
+        cached_file_id.store(other.cached_file_id.load());
+        cached_max_bytes.store(other.cached_max_bytes.load());
+        cached_num_lines.store(other.cached_num_lines.load());
+        cached_checkpoint_size.store(other.cached_checkpoint_size.load());
+        std::lock_guard<std::mutex> lock(cached_checkpoints_mutex);
         cached_checkpoints = std::move(other.cached_checkpoints);
     }
     return *this;
@@ -366,10 +367,14 @@ bool GzipIndexer::need_rebuild() const {
         return true;
     }
 
+    // Fast path: if mtime matches, the file hasn't changed.
     std::time_t current_mtime = get_file_modification_time(gz_path);
-    std::uint64_t current_hash = calculate_file_hash(gz_path);
+    if (stored_mtime == current_mtime) return false;
 
-    return (stored_mtime != current_mtime) || (stored_hash != current_hash);
+    // mtime differs, verify with sampled fingerprint (size + head/tail)
+    // to handle edge cases like file replacement within the same second.
+    std::uint64_t current_hash = calculate_file_hash(gz_path);
+    return stored_hash != current_hash;
 }
 
 const std::string &GzipIndexer::get_idx_path() const { return idx_path; }
@@ -379,34 +384,42 @@ const std::string &GzipIndexer::get_archive_path() const { return gz_path; }
 const std::string &GzipIndexer::get_gz_path() const { return gz_path; }
 
 std::uint64_t GzipIndexer::get_max_bytes() const {
-    if (cached_max_bytes == 0) {
-        cached_max_bytes = query_max_bytes(db, gz_path_logical_path);
+    auto val = cached_max_bytes.load(std::memory_order_relaxed);
+    if (val == 0) {
+        val = query_max_bytes(db, gz_path_logical_path);
+        cached_max_bytes.store(val, std::memory_order_relaxed);
     }
-    return cached_max_bytes;
+    return val;
 }
 
 std::uint64_t GzipIndexer::get_checkpoint_size() const {
-    if (cached_checkpoint_size == 0) {
+    auto val = cached_checkpoint_size.load(std::memory_order_relaxed);
+    if (val == 0) {
         int file_id = get_file_id();
         if (file_id != -1) {
-            cached_checkpoint_size = query_checkpoint_size(db, file_id);
+            val = query_checkpoint_size(db, file_id);
+            cached_checkpoint_size.store(val, std::memory_order_relaxed);
         }
     }
-    return cached_checkpoint_size;
+    return val;
 }
 
 std::uint64_t GzipIndexer::get_num_lines() const {
-    if (cached_num_lines == 0) {
-        cached_num_lines = query_num_lines(db, gz_path_logical_path);
+    auto val = cached_num_lines.load(std::memory_order_relaxed);
+    if (val == 0) {
+        val = query_num_lines(db, gz_path_logical_path);
+        cached_num_lines.store(val, std::memory_order_relaxed);
     }
-    return cached_num_lines;
+    return val;
 }
 
 int GzipIndexer::get_file_id() const {
-    if (cached_file_id == -1) {
-        cached_file_id = query_file_id(db, gz_path_logical_path);
+    auto val = cached_file_id.load(std::memory_order_relaxed);
+    if (val == -1) {
+        val = query_file_id(db, gz_path_logical_path);
+        cached_file_id.store(val, std::memory_order_relaxed);
     }
-    return cached_file_id;
+    return val;
 }
 
 int GzipIndexer::find_file_id(const std::string &path) const {

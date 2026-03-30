@@ -164,10 +164,12 @@ class GzipInflater : public Inflater {
     std::uint64_t count_lines(const unsigned char* data,
                               std::size_t size) const {
         std::uint64_t lines = 0;
-        for (std::size_t i = 0; i < size; i++) {
-            if (data[i] == '\n') {
-                lines++;
-            }
+        const unsigned char* p = data;
+        const unsigned char* end = data + size;
+        while ((p = static_cast<const unsigned char*>(
+                    std::memchr(p, '\n', end - p)))) {
+            ++lines;
+            ++p;
         }
         return lines;
     }

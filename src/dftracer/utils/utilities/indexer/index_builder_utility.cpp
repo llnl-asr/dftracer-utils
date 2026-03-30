@@ -103,9 +103,13 @@ coro::CoroTask<IndexBuildResult> IndexBuilderUtility::process(
             co_return result;
         }
 
+        // NOTE(perf): compute need_rebuild once: used for both skip decision
+        // and checkpoints_valid below. Avoids duplicate fingerprint check.
+        bool idx_exists = !below_threshold && indexer->exists();
+        bool needs_rebuild = idx_exists ? indexer->need_rebuild() : true;
+
         // Skip if index exists, is current, and all requested features present.
-        if (!below_threshold && !config.force_rebuild && indexer->exists() &&
-            !indexer->need_rebuild()) {
+        if (idx_exists && !config.force_rebuild && !needs_rebuild) {
             auto logical = internal::get_logical_path(config.file_path);
             bool bloom_ok = !config.build_bloom || [&] {
                 try {
@@ -157,8 +161,9 @@ coro::CoroTask<IndexBuildResult> IndexBuilderUtility::process(
         }
 
         // Decide whether checkpoints need rebuilding.
-        bool checkpoints_valid = !config.force_rebuild && indexer->exists() &&
-                                 !indexer->need_rebuild();
+        // Reuses the need_rebuild result computed above.
+        bool checkpoints_valid =
+            !config.force_rebuild && idx_exists && !needs_rebuild;
 
         if (checkpoints_valid && !visitor_list.empty()) {
             // Checkpoints exist — only need a streaming pass for visitors.

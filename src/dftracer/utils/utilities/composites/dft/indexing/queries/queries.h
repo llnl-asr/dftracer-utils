@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_QUERIES_H
 
 #include <dftracer/utils/core/sqlite/database.h>
+#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 
@@ -12,12 +13,12 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
 
 using dftracer::utils::sqlite::SqliteDatabase;
+using dftracer::utils::sqlite::SqliteStmt;
 
 // --- Insert operations ---
 
@@ -50,6 +51,25 @@ void insert_index_dimension(const SqliteDatabase& db, int file_info_id,
                             std::string_view dimension);
 
 void insert_hash_resolution(const SqliteDatabase& db, int file_info_id,
+                            std::string_view dimension,
+                            std::string_view hash_value,
+                            std::string_view resolved_value);
+
+SqliteStmt prepare_insert_chunk_bloom_filter(const SqliteDatabase& db);
+void insert_chunk_bloom_filter(SqliteStmt& stmt, int file_info_id,
+                               std::uint64_t checkpoint_idx,
+                               std::string_view dimension,
+                               const void* blob_data, int blob_size,
+                               std::uint64_t num_entries);
+
+SqliteStmt prepare_insert_chunk_dimension_stats(const SqliteDatabase& db);
+void insert_chunk_dimension_stats(SqliteStmt& stmt, int file_info_id,
+                                  std::uint64_t checkpoint_idx,
+                                  const ChunkDimensionStats& stats,
+                                  std::size_t value_counts_cap);
+
+SqliteStmt prepare_insert_hash_resolution(const SqliteDatabase& db);
+void insert_hash_resolution(SqliteStmt& stmt, int file_info_id,
                             std::string_view dimension,
                             std::string_view hash_value,
                             std::string_view resolved_value);

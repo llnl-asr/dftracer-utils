@@ -2,6 +2,7 @@
 #include <yyjson.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -14,17 +15,22 @@ void ChunkStatistics::update_from_event(std::string_view name,
                                         std::uint64_t dur) {
     ++total_events;
 
+    // 20 digits max per uint64 + ':' separator = 41 chars max
+    char pt_buf[52];
+    auto [pp, ec1] = std::to_chars(pt_buf, pt_buf + sizeof(pt_buf), pid);
+    *pp++ = ':';
+    auto [tp, ec2] = std::to_chars(pp, pt_buf + sizeof(pt_buf), tid);
+    std::string_view pt_sv(pt_buf, tp - pt_buf);
+
     category_counts[std::string(cat)]++;
     name_counts[std::string(name)]++;
-    std::string pid_tid = std::to_string(pid) + ":" + std::to_string(tid);
-    pid_tid_counts[pid_tid]++;
+    pid_tid_counts[std::string(pt_sv)]++;
 
     if (ts < min_timestamp_us) min_timestamp_us = ts;
     std::uint64_t end_ts = ts + dur;
     if (end_ts > max_timestamp_us) max_timestamp_us = end_ts;
 
     // Welford's online algorithm for variance
-    // Compute old_mean BEFORE updating count/sum
     double old_mean = (duration_count > 0)
                           ? static_cast<double>(duration_sum_us) /
                                 static_cast<double>(duration_count)
@@ -45,12 +51,15 @@ void ChunkStatistics::update_from_event(std::string_view name,
     duration_sketch.add(dur_d);
     duration_histogram.add(dur);
 
-    std::string name_str(name);
-    name_duration_sketches[name_str].add(dur_d);
-    name_duration_histograms[name_str].add(dur);
-    name_duration_sums[name_str] += dur_d;
-    name_duration_sum_sqs[name_str] += dur_d * dur_d;
-    name_category.emplace(name_str, std::string(cat));
+    auto [sketch_it, _3] =
+        name_duration_sketches.try_emplace(std::string(name));
+    sketch_it->second.add(dur_d);
+
+    const std::string& name_key = sketch_it->first;
+    name_duration_histograms[name_key].add(dur);
+    name_duration_sums[name_key] += dur_d;
+    name_duration_sum_sqs[name_key] += dur_d * dur_d;
+    name_category.try_emplace(name_key, cat);
 }
 
 void ChunkStatistics::merge_from(const ChunkStatistics& other) {
@@ -207,28 +216,34 @@ std::string ChunkStatistics::name_duration_sum_sqs_json() const {
 
 // Binary format: uint32_t num_entries, then per entry:
 //   uint32_t key_len, char[key_len], uint32_t blob_len, uint8_t[blob_len]
-std::vector<uint8_t> ChunkStatistics::serialize_name_duration_sketches() const {
-    std::vector<uint8_t> buf;
-    auto num = static_cast<uint32_t>(name_duration_sketches.size());
-    buf.resize(sizeof(uint32_t));
-    std::memcpy(buf.data(), &num, sizeof(uint32_t));
+std::vector<std::uint8_t> ChunkStatistics::serialize_name_duration_sketches()
+    const {
+    std::vector<std::uint8_t> buf;
+    auto num = static_cast<std::uint32_t>(name_duration_sketches.size());
 
+    // NOTE(perf): pre-reserve header + estimated ~512 bytes per sketch entry
+    buf.reserve(sizeof(std::uint32_t) + num * 512);
+
+    buf.resize(sizeof(std::uint32_t));
+    std::memcpy(buf.data(), &num, sizeof(std::uint32_t));
+
+    std::vector<std::uint8_t> sketch_blob;
     for (const auto& [key, sketch] : name_duration_sketches) {
-        auto sketch_blob = sketch.serialize();
-        auto key_len = static_cast<uint32_t>(key.size());
-        auto blob_len = static_cast<uint32_t>(sketch_blob.size());
+        sketch.serialize_into(sketch_blob);
+        auto key_len = static_cast<std::uint32_t>(key.size());
+        auto blob_len = static_cast<std::uint32_t>(sketch_blob.size());
 
         std::size_t offset = buf.size();
-        buf.resize(offset + sizeof(uint32_t) + key_len + sizeof(uint32_t) +
-                   blob_len);
-        uint8_t* p = buf.data() + offset;
+        buf.resize(offset + sizeof(std::uint32_t) + key_len +
+                   sizeof(std::uint32_t) + blob_len);
+        std::uint8_t* p = buf.data() + offset;
 
-        std::memcpy(p, &key_len, sizeof(uint32_t));
-        p += sizeof(uint32_t);
+        std::memcpy(p, &key_len, sizeof(std::uint32_t));
+        p += sizeof(std::uint32_t);
         std::memcpy(p, key.data(), key_len);
         p += key_len;
-        std::memcpy(p, &blob_len, sizeof(uint32_t));
-        p += sizeof(uint32_t);
+        std::memcpy(p, &blob_len, sizeof(std::uint32_t));
+        p += sizeof(std::uint32_t);
         std::memcpy(p, sketch_blob.data(), blob_len);
     }
 
@@ -315,31 +330,31 @@ ChunkStatistics::parse_histogram_map_json(const std::string& json) {
 }
 
 std::unordered_map<std::string, common::statistics::DDSketch>
-ChunkStatistics::deserialize_name_duration_sketches(const uint8_t* data,
+ChunkStatistics::deserialize_name_duration_sketches(const std::uint8_t* data,
                                                     std::size_t len) {
     std::unordered_map<std::string, common::statistics::DDSketch> result;
-    if (!data || len < sizeof(uint32_t)) return result;
+    if (!data || len < sizeof(std::uint32_t)) return result;
 
-    const uint8_t* p = data;
-    const uint8_t* end = data + len;
+    const std::uint8_t* p = data;
+    const std::uint8_t* end = data + len;
 
-    uint32_t num_entries = 0;
-    std::memcpy(&num_entries, p, sizeof(uint32_t));
-    p += sizeof(uint32_t);
+    std::uint32_t num_entries = 0;
+    std::memcpy(&num_entries, p, sizeof(std::uint32_t));
+    p += sizeof(std::uint32_t);
 
-    for (uint32_t i = 0; i < num_entries && p < end; ++i) {
-        if (p + sizeof(uint32_t) > end) break;
-        uint32_t key_len = 0;
-        std::memcpy(&key_len, p, sizeof(uint32_t));
-        p += sizeof(uint32_t);
+    for (std::uint32_t i = 0; i < num_entries && p < end; ++i) {
+        if (p + sizeof(std::uint32_t) > end) break;
+        std::uint32_t key_len = 0;
+        std::memcpy(&key_len, p, sizeof(std::uint32_t));
+        p += sizeof(std::uint32_t);
 
-        if (p + key_len + sizeof(uint32_t) > end) break;
+        if (p + key_len + sizeof(std::uint32_t) > end) break;
         std::string key(reinterpret_cast<const char*>(p), key_len);
         p += key_len;
 
-        uint32_t blob_len = 0;
-        std::memcpy(&blob_len, p, sizeof(uint32_t));
-        p += sizeof(uint32_t);
+        std::uint32_t blob_len = 0;
+        std::memcpy(&blob_len, p, sizeof(std::uint32_t));
+        p += sizeof(std::uint32_t);
 
         if (p + blob_len > end) break;
         result[key] = common::statistics::DDSketch::deserialize(p, blob_len);

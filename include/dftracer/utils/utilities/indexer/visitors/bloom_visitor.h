@@ -1,12 +1,15 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_VISITORS_BLOOM_VISITOR_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_VISITORS_BLOOM_VISITOR_H
 
+#include <dftracer/utils/utilities/common/json/json.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 #include <dftracer/utils/utilities/indexer/index_visitor.h>
+#include <yyjson.h>
 
+#include <array>
 #include <cstddef>
 #include <string>
 #include <unordered_map>
@@ -52,6 +55,10 @@ class BloomVisitor : public IndexVisitor {
     ChunkIndexerConfig config_;
     std::vector<std::string> dimensions_;
     std::vector<ChunkState> chunks_;
+
+    std::array<char, common::json::YYJSON_LINE_POOL_SIZE> yy_buf_{};
+    yyjson_alc yy_alc_{};
+    bool yy_alc_initialized_ = false;
 };
 
 }  // namespace dftracer::utils::utilities::indexer

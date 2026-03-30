@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_BLOOM_FILTER_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_BLOOM_FILTER_H
 
+#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -33,6 +35,7 @@ class BloomFilter {
     void merge_from(const BloomFilter& other);
 
     std::vector<unsigned char> serialize() const;
+    void serialize_into(std::vector<unsigned char>& result) const;
     std::size_t num_entries() const { return num_entries_; }
     std::size_t size_bytes() const { return bits_.size(); }
     std::size_t num_hash_functions() const { return num_hashes_; }
@@ -54,6 +57,7 @@ class BloomFilter {
     std::size_t num_bits_;
     std::size_t num_hashes_;
     std::size_t num_entries_;
+    mutable hash::Fnv1aHasherUtility hasher_;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

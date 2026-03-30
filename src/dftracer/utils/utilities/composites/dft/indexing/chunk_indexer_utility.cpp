@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
+#include <dftracer/utils/utilities/composites/dft/event.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
@@ -12,6 +13,7 @@
 
 // Import JsonValue from common json namespace
 using dftracer::utils::utilities::common::json::JsonValue;
+using dftracer::utils::utilities::composites::dft::DFTracerEvent;
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
@@ -232,31 +234,32 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
                     yyjson_val* root = yyjson_doc_get_root(doc);
                     if (root && yyjson_is_obj(root)) {
                         JsonValue json(root);
-                        std::string_view ph =
-                            json["ph"].get<std::string_view>();
+                        DFTracerEvent ev;
+                        if (!DFTracerEvent::parse(json, ev)) {
+                            yyjson_doc_free(doc);
+                            pos = (newline - data) + 1;
+                            line_number++;
+                            continue;
+                        }
 
-                        if (ph == "M") {
+                        if (ev.is_metadata()) {
                             // Metadata event: collect hash resolutions
-                            std::string_view name_sv =
-                                json["name"].get<std::string_view>();
-                            JsonValue args = json["args"];
-
-                            if (args.exists()) {
+                            if (ev.args.exists()) {
                                 std::string hash_val =
-                                    args["value"].get<std::string>();
+                                    ev.args["value"].get<std::string>();
                                 std::string resolved =
-                                    args["name"].get<std::string>();
+                                    ev.args["name"].get<std::string>();
 
                                 if (!hash_val.empty() && !resolved.empty()) {
-                                    if (name_sv == "HH") {
+                                    if (ev.name == "HH") {
                                         output.hash_resolutions[DIM_HHASH]
                                                                [hash_val] =
                                             resolved;
-                                    } else if (name_sv == "FH") {
+                                    } else if (ev.name == "FH") {
                                         output.hash_resolutions[DIM_FHASH]
                                                                [hash_val] =
                                             resolved;
-                                    } else if (name_sv == "SH") {
+                                    } else if (ev.name == "SH") {
                                         output.hash_resolutions[DIM_SHASH]
                                                                [hash_val] =
                                             resolved;
@@ -264,60 +267,55 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
                                 }
                             }
                             if (collect_manifest) {
-                                std::string meta_type(name_sv);
+                                std::string meta_type(ev.name);
                                 metadata_lines[meta_type].push_back(
                                     line_number);
                             }
                         } else {
                             // Regular event: index into bloom filters + stats
-                            std::string_view name_sv =
-                                json["name"].get<std::string_view>();
-                            std::string_view cat_sv =
-                                json["cat"].get<std::string_view>();
-                            std::uint64_t pid =
-                                json["pid"].get<std::uint64_t>();
-                            std::uint64_t tid =
-                                json["tid"].get<std::uint64_t>();
-                            std::uint64_t ts = json["ts"].get<std::uint64_t>();
-                            std::uint64_t dur =
-                                json["dur"].get<std::uint64_t>();
 
                             // Update statistics (always update for accuracy)
                             output.statistics.update_from_event(
-                                name_sv, cat_sv, pid, tid, ts, dur);
+                                ev.name, ev.cat, ev.pid, ev.tid, ev.ts, ev.dur);
 
                             // Add to bloom filters for missing dimensions only
                             auto it = output.bloom_filters.find(DIM_NAME);
                             if (it != output.bloom_filters.end() &&
-                                !name_sv.empty()) {
-                                it->second.add(name_sv);
+                                !ev.name.empty()) {
+                                it->second.add(ev.name);
                             }
 
                             it = output.bloom_filters.find(DIM_CAT);
                             if (it != output.bloom_filters.end() &&
-                                !cat_sv.empty()) {
-                                it->second.add(cat_sv);
+                                !ev.cat.empty()) {
+                                it->second.add(ev.cat);
                             }
 
                             it = output.bloom_filters.find(DIM_PID);
                             if (it != output.bloom_filters.end()) {
-                                std::string pid_str = std::to_string(pid);
-                                it->second.add(pid_str);
+                                char pid_buf[32];
+                                int n = std::snprintf(
+                                    pid_buf, sizeof(pid_buf), "%llu",
+                                    static_cast<unsigned long long>(ev.pid));
+                                it->second.add(std::string_view(pid_buf, n));
                             }
 
                             it = output.bloom_filters.find(DIM_TID);
                             if (it != output.bloom_filters.end()) {
-                                std::string tid_str = std::to_string(tid);
-                                it->second.add(tid_str);
+                                char tid_buf[32];
+                                int n = std::snprintf(
+                                    tid_buf, sizeof(tid_buf), "%llu",
+                                    static_cast<unsigned long long>(ev.tid));
+                                it->second.add(std::string_view(tid_buf, n));
                             }
 
-                            JsonValue args = json["args"];
-                            if (args.exists()) {
+                            if (ev.args.exists()) {
                                 // Hash dimensions: add hash to bloom
                                 it = output.bloom_filters.find(DIM_HHASH);
                                 if (it != output.bloom_filters.end()) {
                                     std::string_view hhash =
-                                        args["hhash"].get<std::string_view>();
+                                        ev.args["hhash"]
+                                            .get<std::string_view>();
                                     if (!hhash.empty()) {
                                         it->second.add(hhash);
                                     }
@@ -326,7 +324,8 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
                                 it = output.bloom_filters.find(DIM_FHASH);
                                 if (it != output.bloom_filters.end()) {
                                     std::string_view fhash =
-                                        args["fhash"].get<std::string_view>();
+                                        ev.args["fhash"]
+                                            .get<std::string_view>();
                                     if (!fhash.empty()) {
                                         it->second.add(fhash);
                                     }
@@ -336,10 +335,10 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
                                 if (it != output.bloom_filters.end()) {
                                     // shash can be under cmd_hash or exec_hash
                                     std::string_view shash =
-                                        args["cmd_hash"]
+                                        ev.args["cmd_hash"]
                                             .get<std::string_view>();
                                     if (shash.empty()) {
-                                        shash = args["exec_hash"]
+                                        shash = ev.args["exec_hash"]
                                                     .get<std::string_view>();
                                     }
                                     if (!shash.empty()) {
@@ -352,7 +351,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
                                      input.config.extra_dimensions) {
                                     it = output.bloom_filters.find(dim);
                                     if (it != output.bloom_filters.end()) {
-                                        JsonValue val = args.at(dim.c_str());
+                                        JsonValue val = ev.args.at(dim.c_str());
                                         if (val.exists()) {
                                             std::string str_val =
                                                 json_value_to_string(val);
@@ -365,8 +364,8 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
                             }
 
                             if (collect_manifest) {
-                                event_lines[{std::string(cat_sv),
-                                             std::string(name_sv)}]
+                                event_lines[{std::string(ev.cat),
+                                             std::string(ev.name)}]
                                     .push_back(line_number);
                             }
                             output.events_processed++;

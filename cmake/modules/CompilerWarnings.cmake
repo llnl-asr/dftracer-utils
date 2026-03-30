@@ -110,12 +110,20 @@ function(target_set_warnings TARGET_NAME)
                 # -Wuseless-cast          # Warn about useless casts
       )
 
-      # GCC 13+ has false-positive -Wnull-dereference, -Warray-bounds,
-      # and -Wstringop-overflow in libstdc++ (streambuf, exception_ptr,
-      # vector copy). Disable for affected versions.
-      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "13")
+      # GCC 12+ has false-positive -Wrestrict in libstdc++ char_traits
+      # (string concat inlining). Disable for affected versions.
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "12")
+        target_compile_options(${TARGET_NAME} PRIVATE -Wno-restrict)
+      endif()
+
+      # GCC 12+ has false-positive -Wnull-dereference, -Warray-bounds,
+      # -Wstringop-overflow, and -Wstringop-overread in libstdc++
+      # (streambuf, exception_ptr, char_traits, vector copy/move).
+      # Disable for affected versions.
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "12")
         target_compile_options(${TARGET_NAME} PRIVATE -Wno-null-dereference
-                              -Wno-array-bounds -Wno-stringop-overflow)
+                              -Wno-array-bounds -Wno-stringop-overflow
+                              -Wno-stringop-overread)
       endif()
     endif()
 

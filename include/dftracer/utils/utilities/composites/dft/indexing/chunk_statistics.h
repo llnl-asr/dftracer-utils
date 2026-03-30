@@ -59,7 +59,7 @@ struct ChunkStatistics {
     std::string name_duration_sum_sqs_json() const;
 
     /// Serialize per-name DDSketches to a single binary blob.
-    std::vector<uint8_t> serialize_name_duration_sketches() const;
+    std::vector<std::uint8_t> serialize_name_duration_sketches() const;
 
     static std::unordered_map<std::string, std::string> parse_string_map_json(
         const std::string& json);
@@ -68,7 +68,8 @@ struct ChunkStatistics {
     static std::unordered_map<std::string, common::statistics::Log2Histogram>
     parse_histogram_map_json(const std::string& json);
     static std::unordered_map<std::string, common::statistics::DDSketch>
-    deserialize_name_duration_sketches(const uint8_t* data, std::size_t len);
+    deserialize_name_duration_sketches(const std::uint8_t* data,
+                                       std::size_t len);
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

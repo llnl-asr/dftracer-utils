@@ -1,12 +1,13 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_FILE_DECOMPRESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_FILE_DECOMPRESSOR_UTILITY_H
 
+#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
-#include <dftracer/utils/utilities/fileio/streaming_file_reader_utility.h>
+#include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 
 #include <string>
@@ -219,37 +220,17 @@ class FileDecompressorUtility
             // Get compressed file size
             result.compressed_size = fs::file_size(input.input_path);
 
-            // Step 1: Create streaming reader
-            fileio::StreamingFileReaderUtility reader;
-
-            // Step 2: Create streaming decompressor with specified format
             compression::zlib::StreamingDecompressorUtility decompressor(
                 input.format);
-
-            // Step 3: Create streaming writer
             fileio::StreamingFileWriterUtility writer(input.output_path);
 
-            // Step 4: Read compressed file as chunks
-            fileio::StreamReadInput read_input{input.input_path,
-                                               input.chunk_size};
-            fileio::ChunkRange chunks = co_await reader.process(read_input);
-
-            // Step 5: Decompress chunks and write
-            for (const auto& chunk : chunks) {
-                // Convert chunk to CompressedData
-                fileio::CompressedData compressed_chunk{chunk.data};
-
-                // Decompress chunk (may produce multiple output chunks)
-                std::vector<fileio::RawData> decompressed_chunks =
-                    co_await decompressor.process(compressed_chunk);
-
-                // Write all decompressed chunks
-                for (const auto& decompressed : decompressed_chunks) {
-                    co_await writer.process(decompressed);
-                }
+            auto gen =
+                fileio::read_binary_file(input.input_path, input.chunk_size) >>
+                [&](ByteView chunk) { return decompressor.decompress(chunk); };
+            while (auto out = co_await gen.next()) {
+                co_await writer.process(*out);
             }
 
-            // Step 6: Close writer
             writer.close();
 
             // Get final decompressed size

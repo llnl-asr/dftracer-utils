@@ -1,8 +1,7 @@
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
-#include "io_uring_backend.h"
-
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/io/io_uring_backend.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <fcntl.h>
 #include <sys/eventfd.h>
@@ -23,18 +22,6 @@
 #if __has_feature(thread_sanitizer)
 #define DFTRACER_TSAN 1
 #endif
-#endif
-
-#ifdef DFTRACER_TSAN
-extern "C" {
-void __tsan_acquire(void*);
-void __tsan_release(void*);
-}
-#define TSAN_ACQUIRE(addr) __tsan_acquire(addr)
-#define TSAN_RELEASE(addr) __tsan_release(addr)
-#else
-#define TSAN_ACQUIRE(addr) ((void)0)
-#define TSAN_RELEASE(addr) ((void)0)
 #endif
 
 namespace dftracer::utils::io {
@@ -275,7 +262,7 @@ void IoUringBackend::completion_loop() {
 
         auto* req = static_cast<IoUringRequest*>(uring::cqe_get_data(cqe));
         if (req) {
-            TSAN_ACQUIRE(req);
+            DFTRACER_TSAN_ACQUIRE(req);
             if (req->awaitable) {
                 req->awaitable->result_ = cqe->res;
                 executor_.enqueue(req->awaitable->handle_);
@@ -506,7 +493,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
     }
 
     uring::sqe_set_data(sqe, req);
-    TSAN_RELEASE(req);
+    DFTRACER_TSAN_RELEASE(req);
     backend->ring_.mark_pending();
     backend->maybe_flush_locked();
     delete uring_ctx;

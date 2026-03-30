@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_CORE_CORO_CHANNEL_H
 
 #include <concurrentqueue.h>
+#include <dftracer/utils/core/coro/resumption_helper.h>
 
 #include <atomic>
 #include <cassert>
@@ -12,8 +13,6 @@
 #include <mutex>
 #include <optional>
 #include <utility>
-
-#include "dftracer/utils/core/coro/resumption_helper.h"
 
 namespace dftracer::utils {
 class Executor;

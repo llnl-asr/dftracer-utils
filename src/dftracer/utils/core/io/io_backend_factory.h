@@ -1,4 +1,5 @@
-#pragma once
+#ifndef DFTRACER_UTILS_CORE_IO_IO_BACKEND_FACTORY_H
+#define DFTRACER_UTILS_CORE_IO_IO_BACKEND_FACTORY_H
 
 #include <dftracer/utils/core/io/io_backend.h>
 
@@ -22,3 +23,5 @@ std::unique_ptr<IoBackend> create_io_backend(
     unsigned batch_threshold = 16);
 
 }  // namespace dftracer::utils::io
+
+#endif  // DFTRACER_UTILS_CORE_IO_IO_BACKEND_FACTORY_H

@@ -1,16 +1,16 @@
-#pragma once
+#ifndef DFTRACER_UTILS_CORE_IO_KQUEUE_THREAD_POOL_BACKEND_H
+#define DFTRACER_UTILS_CORE_IO_KQUEUE_THREAD_POOL_BACKEND_H
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
 #define DFTRACER_UTILS_HAVE_KQUEUE 1
 
 #include <dftracer/utils/core/io/io_backend.h>
+#include <dftracer/utils/core/io/io_completion_thread.h>
+#include <dftracer/utils/core/io/io_thread_pool.h>
 #include <sys/stat.h>
 
 #include <cstddef>
 #include <string>
-
-#include "io_completion_thread.h"
-#include "io_thread_pool.h"
 
 namespace dftracer::utils {
 class Executor;
@@ -91,3 +91,4 @@ class KqueueThreadPoolBackend : public IoBackend {
 }  // namespace dftracer::utils::io
 
 #endif  // kqueue platforms
+#endif  // DFTRACER_UTILS_CORE_IO_KQUEUE_THREAD_POOL_BACKEND_H

@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/composites/streaming_file_merger_utility.h>
@@ -5,10 +6,40 @@
 #include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 
-#include <fstream>
 #include <utility>
 
 namespace dftracer::utils::utilities::composites {
+
+namespace {
+
+// FNV-1a hash for byte-level verification
+inline std::size_t fnv1a_line(const char* data, std::size_t len) {
+    std::size_t h = 14695981039346656037ULL;
+    for (std::size_t i = 0; i < len; ++i) {
+        h ^= static_cast<std::size_t>(static_cast<unsigned char>(data[i]));
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+// Check if a line is an array delimiter ([ or ]) after trimming whitespace.
+inline bool is_array_delimiter(const char* data, std::size_t len) {
+    // Skip leading whitespace
+    std::size_t start = 0;
+    while (start < len &&
+           (data[start] == ' ' || data[start] == '\t' || data[start] == '\r')) {
+        ++start;
+    }
+    if (start >= len) return true;  // empty/whitespace-only line
+    char ch = data[start];
+    return ch == '[' || ch == ']';
+}
+
+}  // namespace
+
+// ============================================================================
+// Producer: decompress file, strip array delimiters, send raw chunks
+// ============================================================================
 
 coro::CoroTask<StreamingFileProducerOutput>
 StreamingFileProducerUtility::process_async(
@@ -17,8 +48,6 @@ StreamingFileProducerUtility::process_async(
     result.file_path = input.file_path;
 
     try {
-        // Merge always reads sequentially, so we never need a sidecar
-        // index.  Stream-decompress .gz files directly in a single pass.
         auto reader_config =
             fileio::lines::StreamingLineReaderConfig().with_file(
                 input.file_path);
@@ -26,178 +55,168 @@ StreamingFileProducerUtility::process_async(
         auto line_gen =
             fileio::lines::StreamingLineReader::read_async(reader_config);
 
-        StreamingMergeBatchUtility batch;
+        const std::size_t batch_budget = input.batch_byte_budget;
+        // Acquire a reusable buffer from the pool (zero alloc after warmup)
+        std::string local_buf = buf_pool_->acquire();
+        local_buf.clear();
+        std::size_t batch_events = 0;
+        std::size_t batch_hash = 0;
+        std::size_t total_hash = 0;
 
-        if (input.verify) {
-            dft::EventIdExtractor event_extractor;
-            dft::IncrementalEventHasher hasher;
+        auto flush = [&]() -> coro::CoroTask<bool> {
+            if (batch_events == 0) co_return true;
+            StreamingMergeBatch batch;
+            batch.buf = std::move(local_buf);
+            batch.event_count = batch_events;
+            batch.batch_hash = batch_hash;
+            total_hash += batch_hash;
 
-            while (auto line_opt = co_await line_gen.next()) {
-                const auto& line = *line_opt;
-                const char* trimmed;
-                std::size_t trimmed_length;
+            // Acquire next buffer from pool (blocks if all in use)
+            local_buf = buf_pool_->acquire();
+            local_buf.clear();
+            batch_events = 0;
+            batch_hash = 0;
 
-                if (json_trim_and_validate(line.content.data(),
-                                           line.content.size(), trimmed,
-                                           trimmed_length) &&
-                    trimmed_length > 8) {
-                    std::string content(trimmed, trimmed_length);
+            co_return co_await channel_->send(std::move(batch));
+        };
 
-                    auto extract_input =
-                        dft::EventIdExtractionInput::from_json(content);
-                    auto event_id =
-                        co_await event_extractor.process(extract_input);
+        while (auto line_opt = co_await line_gen.next()) {
+            const auto& line = *line_opt;
+            if (line.content.empty()) continue;
 
-                    if (event_id.is_valid()) {
-                        hasher.update(event_id);
-                        batch.add(std::move(content), event_id);
-                        result.events_sent++;
+            if (is_array_delimiter(line.content.data(), line.content.size()))
+                continue;
 
-                        if (batch.size() >= input.batch_size) {
-                            if (!co_await channel_->send(std::move(batch))) {
-                                co_return result;
-                            }
-                            batch = StreamingMergeBatchUtility{};
-                        }
-                    }
-                }
+            const char* trimmed;
+            std::size_t trimmed_length;
+            if (!json_trim_and_validate(line.content.data(),
+                                        line.content.size(), trimmed,
+                                        trimmed_length) ||
+                trimmed_length <= 2) {
+                continue;
             }
 
-            result.input_hash = hasher.get_hash();
-        } else {
-            // Fast path: skip JSON parsing and hashing, include all
-            // valid JSON lines (events + metadata).
-            while (auto line_opt = co_await line_gen.next()) {
-                const auto& line = *line_opt;
-                const char* trimmed;
-                std::size_t trimmed_length;
+            if (batch_events > 0) local_buf += '\n';
+            local_buf.append(trimmed, trimmed_length);
+            ++batch_events;
+            ++result.events_sent;
 
-                if (json_trim_and_validate(line.content.data(),
-                                           line.content.size(), trimmed,
-                                           trimmed_length) &&
-                    trimmed_length > 8) {
-                    batch.add_unchecked(std::string(trimmed, trimmed_length));
-                    result.events_sent++;
+            if (input.verify) {
+                batch_hash += fnv1a_line(trimmed, trimmed_length);
+            }
 
-                    if (batch.size() >= input.batch_size) {
-                        if (!co_await channel_->send(std::move(batch))) {
-                            co_return result;
-                        }
-                        batch = StreamingMergeBatchUtility{};
-                    }
-                }
+            if (local_buf.size() >= batch_budget) {
+                if (!co_await flush()) co_return result;
             }
         }
 
-        if (!batch.empty()) {
-            if (!co_await channel_->send(std::move(batch))) {
-                co_return result;
-            }
+        if (!co_await flush()) {
+            buf_pool_->release(std::move(local_buf));
+            co_return result;
+        }
+
+        // Return unused buffer to pool
+        buf_pool_->release(std::move(local_buf));
+
+        if (input.verify) {
+            result.input_hash = total_hash;
         }
 
         result.success = true;
 
-        DFTRACER_UTILS_LOG_DEBUG("Producer sent %zu events from %s",
-                                 result.events_sent, input.file_path.c_str());
-
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Error processing file %s: %s",
+        DFTRACER_UTILS_LOG_ERROR("Producer error for %s: %s",
                                  input.file_path.c_str(), e.what());
-        result.success = false;
     }
 
     co_return result;
 }
 
+// ============================================================================
+// Consumer: read raw byte batches from channel, write with array wrapper
+// ============================================================================
+
 coro::CoroTask<StreamingFileConsumerOutput>
 StreamingFileConsumerUtility::process_async(
-    CoroScope& ctx, const StreamingFileConsumerInput& input) {
+    [[maybe_unused]] CoroScope& ctx, const StreamingFileConsumerInput& input) {
     StreamingFileConsumerOutput result;
+    result.output_path =
+        input.compress ? input.output_file + ".gz" : input.output_file;
 
     try {
-        const std::string out_path =
-            input.compress ? input.output_file + ".gz" : input.output_file;
-        result.output_path = out_path;
-
-        fileio::StreamingFileWriterUtility writer(out_path, false, true);
-
-        std::unique_ptr<compression::zlib::ManualStreamingCompressorUtility>
-            compressor;
         if (input.compress) {
-            compressor = std::make_unique<
-                compression::zlib::ManualStreamingCompressorUtility>(
-                6, compression::zlib::CompressionFormat::GZIP);
-        }
+            // Compressed path: compress via ByteView generator, zero alloc
+            fileio::StreamingFileWriterUtility writer(result.output_path);
+            compression::zlib::ManualStreamingCompressorUtility compressor;
 
-        // Write a chunk, routing through the compressor when active.
-        auto write_chunk =
-            [&](const fileio::RawData& raw) -> coro::CoroTask<void> {
-            if (compressor) {
-                auto chunks = co_await compressor->process(raw);
-                for (const auto& chunk : chunks) {
-                    co_await writer.process(fileio::RawData{chunk.data});
+            auto write_compressed =
+                [&](const char* data, std::size_t len) -> coro::CoroTask<void> {
+                auto gen = compressor.compress(ByteView(data, len));
+                while (auto chunk = co_await gen.next()) {
+                    co_await writer.process(*chunk);
                 }
-            } else {
-                co_await writer.process(raw);
-            }
-        };
+            };
 
-        co_await write_chunk(fileio::RawData(std::string{"[\n"}));
+            co_await write_compressed("[\n", 2);
 
-        bool first = true;
-
-        while (auto next = co_await ctx.receive(channel_)) {
-            auto& current = *next;
-            result.output_hash += current.batch_hash;
-
-            // Pre-calculate buffer size: each event + leading '\n' (except
-            // the very first event overall).
-            std::size_t total = 0;
-            for (const auto& s : current.contents) {
-                total += s.size() + 1;  // +1 for '\n'
-            }
-            if (first && !current.contents.empty()) {
-                total -= 1;  // no leading newline before the first event
-            }
-
-            std::string buf;
-            buf.reserve(total);
-
-            for (const auto& s : current.contents) {
-                if (!first) {
-                    buf += '\n';
-                }
-                buf += s;
+            bool first = true;
+            while (auto next = co_await ctx.receive(channel_)) {
+                auto& current = *next;
+                result.output_hash += current.batch_hash;
+                result.total_events += current.event_count;
+                if (current.buf.empty()) continue;
+                if (!first) co_await write_compressed("\n", 1);
                 first = false;
-                result.total_events++;
+                co_await write_compressed(current.buf.data(),
+                                          current.buf.size());
+                buf_pool_->release(std::move(current.buf));
             }
 
-            co_await write_chunk(fileio::RawData(buf));
-        }
+            if (result.total_events > 0) {
+                co_await write_compressed("\n]\n", 3);
+            } else {
+                co_await write_compressed("]\n", 2);
+            }
 
-        if (result.total_events > 0) {
-            co_await write_chunk(fileio::RawData(std::string{"\n]\n"}));
+            auto fin = compressor.finalize_stream();
+            while (auto chunk = co_await fin.next()) {
+                co_await writer.process(*chunk);
+            }
+            writer.close();
         } else {
-            co_await write_chunk(fileio::RawData(std::string{"]\n"}));
-        }
-
-        if (compressor) {
-            auto final_chunks = compressor->finalize();
-            for (const auto& chunk : final_chunks) {
-                co_await writer.process(fileio::RawData{chunk.data});
+            // Uncompressed path: write directly to ofstream, zero allocs
+            std::ofstream ofs(result.output_path, std::ios::binary);
+            if (!ofs) {
+                throw std::runtime_error("Failed to open output: " +
+                                         result.output_path);
             }
-        }
 
-        writer.close();
+            ofs.write("[\n", 2);
+
+            bool first = true;
+            while (auto next = co_await ctx.receive(channel_)) {
+                auto& current = *next;
+                result.output_hash += current.batch_hash;
+                result.total_events += current.event_count;
+                if (current.buf.empty()) continue;
+                if (!first) ofs.write("\n", 1);
+                first = false;
+                ofs.write(current.buf.data(),
+                          static_cast<std::streamsize>(current.buf.size()));
+                buf_pool_->release(std::move(current.buf));
+            }
+
+            if (result.total_events > 0) {
+                ofs.write("\n]\n", 3);
+            } else {
+                ofs.write("]\n", 2);
+            }
+            ofs.close();
+        }
         result.success = true;
 
-        DFTRACER_UTILS_LOG_INFO("Consumer wrote %zu events to %s",
-                                result.total_events,
-                                result.output_path.c_str());
-
     } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Error writing output: %s", e.what());
-        result.success = false;
+        DFTRACER_UTILS_LOG_ERROR("Consumer error: %s", e.what());
     }
 
     co_return result;

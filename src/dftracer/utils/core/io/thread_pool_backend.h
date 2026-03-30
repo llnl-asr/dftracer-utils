@@ -1,13 +1,14 @@
-#pragma once
+#ifndef DFTRACER_UTILS_CORE_IO_THREAD_POOL_BACKEND_H
+#define DFTRACER_UTILS_CORE_IO_THREAD_POOL_BACKEND_H
 
+#include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/io/io_backend.h>
+#include <dftracer/utils/core/io/io_thread_pool.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
 
 #include <cstddef>
 #include <string>
-
-#include "io_thread_pool.h"
 
 namespace dftracer::utils {
 class Executor;
@@ -40,6 +41,13 @@ enum class IoOp {
 /// Request descriptor that doubles as SubmitContext.
 /// Heap-allocated per I/O operation, freed after completion.
 struct IoRequest : SubmitContext {
+    static void* operator new(std::size_t size) {
+        return ObjectPool::instance().allocate(size);
+    }
+    static void operator delete(void* ptr, std::size_t size) {
+        ObjectPool::instance().deallocate(ptr, size);
+    }
+
     IoOp op = IoOp::READ;
     int fd = -1;
     void* buf = nullptr;
@@ -117,3 +125,5 @@ class ThreadPoolBackend : public IoBackend {
 };
 
 }  // namespace dftracer::utils::io
+
+#endif  // DFTRACER_UTILS_CORE_IO_THREAD_POOL_BACKEND_H

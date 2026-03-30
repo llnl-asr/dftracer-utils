@@ -191,7 +191,7 @@ TEST_CASE("StreamingFileReaderUtility - Data Integrity") {
 
         std::string reconstructed;
         for (const auto& chunk : chunks) {
-            reconstructed += chunk.to_string();
+            reconstructed += std::string(chunk.as<char>(), chunk.size());
         }
 
         CHECK(reconstructed == original_data);
@@ -213,8 +213,8 @@ TEST_CASE("StreamingFileReaderUtility - Data Integrity") {
 
         std::vector<unsigned char> reconstructed;
         for (const auto& chunk : chunks) {
-            reconstructed.insert(reconstructed.end(), chunk.data.begin(),
-                                 chunk.data.end());
+            reconstructed.insert(reconstructed.end(), chunk.as<unsigned char>(),
+                                 chunk.as<unsigned char>() + chunk.size());
         }
 
         CHECK(reconstructed.size() == 255);
@@ -297,7 +297,7 @@ TEST_CASE("StreamingFileReaderUtility - Special Characters") {
 
         std::string reconstructed;
         for (const auto& chunk : chunks) {
-            reconstructed += chunk.to_string();
+            reconstructed += std::string(chunk.as<char>(), chunk.size());
         }
 
         CHECK(reconstructed.find("Hello") != std::string::npos);

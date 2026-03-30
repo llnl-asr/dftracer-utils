@@ -1,28 +1,92 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
-#include <dftracer/utils/utilities/fileio/types/types.h>
 #include <doctest/doctest.h>
 
-#include <fstream>
-#include <memory>
 #include <string>
+#include <vector>
 
 using namespace dftracer::utils::utilities::compression::zlib;
-using namespace dftracer::utils::utilities::fileio;
+using namespace dftracer::utils::coro;
+using dftracer::utils::ByteView;
+
+// Helper to compress input and finalize, returning all compressed bytes.
+static std::vector<unsigned char> compress_all(
+    ManualStreamingCompressorUtility& comp, ByteView input) {
+    std::vector<unsigned char> result;
+    [&]() -> CoroTask<void> {
+        auto gen = comp.compress(input);
+        while (auto chunk = co_await gen.next()) {
+            result.insert(result.end(), chunk->as<unsigned char>(),
+                          chunk->as<unsigned char>() + chunk->size());
+        }
+        auto fin = comp.finalize_stream();
+        while (auto chunk = co_await fin.next()) {
+            result.insert(result.end(), chunk->as<unsigned char>(),
+                          chunk->as<unsigned char>() + chunk->size());
+        }
+    }()
+                 .get();
+    return result;
+}
+
+// Helper to compress without finalizing (for incremental use).
+static std::vector<unsigned char> compress_chunk(
+    ManualStreamingCompressorUtility& comp, ByteView input) {
+    std::vector<unsigned char> result;
+    [&]() -> CoroTask<void> {
+        auto gen = comp.compress(input);
+        while (auto chunk = co_await gen.next()) {
+            result.insert(result.end(), chunk->as<unsigned char>(),
+                          chunk->as<unsigned char>() + chunk->size());
+        }
+    }()
+                 .get();
+    return result;
+}
+
+// Helper to finalize a compressor, returning remaining bytes.
+static std::vector<unsigned char> finalize_compressor(
+    ManualStreamingCompressorUtility& comp) {
+    std::vector<unsigned char> result;
+    [&]() -> CoroTask<void> {
+        auto fin = comp.finalize_stream();
+        while (auto chunk = co_await fin.next()) {
+            result.insert(result.end(), chunk->as<unsigned char>(),
+                          chunk->as<unsigned char>() + chunk->size());
+        }
+    }()
+                 .get();
+    return result;
+}
+
+// Helper to decompress compressed bytes, returning all decompressed bytes.
+static std::vector<unsigned char> decompress_all(
+    StreamingDecompressorUtility& decomp, ByteView input) {
+    std::vector<unsigned char> result;
+    [&]() -> CoroTask<void> {
+        auto gen = decomp.decompress(input);
+        while (auto chunk = co_await gen.next()) {
+            result.insert(result.end(), chunk->as<unsigned char>(),
+                          chunk->as<unsigned char>() + chunk->size());
+        }
+    }()
+                 .get();
+    return result;
+}
 
 TEST_CASE("ManualStreamingCompressorUtility - Basic Operations") {
     SUBCASE("Compress single chunk") {
         ManualStreamingCompressorUtility compressor;
 
         std::string text = "Hello, World!";
-        RawData chunk(text);
-
-        auto compressed_chunks = compressor.process(chunk).get();
-        auto final_chunks = compressor.finalize();
+        auto compressed = compress_all(compressor, ByteView(text));
 
         // Should produce some compressed data
-        CHECK((compressed_chunks.size() + final_chunks.size()) > 0);
+        CHECK(compressed.size() > 0);
         CHECK(compressor.total_bytes_in() == text.size());
         CHECK(compressor.total_bytes_out() > 0);
     }
@@ -30,10 +94,10 @@ TEST_CASE("ManualStreamingCompressorUtility - Basic Operations") {
     SUBCASE("Compress empty chunk") {
         ManualStreamingCompressorUtility compressor;
 
-        RawData empty(std::vector<unsigned char>{});
-        auto compressed_chunks = compressor.process(empty).get();
+        std::vector<unsigned char> empty{};
+        auto compressed = compress_chunk(compressor, ByteView(empty));
 
-        CHECK(compressed_chunks.empty());
+        CHECK(compressed.empty());
     }
 
     SUBCASE("Multiple small chunks") {
@@ -43,12 +107,11 @@ TEST_CASE("ManualStreamingCompressorUtility - Basic Operations") {
         std::size_t total_size = 0;
 
         for (const auto& text : texts) {
-            RawData chunk(text);
             total_size += text.size();
-            auto compressed_chunks = compressor.process(chunk).get();
+            compress_chunk(compressor, ByteView(text));
         }
 
-        auto final_chunks = compressor.finalize();
+        finalize_compressor(compressor);
 
         CHECK(compressor.total_bytes_in() == total_size);
         CHECK(compressor.total_bytes_out() > 0);
@@ -60,10 +123,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Compression Levels") {
         ManualStreamingCompressorUtility compressor;
 
         std::string text(1000, 'a');
-        RawData chunk(text);
-
-        auto compressed_chunks = compressor.process(chunk).get();
-        auto final_chunks = compressor.finalize();
+        compress_all(compressor, ByteView(text));
 
         CHECK(compressor.total_bytes_in() == 1000);
         CHECK(compressor.compression_ratio() < 1.0);
@@ -73,10 +133,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Compression Levels") {
         ManualStreamingCompressorUtility compressor(0);
 
         std::string text(1000, 'a');
-        RawData chunk(text);
-
-        auto compressed_chunks = compressor.process(chunk).get();
-        auto final_chunks = compressor.finalize();
+        compress_all(compressor, ByteView(text));
 
         CHECK(compressor.total_bytes_in() == 1000);
     }
@@ -85,10 +142,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Compression Levels") {
         ManualStreamingCompressorUtility compressor(9);
 
         std::string text(1000, 'a');
-        RawData chunk(text);
-
-        auto compressed_chunks = compressor.process(chunk).get();
-        auto final_chunks = compressor.finalize();
+        compress_all(compressor, ByteView(text));
 
         CHECK(compressor.total_bytes_in() == 1000);
         // Level 9 should compress very well
@@ -109,13 +163,12 @@ TEST_CASE("ManualStreamingCompressorUtility - Streaming Behavior") {
 
         std::size_t total_input = 0;
         for (const auto& text : chunks_data) {
-            RawData chunk(text);
             total_input += text.size();
-            auto compressed = compressor.process(chunk).get();
+            compress_chunk(compressor, ByteView(text));
             // Each chunk may or may not produce output
         }
 
-        auto final_chunks = compressor.finalize();
+        finalize_compressor(compressor);
 
         CHECK(compressor.total_bytes_in() == total_input);
         CHECK(compressor.total_bytes_out() > 0);
@@ -127,10 +180,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Streaming Behavior") {
 
         // Create large repetitive data
         std::string large_chunk(100000, 'x');
-        RawData chunk(large_chunk);
-
-        auto compressed = compressor.process(chunk).get();
-        auto final_chunks = compressor.finalize();
+        compress_all(compressor, ByteView(large_chunk));
 
         // Should compress very well
         CHECK(compressor.compression_ratio() < 0.01);
@@ -147,11 +197,10 @@ TEST_CASE("ManualStreamingCompressorUtility - Streaming Behavior") {
         };
 
         for (const auto& text : chunks_data) {
-            RawData chunk(text);
-            compressor.process(chunk).get();
+            compress_chunk(compressor, ByteView(text));
         }
 
-        compressor.finalize();
+        finalize_compressor(compressor);
 
         CHECK(compressor.total_bytes_in() == (10 + 1000 + 10000 + 100));
     }
@@ -162,10 +211,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Metadata") {
         ManualStreamingCompressorUtility compressor;
 
         std::string text(10000, 'z');
-        RawData chunk(text);
-
-        compressor.process(chunk).get();
-        compressor.finalize();
+        compress_all(compressor, ByteView(text));
 
         double ratio = compressor.compression_ratio();
         double expected =
@@ -181,12 +227,11 @@ TEST_CASE("ManualStreamingCompressorUtility - Metadata") {
         std::size_t expected_in = 0;
 
         for (const auto& text : texts) {
-            RawData chunk(text);
             expected_in += text.size();
-            compressor.process(chunk).get();
+            compress_chunk(compressor, ByteView(text));
         }
 
-        compressor.finalize();
+        finalize_compressor(compressor);
 
         CHECK(compressor.total_bytes_in() == expected_in);
         CHECK(compressor.total_bytes_out() > 0);
@@ -197,7 +242,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Edge Cases") {
     SUBCASE("Finalize without processing") {
         ManualStreamingCompressorUtility compressor;
 
-        auto final_chunks = compressor.finalize();
+        finalize_compressor(compressor);
 
         // Should handle empty stream
         CHECK(compressor.total_bytes_in() == 0);
@@ -207,10 +252,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Edge Cases") {
         ManualStreamingCompressorUtility compressor;
 
         std::vector<unsigned char> zeros(10000, 0);
-        RawData chunk(zeros);
-
-        compressor.process(chunk).get();
-        compressor.finalize();
+        compress_all(compressor, ByteView(zeros));
 
         // Should compress extremely well
         CHECK(compressor.compression_ratio() < 0.01);
@@ -223,10 +265,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Edge Cases") {
         for (int i = 0; i < 1000; ++i) {
             pattern.push_back(static_cast<unsigned char>(i % 256));
         }
-        RawData chunk(pattern);
-
-        compressor.process(chunk).get();
-        compressor.finalize();
+        compress_all(compressor, ByteView(pattern));
 
         CHECK(compressor.total_bytes_in() == 1000);
         CHECK(compressor.total_bytes_out() > 0);
@@ -241,11 +280,10 @@ TEST_CASE("ManualStreamingCompressorUtility - Real World Scenarios") {
         for (int i = 0; i < 100; ++i) {
             std::string log_entry = "[2024-01-01 12:00:00] INFO: Log entry " +
                                     std::to_string(i) + "\n";
-            RawData chunk(log_entry);
-            compressor.process(chunk).get();
+            compress_chunk(compressor, ByteView(log_entry));
         }
 
-        compressor.finalize();
+        finalize_compressor(compressor);
 
         // Log data should compress well due to repetition
         CHECK(compressor.compression_ratio() < 0.5);
@@ -256,16 +294,16 @@ TEST_CASE("ManualStreamingCompressorUtility - Real World Scenarios") {
 
         // CSV header
         std::string header = "id,name,value\n";
-        compressor.process(RawData(header)).get();
+        compress_chunk(compressor, ByteView(header));
 
         // CSV rows
         for (int i = 0; i < 1000; ++i) {
             std::string row = std::to_string(i) + ",item" + std::to_string(i) +
                               "," + std::to_string(i * 100) + "\n";
-            compressor.process(RawData(row)).get();
+            compress_chunk(compressor, ByteView(row));
         }
 
-        compressor.finalize();
+        finalize_compressor(compressor);
 
         CHECK(compressor.total_bytes_in() > 1000);
         CHECK(compressor.compression_ratio() < 1.0);
@@ -275,7 +313,8 @@ TEST_CASE("ManualStreamingCompressorUtility - Real World Scenarios") {
         ManualStreamingCompressorUtility compressor;
 
         // Simulate JSON array streaming
-        compressor.process(RawData("[\n")).get();
+        std::string open_bracket = "[\n";
+        compress_chunk(compressor, ByteView(open_bracket));
 
         for (int i = 0; i < 50; ++i) {
             std::string json_obj = R"(  {"id": )" + std::to_string(i) +
@@ -283,11 +322,12 @@ TEST_CASE("ManualStreamingCompressorUtility - Real World Scenarios") {
                                    "}";
             if (i < 49) json_obj += ",";
             json_obj += "\n";
-            compressor.process(RawData(json_obj)).get();
+            compress_chunk(compressor, ByteView(json_obj));
         }
 
-        compressor.process(RawData("]\n")).get();
-        compressor.finalize();
+        std::string close_bracket = "]\n";
+        compress_chunk(compressor, ByteView(close_bracket));
+        finalize_compressor(compressor);
 
         CHECK(compressor.total_bytes_out() > 0);
     }
@@ -299,15 +339,15 @@ TEST_CASE("ManualStreamingCompressorUtility - Consistency") {
 
         // Compress as single chunk
         ManualStreamingCompressorUtility compressor1;
-        compressor1.process(RawData(full_text)).get();
-        compressor1.finalize();
+        compress_all(compressor1, ByteView(full_text));
 
         // Compress as multiple chunks
         ManualStreamingCompressorUtility compressor2;
         for (char c : full_text) {
-            compressor2.process(RawData(std::string(1, c))).get();
+            std::string s(1, c);
+            compress_chunk(compressor2, ByteView(s));
         }
-        compressor2.finalize();
+        finalize_compressor(compressor2);
 
         // Both should produce same input size
         CHECK(compressor1.total_bytes_in() == compressor2.total_bytes_in());
@@ -326,44 +366,14 @@ TEST_CASE("ManualStreamingCompressorUtility - Performance") {
         for (std::size_t i = 0; i < num_chunks; ++i) {
             std::string chunk_data(chunk_size,
                                    static_cast<char>('a' + (i % 26)));
-            compressor.process(RawData(chunk_data)).get();
+            compress_chunk(compressor, ByteView(chunk_data));
         }
 
-        compressor.finalize();
+        finalize_compressor(compressor);
 
         CHECK(compressor.total_bytes_in() == chunk_size * num_chunks);
         CHECK(compressor.total_bytes_out() > 0);
         CHECK(compressor.compression_ratio() < 0.1);  // Should compress well
-    }
-}
-
-TEST_CASE("StreamingCompressorUtility - Set Compression Level") {
-    auto streaming_compressor = std::make_shared<StreamingCompressorUtility>();
-
-    SUBCASE("Default level") {
-        CHECK(streaming_compressor->get_compression_level() ==
-              Z_DEFAULT_COMPRESSION);
-    }
-
-    SUBCASE("Set valid levels") {
-        for (int level = 0; level <= 9; ++level) {
-            CHECK_NOTHROW(streaming_compressor->set_compression_level(level));
-            CHECK(streaming_compressor->get_compression_level() == level);
-        }
-    }
-
-    SUBCASE("Set Z_DEFAULT_COMPRESSION") {
-        CHECK_NOTHROW(
-            streaming_compressor->set_compression_level(Z_DEFAULT_COMPRESSION));
-        CHECK(streaming_compressor->get_compression_level() ==
-              Z_DEFAULT_COMPRESSION);
-    }
-
-    SUBCASE("Invalid levels") {
-        CHECK_THROWS_AS(streaming_compressor->set_compression_level(10),
-                        std::invalid_argument);
-        CHECK_THROWS_AS(streaming_compressor->set_compression_level(-2),
-                        std::invalid_argument);
     }
 }
 
@@ -372,10 +382,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Compression Formats") {
         ManualStreamingCompressorUtility compressor(Z_DEFAULT_COMPRESSION,
                                                     CompressionFormat::GZIP);
         std::string text = "Test data for GZIP format";
-        RawData chunk(text);
-
-        auto compressed = compressor.process(chunk).get();
-        auto final = compressor.finalize();
+        compress_all(compressor, ByteView(text));
 
         CHECK(compressor.total_bytes_in() == text.size());
         CHECK(compressor.total_bytes_out() > 0);
@@ -385,10 +392,7 @@ TEST_CASE("ManualStreamingCompressorUtility - Compression Formats") {
         ManualStreamingCompressorUtility compressor(Z_DEFAULT_COMPRESSION,
                                                     CompressionFormat::ZLIB);
         std::string text = "Test data for ZLIB format";
-        RawData chunk(text);
-
-        auto compressed = compressor.process(chunk).get();
-        auto final = compressor.finalize();
+        compress_all(compressor, ByteView(text));
 
         CHECK(compressor.total_bytes_in() == text.size());
         CHECK(compressor.total_bytes_out() > 0);
@@ -398,203 +402,10 @@ TEST_CASE("ManualStreamingCompressorUtility - Compression Formats") {
         ManualStreamingCompressorUtility compressor(
             Z_DEFAULT_COMPRESSION, CompressionFormat::DEFLATE_RAW);
         std::string text = "Test data for RAW DEFLATE format";
-        RawData chunk(text);
-
-        auto compressed = compressor.process(chunk).get();
-        auto final = compressor.finalize();
+        compress_all(compressor, ByteView(text));
 
         CHECK(compressor.total_bytes_in() == text.size());
         CHECK(compressor.total_bytes_out() > 0);
-    }
-}
-
-TEST_CASE("StreamingCompressorUtility - With ChunkRange") {
-    // Create a test file
-    fs::path test_file =
-        fs::temp_directory_path() / "test_streaming_compress.txt";
-
-    SUBCASE("Compress file using ChunkRange") {
-        // Write test data to file
-        {
-            std::ofstream ofs(test_file);
-            for (int i = 0; i < 1000; ++i) {
-                ofs << "Line " << i
-                    << ": This is a test line with some data.\n";
-            }
-        }
-
-        // Create streaming compressor
-        auto compressor = std::make_shared<StreamingCompressorUtility>();
-        compressor->set_compression_level(6);
-
-        // Create ChunkRange
-        ChunkRange chunks(test_file, 1024);  // 1KB chunks
-
-        // Compress using the StreamingCompressorUtility::process
-        auto compressed_range = compressor->process(chunks).get();
-
-        // Iterate through compressed chunks
-        std::size_t total_compressed = 0;
-        int chunk_count = 0;
-        for (const auto& compressed_chunk : compressed_range) {
-            total_compressed += compressed_chunk.size();
-            chunk_count++;
-        }
-
-        CHECK(chunk_count > 0);
-        CHECK(total_compressed > 0);
-
-        // Clean up
-        fs::remove(test_file);
-    }
-
-    SUBCASE("Different compression levels with ChunkRange") {
-        // Write test data
-        {
-            std::ofstream ofs(test_file);
-            std::string line(100, 'a');
-            for (int i = 0; i < 1000; ++i) {
-                ofs << line << "\n";
-            }
-        }
-
-        // Test level 1
-        {
-            auto compressor1 = std::make_shared<StreamingCompressorUtility>();
-            compressor1->set_compression_level(1);
-            ChunkRange chunks(test_file, 1024);
-            auto compressed = compressor1->process(chunks).get();
-
-            std::size_t size1 = 0;
-            for (const auto& chunk : compressed) {
-                size1 += chunk.size();
-            }
-
-            CHECK(size1 > 0);
-        }
-
-        // Test level 9
-        {
-            auto compressor9 = std::make_shared<StreamingCompressorUtility>();
-            compressor9->set_compression_level(9);
-            ChunkRange chunks(test_file, 1024);
-            auto compressed = compressor9->process(chunks).get();
-
-            std::size_t size9 = 0;
-            for (const auto& chunk : compressed) {
-                size9 += chunk.size();
-            }
-
-            CHECK(size9 > 0);
-            // Level 9 should generally be smaller or equal
-        }
-
-        fs::remove(test_file);
-    }
-
-    SUBCASE("Large file streaming compression") {
-        // Create larger file
-        {
-            std::ofstream ofs(test_file);
-            for (int i = 0; i < 10000; ++i) {
-                ofs << "This is test line " << i << " with repeated data. ";
-                ofs << "More data here for compression testing.\n";
-            }
-        }
-
-        auto compressor = std::make_shared<StreamingCompressorUtility>();
-        compressor->set_compression_level(6);
-
-        // Use smaller chunks to test streaming
-        ChunkRange chunks(test_file, 512);
-        auto compressed_range = compressor->process(chunks).get();
-
-        std::size_t total_compressed = 0;
-        int chunk_count = 0;
-        for (const auto& compressed_chunk : compressed_range) {
-            total_compressed += compressed_chunk.size();
-            chunk_count++;
-        }
-
-        // Should have multiple chunks
-        CHECK(chunk_count > 1);
-        CHECK(total_compressed > 0);
-
-        // Should compress well due to repetitive data
-        std::size_t file_size = fs::file_size(test_file);
-        double compression_ratio = static_cast<double>(total_compressed) /
-                                   static_cast<double>(file_size);
-        CHECK(compression_ratio < 1.0);
-
-        fs::remove(test_file);
-    }
-
-    SUBCASE("Small file single chunk") {
-        // Write small file
-        {
-            std::ofstream ofs(test_file);
-            ofs << "Small test file";
-        }
-
-        auto compressor = std::make_shared<StreamingCompressorUtility>();
-        ChunkRange chunks(test_file, 1024);
-        auto compressed_range = compressor->process(chunks).get();
-
-        int chunk_count = 0;
-        for (const auto& compressed_chunk : compressed_range) {
-            chunk_count++;
-            CHECK_FALSE(compressed_chunk.data.empty());
-        }
-
-        // Small file should result in 1 compressed chunk
-        CHECK(chunk_count >= 1);
-
-        fs::remove(test_file);
-    }
-
-    SUBCASE("Binary file compression") {
-        // Write binary data
-        {
-            std::ofstream ofs(test_file, std::ios::binary);
-            for (int i = 0; i < 10000; ++i) {
-                unsigned char byte = static_cast<unsigned char>(i % 256);
-                ofs.write(reinterpret_cast<const char*>(&byte), 1);
-            }
-        }
-
-        auto compressor = std::make_shared<StreamingCompressorUtility>();
-        ChunkRange chunks(test_file, 1024);
-        auto compressed_range = compressor->process(chunks).get();
-
-        std::size_t total_compressed = 0;
-        for (const auto& compressed_chunk : compressed_range) {
-            total_compressed += compressed_chunk.size();
-        }
-
-        CHECK(total_compressed > 0);
-
-        fs::remove(test_file);
-    }
-
-    SUBCASE("Empty file") {
-        // Create empty file
-        {
-            std::ofstream ofs(test_file);
-        }
-
-        auto compressor = std::make_shared<StreamingCompressorUtility>();
-        ChunkRange chunks(test_file, 1024);
-        auto compressed_range = compressor->process(chunks).get();
-
-        int chunk_count = 0;
-        for ([[maybe_unused]] const auto& compressed_chunk : compressed_range) {
-            chunk_count++;
-        }
-
-        // Empty file might produce header/trailer
-        CHECK(chunk_count >= 0);
-
-        fs::remove(test_file);
     }
 }
 
@@ -607,153 +418,67 @@ TEST_CASE(
     SUBCASE("ZLIB format round trip") {
         ManualStreamingCompressorUtility compressor(Z_DEFAULT_COMPRESSION,
                                                     CompressionFormat::ZLIB);
-        RawData input(original);
-
-        auto chunks = compressor.process(input).get();
-        auto final_chunks = compressor.finalize();
-
-        // Combine compressed data
-        std::vector<unsigned char> compressed_data;
-        for (const auto& chunk : chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
-        for (const auto& chunk : final_chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
+        auto compressed_data = compress_all(compressor, ByteView(original));
 
         // Decompress with matching format
         StreamingDecompressorUtility decompressor(DecompressionFormat::ZLIB);
-        CompressedData compressed(std::move(compressed_data), original.size());
-        auto decompressed = decompressor.process(compressed).get();
+        auto decompressed =
+            decompress_all(decompressor, ByteView(compressed_data));
 
-        std::string result;
-        for (const auto& chunk : decompressed) {
-            result += chunk.to_string();
-        }
-
+        std::string result(decompressed.begin(), decompressed.end());
         CHECK(result == original);
     }
 
     SUBCASE("GZIP format round trip") {
         ManualStreamingCompressorUtility compressor(Z_DEFAULT_COMPRESSION,
                                                     CompressionFormat::GZIP);
-        RawData input(original);
-
-        auto chunks = compressor.process(input).get();
-        auto final_chunks = compressor.finalize();
-
-        std::vector<unsigned char> compressed_data;
-        for (const auto& chunk : chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
-        for (const auto& chunk : final_chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
+        auto compressed_data = compress_all(compressor, ByteView(original));
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::GZIP);
-        CompressedData compressed(std::move(compressed_data), original.size());
-        auto decompressed = decompressor.process(compressed).get();
+        auto decompressed =
+            decompress_all(decompressor, ByteView(compressed_data));
 
-        std::string result;
-        for (const auto& chunk : decompressed) {
-            result += chunk.to_string();
-        }
-
+        std::string result(decompressed.begin(), decompressed.end());
         CHECK(result == original);
     }
 
     SUBCASE("DEFLATE_RAW format round trip") {
         ManualStreamingCompressorUtility compressor(
             Z_DEFAULT_COMPRESSION, CompressionFormat::DEFLATE_RAW);
-        RawData input(original);
-
-        auto chunks = compressor.process(input).get();
-        auto final_chunks = compressor.finalize();
-
-        std::vector<unsigned char> compressed_data;
-        for (const auto& chunk : chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
-        for (const auto& chunk : final_chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
+        auto compressed_data = compress_all(compressor, ByteView(original));
 
         StreamingDecompressorUtility decompressor(
             DecompressionFormat::DEFLATE_RAW);
-        CompressedData compressed(std::move(compressed_data), original.size());
-        auto decompressed = decompressor.process(compressed).get();
+        auto decompressed =
+            decompress_all(decompressor, ByteView(compressed_data));
 
-        std::string result;
-        for (const auto& chunk : decompressed) {
-            result += chunk.to_string();
-        }
-
+        std::string result(decompressed.begin(), decompressed.end());
         CHECK(result == original);
     }
 
     SUBCASE("AUTO decompression with ZLIB input") {
         ManualStreamingCompressorUtility compressor(Z_DEFAULT_COMPRESSION,
                                                     CompressionFormat::ZLIB);
-        RawData input(original);
-
-        auto chunks = compressor.process(input).get();
-        auto final_chunks = compressor.finalize();
-
-        std::vector<unsigned char> compressed_data;
-        for (const auto& chunk : chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
-        for (const auto& chunk : final_chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
+        auto compressed_data = compress_all(compressor, ByteView(original));
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::AUTO);
-        CompressedData compressed(std::move(compressed_data), original.size());
-        auto decompressed = decompressor.process(compressed).get();
+        auto decompressed =
+            decompress_all(decompressor, ByteView(compressed_data));
 
-        std::string result;
-        for (const auto& chunk : decompressed) {
-            result += chunk.to_string();
-        }
-
+        std::string result(decompressed.begin(), decompressed.end());
         CHECK(result == original);
     }
 
     SUBCASE("AUTO decompression with GZIP input") {
         ManualStreamingCompressorUtility compressor(Z_DEFAULT_COMPRESSION,
                                                     CompressionFormat::GZIP);
-        RawData input(original);
-
-        auto chunks = compressor.process(input).get();
-        auto final_chunks = compressor.finalize();
-
-        std::vector<unsigned char> compressed_data;
-        for (const auto& chunk : chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
-        for (const auto& chunk : final_chunks) {
-            compressed_data.insert(compressed_data.end(), chunk.data.begin(),
-                                   chunk.data.end());
-        }
+        auto compressed_data = compress_all(compressor, ByteView(original));
 
         StreamingDecompressorUtility decompressor(DecompressionFormat::AUTO);
-        CompressedData compressed(std::move(compressed_data), original.size());
-        auto decompressed = decompressor.process(compressed).get();
+        auto decompressed =
+            decompress_all(decompressor, ByteView(compressed_data));
 
-        std::string result;
-        for (const auto& chunk : decompressed) {
-            result += chunk.to_string();
-        }
-
+        std::string result(decompressed.begin(), decompressed.end());
         CHECK(result == original);
     }
 }

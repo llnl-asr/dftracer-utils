@@ -79,8 +79,6 @@ set(UTILITIES_TEST_SOURCES
     indexer/test_index_builder.cpp
 
     # Compression
-    compression/zlib/test_compressor.cpp
-    compression/zlib/test_decompressor.cpp
     compression/zlib/test_streaming_compressor.cpp
     compression/zlib/test_streaming_decompressor.cpp
 
@@ -94,7 +92,6 @@ set(UTILITIES_TEST_SOURCES
     hash/test_std_hasher.cpp
 
     # I/O
-    fileio/test_binary_file_reader.cpp
     fileio/test_file_reader.cpp
     fileio/test_streaming_file_reader.cpp
     fileio/test_streaming_file_writer.cpp

@@ -1,8 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_WRITER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_WRITER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/utility.h>
-#include <dftracer/utils/utilities/fileio/types/types.h>
+#include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/utilities/fileio/types/streaming.h>
 
 #include <fstream>
 #include <stdexcept>
@@ -10,41 +11,16 @@
 namespace dftracer::utils::utilities::fileio {
 
 /**
- * @brief Streaming file writer for lazy chunk iteration.
+ * @brief Streaming file writer that accepts ByteView chunks.
  *
- * This writer writes chunks as they are produced by an iterator,
- * maintaining constant memory usage.
- *
- * Usage pattern (true streaming):
+ * Usage:
  * @code
- * // Read, compress, and write in one pass - constant memory!
- * auto reader = std::make_shared<StreamingFileReader>();
- * gzip::StreamingCompressor compressor(9);
- * StreamingFileWriter writer("/output.gz");
- *
- * ChunkRange chunks = reader->process(StreamReadInput{"/large/file.txt"});
- * for (const auto& chunk : chunks) {
- *     // Compress chunk
- *     auto compressed = compressor.compress_chunk(chunk);
- *
- *     // Write immediately (constant memory!)
- *     for (const auto& out_chunk : compressed) {
- *         writer.write_chunk(RawData{out_chunk.data});
- *     }
- * }
- *
- * // Finalize compression and write remaining data
- * auto final = compressor.finalize();
- * for (const auto& chunk : final) {
- *     writer.write_chunk(RawData{chunk.data});
- * }
- *
+ * StreamingFileWriterUtility writer("/output.gz");
+ * co_await writer.process(ByteView(data, len));
  * writer.close();
- * std::cout << "Wrote " << writer.total_bytes() << " bytes\n";
  * @endcode
  */
-class StreamingFileWriterUtility
-    : public dftracer::utils::utilities::Utility<RawData, StreamWriteResult> {
+class StreamingFileWriterUtility {
    private:
     std::ofstream file_;
     fs::path path_;
@@ -124,7 +100,7 @@ class StreamingFileWriterUtility
      * @param chunk Data chunk to write
      * @return StreamWriteResult with current write status
      */
-    coro::CoroTask<StreamWriteResult> process(const RawData& chunk) override {
+    coro::CoroTask<StreamWriteResult> process(ByteView chunk) {
         if (!opened_) {
             throw std::runtime_error("Cannot write to closed file");
         }
@@ -134,7 +110,7 @@ class StreamingFileWriterUtility
                                                         total_chunks_);
         }
 
-        file_.write(reinterpret_cast<const char*>(chunk.data.data()),
+        file_.write(chunk.as<char>(),
                     static_cast<std::streamsize>(chunk.size()));
 
         if (!file_) {

@@ -5,61 +5,13 @@
  * @file zlib.h
  * @brief Convenience header for zlib compression utilities.
  *
- * This header provides composable utilities for zlib compression (supporting
- * GZIP, ZLIB, and DEFLATE formats):
+ * Streaming compression utilities using ByteView and AsyncGenerator:
+ * - ManualStreamingCompressorUtility: chunk-by-chunk compression
+ * - StreamingDecompressorUtility: chunk-by-chunk decompression
  *
- * In-Memory Compression:
- * - Compressor: Compress raw data using gzip (fileio::RawData ->
- * fileio::CompressedData)
- * - Decompressor: Decompress gzip-compressed data (fileio::CompressedData ->
- * fileio::RawData)
- *
- * Streaming Compression (lazy iterators):
- * - StreamingCompressor: Lazy compression (ChunkRange -> CompressedChunkRange)
- * - ManualStreamingCompressor: Manual chunk-by-chunk compression
- * - StreamingDecompressor: Manual chunk-by-chunk decompression
- *
- * Note: RawData and CompressedData are defined in
- * utilities/fileio/types/types.h
- *
- * Usage (In-Memory):
- * @code
- * #include <dftracer/utils/utilities/compression/zlib/zlib.h>
- *
- * using namespace dftracer::utils::utilities::compression::zlib;
- * using namespace dftracer::utils::utilities::fileio;
- *
- * auto compressor = std::make_shared<Compressor>();
- * auto decompressor = std::make_shared<Decompressor>();
- *
- * RawData input("Hello, World!");
- * CompressedData compressed = compressor->process(input);
- * RawData restored = decompressor->process(compressed);
- * @endcode
- *
- * Usage (Streaming):
- * @code
- * #include <dftracer/utils/utilities/compression/zlib/zlib.h>
- * #include <dftracer/utils/utilities/fileio/streaming_file_reader.h>
- *
- * using namespace dftracer::utils::utilities;
- *
- * auto reader = std::make_shared<io::StreamingFileReader>();
- * auto compressor = std::make_shared<compression::zlib::StreamingCompressor>();
- *
- * fileio::ChunkRange chunks =
- * reader->process(fileio::StreamReadInput{"/large/file.txt"});
- * compression::zlib::CompressedChunkRange compressed =
- * compressor->process(chunks);
- *
- * for (const auto& chunk : compressed) {
- *     // Process compressed chunks lazily - constant memory!
- * }
- * @endcode
+ * Both yield zero-copy ByteView into internal buffers.
  */
 
-#include <dftracer/utils/utilities/compression/zlib/compressor_utility.h>
-#include <dftracer/utils/utilities/compression/zlib/decompressor_utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
 #include <dftracer/utils/utilities/compression/zlib/types.h>

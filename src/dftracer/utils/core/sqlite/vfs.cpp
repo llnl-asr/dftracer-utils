@@ -8,8 +8,9 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <new>
 
 namespace dftracer::utils::sqlite {
 
@@ -110,8 +111,7 @@ static int dftracer_sqlite_vfs_close(sqlite3_file *pFile) {
         vf->fd = -1;
     }
 
-    // Destroy placement-new'd string
-    vf->path.~basic_string();
+    vf->path[0] = '\0';
 
     return SQLITE_OK;
 }
@@ -304,9 +304,10 @@ static int dftracer_sqlite_vfs_shm_map(sqlite3_file *pFile, int iRegion,
 
     // Open SHM file if not yet opened
     if (vf->shm_fd < 0) {
-        std::string shm_path = vf->path + "-shm";
+        char shm_path[1024];
+        std::snprintf(shm_path, sizeof(shm_path), "%s-shm", vf->path);
         int oflags = O_RDWR | O_CREAT;
-        vf->shm_fd = ::open(shm_path.c_str(), oflags, 0644);
+        vf->shm_fd = ::open(shm_path, oflags, 0644);
         if (vf->shm_fd < 0) {
             *pp = nullptr;
             return SQLITE_IOERR;
@@ -400,8 +401,9 @@ static int dftracer_sqlite_vfs_shm_unmap(sqlite3_file *pFile, int deleteFlag) {
     if (vf->shm_fd >= 0) {
         ::close(vf->shm_fd);
         if (deleteFlag) {
-            std::string shm_path = vf->path + "-shm";
-            ::unlink(shm_path.c_str());
+            char shm_path[1024];
+            std::snprintf(shm_path, sizeof(shm_path), "%s-shm", vf->path);
+            ::unlink(shm_path);
         }
         vf->shm_fd = -1;
     }
@@ -450,8 +452,7 @@ static int dftracer_sqlite_vfs_open(sqlite3_vfs *pVfs, const char *zName,
         vf->shm_regions[i] = nullptr;
     }
 
-    // Placement-new the std::string (SQLite allocates raw memory)
-    new (&vf->path) std::string(zName ? zName : "");
+    std::snprintf(vf->path, sizeof(vf->path), "%s", zName ? zName : "");
 
     vf->backend = app ? app->backend : nullptr;
     vf->executor = app ? app->executor : nullptr;
@@ -473,18 +474,18 @@ static int dftracer_sqlite_vfs_open(sqlite3_vfs *pVfs, const char *zName,
 
     // Handle temp/journal files without a name
     if (zName == nullptr) {
-        char tmp_path[] = "/tmp/dftracer_sqlite_XXXXXX";
-        vf->fd = ::mkstemp(tmp_path);
+        const char *tmpdir = std::getenv("TMPDIR");
+        if (!tmpdir) tmpdir = "/tmp";
+        std::snprintf(vf->path, sizeof(vf->path), "%s/dftracer_sqlite_XXXXXX",
+                      tmpdir);
+        vf->fd = ::mkstemp(vf->path);
         if (vf->fd < 0) {
-            vf->path.~basic_string();
             return SQLITE_CANTOPEN;
         }
-        ::unlink(tmp_path);
-        vf->path = tmp_path;
+        ::unlink(vf->path);
     } else {
         vf->fd = ::open(zName, oflags, 0644);
         if (vf->fd < 0) {
-            vf->path.~basic_string();
             return SQLITE_CANTOPEN;
         }
     }
@@ -506,15 +507,20 @@ static int dftracer_sqlite_vfs_delete(sqlite3_vfs * /*pVfs*/, const char *zPath,
 
     if (dirSync) {
         // Sync the parent directory
-        std::string dir(zPath);
-        auto pos = dir.rfind('/');
-        if (pos != std::string::npos) {
-            dir.resize(pos);
-            if (dir.empty()) dir = "/";
+        char dir[1024];
+        std::snprintf(dir, sizeof(dir), "%s", zPath);
+        char *slash = std::strrchr(dir, '/');
+        if (slash) {
+            if (slash == dir) {
+                dir[1] = '\0';  // root "/"
+            } else {
+                *slash = '\0';
+            }
         } else {
-            dir = ".";
+            dir[0] = '.';
+            dir[1] = '\0';
         }
-        int dfd = ::open(dir.c_str(), O_RDONLY);
+        int dfd = ::open(dir, O_RDONLY);
         if (dfd >= 0) {
             ::fsync(dfd);
             ::close(dfd);
@@ -578,7 +584,7 @@ void register_dftracer_sqlite_vfs(io::IoBackend *backend, Executor *executor) {
     dftracer_vfs_instance.iVersion = 3;
     dftracer_vfs_instance.szOsFile =
         static_cast<int>(sizeof(DfTracerSqliteVfsFile));
-    dftracer_vfs_instance.mxPathname = 512;
+    dftracer_vfs_instance.mxPathname = VFS_MAX_PATHNAME;
     dftracer_vfs_instance.pNext = nullptr;
     dftracer_vfs_instance.zName = "dftracer_sqlite";
     dftracer_vfs_instance.pAppData = dftracer_vfs_app_data;

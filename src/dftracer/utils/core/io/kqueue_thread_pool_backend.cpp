@@ -1,9 +1,9 @@
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
 
-#include "kqueue_thread_pool_backend.h"
-
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/io/kqueue_thread_pool_backend.h>
+#include <dftracer/utils/core/io/thread_pool_backend.h>  // IoRequest, IoOp
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <sys/event.h>
 #include <sys/socket.h>
@@ -15,8 +15,6 @@
 
 #include <cerrno>
 #include <cstring>
-
-#include "thread_pool_backend.h"  // IoRequest, IoOp
 
 namespace dftracer::utils::io {
 

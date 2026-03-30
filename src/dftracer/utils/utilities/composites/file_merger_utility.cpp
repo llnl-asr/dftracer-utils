@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/file_merger_utility.h>
 #include <dftracer/utils/utilities/fileio/file_reader_utility.h>
@@ -90,12 +91,10 @@ FileMergeValidatorUtility::process(
         bool first = true;
         for (const auto& event : validated_events) {
             if (!first) {
-                fileio::RawData newline_data{std::vector<unsigned char>{'\n'}};
-                co_await writer.process(newline_data);
+                co_await writer.process(ByteView("\n", 1));
             }
 
-            fileio::RawData event_data(event.content);
-            co_await writer.process(event_data);
+            co_await writer.process(ByteView(event.content));
 
             first = false;
             result.valid_events++;
@@ -103,8 +102,7 @@ FileMergeValidatorUtility::process(
 
         // Add trailing newline to ensure proper NDJSON format
         if (!validated_events.empty()) {
-            fileio::RawData newline_data{std::vector<unsigned char>{'\n'}};
-            co_await writer.process(newline_data);
+            co_await writer.process(ByteView("\n", 1));
         }
 
         result.lines_processed = validated_events.size();
@@ -157,8 +155,7 @@ coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
         fileio::StreamingFileWriterUtility writer(input.output_file, false,
                                                   true);
 
-        fileio::RawData array_open(std::vector<unsigned char>{'[', '\n'});
-        co_await writer.process(array_open);
+        co_await writer.process(ByteView("[\n", 2));
 
         DFTRACER_UTILS_LOG_DEBUG("Processing %zu file results",
                                  input.file_results.size());
@@ -218,10 +215,7 @@ coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
 
                     // Write NDJSON content directly (Perfetto format: [ +
                     // NDJSON + ])
-                    std::vector<unsigned char> content_bytes(content.begin(),
-                                                             content.end());
-                    fileio::RawData content_data(content_bytes);
-                    co_await writer.process(content_data);
+                    co_await writer.process(ByteView(content));
 
                     output.files_combined++;
                     output.total_events += result.valid_events;
@@ -231,9 +225,7 @@ coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
         }  // end for loop
 
         // Write JSON array closing bracket
-        fileio::RawData array_close(
-            std::vector<unsigned char>{'\n', ']', '\n'});
-        co_await writer.process(array_close);
+        co_await writer.process(ByteView("\n]\n", 3));
 
         writer.close();
 

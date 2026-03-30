@@ -18,7 +18,8 @@ namespace dftracer::utils {
 
 class Inflater {
    public:
-    static constexpr std::size_t BUFFER_SIZE = 65536;
+    static constexpr std::size_t BUFFER_SIZE =
+        constants::indexer::INFLATE_BUFFER_SIZE;
 
     z_stream stream;
     alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char out_buffer[BUFFER_SIZE];

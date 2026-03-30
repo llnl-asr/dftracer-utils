@@ -1,17 +1,18 @@
-#pragma once
+#ifndef DFTRACER_UTILS_CORE_IO_IO_URING_BACKEND_H
+#define DFTRACER_UTILS_CORE_IO_IO_URING_BACKEND_H
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
+#include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/core/io/io_backend.h>
+#include <dftracer/utils/core/io/io_completion_thread.h>
+#include <dftracer/utils/core/io/io_uring_wrapper.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
 
 #include <cstddef>
 #include <mutex>
 #include <string>
-
-#include "io_completion_thread.h"
-#include "io_uring_wrapper.h"
 
 namespace dftracer::utils {
 class Executor;
@@ -22,6 +23,13 @@ namespace dftracer::utils::io {
 /// io_uring request. Stored in the SQE's user_data so we can
 /// recover the IoAwaitable pointer on completion.
 struct IoUringRequest {
+    static void* operator new(std::size_t size) {
+        return ObjectPool::instance().allocate(size);
+    }
+    static void operator delete(void* ptr, std::size_t size) {
+        ObjectPool::instance().deallocate(ptr, size);
+    }
+
     IoAwaitable* awaitable = nullptr;
 };
 
@@ -94,6 +102,13 @@ class IoUringBackend : public IoBackend {
 /// SubmitContext subclass for io_uring. Carries the operation
 /// details needed to prepare an SQE on await_suspend.
 struct IoUringSubmitCtx : SubmitContext {
+    static void* operator new(std::size_t size) {
+        return ObjectPool::instance().allocate(size);
+    }
+    static void operator delete(void* ptr, std::size_t size) {
+        ObjectPool::instance().deallocate(ptr, size);
+    }
+
     enum class Op {
         READ,
         WRITE,
@@ -137,3 +152,4 @@ struct IoUringSubmitCtx : SubmitContext {
 }  // namespace dftracer::utils::io
 
 #endif  // DFTRACER_UTILS_HAVE_IO_URING
+#endif  // DFTRACER_UTILS_CORE_IO_IO_URING_BACKEND_H

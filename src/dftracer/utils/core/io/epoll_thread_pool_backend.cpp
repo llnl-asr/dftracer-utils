@@ -1,8 +1,8 @@
 #ifdef __linux__
 
-#include "epoll_thread_pool_backend.h"
-
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/io/epoll_thread_pool_backend.h>
+#include <dftracer/utils/core/io/thread_pool_backend.h>  // IoRequest, IoOp
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -14,8 +14,6 @@
 
 #include <cerrno>
 #include <cstring>
-
-#include "thread_pool_backend.h"  // IoRequest, IoOp
 
 namespace dftracer::utils::io {
 

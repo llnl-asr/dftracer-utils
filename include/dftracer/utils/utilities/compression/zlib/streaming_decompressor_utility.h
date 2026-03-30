@@ -1,39 +1,37 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_STREAMING_DECOMPRESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_STREAMING_DECOMPRESSOR_UTILITY_H
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/utilities/compression/zlib/types.h>
-#include <dftracer/utils/utilities/fileio/types/types.h>
 #include <zlib.h>
 
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 namespace dftracer::utils::utilities::compression::zlib {
 
 /**
- * @brief Manual streaming decompressor that works chunk-by-chunk.
+ * @brief Streaming decompressor that yields zero-copy ByteView chunks.
  *
- * This class provides manual control over decompression for advanced use cases.
- * For most cases, consider using the in-memory Decompressor utility instead.
+ * Each call to decompress() returns an AsyncGenerator that yields ByteView
+ * references into the internal output buffer. The view is valid until the
+ * next co_await gen.next() call. Callers must consume each view before
+ * advancing the generator.
  *
  * Usage:
  * @code
- * StreamingDecompressor decompressor;
- *
- * // Decompress chunks one by one
- * for (const auto& compressed_chunk : compressed_chunks) {
- *     std::vector<RawData> raw_chunks =
- * decompressor.decompress_chunk(compressed_chunk); for (const auto& raw :
- * raw_chunks) {
- *         // Process decompressed data
+ * StreamingDecompressorUtility decompressor;
+ * for (const auto& compressed_chunk : chunks) {
+ *     auto gen = decompressor.decompress(ByteView(chunk_data, chunk_len));
+ *     while (auto view = co_await gen.next()) {
+ *         process(view->as<char>(), view->size());
  *     }
  * }
  * @endcode
  */
-class StreamingDecompressorUtility
-    : public utilities::Utility<fileio::CompressedData,
-                                std::vector<fileio::RawData>> {
+class StreamingDecompressorUtility {
    private:
     z_stream stream_;
     bool initialized_ = false;
@@ -57,39 +55,37 @@ class StreamingDecompressorUtility
         }
     }
 
-    // Non-copyable
     StreamingDecompressorUtility(const StreamingDecompressorUtility&) = delete;
     StreamingDecompressorUtility& operator=(
         const StreamingDecompressorUtility&) = delete;
 
     /**
-     * @brief Decompress a single chunk, yielding output chunks.
+     * @brief Decompress input bytes, yielding zero-copy views into internal
+     * buffer.
      *
-     * @param chunk Compressed input chunk
-     * @return Vector of decompressed output chunks
+     * Each yielded ByteView points into output_buffer_ and is valid only
+     * until the next iteration. Handles concatenated gzip members (RFC 1952).
+     *
+     * @param input Compressed input bytes
+     * @return AsyncGenerator yielding ByteView chunks
      */
-    coro::CoroTask<std::vector<fileio::RawData>> process(
-        const fileio::CompressedData& chunk) override {
+    coro::AsyncGenerator<ByteView> decompress(ByteView input) {
         if (!initialized_) {
             initialize();
         }
 
-        if (chunk.empty()) {
-            co_return {};
+        if (input.empty()) {
+            co_return;
         }
 
-        // A previous chunk ended exactly at a gzip member boundary.
-        // Reset for the next concatenated member.
         if (finished_) {
             inflateReset2(&stream_, static_cast<int>(format_));
             finished_ = false;
             between_members_ = true;
         }
 
-        std::vector<fileio::RawData> output_chunks;
-
-        stream_.avail_in = static_cast<uInt>(chunk.size());
-        stream_.next_in = const_cast<Bytef*>(chunk.data.data());
+        stream_.avail_in = static_cast<uInt>(input.size());
+        stream_.next_in = const_cast<Bytef*>(input.as<unsigned char>());
 
         do {
             stream_.avail_out = static_cast<uInt>(output_buffer_.size());
@@ -103,9 +99,6 @@ class StreamingDecompressorUtility
 
             if (ret == Z_DATA_ERROR) {
                 if (between_members_) {
-                    // After a reset between concatenated members the
-                    // leftover bytes may not form a valid gzip header
-                    // (e.g. trailing padding).  Treat as end-of-stream.
                     finished_ = true;
                     break;
                 }
@@ -117,18 +110,10 @@ class StreamingDecompressorUtility
             if (decompressed_size > 0) {
                 between_members_ = false;
                 total_out_ += decompressed_size;
-
-                std::vector<unsigned char> decompressed_data(
-                    output_buffer_.begin(),
-                    output_buffer_.begin() + decompressed_size);
-
-                output_chunks.push_back(
-                    fileio::RawData{std::move(decompressed_data)});
+                co_yield ByteView(output_buffer_.data(), decompressed_size);
             }
 
             if (ret == Z_STREAM_END) {
-                // Concatenated gzip: reset for the next member if
-                // there is remaining input in this chunk.
                 if (stream_.avail_in > 0) {
                     inflateReset2(&stream_, static_cast<int>(format_));
                     between_members_ = true;
@@ -140,8 +125,7 @@ class StreamingDecompressorUtility
 
         } while (stream_.avail_out == 0 || stream_.avail_in > 0);
 
-        total_in_ += chunk.size();
-        co_return output_chunks;
+        total_in_ += input.size();
     }
 
     std::size_t total_bytes_in() const { return total_in_; }
@@ -151,8 +135,7 @@ class StreamingDecompressorUtility
     void initialize() {
         std::memset(&stream_, 0, sizeof(stream_));
 
-        int ret = inflateInit2(
-            &stream_, static_cast<int>(format_));  // Use format enum value
+        int ret = inflateInit2(&stream_, static_cast<int>(format_));
 
         if (ret != Z_OK) {
             throw std::runtime_error("Failed to initialize inflate");

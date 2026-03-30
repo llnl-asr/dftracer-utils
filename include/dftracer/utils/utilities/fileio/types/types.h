@@ -5,8 +5,6 @@
 #include <dftracer/utils/utilities/fileio/types/chunk_iterator.h>
 #include <dftracer/utils/utilities/fileio/types/chunk_manifest.h>
 #include <dftracer/utils/utilities/fileio/types/chunk_spec.h>
-#include <dftracer/utils/utilities/fileio/types/compressed_data.h>
-#include <dftracer/utils/utilities/fileio/types/raw_data.h>
 #include <dftracer/utils/utilities/fileio/types/streaming.h>
 
 #endif  // DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_TYPES_H

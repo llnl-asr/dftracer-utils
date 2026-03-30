@@ -1,39 +1,22 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_ITERATOR_H
 
+#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/fileio/types/raw_data.h>
 
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <vector>
 
 namespace dftracer::utils::utilities::fileio {
 
 /**
  * @brief Iterator that lazily reads file chunks on demand.
  *
- * This iterator reads chunks from a file only when dereferenced.
- * Only one chunk is kept in memory at a time.
- *
- * Usage:
- * @code
- * ChunkIterator it("/path/to/file.txt", 64 * 1024);
- * ChunkIterator end;  // End iterator
- *
- * for (; it != end; ++it) {
- *     const RawData& chunk = *it;
- *     // Process chunk - only this chunk is in memory
- * }
- * @endcode
- *
- * Range-based for loop:
- * @code
- * ChunkRange range("/path/to/file.txt", 64 * 1024);
- * for (const auto& chunk : range) {
- *     // Process chunk lazily
- * }
- * @endcode
+ * Reads chunks from a file only when dereferenced. Only one chunk
+ * is kept in memory at a time. Exposes chunks as ByteView into
+ * the internal read buffer -- zero copy on dereference.
  */
 class ChunkIterator {
    private:
@@ -42,7 +25,7 @@ class ChunkIterator {
         std::size_t chunk_size;
         std::ifstream file;
         std::vector<unsigned char> buffer;
-        RawData current_chunk;
+        ByteView current_view;
         bool is_end = false;
 
         State(fs::path p, std::size_t cs)
@@ -61,9 +44,8 @@ class ChunkIterator {
             std::streamsize bytes_read = file.gcount();
 
             if (bytes_read > 0) {
-                std::vector<unsigned char> chunk_data(
-                    buffer.begin(), buffer.begin() + bytes_read);
-                current_chunk = RawData{std::move(chunk_data)};
+                current_view = ByteView(buffer.data(),
+                                        static_cast<std::size_t>(bytes_read));
             } else {
                 is_end = true;
             }
@@ -73,54 +55,43 @@ class ChunkIterator {
     std::shared_ptr<State> state_;
 
    public:
-    // Iterator traits
     using iterator_category = std::input_iterator_tag;
-    using value_type = RawData;
+    using value_type = ByteView;
     using difference_type = std::ptrdiff_t;
-    using pointer = const RawData*;
-    using reference = const RawData&;
+    using pointer = const ByteView*;
+    using reference = const ByteView&;
 
-    // Default constructor creates end iterator
     ChunkIterator() : state_(nullptr) {}
 
-    // Constructor for begin iterator
     ChunkIterator(fs::path path, std::size_t chunk_size = 64 * 1024)
         : state_(std::make_shared<State>(std::move(path), chunk_size)) {
         if (state_->is_end) {
-            state_ = nullptr;  // Convert to end iterator
+            state_ = nullptr;
         }
     }
 
-    // Dereference - returns current chunk
-    reference operator*() const { return state_->current_chunk; }
+    reference operator*() const { return state_->current_view; }
+    pointer operator->() const { return &state_->current_view; }
 
-    pointer operator->() const { return &state_->current_chunk; }
-
-    // Pre-increment - read next chunk
     ChunkIterator& operator++() {
         if (state_) {
             state_->read_next_chunk();
             if (state_->is_end) {
-                state_ = nullptr;  // Convert to end iterator
+                state_ = nullptr;
             }
         }
         return *this;
     }
 
-    // Post-increment
     ChunkIterator operator++(int) {
         ChunkIterator tmp = *this;
         ++(*this);
         return tmp;
     }
 
-    // Equality comparison
     bool operator==(const ChunkIterator& other) const {
-        // Two end iterators are equal
         if (!state_ && !other.state_) return true;
-        // End iterator != non-end iterator
         if (!state_ || !other.state_) return false;
-        // Compare paths (same file, same position)
         return state_->path == other.state_->path &&
                state_->file.tellg() == other.state_->file.tellg();
     }
@@ -132,15 +103,6 @@ class ChunkIterator {
 
 /**
  * @brief Range wrapper for chunk iteration (enables range-based for).
- *
- * Usage:
- * @code
- * ChunkRange range("/path/to/file.txt", 64 * 1024);
- * for (const auto& chunk : range) {
- *     // Each chunk is read lazily, only one in memory at a time
- *     process_chunk(chunk);
- * }
- * @endcode
  */
 class ChunkRange {
    private:
@@ -153,10 +115,7 @@ class ChunkRange {
         : path_(std::move(path)), chunk_size_(chunk_size) {}
 
     ChunkIterator begin() const { return ChunkIterator{path_, chunk_size_}; }
-
-    ChunkIterator end() const {
-        return ChunkIterator{};  // End iterator
-    }
+    ChunkIterator end() const { return ChunkIterator{}; }
 };
 
 }  // namespace dftracer::utils::utilities::fileio

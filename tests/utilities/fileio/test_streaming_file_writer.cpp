@@ -4,6 +4,7 @@
 #endif
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <doctest/doctest.h>
@@ -15,6 +16,7 @@
 
 using namespace dftracer::utils::utilities::fileio;
 using namespace dft_utils_test;
+using dftracer::utils::ByteView;
 
 TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
     fs::path test_file = make_unique_test_path("test_streaming_writer.txt");
@@ -22,7 +24,7 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
     SUBCASE("Write single chunk") {
         {
             StreamingFileWriterUtility writer(test_file);
-            RawData chunk("Hello, World!");
+            ByteView chunk("Hello, World!");
             writer.process(chunk).get();
             writer.close();
 
@@ -43,9 +45,9 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
     SUBCASE("Write multiple chunks") {
         {
             StreamingFileWriterUtility writer(test_file);
-            writer.process(RawData("First ")).get();
-            writer.process(RawData("Second ")).get();
-            writer.process(RawData("Third")).get();
+            writer.process(ByteView("First ")).get();
+            writer.process(ByteView("Second ")).get();
+            writer.process(ByteView("Third")).get();
             writer.close();
 
             CHECK(writer.total_bytes() ==
@@ -65,9 +67,9 @@ TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
     SUBCASE("Write empty chunk") {
         {
             StreamingFileWriterUtility writer(test_file);
-            writer.process(RawData("Before")).get();
-            writer.process(RawData{}).get();  // Empty chunk
-            writer.process(RawData("After")).get();
+            writer.process(ByteView("Before")).get();
+            writer.process(ByteView()).get();  // Empty chunk
+            writer.process(ByteView("After")).get();
             writer.close();
 
             CHECK(writer.total_bytes() == 11);
@@ -91,7 +93,7 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
         {
             StreamingFileWriterUtility writer(test_file);
             std::vector<unsigned char> data = {0x00, 0x01, 0x02, 0xFF, 0xFE};
-            writer.process(RawData(data)).get();
+            writer.process(ByteView(data)).get();
             writer.close();
 
             CHECK(writer.total_bytes() == 5);
@@ -113,7 +115,7 @@ TEST_CASE("StreamingFileWriterUtility - Binary Data") {
         {
             StreamingFileWriterUtility writer(test_file);
             std::vector<unsigned char> data = {0x00, 0x00, 0x00};
-            writer.process(RawData(data)).get();
+            writer.process(ByteView(data)).get();
             writer.close();
 
             CHECK(writer.total_bytes() == 3);
@@ -139,14 +141,14 @@ TEST_CASE("StreamingFileWriterUtility - Append Mode") {
     // Write initial content
     {
         StreamingFileWriterUtility writer(test_file);
-        writer.process(RawData("Initial content\n")).get();
+        writer.process(ByteView("Initial content\n")).get();
         writer.close();
     }
 
     // Append to file
     {
         StreamingFileWriterUtility writer(test_file, true);  // append=true
-        writer.process(RawData("Appended content\n")).get();
+        writer.process(ByteView("Appended content\n")).get();
         writer.close();
     }
 
@@ -168,7 +170,7 @@ TEST_CASE("StreamingFileWriterUtility - Directory Creation") {
         {
             StreamingFileWriterUtility writer(test_file, false,
                                               true);  // create_dirs=true
-            writer.process(RawData("Content")).get();
+            writer.process(ByteView("Content")).get();
             writer.close();
         }
 
@@ -191,7 +193,7 @@ TEST_CASE("StreamingFileWriterUtility - Error Handling") {
         StreamingFileWriterUtility writer(test_file);
         writer.close();
 
-        CHECK_THROWS_AS(writer.process(RawData("Data")).get(),
+        CHECK_THROWS_AS(writer.process(ByteView("Data")).get(),
                         std::runtime_error);
 
         fs::remove(test_file);
@@ -216,7 +218,7 @@ TEST_CASE("StreamingFileWriterUtility - Large Files") {
             // Write 1MB in 1KB chunks
             std::vector<unsigned char> chunk(1024, 0xAA);
             for (int i = 0; i < 1024; ++i) {
-                writer.process(RawData(chunk)).get();
+                writer.process(ByteView(chunk)).get();
             }
             writer.close();
 
@@ -236,7 +238,7 @@ TEST_CASE("StreamingFileWriterUtility - Large Files") {
 
             // Write 10000 small chunks
             for (int i = 0; i < 10000; ++i) {
-                writer.process(RawData("x")).get();
+                writer.process(ByteView("x")).get();
             }
             writer.close();
 
@@ -257,7 +259,7 @@ TEST_CASE("StreamingFileWriterUtility - Round Trip") {
             StreamingFileWriterUtility writer(test_file);
             for (int i = 0; i < 100; ++i) {
                 std::string line = "Line " + std::to_string(i) + "\n";
-                writer.process(RawData(line)).get();
+                writer.process(ByteView(line)).get();
                 original_data += line;
             }
             writer.close();
@@ -281,7 +283,7 @@ TEST_CASE("StreamingFileWriterUtility - Automatic Closure") {
     SUBCASE("Destructor closes file") {
         {
             StreamingFileWriterUtility writer(test_file);
-            writer.process(RawData("Data")).get();
+            writer.process(ByteView("Data")).get();
             // No explicit close() - destructor should handle it
         }
 
@@ -303,8 +305,8 @@ TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
     SUBCASE("Write text data") {
         {
             StreamingFileWriterUtility writer(test_file);
-            writer.process(RawData("Text line 1\n")).get();
-            writer.process(RawData("Text line 2\n")).get();
+            writer.process(ByteView("Text line 1\n")).get();
+            writer.process(ByteView("Text line 2\n")).get();
             writer.close();
         }
 
@@ -325,7 +327,7 @@ TEST_CASE("StreamingFileWriterUtility - Different Data Types") {
             for (int i = 0; i < 100; ++i) {
                 unsigned char byte = (i % 2 == 0) ? 0xAA : 0x55;
                 std::vector<unsigned char> data = {byte};
-                writer.process(RawData(data)).get();
+                writer.process(ByteView(data)).get();
             }
             writer.close();
         }
@@ -349,7 +351,7 @@ TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
     // Write initial data
     {
         StreamingFileWriterUtility writer(test_file);
-        writer.process(RawData("Initial data\n")).get();
+        writer.process(ByteView("Initial data\n")).get();
         writer.close();
     }
 
@@ -357,7 +359,7 @@ TEST_CASE("StreamingFileWriterUtility - Truncate vs Append") {
         {
             StreamingFileWriterUtility writer(
                 test_file, false);  // append=false (truncate)
-            writer.process(RawData("New data\n")).get();
+            writer.process(ByteView("New data\n")).get();
             writer.close();
         }
 
@@ -379,7 +381,7 @@ TEST_CASE("StreamingFileWriterUtility - Path Information") {
         CHECK(writer.path() == test_file);
         CHECK_FALSE(writer.is_closed());
 
-        writer.process(RawData("Data")).get();
+        writer.process(ByteView("Data")).get();
         writer.close();
 
         CHECK(writer.is_closed());

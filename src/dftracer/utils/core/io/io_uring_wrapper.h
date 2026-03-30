@@ -1,4 +1,5 @@
-#pragma once
+#ifndef DFTRACER_UTILS_CORE_IO_IO_URING_WRAPPER_H
+#define DFTRACER_UTILS_CORE_IO_IO_URING_WRAPPER_H
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
 
 #include <linux/io_uring.h>
@@ -234,3 +235,4 @@ inline void* cqe_get_data(struct io_uring_cqe* cqe) {
 }  // namespace dftracer::utils::io::uring
 
 #endif  // DFTRACER_UTILS_HAVE_IO_URING
+#endif  // DFTRACER_UTILS_CORE_IO_IO_URING_WRAPPER_H

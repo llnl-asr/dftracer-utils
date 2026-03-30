@@ -4,23 +4,6 @@
 /**
  * @file io.h
  * @brief Convenience header that includes all I/O utilities.
- *
- * This header provides access to:
- * - File readers (StreamingFileReader, FileReader, BinaryFileReader)
- * - File writers (StreamingFileWriter)
- * - Streaming utilities (ChunkIterator, ChunkRange)
- * - I/O types (RawData, CompressedData, ChunkSpec, ChunkManifest)
- * - Line-based I/O (LineRange, LineBytesRange, StreamingLineReader)
- *
- * Usage:
- * @code
- * #include <dftracer/utils/utilities/fileio/io.h>
- *
- * // All I/O utilities are now available
- * auto reader = std::make_shared<StreamingFileReader>();
- * StreamReadInput input{"/path/to/file.txt", 64 * 1024};
- * ChunkRange chunks = reader->process(input);
- * @endcode
  */
 
 // File readers and writers

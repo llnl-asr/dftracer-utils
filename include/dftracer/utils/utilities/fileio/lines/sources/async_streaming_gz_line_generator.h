@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_STREAMING_GZ_LINE_GENERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_STREAMING_GZ_LINE_GENERATOR_H
 
+#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
-#include <dftracer/utils/utilities/fileio/types/compressed_data.h>
 
 #include <string>
 #include <vector>
@@ -16,17 +16,9 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * @brief Async generator that yields lines from .gz files without an index.
  *
  * Reads compressed chunks via async I/O, decompresses them through
- * StreamingDecompressorUtility, and splits the decompressed bytes into
- * lines. This avoids the double-decompression overhead of building a
- * sidecar index first.
- *
- * Usage:
- * @code
- * auto gen = async_streaming_gz_lines("data.pfw.gz");
- * while (auto line = co_await gen.next()) {
- *     process(*line);
- * }
- * @endcode
+ * StreamingDecompressorUtility (yielding zero-copy ByteView into the
+ * decompressor's internal buffer), and splits the decompressed bytes
+ * into lines. Zero heap allocations per read/decompress iteration.
  */
 inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     std::string file_path, std::size_t start_line = 0,
@@ -49,13 +41,10 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     compression::zlib::StreamingDecompressorUtility decompressor(
         compression::zlib::DecompressionFormat::AUTO);
 
-    // Capture exceptions so we can close fd before rethrowing
-    // (co_await is not allowed inside catch handlers).
     std::exception_ptr ex;
 
     try {
-        bool eof = false;
-        while (!eof) {
+        while (true) {
             ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
                 fd, read_buffer.data(), READ_BUFFER_SIZE, file_offset);
 
@@ -66,7 +55,6 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
             }
 
             if (bytes_read == 0) {
-                // EOF — yield final partial line if any
                 if (!line_buffer.empty()) {
                     current_line++;
                     if ((start_line == 0 || current_line >= start_line) &&
@@ -80,18 +68,25 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
 
             file_offset += bytes_read;
 
-            // Wrap raw bytes into CompressedData for the decompressor
-            CompressedData compressed(std::vector<unsigned char>(
-                reinterpret_cast<unsigned char*>(read_buffer.data()),
-                reinterpret_cast<unsigned char*>(read_buffer.data()) +
-                    bytes_read));
+            // Pass read buffer directly as ByteView
+            ByteView input(read_buffer.data(),
+                           static_cast<std::size_t>(bytes_read));
+            auto gen = decompressor.decompress(input);
 
-            auto raw_chunks = co_await decompressor.process(compressed);
+            while (auto chunk = co_await gen.next()) {
+                const char* data = chunk->as<char>();
+                std::size_t remaining = chunk->size();
+                std::size_t pos = 0;
 
-            // Split decompressed bytes into lines
-            for (const auto& raw : raw_chunks) {
-                for (unsigned char byte : raw.data) {
-                    if (byte == '\n') {
+                while (pos < remaining) {
+                    const void* nl =
+                        std::memchr(data + pos, '\n', remaining - pos);
+                    if (nl) {
+                        std::size_t nl_pos = static_cast<std::size_t>(
+                            static_cast<const char*>(nl) - data);
+                        if (nl_pos > pos) {
+                            line_buffer.append(data + pos, nl_pos - pos);
+                        }
                         current_line++;
                         if ((start_line == 0 || current_line >= start_line) &&
                             (end_line == 0 || current_line <= end_line)) {
@@ -103,8 +98,10 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                             co_return;
                         }
                         line_buffer.clear();
+                        pos = nl_pos + 1;
                     } else {
-                        line_buffer.push_back(static_cast<char>(byte));
+                        line_buffer.append(data + pos, remaining - pos);
+                        break;
                     }
                 }
             }

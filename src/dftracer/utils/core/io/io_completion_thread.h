@@ -1,4 +1,5 @@
-#pragma once
+#ifndef DFTRACER_UTILS_CORE_IO_IO_COMPLETION_THREAD_H
+#define DFTRACER_UTILS_CORE_IO_IO_COMPLETION_THREAD_H
 
 #include <atomic>
 #include <functional>
@@ -45,3 +46,5 @@ class IoCompletionThread {
 };
 
 }  // namespace dftracer::utils::io
+
+#endif  // DFTRACER_UTILS_CORE_IO_IO_COMPLETION_THREAD_H

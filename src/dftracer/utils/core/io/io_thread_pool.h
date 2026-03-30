@@ -1,4 +1,5 @@
-#pragma once
+#ifndef DFTRACER_UTILS_CORE_IO_IO_THREAD_POOL_H
+#define DFTRACER_UTILS_CORE_IO_IO_THREAD_POOL_H
 
 #include <atomic>
 #include <condition_variable>
@@ -57,3 +58,5 @@ class IoThreadPool {
 };
 
 }  // namespace dftracer::utils::io
+
+#endif  // DFTRACER_UTILS_CORE_IO_IO_THREAD_POOL_H

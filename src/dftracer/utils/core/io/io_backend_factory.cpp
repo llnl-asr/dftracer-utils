@@ -1,18 +1,16 @@
-#include "io_backend_factory.h"
-
 #include <dftracer/utils/core/common/logging.h>
-
-#include "thread_pool_backend.h"
+#include <dftracer/utils/core/io/io_backend_factory.h>
+#include <dftracer/utils/core/io/thread_pool_backend.h>
 #ifdef __linux__
-#include "epoll_thread_pool_backend.h"
+#include <dftracer/utils/core/io/epoll_thread_pool_backend.h>
 #endif
 #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__) || defined(__DragonFly__)
-#include "kqueue_thread_pool_backend.h"
+#include <dftracer/utils/core/io/kqueue_thread_pool_backend.h>
 #endif
 
 #ifdef DFTRACER_UTILS_HAVE_IO_URING
-#include "io_uring_backend.h"
+#include <dftracer/utils/core/io/io_uring_backend.h>
 #endif
 
 namespace dftracer::utils::io {

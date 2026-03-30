@@ -1,7 +1,6 @@
+#include <dftracer/utils/core/io/io_thread_pool.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/sqlite/async.h>
-
-#include "../io/io_thread_pool.h"
 
 namespace dftracer::utils::sqlite {
 

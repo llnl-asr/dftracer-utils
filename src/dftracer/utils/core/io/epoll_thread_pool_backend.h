@@ -1,14 +1,14 @@
-#pragma once
+#ifndef DFTRACER_UTILS_CORE_IO_EPOLL_THREAD_POOL_BACKEND_H
+#define DFTRACER_UTILS_CORE_IO_EPOLL_THREAD_POOL_BACKEND_H
 #ifdef __linux__
 
 #include <dftracer/utils/core/io/io_backend.h>
+#include <dftracer/utils/core/io/io_completion_thread.h>
+#include <dftracer/utils/core/io/io_thread_pool.h>
 #include <sys/stat.h>
 
 #include <cstddef>
 #include <string>
-
-#include "io_completion_thread.h"
-#include "io_thread_pool.h"
 
 namespace dftracer::utils {
 class Executor;
@@ -87,3 +87,4 @@ class EpollThreadPoolBackend : public IoBackend {
 }  // namespace dftracer::utils::io
 
 #endif  // __linux__
+#endif  // DFTRACER_UTILS_CORE_IO_EPOLL_THREAD_POOL_BACKEND_H

@@ -137,7 +137,36 @@ class ReaderInflater : public Inflater {
             int ret = inflate(&stream, Z_NO_FLUSH);
 
             if (ret == Z_STREAM_END) {
-                if (inflateReset(&stream) != Z_OK) {
+                // In raw mode (-15), inflate only processes deflate data;
+                // the 8-byte gzip trailer (CRC32 + ISIZE) is NOT consumed.
+                // Skip it before switching to gzip auto-detect mode so
+                // subsequent members in concatenated gzip are handled.
+                if (window_bits_ < 0) {
+                    std::size_t trailer = 8;
+                    while (trailer > 0) {
+                        if (stream.avail_in == 0) {
+                            if (!co_await read_input(fd, offset)) {
+                                co_return false;
+                            }
+                            if (stream.avail_in == 0) break;
+                        }
+                        auto n = std::min(
+                            trailer, static_cast<std::size_t>(stream.avail_in));
+                        stream.next_in += n;
+                        stream.avail_in -= static_cast<uInt>(n);
+                        trailer -= n;
+                    }
+                    if (trailer != 0) {
+                        DFTRACER_UTILS_LOG_DEBUG(
+                            "Incomplete gzip trailer: %zu bytes remaining",
+                            trailer);
+                        co_return false;
+                    }
+                    window_bits_ = constants::indexer::ZLIB_GZIP_WINDOW_BITS;
+                }
+                if (inflateReset2(&stream,
+                                  constants::indexer::ZLIB_GZIP_WINDOW_BITS) !=
+                    Z_OK) {
                     DFTRACER_UTILS_LOG_DEBUG(
                         "Failed to reset inflater for next stream: %s",
                         stream.msg ? stream.msg : "no message");

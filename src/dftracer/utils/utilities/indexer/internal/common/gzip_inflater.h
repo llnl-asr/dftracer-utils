@@ -108,7 +108,17 @@ class GzipInflater : public Inflater {
                         stream.msg ? stream.msg : "no message");
                     break;
                 }
-                continue;
+                // NOTE: inflateReset clears the zlib
+                // sliding window (state->whave = 0). If we continued filling
+                // the output buffer, the next deflate-block boundary would
+                // pass the "avail_out < sizeof" check (using pre-reset
+                // output) while inflateGetDictionary returns an empty window.
+                // Breaking here lets the caller consume the output produced
+                // so far, and the NEXT read() call starts with fresh output
+                // accounting so block-boundary checks only reflect post-reset
+                // output where the window is valid.
+                result.at_block_boundary = false;
+                break;
             }
             if (ret != Z_OK) {
                 DFTRACER_UTILS_LOG_DEBUG(

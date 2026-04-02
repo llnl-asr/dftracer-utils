@@ -62,20 +62,45 @@ static std::vector<std::string> sync_read_bytes_range(const std::string& path,
     }
 
     std::vector<std::string> result;
-    while (pos < end) {
-        std::string line_buf;
+    std::string line_buf;
+    bool past_end = false;
+    while (true) {
+        if (pos >= end) {
+            if (line_buf.empty()) break;
+            past_end = true;
+        }
+
+        line_buf.clear();
         bool found_char = false;
+        bool emitted_line = false;
         char c;
-        while (pos < end && file.get(c)) {
+        while (file.get(c)) {
             pos++;
             found_char = true;
-            if (c == '\n') break;
+            if (pos > end) past_end = true;
+            if (c == '\n') {
+                result.push_back(std::move(line_buf));
+                emitted_line = true;
+                if (past_end) {
+                    return result;
+                }
+                break;
+            }
             line_buf.push_back(c);
         }
-        if (!found_char || (line_buf.empty() && pos >= end)) {
+
+        if (!found_char) {
             break;
         }
-        result.push_back(std::move(line_buf));
+
+        if (emitted_line) {
+            continue;
+        }
+
+        if (!line_buf.empty()) {
+            result.push_back(std::move(line_buf));
+        }
+        break;
     }
     return result;
 }
@@ -567,6 +592,61 @@ TEST_SUITE("AsyncPlainFileBytesGenerator") {
             for (std::size_t i = 0; i < sync_lines.size(); ++i) {
                 CHECK(sync_lines[i] == async_lines[i]);
             }
+
+            fs::remove(test_file);
+        }
+
+        SUBCASE("Async and sync both preserve empty lines") {
+            fs::path test_file = make_unique_test_path(
+                "test_async_plain_bytes_empty_parity.txt");
+            {
+                std::ofstream ofs(test_file);
+                ofs << "Line 1\n";
+                ofs << "\n";
+                ofs << "Line 3\n";
+                ofs << "\n";
+            }
+
+            std::ifstream ifs(test_file, std::ios::ate | std::ios::binary);
+            auto file_size = static_cast<std::size_t>(ifs.tellg());
+            ifs.close();
+
+            auto sync_lines =
+                sync_read_bytes_range(test_file.string(), 0, file_size);
+
+            auto gen = async_plain_file_bytes(test_file.string(), 0, file_size);
+            auto task = collect_lines(std::move(gen));
+            auto async_lines = task.get();
+
+            REQUIRE(sync_lines.size() == 4);
+            CHECK(sync_lines[0] == "Line 1");
+            CHECK(sync_lines[1] == "");
+            CHECK(sync_lines[2] == "Line 3");
+            CHECK(sync_lines[3] == "");
+
+            REQUIRE(sync_lines == async_lines);
+
+            fs::remove(test_file);
+        }
+
+        SUBCASE("Byte range completes the in-flight line past end_byte") {
+            fs::path test_file = make_unique_test_path(
+                "test_async_plain_bytes_end_complete.txt");
+            {
+                std::ofstream ofs(test_file);
+                ofs << "First line\n";
+                ofs << "Second line spills past end byte\n";
+                ofs << "Third line\n";
+            }
+
+            std::size_t end = std::string("First line\nSecond").size();
+            auto gen = async_plain_file_bytes(test_file.string(), 0, end);
+            auto task = collect_lines(std::move(gen));
+            auto lines = task.get();
+
+            REQUIRE(lines.size() == 2);
+            CHECK(lines[0] == "First line");
+            CHECK(lines[1] == "Second line spills past end byte");
 
             fs::remove(test_file);
         }

@@ -230,6 +230,61 @@ TEST_SUITE("TraceReader") {
         CHECK(subset < total);
     }
 
+    TEST_CASE("read_lines plain file byte range completes current line") {
+        auto test_file = make_unique_test_path("trace_reader_plain_range.pfw");
+        const std::string first_line =
+            R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})";
+        const std::string second_line =
+            R"({"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":20,"ph":"X","args":{"ret":2}})";
+        const std::string third_line =
+            R"({"name":"close","cat":"POSIX","pid":1,"tid":1,"ts":3000,"dur":30,"ph":"X","args":{"ret":3}})";
+        {
+            std::ofstream out(test_file);
+            out << first_line << "\n";
+            out << second_line << "\n";
+            out << third_line << "\n";
+        }
+
+        TraceReader reader({.file_path = test_file.string()});
+
+        ReadConfig rc;
+        rc.start_byte = 0;
+        rc.end_byte =
+            first_line.size() + 1 + std::string(R"({"name":"write")").size();
+
+        auto lines = collect_lines(reader.read_lines(rc)).get();
+
+        REQUIRE(lines.size() == 2);
+        CHECK(lines[0].find(R"("name":"read")") != std::string::npos);
+        CHECK(lines[1].find(R"("name":"write")") != std::string::npos);
+
+        fs::remove(test_file);
+    }
+
+    TEST_CASE("read_lines plain file byte range skips partial first line") {
+        auto test_file =
+            make_unique_test_path("trace_reader_plain_skip_partial.pfw");
+        {
+            std::ofstream out(test_file);
+            out << "alpha\n";
+            out << "beta\n";
+            out << "gamma\n";
+        }
+
+        TraceReader reader({.file_path = test_file.string()});
+
+        ReadConfig rc;
+        rc.start_byte = 2;
+        rc.end_byte = 100;
+        auto lines = collect_lines(reader.read_lines(rc)).get();
+
+        REQUIRE(lines.size() == 2);
+        CHECK(lines[0] == "beta");
+        CHECK(lines[1] == "gamma");
+
+        fs::remove(test_file);
+    }
+
     TEST_CASE("read_raw indexed and unindexed produce same chunk count") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
@@ -315,6 +370,31 @@ TEST_SUITE("TraceReader") {
         for (const auto& line : lines) {
             CHECK(line.find("\"name\":\"read\"") != std::string::npos);
         }
+    }
+
+    TEST_CASE("Query filters plain file byte ranges") {
+        auto test_file =
+            make_unique_test_path("trace_reader_plain_query_range.pfw");
+        {
+            std::ofstream out(test_file);
+            out << R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})"
+                << "\n";
+            out << R"({"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":20,"ph":"X","args":{"ret":2}})"
+                << "\n";
+        }
+
+        TraceReader reader({.file_path = test_file.string()});
+
+        ReadConfig rc;
+        rc.start_byte = 0;
+        rc.end_byte = fs::file_size(test_file);
+        rc.query = R"(name == "write")";
+        auto lines = collect_lines(reader.read_lines(rc)).get();
+
+        REQUIRE(lines.size() == 1);
+        CHECK(lines[0].find(R"("name":"write")") != std::string::npos);
+
+        fs::remove(test_file);
     }
 
     TEST_CASE("Query with AND narrows results") {

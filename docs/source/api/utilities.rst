@@ -44,6 +44,16 @@ High-level aggregation pipeline. Scans a directory for ``.pfw`` /
 ``.pfw.gz`` files, builds indexes, aggregates events into time-bucketed
 counters, and returns the result as Arrow.
 
+The Arrow output always includes the base aggregation columns:
+``batch_type``, ``cat``, ``name``, ``pid``, ``tid``, ``hhash``,
+``fhash``, ``time_bucket``, ``count``, ``dur_total``, ``dur_min``,
+``dur_max``, ``dur_mean``, ``dur_std``, ``size_total``, ``size_min``,
+``size_max``, ``size_mean``, ``size_std``, ``ts``, and ``te``.
+When ``custom_metric_fields`` is provided, each field adds
+``<field>_total``, ``<field>_min``, ``<field>_max``, ``<field>_mean``,
+and ``<field>_std`` columns. ``batch_type`` distinguishes regular event,
+profile-counter, and system-counter rows.
+
 .. autoclass:: dftracer.utils.dftracer_utils_ext.AggregatorUtility(runtime: Runtime | None = None)
    :members: process, iter_arrow
    :undoc-members:
@@ -54,6 +64,14 @@ counters, and returns the result as Arrow.
 
    # Materialized
    table = agg.process("./traces", time_interval_ms=1000.0)
+
+   # Include custom metrics from event args
+   table = agg.process(
+       "./traces",
+       time_interval_ms=1000.0,
+       custom_metric_fields=["bytes", "ops"],
+       compute_percentiles=True,
+   )
 
    # Streaming
    for batch in agg.iter_arrow("./traces"):

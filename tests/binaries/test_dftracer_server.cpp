@@ -188,6 +188,15 @@ std::string extract_body(const std::string& response) {
 /// Pick a random port in the ephemeral range.
 int pick_port() { return 10000 + (::getpid() % 50000); }
 
+bool tcp_sockets_available() {
+    int sock = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (sock >= 0) {
+        ::close(sock);
+        return true;
+    }
+    return false;
+}
+
 /// RAII server process manager.
 struct ServerProcess {
     pid_t pid = -1;
@@ -253,6 +262,10 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
     auto binary = find_server_binary();
     if (binary.empty()) {
         MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!tcp_sockets_available()) {
+        MESSAGE("TCP sockets are unavailable in this environment, skipping.");
         return;
     }
 
@@ -543,6 +556,10 @@ TEST_CASE("DFTracer Server - graceful shutdown via SIGTERM") {
     auto binary = find_server_binary();
     if (binary.empty()) {
         MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!tcp_sockets_available()) {
+        MESSAGE("TCP sockets are unavailable in this environment, skipping.");
         return;
     }
 

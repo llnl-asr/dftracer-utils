@@ -22,6 +22,8 @@ class AggregatorUtility:
         chunk_size_mb: int = 64,
         batch_size_mb: int = 4,
         event_batch_size: int = 10000,
+        custom_metric_fields: Optional[List[str]] = None,
+        compute_percentiles: bool = False,
     ) -> ArrowTable: ...
     def __call__(
         self,
@@ -36,6 +38,8 @@ class AggregatorUtility:
         chunk_size_mb: int = 64,
         batch_size_mb: int = 4,
         event_batch_size: int = 10000,
+        custom_metric_fields: Optional[List[str]] = None,
+        compute_percentiles: bool = False,
     ) -> ArrowTable: ...
     def iter_arrow(
         self,
@@ -50,4 +54,6 @@ class AggregatorUtility:
         chunk_size_mb: int = 64,
         batch_size_mb: int = 4,
         event_batch_size: int = 10000,
+        custom_metric_fields: Optional[List[str]] = None,
+        compute_percentiles: bool = False,
     ) -> Iterator[Any]: ...

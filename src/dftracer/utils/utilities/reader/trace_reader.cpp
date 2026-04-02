@@ -4,6 +4,7 @@
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_bytes_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_line_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
@@ -183,6 +184,16 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
         std::size_t end = config.has_line_range() ? config.end_line : 0;
         auto gen = fileio::lines::sources::async_streaming_gz_lines(
             config_.file_path, start, end);
+        while (auto opt = co_await gen.next()) {
+            if (!query || line_matches_query(*query, opt->content)) {
+                co_yield *opt;
+            }
+        }
+    } else if (config.has_byte_range()) {
+        // Plain file with byte range
+        auto gen = fileio::lines::sources::async_plain_file_bytes(
+            config_.file_path, config.start_byte, config.end_byte,
+            config.buffer_size);
         while (auto opt = co_await gen.next()) {
             if (!query || line_matches_query(*query, opt->content)) {
                 co_yield *opt;

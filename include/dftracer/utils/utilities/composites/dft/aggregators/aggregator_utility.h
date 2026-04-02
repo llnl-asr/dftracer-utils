@@ -41,8 +41,11 @@ struct AggregatorInput {
     AggregatorInput& with_event_batch_size(std::size_t sz);
 };
 
+enum class AggregationBatchType { EVENT, PROFILE, SYSTEM };
+
 struct AggregationBatch {
     std::vector<std::pair<AggregationKey, AggregationMetrics>> entries;
+    AggregationBatchType batch_type = AggregationBatchType::EVENT;
     std::size_t total_events_processed = 0;
     std::size_t total_files_processed = 0;
     std::size_t total_bytes_processed = 0;

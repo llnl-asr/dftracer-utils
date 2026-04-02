@@ -126,8 +126,7 @@ void AggregationMetrics::update_custom_metric(const std::string& name,
                                               std::uint64_t value,
                                               bool compute_percentiles) {
     if (!custom_metrics) {
-        custom_metrics =
-            std::make_unique<std::unordered_map<std::string, MetricStats>>();
+        custom_metrics = std::make_unique<CustomMetricsMap>();
     }
     if (custom_metrics->find(name) == custom_metrics->end()) {
         custom_metrics->emplace(name, MetricStats(sketch_accuracy));
@@ -165,8 +164,7 @@ void AggregationMetrics::merge_from(const AggregationMetrics& other) {
 
     if (other.custom_metrics) {
         if (!custom_metrics) {
-            custom_metrics = std::make_unique<
-                std::unordered_map<std::string, MetricStats>>();
+            custom_metrics = std::make_unique<CustomMetricsMap>();
         }
         for (const auto& [name, other_metric] : *other.custom_metrics) {
             (*custom_metrics)[name].merge_from(other_metric, n1, n2, n);

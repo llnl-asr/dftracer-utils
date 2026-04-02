@@ -17,8 +17,10 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <atomic>
 #include <ctime>
+#include <set>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
@@ -77,48 +79,127 @@ using common::arrow::RecordBatchBuilder;
 
 ArrowExportResult AggregationBatch::to_arrow() const {
     RecordBatchBuilder builder;
-    builder.declare_schema({
-        {"cat", ColumnType::STRING},
-        {"name", ColumnType::STRING},
-        {"pid", ColumnType::UINT64},
-        {"tid", ColumnType::UINT64},
-        {"hhash", ColumnType::STRING},
-        {"fhash", ColumnType::STRING},
-        {"time_bucket", ColumnType::UINT64},
-        {"count", ColumnType::UINT64},
-        {"dur_total", ColumnType::UINT64},
-        {"dur_min", ColumnType::UINT64},
-        {"dur_max", ColumnType::UINT64},
-        {"dur_mean", ColumnType::DOUBLE},
-        {"size_total", ColumnType::UINT64},
-        {"size_min", ColumnType::UINT64},
-        {"size_max", ColumnType::UINT64},
-        {"size_mean", ColumnType::DOUBLE},
-        {"ts", ColumnType::UINT64},
+
+    // Discover the union of extra key IDs and custom metric names.
+    std::set<std::uint32_t> extra_key_id_set;
+    std::set<std::string_view, std::less<>> custom_metric_name_set;
+    for (const auto& [key, metrics] : entries) {
+        if (key.extra_keys && !key.extra_keys->empty()) {
+            for (const auto& [k, v] : *key.extra_keys) {
+                extra_key_id_set.insert(k);
+            }
+        }
+        if (metrics.custom_metrics && !metrics.custom_metrics->empty()) {
+            for (const auto& [name, _] : *metrics.custom_metrics) {
+                custom_metric_name_set.insert(name);
+            }
+        }
+    }
+    std::vector<std::uint32_t> extra_key_ids(extra_key_id_set.begin(),
+                                             extra_key_id_set.end());
+    std::vector<std::string_view> custom_metric_names(
+        custom_metric_name_set.begin(), custom_metric_name_set.end());
+
+    // Build schema: batch_type + fixed columns + extra keys + custom metrics
+    std::vector<common::arrow::ColumnSpec> schema = {
+        {"batch_type", ColumnType::INT64},  {"cat", ColumnType::STRING},
+        {"name", ColumnType::STRING},       {"pid", ColumnType::UINT64},
+        {"tid", ColumnType::UINT64},        {"hhash", ColumnType::STRING},
+        {"fhash", ColumnType::STRING},      {"time_bucket", ColumnType::UINT64},
+        {"count", ColumnType::UINT64},      {"dur_total", ColumnType::UINT64},
+        {"dur_min", ColumnType::UINT64},    {"dur_max", ColumnType::UINT64},
+        {"dur_mean", ColumnType::DOUBLE},   {"dur_std", ColumnType::DOUBLE},
+        {"size_total", ColumnType::UINT64}, {"size_min", ColumnType::UINT64},
+        {"size_max", ColumnType::UINT64},   {"size_mean", ColumnType::DOUBLE},
+        {"size_std", ColumnType::DOUBLE},   {"ts", ColumnType::UINT64},
         {"te", ColumnType::UINT64},
-    });
+    };
+    for (auto id : extra_key_ids) {
+        schema.push_back({std::string(aggregation_intern().resolve(id)),
+                          ColumnType::STRING});
+    }
+    // Custom metric suffixed names — need owned strings for ColumnSpec
+    struct MetricSuffix {
+        const char* suffix;
+        ColumnType type;
+    };
+    static constexpr MetricSuffix cm_schema[] = {
+        {"_total", ColumnType::UINT64}, {"_min", ColumnType::UINT64},
+        {"_max", ColumnType::UINT64},   {"_mean", ColumnType::DOUBLE},
+        {"_std", ColumnType::DOUBLE},
+    };
+    for (auto cm : custom_metric_names) {
+        for (const auto& [suffix, type] : cm_schema) {
+            std::string col_name;
+            col_name.reserve(cm.size() + 8);
+            col_name.append(cm);
+            col_name.append(suffix);
+            schema.push_back({std::move(col_name), type});
+        }
+    }
+
+    builder.declare_schema(schema);
     builder.reserve(entries.size());
 
     for (const auto& [key, metrics] : entries) {
-        builder.append_string(0, key.cat());
-        builder.append_string(1, key.name());
-        builder.append_uint64(2, key.pid);
-        builder.append_uint64(3, key.tid);
-        builder.append_string(4, key.hhash());
-        builder.append_string(5, key.fhash());
-        builder.append_uint64(6, key.time_bucket);
-        builder.append_uint64(7, metrics.count);
-        builder.append_uint64(8, metrics.duration.total);
-        // min is initialized to uint64_max when no events — clamp to 0
-        builder.append_uint64(9, metrics.count > 0 ? metrics.duration.min : 0);
-        builder.append_uint64(10, metrics.duration.max);
-        builder.append_double(11, metrics.duration.mean);
-        builder.append_uint64(12, metrics.size.total);
-        builder.append_uint64(13, metrics.count > 0 ? metrics.size.min : 0);
-        builder.append_uint64(14, metrics.size.max);
-        builder.append_double(15, metrics.size.mean);
-        builder.append_uint64(16, metrics.ts);
-        builder.append_uint64(17, metrics.te);
+        std::size_t ci = 0;
+        builder.append_int64(ci++, static_cast<int64_t>(batch_type));
+        builder.append_string(ci++, key.cat());
+        builder.append_string(ci++, key.name());
+        builder.append_uint64(ci++, key.pid);
+        builder.append_uint64(ci++, key.tid);
+        builder.append_string(ci++, key.hhash());
+        builder.append_string(ci++, key.fhash());
+        builder.append_uint64(ci++, key.time_bucket);
+        builder.append_uint64(ci++, metrics.count);
+        builder.append_uint64(ci++, metrics.duration.total);
+        builder.append_uint64(ci++,
+                              metrics.count > 0 ? metrics.duration.min : 0);
+        builder.append_uint64(ci++, metrics.duration.max);
+        builder.append_double(ci++, metrics.duration.mean);
+        builder.append_double(ci++, metrics.get_stddev_duration());
+        builder.append_uint64(ci++, metrics.size.total);
+        builder.append_uint64(ci++, metrics.count > 0 ? metrics.size.min : 0);
+        builder.append_uint64(ci++, metrics.size.max);
+        builder.append_double(ci++, metrics.size.mean);
+        builder.append_double(ci++, metrics.get_stddev_size());
+        builder.append_uint64(ci++, metrics.ts);
+        builder.append_uint64(ci++, metrics.te);
+
+        for (auto extra_key_id : extra_key_ids) {
+            bool found_extra_key = false;
+            if (key.extra_keys) {
+                for (const auto& [present_id, value_id] : *key.extra_keys) {
+                    if (present_id == extra_key_id) {
+                        builder.append_string(
+                            ci++, aggregation_intern().resolve(value_id));
+                        found_extra_key = true;
+                        break;
+                    }
+                }
+            }
+            if (!found_extra_key) {
+                builder.append_null(ci++);
+            }
+        }
+
+        for (auto cm : custom_metric_names) {
+            if (metrics.custom_metrics) {
+                auto it = metrics.custom_metrics->find(cm);
+                if (it != metrics.custom_metrics->end()) {
+                    const auto& ms = it->second;
+                    builder.append_uint64(ci++, ms.total);
+                    builder.append_uint64(ci++, metrics.count > 0 ? ms.min : 0);
+                    builder.append_uint64(ci++, ms.max);
+                    builder.append_double(ci++, ms.mean);
+                    builder.append_double(ci++, ms.get_stddev(metrics.count));
+                    continue;
+                }
+            }
+            for (std::size_t j = 0; j < std::size(cm_schema); ++j)
+                builder.append_null(ci++);
+        }
+
         builder.end_row();
     }
 
@@ -177,15 +258,20 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     std::atomic<int> global_chunk_idx{0};
 
     for (const auto& file_path : input_files) {
-        std::string idx_path = composites::dft::internal::determine_index_path(
-            file_path, effective_index_dir);
+        bool is_compressed =
+            file_path.size() >= 3 &&
+            file_path.compare(file_path.size() - 3, 3, ".gz") == 0;
 
-        // Build (or reuse) the checkpoint index.
-        auto idx_input = indexer::IndexBuildConfig::for_file(file_path)
-                             .with_checkpoint_size(input.checkpoint_size)
-                             .with_force_rebuild(input.force_rebuild)
-                             .with_index_dir(effective_index_dir);
-        co_await indexer::IndexBuilderUtility{}.process(idx_input);
+        std::string idx_path;
+        if (is_compressed) {
+            idx_path = composites::dft::internal::determine_index_path(
+                file_path, effective_index_dir);
+            auto idx_input = indexer::IndexBuildConfig::for_file(file_path)
+                                 .with_checkpoint_size(input.checkpoint_size)
+                                 .with_force_rebuild(input.force_rebuild)
+                                 .with_index_dir(effective_index_dir);
+            co_await indexer::IndexBuilderUtility{}.process(idx_input);
+        }
 
         // Collect file metadata (line count, size, etc.).
         auto meta_input =
@@ -237,34 +323,49 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     AssociationResolverUtility resolver;
     auto resolver_output = co_await resolver.process(resolver_input);
 
-    // Yield the resolved aggregations in bounded batches.
+    // Yield resolved aggregations in bounded batches, separated by type.
     const std::size_t batch_sz = input.event_batch_size;
+    const auto& resolved = resolver_output.aggregations;
 
-    AggregationBatch batch;
-    batch.total_events_processed =
-        resolver_output.aggregations.total_events_processed;
-    batch.total_files_processed =
-        resolver_output.aggregations.total_files_processed;
-    batch.total_bytes_processed =
-        resolver_output.aggregations.total_bytes_processed;
-
-    for (auto& [key, metrics] : resolver_output.aggregations.aggregations) {
-        batch.entries.emplace_back(std::move(key), std::move(metrics));
-        if (batch.entries.size() >= batch_sz) {
-            co_yield std::move(batch);
-            batch = AggregationBatch{};
-            batch.total_events_processed =
-                resolver_output.aggregations.total_events_processed;
-            batch.total_files_processed =
-                resolver_output.aggregations.total_files_processed;
-            batch.total_bytes_processed =
-                resolver_output.aggregations.total_bytes_processed;
+    auto yield_map = [&](AggregationMap& map, AggregationBatchType type)
+        -> coro::AsyncGenerator<AggregationBatch> {
+        AggregationBatch batch;
+        batch.batch_type = type;
+        batch.total_events_processed = resolved.total_events_processed;
+        batch.total_files_processed = resolved.total_files_processed;
+        batch.total_bytes_processed = resolved.total_bytes_processed;
+        for (auto& [key, metrics] : map) {
+            batch.entries.emplace_back(std::move(key), std::move(metrics));
+            if (batch.entries.size() >= batch_sz) {
+                co_yield std::move(batch);
+                batch = AggregationBatch{};
+                batch.batch_type = type;
+                batch.total_events_processed = resolved.total_events_processed;
+                batch.total_files_processed = resolved.total_files_processed;
+                batch.total_bytes_processed = resolved.total_bytes_processed;
+            }
         }
-    }
+        if (!batch.entries.empty()) {
+            co_yield std::move(batch);
+        }
+    };
 
-    if (!batch.entries.empty()) {
-        co_yield std::move(batch);
-    }
+    // Events
+    auto event_gen = yield_map(resolver_output.aggregations.aggregations,
+                               AggregationBatchType::EVENT);
+    while (auto b = co_await event_gen.next()) co_yield std::move(*b);
+
+    // Profiles
+    auto profile_gen =
+        yield_map(resolver_output.aggregations.profile_aggregations,
+                  AggregationBatchType::PROFILE);
+    while (auto b = co_await profile_gen.next()) co_yield std::move(*b);
+
+    // System
+    auto system_gen =
+        yield_map(resolver_output.aggregations.system_aggregations,
+                  AggregationBatchType::SYSTEM);
+    while (auto b = co_await system_gen.next()) co_yield std::move(*b);
 
     // Clean up the temporary index directory if we created it.
     if (!temp_index_dir.empty()) {

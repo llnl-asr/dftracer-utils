@@ -88,9 +88,11 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
 
         // Read chunks and split into lines.
         bool done = false;
+        bool past_end = false;
         while (!done) {
             if (static_cast<std::size_t>(file_offset) >= end_byte) {
-                break;
+                if (line_buffer.empty()) break;
+                past_end = true;  // keep reading to finish the current line
             }
 
             ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
@@ -116,15 +118,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
                 auto abs_pos = static_cast<std::size_t>(file_offset) +
                                static_cast<std::size_t>(i);
 
-                if (abs_pos >= end_byte) {
-                    if (!line_buffer.empty()) {
-                        current_line++;
-                        co_yield Line(std::string_view(line_buffer),
-                                      current_line);
-                    }
-                    done = true;
-                    break;
-                }
+                if (abs_pos >= end_byte) past_end = true;
 
                 char c = read_buffer[static_cast<std::size_t>(i)];
 
@@ -132,8 +126,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
                     current_line++;
                     co_yield Line(std::string_view(line_buffer), current_line);
                     line_buffer.clear();
-
-                    if (abs_pos + 1 >= end_byte) {
+                    if (past_end) {
                         done = true;
                         break;
                     }

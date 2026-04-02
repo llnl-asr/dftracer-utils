@@ -75,6 +75,22 @@ static int Aggregator_init(AggregatorObject *self, PyObject *args,
 // Helpers
 // ---------------------------------------------------------------------------
 
+static int parse_str_list(PyObject *obj, std::vector<std::string> &out,
+                          const char *param_name) {
+    if (!obj || obj == Py_None) return 0;
+    if (!PyList_Check(obj)) {
+        PyErr_Format(PyExc_TypeError, "%s must be a list of str", param_name);
+        return -1;
+    }
+    Py_ssize_t n = PyList_Size(obj);
+    for (Py_ssize_t i = 0; i < n; i++) {
+        const char *s = PyUnicode_AsUTF8(PyList_GetItem(obj, i));
+        if (!s) return -1;
+        out.emplace_back(s);
+    }
+    return 0;
+}
+
 static int parse_aggregator_args(PyObject *args, PyObject *kwds,
                                  AggregatorInput &input) {
     static const char *kwlist[] = {"directory",
@@ -88,6 +104,8 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
                                    "chunk_size_mb",
                                    "batch_size_mb",
                                    "event_batch_size",
+                                   "custom_metric_fields",
+                                   "compute_percentiles",
                                    NULL};
 
     const char *directory = NULL;
@@ -101,12 +119,15 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
     Py_ssize_t chunk_size_mb = 64;
     Py_ssize_t batch_size_mb = 4;
     Py_ssize_t event_batch_size = 10000;
+    PyObject *custom_metrics_obj = Py_None;
+    int compute_percentiles = 0;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "s|dOOOsnpnnn", (char **)kwlist, &directory,
+            args, kwds, "s|dOOOsnpnnnOp", (char **)kwlist, &directory,
             &time_interval_ms, &group_keys_obj, &categories_obj, &names_obj,
             &index_dir, &checkpoint_size, &force_rebuild, &chunk_size_mb,
-            &batch_size_mb, &event_batch_size))
+            &batch_size_mb, &event_batch_size, &custom_metrics_obj,
+            &compute_percentiles))
         return -1;
 
     input.directory = directory;
@@ -118,24 +139,14 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
     input.chunk_size_mb = static_cast<std::size_t>(chunk_size_mb);
     input.batch_size_mb = static_cast<std::size_t>(batch_size_mb);
     input.event_batch_size = static_cast<std::size_t>(event_batch_size);
+    input.config.compute_percentiles = compute_percentiles != 0;
 
-    if (group_keys_obj && group_keys_obj != Py_None) {
-        if (!PyList_Check(group_keys_obj)) {
-            PyErr_SetString(PyExc_TypeError,
-                            "group_keys must be a list of str");
-            return -1;
-        }
-        Py_ssize_t n = PyList_Size(group_keys_obj);
-        for (Py_ssize_t i = 0; i < n; i++) {
-            const char *s = PyUnicode_AsUTF8(PyList_GetItem(group_keys_obj, i));
-            if (!s) return -1;
-            input.config.extra_group_keys.emplace_back(s);
-        }
-    }
-
-    // categories and names filtering is now handled via the query DSL.
-    // The categories_obj and names_obj parameters are accepted but ignored
-    // for backward compatibility. Use the query parameter instead.
+    if (parse_str_list(group_keys_obj, input.config.extra_group_keys,
+                       "group_keys") < 0)
+        return -1;
+    if (parse_str_list(custom_metrics_obj, input.config.custom_metric_fields,
+                       "custom_metric_fields") < 0)
+        return -1;
 
     return 0;
 }
@@ -278,7 +289,8 @@ static PyMethodDef Aggregator_methods[] = {
      "process(directory, time_interval_ms=5000.0, group_keys=None,\n"
      "        categories=None, names=None, index_dir='',\n"
      "        checkpoint_size=33554432, force_rebuild=False,\n"
-     "        chunk_size_mb=64, batch_size_mb=4, event_batch_size=10000)\n"
+     "        chunk_size_mb=64, batch_size_mb=4, event_batch_size=10000,\n"
+     "        custom_metric_fields=None, compute_percentiles=False)\n"
      "--\n"
      "\n"
      "Run aggregation pipeline, return materialized ArrowTable.\n"
@@ -296,6 +308,11 @@ static PyMethodDef Aggregator_methods[] = {
      "    chunk_size_mb (int): Target chunk size in MB (default 64).\n"
      "    batch_size_mb (int): Batch read size in MB (default 4).\n"
      "    event_batch_size (int): Entries per batch (default 10000).\n"
+     "    custom_metric_fields (list[str] or None): Extra numeric args\n"
+     "        fields to aggregate into *_total/*_min/*_max/*_mean/*_std\n"
+     "        columns (default None).\n"
+     "    compute_percentiles (bool): Enable percentile sketch collection\n"
+     "        during aggregation (default False).\n"
      "\n"
      "Returns:\n"
      "    ArrowTable: Aggregated results.\n"},
@@ -304,7 +321,8 @@ static PyMethodDef Aggregator_methods[] = {
      "iter_arrow(directory, time_interval_ms=5000.0, group_keys=None,\n"
      "           categories=None, names=None, index_dir='',\n"
      "           checkpoint_size=33554432, force_rebuild=False,\n"
-     "           chunk_size_mb=64, batch_size_mb=4, event_batch_size=10000)\n"
+     "           chunk_size_mb=64, batch_size_mb=4, event_batch_size=10000,\n"
+     "           custom_metric_fields=None, compute_percentiles=False)\n"
      "--\n"
      "\n"
      "Run aggregation pipeline, stream Arrow batches.\n"
@@ -322,6 +340,11 @@ static PyMethodDef Aggregator_methods[] = {
      "    chunk_size_mb (int): Target chunk size in MB (default 64).\n"
      "    batch_size_mb (int): Batch read size in MB (default 4).\n"
      "    event_batch_size (int): Entries per batch (default 10000).\n"
+     "    custom_metric_fields (list[str] or None): Extra numeric args\n"
+     "        fields to aggregate into *_total/*_min/*_max/*_mean/*_std\n"
+     "        columns (default None).\n"
+     "    compute_percentiles (bool): Enable percentile sketch collection\n"
+     "        during aggregation (default False).\n"
      "\n"
      "Returns:\n"
      "    Iterator[ArrowBatch]: Arrow record batches.\n"},

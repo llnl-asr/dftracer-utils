@@ -48,6 +48,10 @@ struct DFTracerEvent {
 
     // Convenience predicates
     bool is_metadata() const { return ph == "M"; }
+    bool is_counter() const { return ph == "C"; }
+    bool is_profile() const { return ph == "C" && cat != "sys"; }
+    bool is_system() const { return ph == "C" && cat == "sys"; }
+    bool is_event() const { return !is_metadata() && !is_counter(); }
     bool is_complete() const { return ph == "X"; }
     bool has_id() const { return id != 0; }
 

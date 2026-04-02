@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_METRICS_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_METRICS_H
 
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 
 #include <cstdint>
@@ -68,6 +69,10 @@ struct MetricStats {
     double get_kurtosis(std::uint64_t count) const;
 };
 
+using CustomMetricsMap =
+    std::unordered_map<std::string, MetricStats, TransparentStringHash,
+                       TransparentStringEqual>;
+
 struct AggregationMetrics {
     std::uint64_t count = 0;
 
@@ -81,8 +86,7 @@ struct AggregationMetrics {
         boundary_associations;
     std::uint64_t parent_pid = 0;
 
-    std::unique_ptr<std::unordered_map<std::string, MetricStats>>
-        custom_metrics;
+    std::unique_ptr<CustomMetricsMap> custom_metrics;
 
     double sketch_accuracy = 0.01;
 
@@ -106,9 +110,7 @@ struct AggregationMetrics {
           parent_pid(other.parent_pid),
           custom_metrics(
               other.custom_metrics
-                  ? std::make_unique<
-                        std::unordered_map<std::string, MetricStats>>(
-                        *other.custom_metrics)
+                  ? std::make_unique<CustomMetricsMap>(*other.custom_metrics)
                   : nullptr),
           sketch_accuracy(other.sketch_accuracy) {}
 
@@ -128,9 +130,7 @@ struct AggregationMetrics {
             parent_pid = other.parent_pid;
             custom_metrics =
                 other.custom_metrics
-                    ? std::make_unique<
-                          std::unordered_map<std::string, MetricStats>>(
-                          *other.custom_metrics)
+                    ? std::make_unique<CustomMetricsMap>(*other.custom_metrics)
                     : nullptr;
             sketch_accuracy = other.sketch_accuracy;
         }

@@ -18,6 +18,29 @@ coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
     std::size_t file_size = meta.uncompressed_size;
     std::size_t num_lines = meta.valid_events;
 
+    // When file size or line count is unknown (e.g. gzip without index),
+    // treat the whole file as a single chunk and let the reader handle bounds.
+    if (file_size == 0 || num_lines == 0) {
+        DFTRACER_UTILS_LOG_DEBUG(
+            "File %s has unknown size/lines, using single chunk",
+            meta.file_path.c_str());
+
+        FileChunkMapperOutput chunks;
+        ChunkAggregatorInput chunk;
+        chunk.with_file_path(meta.file_path)
+            .with_idx_path(meta.idx_path)
+            .with_byte_range(0, 0)
+            .with_line_range(0, 0)
+            .with_chunk_index(input.start_chunk_index)
+            .with_config(input.config)
+            .with_checkpoint_size(input.checkpoint_size)
+            .with_batch_size(input.batch_size);
+        chunk.query = input.query;
+        chunks.push_back(std::move(chunk));
+        co_return chunks;
+    }
+
+    if (target_chunk_bytes == 0) target_chunk_bytes = 1;
     std::size_t num_chunks =
         (file_size + target_chunk_bytes - 1) / target_chunk_bytes;
     if (num_chunks == 0) num_chunks = 1;

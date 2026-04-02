@@ -199,6 +199,13 @@ scalar utilities return dicts.
    table = agg.process("./traces", time_interval_ms=1000.0)
    df = table.to_pandas()
 
+   # Optional: aggregate extra numeric args fields
+   table = agg.process(
+       "./traces",
+       custom_metric_fields=["bytes"],
+       compute_percentiles=True,
+   )
+
    # Statistics query (returns dict)
    sq = StatisticsQueryUtility()
    stats = sq.process("trace.pfw.gz", query_type="summary")

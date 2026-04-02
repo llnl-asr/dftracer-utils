@@ -79,6 +79,9 @@ Quick Example
    agg = AggregatorUtility()
    table = agg.process("./traces", time_interval_ms=1000.0)
 
+   # Include extra per-event numeric fields as Arrow columns
+   table = agg.process("./traces", custom_metric_fields=["bytes"])
+
 Indices and tables
 ==================
 

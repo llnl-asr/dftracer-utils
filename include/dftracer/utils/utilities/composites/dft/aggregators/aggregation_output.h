@@ -26,6 +26,8 @@ using BoundaryTimeRangesMap =
 struct ChunkAggregationOutput {
     int chunk_index = 0;
     AggregationMap aggregations;
+    AggregationMap profile_aggregations;
+    AggregationMap system_aggregations;
     std::size_t events_processed = 0;
     std::size_t bytes_processed = 0;
     std::string file_path;
@@ -35,6 +37,8 @@ struct ChunkAggregationOutput {
 
 struct EventAggregatorUtilityOutput {
     AggregationMap aggregations;
+    AggregationMap profile_aggregations;
+    AggregationMap system_aggregations;
     std::size_t total_events_processed = 0;
     std::size_t total_files_processed = 0;
     std::size_t total_bytes_processed = 0;

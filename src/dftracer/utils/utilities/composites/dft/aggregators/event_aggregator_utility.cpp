@@ -12,14 +12,19 @@ void EventAggregatorUtility::merge_chunk(
     state_.total_bytes_processed += chunk_output.bytes_processed;
     unique_files_.insert(chunk_output.file_path);
 
-    for (auto& [key, metrics] : chunk_output.aggregations) {
-        auto it = state_.aggregations.find(key);
-        if (it == state_.aggregations.end()) {
-            state_.aggregations.emplace(key, std::move(metrics));
-        } else {
-            it->second.merge_from(metrics);
+    auto merge_into = [](AggregationMap& dst, AggregationMap& src) {
+        for (auto& [key, metrics] : src) {
+            auto it = dst.find(key);
+            if (it == dst.end()) {
+                dst.emplace(key, std::move(metrics));
+            } else {
+                it->second.merge_from(metrics);
+            }
         }
-    }
+    };
+    merge_into(state_.aggregations, chunk_output.aggregations);
+    merge_into(state_.profile_aggregations, chunk_output.profile_aggregations);
+    merge_into(state_.system_aggregations, chunk_output.system_aggregations);
 
     if (chunk_output.local_tracker) {
         state_.trackers.push_back(std::move(chunk_output.local_tracker));

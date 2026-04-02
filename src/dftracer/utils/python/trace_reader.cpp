@@ -8,7 +8,12 @@
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cinttypes>
 #include <cstddef>
+#include <cstdio>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <string>
@@ -26,6 +31,11 @@ using dftracer::utils::coro::CoroTask;
 using dftracer::utils::utilities::reader::ReadConfig;
 using dftracer::utils::utilities::reader::TraceReader;
 using dftracer::utils::utilities::reader::TraceReaderConfig;
+
+int64_t json_to_int64(yyjson_val *value) {
+    if (yyjson_is_int(value)) return yyjson_get_sint(value);
+    return static_cast<int64_t>(yyjson_get_uint(value));
+}
 
 CoroTask<void> produce_lines(std::shared_ptr<IteratorState> state,
                              TraceReaderConfig cfg, ReadConfig rc) {
@@ -104,9 +114,446 @@ CoroTask<void> produce_raw(std::shared_ptr<IteratorState> state,
 using dftracer::utils::utilities::common::arrow::ColumnType;
 using dftracer::utils::utilities::common::arrow::RecordBatchBuilder;
 
+// Bump arena for string_views that must survive until builder.finish().
+struct StringArena {
+    static constexpr std::size_t BLOCK_SIZE = 64 * 1024;
+    std::vector<std::vector<char>> blocks;
+    std::size_t pos = 0;
+
+    StringArena() { blocks.emplace_back(BLOCK_SIZE); }
+
+    std::string_view push(const char *data, std::size_t len) {
+        if (pos + len > blocks.back().size()) {
+            blocks.emplace_back(std::max(BLOCK_SIZE, len));
+            pos = 0;
+        }
+        char *dst = blocks.back().data() + pos;
+        std::memcpy(dst, data, len);
+        pos += len;
+        return {dst, len};
+    }
+
+    void clear() {
+        if (blocks.size() > 1) blocks.resize(1);
+        pos = 0;
+    }
+};
+
+// --- Row type constants (must match Python TYPE_* constants) ---
+enum RowType : int8_t {
+    ROW_EVENT = 0,
+    ROW_FILE_HASH = 1,
+    ROW_HOST_HASH = 2,
+    ROW_STRING_HASH = 3,
+    ROW_METADATA = 4,
+    ROW_PROC_METADATA = 5,
+    ROW_PROFILE = 6,
+    ROW_SYSTEM = 7,
+};
+
+// --- IO category constants (must match Python IOCategory values) ---
+enum IOCat : int8_t {
+    IO_READ = 1,
+    IO_WRITE = 2,
+    IO_METADATA = 3,
+    IO_PCTL = 4,
+    IO_IPC = 5,
+    IO_OTHER = 6,
+    IO_SYNC = 7,
+};
+
+static int8_t get_io_cat(std::string_view func) {
+    // READ
+    if (func == "fread" || func == "pread" || func == "preadv" ||
+        func == "read" || func == "readv")
+        return IO_READ;
+    // WRITE
+    if (func == "fwrite" || func == "pwrite" || func == "pwritev" ||
+        func == "write" || func == "writev")
+        return IO_WRITE;
+    // SYNC
+    if (func == "fsync" || func == "fdatasync" || func == "msync" ||
+        func == "sync")
+        return IO_SYNC;
+    // PCTL
+    if (func == "exec" || func == "exit" || func == "fork" || func == "kill" ||
+        func == "pipe" || func == "wait")
+        return IO_PCTL;
+    // IPC
+    if (func == "msgctl" || func == "msgget" || func == "msgrcv" ||
+        func == "msgsnd" || func == "semctl" || func == "semget" ||
+        func == "semop" || func == "shmat" || func == "shmctl" ||
+        func == "shmdt" || func == "shmget")
+        return IO_IPC;
+    // METADATA
+    if (func == "__fxstat" || func == "__fxstat64" || func == "__lxstat" ||
+        func == "__lxstat64" || func == "__xstat" || func == "__xstat64" ||
+        func == "access" || func == "close" || func == "closedir" ||
+        func == "fclose" || func == "fcntl" || func == "fopen" ||
+        func == "fopen64" || func == "fseek" || func == "fstat" ||
+        func == "fstatat" || func == "ftell" || func == "ftruncate" ||
+        func == "link" || func == "lseek" || func == "lseek64" ||
+        func == "mkdir" || func == "open" || func == "open64" ||
+        func == "opendir" || func == "readdir" || func == "readlink" ||
+        func == "remove" || func == "rename" || func == "rmdir" ||
+        func == "seek" || func == "stat" || func == "unlink")
+        return IO_METADATA;
+    return IO_OTHER;
+}
+
+static bool str_iequal(std::string_view a, const char *b) {
+    std::size_t len = std::strlen(b);
+    if (a.size() != len) return false;
+    for (std::size_t i = 0; i < len; ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            static_cast<unsigned char>(b[i]))
+            return false;
+    }
+    return true;
+}
+
+static bool str_contains_lower(std::string_view s, const char *needle) {
+    std::size_t nlen = std::strlen(needle);
+    if (s.size() < nlen) return false;
+    for (std::size_t i = 0; i <= s.size() - nlen; ++i) {
+        bool match = true;
+        for (std::size_t j = 0; j < nlen; ++j) {
+            if (std::tolower(static_cast<unsigned char>(s[i + j])) !=
+                static_cast<unsigned char>(needle[j])) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
+}
+
+// Normalize a raw JSON row (already parsed into yyjson) into the semantic
+// output schema.  Appends one row to `builder` with the full set of output
+// columns.  Returns false if the row should be skipped (no valid name).
+static bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
+                          yyjson_val *root) {
+    // --- Extract top-level fields ---
+    yyjson_val *v_ph = yyjson_obj_get(root, "ph");
+    yyjson_val *v_name = yyjson_obj_get(root, "name");
+    yyjson_val *v_cat = yyjson_obj_get(root, "cat");
+    yyjson_val *v_pid = yyjson_obj_get(root, "pid");
+    yyjson_val *v_tid = yyjson_obj_get(root, "tid");
+    yyjson_val *v_ts = yyjson_obj_get(root, "ts");
+    yyjson_val *v_dur = yyjson_obj_get(root, "dur");
+    yyjson_val *v_args = yyjson_obj_get(root, "args");
+
+    std::string_view ph =
+        v_ph && yyjson_is_str(v_ph)
+            ? std::string_view(yyjson_get_str(v_ph), yyjson_get_len(v_ph))
+            : std::string_view();
+    std::string_view name_sv =
+        v_name && yyjson_is_str(v_name)
+            ? std::string_view(yyjson_get_str(v_name), yyjson_get_len(v_name))
+            : std::string_view();
+    std::string_view cat_sv =
+        v_cat && yyjson_is_str(v_cat)
+            ? std::string_view(yyjson_get_str(v_cat), yyjson_get_len(v_cat))
+            : std::string_view();
+
+    // Helper to get args fields
+    auto args_str = [&](const char *key) -> std::string_view {
+        if (!v_args) return {};
+        yyjson_val *v = yyjson_obj_get(v_args, key);
+        if (!v) return {};
+        if (yyjson_is_str(v)) return {yyjson_get_str(v), yyjson_get_len(v)};
+        return {};
+    };
+    auto args_int = [&](const char *key) -> std::pair<bool, int64_t> {
+        if (!v_args) return {false, 0};
+        yyjson_val *v = yyjson_obj_get(v_args, key);
+        if (!v) return {false, 0};
+        if (yyjson_is_int(v)) return {true, yyjson_get_sint(v)};
+        if (yyjson_is_uint(v))
+            return {true, static_cast<int64_t>(yyjson_get_uint(v))};
+        if (yyjson_is_real(v))
+            return {true, static_cast<int64_t>(yyjson_get_real(v))};
+        return {false, 0};
+    };
+    auto args_float = [&](const char *key) -> std::pair<bool, double> {
+        if (!v_args) return {false, 0.0};
+        yyjson_val *v = yyjson_obj_get(v_args, key);
+        if (!v) return {false, 0.0};
+        if (yyjson_is_real(v)) return {true, yyjson_get_real(v)};
+        if (yyjson_is_int(v))
+            return {true, static_cast<double>(yyjson_get_sint(v))};
+        if (yyjson_is_uint(v))
+            return {true, static_cast<double>(yyjson_get_uint(v))};
+        return {false, 0.0};
+    };
+
+    // --- Type classification ---
+    bool is_M = (ph == "M");
+    bool is_C = (ph == "C");
+    bool is_event = !is_M && !is_C;
+
+    int8_t row_type = ROW_EVENT;
+    if (is_M) {
+        if (name_sv == "FH")
+            row_type = ROW_FILE_HASH;
+        else if (name_sv == "HH")
+            row_type = ROW_HOST_HASH;
+        else if (name_sv == "SH")
+            row_type = ROW_STRING_HASH;
+        else if (name_sv == "PR")
+            row_type = ROW_PROC_METADATA;
+        else
+            row_type = ROW_METADATA;
+    } else if (is_C) {
+        row_type = str_iequal(cat_sv, "sys") ? ROW_SYSTEM : ROW_PROFILE;
+    }
+    bool is_hash = (row_type >= ROW_FILE_HASH && row_type <= ROW_STRING_HASH) ||
+                   row_type == ROW_PROC_METADATA;
+    bool is_profile = (row_type == ROW_PROFILE);
+    bool is_sys = (row_type == ROW_SYSTEM);
+
+    // Name: metadata rows use args.name if available
+    std::string_view out_name = name_sv;
+    if (is_M) {
+        auto an = args_str("name");
+        if (!an.empty()) out_name = an;
+    }
+    if (out_name.empty()) return false;  // skip rows without name
+
+    // --- Declare all output columns (lazy — add_or_get_column handles
+    // first-time creation) --- We use a fixed schema so column indices are
+    // stable across rows. The builder backfills nulls for columns not touched
+    // via end_row().
+
+    auto ci_type = builder.add_or_get_column("type", ColumnType::INT64);
+    auto ci_cat = builder.add_or_get_column("cat", ColumnType::STRING);
+    auto ci_name = builder.add_or_get_column("name", ColumnType::STRING);
+    auto ci_pid = builder.add_or_get_column("pid", ColumnType::INT64);
+    auto ci_tid = builder.add_or_get_column("tid", ColumnType::INT64);
+    auto ci_hash = builder.add_or_get_column("hash", ColumnType::STRING);
+    auto ci_value = builder.add_or_get_column("value", ColumnType::STRING);
+    auto ci_host_hash =
+        builder.add_or_get_column("host_hash", ColumnType::STRING);
+    auto ci_file_hash =
+        builder.add_or_get_column("file_hash", ColumnType::STRING);
+    auto ci_epoch = builder.add_or_get_column("epoch", ColumnType::INT64);
+    auto ci_step = builder.add_or_get_column("step", ColumnType::INT64);
+    auto ci_ts = builder.add_or_get_column("ts", ColumnType::INT64);
+    auto ci_dur = builder.add_or_get_column("dur", ColumnType::INT64);
+    auto ci_te = builder.add_or_get_column("te", ColumnType::INT64);
+    auto ci_trange = builder.add_or_get_column("trange", ColumnType::INT64);
+    auto ci_io_cat = builder.add_or_get_column("io_cat", ColumnType::INT64);
+    auto ci_size = builder.add_or_get_column("size", ColumnType::INT64);
+    auto ci_offset = builder.add_or_get_column("offset", ColumnType::INT64);
+    auto ci_image_id = builder.add_or_get_column("image_id", ColumnType::INT64);
+
+    // --- Populate core columns ---
+    builder.append_int64(ci_type, row_type);
+
+    // cat (lowercased) — write into arena
+    if (!cat_sv.empty()) {
+        char lbuf[256];
+        std::size_t clen = std::min(cat_sv.size(), sizeof(lbuf));
+        for (std::size_t i = 0; i < clen; ++i)
+            lbuf[i] = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(cat_sv[i])));
+        builder.append_string(ci_cat, arena.push(lbuf, clen));
+    } else {
+        builder.append_null(ci_cat);
+    }
+
+    builder.append_string(ci_name, out_name);
+
+    if (v_pid && (yyjson_is_int(v_pid) || yyjson_is_uint(v_pid)))
+        builder.append_int64(ci_pid, json_to_int64(v_pid));
+    // else: null via end_row backfill
+
+    if (v_tid && (yyjson_is_int(v_tid) || yyjson_is_uint(v_tid)))
+        builder.append_int64(ci_tid, json_to_int64(v_tid));
+
+    // hash / value
+    auto a_value = args_str("value");
+    if (is_hash && !a_value.empty()) builder.append_string(ci_hash, a_value);
+    if (row_type == ROW_METADATA && !a_value.empty())
+        builder.append_string(ci_value, a_value);
+
+    // host_hash / file_hash
+    auto a_hhash = args_str("hhash");
+    if (!a_hhash.empty()) builder.append_string(ci_host_hash, a_hhash);
+    auto a_fhash = args_str("fhash");
+    if (!a_fhash.empty()) builder.append_string(ci_file_hash, a_fhash);
+
+    // epoch / step
+    auto [has_epoch, epoch_v] = args_int("epoch");
+    if (has_epoch && epoch_v >= 0) builder.append_int64(ci_epoch, epoch_v);
+    auto [has_step, step_v] = args_int("step");
+    if (has_step && step_v >= 0) builder.append_int64(ci_step, step_v);
+
+    // --- Temporal ---
+    bool has_ts = (is_event || is_C) && v_ts &&
+                  (yyjson_is_int(v_ts) || yyjson_is_uint(v_ts));
+    bool has_dur = v_dur && (yyjson_is_int(v_dur) || yyjson_is_uint(v_dur));
+    int64_t ts_val = 0, dur_val = 0;
+    if (has_ts) {
+        ts_val = json_to_int64(v_ts);
+        builder.append_int64(ci_ts, ts_val);
+    }
+    if (is_event && has_ts && has_dur) {
+        dur_val = json_to_int64(v_dur);
+        builder.append_int64(ci_dur, dur_val);
+        builder.append_int64(ci_te, ts_val + dur_val);
+    }
+
+    // --- IO columns (events only) ---
+    if (is_event) {
+        bool is_posix_stdio =
+            str_iequal(cat_sv, "posix") || str_iequal(cat_sv, "stdio");
+        int8_t io_cat = IO_OTHER;
+
+        // size priority: size_sum > POSIX ret > image_size
+        auto [has_ss, ss_val] = args_int("size_sum");
+        if (has_ss) {
+            builder.append_int64(ci_size, ss_val);
+            if (is_posix_stdio) io_cat = get_io_cat(name_sv);
+        } else if (is_posix_stdio) {
+            io_cat = get_io_cat(name_sv);
+            auto [has_ret, ret_val] = args_int("ret");
+            if (has_ret && ret_val > 0 &&
+                (io_cat == IO_READ || io_cat == IO_WRITE))
+                builder.append_int64(ci_size, ret_val);
+            auto [has_ofs, ofs_val] = args_int("offset");
+            if (has_ofs && ofs_val >= 0)
+                builder.append_int64(ci_offset, ofs_val);
+        } else {
+            auto [has_img, img_val] = args_int("image_idx");
+            if (has_img && img_val > 0)
+                builder.append_int64(ci_image_id, img_val);
+            auto [has_ims, ims_val] = args_int("image_size");
+            if (has_ims && ims_val > 0 && !str_contains_lower(name_sv, "open"))
+                builder.append_int64(ci_size, ims_val);
+        }
+        builder.append_int64(ci_io_cat, io_cat);
+    }
+
+    // --- Profile columns ---
+    if (is_profile) {
+        bool is_posix_stdio =
+            str_iequal(cat_sv, "posix") || str_iequal(cat_sv, "stdio");
+        int8_t io_cat = is_posix_stdio ? get_io_cat(name_sv) : IO_OTHER;
+        builder.append_int64(ci_io_cat, io_cat);
+
+        static const char *profile_keys[] = {
+            "count",      "count_max",  "count_min",  "count_sum",
+            "dft_cnt",    "dur",        "dur_max",    "dur_min",
+            "dur_sum",    "epoch",      "flags",      "offset",
+            "offset_max", "offset_min", "offset_sum", "ret",
+            "ret_max",    "ret_min",    "ret_sum",    "whence",
+            "whence_max", "whence_min", "whence_sum", nullptr};
+        for (const char **pk = profile_keys; *pk; ++pk) {
+            auto [has_v, val] = args_int(*pk);
+            if (has_v) {
+                auto idx = builder.add_or_get_column(*pk, ColumnType::INT64);
+                builder.append_int64(idx, val);
+            }
+        }
+    }
+
+    // --- System columns ---
+    if (is_sys) {
+        static const char *sys_keys[] = {
+            "user_pct", "system_pct",  "iowait_pct",   "idle_pct",
+            "irq_pct",  "softirq_pct", "MemAvailable", "MemFree",
+            "Cached",   "Dirty",       "Active",       nullptr};
+        for (const char **sk = sys_keys; *sk; ++sk) {
+            auto [has_v, val] = args_float(*sk);
+            if (has_v) {
+                auto idx = builder.add_or_get_column(*sk, ColumnType::DOUBLE);
+                builder.append_double(idx, val);
+            }
+        }
+    }
+
+    builder.end_row();
+    return true;
+}
+
+// Flatten a yyjson object into "prefix.key" columns using native types.
+// On type mismatch (same key, different type across rows), appends null.
+static void flatten_object_into(RecordBatchBuilder &builder, StringArena &arena,
+                                std::string_view prefix, yyjson_val *obj) {
+    char key_buf[512];
+
+    yyjson_obj_iter sub_iter;
+    yyjson_obj_iter_init(obj, &sub_iter);
+    yyjson_val *sub_key;
+    while ((sub_key = yyjson_obj_iter_next(&sub_iter))) {
+        yyjson_val *sub_val = yyjson_obj_iter_get_val(sub_key);
+        const char *sk_str = yyjson_get_str(sub_key);
+        std::size_t sk_len = yyjson_get_len(sub_key);
+
+        std::size_t needed = prefix.size() + 1 + sk_len;
+        if (needed >= sizeof(key_buf)) continue;
+        std::memcpy(key_buf, prefix.data(), prefix.size());
+        key_buf[prefix.size()] = '.';
+        std::memcpy(key_buf + prefix.size() + 1, sk_str, sk_len);
+        std::string_view full_key(key_buf, needed);
+
+        if (yyjson_is_int(sub_val)) {
+            auto idx = builder.add_or_get_column(full_key, ColumnType::INT64);
+            if (builder.column_type(idx) == ColumnType::INT64)
+                builder.append_int64(idx, yyjson_get_sint(sub_val));
+            else
+                builder.append_null(idx);
+        } else if (yyjson_is_uint(sub_val)) {
+            auto idx = builder.add_or_get_column(full_key, ColumnType::UINT64);
+            if (builder.column_type(idx) == ColumnType::UINT64)
+                builder.append_uint64(idx, yyjson_get_uint(sub_val));
+            else
+                builder.append_null(idx);
+        } else if (yyjson_is_real(sub_val)) {
+            auto idx = builder.add_or_get_column(full_key, ColumnType::DOUBLE);
+            if (builder.column_type(idx) == ColumnType::DOUBLE)
+                builder.append_double(idx, yyjson_get_real(sub_val));
+            else
+                builder.append_null(idx);
+        } else if (yyjson_is_bool(sub_val)) {
+            auto idx = builder.add_or_get_column(full_key, ColumnType::BOOL);
+            if (builder.column_type(idx) == ColumnType::BOOL)
+                builder.append_bool(idx, yyjson_get_bool(sub_val));
+            else
+                builder.append_null(idx);
+        } else if (yyjson_is_str(sub_val)) {
+            auto idx = builder.add_or_get_column(full_key, ColumnType::STRING);
+            if (builder.column_type(idx) == ColumnType::STRING)
+                builder.append_string(
+                    idx, std::string_view(yyjson_get_str(sub_val),
+                                          yyjson_get_len(sub_val)));
+            else
+                builder.append_null(idx);
+        } else if (yyjson_is_null(sub_val)) {
+            auto existing = builder.find_column(full_key);
+            if (existing) builder.append_null(*existing);
+        } else {
+            // nested object/array: serialize
+            std::size_t json_len;
+            char *json_str = yyjson_val_write(sub_val, 0, &json_len);
+            auto idx = builder.add_or_get_column(full_key, ColumnType::STRING);
+            if (json_str) {
+                builder.append_string(idx, arena.push(json_str, json_len));
+                free(json_str);
+            } else {
+                builder.append_null(idx);
+            }
+        }
+    }
+}
+
 CoroTask<void> produce_arrow_batches(std::shared_ptr<ArrowIteratorState> state,
                                      TraceReaderConfig cfg, ReadConfig rc,
-                                     std::size_t batch_size) {
+                                     std::size_t batch_size,
+                                     bool flatten_objects = false,
+                                     bool normalize = false) {
     auto *sp = state.get();
     try {
         TraceReader reader(std::move(cfg));
@@ -114,11 +561,8 @@ CoroTask<void> produce_arrow_batches(std::shared_ptr<ArrowIteratorState> state,
         RecordBatchBuilder builder;
         builder.reserve(batch_size);
 
-        // Keep yyjson docs alive until finish() since string columns hold
-        // string_views into doc memory. Serialized object/array values are
-        // stored as owned strings in held_serialized.
         std::vector<yyjson_doc *> held_docs;
-        std::vector<std::string> held_serialized;
+        StringArena arena;
         held_docs.reserve(batch_size);
 
         while (auto opt = co_await gen.next()) {
@@ -141,68 +585,72 @@ CoroTask<void> produce_arrow_batches(std::shared_ptr<ArrowIteratorState> state,
                 continue;
             }
 
-            yyjson_obj_iter iter;
-            yyjson_obj_iter_init(root, &iter);
-            yyjson_val *key;
-            while ((key = yyjson_obj_iter_next(&iter))) {
-                yyjson_val *val = yyjson_obj_iter_get_val(key);
-                const char *key_str = yyjson_get_str(key);
-                std::size_t key_len = yyjson_get_len(key);
-                std::string_view key_sv(key_str, key_len);
+            if (normalize) {
+                // Produce the semantic output schema directly.
+                // normalize_row calls end_row() internally.
+                if (!normalize_row(builder, arena, root)) {
+                    yyjson_doc_free(doc);
+                    continue;
+                }
+                held_docs.push_back(doc);
+            } else {
+                yyjson_obj_iter iter;
+                yyjson_obj_iter_init(root, &iter);
+                yyjson_val *key;
+                while ((key = yyjson_obj_iter_next(&iter))) {
+                    yyjson_val *val = yyjson_obj_iter_get_val(key);
+                    const char *key_str = yyjson_get_str(key);
+                    std::size_t key_len = yyjson_get_len(key);
+                    std::string_view key_sv(key_str, key_len);
 
-                if (yyjson_is_int(val)) {
-                    std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::INT64);
-                    builder.append_int64(idx, yyjson_get_sint(val));
-                } else if (yyjson_is_uint(val)) {
-                    std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::UINT64);
-                    builder.append_uint64(idx, yyjson_get_uint(val));
-                } else if (yyjson_is_real(val)) {
-                    std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::DOUBLE);
-                    builder.append_double(idx, yyjson_get_real(val));
-                } else if (yyjson_is_bool(val)) {
-                    std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::BOOL);
-                    builder.append_bool(idx, yyjson_get_bool(val));
-                } else if (yyjson_is_str(val)) {
-                    std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::STRING);
-                    // string_view into doc memory — doc kept alive in
-                    // held_docs until finish()
-                    builder.append_string(
-                        idx, std::string_view(yyjson_get_str(val),
-                                              yyjson_get_len(val)));
-                } else if (yyjson_is_null(val)) {
-                    // Only append null to an existing column; skip if the
-                    // column is new — we don't know its type yet and creating
-                    // it as STRING would corrupt later typed appends.
-                    auto existing = builder.find_column(key_sv);
-                    if (existing) builder.append_null(*existing);
-                } else {
-                    // object/array: serialize to JSON string
-                    std::size_t json_len;
-                    char *json_str = yyjson_val_write(val, 0, &json_len);
-                    std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::STRING);
-                    if (json_str) {
-                        held_serialized.emplace_back(json_str, json_len);
-                        free(json_str);
-                        builder.append_string(idx, held_serialized.back());
+                    if (yyjson_is_int(val)) {
+                        std::size_t idx = builder.add_or_get_column(
+                            key_sv, ColumnType::INT64);
+                        builder.append_int64(idx, yyjson_get_sint(val));
+                    } else if (yyjson_is_uint(val)) {
+                        std::size_t idx = builder.add_or_get_column(
+                            key_sv, ColumnType::UINT64);
+                        builder.append_uint64(idx, yyjson_get_uint(val));
+                    } else if (yyjson_is_real(val)) {
+                        std::size_t idx = builder.add_or_get_column(
+                            key_sv, ColumnType::DOUBLE);
+                        builder.append_double(idx, yyjson_get_real(val));
+                    } else if (yyjson_is_bool(val)) {
+                        std::size_t idx =
+                            builder.add_or_get_column(key_sv, ColumnType::BOOL);
+                        builder.append_bool(idx, yyjson_get_bool(val));
+                    } else if (yyjson_is_str(val)) {
+                        std::size_t idx = builder.add_or_get_column(
+                            key_sv, ColumnType::STRING);
+                        builder.append_string(
+                            idx, std::string_view(yyjson_get_str(val),
+                                                  yyjson_get_len(val)));
+                    } else if (yyjson_is_null(val)) {
+                        auto existing = builder.find_column(key_sv);
+                        if (existing) builder.append_null(*existing);
                     } else {
-                        builder.append_null(idx);
+                        std::size_t json_len;
+                        char *json_str = yyjson_val_write(val, 0, &json_len);
+                        std::size_t idx = builder.add_or_get_column(
+                            key_sv, ColumnType::STRING);
+                        if (json_str) {
+                            builder.append_string(
+                                idx, arena.push(json_str, json_len));
+                            free(json_str);
+                        } else {
+                            builder.append_null(idx);
+                        }
                     }
                 }
-            }
-            builder.end_row();
-            held_docs.push_back(doc);
+                builder.end_row();
+                held_docs.push_back(doc);
+            }  // end else (raw path)
 
             if (builder.num_rows() >= batch_size) {
                 auto result = builder.finish();
                 for (auto *d : held_docs) yyjson_doc_free(d);
                 held_docs.clear();
-                held_serialized.clear();
+                arena.clear();
 
                 {
                     std::unique_lock<std::mutex> lock(sp->mtx);
@@ -219,12 +667,11 @@ CoroTask<void> produce_arrow_batches(std::shared_ptr<ArrowIteratorState> state,
             }
         }
 
-        // Flush remaining rows
         if (builder.num_rows() > 0) {
             auto result = builder.finish();
             for (auto *d : held_docs) yyjson_doc_free(d);
             held_docs.clear();
-            held_serialized.clear();
+            arena.clear();
             {
                 std::lock_guard<std::mutex> lock(sp->mtx);
                 sp->queue.push(std::move(result));
@@ -602,18 +1049,22 @@ static PyObject *TraceReader_read_lines_json(TraceReaderObject *self,
 
 static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
                                         PyObject *kwds) {
-    static const char *kwlist[] = {"batch_size", "start_line", "end_line",
-                                   "start_byte", "end_byte",   "buffer_size",
-                                   "query",      NULL};
+    static const char *kwlist[] = {
+        "batch_size", "start_line",  "end_line", "start_byte",
+        "end_byte",   "buffer_size", "query",    "flatten_objects",
+        "normalize",  NULL};
     Py_ssize_t batch_size = 10000;
     Py_ssize_t start_line = 0, end_line = 0;
     Py_ssize_t start_byte = 0, end_byte = 0;
     Py_ssize_t buffer_size = 4 * 1024 * 1024;
     const char *query_str = NULL;
+    int flatten_objects = 0;
+    int normalize = 0;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|nnnnnnz", (char **)kwlist, &batch_size, &start_line,
-            &end_line, &start_byte, &end_byte, &buffer_size, &query_str)) {
+            args, kwds, "|nnnnnnzpp", (char **)kwlist, &batch_size, &start_line,
+            &end_line, &start_byte, &end_byte, &buffer_size, &query_str,
+            &flatten_objects, &normalize)) {
         return NULL;
     }
 
@@ -650,7 +1101,8 @@ static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
     Runtime *rt = get_runtime(self);
     try {
         rt->submit(produce_arrow_batches(state, cfg, rc,
-                                         static_cast<std::size_t>(batch_size)),
+                                         static_cast<std::size_t>(batch_size),
+                                         flatten_objects != 0, normalize != 0),
                    "iter_arrow");
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());

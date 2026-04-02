@@ -376,6 +376,21 @@ dftracer_aggregator
 
 **Description:** Aggregate DFTracer events into time-series counters using streaming coroutine pipeline
 
+The aggregator can emit three logical row types:
+
+- regular event rows from non-counter trace events
+- profile-counter rows from ``ph="C"`` events whose category is not ``sys``
+- system-counter rows from ``ph="C"`` events whose category is ``sys``
+
+With ``--format arrow``, these are distinguished by the ``batch_type`` column.
+The Arrow output always includes the base columns ``batch_type``, ``cat``,
+``name``, ``pid``, ``tid``, ``hhash``, ``fhash``, ``time_bucket``, ``count``,
+``dur_total``, ``dur_min``, ``dur_max``, ``dur_mean``, ``dur_std``,
+``size_total``, ``size_min``, ``size_max``, ``size_mean``, ``size_std``,
+``ts``, and ``te``. Each field listed in ``--metric-fields`` adds
+``<field>_total``, ``<field>_min``, ``<field>_max``, ``<field>_mean``, and
+``<field>_std``.
+
 **Usage:**
 
 .. code-block:: bash
@@ -416,11 +431,15 @@ dftracer_aggregator
     # Aggregation with percentiles and compression
     dftracer_aggregator -d ./traces -o agg.json --compute-percentiles --compress
 
-    # Filter to specific categories with custom metrics
-    dftracer_aggregator -d ./traces -c "POSIX,APP" -m "iter_count,epoch"
+    # Query-filtered aggregation with custom metrics from args
+    dftracer_aggregator -d ./traces --query 'cat == "POSIX"' \
+        -m "iter_count,epoch"
 
     # Output as Arrow IPC file (readable by pyarrow, polars, DuckDB)
     dftracer_aggregator -d ./traces -o agg.arrows --format arrow
+
+    # Stream profile/system counters as Perfetto counter events
+    dftracer_aggregator -d ./traces --event-format counter
 
 **Reading Arrow IPC output:**
 

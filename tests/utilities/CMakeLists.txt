@@ -67,6 +67,9 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/aggregators/test_aggregation_metrics.cpp
     composites/dft/aggregators/test_aggregation_key.cpp
     composites/dft/aggregators/test_aggregation_config.cpp
+    composites/dft/aggregators/test_aggregator_utility.cpp
+    composites/dft/aggregators/test_chunk_aggregator_utility.cpp
+    composites/dft/aggregators/test_event_aggregator_utility.cpp
 
     # DFT Comparator Composites
     composites/dft/comparator/test_comparison_result.cpp

@@ -14,7 +14,7 @@
 namespace dftracer::utils::utilities::reader::internal {
 class GzipReader : public Reader {
    public:
-    GzipReader(const std::string &gz_path, const std::string &idx_path,
+    GzipReader(const std::string &gz_path, const std::string &index_path,
                std::size_t index_ckpt_size = dftracer::utils::utilities::
                    indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE);
     explicit GzipReader(
@@ -32,7 +32,7 @@ class GzipReader : public Reader {
     std::size_t get_max_bytes() const override;
     std::size_t get_num_lines() const override;
     const std::string &get_archive_path() const override;
-    const std::string &get_idx_path() const override;
+    const std::string &get_index_path() const override;
     void set_buffer_size(std::size_t size) override;
 
     coro::CoroTask<std::size_t> read_async(std::size_t start_bytes,
@@ -57,7 +57,7 @@ class GzipReader : public Reader {
 
    private:
     std::string gz_path;
-    std::string idx_path;
+    std::string index_path;
     bool is_open;
     std::size_t default_buffer_size;
     std::shared_ptr<dftracer::utils::utilities::indexer::internal::Indexer>

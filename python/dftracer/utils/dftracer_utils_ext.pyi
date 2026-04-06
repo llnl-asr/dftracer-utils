@@ -17,12 +17,12 @@ class IndexerCheckpoint:
     num_lines: int
 
 class Indexer:
-    """Indexer for creating and managing gzip file indices."""
+    """Indexer for creating and managing root-local ``.dftindex`` stores."""
 
     def __init__(
         self,
         gz_path: str,
-        idx_path: Optional[str] = None,
+        index_path: Optional[str] = None,
         checkpoint_size: int = 1048576,
         force_rebuild: bool = False,
         build_bloom: bool = False,
@@ -34,7 +34,8 @@ class Indexer:
 
         Args:
             gz_path: Path to the gzip trace file.
-            idx_path: Path to the index file. If None, uses gz_path + ".idx".
+            index_path: Path to the `.dftindex` store. If None, uses the
+                root-local `.dftindex` next to ``gz_path``.
             checkpoint_size: Checkpoint size in bytes for index building.
             force_rebuild: If True, rebuild the index even if it exists.
             build_bloom: If True, build bloom filter data in the index.
@@ -56,7 +57,7 @@ class Indexer:
         ...
 
     def exists(self) -> bool:
-        """Check if the index file exists."""
+        """Check if the `.dftindex` store exists."""
         ...
 
     def get_max_bytes(self) -> int:
@@ -75,14 +76,22 @@ class Indexer:
         """Find checkpoint for target offset."""
         ...
 
+    def close(self) -> None:
+        """Release this Python wrapper's native indexer handle.
+
+        This does not force-close the shared RocksDB instance for the same
+        ``.dftindex`` path.
+        """
+        ...
+
     @property
     def gz_path(self) -> str:
         """Get gzip path."""
         ...
 
     @property
-    def idx_path(self) -> str:
-        """Get index path."""
+    def index_path(self) -> str:
+        """Get the `.dftindex` path."""
         ...
 
     @property
@@ -92,12 +101,12 @@ class Indexer:
 
     @property
     def has_bloom(self) -> bool:
-        """Whether bloom filter data exists in the index sidecar."""
+        """Whether bloom filter data exists in the `.dftindex` store."""
         ...
 
     @property
     def has_manifest(self) -> bool:
-        """Whether manifest data exists in the index sidecar."""
+        """Whether manifest data exists in the `.dftindex` store."""
         ...
 
     def __enter__(self) -> "Indexer":
@@ -110,7 +119,11 @@ class Indexer:
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        """Exit the runtime context for the with statement."""
+        """Release this Python wrapper on context exit.
+
+        This does not force-close the shared RocksDB instance for the same
+        ``.dftindex`` path.
+        """
         ...
 
 # ========== JSON ==========
@@ -321,7 +334,7 @@ class TraceReader:
 
         Args:
             file_path: Path to the trace file (.pfw.gz or plain text).
-            index_dir: Directory to search for ``.idx`` sidecar files.
+            index_dir: Directory to search for ``.dftindex`` stores.
                 Empty string (default) searches next to the trace file.
             checkpoint_size: Checkpoint interval in bytes for index
                 building (default 32 MB).
@@ -514,7 +527,7 @@ class TraceReader:
 
     @property
     def index_dir(self) -> str:
-        """Directory searched for index sidecar files."""
+        """Directory searched for `.dftindex` stores."""
         ...
 
     @property

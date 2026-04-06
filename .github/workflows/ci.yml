@@ -13,8 +13,8 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
-    - uses: actions/checkout@v4
-    - uses: dorny/paths-filter@v3
+    - uses: actions/checkout@v6
+    - uses: dorny/paths-filter@v3.0.2
       id: filter
       with:
         filters: |
@@ -44,24 +44,33 @@ jobs:
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
     
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v6.1.0
       with:
         python-version: ${{ matrix.python-version }}
+
+    - name: Cache ccache
+      uses: actions/cache@v5
+      with:
+        path: ~/.ccache
+        key: ccache-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('CMakeLists.txt', 'pyproject.toml', '.github/workflows/ci.yml') }}
+        restore-keys: |
+          ccache-${{ runner.os }}-${{ matrix.python-version }}-
+          ccache-${{ runner.os }}-
     
     - name: Install dependencies (Ubuntu)
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential cmake lcov zlib1g-dev libsqlite3-dev pkg-config ninja-build
+        sudo apt-get install -y build-essential cmake ccache lcov zlib1g-dev libsqlite3-dev pkg-config ninja-build
     
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
         brew update
-        for f in cmake lcov zlib sqlite pkg-config ninja; do
+        for f in cmake ccache lcov zlib sqlite pkg-config ninja; do
           if brew list --versions "$f" >/dev/null; then
             echo "$f already installed"
           else
@@ -80,24 +89,17 @@ jobs:
         make test
     
     - name: Run Python tests (with venv)
+      if: "!((matrix.os == 'ubuntu-22.04' || matrix.os == 'macos-latest') && matrix.python-version == '3.12')"
       run: |
-        make test-py
-    
-    - name: Run Python tests (without venv)
-      run: |
-        pip install --upgrade pip setuptools wheel
-        pip install -e ".[dev]"
-        pytest tests/python -v
-
-    - name: Type check (ty)
-      if: matrix.python-version == '3.12' && runner.os == 'Linux'
-      run: |
-        pip install ty
-        ty check --python "$(which python)" python/
+        if [ "${{ runner.os }}" = "Linux" ] && [ "${{ matrix.python-version }}" = "3.12" ]; then
+          make test-py RUN_TY=1
+        else
+          make test-py
+        fi
 
     - name: Upload coverage reports to Coveralls
       if: (matrix.os == 'ubuntu-22.04' || matrix.os == 'macos-latest') && matrix.python-version == '3.12'
-      uses: coverallsapp/github-action@v2
+      uses: coverallsapp/github-action@v2.3.6
       continue-on-error: true
       with:
         file: coverage/coverage_filtered.info
@@ -113,7 +115,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Coveralls finished
-      uses: coverallsapp/github-action@v2
+      uses: coverallsapp/github-action@v2.3.6
       continue-on-error: true
       with:
         parallel-finished: true

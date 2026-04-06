@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/metadata_collector.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 
 #include <string>
@@ -74,6 +75,7 @@ static PyObject *MetadataCollector_collect(MetadataCollectorObject *self,
         return NULL;
 
     std::string file_path_str(file_path);
+    std::string index_dir_str(index_dir);
     std::string error_msg;
     MetadataCollectorUtilityOutput output;
 
@@ -82,7 +84,8 @@ static PyObject *MetadataCollector_collect(MetadataCollectorObject *self,
 
         MetadataCollectorUtilityInput input;
         input.file_path = file_path_str;
-        input.idx_path = file_path_str + ".idx";
+        input.index_path = dftracer::utils::utilities::composites::dft::
+            internal::determine_index_path(file_path_str, index_dir_str);
 
         auto *out_p = &output;
         auto input_copy = input;
@@ -160,7 +163,7 @@ static PyObject *MetadataCollector_collect(MetadataCollectorObject *self,
     } while (0)
 
     SET_STR("file_path", output.file_path.c_str());
-    SET_STR("idx_path", output.idx_path.c_str());
+    SET_STR("index_path", output.index_path.c_str());
     SET_DBL("size_mb", output.size_mb);
     SET_SZT("start_line", output.start_line);
     SET_SZT("end_line", output.end_line);
@@ -199,7 +202,7 @@ static PyMethodDef MetadataCollector_methods[] = {
      "\n"
      "Args:\n"
      "    file_path (str): Path to the trace file.\n"
-     "    index_dir (str): Directory for index sidecars.\n"},
+     "    index_dir (str): Directory for .dftindex stores.\n"},
     {NULL}};
 
 PyTypeObject MetadataCollectorType = {
@@ -231,7 +234,7 @@ PyTypeObject MetadataCollectorType = {
     "\n"
     "process(file_path, index_dir='') -> dict\n"
     "    file_path (str): Path to the trace file.\n"
-    "    index_dir (str): Directory for index sidecar files.\n",
+    "    index_dir (str): Directory for .dftindex stores.\n",
     0,                                /* tp_traverse */
     0,                                /* tp_clear */
     0,                                /* tp_richcompare */

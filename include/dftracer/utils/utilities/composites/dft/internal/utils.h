@@ -11,18 +11,15 @@ namespace dftracer::utils::utilities::composites::dft::internal {
 bool is_data_transfer_op(std::string_view cat, std::string_view name);
 
 /**
- * @brief Determine the index file path for a given data file.
+ * @brief Determine the root-local RocksDB index path for a given data file.
  *
- * When a custom index directory is provided, the index is placed there
- * directly. Otherwise, a unique subdirectory under /tmp is created
- * using a hash of the data file's absolute path, preventing collisions
- * when multiple files share the same basename.
+ * When a custom index directory is provided, the index root is
+ * `<index_dir>/.dftindex`. Otherwise, the index root is placed alongside the
+ * data file as `<file_dir>/.dftindex`.
  *
  * @param file_path Path to the data file (e.g., "data/trace.pfw.gz")
- * @param index_dir Optional custom directory for the index file.
- *                  If empty, uses /tmp/dft_<hash>/.
- * @return Complete path to the index file
- *         (e.g., "/tmp/dft_a1b2c3d4/trace.pfw.gz.idx")
+ * @param index_dir Optional custom directory for the index root.
+ * @return Path to the owning `.dftindex` directory.
  */
 std::string determine_index_path(const std::string& file_path,
                                  const std::string& index_dir = "");
@@ -30,12 +27,12 @@ std::string determine_index_path(const std::string& file_path,
 /**
  * @brief Determine the provenance index file path for a given data file.
  *
- * Follows the same placement logic as determine_index_path but produces
- * a `.pidx` sidecar instead of `.idx`.
+ * Provenance now lives in the same root-local `.dftindex` database as
+ * the regular index data.
  *
  * @param data_path Path to the data file
  * @param index_dir Optional directory. If empty, places next to data file.
- * @return Complete path to the provenance index file
+ * @return Path to the owning `.dftindex` directory
  */
 std::string determine_provenance_index_path(const std::string& data_path,
                                             const std::string& index_dir = "");

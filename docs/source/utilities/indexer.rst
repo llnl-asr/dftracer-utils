@@ -244,6 +244,11 @@ Python API
    with Indexer("trace.pfw.gz", build_bloom=True) as indexer:
        indexer.build()  # reuses checkpoints, adds bloom only
 
+   # Wrapper cleanup only; the shared .dftindex store remains available
+   indexer = Indexer("trace.pfw.gz")
+   indexer.build()
+   indexer.close()
+
    # With explicit Runtime for thread pool control
    from dftracer.utils import Runtime
 
@@ -270,7 +275,7 @@ Python API
    partial = reader.read_lines(start_line=100, end_line=200)
 
    # Properties
-   print(reader.has_index)    # True if .idx exists
+   print(reader.has_index)    # True if .dftindex exists
    print(reader.num_lines)    # precise line count
 
    # Context manager

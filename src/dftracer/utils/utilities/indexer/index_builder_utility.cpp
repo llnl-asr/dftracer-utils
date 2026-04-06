@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/rocksdb/async.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
@@ -8,6 +9,7 @@
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/utilities/indexer/internal/transaction_scope.h>
 #include <dftracer/utils/utilities/indexer/visitors/bloom_visitor.h>
 #include <dftracer/utils/utilities/indexer/visitors/manifest_visitor.h>
 
@@ -18,6 +20,7 @@ namespace dftracer::utils::utilities::indexer {
 
 using composites::dft::internal::determine_index_path;
 using internal::IndexerFactory;
+namespace rocks = dftracer::utils::rocksdb;
 
 // ---------------------------------------------------------------------------
 // IndexBuildConfig builder methods
@@ -78,9 +81,9 @@ coro::CoroTask<IndexBuildResult> IndexBuilderUtility::process(
     result.file_path = config.file_path;
 
     try {
-        std::string idx_path =
+        std::string index_path =
             determine_index_path(config.file_path, config.index_dir);
-        result.idx_path = idx_path;
+        result.index_path = index_path;
 
         // Check compressed file size against threshold (0 = always index).
         std::uintmax_t file_sz = 0;
@@ -93,7 +96,7 @@ coro::CoroTask<IndexBuildResult> IndexBuilderUtility::process(
         auto build_start = std::chrono::steady_clock::now();
 
         auto indexer = IndexerFactory::create(
-            config.file_path, idx_path,
+            config.file_path, index_path,
             static_cast<std::uint64_t>(config.checkpoint_size),
             config.force_rebuild);
 
@@ -113,7 +116,9 @@ coro::CoroTask<IndexBuildResult> IndexBuilderUtility::process(
             auto logical = internal::get_logical_path(config.file_path);
             bool bloom_ok = !config.build_bloom || [&] {
                 try {
-                    IndexDatabase db(idx_path);
+                    IndexDatabase db(index_path,
+                                     dftracer::utils::rocksdb::RocksDatabase::
+                                         OpenMode::ReadOnly);
                     int fid = db.get_file_info_id(logical);
                     return fid >= 0 && db.has_bloom_data(fid);
                 } catch (...) {
@@ -122,7 +127,9 @@ coro::CoroTask<IndexBuildResult> IndexBuilderUtility::process(
             }();
             bool manifest_ok = !config.build_manifest || [&] {
                 try {
-                    IndexDatabase db(idx_path);
+                    IndexDatabase db(index_path,
+                                     dftracer::utils::rocksdb::RocksDatabase::
+                                         OpenMode::ReadOnly);
                     int fid = db.get_file_info_id(logical);
                     return fid >= 0 && db.has_manifest_data(fid);
                 } catch (...) {
@@ -202,33 +209,37 @@ coro::CoroTask<IndexBuildResult> IndexBuilderUtility::process(
         result.chunks_processed =
             static_cast<std::size_t>(indexer->get_checkpoints().size());
 
-        // Persist visitor data into the .idx database only when the file meets
-        // the size threshold (or threshold is disabled).
+        // Persist visitor data into the `.dftindex` store only when the file
+        // meets the size threshold (or threshold is disabled).
         if (!below_threshold && (config.build_bloom || config.build_manifest)) {
-            const std::string& built_idx = indexer->get_idx_path();
+            const std::string& built_index_path = indexer->get_index_path();
 
-            IndexDatabase db(built_idx);
-
-            auto logical = internal::get_logical_path(config.file_path);
-            int fid = db.get_file_info_id(logical);
-            if (fid < 0) {
-                result.error_message =
-                    "File not found in index after build: " + logical;
-                co_return result;
-            }
-
-            db.begin_transaction();
             try {
-                if (config.build_bloom && bloom_visitor) {
-                    db.init_bloom_schema();
-                    db.delete_chunk_statistics(fid);
-                    bloom_visitor->finalize(db, fid);
-                }
-                if (config.build_manifest && manifest_visitor) {
-                    db.init_manifest_schema();
-                    manifest_visitor->finalize(db, fid);
-                }
-                db.commit_transaction();
+                IndexDatabase db(built_index_path);
+                auto logical = internal::get_logical_path(config.file_path);
+                const auto hash =
+                    internal::calculate_file_hash(config.file_path);
+                auto* db_ptr = &db;
+                auto* logical_ptr = &logical;
+                auto* config_ptr = &config;
+                auto* bloom_visitor_ptr = &bloom_visitor;
+                auto* manifest_visitor_ptr = &manifest_visitor;
+                co_await rocks::run([db_ptr, logical_ptr, hash, config_ptr,
+                                     bloom_visitor_ptr, manifest_visitor_ptr] {
+                    int fid =
+                        db_ptr->get_or_create_file_info(*logical_ptr, hash);
+                    internal::TransactionScope txn(*db_ptr);
+                    if (config_ptr->build_bloom && *bloom_visitor_ptr) {
+                        db_ptr->init_bloom_schema();
+                        db_ptr->delete_chunk_statistics(fid);
+                        (*bloom_visitor_ptr)->finalize(*db_ptr, fid);
+                    }
+                    if (config_ptr->build_manifest && *manifest_visitor_ptr) {
+                        db_ptr->init_manifest_schema();
+                        (*manifest_visitor_ptr)->finalize(*db_ptr, fid);
+                    }
+                    txn.commit();
+                });
             } catch (const std::exception& e) {
                 result.error_message =
                     std::string("Failed to persist index data: ") + e.what();

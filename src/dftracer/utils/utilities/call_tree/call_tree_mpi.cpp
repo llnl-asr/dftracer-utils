@@ -241,10 +241,11 @@ bool MPIFilteredTraceReader::read(const std::string& trace_file,
     ArchiveFormat format = FormatDetector::detect(trace_file);
 
     if (format == ArchiveFormat::GZIP) {
-        // Try to use indexer
-        std::string idx_file = trace_file + ".idx";
-        if (fs::exists(idx_file)) {
-            return read_with_indexer(trace_file, idx_file, graph);
+        std::string index_path =
+            utilities::composites::dft::internal::determine_index_path(
+                trace_file, "");
+        if (fs::exists(index_path)) {
+            return read_with_indexer(trace_file, index_path, graph);
         }
     }
 
@@ -610,12 +611,14 @@ std::set<std::uint32_t> MPICallTreeBuilder::scan_file_for_pids(
 
     // Check if it's a gzip file with an index
     ArchiveFormat format = FormatDetector::detect(trace_file);
-    std::string idx_file = trace_file + ".idx";
+    std::string index_path =
+        utilities::composites::dft::internal::determine_index_path(trace_file,
+                                                                   "");
 
-    if (format == ArchiveFormat::GZIP && fs::exists(idx_file)) {
+    if (format == ArchiveFormat::GZIP && fs::exists(index_path)) {
         try {
             auto reader = utilities::reader::internal::ReaderFactory::create(
-                trace_file, idx_file);
+                trace_file, index_path);
             if (reader && reader->is_valid()) {
                 // Read first N lines to discover PIDs
                 std::size_t num_lines = reader->get_num_lines();

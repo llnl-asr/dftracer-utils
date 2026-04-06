@@ -70,7 +70,7 @@ TEST_SUITE("ChunkIndexerUtility") {
 
         ChunkIndexerInput input;
         input.with_file_path(trace_file)
-            .with_idx_path("")
+            .with_index_path("")
             .with_checkpoint_size(uncompressed_size)
             .with_checkpoint_idx(0)
             .with_byte_range(0, uncompressed_size)
@@ -140,7 +140,7 @@ TEST_SUITE("ChunkIndexerUtility") {
 
         ChunkIndexerInput input;
         input.with_file_path(trace_file)
-            .with_idx_path("")
+            .with_index_path("")
             .with_checkpoint_size(uncompressed_size)
             .with_checkpoint_idx(0)
             .with_byte_range(0, uncompressed_size)
@@ -197,7 +197,7 @@ TEST_SUITE("ChunkIndexerUtility") {
 
         ChunkIndexerInput input;
         input.with_file_path(gz_path)
-            .with_idx_path("")
+            .with_index_path("")
             .with_checkpoint_size(uncompressed_size)
             .with_checkpoint_idx(0)
             .with_byte_range(0, uncompressed_size)

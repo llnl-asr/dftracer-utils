@@ -17,9 +17,9 @@ class TestStatisticsQueryUtility:
     def test_query_summary(self):
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="summary")
@@ -30,9 +30,9 @@ class TestStatisticsQueryUtility:
     def test_query_categories(self):
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="categories")
@@ -42,9 +42,9 @@ class TestStatisticsQueryUtility:
     def test_query_names(self):
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="names")
@@ -53,9 +53,9 @@ class TestStatisticsQueryUtility:
     def test_query_top_n_names(self):
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="top_n_names", top_n=5)
@@ -65,9 +65,9 @@ class TestStatisticsQueryUtility:
     def test_query_duration_stats(self):
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="duration_stats")
@@ -77,9 +77,9 @@ class TestStatisticsQueryUtility:
     def test_call_delegates_to_process(self):
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             util = StatisticsQueryUtility()
@@ -95,10 +95,10 @@ class TestStatisticsQueryWithoutIndex:
         """Sequential fallback produces correct event count."""
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 index_threshold=_SKIP_INDEX_THRESHOLD,
             ) as indexer:
@@ -112,10 +112,10 @@ class TestStatisticsQueryWithoutIndex:
         """Sequential fallback populates categories."""
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 index_threshold=_SKIP_INDEX_THRESHOLD,
             ) as indexer:

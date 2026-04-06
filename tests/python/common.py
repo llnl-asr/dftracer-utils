@@ -3,6 +3,7 @@
 Common test utilities for  Python bindings tests
 """
 
+import gc
 import gzip
 import os
 import shutil
@@ -11,6 +12,12 @@ import tempfile
 import pytest
 
 import dftracer.utils as dft_utils
+
+
+def determine_index_path(file_path: str, index_dir: str = "") -> str:
+    if index_dir:
+        return os.path.join(index_dir, ".dftindex")
+    return os.path.join(os.path.dirname(file_path), ".dftindex")
 
 
 class Environment:
@@ -34,13 +41,14 @@ class Environment:
 
     def cleanup(self):
         """Clean up temporary files and directory"""
+        gc.collect()
         for file_path in self.test_files:
             try:
                 if os.path.exists(file_path):
                     os.remove(file_path)
-                idx_path = file_path + ".idx"
-                if os.path.exists(idx_path):
-                    os.remove(idx_path)
+                index_path = determine_index_path(file_path, "")
+                if os.path.isdir(index_path):
+                    shutil.rmtree(index_path)
             except OSError:
                 pass
 
@@ -49,10 +57,12 @@ class Environment:
                 shutil.rmtree(self.temp_dir)
             except OSError:
                 pass
+        gc.collect()
 
     def create_test_gzip_file(self, filename="test_data.pfw.gz", bytes_per_line=1024):
         """Create a test gzip file with valid DFTracer trace events"""
         file_path = os.path.join(self.temp_dir, filename)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
         io_names = ["read", "write", "open", "close", "pread", "pwrite", "fread", "fwrite"]
         cats = ["POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "STDIO", "STDIO"]
@@ -96,6 +106,7 @@ class Environment:
     def create_dft_trace_file(self, filename="dft_trace.pfw.gz", num_events=None):
         """Create a gzip file with valid DFTracer trace events."""
         file_path = os.path.join(self.temp_dir, filename)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         n = num_events if num_events is not None else self.lines
         io_names = ["read", "write", "open", "close", "pread", "pwrite", "fread", "fwrite"]
         cats = ["POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "STDIO", "STDIO"]
@@ -198,25 +209,24 @@ class Environment:
         return file_path
 
     def get_index_path(self, gz_file_path):
-        """Get the index file path for a gzip file"""
-        return gz_file_path + ".idx"
+        """Get the `.dftindex` path for a gzip file."""
+        return determine_index_path(gz_file_path, "")
 
     def build_index(self, gz_file_path, checkpoint_size_bytes=None):
         """Build index for the gzip file using Python indexer"""
         if checkpoint_size_bytes is None:
             checkpoint_size_bytes = 32 * 1024 * 1024  # 32MB default
 
-        idx_file = self.get_index_path(gz_file_path)
+        index_path = self.get_index_path(gz_file_path)
 
         try:
-            # Use the indexer API
-            indexer = dft_utils.Indexer(gz_file_path, idx_file, checkpoint_size_bytes)
-            if indexer.need_rebuild():
-                indexer.build()
+            with dft_utils.Indexer(gz_file_path, index_path, checkpoint_size_bytes) as indexer:
+                if indexer.need_rebuild():
+                    indexer.build()
 
-            if not os.path.exists(idx_file):
-                pytest.skip("Index file was not created")
-            return idx_file
+            if not os.path.exists(index_path):
+                pytest.skip("Index store was not created")
+            return index_path
         except Exception as e:
             pytest.skip(f"Failed to build index: {e}")
 

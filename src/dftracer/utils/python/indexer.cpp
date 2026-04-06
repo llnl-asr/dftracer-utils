@@ -2,6 +2,7 @@
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/indexer_checkpoint.h>
 #include <dftracer/utils/python/runtime.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
@@ -11,12 +12,25 @@
 
 static void Indexer_dealloc(IndexerObject *self) {
     if (self->handle) {
+        // The Python wrapper owns only the native indexer handle. The
+        // underlying RocksDB instance remains manager-owned and may continue to
+        // live process-wide for the same .dftindex path.
         dft_indexer_destroy(self->handle);
+        self->handle = NULL;
     }
     Py_XDECREF(self->gz_path);
-    Py_XDECREF(self->idx_path);
+    Py_XDECREF(self->index_path);
     Py_XDECREF(self->runtime_obj);
     Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static void Indexer_release_handle(IndexerObject *self) {
+    if (self->handle) {
+        // Releasing the handle drops this wrapper's native indexer state only.
+        // Shared RocksDB lifetime is managed separately by RocksDBManager.
+        dft_indexer_destroy(self->handle);
+        self->handle = NULL;
+    }
 }
 
 static PyObject *Indexer_new(PyTypeObject *type, PyObject *args,
@@ -26,7 +40,7 @@ static PyObject *Indexer_new(PyTypeObject *type, PyObject *args,
     if (self != NULL) {
         self->handle = NULL;
         self->gz_path = NULL;
-        self->idx_path = NULL;
+        self->index_path = NULL;
         self->checkpoint_size = 0;
         self->build_bloom = 0;
         self->build_manifest = 0;
@@ -39,11 +53,11 @@ static PyObject *Indexer_new(PyTypeObject *type, PyObject *args,
 
 static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     static const char *kwlist[] = {
-        "gz_path",         "idx_path",    "checkpoint_size",
+        "gz_path",         "index_path",  "checkpoint_size",
         "force_rebuild",   "build_bloom", "build_manifest",
         "index_threshold", "runtime",     NULL};
     const char *gz_path;
-    const char *idx_path = NULL;
+    const char *index_path = NULL;
     std::uint64_t checkpoint_size =
         dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     int force_rebuild = 0;
@@ -54,7 +68,7 @@ static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     PyObject *runtime_arg = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "s|snpppnO", (char **)kwlist, &gz_path, &idx_path,
+            args, kwds, "s|snpppnO", (char **)kwlist, &gz_path, &index_path,
             &checkpoint_size, &force_rebuild, &build_bloom, &build_manifest,
             &index_threshold, &runtime_arg)) {
         return -1;
@@ -82,15 +96,15 @@ static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
         return -1;
     }
 
-    if (idx_path) {
-        self->idx_path = PyUnicode_FromString(idx_path);
+    if (index_path) {
+        self->index_path = PyUnicode_FromString(index_path);
     } else {
-        PyObject *gz_path_obj = PyUnicode_FromString(gz_path);
-        self->idx_path = PyUnicode_FromFormat("%U.idx", gz_path_obj);
-        Py_DECREF(gz_path_obj);
+        const std::string index_path = dftracer::utils::utilities::composites::
+            dft::internal::determine_index_path(gz_path, "");
+        self->index_path = PyUnicode_FromString(index_path.c_str());
     }
 
-    if (!self->idx_path) {
+    if (!self->index_path) {
         Py_DECREF(self->gz_path);
         return -1;
     }
@@ -100,12 +114,12 @@ static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     self->build_manifest = build_manifest;
     self->index_threshold = index_threshold;
 
-    const char *idx_path_str = PyUnicode_AsUTF8(self->idx_path);
-    if (!idx_path_str) {
+    const char *index_path_str = PyUnicode_AsUTF8(self->index_path);
+    if (!index_path_str) {
         return -1;
     }
 
-    self->handle = dft_indexer_create(gz_path, idx_path_str, checkpoint_size,
+    self->handle = dft_indexer_create(gz_path, index_path_str, checkpoint_size,
                                       force_rebuild);
     if (!self->handle) {
         PyErr_SetString(PyExc_RuntimeError, "Failed to create indexer");
@@ -133,7 +147,7 @@ static PyObject *Indexer_build(IndexerObject *self,
     using namespace dftracer::utils::utilities::indexer;
 
     const char *gz = PyUnicode_AsUTF8(self->gz_path);
-    const char *idx = PyUnicode_AsUTF8(self->idx_path);
+    const char *idx = PyUnicode_AsUTF8(self->index_path);
     if (!gz || !idx) {
         return NULL;
     }
@@ -296,7 +310,7 @@ static PyObject *Indexer_get_checkpoints(IndexerObject *self,
 }
 
 static PyObject *Indexer_has_bloom(IndexerObject *self, void *closure) {
-    const char *idx = PyUnicode_AsUTF8(self->idx_path);
+    const char *idx = PyUnicode_AsUTF8(self->index_path);
     const char *gz = PyUnicode_AsUTF8(self->gz_path);
     if (!idx || !gz) {
         Py_RETURN_FALSE;
@@ -304,7 +318,8 @@ static PyObject *Indexer_has_bloom(IndexerObject *self, void *closure) {
     try {
         using namespace dftracer::utils::utilities::indexer;
         using namespace dftracer::utils::utilities::indexer::internal;
-        IndexDatabase db(idx);
+        IndexDatabase db(
+            idx, dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
         std::string logical = get_logical_path(gz);
         int fid = db.get_file_info_id(logical);
         if (fid >= 0 && db.has_bloom_data(fid)) {
@@ -316,7 +331,7 @@ static PyObject *Indexer_has_bloom(IndexerObject *self, void *closure) {
 }
 
 static PyObject *Indexer_has_manifest(IndexerObject *self, void *closure) {
-    const char *idx = PyUnicode_AsUTF8(self->idx_path);
+    const char *idx = PyUnicode_AsUTF8(self->index_path);
     const char *gz = PyUnicode_AsUTF8(self->gz_path);
     if (!idx || !gz) {
         Py_RETURN_FALSE;
@@ -324,7 +339,8 @@ static PyObject *Indexer_has_manifest(IndexerObject *self, void *closure) {
     try {
         using namespace dftracer::utils::utilities::indexer;
         using namespace dftracer::utils::utilities::indexer::internal;
-        IndexDatabase db(idx);
+        IndexDatabase db(
+            idx, dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
         std::string logical = get_logical_path(gz);
         int fid = db.get_file_info_id(logical);
         if (fid >= 0 && db.has_manifest_data(fid)) {
@@ -340,9 +356,9 @@ static PyObject *Indexer_gz_path(IndexerObject *self, void *closure) {
     return self->gz_path;
 }
 
-static PyObject *Indexer_idx_path(IndexerObject *self, void *closure) {
-    Py_INCREF(self->idx_path);
-    return self->idx_path;
+static PyObject *Indexer_index_path(IndexerObject *self, void *closure) {
+    Py_INCREF(self->index_path);
+    return self->index_path;
 }
 
 static PyObject *Indexer_checkpoint_size(IndexerObject *self, void *closure) {
@@ -355,7 +371,14 @@ static PyObject *Indexer_enter(IndexerObject *self,
     return (PyObject *)self;
 }
 
+static PyObject *Indexer_close(IndexerObject *self,
+                               PyObject *Py_UNUSED(ignored)) {
+    Indexer_release_handle(self);
+    Py_RETURN_NONE;
+}
+
 static PyObject *Indexer_exit(IndexerObject *self, PyObject *args) {
+    Indexer_release_handle(self);
     Py_RETURN_NONE;
 }
 
@@ -368,7 +391,7 @@ static PyMethodDef Indexer_methods[] = {
     {"need_rebuild", (PyCFunction)Indexer_need_rebuild, METH_NOARGS,
      "Check if a rebuild is needed."},
     {"exists", (PyCFunction)Indexer_exists, METH_NOARGS,
-     "Check if the index file exists."},
+     "Check if the .dftindex store exists."},
     {"get_max_bytes", (PyCFunction)Indexer_get_max_bytes, METH_NOARGS,
      "Get the maximum uncompressed bytes in the indexed file."},
     {"get_num_lines", (PyCFunction)Indexer_get_num_lines, METH_NOARGS,
@@ -380,17 +403,25 @@ static PyMethodDef Indexer_methods[] = {
      "    offset (int): Uncompressed byte offset.\n"},
     {"get_checkpoints", (PyCFunction)Indexer_get_checkpoints, METH_NOARGS,
      "Get all checkpoints for this file as a list."},
+    {"close", (PyCFunction)Indexer_close, METH_NOARGS,
+     "Release this Python wrapper's native indexer handle.\n"
+     "\n"
+     "The shared RocksDB instance for the same .dftindex path remains managed\n"
+     "by the native RocksDBManager cache."},
     {"__enter__", (PyCFunction)Indexer_enter, METH_NOARGS,
      "Enter the runtime context for the with statement."},
     {"__exit__", (PyCFunction)Indexer_exit, METH_VARARGS,
-     "Exit the runtime context for the with statement."},
+     "Release this Python wrapper on context exit.\n"
+     "\n"
+     "This does not force-close the shared RocksDB instance for the same\n"
+     ".dftindex path."},
     {NULL} /* Sentinel */
 };
 
 static PyGetSetDef Indexer_getsetters[] = {
     {"gz_path", (getter)Indexer_gz_path, NULL, "Path to the gzip file", NULL},
-    {"idx_path", (getter)Indexer_idx_path, NULL, "Path to the index file",
-     NULL},
+    {"index_path", (getter)Indexer_index_path, NULL,
+     "Path to the .dftindex store", NULL},
     {"checkpoint_size", (getter)Indexer_checkpoint_size, NULL,
      "Checkpoint size in bytes", NULL},
     {"has_bloom", (getter)Indexer_has_bloom, NULL,
@@ -420,7 +451,7 @@ PyTypeObject IndexerType = {
     0,                                                /* tp_setattro */
     0,                                                /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,         /* tp_flags */
-    "Indexer(gz_path: str, idx_path: str | None = None,\n"
+    "Indexer(gz_path: str, index_path: str | None = None,\n"
     "       checkpoint_size: int = 1048576,\n"
     "       force_rebuild: bool = False, build_bloom: bool = False,\n"
     "       build_manifest: bool = False,\n"
@@ -428,20 +459,20 @@ PyTypeObject IndexerType = {
     "       runtime: Runtime | None = None)\n"
     "--\n"
     "\n"
-    "Indexer for creating and managing gzip file indices.\n"
+    "Indexer for creating and managing gzip trace index stores.\n"
     "\n"
     "Args:\n"
     "    gz_path (str): Path to the gzip trace file.\n"
-    "    idx_path (str or None): Path to the index file. If None,\n"
-    "        uses gz_path + \".idx\".\n"
+    "    index_path (str or None): Path to the .dftindex store. If None,\n"
+    "        uses the root-local \".dftindex\" next to gz_path.\n"
     "    checkpoint_size (int): Checkpoint size in bytes for index\n"
     "        building (default 1 MB).\n"
     "    force_rebuild (bool): If True, rebuild the index even if it\n"
     "        exists.\n"
     "    build_bloom (bool): If True, build bloom filter data in the\n"
-    "        index.\n"
+    "        store.\n"
     "    build_manifest (bool): If True, build manifest data in the\n"
-    "        index.\n"
+    "        store.\n"
     "    index_threshold (int): Skip indexing for files smaller than\n"
     "        this (default 1 MB).\n"
     "    runtime (Runtime or None): Runtime instance for thread pool\n"

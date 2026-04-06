@@ -22,7 +22,7 @@ namespace dftracer::utils::utilities::composites::dft::views {
 
 struct ViewReaderInput {
     std::string file_path;
-    std::string idx_path;
+    std::string index_path;
     std::size_t checkpoint_size =
         utilities::indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t start_byte = 0;
@@ -34,7 +34,7 @@ struct ViewReaderInput {
     std::optional<common::query::Query> query;
 
     ViewReaderInput& with_file_path(const std::string& path);
-    ViewReaderInput& with_idx_path(const std::string& path);
+    ViewReaderInput& with_index_path(const std::string& path);
     ViewReaderInput& with_checkpoint_size(std::size_t sz);
     ViewReaderInput& with_byte_range(std::size_t start, std::size_t end);
     ViewReaderInput& with_checkpoint_idx(std::uint64_t idx);

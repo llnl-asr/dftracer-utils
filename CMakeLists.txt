@@ -26,6 +26,18 @@ project(
   VERSION ${DFTRACER_UTILS_VERSION}
   LANGUAGES C CXX)
 
+find_program(CCACHE_EXECUTABLE ccache)
+if(CCACHE_EXECUTABLE)
+  foreach(lang C CXX ASM)
+    if(NOT CMAKE_${lang}_COMPILER_LAUNCHER)
+      set(CMAKE_${lang}_COMPILER_LAUNCHER
+          "${CCACHE_EXECUTABLE}"
+          CACHE STRING "Compiler launcher for ${lang}" FORCE)
+    endif()
+  endforeach()
+  message(STATUS "Using ccache: ${CCACHE_EXECUTABLE}")
+endif()
+
 set(DFTRACER_UTILS_PACKAGE ${PROJECT_NAME})
 set(DFTRACER_UTILS_PACKAGE_NAME ${PROJECT_NAME})
 set(DFTRACER_UTILS_PACKAGE_VERSION "${PROJECT_VERSION}")

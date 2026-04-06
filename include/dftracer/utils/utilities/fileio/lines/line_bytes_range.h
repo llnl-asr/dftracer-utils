@@ -28,7 +28,7 @@ namespace dftracer::utils::utilities::fileio::lines {
  * Usage:
  * @code
  * // From indexed file with byte range
- * auto reader = ReaderFactory::create("file.gz", "file.gz.idx");
+ * auto reader = ReaderFactory::create("file.gz", "/data/.dftindex");
  * LineBytesRange range1 = LineBytesRange::from_indexed_file(reader, 1000,
  * 5000);
  *

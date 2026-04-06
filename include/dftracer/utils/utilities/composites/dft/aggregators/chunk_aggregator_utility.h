@@ -29,7 +29,7 @@ using dftracer::utils::utilities::composites::dft::DFTracerEvent;
 
 struct ChunkAggregatorInput {
     std::string file_path;
-    std::string idx_path;
+    std::string index_path;
     std::size_t start_byte;
     std::size_t end_byte;
     std::size_t start_line;
@@ -46,8 +46,8 @@ struct ChunkAggregatorInput {
         return *this;
     }
 
-    ChunkAggregatorInput& with_idx_path(const std::string& path) {
-        idx_path = path;
+    ChunkAggregatorInput& with_index_path(const std::string& path) {
+        index_path = path;
         return *this;
     }
 

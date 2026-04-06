@@ -43,28 +43,29 @@ TEST_SUITE("ReconstructionPlanner") {
         }
 
         // Create .pidx sidecar with provenance
-        std::string pidx_path = determine_provenance_index_path(reorg_file, "");
+        std::string provenance_path =
+            determine_provenance_index_path(reorg_file, "");
         {
-            ProvenanceDatabase pdb(pidx_path);
+            ProvenanceDatabase pdb(provenance_path);
             pdb.init_schema();
             int fid = pdb.get_or_create_file_info(reorg_file, 0);
 
             pdb.begin_transaction();
 
             // Provenance info
-            pdb.insert_info("version", "1.0");
-            pdb.insert_info("tool", "dftracer_organize");
+            pdb.insert_info(fid, "version", "1.0");
+            pdb.insert_info(fid, "tool", "dftracer_organize");
 
             // Provenance group
-            pdb.insert_group("io", "cat=POSIX");
+            pdb.insert_group(fid, "io", "cat=POSIX");
 
             // Provenance source
             pdb.insert_source(fid, 0, "/original/trace.pfw.gz", 3, "abc123");
 
             // Provenance segments (3 checkpoints)
-            pdb.insert_segment(0, 0, 0, 100, 100);
-            pdb.insert_segment(0, 1, 100, 250, 150);
-            pdb.insert_segment(0, 2, 250, 400, 150);
+            pdb.insert_segment(fid, 0, 0, 0, 100, 100);
+            pdb.insert_segment(fid, 0, 1, 100, 250, 150);
+            pdb.insert_segment(fid, 0, 2, 250, 400, 150);
 
             pdb.commit_transaction();
         }
@@ -127,42 +128,42 @@ TEST_SUITE("ReconstructionPlanner") {
 
         // Create .pidx for io.pfw.gz
         {
-            std::string pidx_path =
+            std::string provenance_path =
                 determine_provenance_index_path(io_file, "");
-            ProvenanceDatabase pdb(pidx_path);
+            ProvenanceDatabase pdb(provenance_path);
             pdb.init_schema();
             int fid = pdb.get_or_create_file_info(io_file, 0);
 
             pdb.begin_transaction();
-            pdb.insert_info("version", "1.0");
-            pdb.insert_info("tool", "dftracer_organize");
-            pdb.insert_group("io", "cat=POSIX");
+            pdb.insert_info(fid, "version", "1.0");
+            pdb.insert_info(fid, "tool", "dftracer_organize");
+            pdb.insert_group(fid, "io", "cat=POSIX");
             pdb.insert_source(fid, 0, "/original/trace.pfw.gz", 2, "hash1");
 
             // Segments for checkpoints 0 and 1
-            pdb.insert_segment(0, 0, 0, 50, 50);
-            pdb.insert_segment(0, 1, 50, 120, 70);
+            pdb.insert_segment(fid, 0, 0, 0, 50, 50);
+            pdb.insert_segment(fid, 0, 1, 50, 120, 70);
 
             pdb.commit_transaction();
         }
 
         // Create .pidx for compute.pfw.gz
         {
-            std::string pidx_path =
+            std::string provenance_path =
                 determine_provenance_index_path(compute_file, "");
-            ProvenanceDatabase pdb(pidx_path);
+            ProvenanceDatabase pdb(provenance_path);
             pdb.init_schema();
             int fid = pdb.get_or_create_file_info(compute_file, 0);
 
             pdb.begin_transaction();
-            pdb.insert_info("version", "1.0");
-            pdb.insert_info("tool", "dftracer_organize");
-            pdb.insert_group("compute", "cat=APP");
+            pdb.insert_info(fid, "version", "1.0");
+            pdb.insert_info(fid, "tool", "dftracer_organize");
+            pdb.insert_group(fid, "compute", "cat=APP");
             pdb.insert_source(fid, 0, "/original/trace.pfw.gz", 2, "hash1");
 
             // Segments for checkpoints 0 and 1
-            pdb.insert_segment(0, 0, 0, 30, 30);
-            pdb.insert_segment(0, 1, 30, 80, 50);
+            pdb.insert_segment(fid, 0, 0, 0, 30, 30);
+            pdb.insert_segment(fid, 0, 1, 30, 80, 50);
 
             pdb.commit_transaction();
         }
@@ -207,9 +208,10 @@ TEST_SUITE("ReconstructionPlanner") {
         }
 
         // Create .pidx with NO provenance tables
-        std::string pidx_path = determine_provenance_index_path(reorg_file, "");
+        std::string provenance_path =
+            determine_provenance_index_path(reorg_file, "");
         {
-            ProvenanceDatabase pdb(pidx_path);
+            ProvenanceDatabase pdb(provenance_path);
             pdb.init_schema();
             pdb.get_or_create_file_info(reorg_file, 0);
             // No provenance data inserted

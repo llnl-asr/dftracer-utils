@@ -1,7 +1,6 @@
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/sqlite/async.h>
+#include <dftracer/utils/core/rocksdb/async.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
@@ -21,25 +20,25 @@ coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
     TraceStatistics result;
     result.file_path = input.file_path;
 
-    if (!input.idx_path.empty()) {
-        result.idx_path = input.idx_path;
+    if (!input.index_path.empty()) {
+        result.index_path =
+            indexer::internal::normalize_index_root(input.index_path);
     } else {
-        result.idx_path =
+        result.index_path =
             internal::determine_index_path(input.file_path, input.index_dir);
     }
 
-    if (!fs::exists(result.idx_path)) {
+    if (!fs::exists(result.index_path)) {
         result.success = false;
-        result.error_message = "Index file not found: " + result.idx_path;
+        result.error_message = "Index store not found: " + result.index_path;
         co_return result;
     }
 
     bool needs_streaming_fallback = false;
-
     auto do_query = [&input, &result,
                      &needs_streaming_fallback]() -> TraceStatistics {
         try {
-            IndexDatabase idx_db(result.idx_path);
+            IndexDatabase idx_db(result.index_path);
 
             int fid =
                 idx_db.get_file_info_id(get_logical_path(input.file_path));
@@ -50,10 +49,9 @@ coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
                 return result;
             }
 
-            std::vector<indexing::queries::ChunkStatisticsResult> chunks;
+            std::vector<IndexDatabase::ChunkStatisticsResult> chunks;
             try {
-                chunks = indexing::queries::query_chunk_statistics(
-                    idx_db.sql_db(), fid);
+                chunks = idx_db.query_chunk_statistics(fid);
             } catch (const std::exception&) {
                 needs_streaming_fallback = true;
                 return result;
@@ -70,8 +68,7 @@ coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
                 result.merged.merge_from(chunks[i].stats);
             }
 
-            auto dim_stats = indexing::queries::query_chunk_dimension_stats(
-                idx_db.sql_db(), fid);
+            auto dim_stats = idx_db.query_chunk_dimension_stats(fid);
             for (const auto& ds : dim_stats) {
                 if (!ds.value_counts) continue;
                 if (ds.dimension == "cat") {
@@ -94,7 +91,7 @@ coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
         return result;
     };
 
-    result = co_await sqlite::run(do_query);
+    result = co_await rocksdb::run(do_query);
 
     if (!needs_streaming_fallback) {
         co_return result;

@@ -19,12 +19,12 @@ class TestIndexer:
         """Test indexer creation"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
 
             # Test basic creation using context manager
-            with dft_utils.Indexer(gz_file, idx_file) as indexer:
+            with dft_utils.Indexer(gz_file, index_path) as indexer:
                 assert indexer.gz_path == gz_file
-                assert indexer.idx_path == idx_file
+                assert indexer.index_path == index_path
                 assert indexer.checkpoint_size > 0
 
     def test_indexer_creation_with_defaults(self):
@@ -35,7 +35,7 @@ class TestIndexer:
             # Test creation with defaults using context manager
             with dft_utils.Indexer(gz_file) as indexer:
                 assert indexer.gz_path == gz_file
-                assert indexer.idx_path == gz_file + ".idx"
+                assert indexer.index_path == env.get_index_path(gz_file)
                 assert indexer.checkpoint_size <= 33554432  # Should be <= 32MB default
 
     def test_indexer_custom_checkpoint_size(self):
@@ -57,9 +57,9 @@ class TestIndexer:
         """Test indexer build and rebuild functionality"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
 
-            with dft_utils.Indexer(gz_file, idx_file) as indexer:
+            with dft_utils.Indexer(gz_file, index_path) as indexer:
                 # Should need rebuild initially
                 assert indexer.need_rebuild()
 
@@ -67,7 +67,7 @@ class TestIndexer:
                 indexer.build()
 
                 # Index file should exist
-                assert os.path.exists(idx_file)
+                assert os.path.exists(index_path)
 
                 # Should not need rebuild after building
                 assert not indexer.need_rebuild()
@@ -75,7 +75,7 @@ class TestIndexer:
             # Test force rebuild with a new indexer
             # Note: force_rebuild affects the build process, not need_rebuild() check
             # The need_rebuild() method checks file consistency, not force_rebuild flag
-            with dft_utils.Indexer(gz_file, idx_file, force_rebuild=True) as indexer_force:
+            with dft_utils.Indexer(gz_file, index_path, force_rebuild=True) as indexer_force:
                 # Since the index already exists and file hasn't changed, need_rebuild should be False
                 # But force_rebuild will cause a rebuild when build() is called
                 assert not indexer_force.need_rebuild()
@@ -205,7 +205,7 @@ class TestIndexerIntegration:
                 if indexer.need_rebuild():
                     indexer.build()
 
-                # Test creating reader after indexer builds sidecar
+                # Test creating reader after indexer builds the shared index store
                 reader = dft_utils.TraceReader(gz_file)
                 assert reader.get_max_bytes() > 0
                 assert reader.file_path == gz_file
@@ -220,7 +220,7 @@ class TestIndexerIntegration:
                 if indexer.need_rebuild():
                     indexer.build()
 
-                # Test creating reader after indexer builds sidecar
+                # Test creating reader after indexer builds the shared index store
                 reader = dft_utils.TraceReader(gz_file)
                 assert reader.get_max_bytes() > 0
 
@@ -234,7 +234,7 @@ class TestIndexerIntegration:
                 if indexer.need_rebuild():
                     indexer.build()
 
-                # Create multiple readers (all use same sidecar)
+                # Create multiple readers (all use the same shared index store)
                 readers = []
                 for i in range(3):
                     reader = dft_utils.TraceReader(gz_file)
@@ -247,6 +247,44 @@ class TestIndexerIntegration:
                     assert reader.get_max_bytes() == max_bytes
 
 
+class TestIndexerLifetime:
+    """Python wrapper lifetime should not own the shared index store."""
+
+    def test_indexer_close_releases_wrapper_not_index_store(self):
+        """close() should release the Python handle without deleting .dftindex."""
+        with Environment() as env:
+            gz_file = env.create_test_gzip_file()
+            index_path = env.get_index_path(gz_file)
+
+            indexer = dft_utils.Indexer(gz_file, index_path)
+            assert indexer.need_rebuild()
+            indexer.build()
+            assert os.path.exists(index_path)
+
+            indexer.close()
+            assert os.path.exists(index_path)
+
+            with dft_utils.Indexer(gz_file, index_path) as reopened:
+                assert not reopened.need_rebuild()
+                assert reopened.get_num_lines() > 0
+
+    def test_indexer_context_exit_keeps_shared_index_store(self):
+        """Context exit should not tear down the shared index store."""
+        with Environment() as env:
+            gz_file = env.create_test_gzip_file()
+            index_path = env.get_index_path(gz_file)
+
+            with dft_utils.Indexer(gz_file, index_path) as indexer:
+                if indexer.need_rebuild():
+                    indexer.build()
+                assert indexer.get_num_lines() > 0
+
+            assert os.path.exists(index_path)
+
+            reader = dft_utils.TraceReader(gz_file)
+            assert reader.get_num_lines() > 0
+
+
 class TestIndexerUnified:
     """Test unified IndexBuilder features via Python Indexer"""
 
@@ -254,9 +292,9 @@ class TestIndexerUnified:
         """Test building with bloom=True"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
                 assert indexer.has_bloom
@@ -265,9 +303,9 @@ class TestIndexerUnified:
         """Test building with manifest=True"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_manifest=True, index_threshold=0
+                gz_file, index_path, build_manifest=True, index_threshold=0
             ) as indexer:
                 indexer.build()
                 assert indexer.has_manifest
@@ -276,10 +314,10 @@ class TestIndexerUnified:
         """Test building with both bloom and manifest"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 build_manifest=True,
                 index_threshold=0,
@@ -292,8 +330,8 @@ class TestIndexerUnified:
         """Test that bloom is not built when build_bloom is omitted"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
-            with dft_utils.Indexer(gz_file, idx_file, index_threshold=0) as indexer:
+            index_path = env.get_index_path(gz_file)
+            with dft_utils.Indexer(gz_file, index_path, index_threshold=0) as indexer:
                 indexer.build()
                 assert not indexer.has_bloom
 
@@ -301,8 +339,8 @@ class TestIndexerUnified:
         """Test that manifest is not built when build_manifest is omitted"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
-            with dft_utils.Indexer(gz_file, idx_file, index_threshold=0) as indexer:
+            index_path = env.get_index_path(gz_file)
+            with dft_utils.Indexer(gz_file, index_path, index_threshold=0) as indexer:
                 indexer.build()
                 assert not indexer.has_manifest
 
@@ -310,9 +348,9 @@ class TestIndexerUnified:
         """Test that has_bloom returns a bool"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
                 assert isinstance(indexer.has_bloom, bool)
@@ -321,9 +359,9 @@ class TestIndexerUnified:
         """Test that has_manifest returns a bool"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_manifest=True, index_threshold=0
+                gz_file, index_path, build_manifest=True, index_threshold=0
             ) as indexer:
                 indexer.build()
                 assert isinstance(indexer.has_manifest, bool)
@@ -332,11 +370,11 @@ class TestIndexerUnified:
         """Test that index_threshold is accepted without error"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             # A very large threshold skips bloom for small files
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 index_threshold=1024 * 1024 * 1024,
             ) as indexer:
@@ -345,30 +383,29 @@ class TestIndexerUnified:
                 assert not indexer.has_bloom
 
     def test_indexer_bloom_persists_across_instances(self):
-        """Bloom data written to the sidecar is visible from a new Indexer"""
+        """Bloom data written to the index store is visible from a new Indexer"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
 
-            # Open a fresh Indexer pointing at the same sidecar
-            with dft_utils.Indexer(gz_file, idx_file) as indexer2:
+            with dft_utils.Indexer(gz_file, index_path) as indexer2:
                 assert indexer2.has_bloom
 
     def test_indexer_manifest_persists_across_instances(self):
-        """Manifest data written to the sidecar is visible from a new Indexer"""
+        """Manifest data written to the index store is visible from a new Indexer"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_manifest=True, index_threshold=0
+                gz_file, index_path, build_manifest=True, index_threshold=0
             ) as indexer:
                 indexer.build()
 
-            with dft_utils.Indexer(gz_file, idx_file) as indexer2:
+            with dft_utils.Indexer(gz_file, index_path) as indexer2:
                 assert indexer2.has_manifest
 
 
@@ -379,9 +416,12 @@ class TestIndexerThreshold:
         """Explicit large threshold should skip bloom for small files"""
         with Environment(lines=5) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=128)
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=10 * 1024 * 1024
+                gz_file,
+                index_path,
+                build_bloom=True,
+                index_threshold=10 * 1024 * 1024,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_bloom
@@ -390,9 +430,12 @@ class TestIndexerThreshold:
         """Explicit large threshold should skip manifest for small files"""
         with Environment(lines=5) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=128)
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_manifest=True, index_threshold=10 * 1024 * 1024
+                gz_file,
+                index_path,
+                build_manifest=True,
+                index_threshold=10 * 1024 * 1024,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_manifest
@@ -401,10 +444,10 @@ class TestIndexerThreshold:
         """Explicit large threshold should skip bloom and manifest for small files"""
         with Environment(lines=5) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=128)
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 build_manifest=True,
                 index_threshold=10 * 1024 * 1024,
@@ -417,10 +460,10 @@ class TestIndexerThreshold:
         """Explicit large threshold should skip bloom for small files"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 index_threshold=1024 * 1024 * 1024,
             ) as indexer:
@@ -431,9 +474,9 @@ class TestIndexerThreshold:
         """index_threshold=0 disables threshold, bloom should be built"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
                 assert indexer.has_bloom
@@ -442,9 +485,9 @@ class TestIndexerThreshold:
         """index_threshold=0 disables threshold, manifest should be built"""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_manifest=True, index_threshold=0
+                gz_file, index_path, build_manifest=True, index_threshold=0
             ) as indexer:
                 indexer.build()
                 assert indexer.has_manifest

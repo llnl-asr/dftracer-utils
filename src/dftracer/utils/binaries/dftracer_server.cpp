@@ -34,7 +34,7 @@ static coro::CoroTask<int> run_server(argparse::ArgumentParser& program) {
         program.get<std::size_t>("--executor-threads");
 
     // When no explicit index dir is given, default to the trace
-    // directory so sidecar files (.idx) persist across restarts
+    // directory so `.dftindex` stores persist across restarts
     // and don't need to be rebuilt every time.
     if (index_dir.empty()) {
         index_dir = directory;
@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
 
     program.add_argument("--index-dir")
         .help(
-            "Directory for bloom/checkpoint index files (default: same as "
+            "Directory for root-local .dftindex stores (default: same as "
             "--directory)")
         .default_value<std::string>("");
 

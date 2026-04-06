@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/statistics_query.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_query_utility.h>
 
@@ -117,7 +118,8 @@ static PyObject *StatisticsQuery_query(StatisticsQueryObject *self,
         StatisticsAggregatorInput agg_input;
         agg_input.file_path = file_path_str;
         agg_input.index_dir = index_dir_str;
-        agg_input.idx_path = file_path_str + ".idx";
+        agg_input.index_path = dftracer::utils::utilities::composites::dft::
+            internal::determine_index_path(file_path_str, index_dir_str);
 
         auto *stats_p = &stats;
         auto agg_task = [stats_p, agg_input]() -> CoroTask<void> {
@@ -251,7 +253,7 @@ static PyMethodDef StatisticsQuery_methods[] = {
      "        'time_range', 'duration_stats', 'top_n_names',\n"
      "        'top_n_categories', 'detailed'.\n"
      "    top_n (int): Top results for ranked queries (default 10).\n"
-     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "    index_dir (str): Directory for .dftindex stores (default '').\n"
      "\n"
      "Returns:\n"
      "    dict: Query results.\n"},

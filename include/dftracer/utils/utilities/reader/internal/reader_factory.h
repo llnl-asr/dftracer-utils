@@ -19,7 +19,7 @@ class ReaderFactory {
      * Create a reader for any supported archive format (returns Reader)
      */
     static std::shared_ptr<Reader> create(
-        const std::string &archive_path, const std::string &idx_path,
+        const std::string &archive_path, const std::string &index_path,
         std::size_t index_ckpt_size = dftracer::utils::utilities::indexer::
             internal::Indexer::DEFAULT_CHECKPOINT_SIZE);
 

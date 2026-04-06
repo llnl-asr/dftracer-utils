@@ -17,6 +17,14 @@
 
 namespace {
 
+void set_test_library_path(const std::string& binary) {
+    const fs::path build_root = fs::path(binary).parent_path().parent_path();
+    const std::string lib_path =
+        (build_root / "lib").string() + ":" +
+        (build_root / "_deps" / "rocksdb-build").string();
+    ::setenv("LD_LIBRARY_PATH", lib_path.c_str(), 1);
+}
+
 std::string create_pfw_gz(dft_utils_test::TestEnvironment& env, int num_events,
                           int id) {
     auto trace_gz = env.create_dft_test_gzip_file(num_events);
@@ -63,6 +71,7 @@ int run_binary(const std::string& binary,
     pid_t pid = ::fork();
     if (pid < 0) return -1;
     if (pid == 0) {
+        set_test_library_path(binary);
         std::vector<const char*> argv;
         argv.push_back(binary.c_str());
         for (const auto& arg : args) argv.push_back(arg.c_str());
@@ -115,6 +124,16 @@ bool any_file_with_suffix(const std::string& dir, const std::string& suffix) {
                 name.substr(name.size() - suffix.size()) == suffix) {
                 return true;
             }
+        }
+    }
+    return false;
+}
+
+bool any_dir_named(const std::string& dir, const std::string& name) {
+    if (!fs::exists(dir)) return false;
+    for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+        if (entry.is_directory() && entry.path().filename() == name) {
+            return true;
         }
     }
     return false;
@@ -175,7 +194,7 @@ TEST_SUITE("DFTracerOrganize") {
         CHECK(has_output);
     }
 
-    TEST_CASE("organize creates midx sidecar") {
+    TEST_CASE("organize creates .dftindex store") {
         auto binary = find_organize_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_organize binary not found, skipping.");
@@ -195,8 +214,7 @@ TEST_SUITE("DFTracerOrganize") {
                                      "--groups", R"(io:cat == "POSIX")"});
         CHECK(rc == 0);
 
-        // The organizer builds .pidx sidecars in the output directory.
-        CHECK(any_file_with_suffix(out_dir, ".pidx"));
+        CHECK(any_dir_named(out_dir, ".dftindex"));
     }
 
     TEST_CASE("reconstruct from organized") {
@@ -225,7 +243,7 @@ TEST_SUITE("DFTracerOrganize") {
                                     "--groups", R"(io:cat == "POSIX")"});
         REQUIRE(rc_org == 0);
 
-        // Reconstruct needs the .pidx sidecars in the organized dir.
+        REQUIRE(any_dir_named(org_dir, ".dftindex"));
         int rc_rec = run_binary(
             rec_binary, {"-d", org_dir, "-o", rec_dir, "--no-compress"});
         CHECK(rc_rec == 0);

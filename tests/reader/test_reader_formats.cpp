@@ -76,7 +76,8 @@ TEST_CASE_TEMPLATE("Indexer creation and destruction", FormatType, GZIPFormat,
         auto indexer = IndexerFactory::create(
             fixture.get_test_file(), fixture.get_index_file(), 1024 * 1024);
         REQUIRE(indexer != nullptr);
-        CHECK(indexer->exists());
+        CHECK_FALSE(indexer->exists());
+        CHECK(indexer->need_rebuild());
     }
 
     SUBCASE("Invalid file path") {

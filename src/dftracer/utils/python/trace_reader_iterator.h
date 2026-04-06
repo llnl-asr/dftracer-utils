@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_PYTHON_TRACE_READER_ITERATOR_H
 
 #include <Python.h>
+#include <dftracer/utils/core/task_handle.h>
 
 #include <atomic>
 #include <condition_variable>
@@ -40,6 +41,7 @@ struct IteratorState {
     std::atomic<bool> cancelled{false};
     std::atomic<bool> done{false};
     std::size_t max_queue_size = 64;
+    std::shared_future<void> task_future;
 };
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -54,6 +56,7 @@ struct ArrowIteratorState {
     std::atomic<bool> cancelled{false};
     std::atomic<bool> done{false};
     std::size_t max_queue_size = 8;
+    std::shared_future<void> task_future;
 };
 #endif
 

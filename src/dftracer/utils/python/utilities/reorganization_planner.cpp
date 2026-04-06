@@ -178,8 +178,8 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
         }
         PyDict_SetItemString(entry, "file_path",
                              PyUnicode_FromString(sf.file_path.c_str()));
-        PyDict_SetItemString(entry, "idx_path",
-                             PyUnicode_FromString(sf.idx_path.c_str()));
+        PyDict_SetItemString(entry, "index_path",
+                             PyUnicode_FromString(sf.index_path.c_str()));
         PyDict_SetItemString(entry, "num_checkpoints",
                              PyLong_FromSize_t(sf.num_checkpoints));
         PyDict_SetItemString(entry, "uncompressed_size",
@@ -254,7 +254,7 @@ static PyMethodDef ReorganizationPlanner_methods[] = {
      "    source_files (list[str]): Paths to source trace files.\n"
      "    groups (list[dict] or None): Predicate group definitions\n"
      "        (default None).\n"
-     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "    index_dir (str): Directory for .dftindex stores (default '').\n"
      "\n"
      "Returns:\n"
      "    dict: Extraction plan.\n"},

@@ -2,7 +2,8 @@ TraceReader Module
 ==================
 
 The ``TraceReader`` is the recommended way to read trace files. It auto-selects
-sequential or indexed reading based on whether an ``.idx`` sidecar exists.
+sequential or indexed reading based on whether a root-local ``.dftindex``
+RocksDB store exists.
 
 TraceReader Class
 -----------------
@@ -74,7 +75,7 @@ File Metadata
 -------------
 
 ``get_max_bytes()`` and ``get_num_lines()`` return file metadata without
-reading the full file (when an index exists):
+reading the full file (when a ``.dftindex`` RocksDB index store exists):
 
 .. code-block:: python
 

@@ -5,7 +5,8 @@
 add_rpath()
 
 need_zlib()
-need_sqlite3()
+need_lz4()
+need_rocksdb()
 need_argparse()
 need_ghc_filesystem()
 need_cpplogger()
@@ -31,6 +32,7 @@ set(DFTRACER_UTILS_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/constants.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/format_detector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/filesystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/env.cpp
     # Utilities
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utils/timer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utils/string.cpp
@@ -56,12 +58,12 @@ set(DFTRACER_UTILS_CORE_SOURCES
     # Tasks
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task_result.cpp
-    # SQLite
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/error.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/database.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/statement.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/vfs.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/sqlite/async.cpp
+    # RocksDB
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/database.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/filesystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/key_codec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/async.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/db_manager.cpp
 )
 
 # Conditionally add io_uring backend sources
@@ -126,37 +128,6 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_chunk_bloom_filter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_file_bloom_filter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_chunk_statistics.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_index_dimension.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_hash_resolution.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_chunk_bloom_filters.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_chunk_bloom_filters_batch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_file_bloom_filter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_file_bloom_filters_batch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_index_dimensions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_hash_by_resolved.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_resolved_by_hash.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_chunk_bloom_filters.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_file_bloom_filter.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_chunk_statistics.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_time_bounds.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_chunk_statistics.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_chunk_dimension_stats.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_chunk_dimension_stats.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_chunk_dimension_stats.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_hash_resolutions.cpp
-    # Manifest index queries
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_event_range.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_metadata_lines.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_event_ranges.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_metadata_lines.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_event_ranges.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/delete_metadata_lines.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/insert_provenance.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/indexing/queries/query_provenance.cpp
-
     # DFT Reorganization
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.cpp
@@ -197,33 +168,12 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     # Indexer factory
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_factory.cpp
     # GZIP indexer
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/delete_file_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/insert_checkpoint_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/insert_file_metadata_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/insert_file_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_checkpoint.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_checkpoints.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_file_id.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_max_bytes.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_num_lines.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_schema_validity.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_stored_file_info.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/queries/query_checkpoint_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/constants.cpp
     # TAR indexer
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/tar_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/tar_indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/constants.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_file_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_archive_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_archive_metadata_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_tar_file_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/insert_tar_checkpoint_record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/query_archive_id.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/query_tar_files.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/query_tar_checkpoints.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/queries/query_metadata.cpp
     # Reader
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_c.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/stream_c.cpp
@@ -278,14 +228,6 @@ set(PKG_CONFIG_LIBS_PRIVATE "")
 
 # Add Threads (always required)
 set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lpthread")
-
-# Only add sqlite3 to pkg-config requirements if it was found on system
-if(SQLite3_FOUND AND NOT SQLite3_CPM)
-  set(PKG_CONFIG_REQUIRES "${PKG_CONFIG_REQUIRES} sqlite3")
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lsqlite3")
-else()
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lsqlite3")
-endif()
 
 # Only add zlib to pkg-config requirements if it was found on system
 if(ZLIB_FOUND AND NOT ZLIB_CPM)
@@ -373,7 +315,7 @@ foreach(variant shared static)
     # Link dependencies using helper functions
     link_cpp_logger(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_yyjson(dftracer_utils_core_${variant} ${VARIANT_UPPER})
-    link_sqlite3(dftracer_utils_core_${variant} ${VARIANT_UPPER})
+    link_rocksdb(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_zlib(dftracer_utils_core_${variant} ${VARIANT_UPPER})
 
     # Add stdfs if needed
@@ -822,6 +764,7 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
     set_target_properties(
       ${bin_exec} PROPERTIES OUTPUT_NAME "${bin_exec}" RUNTIME_OUTPUT_DIRECTORY
                                                        ${CMAKE_BINARY_DIR}/bin)
+    target_add_rpath(${bin_exec})
 
     # Link to unified library (which includes both core and utilities)
     target_link_libraries(${bin_exec} PRIVATE dftracer_utils argparse::argparse)
@@ -867,6 +810,7 @@ if(DFTRACER_UTILS_BUILD_EXAMPLES)
 
     add_executable(${example_name} ${example})
     set_target_properties(${example_name} PROPERTIES OUTPUT_NAME "${example_name}")
+    target_add_rpath(${example_name})
     target_link_libraries(
       ${example_name} PRIVATE dftracer_utils argparse::argparse)
 

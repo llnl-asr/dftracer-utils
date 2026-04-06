@@ -52,10 +52,12 @@ TraceReader::TraceReader(TraceReaderConfig config)
 }
 
 void TraceReader::probe_index() {
-    idx_path_ = dft_internal::determine_index_path(config_.file_path,
-                                                   config_.index_dir);
-    has_index_ = fs::exists(idx_path_);
     format_ = IndexerFactory::detect_format(config_.file_path);
+    index_path_ = dft_internal::determine_index_path(config_.file_path,
+                                                     config_.index_dir);
+    has_index_ =
+        (format_ == ArchiveFormat::GZIP || format_ == ArchiveFormat::TAR_GZ) &&
+        fs::exists(index_path_);
 }
 
 bool TraceReader::has_index() const { return has_index_; }
@@ -91,7 +93,7 @@ std::size_t TraceReader::get_num_lines() {
 }
 
 std::shared_ptr<internal::Reader> TraceReader::create_indexed_reader() {
-    auto indexer = IndexerFactory::create(config_.file_path, idx_path_,
+    auto indexer = IndexerFactory::create(config_.file_path, index_path_,
                                           config_.checkpoint_size, false);
     return internal::ReaderFactory::create(indexer);
 }
@@ -136,10 +138,10 @@ coro::AsyncGenerator<Line> TraceReader::read_lines(ReadConfig config) {
             if (start >= max_bytes) co_return;
         }
 
-        if (query && !idx_path_.empty() &&
+        if (has_index_ && query && !index_path_.empty() &&
             range_type == internal::RangeType::BYTE_RANGE) {
-            ChunkPrunerInput pruner_input{idx_path_, config_.file_path, *query,
-                                          nullptr};
+            ChunkPrunerInput pruner_input{index_path_, config_.file_path,
+                                          *query, nullptr};
             ChunkPrunerUtility pruner;
             auto pruner_out = co_await pruner.process(pruner_input);
             if (pruner_out.success && !pruner_out.file_may_match) {
@@ -234,11 +236,11 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
             if (start >= max_bytes) co_return;
         }
 
-        if (!config.query.empty() && !idx_path_.empty() &&
+        if (has_index_ && !config.query.empty() && !index_path_.empty() &&
             range_type == internal::RangeType::BYTE_RANGE) {
             auto parsed = Query::from_string(config.query);
             if (!parsed) throw common::query::QueryParseError(parsed.error());
-            ChunkPrunerInput pruner_input{idx_path_, config_.file_path,
+            ChunkPrunerInput pruner_input{index_path_, config_.file_path,
                                           std::move(*parsed), nullptr};
             ChunkPrunerUtility pruner;
             auto pruner_out = co_await pruner.process(pruner_input);

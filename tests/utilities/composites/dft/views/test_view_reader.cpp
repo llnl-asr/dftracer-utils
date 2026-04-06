@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <doctest/doctest.h>
@@ -15,6 +16,7 @@
 #include <vector>
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::composites::dft::internal;
 using namespace dftracer::utils::utilities::composites::dft::views;
 using namespace dft_utils_test;
 using dftracer::utils::utilities::common::query::Query;
@@ -62,10 +64,11 @@ TEST_SUITE("ViewReader") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_pfw_gz(env, 50);
+        std::string db_root = determine_index_path(gz, "");
 
         ViewReaderInput input;
         input.with_file_path(gz)
-            .with_idx_path(gz + ".idx")
+            .with_index_path(db_root)
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
         input.view.with_include_metadata(false);
@@ -82,10 +85,11 @@ TEST_SUITE("ViewReader") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_pfw_gz(env, 50);
+        std::string db_root = determine_index_path(gz, "");
 
         ViewReaderInput input;
         input.with_file_path(gz)
-            .with_idx_path(gz + ".idx")
+            .with_index_path(db_root)
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
         input.view.with_include_metadata(false);
@@ -105,10 +109,11 @@ TEST_SUITE("ViewReader") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
         std::string gz = create_pfw_gz(env, 50);
+        std::string db_root = determine_index_path(gz, "");
 
         ViewReaderInput input;
         input.with_file_path(gz)
-            .with_idx_path(gz + ".idx")
+            .with_index_path(db_root)
             .with_checkpoint_size(1024)
             .with_byte_range(0, std::numeric_limits<std::size_t>::max());
         input.view.with_include_metadata(false);

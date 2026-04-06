@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/statistics_aggregator.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/trace_statistics.h>
 
@@ -83,7 +84,8 @@ static PyObject *StatisticsAggregator_compute(StatisticsAggregatorObject *self,
         StatisticsAggregatorInput input;
         input.file_path = file_path_str;
         input.index_dir = index_dir_str;
-        input.idx_path = file_path_str + ".idx";
+        input.index_path = dftracer::utils::utilities::composites::dft::
+            internal::determine_index_path(file_path_str, index_dir_str);
 
         auto *stats_p = &stats;
         auto input_copy = input;
@@ -199,7 +201,7 @@ static PyMethodDef StatisticsAggregator_methods[] = {
      "\n"
      "Args:\n"
      "    file_path (str): Path to the trace file.\n"
-     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "    index_dir (str): Directory for .dftindex stores (default '').\n"
      "\n"
      "Returns:\n"
      "    dict: Aggregated statistics.\n"},

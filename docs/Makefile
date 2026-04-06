@@ -12,6 +12,7 @@ DOXYGEN := $(shell command -v doxygen 2> /dev/null)
 PYTHON   ?= python3
 
 GENDIR   = $(SOURCEDIR)/_generated
+APIDIR   = $(SOURCEDIR)/cpp_api/api
 
 # Put it first so that "make" without argument is like "make help".
 help:
@@ -24,6 +25,7 @@ clean:
 	rm -rf $(BUILDDIR)
 	rm -rf doxygen
 	rm -rf $(GENDIR)
+	rm -rf $(APIDIR)
 
 # Generate Doxygen documentation (only if doxygen is installed)
 doxygen:

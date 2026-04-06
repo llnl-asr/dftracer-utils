@@ -210,7 +210,7 @@ static PyMethodDef ReconstructionPlanner_methods[] = {
      "\n"
      "Args:\n"
      "    reorganized_files (list[str]): Paths to reorganized files.\n"
-     "    index_dir (str): Directory for index sidecars (default '').\n"
+     "    index_dir (str): Directory for .dftindex stores (default '').\n"
      "\n"
      "Returns:\n"
      "    dict: Reconstruction plan.\n"},
@@ -250,7 +250,7 @@ PyTypeObject ReconstructionPlannerType = {
     "\n"
     "process(reorganized_files, index_dir='') -> dict\n"
     "    reorganized_files (list[str]): Paths to reorganized trace files.\n"
-    "    index_dir (str): Directory containing provenance index sidecars.\n",
+    "    index_dir (str): Directory containing `.dftindex` stores.\n",
     /* tp_doc */
     0,                                    /* tp_traverse */
     0,                                    /* tp_clear */

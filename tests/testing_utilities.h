@@ -93,7 +93,7 @@ char** get_tar_file_list(const char* tar_path, size_t* num_files);
 void free_tar_file_list(char** file_list, size_t num_files);
 
 /**
- * Get index path for a given gzip file
+ * Get the `.dftindex` path for a given gzip file
  * Returns allocated string - caller must free
  */
 char* test_environment_get_index_path(test_environment_handle_t env,

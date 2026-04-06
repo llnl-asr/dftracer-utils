@@ -19,21 +19,22 @@ coro::CoroTask<ReconstructionPlan> ReconstructionPlannerUtility::process(
     ReconstructionPlan plan;
 
     for (const auto& reorg_file : input.reorganized_files) {
-        std::string pidx_path = internal::determine_provenance_index_path(
+        std::string provenance_path = internal::determine_provenance_index_path(
             reorg_file, input.index_dir);
 
-        if (!fs::exists(pidx_path)) {
+        if (!fs::exists(provenance_path)) {
             continue;
         }
 
-        ProvenanceDatabase pdb(pidx_path);
-        pdb.init_schema();
+        ProvenanceDatabase pdb(
+            provenance_path,
+            dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
 
         int fid = pdb.get_file_info_id(reorg_file);
         if (fid < 0) continue;
 
         // Check if this file has provenance
-        std::string tool = pdb.query_info("tool");
+        std::string tool = pdb.query_info(fid, "tool");
         if (tool.empty()) continue;
 
         // Read sources
@@ -54,7 +55,7 @@ coro::CoroTask<ReconstructionPlan> ReconstructionPlannerUtility::process(
         }
 
         // Read all segments
-        auto segments = pdb.query_all_segments();
+        auto segments = pdb.query_all_segments(fid);
 
         for (const auto& seg : segments) {
             auto src_it = source_map.find(seg.source_idx);

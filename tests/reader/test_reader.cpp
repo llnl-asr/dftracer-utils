@@ -53,7 +53,7 @@ TEST_CASE("C++ Indexer - Basic functionality") {
 
         // Test getter methods
         CHECK(indexer->get_archive_path() == gz_file);
-        CHECK(indexer->get_idx_path() == idx_file);
+        CHECK(indexer->get_index_path() == idx_file);
 
         // Build index first before accessing metadata
         indexer->build();
@@ -119,7 +119,7 @@ TEST_CASE("C++ Reader - Basic functionality") {
 
         // Test getter methods
         CHECK(reader->get_archive_path() == gz_file);
-        CHECK(reader->get_idx_path() == idx_file);
+        CHECK(reader->get_index_path() == idx_file);
     }
 
     SUBCASE("Read byte range using streaming API") {

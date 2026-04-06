@@ -38,21 +38,21 @@ class TestDaskIntegration:
             # Create multiple test files
             gz_files = []
             for i in range(3):
-                gz_file = env.create_test_gzip_file(f"test_{i}.pfw.gz", bytes_per_line=512)
+                gz_file = env.create_test_gzip_file(f"file_{i}/test_{i}.pfw.gz", bytes_per_line=512)
                 gz_files.append(gz_file)
 
             def create_and_build_indexer(gz_file):
                 """Helper function to create and build an indexer"""
                 try:
-                    indexer = dft_utils.Indexer(gz_file, checkpoint_size=256 * 1024)
-                    if indexer.need_rebuild():
-                        indexer.build()
-                    return {
-                        "file": gz_file,
-                        "max_bytes": indexer.get_max_bytes(),
-                        "num_lines": indexer.get_num_lines(),
-                        "success": True,
-                    }
+                    with dft_utils.Indexer(gz_file, checkpoint_size=256 * 1024) as indexer:
+                        if indexer.need_rebuild():
+                            indexer.build()
+                        return {
+                            "file": gz_file,
+                            "max_bytes": indexer.get_max_bytes(),
+                            "num_lines": indexer.get_num_lines(),
+                            "success": True,
+                        }
                 except Exception as e:
                     return {"file": gz_file, "error": str(e), "success": False}
 
@@ -69,9 +69,9 @@ class TestDaskIntegration:
                 assert result["max_bytes"] > 0
                 assert result["num_lines"] > 0
 
-                # Verify index file was created
-                idx_file = result["file"] + ".idx"
-                assert os.path.exists(idx_file)
+                # Verify index store was created
+                index_path = env.get_index_path(result["file"])
+                assert os.path.exists(index_path)
 
     def test_parallel_reader_operations(self):
         """Test parallel reading operations with all reader types including JSON"""
@@ -83,16 +83,19 @@ class TestDaskIntegration:
                 """Helper function to read a chunk - creates its own indexer for thread safety"""
                 try:
                     # Each task creates its own indexer instance to avoid sharing
-                    reader = dft_utils.TraceReader(gz_file_path)
-
-                    if reader_type == "bytes":
-                        data = b"".join(reader.read_raw(start_byte=start_bytes, end_byte=end_bytes))
-                    elif reader_type == "line_bytes":
-                        data = reader.read_lines(start_byte=start_bytes, end_byte=end_bytes)
-                    elif reader_type == "json_bytes":
-                        data = reader.read_lines_json(start_byte=start_bytes, end_byte=end_bytes)
-                    else:
-                        raise ValueError(f"Unknown reader type: {reader_type}")
+                    with dft_utils.TraceReader(gz_file_path) as reader:
+                        if reader_type == "bytes":
+                            data = b"".join(
+                                reader.read_raw(start_byte=start_bytes, end_byte=end_bytes)
+                            )
+                        elif reader_type == "line_bytes":
+                            data = reader.read_lines(start_byte=start_bytes, end_byte=end_bytes)
+                        elif reader_type == "json_bytes":
+                            data = reader.read_lines_json(
+                                start_byte=start_bytes, end_byte=end_bytes
+                            )
+                        else:
+                            raise ValueError(f"Unknown reader type: {reader_type}")
 
                     return {
                         "type": reader_type,
@@ -104,8 +107,8 @@ class TestDaskIntegration:
                     return {"type": reader_type, "error": str(e), "success": False}
 
             # Get file info from a temporary indexer
-            temp_indexer = dft_utils.Indexer(gz_file, checkpoint_size=512 * 1024)
-            max_bytes = temp_indexer.get_max_bytes()
+            with dft_utils.Indexer(gz_file, checkpoint_size=512 * 1024) as temp_indexer:
+                max_bytes = temp_indexer.get_max_bytes()
             chunk_size = max_bytes // 4
 
             # Create tasks for all reader types
@@ -159,10 +162,10 @@ class TestDaskIntegration:
             def extract_json_data(gz_file_path, start_bytes, end_bytes):
                 """Extract JSON data and convert to DataFrame-friendly format"""
                 try:
-                    reader = dft_utils.TraceReader(gz_file_path)
-                    json_objects = reader.read_lines_json(
-                        start_byte=start_bytes, end_byte=end_bytes
-                    )
+                    with dft_utils.TraceReader(gz_file_path) as reader:
+                        json_objects = reader.read_lines_json(
+                            start_byte=start_bytes, end_byte=end_bytes
+                        )
 
                     # Convert to list of dictionaries suitable for DataFrame
                     records = []
@@ -181,8 +184,8 @@ class TestDaskIntegration:
                     return []
 
             # Get file info and create chunks
-            temp_indexer = dft_utils.Indexer(gz_file, checkpoint_size=512 * 1024)
-            max_bytes = temp_indexer.get_max_bytes()
+            with dft_utils.Indexer(gz_file, checkpoint_size=512 * 1024) as temp_indexer:
+                max_bytes = temp_indexer.get_max_bytes()
             chunk_size = max_bytes // 4
 
             # Create delayed tasks to extract data from each chunk
@@ -226,8 +229,8 @@ class TestDaskIntegration:
             gz_file = env.create_test_gzip_file(bytes_per_line=512)
             env.build_index(gz_file, checkpoint_size_bytes=256 * 1024)
 
-            temp_indexer = dft_utils.Indexer(gz_file, checkpoint_size=256 * 1024)
-            max_bytes = temp_indexer.get_max_bytes()
+            with dft_utils.Indexer(gz_file, checkpoint_size=256 * 1024) as temp_indexer:
+                max_bytes = temp_indexer.get_max_bytes()
 
             # Test various batch sizes including boundary-critical ones
             batch_sizes = [
@@ -246,8 +249,8 @@ class TestDaskIntegration:
             def process_batch(batch_info):
                 """Process one batch and return processed records"""
                 filename, start, end = batch_info
-                reader = dft_utils.TraceReader(filename)
-                json_lines = reader.read_lines_json(start_byte=start, end_byte=end)
+                with dft_utils.TraceReader(filename) as reader:
+                    json_lines = reader.read_lines_json(start_byte=start, end_byte=end)
 
                 processed_records = []
                 for json_obj in json_lines:
@@ -265,8 +268,8 @@ class TestDaskIntegration:
                 return processed_records
 
             # Get reference data (full file read) and verify against environment
-            full_reader = dft_utils.TraceReader(gz_file)
-            reference_data = full_reader.read_lines_json(start_byte=0, end_byte=max_bytes)
+            with dft_utils.TraceReader(gz_file) as full_reader:
+                reference_data = full_reader.read_lines_json(start_byte=0, end_byte=max_bytes)
             reference_names = sorted(
                 [obj["name"] for obj in reference_data if obj and "name" in obj]
             )
@@ -363,14 +366,14 @@ class TestDaskIntegration:
             gz_file = env.create_test_gzip_file(bytes_per_line=512)
             env.build_index(gz_file, checkpoint_size_bytes=256 * 1024)
 
-            temp_indexer = dft_utils.Indexer(gz_file, checkpoint_size=256 * 1024)
-            max_bytes = temp_indexer.get_max_bytes()
+            with dft_utils.Indexer(gz_file, checkpoint_size=256 * 1024) as temp_indexer:
+                max_bytes = temp_indexer.get_max_bytes()
 
             def process_batch(batch_info):
                 """Process one batch and return processed records"""
                 filename, start, end = batch_info
-                reader = dft_utils.TraceReader(filename)
-                json_lines = reader.read_lines_json(start_byte=start, end_byte=end)
+                with dft_utils.TraceReader(filename) as reader:
+                    json_lines = reader.read_lines_json(start_byte=start, end_byte=end)
 
                 processed_records = []
                 for json_obj in json_lines:
@@ -385,8 +388,8 @@ class TestDaskIntegration:
                 return processed_records
 
             # Get reference data and verify against environment
-            full_reader = dft_utils.TraceReader(gz_file)
-            reference_data = full_reader.read_lines_json(start_byte=0, end_byte=max_bytes)
+            with dft_utils.TraceReader(gz_file) as full_reader:
+                reference_data = full_reader.read_lines_json(start_byte=0, end_byte=max_bytes)
             expected_count = len([obj for obj in reference_data if obj and "name" in obj])
 
             assert expected_count == env.lines, (

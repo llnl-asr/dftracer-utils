@@ -55,7 +55,7 @@ using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 
 // Files below this compressed size are scanned directly without building
-// sidecar index files (.idx).  At 8 MB compressed (~160 MB
+// `.dftindex` stores. At 8 MB compressed (~160 MB
 // uncompressed with typical 20x JSON compression), a file has only a
 // handful of 32 MB checkpoints — the indexing overhead exceeds the
 // benefit of bloom-filter skip.
@@ -456,7 +456,7 @@ static void print_text_detailed(
     std::printf("\n");
 }
 
-// Direct-scan a small .pfw.gz file without any sidecar index.
+// Direct-scan a small .pfw.gz file without any persisted index store.
 // Streams lines via async_streaming_gz_lines, parses each with yyjson,
 // and accumulates stats via ChunkStatistics::update_from_event().
 static coro::CoroTask<TraceStatistics> direct_scan_trace_statistics(
@@ -657,7 +657,7 @@ static coro::CoroTask<DetailedStatistics> direct_scan_detailed_statistics(
 // Per-chunk scanning coroutine for parallel detailed stats.
 // Scans a single chunk and merges results into shared file_detailed.
 static coro::CoroTask<void> scan_chunk_detailed(
-    std::string file_path, std::string idx_path, std::size_t checkpoint_size,
+    std::string file_path, std::string index_path, std::size_t checkpoint_size,
     std::size_t file_size, std::size_t num_ckpts, std::uint64_t ckpt_idx,
     const std::vector<std::string>* filter_names_ptr,
     const std::vector<std::string>* filter_cats_ptr,
@@ -676,7 +676,7 @@ static coro::CoroTask<void> scan_chunk_detailed(
 
     ChunkDetailScanInput scan_input;
     scan_input.file_path = file_path;
-    scan_input.idx_path = idx_path;
+    scan_input.index_path = index_path;
     scan_input.checkpoint_size = checkpoint_size;
     scan_input.start_byte = start_byte;
     scan_input.end_byte = end_byte;
@@ -709,12 +709,13 @@ static coro::CoroTask<void> process_file_detailed(
     DetailedStatistics* aggregate_detailed_ptr, std::mutex* aggregate_mutex_ptr,
     std::mutex* output_mutex_ptr,
     std::vector<std::pair<std::size_t, std::string>>* json_results_ptr) {
-    std::string idx_path = internal::determine_index_path(file_path, index_dir);
+    std::string index_path =
+        internal::determine_index_path(file_path, index_dir);
 
     auto meta_input = MetadataCollectorUtilityInput::from_file(file_path)
                           .with_checkpoint_size(checkpoint_size)
                           .with_force_rebuild(false)
-                          .with_index(idx_path);
+                          .with_index(index_path);
     auto metadata = co_await MetadataCollectorUtility{}.process(meta_input);
 
     if (!metadata.success) {
@@ -731,9 +732,9 @@ static coro::CoroTask<void> process_file_detailed(
     std::vector<std::uint64_t> candidate_checkpoints;
     std::uint64_t total_checkpoints = (num_ckpts == 0) ? 1 : num_ckpts;
 
-    if (query_ptr && fs::exists(idx_path)) {
+    if (query_ptr && fs::exists(index_path)) {
         try {
-            ChunkPrunerInput pruner_input{idx_path, file_path, *query_ptr,
+            ChunkPrunerInput pruner_input{index_path, file_path, *query_ptr,
                                           nullptr};
             ChunkPrunerUtility pruner;
             auto pruner_output = co_await pruner.process(pruner_input);
@@ -766,19 +767,19 @@ static coro::CoroTask<void> process_file_detailed(
         total_checkpoints - candidate_checkpoints.size();
     auto chunk_mutex = std::make_shared<std::mutex>();
 
-    co_await fctx.scope([file_path, idx_path, checkpoint_size, file_size,
+    co_await fctx.scope([file_path, index_path, checkpoint_size, file_size,
                          num_ckpts, filter_names_ptr, filter_cats_ptr,
                          group_by_ptr, file_detailed, chunk_mutex,
                          candidates = std::move(candidate_checkpoints)](
                             CoroScope& chunk_scope) -> coro::CoroTask<void> {
         for (auto ckpt_idx : candidates) {
             chunk_scope.spawn(
-                [file_path, idx_path, checkpoint_size, file_size, num_ckpts,
+                [file_path, index_path, checkpoint_size, file_size, num_ckpts,
                  ckpt_idx, filter_names_ptr, filter_cats_ptr, group_by_ptr,
                  file_detailed,
                  chunk_mutex](CoroScope& /*cctx*/) -> coro::CoroTask<void> {
                     co_return co_await scan_chunk_detailed(
-                        file_path, idx_path, checkpoint_size, file_size,
+                        file_path, index_path, checkpoint_size, file_size,
                         num_ckpts, ckpt_idx, filter_names_ptr, filter_cats_ptr,
                         group_by_ptr, file_detailed, chunk_mutex);
                 });
@@ -788,9 +789,9 @@ static coro::CoroTask<void> process_file_detailed(
 
     // Hash resolution (sequential, all chunks done)
     std::unordered_map<std::string, std::string> hash_resolutions;
-    if (needs_hash_resolution && fs::exists(idx_path)) {
+    if (needs_hash_resolution && fs::exists(index_path)) {
         try {
-            IndexDatabase idx_db(idx_path);
+            IndexDatabase idx_db(index_path);
             auto logical =
                 utilities::indexer::internal::get_logical_path(file_path);
             int file_info_id = idx_db.get_file_info_id(logical);
@@ -996,11 +997,11 @@ static coro::CoroTask<int> run_stats(argparse::ArgumentParser& program) {
     std::vector<std::string> files_needing_index;
     std::vector<std::string> small_files;
     for (const auto& file_path : files) {
-        std::string idx_path =
+        std::string index_path =
             internal::determine_index_path(file_path, index_dir);
-        if (fs::exists(idx_path)) {
+        if (fs::exists(index_path)) {
             try {
-                IndexDatabase db(idx_path);
+                IndexDatabase db(index_path);
                 auto logical =
                     utilities::indexer::internal::get_logical_path(file_path);
                 int fid = db.get_file_info_id(logical);
@@ -1370,8 +1371,8 @@ int main(int argc, char** argv) {
                                      DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(
         "Display statistics for DFTracer trace files from pre-built "
-        "index (.idx) databases. Auto-builds indices if missing. "
-        "Zero-cost reads: only SQLite metadata, no decompression.");
+        ".dftindex databases. Auto-builds indexes if missing. "
+        "Zero-cost reads from RocksDB metadata, no decompression.");
 
     program.add_argument("--files")
         .help("Trace files to inspect (.pfw, .pfw.gz)")
@@ -1383,7 +1384,7 @@ int main(int argc, char** argv) {
         .default_value<std::string>("");
 
     program.add_argument("--index-dir")
-        .help("Directory where .idx index files are stored")
+        .help("Directory where .dftindex stores are created")
         .default_value<std::string>("");
 
     program.add_argument("--json").help("Output in JSON format").flag();
@@ -1407,7 +1408,7 @@ int main(int argc, char** argv) {
         .default_value(static_cast<std::uint64_t>(10));
 
     program.add_argument("--no-auto-index")
-        .help("Disable automatic index building for files missing .idx")
+        .help("Disable automatic index building for files missing .dftindex")
         .flag();
 
     program.add_argument("--checkpoint-size")

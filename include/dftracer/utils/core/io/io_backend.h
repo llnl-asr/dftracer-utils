@@ -13,6 +13,8 @@
 
 namespace dftracer::utils::io {
 
+using IoCompletionFn = void (*)(void *context, ssize_t result) noexcept;
+
 /// Backend selection preference.
 enum class IoBackendType {
     AUTO,  // Runtime detection: io_uring > epoll/kqueue+threadpool > threadpool
@@ -45,6 +47,12 @@ class IoBackend {
     /// Submit an async positional read. Only seekable fds.
     virtual IoAwaitable submit_pread(int fd, void *buf, std::size_t len,
                                      off_t offset) = 0;
+
+    /// Submit an async positional read with a completion callback.
+    /// The callback receives either a byte count or a negative errno.
+    virtual void submit_pread_callback(int fd, void *buf, std::size_t len,
+                                       off_t offset, IoCompletionFn completion,
+                                       void *context) = 0;
 
     /// Submit an async positional write. Only seekable fds.
     virtual IoAwaitable submit_pwrite(int fd, const void *buf, std::size_t len,

@@ -42,13 +42,14 @@ struct Line {
  * Usage:
  * @code
  * auto input = LineReadInput::from_file("data.txt")
- *                  .with_index("data.txt.idx")
+ *                  .with_index("/data/.dftindex")
  *                  .with_range(10, 100);
  * @endcode
  */
 struct LineReadInput {
     std::string file_path;   // Path to the archive file
-    std::string idx_path;    // Path to the index file (empty for plain files)
+    std::string index_path;  // Path to the `.dftindex` store
+                             // (empty for plain files)
     std::size_t start_line;  // Starting line (1-based, inclusive), 0 = start
     std::size_t end_line;    // Ending line (1-based, inclusive), 0 = end
 
@@ -57,7 +58,7 @@ struct LineReadInput {
     LineReadInput(std::string file_path_, std::string idx_path_,
                   std::size_t start_line_, std::size_t end_line_)
         : file_path(std::move(file_path_)),
-          idx_path(std::move(idx_path_)),
+          index_path(std::move(idx_path_)),
           start_line(start_line_),
           end_line(end_line_) {}
 
@@ -68,7 +69,7 @@ struct LineReadInput {
     }
 
     LineReadInput& with_index(std::string idx) {
-        idx_path = std::move(idx);
+        index_path = std::move(idx);
         return *this;
     }
 
@@ -79,7 +80,7 @@ struct LineReadInput {
     }
 
     bool operator==(const LineReadInput& other) const {
-        return file_path == other.file_path && idx_path == other.idx_path &&
+        return file_path == other.file_path && index_path == other.index_path &&
                start_line == other.start_line && end_line == other.end_line;
     }
 
@@ -153,7 +154,7 @@ struct hash<dftracer::utils::utilities::fileio::lines::LineReadInput> {
         const {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
         hasher.update(req.file_path);
-        hasher.update(req.idx_path);
+        hasher.update(req.index_path);
         hasher.update(req.start_line);
         hasher.update(req.end_line);
         return hasher.get_hash().value;

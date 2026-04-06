@@ -78,7 +78,7 @@ ChunkManifestMapperUtility::process(
                 static_cast<double>(line_end - file.start_line + 1) *
                 bytes_per_line);
 
-            internal::DFTracerChunkSpec spec(file.file_path, file.idx_path,
+            internal::DFTracerChunkSpec spec(file.file_path, file.index_path,
                                              size_to_take, start_byte, end_byte,
                                              current_start, line_end);
 

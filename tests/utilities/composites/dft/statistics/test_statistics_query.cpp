@@ -13,7 +13,7 @@ static TraceStatistics make_test_stats() {
     ts.success = true;
     ts.num_chunks = 2;
     ts.file_path = "/test/file.pfw.gz";
-    ts.idx_path = "/test/file.pfw.gz.idx";
+    ts.index_path = "/test/file.pfw.gz.idx";
 
     // Simulate a variety of events
     ts.merged.update_from_event("read", "POSIX", 1, 1, 1000, 100);

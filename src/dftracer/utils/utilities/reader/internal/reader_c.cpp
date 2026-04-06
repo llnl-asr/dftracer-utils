@@ -19,16 +19,18 @@ static int validate_handle(dft_reader_handle_t reader) {
     return reader ? 0 : -1;
 }
 
-dft_reader_handle_t dft_reader_create(const char *gz_path, const char *idx_path,
+dft_reader_handle_t dft_reader_create(const char *gz_path,
+                                      const char *index_path,
                                       size_t index_ckpt_size) {
-    if (!gz_path || !idx_path) {
+    if (!gz_path || !index_path) {
         DFTRACER_UTILS_LOG_ERROR("%s",
-                                 "Both gz_path and idx_path cannot be null");
+                                 "Both gz_path and index_path cannot be null");
         return nullptr;
     }
 
     try {
-        auto reader = ReaderFactory::create(gz_path, idx_path, index_ckpt_size);
+        auto reader =
+            ReaderFactory::create(gz_path, index_path, index_ckpt_size);
         // For C API, we need to transfer ownership - create a new shared_ptr on
         // heap
         return static_cast<dft_reader_handle_t>(

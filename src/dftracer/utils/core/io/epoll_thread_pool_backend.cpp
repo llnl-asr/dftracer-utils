@@ -161,6 +161,23 @@ IoAwaitable EpollThreadPoolBackend::submit_pread(int fd, void* buf,
                               &executor_, &pool_);
 }
 
+void EpollThreadPoolBackend::submit_pread_callback(int fd, void* buf,
+                                                   std::size_t len,
+                                                   off_t offset,
+                                                   IoCompletionFn completion,
+                                                   void* context) {
+    auto* req = new IoRequest{};
+    req->op = IoOp::PREAD;
+    req->fd = fd;
+    req->buf = buf;
+    req->len = len;
+    req->offset = offset;
+    req->completion = completion;
+    req->completion_ctx = context;
+    req->pool = &pool_;
+    pool_.submit([req] { execute_request(req); });
+}
+
 IoAwaitable EpollThreadPoolBackend::submit_pwrite(int fd, const void* buf,
                                                   std::size_t len,
                                                   off_t offset) {
@@ -364,8 +381,12 @@ void EpollThreadPoolBackend::execute_request(IoRequest* req) {
     }
     if (result < 0) result = -errno;
 
-    req->awaitable->result_ = result;
-    req->executor->enqueue(req->awaitable->handle_);
+    if (req->awaitable != nullptr) {
+        req->awaitable->result_ = result;
+        req->executor->enqueue(req->awaitable->handle_);
+    } else if (req->completion != nullptr) {
+        req->completion(req->completion_ctx, result);
+    }
     delete req;
 }
 

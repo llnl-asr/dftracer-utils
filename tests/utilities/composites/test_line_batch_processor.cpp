@@ -66,11 +66,11 @@ TEST_SUITE("LineBatchProcessor") {
         SUBCASE("Process lines from compressed file") {
             TestEnvironment env(15);
             std::string gz_path = env.create_test_gzip_file();
-            std::string idx_path = gz_path + ".idx";
+            std::string index_path = gz_path + ".idx";
 
             // Create index
             auto indexer =
-                IndexerFactory::create(gz_path, idx_path, 1024, true);
+                IndexerFactory::create(gz_path, index_path, 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -85,7 +85,7 @@ TEST_SUITE("LineBatchProcessor") {
 
             LineReadInput input;
             input.file_path = gz_path;
-            input.idx_path = idx_path;
+            input.index_path = index_path;
 
             auto results = batch.process(input).get();
 
@@ -217,11 +217,11 @@ TEST_SUITE("LineBatchProcessor") {
         SUBCASE("Process line range from compressed file") {
             TestEnvironment env(20);
             std::string gz_path = env.create_test_gzip_file();
-            std::string idx_path = gz_path + ".idx";
+            std::string index_path = gz_path + ".idx";
 
             // Create index
             auto indexer =
-                IndexerFactory::create(gz_path, idx_path, 1024, true);
+                IndexerFactory::create(gz_path, index_path, 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
 
@@ -236,7 +236,7 @@ TEST_SUITE("LineBatchProcessor") {
 
             LineReadInput input;
             input.file_path = gz_path;
-            input.idx_path = idx_path;
+            input.index_path = index_path;
             input.start_line = 10;
             input.end_line = 15;
 

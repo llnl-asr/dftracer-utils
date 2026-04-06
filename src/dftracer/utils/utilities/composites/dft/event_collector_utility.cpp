@@ -95,10 +95,10 @@ EventCollectorFromMetadataUtility::process(
 #endif
         EventIdCollector collector(events, input.trim_commas);
 
-        if (!file.idx_path.empty()) {
+        if (!file.index_path.empty()) {
             // Indexed/compressed file
             auto reader = reader::internal::ReaderFactory::create(
-                file.file_path, file.idx_path);
+                file.file_path, file.index_path);
             if (!reader) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to create reader for file: %s",
                                          file.file_path.c_str());

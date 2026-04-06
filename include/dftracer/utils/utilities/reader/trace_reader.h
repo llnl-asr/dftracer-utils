@@ -20,7 +20,7 @@ using fileio::lines::Line;
 /// File-level configuration for TraceReader.
 struct TraceReaderConfig {
     std::string file_path;  ///< Path to trace file (.pfw.gz or plain).
-    std::string index_dir;  ///< Directory for .idx sidecar files.
+    std::string index_dir;  ///< Directory containing `.dftindex` roots.
     std::size_t checkpoint_size = 32 * 1024 * 1024;  ///< Checkpoint interval.
     bool auto_build_index = false;  ///< Auto-build index if missing.
     std::size_t index_threshold =
@@ -62,7 +62,7 @@ class TraceReader {
     coro::AsyncGenerator<std::span<const char>> read_raw(
         ReadConfig config = {});
 
-    /// True if an .idx sidecar was found at construction time.
+    /// True if a `.dftindex` database was found at construction time.
     bool has_index() const;
     /// Decompressed size (0 if no index for compressed files).
     std::size_t get_max_bytes();
@@ -72,7 +72,7 @@ class TraceReader {
    private:
     TraceReaderConfig config_;
     bool has_index_ = false;
-    std::string idx_path_;
+    std::string index_path_;
     ArchiveFormat format_ = ArchiveFormat::UNKNOWN;
     std::size_t cached_max_bytes_ = 0;
     std::size_t cached_num_lines_ = 0;

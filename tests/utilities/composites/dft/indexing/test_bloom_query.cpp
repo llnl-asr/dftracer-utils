@@ -2,7 +2,6 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
@@ -17,9 +16,9 @@ using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
 // Helper to set up a .idx database with test data
-static void populate_test_idx(const std::string& idx_path,
+static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {
-    IndexDatabase idx_db(idx_path);
+    IndexDatabase idx_db(index_path);
     idx_db.init_base_schema();
     idx_db.init_bloom_schema();
 
@@ -44,10 +43,9 @@ static void populate_test_idx(const std::string& idx_path,
         }
 
         auto blob = name_bloom.serialize();
-        queries::insert_chunk_bloom_filter(
-            idx_db.sql_db(), fid, static_cast<std::uint64_t>(ckpt), "name",
-            blob.data(), static_cast<int>(blob.size()),
-            name_bloom.num_entries());
+        idx_db.insert_chunk_bloom_filter(
+            fid, static_cast<std::uint64_t>(ckpt), "name", blob.data(),
+            static_cast<int>(blob.size()), name_bloom.num_entries());
 
         // cat dimension
         BloomFilter cat_bloom(100, 0.01);
@@ -58,10 +56,9 @@ static void populate_test_idx(const std::string& idx_path,
         }
 
         auto cat_blob = cat_bloom.serialize();
-        queries::insert_chunk_bloom_filter(
-            idx_db.sql_db(), fid, static_cast<std::uint64_t>(ckpt), "cat",
-            cat_blob.data(), static_cast<int>(cat_blob.size()),
-            cat_bloom.num_entries());
+        idx_db.insert_chunk_bloom_filter(
+            fid, static_cast<std::uint64_t>(ckpt), "cat", cat_blob.data(),
+            static_cast<int>(cat_blob.size()), cat_bloom.num_entries());
     }
 
     // Create file-level bloom filters (merged from all chunks)
@@ -72,42 +69,40 @@ static void populate_test_idx(const std::string& idx_path,
     file_name_bloom.add("close");
     file_name_bloom.add("stat");
     auto name_blob = file_name_bloom.serialize();
-    queries::insert_file_bloom_filter(
-        idx_db.sql_db(), fid, "name", name_blob.data(),
-        static_cast<int>(name_blob.size()), file_name_bloom.num_entries());
+    idx_db.insert_file_bloom_filter(fid, "name", name_blob.data(),
+                                    static_cast<int>(name_blob.size()),
+                                    file_name_bloom.num_entries());
 
     BloomFilter file_cat_bloom(100, 0.01);
     file_cat_bloom.add("POSIX");
     file_cat_bloom.add("storage");
     auto cat_blob = file_cat_bloom.serialize();
-    queries::insert_file_bloom_filter(
-        idx_db.sql_db(), fid, "cat", cat_blob.data(),
-        static_cast<int>(cat_blob.size()), file_cat_bloom.num_entries());
+    idx_db.insert_file_bloom_filter(fid, "cat", cat_blob.data(),
+                                    static_cast<int>(cat_blob.size()),
+                                    file_cat_bloom.num_entries());
 
     // Add fhash with resolution
     BloomFilter fhash_bloom(100, 0.01);
     fhash_bloom.add("abc123");
     auto fhash_blob = fhash_bloom.serialize();
-    queries::insert_file_bloom_filter(
-        idx_db.sql_db(), fid, "fhash", fhash_blob.data(),
-        static_cast<int>(fhash_blob.size()), fhash_bloom.num_entries());
+    idx_db.insert_file_bloom_filter(fid, "fhash", fhash_blob.data(),
+                                    static_cast<int>(fhash_blob.size()),
+                                    fhash_bloom.num_entries());
 
     for (int ckpt = 0; ckpt < 3; ++ckpt) {
         auto blob = fhash_bloom.serialize();
-        queries::insert_chunk_bloom_filter(
-            idx_db.sql_db(), fid, static_cast<std::uint64_t>(ckpt), "fhash",
-            blob.data(), static_cast<int>(blob.size()),
-            fhash_bloom.num_entries());
+        idx_db.insert_chunk_bloom_filter(
+            fid, static_cast<std::uint64_t>(ckpt), "fhash", blob.data(),
+            static_cast<int>(blob.size()), fhash_bloom.num_entries());
     }
 
     // Hash resolutions
-    queries::insert_hash_resolution(idx_db.sql_db(), fid, "fhash", "abc123",
-                                    "./data/file.h5");
+    idx_db.insert_hash_resolution(fid, "fhash", "abc123", "./data/file.h5");
 
     // Record dimensions
-    queries::insert_index_dimension(idx_db.sql_db(), fid, "name");
-    queries::insert_index_dimension(idx_db.sql_db(), fid, "cat");
-    queries::insert_index_dimension(idx_db.sql_db(), fid, "fhash");
+    idx_db.insert_index_dimension(fid, "name");
+    idx_db.insert_index_dimension(fid, "cat");
+    idx_db.insert_index_dimension(fid, "fhash");
 
     idx_db.commit_transaction();
 }
@@ -118,13 +113,14 @@ TEST_SUITE("BloomQueryUtility") {
             dft_utils_test::make_unique_test_path("test_bloom_query").string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         BloomQueryInput input;
-        input.with_idx_path(idx_path).with_file_path(file_path).with_predicate(
-            "name", {"nonexistent_operation"});
+        input.with_index_path(index_path)
+            .with_file_path(file_path)
+            .with_predicate("name", {"nonexistent_operation"});
 
         BloomQueryUtility query;
         auto output = query.process(input).get();
@@ -142,13 +138,14 @@ TEST_SUITE("BloomQueryUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         BloomQueryInput input;
-        input.with_idx_path(idx_path).with_file_path(file_path).with_predicate(
-            "name", {"read"});
+        input.with_index_path(index_path)
+            .with_file_path(file_path)
+            .with_predicate("name", {"read"});
 
         BloomQueryUtility query;
         auto output = query.process(input).get();
@@ -168,12 +165,12 @@ TEST_SUITE("BloomQueryUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         BloomQueryInput input;
-        input.with_idx_path(idx_path)
+        input.with_index_path(index_path)
             .with_file_path(file_path)
             .with_predicate("name", {"open"})
             .with_predicate("cat", {"storage"});
@@ -196,12 +193,12 @@ TEST_SUITE("BloomQueryUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         BloomQueryInput input;
-        input.with_idx_path(idx_path).with_file_path(file_path);
+        input.with_index_path(index_path).with_file_path(file_path);
 
         BloomQueryUtility query;
         auto output = query.process(input).get();
@@ -218,14 +215,15 @@ TEST_SUITE("BloomQueryUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         // Query by resolved value (not hash)
         BloomQueryInput input;
-        input.with_idx_path(idx_path).with_file_path(file_path).with_predicate(
-            "fhash", {"./data/file.h5"});
+        input.with_index_path(index_path)
+            .with_file_path(file_path)
+            .with_predicate("fhash", {"./data/file.h5"});
 
         BloomQueryUtility query;
         auto output = query.process(input).get();
@@ -244,13 +242,14 @@ TEST_SUITE("BloomQueryUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         BloomQueryInput input;
-        input.with_idx_path(idx_path).with_file_path(file_path).with_predicate(
-            "name", {"read", "open"});
+        input.with_index_path(index_path)
+            .with_file_path(file_path)
+            .with_predicate("name", {"read", "open"});
 
         BloomQueryUtility query;
         auto output = query.process(input).get();

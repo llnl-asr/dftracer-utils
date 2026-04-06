@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -14,6 +15,7 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer;
 using namespace dftracer::utils::utilities::behaviors;
+using namespace dftracer::utils::utilities::composites::dft::internal;
 using namespace dft_utils_test;
 
 namespace tags = dftracer::utils::utilities::tags;
@@ -46,7 +48,7 @@ TEST_SUITE("IndexBuilder") {
 
         SUBCASE("Build index for gzip file") {
             std::string gz_file = env.create_dft_test_gzip_file(50);
-            std::string idx_path = gz_file + ".idx";
+            std::string db_root = determine_index_path(gz_file, "");
 
             auto input = IndexBuildConfig::for_file(gz_file)
                              .with_index_dir("")
@@ -56,16 +58,15 @@ TEST_SUITE("IndexBuilder") {
             auto output = run_builder(input);
 
             CHECK(output.file_path == gz_file);
-            CHECK(output.idx_path == idx_path);
+            CHECK(output.index_path == db_root);
             CHECK(output.success == true);
             CHECK(output.was_skipped == false);
 
-            CHECK(fs::exists(idx_path));
+            CHECK(fs::exists(db_root));
         }
 
         SUBCASE("Use existing index without force rebuild") {
             std::string gz_file = env.create_dft_test_gzip_file(20);
-            std::string idx_path = gz_file + ".idx";
 
             auto input1 = IndexBuildConfig::for_file(gz_file)
                               .with_index_dir("")
@@ -85,7 +86,6 @@ TEST_SUITE("IndexBuilder") {
         TestEnvironment env(100);
 
         std::string gz_file = env.create_dft_test_gzip_file(30);
-        std::string idx_path = gz_file + ".idx";
 
         auto input = IndexBuildConfig::for_file(gz_file)
                          .with_index_dir("")

@@ -25,21 +25,21 @@ class TestTraceReaderCreation:
         with pytest.raises(RuntimeError):
             reader.read_lines()
 
-    def test_has_index_false_without_sidecar(self):
-        """has_index is False when no .idx sidecar exists."""
+    def test_has_index_false_without_index_store(self):
+        """has_index is False when no `.dftindex` store exists."""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             assert reader.has_index is False
 
     def test_has_index_true_after_indexer_build(self):
-        """has_index is True when a sidecar was built before construction."""
+        """has_index is True when an index store was built before construction."""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
-            with dft_utils.Indexer(gz_file, idx_file) as indexer:
+            index_path = env.get_index_path(gz_file)
+            with dft_utils.Indexer(gz_file, index_path) as indexer:
                 indexer.build()
-            # TraceReader probes for the sidecar at __init__ time
+            # TraceReader probes for the index store at __init__ time
             reader = dft_utils.TraceReader(gz_file)
             assert reader.has_index is True
 
@@ -150,11 +150,11 @@ class TestTraceReaderReadLines:
                 reader.read_lines(end_line=-1)
 
     def test_read_lines_with_index(self):
-        """read_lines() works correctly when a sidecar index is present."""
+        """read_lines() works correctly when an index store is present."""
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
-            with dft_utils.Indexer(gz_file, idx_file) as indexer:
+            index_path = env.get_index_path(gz_file)
+            with dft_utils.Indexer(gz_file, index_path) as indexer:
                 indexer.build()
             reader = dft_utils.TraceReader(gz_file)
             assert reader.has_index
@@ -169,8 +169,8 @@ class TestTraceReaderReadLines:
             sequential = dft_utils.TraceReader(gz_file).read_lines()
 
             # Build index, then read again
-            idx_file = gz_file + ".idx"
-            with dft_utils.Indexer(gz_file, idx_file) as indexer:
+            index_path = env.get_index_path(gz_file)
+            with dft_utils.Indexer(gz_file, index_path) as indexer:
                 indexer.build()
             indexed = dft_utils.TraceReader(gz_file).read_lines()
 

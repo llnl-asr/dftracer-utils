@@ -12,7 +12,7 @@ namespace dftracer::utils::utilities::indexer::internal {
 std::size_t determine_checkpoint_size(
     std::size_t user_checkpoint_size, const std::string& path,
     // Tunables:
-    std::size_t max_chk = (512u << 20), std::size_t max_parts = 100000000,
+    std::size_t max_parts = 100000000, std::size_t max_chk = (512u << 20),
     // default:
     std::size_t window = constants::indexer::ZLIB_WINDOW_SIZE);
 

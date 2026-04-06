@@ -43,20 +43,19 @@ Before building dftracer utilities, ensure you have:
 - CMake 3.5 or higher
 - C++20 compatible compiler (GCC 11+, Clang 14+)
 - zlib development library
-- SQLite3 development library
 - pkg-config
 
 On Ubuntu/Debian:
 
 .. code-block:: bash
 
-   sudo apt-get install cmake build-essential zlib1g-dev libsqlite3-dev pkg-config
+   sudo apt-get install cmake build-essential zlib1g-dev pkg-config
 
 On macOS:
 
 .. code-block:: bash
 
-   brew install cmake zlib sqlite pkg-config
+   brew install cmake zlib pkg-config
 
 Building from Source
 ~~~~~~~~~~~~~~~~~~~~

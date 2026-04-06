@@ -895,7 +895,8 @@ static PyObject *TraceReader_iter_lines(TraceReaderObject *self, PyObject *args,
 
     Runtime *rt = get_runtime(self);
     try {
-        rt->submit(produce_lines(state, cfg, rc), "iter_lines");
+        auto handle = rt->submit(produce_lines(state, cfg, rc), "iter_lines");
+        state->task_future = handle.future;
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return NULL;
@@ -954,7 +955,8 @@ static PyObject *TraceReader_iter_raw(TraceReaderObject *self, PyObject *args,
 
     Runtime *rt = get_runtime(self);
     try {
-        rt->submit(produce_raw(state, cfg, rc), "iter_raw");
+        auto handle = rt->submit(produce_raw(state, cfg, rc), "iter_raw");
+        state->task_future = handle.future;
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return NULL;
@@ -1026,7 +1028,9 @@ static PyObject *TraceReader_iter_lines_json(TraceReaderObject *self,
 
     Runtime *rt = get_runtime(self);
     try {
-        rt->submit(produce_lines(state, cfg, rc), "iter_lines_json");
+        auto handle =
+            rt->submit(produce_lines(state, cfg, rc), "iter_lines_json");
+        state->task_future = handle.future;
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return NULL;
@@ -1100,10 +1104,12 @@ static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
 
     Runtime *rt = get_runtime(self);
     try {
-        rt->submit(produce_arrow_batches(state, cfg, rc,
-                                         static_cast<std::size_t>(batch_size),
-                                         flatten_objects != 0, normalize != 0),
-                   "iter_arrow");
+        auto handle =
+            rt->submit(produce_arrow_batches(
+                           state, cfg, rc, static_cast<std::size_t>(batch_size),
+                           flatten_objects != 0, normalize != 0),
+                       "iter_arrow");
+        state->task_future = handle.future;
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return NULL;
@@ -1294,7 +1300,10 @@ static PyMethodDef TraceReader_methods[] = {
     {"__enter__", (PyCFunction)TraceReader_enter, METH_NOARGS,
      "Enter the runtime context for the with statement."},
     {"__exit__", (PyCFunction)TraceReader_exit, METH_VARARGS,
-     "Exit the runtime context for the with statement."},
+     "Exit the runtime context for the with statement.\n"
+     "\n"
+     "TraceReader does not own the shared RocksDB instance for an index path;\n"
+     "any shared DB lifetime remains manager-owned on the native side."},
     {NULL}};
 
 static PyGetSetDef TraceReader_getsetters[] = {
@@ -1336,13 +1345,13 @@ PyTypeObject TraceReaderType = {
     "--\n"
     "\n"
     "Smart trace file reader that auto-selects sequential or indexed\n"
-    "reading based on whether an ``.idx`` sidecar exists.\n"
+    "reading based on whether a ``.dftindex`` store exists.\n"
     "\n"
     "Args:\n"
     "    file_path (str): Path to the trace file (.pfw.gz or plain "
     "text).\n"
-    "    index_dir (str): Directory to search for ``.idx`` sidecar "
-    "files.\n"
+    "    index_dir (str): Directory to search for ``.dftindex`` "
+    "stores.\n"
     "        Empty string (default) searches next to the trace file.\n"
     "    checkpoint_size (int): Checkpoint interval in bytes for index\n"
     "        building (default 32 MB).\n"

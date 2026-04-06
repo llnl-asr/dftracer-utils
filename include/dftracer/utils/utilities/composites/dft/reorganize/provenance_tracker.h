@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_REORGANIZE_PROVENANCE_TRACKER_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_REORGANIZE_PROVENANCE_TRACKER_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
 
@@ -27,10 +28,11 @@ class ProvenanceTracker {
     void record(int source_file_idx, int checkpoint_idx, int output_chunk_idx,
                 int output_line_start, int output_line_end, int event_count);
 
-    void flush_to_db(const ExtractionPlan& plan, const std::string& group_name,
-                     const std::string& group_query,
-                     const std::vector<fileio::ChunkInfo>& chunks,
-                     const std::string& output_dir);
+    coro::CoroTask<void> flush_to_db(
+        const ExtractionPlan& plan, const std::string& group_name,
+        const std::string& group_query,
+        const std::vector<fileio::ChunkInfo>& chunks,
+        const std::string& output_dir);
 
     std::size_t record_count() const { return records_.size(); }
     const std::vector<ProvenanceRecord>& records() const { return records_; }

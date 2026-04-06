@@ -164,10 +164,10 @@ static void execute_extraction(const ExtractionPlan& plan,
             }
         }
 
-        std::string idx_path =
+        std::string index_path =
             internal::determine_index_path(src.file_path, index_dir);
         auto reader_input =
-            IndexedReadInput::from_file(src.file_path).with_index(idx_path);
+            IndexedReadInput::from_file(src.file_path).with_index(index_path);
         IndexedFileReaderUtility reader_utility;
         auto reader = reader_utility.process(reader_input).get();
 
@@ -405,11 +405,11 @@ TEST_SUITE("ReorganizeIntegration") {
             REQUIRE(fid >= 0);
 
             pdb.begin_transaction();
-            pdb.insert_info("version", "1.0");
-            pdb.insert_info("tool", "dftracer_organize");
-            pdb.insert_group("io", R"(cat == "POSIX")");
+            pdb.insert_info(fid, "version", "1.0");
+            pdb.insert_info(fid, "tool", "dftracer_organize");
+            pdb.insert_group(fid, "io", R"(cat == "POSIX")");
             pdb.insert_source(fid, 0, trace_file, 1, "");
-            pdb.insert_segment(0, 0, 0, 5, 3);
+            pdb.insert_segment(fid, 0, 0, 0, 5, 3);
             pdb.commit_transaction();
         }
 
@@ -420,16 +420,16 @@ TEST_SUITE("ReorganizeIntegration") {
             int fid = pdb.get_file_info_id(io_gz);
             REQUIRE(fid >= 0);
 
-            CHECK(pdb.query_info("version") == "1.0");
-            CHECK(pdb.query_info("tool") == "dftracer_organize");
-            CHECK(pdb.query_group_name() == "io");
-            CHECK(pdb.query_group_predicate() == R"(cat == "POSIX")");
+            CHECK(pdb.query_info(fid, "version") == "1.0");
+            CHECK(pdb.query_info(fid, "tool") == "dftracer_organize");
+            CHECK(pdb.query_group_name(fid) == "io");
+            CHECK(pdb.query_group_predicate(fid) == R"(cat == "POSIX")");
 
             auto sources = pdb.query_sources(fid);
             REQUIRE(sources.size() == 1);
             CHECK(sources[0].path == trace_file);
 
-            auto segments = pdb.query_segments(0);
+            auto segments = pdb.query_segments(fid, 0);
             REQUIRE(segments.size() == 1);
             CHECK(segments[0].output_line_start == 0);
             CHECK(segments[0].output_line_end == 5);

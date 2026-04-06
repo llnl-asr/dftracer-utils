@@ -2,6 +2,7 @@
 
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <zlib.h>
 
 #include <cstdint>
@@ -246,7 +247,6 @@ std::string TestEnvironment::create_test_gzip_file_impl() {
 
     // Create test file in the unique directory
     std::string gz_file = test_dir + "/test_data.gz";
-    std::string idx_file = test_dir + "/test_data.gz.idx";
     std::string txt_file = test_dir + "/test_data.txt";
 
     // Write test data to text file
@@ -333,7 +333,8 @@ std::string TestEnvironment::create_test_tar_gzip_file_impl() {
 }
 
 std::string TestEnvironment::get_index_path(const std::string& gz_file) {
-    return gz_file + ".idx";
+    return dftracer::utils::utilities::composites::dft::internal::
+        determine_index_path(gz_file, "");
 }
 
 std::string TestEnvironment::create_dft_test_file(int num_events) {
@@ -465,10 +466,10 @@ char* test_environment_get_index_path(test_environment_handle_t env,
                                       const char* gz_file) {
     if (!env || !gz_file) return nullptr;
     auto* cpp_env = reinterpret_cast<dft_utils_test::TestEnvironment*>(env);
-    std::string idx_path = cpp_env->get_index_path(gz_file);
-    char* result = static_cast<char*>(malloc(idx_path.length() + 1));
+    std::string index_path = cpp_env->get_index_path(gz_file);
+    char* result = static_cast<char*>(malloc(index_path.length() + 1));
     if (result) {
-        strcpy(result, idx_path.c_str());
+        strcpy(result, index_path.c_str());
     }
     return result;
 }

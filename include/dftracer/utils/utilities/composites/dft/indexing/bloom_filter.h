@@ -15,7 +15,7 @@ namespace dftracer::utils::utilities::composites::dft::indexing {
  *
  * Uses Kirsch-Mitzenmacher optimization: k hash functions derived from
  * 2 base hash values (std::hash with different seeds). Supports
- * serialization to/from BLOB for SQLite storage.
+ * serialization to/from binary blobs for RocksDB storage.
  *
  * Serialization format (self-describing):
  *   [4 bytes: num_hashes (uint32_t LE)]

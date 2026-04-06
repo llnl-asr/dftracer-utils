@@ -75,11 +75,11 @@ static coro::CoroTask<void> index_single_file(const std::string& file_path,
 }
 
 static coro::CoroTask<void> read_single_chunk(
-    const std::string& file_path, const std::string& idx_path,
+    const std::string& file_path, const std::string& index_path,
     const ViewChunkCandidate& candidate, const ViewContext& vctx, CoroScope&) {
     ViewReaderInput reader_input;
     reader_input.with_file_path(file_path)
-        .with_idx_path(idx_path)
+        .with_index_path(index_path)
         .with_checkpoint_size(vctx.checkpoint_size)
         .with_byte_range(candidate.start_byte, candidate.end_byte)
         .with_checkpoint_idx(candidate.checkpoint_idx)
@@ -117,14 +117,14 @@ static coro::CoroTask<void> read_single_chunk(
 static coro::CoroTask<void> process_single_file(const std::string& file_path,
                                                 const ViewContext& vctx,
                                                 CoroScope& fctx) {
-    std::string idx_path =
+    std::string index_path =
         internal::determine_index_path(file_path, vctx.index_dir);
 
     // Collect metadata
     auto meta_input = MetadataCollectorUtilityInput::from_file(file_path)
                           .with_checkpoint_size(vctx.checkpoint_size)
                           .with_force_rebuild(false)
-                          .with_index(idx_path);
+                          .with_index(index_path);
     auto metadata = co_await MetadataCollectorUtility{}.process(meta_input);
 
     if (!metadata.success) {
@@ -138,7 +138,7 @@ static coro::CoroTask<void> process_single_file(const std::string& file_path,
     ViewBuilderInput builder_input;
     builder_input.with_view(vctx.view)
         .with_file_path(file_path)
-        .with_idx_path(fs::exists(idx_path) ? idx_path : "")
+        .with_index_path(fs::exists(index_path) ? index_path : "")
         .with_uncompressed_size(metadata.uncompressed_size)
         .with_num_checkpoints(metadata.num_checkpoints);
 
@@ -159,13 +159,13 @@ static coro::CoroTask<void> process_single_file(const std::string& file_path,
 
     // Process each candidate chunk
     auto& candidates = build_output.candidates;
-    co_await fctx.scope([&file_path, &idx_path, &vctx, &candidates](
+    co_await fctx.scope([&file_path, &index_path, &vctx, &candidates](
                             CoroScope& chunk_scope) -> coro::CoroTask<void> {
         for (const auto& candidate : candidates) {
-            chunk_scope.spawn([&file_path, &idx_path, &candidate,
+            chunk_scope.spawn([&file_path, &index_path, &candidate,
                                &vctx](CoroScope& cctx) -> coro::CoroTask<void> {
-                co_await read_single_chunk(file_path, idx_path, candidate, vctx,
-                                           cctx);
+                co_await read_single_chunk(file_path, index_path, candidate,
+                                           vctx, cctx);
             });
         }
         co_return;
@@ -331,9 +331,9 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
 
     std::vector<std::string> files_needing_index;
     for (const auto& file_path : files) {
-        std::string idx_path =
+        std::string index_path =
             internal::determine_index_path(file_path, index_dir);
-        if (!fs::exists(idx_path)) {
+        if (!fs::exists(index_path)) {
             files_needing_index.push_back(file_path);
         }
     }
@@ -341,7 +341,8 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
     if (!files_needing_index.empty()) {
         if (no_auto_index) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Missing .idx index for %zu file(s) and --no-auto-index is "
+                "Missing .dftindex store for %zu file(s) and --no-auto-index "
+                "is "
                 "set. Run dftracer_index first.",
                 files_needing_index.size());
             for (const auto& f : files_needing_index) {
@@ -539,11 +540,11 @@ int main(int argc, char** argv) {
 
     // Indexing options
     program.add_argument("--index-dir")
-        .help("Directory where .idx index files are stored")
+        .help("Directory where .dftindex stores are created")
         .default_value<std::string>("");
 
     program.add_argument("--no-auto-index")
-        .help("Disable automatic index building for files missing .idx")
+        .help("Disable automatic index building for files missing .dftindex")
         .flag();
 
     program.add_argument("--checkpoint-size")

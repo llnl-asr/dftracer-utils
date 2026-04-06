@@ -11,7 +11,7 @@
 namespace dftracer::utils::utilities::reader::internal {
 
 std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
-                                              const std::string &idx_path,
+                                              const std::string &index_path,
                                               std::size_t index_ckpt_size) {
     ArchiveFormat format = FormatDetector::detect(archive_path);
 
@@ -21,11 +21,11 @@ std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
 
     switch (format) {
         case ArchiveFormat::GZIP:
-            return std::make_shared<GzipReader>(archive_path, idx_path,
+            return std::make_shared<GzipReader>(archive_path, index_path,
                                                 index_ckpt_size);
 
         case ArchiveFormat::TAR_GZ:
-            return std::make_shared<TarReader>(archive_path, idx_path,
+            return std::make_shared<TarReader>(archive_path, index_path,
                                                index_ckpt_size);
 
         default:

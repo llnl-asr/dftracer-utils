@@ -77,6 +77,8 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/comparator/test_is_data_transfer_op.cpp
 
     # Indexer
+    indexer/test_rocksdb_storage.cpp
+    indexer/test_scan_prefix.cpp
     indexer/test_index_database.cpp
     indexer/test_provenance_database.cpp
     indexer/test_index_builder.cpp

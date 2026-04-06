@@ -4,7 +4,6 @@
 #include <dftracer/utils/core/io/io_backend_factory.h>
 #include <dftracer/utils/core/io/io_thread_pool.h>
 #include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/sqlite/vfs.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 
@@ -33,9 +32,7 @@ Executor* Executor::set_current(Executor* e) noexcept {
     return old;
 }
 
-io::IoThreadPool* Executor::sqlite_pool() noexcept {
-    return sqlite_pool_.get();
-}
+io::IoThreadPool* Executor::db_pool() noexcept { return db_pool_.get(); }
 
 // Thread-local list of coroutine handles to destroy after the current
 // resume() returns.  FinalAwaiter pushes here instead of the shared
@@ -70,7 +67,7 @@ Executor::Executor(const ExecutorConfig& config)
       io_pool_size_(config.io_pool_size),
       io_backend_type_(config.io_backend_type),
       io_batch_threshold_(config.io_batch_threshold),
-      sqlite_pool_size_(config.sqlite_pool_size) {
+      db_pool_size_(config.db_pool_size) {
     if (num_threads_ == 0) {
         num_threads_ = 2;  // Fallback if hardware_concurrency returns 0
     }
@@ -102,10 +99,9 @@ void Executor::start() {
     io_backend_ = io::create_io_backend(*this, io_pool_size_, io_backend_type_,
                                         io_batch_threshold_);
     io_backend_->start();
-    sqlite::register_dftracer_sqlite_vfs(io_backend_.get(), this);
 
-    sqlite_pool_ = std::make_unique<io::IoThreadPool>(sqlite_pool_size_);
-    sqlite_pool_->start();
+    db_pool_ = std::make_unique<io::IoThreadPool>(db_pool_size_);
+    db_pool_->start();
 
     // Create all worker contexts first so workers_ is stable before any
     // worker thread can try to iterate/steal from it.
@@ -147,12 +143,10 @@ void Executor::shutdown() {
     // completion thread may still call enqueue() -> wake_all_workers()
     // which accesses WorkerContext cv/mutex, so workers_ must remain
     // alive until the completion thread has exited.
-    if (sqlite_pool_) {
-        sqlite_pool_->stop();
-        sqlite_pool_.reset();
+    if (db_pool_) {
+        db_pool_->stop();
+        db_pool_.reset();
     }
-
-    sqlite::unregister_dftracer_sqlite_vfs();
 
     if (io_backend_) {
         io_backend_->stop();
@@ -242,6 +236,7 @@ void Executor::worker_thread(WorkerContext* context) {
             // thread.  Safe: resume() has fully returned, so the frame
             // is suspended at final_suspend and no code references it.
             drain_thread_local_destroys();
+            drain_destroy_queue();
         }
         // No work available -- sleep until signaled.
         else {
@@ -258,9 +253,11 @@ void Executor::worker_thread(WorkerContext* context) {
             if (io_backend_) {
                 auto reaped = io_backend_->poll(0);
                 if (reaped > 0) {
+                    drain_destroy_queue();
                     continue;
                 }
             }
+            drain_destroy_queue();
             std::unique_lock<std::mutex> lock(context->queue_mutex);
             context->cv.wait(lock, [this, observed_signal] {
                 return !running_.load(std::memory_order_acquire) ||

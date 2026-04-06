@@ -2,10 +2,12 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
 namespace dftracer::utils::utilities::composites::dft {
@@ -28,11 +30,15 @@ MetadataCollectorUtility::process(const MetadataCollectorUtilityInput& input) {
         if (is_compressed) {
             // Compressed file - generate index path if not provided
             MetadataCollectorUtilityInput modified_input = input;
-            if (modified_input.idx_path.empty()) {
-                // Auto-generate index path
-                modified_input.idx_path = file_path + ".idx";
+            if (modified_input.index_path.empty()) {
+                modified_input.index_path =
+                    internal::determine_index_path(file_path, "");
+            } else {
+                modified_input.index_path =
+                    dftracer::utils::utilities::indexer::internal::
+                        normalize_index_root(modified_input.index_path);
             }
-            meta.idx_path = modified_input.idx_path;
+            meta.index_path = modified_input.index_path;
             co_return co_await process_compressed(modified_input);
         } else {
             // Plain text file
@@ -50,7 +56,7 @@ MetadataCollectorUtility::process_compressed(
     const MetadataCollectorUtilityInput& input) {
     MetadataCollectorUtilityOutput meta;
     meta.file_path = input.file_path;
-    meta.idx_path = input.idx_path;
+    meta.index_path = input.index_path;
 
     try {
         // Detect format
@@ -59,7 +65,7 @@ MetadataCollectorUtility::process_compressed(
         meta.compressed_size = fs::file_size(input.file_path);
 
         // Check if index exists
-        meta.has_index = fs::exists(input.idx_path);
+        meta.has_index = fs::exists(input.index_path);
 
         // Create or load indexer
         std::shared_ptr<dftracer::utils::utilities::indexer::internal::Indexer>
@@ -67,27 +73,27 @@ MetadataCollectorUtility::process_compressed(
         if (!meta.has_index || input.force_rebuild) {
             if (input.force_rebuild && meta.has_index) {
                 DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
-                                         input.idx_path.c_str());
-                fs::remove(input.idx_path);
+                                         input.index_path.c_str());
+                fs::remove_all(input.index_path);
             }
             DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",
                                      input.file_path.c_str());
             indexer = dftracer::utils::utilities::indexer::internal::
-                IndexerFactory::create(input.file_path, input.idx_path,
+                IndexerFactory::create(input.file_path, input.index_path,
                                        input.checkpoint_size, true);
             co_await indexer->build_async();
             meta.has_index = true;
         } else {
             indexer = dftracer::utils::utilities::indexer::internal::
-                IndexerFactory::create(input.file_path, input.idx_path,
+                IndexerFactory::create(input.file_path, input.index_path,
                                        input.checkpoint_size, false);
             if (indexer->need_rebuild()) {
                 DFTRACER_UTILS_LOG_DEBUG("Index needs rebuild: %s",
-                                         input.idx_path.c_str());
+                                         input.index_path.c_str());
                 meta.index_valid = false;
-                fs::remove(input.idx_path);
+                fs::remove_all(input.index_path);
                 indexer = dftracer::utils::utilities::indexer::internal::
-                    IndexerFactory::create(input.file_path, input.idx_path,
+                    IndexerFactory::create(input.file_path, input.index_path,
                                            input.checkpoint_size, true);
                 co_await indexer->build_async();
             }
@@ -124,7 +130,7 @@ MetadataCollectorUtility::process_compressed(
                 auto line_gen = StreamingLineReader::read_async(
                     StreamingLineReaderConfig()
                         .with_file(input.file_path)
-                        .with_index(input.idx_path)
+                        .with_index(input.index_path)
                         .with_line_range(1, total_lines));
                 while (auto line_opt = co_await line_gen.next()) {
                     const auto& line = *line_opt;
@@ -173,7 +179,7 @@ MetadataCollectorUtility::process_plain(
     const MetadataCollectorUtilityInput& input) {
     MetadataCollectorUtilityOutput meta;
     meta.file_path = input.file_path;
-    meta.idx_path = "";
+    meta.index_path = "";
 
     try {
         // Plain file metadata

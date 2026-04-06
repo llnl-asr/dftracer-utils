@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_PLAIN_FILE_BYTES_GENERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_PLAIN_FILE_BYTES_GENERATOR_H
 
+#include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
@@ -9,7 +10,6 @@
 #include <vector>
 
 namespace dftracer::utils::utilities::fileio::lines::sources {
-
 /**
  * @brief Async generator that yields lines from plain text files
  *        within a byte range, with line-boundary alignment.
@@ -39,7 +39,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
     if (fd_result < 0) {
         throw std::runtime_error("Cannot open file: " + file_path);
     }
-    int fd = static_cast<int>(fd_result);
+    dftracer::utils::ScopedFd fd(static_cast<int>(fd_result));
 
     std::vector<char> read_buffer(buffer_size);
     std::string line_buffer;
@@ -56,7 +56,8 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
             bool aligned = false;
             while (!aligned) {
                 ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
-                    fd, read_buffer.data(), read_buffer.size(), file_offset);
+                    fd.get(), read_buffer.data(), read_buffer.size(),
+                    file_offset);
 
                 if (bytes_read < 0) {
                     throw std::runtime_error(
@@ -66,7 +67,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
 
                 if (bytes_read == 0) {
                     // Hit EOF before finding a newline — nothing to yield
-                    co_await ::dftracer::utils::io::close(fd);
+                    fd.reset();
                     co_return;
                 }
 
@@ -80,7 +81,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
 
                 if (static_cast<std::size_t>(file_offset) >= end_byte) {
                     // Passed end_byte while aligning — nothing to yield
-                    co_await ::dftracer::utils::io::close(fd);
+                    fd.reset();
                     co_return;
                 }
             }
@@ -96,7 +97,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
             }
 
             ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
-                fd, read_buffer.data(), read_buffer.size(), file_offset);
+                fd.get(), read_buffer.data(), read_buffer.size(), file_offset);
 
             if (bytes_read < 0) {
                 throw std::runtime_error(
@@ -141,7 +142,6 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
         ex = std::current_exception();
     }
 
-    co_await ::dftracer::utils::io::close(fd);
     if (ex) {
         std::rethrow_exception(ex);
     }

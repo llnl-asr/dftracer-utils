@@ -57,7 +57,7 @@ std::string TraceStatistics::to_json() const {
     yyjson_mut_doc_set_root(doc, root);
 
     yyjson_mut_obj_add_str(doc, root, "file_path", file_path.c_str());
-    yyjson_mut_obj_add_str(doc, root, "idx_path", idx_path.c_str());
+    yyjson_mut_obj_add_str(doc, root, "index_path", index_path.c_str());
     yyjson_mut_obj_add_bool(doc, root, "success", success);
 
     if (!success) {

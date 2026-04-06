@@ -73,7 +73,7 @@ struct PipelineConfig {
     io::IoBackendType io_backend_type =
         io::IoBackendType::AUTO;       // Backend selection
     unsigned io_batch_threshold = 16;  // SQE batch threshold (0 = per-op)
-    std::size_t sqlite_pool_size = 2;  // SQLite async thread pool size
+    std::size_t db_pool_size = 2;      // Blocking DB async thread pool size
 
     /**
      * Set pipeline name
@@ -201,10 +201,10 @@ struct PipelineConfig {
     }
 
     /**
-     * Set SQLite async thread pool size (default 2)
+     * Set blocking DB async thread pool size (default 2)
      */
-    PipelineConfig& with_sqlite_pool_size(std::size_t size) {
-        sqlite_pool_size = size;
+    PipelineConfig& with_db_pool_size(std::size_t size) {
+        db_pool_size = size;
         return *this;
     }
 

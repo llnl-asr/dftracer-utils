@@ -195,7 +195,7 @@ CoroTask<EventAggregatorUtilityOutput> run_aggregation(
                                     -> CoroTask<void> {
                         [[maybe_unused]] auto producer_guard = ch.guard();
 
-                        std::string idx_path =
+                        std::string index_path =
                             composites::dft::internal::determine_index_path(
                                 file_path, index_dir);
 
@@ -204,7 +204,7 @@ CoroTask<EventAggregatorUtilityOutput> run_aggregation(
                                 from_file(file_path)
                                     .with_checkpoint_size(checkpoint_size)
                                     .with_force_rebuild(force_rebuild)
-                                    .with_index(idx_path);
+                                    .with_index(index_path);
                         auto metadata =
                             co_await composites::dft::MetadataCollectorUtility{}
                                 .process(meta_input);
@@ -392,6 +392,14 @@ static int run_comparison_pipeline(ComparatorObject *self,
 
             // Build indexes upfront
             {
+                if (config.force_rebuild && !baseline_files.empty()) {
+                    const std::string shared_index_path =
+                        composites::dft::internal::determine_index_path(
+                            baseline_files.front(), config.index_dir);
+                    if (fs::exists(shared_index_path)) {
+                        fs::remove_all(shared_index_path);
+                    }
+                }
                 std::unordered_set<std::string> seen;
                 std::vector<std::string> all_files;
                 for (const auto &f : baseline_files) {
@@ -406,7 +414,7 @@ static int run_comparison_pipeline(ComparatorObject *self,
                     idx_configs.push_back(
                         indexer::IndexBuildConfig::for_file(file_path)
                             .with_checkpoint_size(config.checkpoint_size)
-                            .with_force_rebuild(config.force_rebuild)
+                            .with_force_rebuild(false)
                             .with_index_dir(config.index_dir));
                 }
                 std::vector<CoroTask<indexer::IndexBuildResult>> idx_tasks;
@@ -646,7 +654,7 @@ static const char *COMPARE_DOC =
     "(default 5000).\n"
     "    threshold (float): Hide changes below this pct.\n"
     "    executor_threads (int): Parallel threads (0=auto).\n"
-    "    index_dir (str): Index sidecar directory.\n"
+    "    index_dir (str): Directory for .dftindex stores.\n"
     "    force_rebuild (bool): Force index rebuild.\n"
     "    config (str): JSON config file path.\n"
     "\n"
@@ -673,7 +681,7 @@ static const char *COMPARE_JSON_DOC =
     "(default 5000).\n"
     "    threshold (float): Hide changes below this pct.\n"
     "    executor_threads (int): Parallel threads (0=auto).\n"
-    "    index_dir (str): Index sidecar directory.\n"
+    "    index_dir (str): Directory for .dftindex stores.\n"
     "    force_rebuild (bool): Force index rebuild.\n"
     "    config (str): JSON config file path.\n"
     "\n"
@@ -700,7 +708,7 @@ static const char *COMPARE_TABLE_DOC =
     "(default 5000).\n"
     "    threshold (float): Hide changes below this pct.\n"
     "    executor_threads (int): Parallel threads (0=auto).\n"
-    "    index_dir (str): Index sidecar directory.\n"
+    "    index_dir (str): Directory for .dftindex stores.\n"
     "    force_rebuild (bool): Force index rebuild.\n"
     "    config (str): JSON config file path.\n"
     "\n"

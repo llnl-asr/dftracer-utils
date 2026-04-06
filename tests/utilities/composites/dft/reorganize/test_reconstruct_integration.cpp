@@ -167,10 +167,10 @@ static void execute_extraction(const ExtractionPlan& plan,
             }
         }
 
-        std::string idx_path =
+        std::string index_path =
             internal::determine_index_path(src.file_path, index_dir);
         auto reader_input =
-            IndexedReadInput::from_file(src.file_path).with_index(idx_path);
+            IndexedReadInput::from_file(src.file_path).with_index(index_path);
         IndexedFileReaderUtility reader_utility;
         auto reader = reader_utility.process(reader_input).get();
 
@@ -243,6 +243,59 @@ static const SegmentInterval* find_segment(
     return nullptr;
 }
 
+static void write_group_provenance(
+    const ExtractionPlan& plan,
+    const std::map<std::string, std::string>& group_gz_paths,
+    const std::string& reorg_dir) {
+    for (const auto& g : plan.groups) {
+        auto gz_it = group_gz_paths.find(g.name);
+        if (gz_it == group_gz_paths.end()) continue;
+        const std::string& gz_path = gz_it->second;
+
+        std::string db_root =
+            internal::determine_provenance_index_path(gz_path, reorg_dir);
+
+        ProvenanceDatabase pdb(db_root);
+        pdb.init_schema();
+        int fid = pdb.get_or_create_file_info(gz_path, 0);
+        REQUIRE(fid >= 0);
+
+        pdb.begin_transaction();
+
+        pdb.insert_info(fid, "version", "1.0");
+        pdb.insert_info(fid, "tool", "dftracer_organize");
+        pdb.insert_group(fid, g.name, g.query);
+
+        for (std::size_t si = 0; si < plan.source_files.size(); ++si) {
+            const auto& src = plan.source_files[si];
+            pdb.insert_source(fid, static_cast<int>(si), src.file_path,
+                              static_cast<int>(src.num_checkpoints), "");
+        }
+
+        std::map<std::size_t, std::map<std::uint64_t, std::size_t>>
+            segment_events;
+        for (const auto& task : plan.tasks) {
+            if (task.target_group == g.name) {
+                segment_events[task.source_file_idx][task.checkpoint_idx] =
+                    task.line_numbers.size();
+            }
+        }
+
+        int output_line = 0;
+        for (const auto& [src_idx, ckpts] : segment_events) {
+            for (const auto& [ckpt, count] : ckpts) {
+                pdb.insert_segment(fid, static_cast<int>(src_idx),
+                                   static_cast<int>(ckpt), output_line,
+                                   output_line + static_cast<int>(count),
+                                   static_cast<int>(count));
+                output_line += static_cast<int>(count);
+            }
+        }
+
+        pdb.commit_transaction();
+    }
+}
+
 TEST_SUITE("ReconstructIntegration") {
     TEST_CASE("Round-trip: reorganize then reconstruct") {
         std::string test_dir =
@@ -310,54 +363,8 @@ TEST_SUITE("ReconstructIntegration") {
             build_idx(gz_path, reorg_dir);
         }
 
-        // Step 6: Write provenance into each output .pidx
-        for (const auto& g : plan.groups) {
-            auto gz_it = group_gz_paths.find(g.name);
-            if (gz_it == group_gz_paths.end()) continue;
-            const std::string& gz_path = gz_it->second;
-
-            std::string pidx_path =
-                internal::determine_provenance_index_path(gz_path, reorg_dir);
-
-            ProvenanceDatabase pdb(pidx_path);
-            pdb.init_schema();
-            int fid = pdb.get_or_create_file_info(gz_path, 0);
-            REQUIRE(fid >= 0);
-
-            pdb.begin_transaction();
-
-            pdb.insert_info("version", "1.0");
-            pdb.insert_info("tool", "dftracer_organize");
-            pdb.insert_group(g.name, g.query);
-
-            for (std::size_t si = 0; si < plan.source_files.size(); ++si) {
-                const auto& src = plan.source_files[si];
-                pdb.insert_source(fid, static_cast<int>(si), src.file_path,
-                                  static_cast<int>(src.num_checkpoints), "");
-            }
-
-            std::map<std::size_t, std::map<std::uint64_t, std::size_t>>
-                segment_events;
-            for (const auto& task : plan.tasks) {
-                if (task.target_group == g.name) {
-                    segment_events[task.source_file_idx][task.checkpoint_idx] =
-                        task.line_numbers.size();
-                }
-            }
-
-            int output_line = 0;
-            for (const auto& [src_idx, ckpts] : segment_events) {
-                for (const auto& [ckpt, count] : ckpts) {
-                    pdb.insert_segment(static_cast<int>(src_idx),
-                                       static_cast<int>(ckpt), output_line,
-                                       output_line + static_cast<int>(count),
-                                       static_cast<int>(count));
-                    output_line += static_cast<int>(count);
-                }
-            }
-
-            pdb.commit_transaction();
-        }
+        // Step 6: Write provenance into the shared output-root .dftindex
+        write_group_provenance(plan, group_gz_paths, reorg_dir);
 
         // Step 7: Plan reconstruction
         std::vector<std::string> reorg_files;
@@ -403,18 +410,18 @@ TEST_SUITE("ReconstructIntegration") {
         }
 
         for (const auto& [reorg_file, intervals] : per_reorg_segments) {
-            std::string idx_path =
+            std::string index_path =
                 internal::determine_index_path(reorg_file, reorg_dir);
 
             MetadataCollectorUtility meta_collector;
             auto meta_input =
                 MetadataCollectorUtilityInput::from_file(reorg_file)
-                    .with_index(idx_path);
+                    .with_index(index_path);
             auto meta = meta_collector.process(meta_input).get();
             REQUIRE(meta.success);
 
             auto reader_input =
-                IndexedReadInput::from_file(reorg_file).with_index(idx_path);
+                IndexedReadInput::from_file(reorg_file).with_index(index_path);
             IndexedFileReaderUtility reader_utility;
             auto reader = reader_utility.process(reader_input).get();
 
@@ -493,6 +500,99 @@ TEST_SUITE("ReconstructIntegration") {
         CHECK(has_hh);
         CHECK(has_fh);
         CHECK(recon_lines.size() >= 6);
+
+        fs::remove_all(test_dir);
+    }
+
+    TEST_CASE(
+        "reconstruction planner reads multiple outputs from one shared "
+        ".dftindex") {
+        std::string test_dir =
+            dft_utils_test::make_unique_test_path("test_recon_shared_root")
+                .string();
+        std::string input_dir = test_dir + "/input";
+        std::string reorg_dir = test_dir + "/reorg";
+        fs::create_directories(input_dir);
+        fs::create_directories(reorg_dir);
+
+        std::string trace_file = create_test_trace(input_dir);
+        build_idx(trace_file, input_dir);
+
+        ReorganizationPlannerUtility planner;
+        ReorganizationPlannerInput planner_input;
+        planner_input.source_files = {trace_file};
+        planner_input.groups = {{"io", R"(cat == "POSIX")"},
+                                {"compute", R"(cat == "APP")"}};
+        planner_input.index_dir = input_dir;
+
+        auto plan = planner.process(planner_input).get();
+        REQUIRE(plan.tasks.size() > 0);
+
+        std::map<std::string, FILE*> group_files;
+        std::map<std::string, std::string> group_pfw_paths;
+        for (const auto& g : plan.groups) {
+            std::string pfw_path = reorg_dir + "/" + g.name + ".pfw";
+            FILE* f = std::fopen(pfw_path.c_str(), "w");
+            REQUIRE(f != nullptr);
+            group_files[g.name] = f;
+            group_pfw_paths[g.name] = pfw_path;
+        }
+
+        execute_extraction(plan, input_dir, group_files);
+
+        for (auto& [_, f] : group_files) {
+            std::fclose(f);
+        }
+
+        std::map<std::string, std::string> group_gz_paths;
+        for (const auto& g : plan.groups) {
+            std::string pfw_path = group_pfw_paths[g.name];
+            if (!fs::exists(pfw_path) || fs::file_size(pfw_path) == 0) continue;
+
+            FileCompressorUtility compressor;
+            auto comp_result =
+                compressor
+                    .process(FileCompressionUtilityInput::from_file(pfw_path))
+                    .get();
+            REQUIRE(comp_result.success);
+
+            std::string gz_path = pfw_path + ".gz";
+            REQUIRE(fs::exists(gz_path));
+            group_gz_paths[g.name] = gz_path;
+            fs::remove(pfw_path);
+        }
+
+        for (const auto& [_, gz_path] : group_gz_paths) {
+            build_idx(gz_path, reorg_dir);
+        }
+
+        write_group_provenance(plan, group_gz_paths, reorg_dir);
+
+        const std::string shared_root =
+            determine_provenance_index_path(trace_file, reorg_dir);
+        REQUIRE(fs::exists(shared_root));
+
+        ProvenanceDatabase pdb(shared_root);
+        const int io_fid = pdb.get_file_info_id(group_gz_paths.at("io"));
+        const int compute_fid =
+            pdb.get_file_info_id(group_gz_paths.at("compute"));
+        REQUIRE(io_fid >= 0);
+        REQUIRE(compute_fid >= 0);
+        CHECK(io_fid != compute_fid);
+        CHECK(pdb.query_group_name(io_fid) == "io");
+        CHECK(pdb.query_group_name(compute_fid) == "compute");
+
+        ReconstructionPlannerUtility recon_planner;
+        ReconstructionPlannerInput recon_input;
+        for (const auto& [_, gz_path] : group_gz_paths) {
+            recon_input.reorganized_files.push_back(gz_path);
+        }
+        recon_input.index_dir = reorg_dir;
+
+        auto recon_plan = recon_planner.process(recon_input).get();
+        REQUIRE(recon_plan.files.size() == 1);
+        CHECK(recon_plan.total_segments >= 2);
+        CHECK(recon_plan.total_events == 8);
 
         fs::remove_all(test_dir);
     }

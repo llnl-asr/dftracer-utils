@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
@@ -12,6 +13,7 @@
 #include <yyjson.h>
 
 #include <algorithm>
+#include <cctype>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -20,7 +22,6 @@ namespace dftracer::utils::utilities::composites::dft::reorganize {
 
 namespace {
 
-using common::json::JsonValue;
 using common::query::Query;
 using dftracer::utils::utilities::indexer::IndexBuildConfig;
 using dftracer::utils::utilities::indexer::IndexBuilderUtility;
@@ -93,7 +94,7 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
     for (std::size_t fi = 0; fi < input.source_files.size(); ++fi) {
         const auto& file_path = input.source_files[fi];
 
-        // Build .idx if needed
+        // Build the shared `.dftindex` store if needed.
         IndexBuilderUtility idx_builder;
         auto idx_input = IndexBuildConfig::for_file(file_path).with_index_dir(
             input.index_dir);
@@ -109,7 +110,7 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         MetadataCollectorUtility metadata_collector;
         auto meta_input =
             MetadataCollectorUtilityInput::from_file(file_path).with_index(
-                idx_result.idx_path);
+                idx_result.index_path);
         if (input.checkpoint_size > 0) {
             meta_input.with_checkpoint_size(input.checkpoint_size);
         }
@@ -119,8 +120,8 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
                                      file_path);
         }
 
-        // Determine .idx path (manifest data now lives in .idx)
-        std::string idx_path =
+        // Determine the root-local `.dftindex` store path.
+        std::string index_path =
             internal::determine_index_path(file_path, input.index_dir);
 
         // Effective checkpoint count: treat 0 as 1
@@ -129,29 +130,26 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
 
         SourceFileInfo sfi;
         sfi.file_path = file_path;
-        sfi.idx_path = idx_result.idx_path;
-        sfi.idx_path = idx_path;
+        sfi.index_path = index_path;
         sfi.num_checkpoints = eff_ckpts;
         sfi.uncompressed_size = meta.uncompressed_size;
         sfi.checkpoint_size = meta.checkpoint_size;
         plan.source_files.push_back(std::move(sfi));
 
-        // Open .idx and try manifest-based planning. Fall back to
-        // whole-file streaming when manifest tables are absent
-        // (file was below index_threshold).
-        IndexDatabase idx_db(idx_path);
+        // Open the shared index store and try manifest-based planning. Fall
+        // back to whole-file streaming when manifest tables are absent (file
+        // was below index_threshold).
+        IndexDatabase idx_db(
+            index_path,
+            dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
         int file_info_id = idx_db.get_file_info_id(
             indexer::internal::get_logical_path(file_path));
         if (file_info_id < 0) {
-            throw std::runtime_error("File not found in .idx: " + file_path);
+            throw std::runtime_error("File not found in .dftindex: " +
+                                     file_path);
         }
 
-        bool has_manifest = true;
-        try {
-            idx_db.query_event_ranges_for_checkpoint(file_info_id, 0);
-        } catch (const std::exception&) {
-            has_manifest = false;
-        }
+        const bool has_manifest = idx_db.has_manifest_data(file_info_id);
 
         if (has_manifest) {
             // Manifest-based planning: per-checkpoint extraction tasks.
@@ -240,8 +238,22 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
                 const auto& line = *line_opt;
                 if (line.content.empty()) continue;
 
+                const char* begin = line.content.data();
+                const char* end = begin + line.content.size();
+                while (begin < end &&
+                       std::isspace(static_cast<unsigned char>(*begin))) {
+                    ++begin;
+                }
+                while (end > begin &&
+                       std::isspace(static_cast<unsigned char>(*(end - 1)))) {
+                    --end;
+                }
+                if (begin == end || *begin != '{' || *(end - 1) != '}') {
+                    continue;
+                }
+
                 yyjson_doc* doc =
-                    yyjson_read(line.content.data(), line.content.size(),
+                    yyjson_read(begin, static_cast<size_t>(end - begin),
                                 YYJSON_READ_NOFLAG);
                 if (!doc) continue;
 
@@ -251,43 +263,49 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
                     continue;
                 }
 
-                try {
-                    JsonValue json(root);
-                    std::string_view ph = json["ph"].get<std::string_view>();
-                    auto line_num =
-                        static_cast<std::uint32_t>(line.line_number);
+                auto line_num = static_cast<std::uint32_t>(line.line_number);
+                yyjson_val* ph_val = yyjson_obj_get(root, "ph");
+                const bool is_metadata =
+                    ph_val && yyjson_is_str(ph_val) &&
+                    std::string_view(yyjson_get_str(ph_val),
+                                     yyjson_get_len(ph_val)) == "M";
 
-                    if (ph == "M") {
-                        meta_line_numbers.push_back(line_num);
-                    } else {
-                        std::string cat_str(
-                            json["cat"].get<std::string_view>());
-                        std::string name_str(
-                            json["name"].get<std::string_view>());
-
-                        bool matched = false;
-                        for (std::size_t gi = 0; gi < parsed_queries.size();
-                             ++gi) {
-                            const auto& q = parsed_queries[gi];
-                            if (!q) continue;
-                            common::query::ValueMap fields = {
-                                {"cat", cat_str}, {"name", name_str}};
-                            if (q->evaluate(fields)) {
-                                group_lines[plan.groups[gi].name].push_back(
-                                    line_num);
-                                matched = true;
-                                break;
-                            }
-                        }
-                        if (!matched) {
-                            group_lines[remainder_name].push_back(line_num);
-                        }
-                        plan.total_events++;
-                    }
-                } catch (const std::exception&) {
-                    // Skip malformed or partial events without
-                    // aborting the entire plan.
+                if (is_metadata) {
+                    meta_line_numbers.push_back(line_num);
+                    yyjson_doc_free(doc);
+                    continue;
                 }
+
+                std::string cat_str;
+                if (yyjson_val* cat_val = yyjson_obj_get(root, "cat");
+                    cat_val && yyjson_is_str(cat_val)) {
+                    cat_str.assign(yyjson_get_str(cat_val),
+                                   yyjson_get_len(cat_val));
+                }
+
+                std::string name_str;
+                if (yyjson_val* name_val = yyjson_obj_get(root, "name");
+                    name_val && yyjson_is_str(name_val)) {
+                    name_str.assign(yyjson_get_str(name_val),
+                                    yyjson_get_len(name_val));
+                }
+
+                bool matched = false;
+                for (std::size_t gi = 0; gi < parsed_queries.size(); ++gi) {
+                    const auto& q = parsed_queries[gi];
+                    if (!q) continue;
+                    common::query::ValueMap fields = {{"cat", cat_str},
+                                                      {"name", name_str}};
+                    if (q->evaluate(fields)) {
+                        group_lines[plan.groups[gi].name].push_back(line_num);
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    group_lines[remainder_name].push_back(line_num);
+                }
+                plan.total_events++;
 
                 yyjson_doc_free(doc);
             }

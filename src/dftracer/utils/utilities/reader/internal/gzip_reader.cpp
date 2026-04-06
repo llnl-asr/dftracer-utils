@@ -62,18 +62,18 @@ GzipReader::GzipReader(const std::string &gz_path_,
                        const std::string &idx_path_,
                        std::size_t index_ckpt_size)
     : gz_path(gz_path_),
-      idx_path(idx_path_),
+      index_path(idx_path_),
       is_open(false),
       default_buffer_size(DEFAULT_READER_BUFFER_SIZE),
       indexer(nullptr) {
     try {
         indexer = dftracer::utils::utilities::indexer::internal::
-            IndexerFactory::create(gz_path, idx_path, index_ckpt_size, false);
+            IndexerFactory::create(gz_path, index_path, index_ckpt_size, false);
         is_open = true;
 
         DFTRACER_UTILS_LOG_DEBUG(
             "Successfully created GZIP reader for gz: %s and index: %s",
-            gz_path.c_str(), idx_path.c_str());
+            gz_path.c_str(), index_path.c_str());
     } catch (const std::exception &e) {
         throw ReaderError(ReaderError::INITIALIZATION_ERROR,
                           "Failed to initialize reader with indexer: " +
@@ -92,19 +92,19 @@ GzipReader::GzipReader(
     }
     is_open = true;
     gz_path = indexer->get_archive_path();
-    idx_path = indexer->get_idx_path();
+    index_path = indexer->get_index_path();
 }
 
 GzipReader::~GzipReader() {
     DFTRACER_UTILS_LOG_DEBUG("Destroying GZIP reader for gz: %s and index: %s",
-                             gz_path.c_str(), idx_path.c_str());
+                             gz_path.c_str(), index_path.c_str());
     reset();
     is_open = false;
 }
 
 GzipReader::GzipReader(GzipReader &&other) noexcept
     : gz_path(std::move(other.gz_path)),
-      idx_path(std::move(other.idx_path)),
+      index_path(std::move(other.index_path)),
       is_open(other.is_open),
       default_buffer_size(other.default_buffer_size),
       indexer(std::move(other.indexer)) {
@@ -114,7 +114,7 @@ GzipReader::GzipReader(GzipReader &&other) noexcept
 GzipReader &GzipReader::operator=(GzipReader &&other) noexcept {
     if (this != &other) {
         gz_path = std::move(other.gz_path);
-        idx_path = std::move(other.idx_path);
+        index_path = std::move(other.index_path);
         is_open = other.is_open;
         default_buffer_size = other.default_buffer_size;
         indexer = std::move(other.indexer);
@@ -140,7 +140,7 @@ std::size_t GzipReader::get_num_lines() const {
 
 const std::string &GzipReader::get_archive_path() const { return gz_path; }
 
-const std::string &GzipReader::get_idx_path() const { return idx_path; }
+const std::string &GzipReader::get_index_path() const { return index_path; }
 
 void GzipReader::set_buffer_size(std::size_t size) {
     default_buffer_size = size;

@@ -12,7 +12,7 @@ typedef void *dft_indexer_handle_t;
 
 // C API function declarations
 dft_indexer_handle_t dft_indexer_create(const char *gz_path,
-                                        const char *idx_path,
+                                        const char *index_path,
                                         uint64_t checkpoint_size,
                                         int force_rebuild);
 int dft_indexer_build(dft_indexer_handle_t indexer);
@@ -65,7 +65,7 @@ class Indexer {
     virtual void set_visitors(VisitorList visitors) { (void)visitors; }
 
     // Metadata accessors
-    virtual const std::string &get_idx_path() const = 0;
+    virtual const std::string &get_index_path() const = 0;
     virtual const std::string &get_archive_path() const = 0;
     virtual std::uint64_t get_checkpoint_size() const = 0;
     virtual std::uint64_t get_max_bytes() const = 0;

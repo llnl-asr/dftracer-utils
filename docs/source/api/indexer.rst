@@ -1,12 +1,13 @@
 Indexer Module
 ==============
 
-The indexer module provides functionality for indexing and searching gzip trace files.
+The indexer module provides functionality for indexing and searching gzip trace
+files using a root-local ``.dftindex`` store.
 
 Indexer Class
 -------------
 
-.. autoclass:: dftracer.utils.Indexer(gz_path: str, idx_path: str | None = None, checkpoint_size: int = 1048576, force_rebuild: bool = False, build_bloom: bool = False, build_manifest: bool = False, index_threshold: int = 8388608, runtime: Runtime | None = None)
+.. autoclass:: dftracer.utils.Indexer(gz_path: str, index_path: str | None = None, checkpoint_size: int = 1048576, force_rebuild: bool = False, build_bloom: bool = False, build_manifest: bool = False, index_threshold: int = 8388608, runtime: Runtime | None = None)
    :members:
    :undoc-members:
    :show-inheritance:

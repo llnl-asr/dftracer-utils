@@ -1,7 +1,7 @@
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
-#include <dftracer/utils/utilities/indexer/internal/tar/queries/queries.h>
 #include <dftracer/utils/utilities/reader/internal/streams/tar_byte_stream.h>
 #include <dftracer/utils/utilities/reader/internal/string_line_processor.h>
 #include <dftracer/utils/utilities/reader/internal/tar_reader.h>
@@ -15,10 +15,28 @@ using namespace dftracer::utils::utilities::indexer::internal::tar;
 
 namespace dftracer::utils::utilities::reader::internal {
 
+namespace {
+
+std::string normalize_idx_path(const std::string &path) {
+    fs::path input(path);
+    if (input.filename() == ".dftindex") {
+        return input.string();
+    }
+    if (input.parent_path().filename() == ".dftindex") {
+        return input.parent_path().string();
+    }
+    if (input.has_extension()) {
+        return (input.parent_path() / ".dftindex").string();
+    }
+    return (input / ".dftindex").string();
+}
+
+}  // namespace
+
 TarReader::TarReader(const std::string &tar_gz_path_,
                      const std::string &idx_path_, std::size_t index_ckpt_size)
     : tar_gz_path(tar_gz_path_),
-      idx_path(idx_path_),
+      index_path(normalize_idx_path(idx_path_)),
       is_open(false),
       default_buffer_size(DEFAULT_TAR_READER_BUFFER_SIZE),
       logical_mapping_cached(false),
@@ -26,14 +44,14 @@ TarReader::TarReader(const std::string &tar_gz_path_,
       cached_total_logical_lines(0) {
     try {
         printf("Creating TAR reader for gz: %s and index: %s\n",
-               tar_gz_path.c_str(), idx_path.c_str());
-        indexer = std::make_shared<TarIndexer>(tar_gz_path, idx_path,
+               tar_gz_path.c_str(), index_path.c_str());
+        indexer = std::make_shared<TarIndexer>(tar_gz_path, index_path,
                                                index_ckpt_size, false);
         is_open = true;
 
         DFTRACER_UTILS_LOG_DEBUG(
             "Successfully created TAR reader for gz: %s and index: %s",
-            tar_gz_path.c_str(), idx_path.c_str());
+            tar_gz_path.c_str(), index_path.c_str());
     } catch (const std::exception &e) {
         throw std::runtime_error(
             "Failed to initialize TAR reader with indexer: " +
@@ -52,14 +70,14 @@ TarReader::TarReader(std::shared_ptr<TarIndexer> indexer_)
     }
     is_open = true;
     tar_gz_path = indexer->get_tar_gz_path();
-    idx_path = indexer->get_idx_path();
+    index_path = indexer->get_index_path();
 }
 
 TarReader::~TarReader() = default;
 
 TarReader::TarReader(TarReader &&other) noexcept
     : tar_gz_path(std::move(other.tar_gz_path)),
-      idx_path(std::move(other.idx_path)),
+      index_path(std::move(other.index_path)),
       is_open(other.is_open),
       default_buffer_size(other.default_buffer_size),
       indexer(std::move(other.indexer)),
@@ -74,7 +92,7 @@ TarReader::TarReader(TarReader &&other) noexcept
 TarReader &TarReader::operator=(TarReader &&other) noexcept {
     if (this != &other) {
         tar_gz_path = std::move(other.tar_gz_path);
-        idx_path = std::move(other.idx_path);
+        index_path = std::move(other.index_path);
         is_open = other.is_open;
         default_buffer_size = other.default_buffer_size;
         indexer = std::move(other.indexer);
@@ -104,7 +122,7 @@ std::string TarReader::get_format_name() const { return "TAR.GZ"; }
 
 const std::string &TarReader::get_archive_path() const { return tar_gz_path; }
 
-const std::string &TarReader::get_idx_path() const { return idx_path; }
+const std::string &TarReader::get_index_path() const { return index_path; }
 
 void TarReader::set_buffer_size(std::size_t size) {
     default_buffer_size = size;

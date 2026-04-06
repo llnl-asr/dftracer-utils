@@ -23,8 +23,8 @@ ViewReaderInput& ViewReaderInput::with_file_path(const std::string& path) {
     return *this;
 }
 
-ViewReaderInput& ViewReaderInput::with_idx_path(const std::string& path) {
-    idx_path = path;
+ViewReaderInput& ViewReaderInput::with_index_path(const std::string& path) {
+    index_path = path;
     return *this;
 }
 
@@ -117,7 +117,7 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
         emitted_hashes;
 
     auto reader_input = composites::IndexedReadInput::from_file(input.file_path)
-                            .with_index(input.idx_path);
+                            .with_index(input.index_path);
     if (input.checkpoint_size > 0) {
         reader_input.with_checkpoint_size(input.checkpoint_size);
     }

@@ -13,8 +13,8 @@
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
 /// Thread-safe bounded cache for deserialized bloom filters.
-/// Keyed by (idx_path, dimension, checkpoint_idx) for chunk blooms,
-/// or (idx_path, dimension, UINT64_MAX) for file-level blooms.
+/// Keyed by (index_path, dimension, checkpoint_idx) for chunk blooms,
+/// or (index_path, dimension, UINT64_MAX) for file-level blooms.
 /// When the cache exceeds max_entries, it is cleared entirely.
 class BloomFilterCache {
    public:
@@ -25,23 +25,23 @@ class BloomFilterCache {
         : max_entries_(max_entries) {}
 
     /// Look up a cached bloom filter. Returns nullopt on miss.
-    std::optional<BloomFilter> get(const std::string& idx_path,
+    std::optional<BloomFilter> get(const std::string& index_path,
                                    const std::string& dimension,
                                    std::uint64_t checkpoint_idx) const {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto it = cache_.find(make_key(idx_path, dimension, checkpoint_idx));
+        auto it = cache_.find(make_key(index_path, dimension, checkpoint_idx));
         if (it == cache_.end()) return std::nullopt;
         return it->second;
     }
 
     /// Insert a bloom filter into the cache. Evicts all entries if full.
-    void put(const std::string& idx_path, const std::string& dimension,
+    void put(const std::string& index_path, const std::string& dimension,
              std::uint64_t checkpoint_idx, const BloomFilter& bloom) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (cache_.size() >= max_entries_) {
             cache_.clear();
         }
-        cache_.emplace(make_key(idx_path, dimension, checkpoint_idx), bloom);
+        cache_.emplace(make_key(index_path, dimension, checkpoint_idx), bloom);
     }
 
     std::size_t size() const {
@@ -50,12 +50,12 @@ class BloomFilterCache {
     }
 
    private:
-    static std::string make_key(const std::string& idx_path,
+    static std::string make_key(const std::string& index_path,
                                 const std::string& dimension,
                                 std::uint64_t checkpoint_idx) {
         std::string key;
-        key.reserve(idx_path.size() + dimension.size() + 24);
-        key += idx_path;
+        key.reserve(index_path.size() + dimension.size() + 24);
+        key += index_path;
         key += '\0';
         key += dimension;
         key += '\0';

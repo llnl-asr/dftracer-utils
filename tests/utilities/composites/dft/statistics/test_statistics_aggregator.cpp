@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
@@ -12,8 +12,8 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::composites::dft::internal;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
-using namespace dftracer::utils::utilities::composites::dft::indexing::queries;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::internal::get_logical_path;
@@ -22,7 +22,7 @@ static void write_chunk(
     IndexDatabase& db, int fid, std::uint64_t checkpoint_idx,
     ChunkStatistics& stats,
     const std::vector<std::pair<std::string, std::string>>& dim_values) {
-    queries::insert_chunk_statistics(db.sql_db(), fid, checkpoint_idx, stats);
+    db.insert_chunk_statistics(fid, checkpoint_idx, stats);
 
     std::unordered_map<std::string, ChunkDimensionStats> dim_stats;
     for (const auto& [dim, val] : dim_values) {
@@ -32,14 +32,13 @@ static void write_chunk(
         ds.observe(val);
     }
     for (const auto& [dim, ds] : dim_stats) {
-        queries::insert_chunk_dimension_stats(db.sql_db(), fid, checkpoint_idx,
-                                              ds);
+        db.insert_chunk_dimension_stats(fid, checkpoint_idx, ds);
     }
 }
 
-static void populate_test_idx(const std::string& idx_path,
-                              const std::string& file_path) {
-    IndexDatabase idx_db(idx_path);
+static void populate_test_db(const std::string& db_root,
+                             const std::string& file_path) {
+    IndexDatabase idx_db(db_root);
     idx_db.init_base_schema();
     idx_db.init_bloom_schema();
 
@@ -93,14 +92,15 @@ TEST_SUITE("StatisticsAggregatorUtility") {
             dft_utils_test::make_unique_test_path("test_stats_agg").string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string db_root =
+            determine_index_path(test_dir + "/test.pfw.gz", "");
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_db(db_root, file_path);
 
         StatisticsAggregatorUtility aggregator;
         StatisticsAggregatorInput input;
         input.file_path = file_path;
-        input.idx_path = idx_path;
+        input.index_path = db_root;
 
         auto result = aggregator.process(input).get();
 
@@ -135,9 +135,9 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         StatisticsAggregatorUtility aggregator;
         StatisticsAggregatorInput input;
         input.file_path = "/fake/nonexistent.pfw.gz";
-        input.idx_path =
-            dft_utils_test::make_unique_test_path("nonexistent").string() +
-            ".idx";
+        input.index_path =
+            (dft_utils_test::make_unique_test_path("nonexistent") / ".dftindex")
+                .string();
 
         auto result = aggregator.process(input).get();
 
@@ -151,14 +151,15 @@ TEST_SUITE("StatisticsAggregatorUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string db_root =
+            determine_index_path(test_dir + "/test.pfw.gz", "");
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_db(db_root, file_path);
 
         StatisticsAggregatorUtility aggregator;
         StatisticsAggregatorInput input;
         input.file_path = "/fake/other_file.pfw.gz";
-        input.idx_path = idx_path;
+        input.index_path = db_root;
 
         auto result = aggregator.process(input).get();
 
@@ -174,11 +175,12 @@ TEST_SUITE("StatisticsAggregatorUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string db_root =
+            determine_index_path(test_dir + "/test.pfw.gz", "");
         std::string file_path = "/fake/test.pfw.gz";
 
         // Create idx with file_info but no chunk_statistics
-        IndexDatabase idx_db(idx_path);
+        IndexDatabase idx_db(db_root);
         idx_db.init_base_schema();
         idx_db.init_bloom_schema();
         idx_db.get_or_create_file_info(get_logical_path(file_path), 12345);
@@ -186,7 +188,7 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         StatisticsAggregatorUtility aggregator;
         StatisticsAggregatorInput input;
         input.file_path = file_path;
-        input.idx_path = idx_path;
+        input.index_path = db_root;
 
         auto result = aggregator.process(input).get();
 
@@ -204,10 +206,11 @@ TEST_SUITE("StatisticsAggregatorUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string db_root =
+            determine_index_path(test_dir + "/test.pfw.gz", "");
         std::string file_path = "/fake/test.pfw.gz";
 
-        IndexDatabase idx_db(idx_path);
+        IndexDatabase idx_db(db_root);
         idx_db.init_base_schema();
         idx_db.init_bloom_schema();
         int fid =
@@ -220,7 +223,7 @@ TEST_SUITE("StatisticsAggregatorUtility") {
             ChunkStatistics stats;
             stats.update_from_event("op", "cat", 1, 1, 1000, 10);
             stats.update_from_event("op", "cat", 1, 1, 2000, 20);
-            queries::insert_chunk_statistics(idx_db.sql_db(), fid, 0, stats);
+            idx_db.insert_chunk_statistics(fid, 0, stats);
         }
 
         // Chunk 1: durations 30, 40, 50
@@ -229,7 +232,7 @@ TEST_SUITE("StatisticsAggregatorUtility") {
             stats.update_from_event("op", "cat", 1, 1, 3000, 30);
             stats.update_from_event("op", "cat", 1, 1, 4000, 40);
             stats.update_from_event("op", "cat", 1, 1, 5000, 50);
-            queries::insert_chunk_statistics(idx_db.sql_db(), fid, 1, stats);
+            idx_db.insert_chunk_statistics(fid, 1, stats);
         }
 
         idx_db.commit_transaction();
@@ -237,7 +240,7 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         StatisticsAggregatorUtility aggregator;
         StatisticsAggregatorInput input;
         input.file_path = file_path;
-        input.idx_path = idx_path;
+        input.index_path = db_root;
 
         auto result = aggregator.process(input).get();
 

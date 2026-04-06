@@ -30,7 +30,7 @@ struct DFTracerChunkSpec : public fileio::ChunkSpec {
     static DFTracerChunkSpec from_chunk_spec(const fileio::ChunkSpec& spec) {
         DFTracerChunkSpec dft_spec;
         dft_spec.file_path = spec.file_path;
-        dft_spec.idx_path = spec.idx_path;
+        dft_spec.index_path = spec.index_path;
         dft_spec.size_mb = spec.size_mb;
         dft_spec.start_byte = spec.start_byte;
         dft_spec.end_byte = spec.end_byte;

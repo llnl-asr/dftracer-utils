@@ -232,6 +232,17 @@ int main(int argc, char** argv) {
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
 
+    if (force) {
+        const std::string shared_index_path =
+            utilities::composites::dft::internal::determine_index_path(
+                input_files.front(), index_dir);
+        if (fs::exists(shared_index_path)) {
+            DFTRACER_UTILS_LOG_INFO("Clearing shared index store: %s",
+                                    shared_index_path.c_str());
+            fs::remove_all(shared_index_path);
+        }
+    }
+
     // Phase 2: Build TaskGraph for file processing
     auto graph = TaskGraph::builder(
         {.name = "DFTracerSplit", .max_concurrency = executor_threads});
@@ -246,7 +257,7 @@ int main(int argc, char** argv) {
             const auto& file_path = (*input_files_ptr)[idx];
 
             // Determine index path
-            std::string idx_path =
+            std::string index_path =
                 utilities::composites::dft::internal::determine_index_path(
                     file_path, index_dir);
 
@@ -254,17 +265,18 @@ int main(int argc, char** argv) {
             auto idx_input =
                 utilities::indexer::IndexBuildConfig::for_file(file_path)
                     .with_checkpoint_size(checkpoint_size)
-                    .with_force_rebuild(force)
+                    .with_force_rebuild(false)
                     .with_index_dir(index_dir);
-            utilities::indexer::IndexBuilderUtility{}.process(idx_input);
+            co_await utilities::indexer::IndexBuilderUtility{}.process(
+                idx_input);
 
             // Collect metadata
             auto meta_input =
                 utilities::composites::dft::MetadataCollectorUtilityInput::
                     from_file(file_path)
                         .with_checkpoint_size(checkpoint_size)
-                        .with_force_rebuild(force)
-                        .with_index(idx_path)
+                        .with_force_rebuild(false)
+                        .with_index(index_path)
                         .with_compute_hash(verify);
 
             co_return co_await utilities::composites::dft::

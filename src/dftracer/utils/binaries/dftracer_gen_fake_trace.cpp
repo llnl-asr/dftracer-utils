@@ -241,7 +241,7 @@ static coro::CoroTask<int> run_verify(
         std::string abs_path = fs::absolute(file_path).string();
 
         // 1. Build gzip index
-        std::string idx_path = internal::determine_index_path(abs_path, "");
+        std::string index_path = internal::determine_index_path(abs_path, "");
         auto idx_input = IndexBuildConfig::for_file(abs_path)
                              .with_checkpoint_size(ckpt_size)
                              .with_force_rebuild(true);
@@ -251,7 +251,7 @@ static coro::CoroTask<int> run_verify(
         auto meta_input = MetadataCollectorUtilityInput::from_file(abs_path)
                               .with_checkpoint_size(ckpt_size)
                               .with_force_rebuild(false)
-                              .with_index(idx_path);
+                              .with_index(index_path);
         auto metadata = co_await MetadataCollectorUtility{}.process(meta_input);
 
         if (!metadata.success) {
@@ -307,7 +307,7 @@ static coro::CoroTask<int> run_verify(
             for (const auto& chunk : chunks) {
                 ChunkIndexerInput ci;
                 ci.with_file_path(abs_path)
-                    .with_idx_path(idx_path)
+                    .with_index_path(index_path)
                     .with_checkpoint_size(ckpt_size)
                     .with_checkpoint_idx(chunk.idx)
                     .with_byte_range(chunk.start, chunk.end)

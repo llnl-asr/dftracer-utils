@@ -60,7 +60,7 @@ ChunkExtractorUtility::extract_and_write(
             auto reader_config =
                 StreamingLineReaderConfig()
                     .with_file(spec.file_path)
-                    .with_index(spec.idx_path)
+                    .with_index(spec.index_path)
                     .with_line_range(spec.start_line, spec.end_line);
             auto line_gen = StreamingLineReader::read_async(reader_config);
 
@@ -84,9 +84,9 @@ ChunkExtractorUtility::extract_and_write(
                 }
             }
         } else {
-            if (!spec.idx_path.empty()) {
+            if (!spec.index_path.empty()) {
                 auto reader = reader::internal::ReaderFactory::create(
-                    spec.file_path, spec.idx_path);
+                    spec.file_path, spec.index_path);
                 auto line_gen = sources::async_indexed_file_bytes(
                     reader, spec.start_byte, spec.end_byte);
 

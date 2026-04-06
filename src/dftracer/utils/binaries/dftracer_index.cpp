@@ -130,7 +130,6 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
                 auto* all_dims_ptr = &all_dimensions;
                 auto* files_ptr = &input_files;
                 auto* index_dir_ptr = &index_dir;
-
                 // Bounded fan-out: channel limits concurrent file processing
                 // to avoid memory pressure from unbounded coroutine spawning.
                 auto file_chan =
@@ -247,7 +246,7 @@ int main(int argc, char** argv) {
                                      DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(
         "Build per-chunk bloom filter indices for DFTracer trace files. "
-        "Creates .idx sidecar databases enabling fast chunk-skipping "
+        "Creates root-local .dftindex databases enabling fast chunk-skipping "
         "queries.");
 
     program.add_argument("-d", "--directory")
@@ -278,7 +277,7 @@ int main(int argc, char** argv) {
             static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
 
     program.add_argument("--index-dir")
-        .help("Directory to store index files (default: same as data files)")
+        .help("Directory where .dftindex stores are created")
         .default_value<std::string>("");
 
     program.add_argument("--expected-entries")
@@ -300,7 +299,7 @@ int main(int argc, char** argv) {
 
     program.add_argument("--manifest")
         .help(
-            "Also build .idx manifest index "
+            "Also build manifest data in the .dftindex store "
             "(per-checkpoint event line routing)")
         .flag();
 

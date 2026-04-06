@@ -76,7 +76,7 @@ static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
 using dftracer::utils::utilities::common::json::JsonDocGuard;
 using dftracer::utils::utilities::common::query::Query;
 
-/// Direct-scan a small file without any sidecar index.
+/// Direct-scan a small file without any `.dftindex` store.
 /// Streams via async_streaming_gz_lines(), parses JSON, applies
 /// predicate filters, collects matching events as raw JSON strings.
 static coro::CoroTask<void> direct_scan_events(
@@ -413,7 +413,8 @@ static coro::AsyncGenerator<StreamChunk> stream_events(
         ViewBuilderInput builder_input;
         builder_input.with_view(ev_view)
             .with_file_path(file_info->path)
-            .with_idx_path(file_info->has_bloom_data ? file_info->idx_path : "")
+            .with_index_path(file_info->has_bloom_data ? file_info->index_path
+                                                       : "")
             .with_uncompressed_size(file_info->uncompressed_size)
             .with_num_checkpoints(file_info->num_checkpoints)
             .with_bloom_cache(bloom_cache)
@@ -428,7 +429,7 @@ static coro::AsyncGenerator<StreamChunk> stream_events(
 
             ViewReaderInput reader_input;
             reader_input.with_file_path(file_info->path)
-                .with_idx_path(file_info->idx_path)
+                .with_index_path(file_info->index_path)
                 .with_byte_range(candidate.start_byte, candidate.end_byte)
                 .with_checkpoint_idx(candidate.checkpoint_idx)
                 .with_view(ev_view);
@@ -529,7 +530,7 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& req,
         for (auto* file_info : stat_files) {
             StatisticsAggregatorInput agg_input;
             agg_input.file_path = file_info->path;
-            agg_input.idx_path = file_info->idx_path;
+            agg_input.index_path = file_info->index_path;
             agg_input.index_dir = index.index_dir();
 
             StatisticsAggregatorUtility aggregator;
@@ -569,7 +570,7 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& req,
 
                     StatisticsAggregatorInput agg_input;
                     agg_input.file_path = file_info->path;
-                    agg_input.idx_path = file_info->idx_path;
+                    agg_input.index_path = file_info->index_path;
                     agg_input.index_dir = *index_dir_ptr;
 
                     StatisticsAggregatorUtility aggregator;

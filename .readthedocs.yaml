@@ -10,14 +10,8 @@ build:
     python: "3.11"
   apt_packages:
     - doxygen
-    - cmake
-    - build-essential
-    - zlib1g-dev
-    - libsqlite3-dev
-    - pkg-config
   jobs:
     pre_build:
-      # Run Doxygen to generate C++ API documentation
       - cd docs && doxygen Doxyfile
 
 # Build documentation in the "docs/" directory with Sphinx
@@ -35,5 +29,3 @@ formats:
 python:
   install:
     - requirements: docs/requirements.txt
-    - method: pip
-      path: .

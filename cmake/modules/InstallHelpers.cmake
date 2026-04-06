@@ -196,42 +196,6 @@ else()
     endif()
 endif()
 
-# SQLITE3 dependency
-find_library(SQLITE3_LIBRARY_BUNDLED
-    NAMES sqlite3 libsqlite3
-    PATHS \${_IMPORT_PREFIX}/lib
-    NO_DEFAULT_PATH
-)
-
-if(SQLITE3_LIBRARY_BUNDLED)
-    # Found sqlite3 that was built with this package
-    find_path(SQLITE3_INCLUDE_DIR_BUNDLED
-        NAMES sqlite3.h
-        PATHS \${_IMPORT_PREFIX}/include
-        NO_DEFAULT_PATH
-    )
-
-    if(SQLITE3_INCLUDE_DIR_BUNDLED AND NOT TARGET SQLite::SQLite3)
-        add_library(SQLite::SQLite3 UNKNOWN IMPORTED)
-        set_target_properties(SQLite::SQLite3 PROPERTIES
-            IMPORTED_LOCATION \"\${SQLITE3_LIBRARY_BUNDLED}\"
-            INTERFACE_INCLUDE_DIRECTORIES \"\${SQLITE3_INCLUDE_DIR_BUNDLED}\"
-        )
-    endif()
-else()
-    # Fall back to system sqlite3 via pkg-config (require minimum version 3.35)
-    find_dependency(PkgConfig REQUIRED)
-    pkg_check_modules(SQLITE3 REQUIRED sqlite3>=3.35)
-
-    if(SQLITE3_FOUND AND NOT TARGET SQLite::SQLite3)
-        add_library(SQLite::SQLite3 UNKNOWN IMPORTED)
-        set_target_properties(SQLite::SQLite3 PROPERTIES
-            IMPORTED_LOCATION \"\${SQLITE3_LIBRARIES}\"
-            INTERFACE_INCLUDE_DIRECTORIES \"\${SQLITE3_INCLUDE_DIRS}\"
-        )
-    endif()
-endif()
-
 # YYJSON dependency
 find_library(YYJSON_LIBRARY_BUNDLED
     NAMES yyjson libyyjson

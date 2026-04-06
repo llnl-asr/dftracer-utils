@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/sqlite/database.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_visitor.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
@@ -18,14 +18,12 @@
 
 namespace dftracer::utils::utilities::indexer::internal::gzip {
 
-using dftracer::utils::sqlite::SqliteDatabase;
-
 class GzipIndexer : public Indexer {
    public:
     static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
         constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
-    GzipIndexer(const std::string &gz_path, const std::string &idx_path,
+    GzipIndexer(const std::string &gz_path, const std::string &index_path,
                 std::uint64_t checkpoint_size = DEFAULT_CHECKPOINT_SIZE,
                 bool force = false);
     ~GzipIndexer();
@@ -43,7 +41,7 @@ class GzipIndexer : public Indexer {
     }
 
     // Metadata - BaseIndexer interface implementation
-    const std::string &get_idx_path() const override;
+    const std::string &get_index_path() const override;
     const std::string &get_archive_path() const override;
     const std::string &get_gz_path() const;
     std::uint64_t get_checkpoint_size() const override;
@@ -69,18 +67,20 @@ class GzipIndexer : public Indexer {
    private:
     std::string gz_path;
     std::string gz_path_logical_path;
-    std::string idx_path;
+    std::string index_path;
     std::uint64_t ckpt_size;
     bool force_rebuild;
-    SqliteDatabase db;
     VisitorList visitors_;
 
     // Cached values (atomic for thread-safe lazy initialization)
     mutable std::atomic<bool> cached_is_valid{false};
     mutable std::atomic<int> cached_file_id{-1};
     mutable std::atomic<std::uint64_t> cached_max_bytes{0};
+    mutable std::atomic<bool> cached_max_bytes_ready{false};
     mutable std::atomic<std::uint64_t> cached_num_lines{0};
+    mutable std::atomic<bool> cached_num_lines_ready{false};
     mutable std::atomic<std::uint64_t> cached_checkpoint_size{0};
+    mutable std::atomic<bool> cached_checkpoint_size_ready{false};
     mutable std::vector<IndexerCheckpoint> cached_checkpoints;
     mutable std::mutex cached_checkpoints_mutex;
 

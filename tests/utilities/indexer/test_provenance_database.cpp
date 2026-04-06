@@ -1,136 +1,164 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/indexer/provenance_database.h>
 #include <doctest/doctest.h>
-#include <sqlite3.h>
 #include <testing_utilities.h>
 
-#include <string>
-
+namespace fs = std::filesystem;
 using namespace dftracer::utils::utilities::indexer;
-using dftracer::utils::sqlite::SqliteStmt;
-
-static bool table_exists(sqlite3* db, const std::string& table_name) {
-    SqliteStmt stmt(
-        db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?;");
-    stmt.bind_text(1, table_name);
-    return sqlite3_step(stmt) == SQLITE_ROW;
-}
 
 TEST_SUITE("ProvenanceDatabase") {
-    TEST_CASE("Create and open database") {
-        auto path =
-            dft_utils_test::make_unique_test_path("provdb_create").string() +
-            ".pidx";
-        CHECK_NOTHROW(ProvenanceDatabase db(path));
-        CHECK(fs::exists(path));
-        fs::remove(path);
+    TEST_CASE("uses the same root-local .dftindex path") {
+        auto root = dft_utils_test::make_unique_test_path("prov_root");
+        fs::create_directories(root);
+
+        auto resolved =
+            determine_provenance_index_path((root / "trace.pfw.gz").string());
+        CHECK(resolved == (root / ".dftindex").string());
+
+        ProvenanceDatabase db(resolved);
+        CHECK(fs::exists(root / ".dftindex"));
     }
 
-    TEST_CASE("init_schema creates tables") {
-        auto path =
-            dft_utils_test::make_unique_test_path("provdb_schema").string() +
-            ".pidx";
-        ProvenanceDatabase db(path);
-        CHECK_NOTHROW(db.init_schema());
+    TEST_CASE("stores and queries provenance records in shared DB") {
+        auto root = dft_utils_test::make_unique_test_path("prov_records");
+        fs::create_directories(root);
 
-        sqlite3* raw = db.db().get();
-        CHECK(table_exists(raw, "file_info"));
-        CHECK(table_exists(raw, "provenance_info"));
-        CHECK(table_exists(raw, "provenance_sources"));
-        CHECK(table_exists(raw, "provenance_group"));
-        CHECK(table_exists(raw, "provenance_segments"));
-
-        fs::remove(path);
-    }
-
-    TEST_CASE("get_or_create_file_info") {
-        auto path =
-            dft_utils_test::make_unique_test_path("provdb_file_info").string() +
-            ".pidx";
-        ProvenanceDatabase db(path);
+        ProvenanceDatabase db((root / ".dftindex").string());
         db.init_schema();
 
-        SUBCASE("insert returns valid id") {
-            int id = db.get_or_create_file_info("/data/trace.pfw.gz", 0xDEAD);
-            CHECK(id >= 1);
-        }
+        int file_id =
+            db.get_or_create_file_info((root / "out.pfw.gz").string(), 0xCAFE);
+        CHECK(file_id > 0);
+        CHECK(db.get_file_info_id((root / "out.pfw.gz").string()) == file_id);
 
-        SUBCASE("same path and hash returns same id") {
-            int id1 = db.get_or_create_file_info("/data/trace.pfw.gz", 0xBEEF);
-            int id2 = db.get_or_create_file_info("/data/trace.pfw.gz", 0xBEEF);
-            CHECK(id1 == id2);
-        }
+        db.insert_info(file_id, "tool", "dftracer_organize");
+        db.insert_group(file_id, "group0", "cat == POSIX");
+        db.insert_source(file_id, 7, "/src/a.pfw.gz", 12, "hash7");
+        db.insert_segment(file_id, 7, 3, 100, 140, 9);
 
-        SUBCASE("same path different hash replaces row") {
-            int id1 = db.get_or_create_file_info("/data/other.pfw.gz", 0xAAAA);
-            int id2 = db.get_or_create_file_info("/data/other.pfw.gz", 0xBBBB);
-            CHECK(id2 >= 1);
-            (void)id1;
-        }
+        auto sources = db.query_sources(file_id);
+        REQUIRE(sources.size() == 1);
+        CHECK(sources[0].source_idx == 7);
+        CHECK(sources[0].path == "/src/a.pfw.gz");
+        CHECK(sources[0].num_checkpoints == 12);
+        CHECK(sources[0].event_hash == "hash7");
 
-        SUBCASE("distinct paths get distinct ids") {
-            int id1 = db.get_or_create_file_info("/data/a.pfw.gz", 0x1111);
-            int id2 = db.get_or_create_file_info("/data/b.pfw.gz", 0x2222);
-            CHECK(id1 != id2);
-        }
+        auto segments = db.query_segments(file_id, 7);
+        REQUIRE(segments.size() == 1);
+        CHECK(segments[0].source_checkpoint == 3);
+        CHECK(segments[0].output_line_start == 100);
+        CHECK(segments[0].output_line_end == 140);
+        CHECK(segments[0].event_count == 9);
 
-        fs::remove(path);
+        CHECK(db.query_info(file_id, "tool") == "dftracer_organize");
+        CHECK(db.query_group_name(file_id) == "group0");
+        CHECK(db.query_group_predicate(file_id) == "cat == POSIX");
     }
 
-    TEST_CASE("get_file_info_id returns -1 for unknown") {
-        auto path =
-            dft_utils_test::make_unique_test_path("provdb_unknown").string() +
-            ".pidx";
-        ProvenanceDatabase db(path);
+    TEST_CASE("keeps provenance for multiple outputs in one shared root") {
+        auto root = dft_utils_test::make_unique_test_path("prov_multi");
+        fs::create_directories(root);
+
+        ProvenanceDatabase db((root / ".dftindex").string());
         db.init_schema();
 
-        CHECK(db.get_file_info_id("/nonexistent/path.pfw.gz") == -1);
+        const auto out_a = (root / "io.pfw.gz").string();
+        const auto out_b = (root / "compute.pfw.gz").string();
 
-        fs::remove(path);
+        const int file_a = db.get_or_create_file_info(out_a, 0xA001);
+        const int file_b = db.get_or_create_file_info(out_b, 0xB002);
+        CHECK(file_a > 0);
+        CHECK(file_b > 0);
+        CHECK(file_a != file_b);
+
+        db.begin_transaction();
+        db.insert_group(file_a, "io", R"(cat == "POSIX")");
+        db.insert_source(file_a, 0, "/src/trace0.pfw.gz", 3, "ha");
+        db.insert_segment(file_a, 0, 1, 0, 5, 3);
+
+        db.insert_group(file_b, "compute", R"(cat == "APP")");
+        db.insert_source(file_b, 1, "/src/trace1.pfw.gz", 2, "hb");
+        db.insert_segment(file_b, 1, 0, 0, 3, 1);
+        db.commit_transaction();
+
+        CHECK(db.get_file_info_id(out_a) == file_a);
+        CHECK(db.get_file_info_id(out_b) == file_b);
+
+        CHECK(db.query_group_name(file_a) == "io");
+        CHECK(db.query_group_name(file_b) == "compute");
+
+        auto segments_a = db.query_all_segments(file_a);
+        auto segments_b = db.query_all_segments(file_b);
+        REQUIRE(segments_a.size() == 1);
+        REQUIRE(segments_b.size() == 1);
+        CHECK(segments_a[0].event_count == 3);
+        CHECK(segments_b[0].event_count == 1);
     }
 
-    TEST_CASE("Transaction commit") {
-        auto path =
-            dft_utils_test::make_unique_test_path("provdb_txn").string() +
-            ".pidx";
-        ProvenanceDatabase db(path);
+    TEST_CASE("rebuild-style writes overwrite provenance for the same output") {
+        auto root = dft_utils_test::make_unique_test_path("prov_rebuild");
+        fs::create_directories(root);
+
+        ProvenanceDatabase db((root / ".dftindex").string());
         db.init_schema();
 
-        CHECK_NOTHROW(db.begin_transaction());
-        int id = db.get_or_create_file_info("/data/txn.pfw.gz", 0xCAFE);
-        CHECK_NOTHROW(db.commit_transaction());
+        const auto out = (root / "group.pfw.gz").string();
 
-        CHECK(id >= 1);
-        CHECK(db.get_file_info_id("/data/txn.pfw.gz") == id);
+        const int original_id = db.get_or_create_file_info(out, 0x1111);
+        db.begin_transaction();
+        db.insert_info(original_id, "tool", "dftracer_organize");
+        db.insert_group(original_id, "io", R"(cat == "POSIX")");
+        db.insert_source(original_id, 0, "/src/trace0.pfw.gz", 4, "old");
+        db.insert_segment(original_id, 0, 0, 0, 4, 2);
+        db.commit_transaction();
 
-        fs::remove(path);
+        const int rebuilt_id = db.get_or_create_file_info(out, 0x2222);
+        CHECK(rebuilt_id == original_id);
+
+        db.begin_transaction();
+        db.insert_info(rebuilt_id, "tool", "dftracer_organize_v2");
+        db.insert_group(rebuilt_id, "io", R"(cat == "MPI")");
+        db.insert_source(rebuilt_id, 0, "/src/trace0.pfw.gz", 8, "new");
+        db.insert_segment(rebuilt_id, 0, 0, 10, 18, 5);
+        db.commit_transaction();
+
+        CHECK(db.query_info(rebuilt_id, "tool") == "dftracer_organize_v2");
+        CHECK(db.query_group_predicate(rebuilt_id) == R"(cat == "MPI")");
+
+        auto sources = db.query_sources(rebuilt_id);
+        REQUIRE(sources.size() == 1);
+        CHECK(sources[0].num_checkpoints == 8);
+        CHECK(sources[0].event_hash == "new");
+
+        auto segments = db.query_segments(rebuilt_id, 0);
+        REQUIRE(segments.size() == 1);
+        CHECK(segments[0].output_line_start == 10);
+        CHECK(segments[0].output_line_end == 18);
+        CHECK(segments[0].event_count == 5);
     }
 
-    TEST_CASE("determine_provenance_index_path - empty index_dir") {
-        SUBCASE("plain path gets .pidx suffix") {
-            auto result = determine_provenance_index_path("/data/trace.pfw.gz");
-            CHECK(result == "/data/trace.pfw.gz.pidx");
-        }
+    TEST_CASE("rollback discards provenance writes") {
+        auto root = dft_utils_test::make_unique_test_path("prov_rollback");
+        fs::create_directories(root);
 
-        SUBCASE("path without extension gets .pidx suffix") {
-            auto result = determine_provenance_index_path("/data/trace");
-            CHECK(result == "/data/trace.pidx");
-        }
-    }
+        ProvenanceDatabase db((root / ".dftindex").string());
+        db.init_schema();
 
-    TEST_CASE("determine_provenance_index_path - with index_dir") {
-        SUBCASE("places filename.pidx under index_dir") {
-            auto result =
-                determine_provenance_index_path("/data/trace.pfw.gz", "/idx");
-            CHECK(result == "/idx/trace.pfw.gz.pidx");
-        }
+        const int file_id =
+            db.get_or_create_file_info((root / "out.pfw.gz").string(), 0xCAFE);
 
-        SUBCASE("nested source path uses only filename") {
-            auto result = determine_provenance_index_path(
-                "/deep/nested/dir/run.pfw.gz", "/scratch/indices");
-            CHECK(result == "/scratch/indices/run.pfw.gz.pidx");
-        }
+        db.begin_transaction();
+        db.insert_info(file_id, "tool", "dftracer_organize");
+        db.insert_group(file_id, "group0", "cat == POSIX");
+        db.insert_source(file_id, 7, "/src/a.pfw.gz", 12, "hash7");
+        db.insert_segment(file_id, 7, 3, 100, 140, 9);
+        db.rollback_transaction();
+
+        CHECK(db.query_info(file_id, "tool").empty());
+        CHECK(db.query_group_name(file_id).empty());
+        CHECK(db.query_group_predicate(file_id).empty());
+        CHECK(db.query_sources(file_id).empty());
+        CHECK(db.query_segments(file_id, 7).empty());
     }
 }

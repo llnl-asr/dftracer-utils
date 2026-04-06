@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
@@ -16,6 +17,7 @@
 using namespace dftracer::utils::utilities::reader;
 using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::coro;
+using namespace dftracer::utils::utilities::composites::dft::internal;
 using namespace dft_utils_test;
 
 namespace {
@@ -88,13 +90,13 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
         std::string index_dir = env.get_dir();
-        std::string idx_path = env.get_index_path(gz_file);
+        std::string index_path = env.get_index_path(gz_file);
 
-        auto indexer =
-            IndexerFactory::create(gz_file, idx_path, 32 * 1024 * 1024, false);
+        auto indexer = IndexerFactory::create(gz_file, index_path,
+                                              32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
-        REQUIRE(fs::exists(idx_path));
+        REQUIRE(fs::exists(determine_index_path(gz_file, index_dir)));
 
         TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
 
@@ -106,7 +108,7 @@ TEST_SUITE("TraceReader") {
 
         SUBCASE("Indexed and unindexed counts match") {
             // Remove the index and re-read to compare.
-            fs::remove(idx_path);
+            fs::remove_all(determine_index_path(gz_file, index_dir));
             TraceReader plain_reader({.file_path = gz_file});
             CHECK_FALSE(plain_reader.has_index());
             auto n_plain = count_lines(plain_reader.read_lines()).get();
@@ -208,13 +210,13 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
         std::string index_dir = env.get_dir();
-        std::string idx_path = env.get_index_path(gz_file);
+        std::string index_path = env.get_index_path(gz_file);
 
-        auto indexer =
-            IndexerFactory::create(gz_file, idx_path, 32 * 1024 * 1024, false);
+        auto indexer = IndexerFactory::create(gz_file, index_path,
+                                              32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
-        REQUIRE(fs::exists(idx_path));
+        REQUIRE(fs::exists(determine_index_path(gz_file, index_dir)));
 
         TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
         CHECK(reader.has_index());
@@ -289,7 +291,7 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
         std::string index_dir = env.get_dir();
-        std::string idx_path = env.get_index_path(gz_file);
+        std::string index_path = env.get_index_path(gz_file);
 
         TraceReader plain_reader({.file_path = gz_file});
         CHECK_FALSE(plain_reader.has_index());
@@ -299,8 +301,8 @@ TEST_SUITE("TraceReader") {
         auto plain_chunks =
             count_raw_chunks(plain_reader.read_raw(single_line)).get();
 
-        auto indexer =
-            IndexerFactory::create(gz_file, idx_path, 32 * 1024 * 1024, false);
+        auto indexer = IndexerFactory::create(gz_file, index_path,
+                                              32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
 
@@ -438,13 +440,13 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);
         std::string index_dir = env.get_dir();
-        std::string idx_path = env.get_index_path(gz_file);
+        std::string index_path = env.get_index_path(gz_file);
 
-        auto indexer =
-            IndexerFactory::create(gz_file, idx_path, 32 * 1024 * 1024, false);
+        auto indexer = IndexerFactory::create(gz_file, index_path,
+                                              32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
-        REQUIRE(fs::exists(idx_path));
+        REQUIRE(fs::exists(determine_index_path(gz_file, index_dir)));
 
         TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
         CHECK(reader.has_index());

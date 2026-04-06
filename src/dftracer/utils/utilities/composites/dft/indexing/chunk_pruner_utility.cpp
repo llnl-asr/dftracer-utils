@@ -1,5 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/sqlite/async.h>
+#include <dftracer/utils/core/rocksdb/async.h>
 #include <dftracer/utils/utilities/common/query/ast.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
@@ -48,11 +48,11 @@ struct PrunerContext {
 
     // Hash resolution: human-readable value → hash strings
     std::unordered_map<std::string, std::vector<std::string>> hash_cache;
-    const sqlite::SqliteDatabase* db = nullptr;
+    const IndexDatabase* db = nullptr;
     int fid = -1;
 
     BloomFilterCache* cache;
-    std::string idx_path;
+    std::string index_path;
 
     // Resolve a value for a hash dimension.
     // Returns the hash strings if the dimension is a hash dim and
@@ -67,7 +67,7 @@ struct PrunerContext {
         if (it != hash_cache.end()) return it->second;
 
         if (db) {
-            auto hashes = queries::query_hash_by_resolved(*db, dim, val);
+            auto hashes = db->query_hash_by_resolved(dim, val);
             auto& cached = hash_cache[key];
             cached = std::move(hashes);
             return cached;
@@ -347,7 +347,7 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPrunerUtility::process(
         out.file_may_match = false;
 
         try {
-            IndexDatabase idx_db(input.idx_path);
+            IndexDatabase idx_db(input.index_path);
             int fid =
                 idx_db.get_file_info_id(get_logical_path(input.file_path));
             if (fid < 0) {
@@ -357,14 +357,13 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPrunerUtility::process(
             }
 
             // Load chunk dimension stats
-            auto dim_stats_rows =
-                queries::query_chunk_dimension_stats(idx_db.sql_db(), fid);
+            auto dim_stats_rows = idx_db.query_chunk_dimension_stats(fid);
 
             PrunerContext ctx;
             ctx.file_info_id = fid;
             ctx.cache = input.cache;
-            ctx.idx_path = input.idx_path;
-            ctx.db = &idx_db.sql_db();
+            ctx.index_path = input.index_path;
+            ctx.db = &idx_db;
             ctx.fid = fid;
 
             for (const auto& ds : dim_stats_rows) {
@@ -373,10 +372,9 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPrunerUtility::process(
             }
 
             // Load bloom filters for all dimensions
-            auto indexed_dims =
-                queries::query_index_dimensions(idx_db.sql_db(), fid);
-            auto all_chunk_blooms = queries::query_chunk_bloom_filters_batch(
-                idx_db.sql_db(), fid, indexed_dims);
+            auto indexed_dims = idx_db.query_index_dimensions(fid);
+            auto all_chunk_blooms =
+                idx_db.query_chunk_bloom_filters_batch(fid, indexed_dims);
 
             for (const auto& [dim, chunk_blooms] : all_chunk_blooms) {
                 for (const auto& cb : chunk_blooms) {
@@ -384,8 +382,8 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPrunerUtility::process(
                     BloomFilter bf = BloomFilter::from_blob(
                         cb.bloom_data.data(), cb.bloom_data.size());
                     if (input.cache) {
-                        input.cache->put(input.idx_path, dim, cb.checkpoint_idx,
-                                         bf);
+                        input.cache->put(input.index_path, dim,
+                                         cb.checkpoint_idx, bf);
                     }
                     ctx.bloom_filters[dim][cb.checkpoint_idx] = std::move(bf);
                 }
@@ -428,7 +426,7 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPrunerUtility::process(
         return out;
     };
 
-    co_return co_await sqlite::run(do_query);
+    co_return co_await rocksdb::run(do_query);
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

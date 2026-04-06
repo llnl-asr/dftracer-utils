@@ -22,15 +22,15 @@ class IndexerFactory {
      * appropriate indexer.
      *
      * @param archive_path Path to the archive file (.gz or .tar.gz)
-     * @param idx_path Path to the index file (optional - will be auto-generated
-     * if empty)
+     * @param index_path Path to the `.dftindex` store (optional - will be
+     * auto-generated if empty)
      * @param checkpoint_size Checkpoint size in bytes
      * @param force Force rebuilding the index even if it exists
      * @return Shared pointer to the appropriate indexer, or nullptr if format
      * not supported
      */
     static std::shared_ptr<Indexer> create(
-        const std::string &archive_path, const std::string &idx_path = "",
+        const std::string &archive_path, const std::string &index_path = "",
         std::uint64_t checkpoint_size =
             constants::indexer::DEFAULT_CHECKPOINT_SIZE,
         bool force = false);

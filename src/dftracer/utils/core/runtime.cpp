@@ -64,8 +64,12 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
            std::shared_ptr<std::atomic<TaskIndex>> task_id) -> coro::Coro {
         try {
             co_await std::move(t);
+            t = coro::CoroTask<void>{
+                std::coroutine_handle<coro::CoroTask<void>::promise_type>{}};
             exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
         } catch (...) {
+            t = coro::CoroTask<void>{
+                std::coroutine_handle<coro::CoroTask<void>::promise_type>{}};
             exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
             p->set_exception(std::current_exception());
             co_return;

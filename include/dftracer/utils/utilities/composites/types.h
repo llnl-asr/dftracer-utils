@@ -59,7 +59,7 @@ struct DirectoryProcessInput {
  */
 struct IndexedReadInput {
     std::string file_path;
-    std::string idx_path;
+    std::string index_path;  // Root-local `.dftindex` path.
     std::size_t checkpoint_size = dftracer::utils::utilities::indexer::
         internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
@@ -71,7 +71,7 @@ struct IndexedReadInput {
                          indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE,
                      bool force = false)
         : file_path(std::move(fpath)),
-          idx_path(std::move(ipath)),
+          index_path(std::move(ipath)),
           checkpoint_size(ckpt_size),
           force_rebuild(force) {}
 
@@ -82,7 +82,7 @@ struct IndexedReadInput {
     }
 
     IndexedReadInput& with_index(std::string idx) {
-        idx_path = std::move(idx);
+        index_path = std::move(idx);
         return *this;
     }
 
@@ -102,7 +102,8 @@ struct IndexedReadInput {
  */
 struct LineBatchInput {
     std::string file_path;
-    std::string idx_path;        // Empty for plain text files
+    std::string index_path;      // Empty for plain text files
+                                 // or `.dftindex` for indexed archives.
     std::size_t start_line = 0;  // 0 = from beginning
     std::size_t end_line = 0;    // 0 = to end
     std::size_t checkpoint_size = dftracer::utils::utilities::indexer::
@@ -113,7 +114,7 @@ struct LineBatchInput {
     LineBatchInput(std::string fpath, std::string ipath = "",
                    std::size_t start = 0, std::size_t end = 0)
         : file_path(std::move(fpath)),
-          idx_path(std::move(ipath)),
+          index_path(std::move(ipath)),
           start_line(start),
           end_line(end) {}
 
@@ -124,7 +125,7 @@ struct LineBatchInput {
     }
 
     LineBatchInput& with_index(std::string idx) {
-        idx_path = std::move(idx);
+        index_path = std::move(idx);
         return *this;
     }
 

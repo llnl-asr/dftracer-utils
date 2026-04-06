@@ -53,7 +53,7 @@ TEST_SUITE("IndexBuilder") {
 
         CHECK(result.success);
         CHECK_FALSE(result.was_skipped);
-        CHECK(fs::exists(result.idx_path));
+        CHECK(fs::exists(result.index_path));
     }
 
     TEST_CASE("BloomVisitor direct test") {
@@ -105,9 +105,9 @@ TEST_SUITE("IndexBuilder") {
         });
 
         REQUIRE(result.success);
-        REQUIRE(fs::exists(result.idx_path));
+        REQUIRE(fs::exists(result.index_path));
 
-        IndexDatabase db(result.idx_path);
+        IndexDatabase db(result.index_path);
         int fid =
             db.get_file_info_id(internal::get_logical_path(result.file_path));
         REQUIRE(fid >= 0);
@@ -134,9 +134,9 @@ TEST_SUITE("IndexBuilder") {
         });
 
         REQUIRE(result.success);
-        REQUIRE(fs::exists(result.idx_path));
+        REQUIRE(fs::exists(result.index_path));
 
-        IndexDatabase db(result.idx_path);
+        IndexDatabase db(result.index_path);
         int fid =
             db.get_file_info_id(internal::get_logical_path(result.file_path));
         REQUIRE(fid >= 0);
@@ -163,9 +163,9 @@ TEST_SUITE("IndexBuilder") {
         });
 
         REQUIRE(result.success);
-        REQUIRE(fs::exists(result.idx_path));
+        REQUIRE(fs::exists(result.index_path));
 
-        IndexDatabase db(result.idx_path);
+        IndexDatabase db(result.index_path);
         int fid =
             db.get_file_info_id(internal::get_logical_path(result.file_path));
         REQUIRE(fid >= 0);
@@ -297,7 +297,7 @@ TEST_SUITE("IndexBuilder") {
 
         // Verify no bloom data yet
         {
-            IndexDatabase db(r1.idx_path);
+            IndexDatabase db(r1.index_path);
             int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
             CHECK(fid >= 0);
             CHECK_FALSE(db.has_bloom_data(fid));
@@ -323,7 +323,7 @@ TEST_SUITE("IndexBuilder") {
 
         // Verify bloom data now exists
         {
-            IndexDatabase db(r2.idx_path);
+            IndexDatabase db(r2.index_path);
             int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
             CHECK(fid >= 0);
             CHECK(db.has_bloom_data(fid));
@@ -352,7 +352,7 @@ TEST_SUITE("IndexBuilder") {
         REQUIRE(r1.success);
 
         {
-            IndexDatabase db(r1.idx_path);
+            IndexDatabase db(r1.index_path);
             int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
             CHECK(db.has_bloom_data(fid));
             CHECK_FALSE(db.has_manifest_data(fid));
@@ -378,7 +378,7 @@ TEST_SUITE("IndexBuilder") {
 
         // Verify both bloom and manifest exist
         {
-            IndexDatabase db(r2.idx_path);
+            IndexDatabase db(r2.index_path);
             int fid = db.get_file_info_id(internal::get_logical_path(gz_file));
             CHECK(db.has_bloom_data(fid));
             CHECK(db.has_manifest_data(fid));

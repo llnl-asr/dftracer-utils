@@ -138,17 +138,37 @@ PyTypeObject ArrowBatchCapsuleType = {
 static void TraceReaderIterator_dealloc(TraceReaderIteratorObject *self) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (self->arrow_state) {
+        auto task_future = self->arrow_state->task_future;
         self->arrow_state->cancelled.store(true, std::memory_order_release);
         self->arrow_state->cv_producer.notify_all();
         self->arrow_state->cv_consumer.notify_all();  // wake blocked __next__
-        self->arrow_state.reset();
+        Py_BEGIN_ALLOW_THREADS {
+            std::unique_lock<std::mutex> lock(self->arrow_state->mtx);
+            self->arrow_state->cv_consumer.wait(lock, [self] {
+                return self->arrow_state->done.load(std::memory_order_acquire);
+            });
+        }
+        if (task_future.valid()) {
+            task_future.wait();
+        }
+        Py_END_ALLOW_THREADS self->arrow_state.reset();
     }
 #endif
     if (self->state) {
+        auto task_future = self->state->task_future;
         self->state->cancelled.store(true, std::memory_order_release);
         self->state->cv_producer.notify_all();
         self->state->cv_consumer.notify_all();  // wake blocked __next__
-        self->state.reset();
+        Py_BEGIN_ALLOW_THREADS {
+            std::unique_lock<std::mutex> lock(self->state->mtx);
+            self->state->cv_consumer.wait(lock, [self] {
+                return self->state->done.load(std::memory_order_acquire);
+            });
+        }
+        if (task_future.valid()) {
+            task_future.wait();
+        }
+        Py_END_ALLOW_THREADS self->state.reset();
     }
     Py_TYPE(self)->tp_free((PyObject *)self);
 }

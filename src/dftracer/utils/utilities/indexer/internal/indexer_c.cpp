@@ -18,10 +18,10 @@ static std::shared_ptr<Indexer> *cast_indexer(dft_indexer_handle_t indexer) {
 }
 
 dft_indexer_handle_t dft_indexer_create(const char *gz_path,
-                                        const char *idx_path,
+                                        const char *index_path,
                                         uint64_t checkpoint_size,
                                         int force_rebuild) {
-    if (!gz_path || !idx_path || checkpoint_size == 0) {
+    if (!gz_path || !index_path || checkpoint_size == 0) {
         DFTRACER_UTILS_LOG_ERROR("%s",
                                  "Invalid parameters for indexer creation");
         return nullptr;
@@ -29,7 +29,7 @@ dft_indexer_handle_t dft_indexer_create(const char *gz_path,
 
     try {
         auto indexer = IndexerFactory::create(
-            gz_path, idx_path, checkpoint_size, force_rebuild != 0);
+            gz_path, index_path, checkpoint_size, force_rebuild != 0);
         if (indexer) {
             return static_cast<dft_indexer_handle_t>(
                 new std::shared_ptr<Indexer>(indexer));

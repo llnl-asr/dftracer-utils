@@ -81,6 +81,24 @@ bool port_is_listening(int port, int timeout_ms = 100) {
     return result == 0;
 }
 
+bool can_bind_local_tcp_socket() {
+    int sock = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return false;
+
+    int opt = 1;
+    ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(0);
+
+    const int rc =
+        ::bind(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr));
+    ::close(sock);
+    return rc == 0;
+}
+
 /// Wait until port is listening or timeout expires.
 bool wait_for_port(int port, int timeout_s = 10) {
     auto deadline =
@@ -188,15 +206,6 @@ std::string extract_body(const std::string& response) {
 /// Pick a random port in the ephemeral range.
 int pick_port() { return 10000 + (::getpid() % 50000); }
 
-bool tcp_sockets_available() {
-    int sock = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (sock >= 0) {
-        ::close(sock);
-        return true;
-    }
-    return false;
-}
-
 /// RAII server process manager.
 struct ServerProcess {
     pid_t pid = -1;
@@ -264,8 +273,8 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         MESSAGE("dftracer_server binary not found, skipping.");
         return;
     }
-    if (!tcp_sockets_available()) {
-        MESSAGE("TCP sockets are unavailable in this environment, skipping.");
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
         return;
     }
 
@@ -558,8 +567,8 @@ TEST_CASE("DFTracer Server - graceful shutdown via SIGTERM") {
         MESSAGE("dftracer_server binary not found, skipping.");
         return;
     }
-    if (!tcp_sockets_available()) {
-        MESSAGE("TCP sockets are unavailable in this environment, skipping.");
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
         return;
     }
 

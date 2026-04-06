@@ -1,80 +1,15 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_QUERIES_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_QUERIES_H
 
-#include <dftracer/utils/core/sqlite/database.h>
-#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 
 #include <cstdint>
 #include <limits>
-#include <optional>
-#include <span>
 #include <string>
-#include <string_view>
-#include <unordered_map>
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::indexing::queries {
-
-using dftracer::utils::sqlite::SqliteDatabase;
-using dftracer::utils::sqlite::SqliteStmt;
-
-// --- Insert operations ---
-
-void insert_chunk_bloom_filter(const SqliteDatabase& db, int file_info_id,
-                               std::uint64_t checkpoint_idx,
-                               std::string_view dimension,
-                               const void* blob_data, int blob_size,
-                               std::uint64_t num_entries);
-
-void insert_chunk_bloom_filter(const SqliteDatabase& db, int file_info_id,
-                               std::uint64_t checkpoint_idx,
-                               std::string_view dimension,
-                               std::span<const unsigned char> blob_data,
-                               std::uint64_t num_entries);
-
-void insert_file_bloom_filter(const SqliteDatabase& db, int file_info_id,
-                              std::string_view dimension, const void* blob_data,
-                              int blob_size, std::uint64_t num_entries);
-
-void insert_file_bloom_filter(const SqliteDatabase& db, int file_info_id,
-                              std::string_view dimension,
-                              std::span<const unsigned char> blob_data,
-                              std::uint64_t num_entries);
-
-void insert_chunk_statistics(const SqliteDatabase& db, int file_info_id,
-                             std::uint64_t checkpoint_idx,
-                             const ChunkStatistics& stats);
-
-void insert_index_dimension(const SqliteDatabase& db, int file_info_id,
-                            std::string_view dimension);
-
-void insert_hash_resolution(const SqliteDatabase& db, int file_info_id,
-                            std::string_view dimension,
-                            std::string_view hash_value,
-                            std::string_view resolved_value);
-
-SqliteStmt prepare_insert_chunk_bloom_filter(const SqliteDatabase& db);
-void insert_chunk_bloom_filter(SqliteStmt& stmt, int file_info_id,
-                               std::uint64_t checkpoint_idx,
-                               std::string_view dimension,
-                               const void* blob_data, int blob_size,
-                               std::uint64_t num_entries);
-
-SqliteStmt prepare_insert_chunk_dimension_stats(const SqliteDatabase& db);
-void insert_chunk_dimension_stats(SqliteStmt& stmt, int file_info_id,
-                                  std::uint64_t checkpoint_idx,
-                                  const ChunkDimensionStats& stats,
-                                  std::size_t value_counts_cap);
-
-SqliteStmt prepare_insert_hash_resolution(const SqliteDatabase& db);
-void insert_hash_resolution(SqliteStmt& stmt, int file_info_id,
-                            std::string_view dimension,
-                            std::string_view hash_value,
-                            std::string_view resolved_value);
-
-// --- Query operations ---
 
 struct ChunkBloomResult {
     std::uint64_t checkpoint_idx;
@@ -82,86 +17,21 @@ struct ChunkBloomResult {
     std::uint64_t num_entries;
 };
 
-std::vector<ChunkBloomResult> query_chunk_bloom_filters(
-    const SqliteDatabase& db, int file_info_id, std::string_view dimension);
-
-/// Fetch chunk bloom filters for ALL specified dimensions in one query.
-std::unordered_map<std::string, std::vector<ChunkBloomResult>>
-query_chunk_bloom_filters_batch(const SqliteDatabase& db, int file_info_id,
-                                const std::vector<std::string>& dimensions);
-
 struct FileBloomResult {
     std::vector<unsigned char> bloom_data;
     std::uint64_t num_entries;
 };
-
-std::optional<FileBloomResult> query_file_bloom_filter(
-    const SqliteDatabase& db, int file_info_id, std::string_view dimension);
-
-/// Fetch file-level bloom filters for ALL specified dimensions in one query.
-std::unordered_map<std::string, FileBloomResult> query_file_bloom_filters_batch(
-    const SqliteDatabase& db, int file_info_id,
-    const std::vector<std::string>& dimensions);
-
-std::vector<std::string> query_index_dimensions(const SqliteDatabase& db,
-                                                int file_info_id);
-
-bool has_index_dimension(const SqliteDatabase& db, int file_info_id,
-                         std::string_view dimension);
 
 struct ChunkStatisticsResult {
     std::uint64_t checkpoint_idx;
     ChunkStatistics stats;
 };
 
-std::vector<ChunkStatisticsResult> query_chunk_statistics(
-    const SqliteDatabase& db, int file_info_id);
-
 struct TimeBounds {
     std::uint64_t min_timestamp_us = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t max_timestamp_us = 0;
     bool valid = false;
 };
-
-/// Fast aggregate query: single-row SELECT MIN/MAX on chunk_statistics.
-TimeBounds query_time_bounds(const SqliteDatabase& db, int file_info_id);
-
-std::vector<std::string> query_hash_by_resolved(
-    const SqliteDatabase& db, std::string_view dimension,
-    std::string_view resolved_value);
-
-std::optional<std::string> query_resolved_by_hash(const SqliteDatabase& db,
-                                                  std::string_view dimension,
-                                                  std::string_view hash_value);
-
-// --- Chunk dimension stats ---
-
-void insert_chunk_dimension_stats(const SqliteDatabase& db, int file_info_id,
-                                  std::uint64_t checkpoint_idx,
-                                  const ChunkDimensionStats& stats,
-                                  std::size_t value_counts_cap = 4096);
-
-std::vector<ChunkDimensionStatsResult> query_chunk_dimension_stats(
-    const SqliteDatabase& db, int file_info_id);
-
-std::vector<ChunkDimensionStatsResult>
-query_chunk_dimension_stats_for_dimension(const SqliteDatabase& db,
-                                          int file_info_id,
-                                          std::string_view dimension);
-
-void delete_chunk_dimension_stats(const SqliteDatabase& db, int file_info_id);
-
-// --- Delete operations ---
-
-void delete_chunk_bloom_filters(const SqliteDatabase& db, int file_info_id,
-                                std::string_view dimension);
-
-void delete_file_bloom_filter(const SqliteDatabase& db, int file_info_id,
-                              std::string_view dimension);
-
-void delete_chunk_statistics(const SqliteDatabase& db, int file_info_id);
-
-void delete_hash_resolutions(const SqliteDatabase& db, int file_info_id);
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing::queries
 

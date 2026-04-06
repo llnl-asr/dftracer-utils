@@ -45,8 +45,9 @@ struct FileMergeValidatorUtilityInput {
         return input;
     }
 
-    FileMergeValidatorUtilityInput& with_index(const std::string& idx_path) {
-        index_path = idx_path;
+    FileMergeValidatorUtilityInput& with_index(
+        const std::string& index_path_value) {
+        index_path = index_path_value;
         return *this;
     }
 

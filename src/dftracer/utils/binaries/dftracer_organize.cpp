@@ -185,11 +185,11 @@ coro::CoroTask<int> run_organize(const std::string& output_dir,
     std::printf("  Source files processed: %zu\n",
                 router_result.source_files_processed);
 
-    // Step 4: Build sidecars for output chunk files
+    // Step 4: Build `.dftindex` stores for output chunk files.
     if (!router_result.output_files.empty()) {
-        std::printf("Step 4: Building sidecars...\n");
+        std::printf("Step 4: Building .dftindex stores...\n");
         auto pipeline_config = PipelineConfig()
-                                   .with_name("Organize: Build Sidecars")
+                                   .with_name("Organize: Build Index Stores")
                                    .with_compute_threads(executor_threads)
                                    .with_watchdog(false);
 
@@ -197,7 +197,7 @@ coro::CoroTask<int> run_organize(const std::string& output_dir,
 
         auto* output_files_ptr = &router_result.output_files;
 
-        auto sidecar_task = make_task(
+        auto index_store_task = make_task(
             [output_files_ptr, output_dir,
              checkpoint_size](CoroScope& ctx) -> coro::CoroTask<void> {
                 co_await ctx.scope(
@@ -224,8 +224,8 @@ coro::CoroTask<int> run_organize(const std::string& output_dir,
             },
             "BuildSidecars");
 
-        pipeline.set_source(sidecar_task);
-        pipeline.set_destination(sidecar_task);
+        pipeline.set_source(index_store_task);
+        pipeline.set_destination(index_store_task);
         pipeline.execute();
     }
 
@@ -293,7 +293,7 @@ int main(int argc, char** argv) {
             indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
 
     program.add_argument("--index-dir")
-        .help("Directory for sidecar files")
+        .help("Directory for .dftindex stores")
         .default_value<std::string>("");
 
     program.add_argument("-f", "--force")

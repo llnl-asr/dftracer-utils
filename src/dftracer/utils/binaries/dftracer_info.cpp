@@ -49,7 +49,7 @@ static std::string format_size(std::uint64_t bytes) {
     return oss.str();
 }
 
-/// Fast path: read metadata from the .idx database.
+/// Fast path: read metadata from the `.dftindex` database.
 /// Returns success=false if index doesn't exist, letting the caller
 /// fall back to direct_scan_info for small/unindexed files.
 static MetadataCollectorUtilityOutput index_based_info(
@@ -60,13 +60,13 @@ static MetadataCollectorUtilityOutput index_based_info(
     meta.file_path = file_path;
 
     try {
-        std::string idx_path = file_path + constants::indexer::EXTENSION;
-        if (!fs::exists(idx_path)) {
+        std::string index_path = file_path + constants::indexer::EXTENSION;
+        if (!fs::exists(index_path)) {
             meta.success = false;
             return meta;
         }
 
-        IndexDatabase db(idx_path);
+        IndexDatabase db(index_path);
         int fid = db.find_file(file_path);
         if (fid < 0) {
             meta.success = false;
@@ -78,6 +78,7 @@ static MetadataCollectorUtilityOutput index_based_info(
         meta.num_lines = db.get_num_lines(fid);
         meta.uncompressed_size = db.get_max_bytes(fid);
         meta.valid_events = db.get_total_events(fid);
+        meta.index_path = index_path;
         meta.has_index = true;
         meta.index_valid = true;
         meta.size_mb =
@@ -97,7 +98,7 @@ static MetadataCollectorUtilityOutput index_based_info(
 }
 
 /// One streaming decompress pass, count lines with JSON validation,
-/// no sidecar index created.
+/// without creating a `.dftindex` store.
 static coro::CoroTask<MetadataCollectorUtilityOutput> direct_scan_info(
     std::string file_path) {
     using dftracer::utils::utilities::fileio::lines::sources::
@@ -214,9 +215,9 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
     if (info.format == ArchiveFormat::GZIP ||
         info.format == ArchiveFormat::TAR_GZ) {
         std::printf("\nIndex Information:\n");
-        std::printf("  Index File: %s\n", info.idx_path.empty()
-                                              ? "(auto-generated)"
-                                              : info.idx_path.c_str());
+        std::printf("  Index Store: %s\n", info.index_path.empty()
+                                               ? "(auto-generated)"
+                                               : info.index_path.c_str());
         std::printf("  Index Status: %s\n",
                     info.has_index ? (info.index_valid ? "Valid" : "Invalid")
                                    : "Not Created");
@@ -239,8 +240,8 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
                             (unsigned long long)lines_per_checkpoint);
 
                 // Calculate index overhead
-                if (fs::exists(info.idx_path)) {
-                    std::uint64_t index_size = fs::file_size(info.idx_path);
+                if (fs::exists(info.index_path)) {
+                    std::uint64_t index_size = fs::file_size(info.index_path);
                     double index_overhead =
                         100.0 * static_cast<double>(index_size) /
                         static_cast<double>(info.compressed_size);
@@ -404,7 +405,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Small files skip indexing to avoid creating sidecar files on
+    // Small files skip indexing to avoid creating `.dftindex` stores on
     // metadata-sensitive filesystems (e.g. Lustre).
     static constexpr std::size_t INDEX_SIZE_THRESHOLD =
         constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;

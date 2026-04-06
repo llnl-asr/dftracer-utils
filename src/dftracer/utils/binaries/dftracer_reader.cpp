@@ -24,31 +24,33 @@ using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::reader::internal;
 
 static coro::CoroTask<int> run_reader(const std::string &gz_path,
-                                      const std::string &idx_path,
+                                      const std::string &index_path,
                                       std::size_t checkpoint_size,
                                       bool force_rebuild, bool check_rebuild,
                                       const std::string &read_mode,
                                       std::size_t read_buffer_size,
                                       int64_t start, int64_t end) {
+    const std::string index_root = normalize_index_root(index_path);
+
     // Create indexer first
     std::shared_ptr<Indexer> indexer;
     try {
-        // check if idx file exists
-        if (!fs::exists(idx_path)) {
+        // Check whether the root-local .dftindex store already exists.
+        if (!fs::exists(index_root)) {
             if (check_rebuild) {
                 DFTRACER_UTILS_LOG_ERROR(
-                    "Index file '%s' does not exist, cannot check",
-                    idx_path.c_str());
+                    "Index store '%s' does not exist, cannot check",
+                    index_root.c_str());
                 co_return 1;
             }
-            DFTRACER_UTILS_LOG_DEBUG("Index file '%s' does not exist",
-                                     idx_path.c_str());
-            DFTRACER_UTILS_LOG_DEBUG("%s", "Will create new index file");
+            DFTRACER_UTILS_LOG_DEBUG("Index store '%s' does not exist",
+                                     index_root.c_str());
+            DFTRACER_UTILS_LOG_DEBUG("%s", "Will create new index store");
             force_rebuild = true;
         }
 
         // Use IndexerFactory to create appropriate indexer
-        indexer = IndexerFactory::create(gz_path, idx_path, checkpoint_size,
+        indexer = IndexerFactory::create(gz_path, index_path, checkpoint_size,
                                          force_rebuild);
 
         if (check_rebuild) {
@@ -60,15 +62,15 @@ static coro::CoroTask<int> run_reader(const std::string &gz_path,
         }
 
         if (force_rebuild) {
-            if (fs::exists(idx_path)) {
-                DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
-                                         idx_path.c_str());
-                fs::remove(idx_path);
+            if (fs::exists(index_root)) {
+                DFTRACER_UTILS_LOG_DEBUG("Removing existing index store: %s",
+                                         index_root.c_str());
+                fs::remove_all(index_root);
             }
-            // Recreate indexer after removing old index
-            indexer = IndexerFactory::create(gz_path, idx_path, checkpoint_size,
-                                             true);
-            DFTRACER_UTILS_LOG_INFO("Building index for file: %s",
+            // Recreate the store after removing the old .dftindex root.
+            indexer = IndexerFactory::create(gz_path, index_path,
+                                             checkpoint_size, true);
+            DFTRACER_UTILS_LOG_INFO("Building index store for file: %s",
                                     gz_path.c_str());
             co_await indexer->build_async();
         }
@@ -184,7 +186,7 @@ int main(int argc, char **argv) {
         .help("Compressed file to process (GZIP, TAR.GZ)")
         .required();
     program.add_argument("-i", "--index")
-        .help("Index file to use")
+        .help("Path to the .dftindex store to use")
         .default_value<std::string>("");
     program.add_argument("-s", "--start")
         .help("Start position in bytes")
@@ -201,9 +203,11 @@ int main(int argc, char **argv) {
         .default_value(
             static_cast<std::size_t>(Indexer::DEFAULT_CHECKPOINT_SIZE));
     program.add_argument("-f", "--force-rebuild")
-        .help("Force rebuild index")
+        .help("Force rebuild the .dftindex store")
         .flag();
-    program.add_argument("--check").help("Check if index is valid").flag();
+    program.add_argument("--check")
+        .help("Check if the .dftindex store is valid")
+        .flag();
     program.add_argument("--read-buffer-size")
         .help("Size of the read buffer in bytes (default: 1MB)")
         .default_value<std::size_t>(1 * 1024 * 1024)
@@ -213,7 +217,7 @@ int main(int argc, char **argv) {
         .default_value<std::string>("bytes")
         .choices("bytes", "line_bytes", "lines");
     program.add_argument("--index-dir")
-        .help("Directory to store index files (default: system temp directory)")
+        .help("Directory to store root-local .dftindex directories")
         .default_value<std::string>("");
 
     try {
@@ -260,11 +264,8 @@ int main(int argc, char **argv) {
     }
     ::close(test_fd);
 
-    std::string idx_path;
-    if (!index_path.empty()) {
-        idx_path = index_path;
-    } else {
-        idx_path = utilities::composites::dft::internal::determine_index_path(
+    if (index_path.empty()) {
+        index_path = utilities::composites::dft::internal::determine_index_path(
             gz_path, index_dir);
     }
 
@@ -277,7 +278,7 @@ int main(int argc, char **argv) {
                                                              : "UNKNOWN");
 #endif
 
-    return run_reader(gz_path, idx_path, checkpoint_size, force_rebuild,
+    return run_reader(gz_path, index_path, checkpoint_size, force_rebuild,
                       check_rebuild, read_mode, read_buffer_size, start, end)
         .get();
 }

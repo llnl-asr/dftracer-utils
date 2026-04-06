@@ -257,6 +257,15 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     EventAggregatorUtility merger;
     std::atomic<int> global_chunk_idx{0};
 
+    if (input.force_rebuild && !input_files.empty()) {
+        const std::string shared_index_path =
+            composites::dft::internal::determine_index_path(
+                input_files.front(), effective_index_dir);
+        if (fs::exists(shared_index_path)) {
+            fs::remove_all(shared_index_path);
+        }
+    }
+
     for (const auto& file_path : input_files) {
         bool is_compressed =
             file_path.size() >= 3 &&
@@ -268,7 +277,7 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
                 file_path, effective_index_dir);
             auto idx_input = indexer::IndexBuildConfig::for_file(file_path)
                                  .with_checkpoint_size(input.checkpoint_size)
-                                 .with_force_rebuild(input.force_rebuild)
+                                 .with_force_rebuild(false)
                                  .with_index_dir(effective_index_dir);
             co_await indexer::IndexBuilderUtility{}.process(idx_input);
         }
@@ -277,7 +286,7 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
         auto meta_input =
             composites::dft::MetadataCollectorUtilityInput::from_file(file_path)
                 .with_checkpoint_size(input.checkpoint_size)
-                .with_force_rebuild(input.force_rebuild)
+                .with_force_rebuild(false)
                 .with_index(idx_path);
         auto metadata =
             co_await composites::dft::MetadataCollectorUtility{}.process(

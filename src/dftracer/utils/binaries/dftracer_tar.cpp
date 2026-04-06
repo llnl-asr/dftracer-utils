@@ -36,8 +36,8 @@ static coro::CoroTask<int> run_tar(const std::string& archive_path,
 
         DFTRACER_UTILS_LOG_INFO("Detected format: %s",
                                 indexer->get_format_name());
-        DFTRACER_UTILS_LOG_INFO("Index file: %s",
-                                indexer->get_idx_path().c_str());
+        DFTRACER_UTILS_LOG_INFO("Index store: %s",
+                                indexer->get_index_path().c_str());
 
         // Build index if needed
         if (force_rebuild || indexer->need_rebuild()) {
@@ -57,7 +57,7 @@ static coro::CoroTask<int> run_tar(const std::string& archive_path,
             printf("Archive Information:\n");
             printf("  Format: %s\n", indexer->get_format_name());
             printf("  Path: %s\n", indexer->get_archive_path().c_str());
-            printf("  Index: %s\n", indexer->get_idx_path().c_str());
+            printf("  Index Store: %s\n", indexer->get_index_path().c_str());
             printf("  Total size: %" PRIu64 " bytes\n",
                    static_cast<std::uint64_t>(indexer->get_max_bytes()));
             printf("  Total lines: %" PRIu64 "\n", indexer->get_num_lines());
@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
         "DFTracer utility for indexing and analyzing TAR.GZ archives");
     program.add_argument("file").help("TAR.GZ file to process").required();
     program.add_argument("-i", "--index")
-        .help("Index file to use (auto-generated if not specified)")
+        .help("Path to the .dftindex store to use (auto-generated if omitted)")
         .default_value<std::string>("");
     program.add_argument("-c", "--checkpoint-size")
         .help("Checkpoint size for indexing in bytes")
@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
         .default_value(
             static_cast<std::size_t>(Indexer::DEFAULT_CHECKPOINT_SIZE));
     program.add_argument("-f", "--force-rebuild")
-        .help("Force rebuild index")
+        .help("Force rebuild the .dftindex store")
         .flag();
     program.add_argument("--list-files")
         .help("List all files in the TAR archive")

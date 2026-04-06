@@ -39,6 +39,9 @@ class KqueueThreadPoolBackend : public IoBackend {
     IoAwaitable submit_write(int fd, const void* buf, std::size_t len) override;
     IoAwaitable submit_pread(int fd, void* buf, std::size_t len,
                              off_t offset) override;
+    void submit_pread_callback(int fd, void* buf, std::size_t len, off_t offset,
+                               IoCompletionFn completion,
+                               void* context) override;
     IoAwaitable submit_pwrite(int fd, const void* buf, std::size_t len,
                               off_t offset) override;
     IoAwaitable submit_open(const char* path, int flags, mode_t mode) override;

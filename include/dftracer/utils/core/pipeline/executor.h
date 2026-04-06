@@ -42,7 +42,7 @@ struct ExecutorConfig {
     std::size_t io_pool_size = 4;
     io::IoBackendType io_backend_type = io::IoBackendType::AUTO;
     unsigned io_batch_threshold = 16;
-    std::size_t sqlite_pool_size = 2;
+    std::size_t db_pool_size = 2;
 };
 
 /**
@@ -229,14 +229,14 @@ class Executor {
     // I/O backend (owned by executor, created by factory)
     std::unique_ptr<io::IoBackend> io_backend_;
 
-    // Dedicated thread pool for SQLite async operations
-    std::unique_ptr<io::IoThreadPool> sqlite_pool_;
+    // Dedicated thread pool for blocking DB operations.
+    std::unique_ptr<io::IoThreadPool> db_pool_;
 
     // Configuration (stored from ExecutorConfig)
     std::size_t io_pool_size_ = 4;
     io::IoBackendType io_backend_type_ = io::IoBackendType::AUTO;
     unsigned io_batch_threshold_ = 16;
-    std::size_t sqlite_pool_size_ = 2;
+    std::size_t db_pool_size_ = 2;
 
    public:
     /**
@@ -306,9 +306,9 @@ class Executor {
     const io::IoBackend& io_backend() const { return *io_backend_; }
 
     /**
-     * Get the dedicated SQLite thread pool (nullptr if not started).
+     * Get the dedicated DB thread pool (nullptr if not started).
      */
-    io::IoThreadPool* sqlite_pool() noexcept;
+    io::IoThreadPool* db_pool() noexcept;
 
     /**
      * Get the executor running on the current worker thread (nullptr

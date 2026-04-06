@@ -9,8 +9,8 @@ namespace dftracer::utils::io {
 ssize_t IoBackend::submit_read_sync(int fd, void *buf, std::size_t len,
                                     off_t offset) {
     // For sync wrappers, we cannot use the normal IoAwaitable coroutine
-    // path. Instead, we directly call the POSIX syscall. The VFS runs
-    // on a dedicated SQLite thread (not an executor worker), so blocking
+    // path. Instead, we directly call the POSIX syscall. This synchronous
+    // path is used from dedicated blocking contexts, so blocking
     // is acceptable.
     ssize_t result = ::pread(fd, buf, len, offset);
     if (result < 0) result = -errno;

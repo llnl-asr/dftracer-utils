@@ -213,6 +213,10 @@ function(create_library)
       set_target_properties(${TARGET_NAME} PROPERTIES ${LIB_PROPERTIES})
     endif()
 
+    if(NOT ${TARGET_TYPE} STREQUAL "INTERFACE")
+      target_add_rpath(${TARGET_NAME})
+    endif()
+
     # Enable C++20 coroutines support
     target_enable_coroutine(${TARGET_NAME})
   endmacro()

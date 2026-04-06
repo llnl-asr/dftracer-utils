@@ -11,7 +11,28 @@ C++20 coroutine primitives for asynchronous task execution. All classes are in t
 
 For usage examples and task scheduling, see :doc:`/pipeline` and :doc:`pipeline/tasks`.
 
-.. mermaid:: ../_generated/coro.mmd
+.. mermaid::
+
+   graph TD
+       Coro["Coro\nfire-and-forget primitive"]
+       CoroTask["CoroTask&lt;T&gt;\nawaitable task result"]
+       SpawnFuture["SpawnFuture&lt;T&gt;\nresult of CoroScope::spawn()"]
+       JoinHandle["JoinHandle\nstructured join barrier"]
+       Channel["Channel&lt;T&gt;\nasync producer/consumer queue"]
+       Producer["ChannelProducer / ProducerGuard\nproducer lifetime management"]
+       Generator["Generator&lt;T&gt;\nsynchronous lazy sequence"]
+       AsyncGenerator["AsyncGenerator&lt;T&gt;\nasynchronous lazy sequence"]
+       Yield["yield() / maybe_yield()\ncooperative scheduling"]
+
+       CoroTask --> Coro
+       SpawnFuture --> CoroTask
+       JoinHandle --> Coro
+       Channel --> Producer
+       CoroTask --> Channel
+       Coro --> Yield
+       CoroTask --> Yield
+       AsyncGenerator --> CoroTask
+       Generator --> Coro
 
 Coro
 ----
@@ -457,4 +478,3 @@ Usage example:
     } else {
         process(result.result);
     }
-

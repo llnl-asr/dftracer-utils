@@ -28,7 +28,7 @@ coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
         FileChunkMapperOutput chunks;
         ChunkAggregatorInput chunk;
         chunk.with_file_path(meta.file_path)
-            .with_idx_path(meta.idx_path)
+            .with_index_path(meta.index_path)
             .with_byte_range(0, 0)
             .with_line_range(0, 0)
             .with_chunk_index(input.start_chunk_index)
@@ -65,7 +65,7 @@ coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
 
         ChunkAggregatorInput chunk;
         chunk.with_file_path(meta.file_path)
-            .with_idx_path(meta.idx_path)
+            .with_index_path(meta.index_path)
             .with_byte_range(start_byte, end_byte)
             .with_line_range(start_line, end_line)
             .with_chunk_index(input.start_chunk_index + static_cast<int>(i))

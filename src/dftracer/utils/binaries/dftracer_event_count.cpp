@@ -127,7 +127,6 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
                 auto* total_events_ptr = &total_events;
                 auto* files_processed_ptr = &files_processed;
                 auto* is_approximate_ptr = &is_approximate;
-
                 auto file_chan =
                     coro::make_channel<std::size_t>(executor_threads * 2);
 
@@ -162,19 +161,19 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
                             co_await builder.process(config);
 
                             // Read event count from index
-                            std::string idx_path =
+                            std::string index_path =
                                 fp + constants::indexer::EXTENSION;
                             if (!index_dir.empty()) {
                                 auto fname = fs::path(fp).filename();
-                                idx_path =
+                                index_path =
                                     (fs::path(index_dir) / fname).string() +
                                     constants::indexer::EXTENSION;
                             }
 
-                            if (fs::exists(idx_path)) {
+                            if (fs::exists(index_path)) {
                                 try {
                                     utilities::indexer::IndexDatabase db(
-                                        idx_path);
+                                        index_path);
                                     int fid = db.find_file(fp);
                                     if (fid >= 0) {
                                         if (!db.has_bloom_data(fid)) {

@@ -265,26 +265,26 @@ TEST_SUITE("ReorganizationPlanner") {
         std::string test_dir =
             dft_utils_test::make_unique_test_path("test_planner_prov").string();
         fs::create_directories(test_dir);
-        std::string pidx_path = test_dir + "/test_prov.pfw.gz.pidx";
+        std::string provenance_path = test_dir + "/test_prov.pfw.gz.pidx";
 
-        ProvenanceDatabase pdb(pidx_path);
+        ProvenanceDatabase pdb(provenance_path);
         pdb.init_schema();
         int fid = pdb.get_or_create_file_info("test.pfw.gz", 0);
 
         pdb.begin_transaction();
 
-        pdb.insert_info("version", "1.0");
-        pdb.insert_info("created_at", "2026-02-17");
+        pdb.insert_info(fid, "version", "1.0");
+        pdb.insert_info(fid, "created_at", "2026-02-17");
         pdb.insert_source(fid, 0, "/data/trace.pfw.gz", 9, "abc123");
-        pdb.insert_group("io", R"(cat == "POSIX")");
-        pdb.insert_segment(0, 0, 0, 100, 50);
-        pdb.insert_segment(0, 1, 100, 200, 45);
+        pdb.insert_group(fid, "io", R"(cat == "POSIX")");
+        pdb.insert_segment(fid, 0, 0, 0, 100, 50);
+        pdb.insert_segment(fid, 0, 1, 100, 200, 45);
 
         pdb.commit_transaction();
 
-        CHECK(pdb.query_info("version") == "1.0");
-        CHECK(pdb.query_info("created_at") == "2026-02-17");
-        CHECK(pdb.query_info("nonexistent").empty());
+        CHECK(pdb.query_info(fid, "version") == "1.0");
+        CHECK(pdb.query_info(fid, "created_at") == "2026-02-17");
+        CHECK(pdb.query_info(fid, "nonexistent").empty());
 
         auto sources = pdb.query_sources(fid);
         REQUIRE(sources.size() == 1);
@@ -293,7 +293,7 @@ TEST_SUITE("ReorganizationPlanner") {
         CHECK(sources[0].num_checkpoints == 9);
         CHECK(sources[0].event_hash == "abc123");
 
-        auto segments = pdb.query_segments(0);
+        auto segments = pdb.query_segments(fid, 0);
         REQUIRE(segments.size() == 2);
         CHECK(segments[0].source_checkpoint == 0);
         CHECK(segments[0].output_line_start == 0);
@@ -301,8 +301,8 @@ TEST_SUITE("ReorganizationPlanner") {
         CHECK(segments[0].event_count == 50);
         CHECK(segments[1].source_checkpoint == 1);
 
-        CHECK(pdb.query_group_name() == "io");
-        CHECK(pdb.query_group_predicate() == R"(cat == "POSIX")");
+        CHECK(pdb.query_group_name(fid) == "io");
+        CHECK(pdb.query_group_predicate(fid) == R"(cat == "POSIX")");
 
         fs::remove_all(test_dir);
     }

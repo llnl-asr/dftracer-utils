@@ -94,15 +94,15 @@ TEST_SUITE("ManifestIndexBuilder") {
         CHECK(result.success == true);
         CHECK(result.total_lines > 0);
 
-        CHECK(fs::exists(result.idx_path));
+        CHECK(fs::exists(result.index_path));
 
-        IndexDatabase idx_db(result.idx_path);
+        IndexDatabase idx_db(result.index_path);
         idx_db.init_base_schema();
         idx_db.init_manifest_schema();
         int fid = idx_db.get_file_info_id(get_logical_path(trace_file));
         REQUIRE(fid >= 0);
 
-        auto event_ranges = queries::query_event_ranges(idx_db.sql_db(), fid);
+        auto event_ranges = idx_db.query_event_ranges(fid);
         CHECK(event_ranges.size() == 3);
 
         bool found_posix_read = false;
@@ -117,7 +117,7 @@ TEST_SUITE("ManifestIndexBuilder") {
         }
         CHECK(found_posix_read);
 
-        auto metadata = queries::query_metadata_lines(idx_db.sql_db(), fid);
+        auto metadata = idx_db.query_metadata_lines(fid);
         CHECK(metadata.size() == 2);
 
         fs::remove_all(test_dir);

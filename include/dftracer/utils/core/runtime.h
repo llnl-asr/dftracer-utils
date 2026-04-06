@@ -91,9 +91,13 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
            std::shared_ptr<std::atomic<TaskIndex>> task_id) -> coro::Coro {
         try {
             T val = co_await std::move(t);
+            t = coro::CoroTask<T>{std::coroutine_handle<
+                typename coro::CoroTask<T>::promise_type>{}};
             exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
             tp->set_value(std::move(val));
         } catch (...) {
+            t = coro::CoroTask<T>{std::coroutine_handle<
+                typename coro::CoroTask<T>::promise_type>{}};
             exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
             auto ex = std::current_exception();
             tp->set_exception(ex);

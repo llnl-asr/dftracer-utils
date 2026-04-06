@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/line_bytes_range.h>
 #include <dftracer/utils/utilities/fileio/lines/line_range.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
@@ -25,7 +26,7 @@ namespace dftracer::utils::utilities::fileio::lines {
  * @code
  * auto config = StreamingLineReaderConfig()
  *     .with_file("file.gz")
- *     .with_index("file.gz.idx")
+ *     .with_index("trace-root/.dftindex")
  *     .with_line_range(1, 100);
  *
  * auto range = StreamingLineReader::read(config);
@@ -71,7 +72,7 @@ class StreamingLineReaderConfig {
  * appropriate line iterator. It supports:
  * - Indexed compressed files (.gz, .tar.gz) via Reader
  * - Plain text files
- * - Automatic index file detection
+ * - Automatic `.dftindex` detection for compressed files
  *
  * Usage:
  * @code
@@ -91,10 +92,10 @@ class StreamingLineReaderConfig {
 class StreamingLineReader {
    public:
     /**
-     * @brief Read lines from a file, auto-detecting format and index.
+     * @brief Read lines from a file, auto-detecting format and `.dftindex`.
      *
      * This method automatically:
-     * 1. Detects if an index file exists (.idx)
+     * 1. Detects if a `.dftindex` store exists
      * 2. Creates appropriate reader (indexed or plain)
      * 3. Returns a LineRange for streaming iteration
      *
@@ -105,16 +106,18 @@ class StreamingLineReader {
         const std::string& file_path = config.file_path();
         std::size_t start_line = config.start_line();
         std::size_t end_line = config.end_line();
-        const std::string& idx_path = config.index_path();
-        // Check if index file exists
-        std::string actual_idx_path =
-            idx_path.empty() ? file_path + ".idx" : idx_path;
-        bool has_index = fs::exists(actual_idx_path);
+        const std::string& index_path = config.index_path();
+        std::string actual_index_path = index_path;
+        if (actual_index_path.empty()) {
+            actual_index_path =
+                composites::dft::internal::determine_index_path(file_path, "");
+        }
+        bool has_index = fs::exists(actual_index_path);
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "StreamingLineReader::read - file=%s, idx_path_param=%s, "
-            "actual_idx=%s, has_index=%d",
-            file_path.c_str(), idx_path.c_str(), actual_idx_path.c_str(),
+            "StreamingLineReader::read - file=%s, index_path_param=%s, "
+            "actual_index=%s, has_index=%d",
+            file_path.c_str(), index_path.c_str(), actual_index_path.c_str(),
             has_index);
 
         // Check file extension to determine if it's compressed
@@ -123,7 +126,7 @@ class StreamingLineReader {
         if (is_compressed && has_index) {
             auto iter_config =
                 sources::IndexedFileLineIteratorConfig().with_file(
-                    file_path, actual_idx_path);
+                    file_path, actual_index_path);
             if (start_line > 0 && end_line > 0) {
                 iter_config.with_line_range(start_line, end_line);
             }
@@ -143,7 +146,7 @@ class StreamingLineReader {
      * @brief Read lines from a file using indexed reader.
      *
      * @param file_path Path to the compressed file
-     * @param idx_path Path to the index file
+     * @param config Indexed reader configuration
      * @param start_line Starting line (1-based, inclusive), 0 means start
      * @param end_line Ending line (1-based, inclusive), 0 means end
      * @return LineRange for streaming iteration
@@ -185,24 +188,24 @@ class StreamingLineReader {
     static coro::AsyncGenerator<Line> read_async(
         const StreamingLineReaderConfig& config) {
         const std::string& file_path = config.file_path();
-        const std::string& idx_path = config.index_path();
+        const std::string& index_path = config.index_path();
         bool is_compressed = is_compressed_format(file_path);
 
         // Only use the indexed path when an index was explicitly
-        // provided.  Auto-discovering .idx files would silently
+        // provided. Auto-discovering `.dftindex` would silently
         // override callers that intentionally omit the index to
         // get single-pass streaming decompression.
         bool has_index = false;
-        std::string actual_idx_path;
-        if (!idx_path.empty()) {
-            actual_idx_path = idx_path;
-            has_index = fs::exists(actual_idx_path);
+        std::string actual_index_path;
+        if (!index_path.empty()) {
+            actual_index_path = index_path;
+            has_index = fs::exists(actual_index_path);
         }
 
         if (is_compressed && has_index) {
             auto iter_config =
                 sources::IndexedFileLineIteratorConfig().with_file(
-                    file_path, actual_idx_path);
+                    file_path, actual_index_path);
             if (config.start_line() > 0 || config.end_line() > 0) {
                 iter_config.with_line_range(config.start_line(),
                                             config.end_line());
@@ -238,7 +241,7 @@ class StreamingLineReader {
      * @brief Async read lines from compressed file without an index.
      *
      * Stream-decompresses the file and splits into lines in a single
-     * pass, avoiding the overhead of building a sidecar index.
+     * pass, avoiding the overhead of building a `.dftindex` store.
      */
     static coro::AsyncGenerator<Line> read_streaming_gz_async(
         const std::string& file_path, std::size_t start_line = 0,

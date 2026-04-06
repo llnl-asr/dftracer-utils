@@ -87,7 +87,7 @@ struct ComparisonConfig {
     std::size_t executor_threads = 0;
     /// Checkpoint size for index building (0 = default).
     std::size_t checkpoint_size = 0;
-    /// Directory for index sidecar files.
+    /// Directory for `.dftindex` stores.
     std::string index_dir;
     /// Force rebuild of existing indexes.
     bool force_rebuild = false;

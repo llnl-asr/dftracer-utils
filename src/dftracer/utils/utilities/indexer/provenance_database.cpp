@@ -1,206 +1,426 @@
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/sqlite/statement.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
+#include <dftracer/utils/core/rocksdb/key_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
+#include <dftracer/utils/utilities/indexer/internal/scan_prefix.h>
 #include <dftracer/utils/utilities/indexer/provenance_database.h>
+
+#include <stdexcept>
+#include <utility>
 
 namespace dftracer::utils::utilities::indexer {
 
-namespace queries = composites::dft::indexing::queries;
+namespace rocks = dftracer::utils::rocksdb;
 
-using dftracer::utils::sqlite::SqliteStmt;
 using internal::IndexerError;
 
-static const char* PROVENANCE_SCHEMA = R"(
-    PRAGMA journal_mode=WAL;
-    PRAGMA busy_timeout=5000;
-    PRAGMA foreign_keys=ON;
+namespace {
 
-    CREATE TABLE IF NOT EXISTS file_info (
-        id      INTEGER PRIMARY KEY,
-        path    TEXT NOT NULL,
-        hash    INTEGER
-    );
+[[noreturn]] void throw_db_error(std::string_view message,
+                                 const ::rocksdb::Status& status) {
+    throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                       std::string(message) + ": " + status.ToString());
+}
 
-    CREATE TABLE IF NOT EXISTS provenance_info (
-        key     TEXT PRIMARY KEY,
-        value   TEXT
-    );
+std::string file_key(std::string_view path) {
+    return std::string("pf|") + std::string(path);
+}
 
-    CREATE TABLE IF NOT EXISTS provenance_sources (
-        source_idx      INTEGER PRIMARY KEY,
-        file_info_id    INTEGER NOT NULL DEFAULT 0,
-        path            TEXT NOT NULL,
-        num_checkpoints INTEGER,
-        event_hash      TEXT NOT NULL DEFAULT ''
-    );
+std::string file_reverse_key(int file_info_id) {
+    std::string key("pr|");
+    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_info_id));
+    return key;
+}
 
-    CREATE TABLE IF NOT EXISTS provenance_group (
-        id          INTEGER PRIMARY KEY,
-        name        TEXT,
-        predicate   TEXT
-    );
+std::string next_file_id_key() { return "_next_prov_file_id"; }
 
-    CREATE TABLE IF NOT EXISTS provenance_segments (
-        source_idx          INTEGER,
-        source_checkpoint   INTEGER,
-        output_line_start   INTEGER,
-        output_line_end     INTEGER,
-        event_count         INTEGER
-    );
-)";
+std::string encode_file_record(int file_info_id, std::uint64_t file_hash) {
+    std::string value;
+    rocks::KeyCodec::append_be32(value,
+                                 static_cast<std::uint32_t>(file_info_id));
+    rocks::KeyCodec::append_be64(value, file_hash);
+    return value;
+}
 
-ProvenanceDatabase::ProvenanceDatabase(const std::string& pidx_path)
-    : db_(pidx_path) {}
+int decode_file_id(std::string_view value) {
+    if (value.size() < 4) {
+        throw std::runtime_error("Corrupt provenance file record");
+    }
+    return static_cast<int>(rocks::KeyCodec::decode_be32(value.substr(0, 4)));
+}
 
-void ProvenanceDatabase::init_schema() {
-    char* err_msg = nullptr;
-    int rc =
-        sqlite3_exec(db_.get(), PROVENANCE_SCHEMA, nullptr, nullptr, &err_msg);
-    if (rc != SQLITE_OK) {
-        std::string error =
-            err_msg ? std::string(err_msg) : "Unknown schema error";
-        if (err_msg) sqlite3_free(err_msg);
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to initialize provenance schema: " + error);
+std::uint64_t decode_hash(std::string_view value) {
+    if (value.size() < 12) {
+        throw std::runtime_error("Corrupt provenance file record");
+    }
+    return rocks::KeyCodec::decode_be64(value.substr(4, 8));
+}
+
+std::string source_key(int file_info_id, int source_idx) {
+    std::string key("ps|");
+    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_info_id));
+    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(source_idx));
+    return key;
+}
+
+std::string info_key(int file_info_id, std::string_view key_suffix) {
+    std::string key("pi|");
+    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_info_id));
+    key.append(key_suffix);
+    return key;
+}
+
+std::string group_prefix(int file_info_id) {
+    std::string key("pg|");
+    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_info_id));
+    return key;
+}
+
+std::string group_key(int file_info_id, std::string_view name) {
+    auto key = group_prefix(file_info_id);
+    key.append(name);
+    return key;
+}
+
+std::string segment_key(int file_info_id, int source_idx,
+                        int source_checkpoint) {
+    std::string key("px|");
+    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_info_id));
+    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(source_idx));
+    rocks::KeyCodec::append_be32(key,
+                                 static_cast<std::uint32_t>(source_checkpoint));
+    return key;
+}
+
+void append_string(std::string& out, std::string_view value) {
+    rocks::KeyCodec::append_be32(out, static_cast<std::uint32_t>(value.size()));
+    out.append(value.data(), value.size());
+}
+
+void append_u32(std::string& out, std::uint32_t value) {
+    rocks::KeyCodec::append_be32(out, value);
+}
+
+class Cursor {
+   public:
+    explicit Cursor(std::string_view data) : data_(data) {}
+
+    std::uint32_t u32() {
+        auto part = take(4);
+        return rocks::KeyCodec::decode_be32(part);
+    }
+
+    std::string str() {
+        const auto len = static_cast<std::size_t>(u32());
+        auto bytes = take(len);
+        return std::string(bytes.data(), bytes.size());
+    }
+
+   private:
+    std::string_view take(std::size_t len) {
+        if (offset_ + len > data_.size()) {
+            throw std::runtime_error("Corrupt provenance payload");
+        }
+        auto part = data_.substr(offset_, len);
+        offset_ += len;
+        return part;
+    }
+
+    std::string_view data_;
+    std::size_t offset_ = 0;
+};
+
+template <typename Fn>
+void scan_prefix(const rocks::RocksDatabase& db, std::string_view prefix,
+                 Fn&& fn) {
+    internal::scan_prefix_iterator(
+        "Failed to scan provenance prefix", prefix,
+        [&] { return db.new_iterator("provenance"); }, std::forward<Fn>(fn));
+}
+
+}  // namespace
+
+ProvenanceDatabase::ProvenanceDatabase(const std::string& provenance_path,
+                                       rocks::RocksDatabase::OpenMode open_mode)
+    : db_path_(internal::normalize_index_root(provenance_path)),
+      open_mode_(open_mode),
+      db_(rocks::RocksDBManager::instance().get_or_open(db_path_, open_mode_)) {
+    if (open_mode_ == rocks::RocksDatabase::OpenMode::ReadWrite) {
+        init_schema();
     }
 }
+
+void ProvenanceDatabase::init_schema() {}
 
 int ProvenanceDatabase::get_or_create_file_info(const std::string& path,
                                                 std::uint64_t file_hash) {
-    {
-        SqliteStmt stmt(db_, "SELECT id, hash FROM file_info WHERE path = ?;");
-        stmt.bind_text(1, path);
-        int rc = sqlite3_step(stmt);
-        if (rc == SQLITE_ROW) {
-            int id = sqlite3_column_int(stmt, 0);
-            auto stored_hash =
-                static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 1));
-            if (stored_hash == file_hash) {
-                return id;
-            }
-            SqliteStmt del(db_, "DELETE FROM file_info WHERE id = ?;");
-            del.bind_int(1, id);
-            sqlite3_step(del);
+    const auto key = file_key(path);
+    std::string value;
+    auto status = db_->get(key, &value, "provenance");
+    if (status.ok()) {
+        const auto id = decode_file_id(value);
+        if (decode_hash(value) == file_hash) {
+            return id;
         }
+        const auto encoded = encode_file_record(id, file_hash);
+        status = txn_batch_ ? db_->put(*txn_batch_, "provenance", key, encoded)
+                            : db_->put(key, encoded, "provenance");
+        if (!status.ok()) {
+            throw_db_error("Failed to update provenance file info", status);
+        }
+        status = txn_batch_
+                     ? db_->put(*txn_batch_, "provenance", file_reverse_key(id),
+                                path)
+                     : db_->put(file_reverse_key(id), path, "provenance");
+        if (!status.ok()) {
+            throw_db_error("Failed to update provenance reverse file info",
+                           status);
+        }
+        return id;
+    }
+    if (!status.IsNotFound()) {
+        throw_db_error("Failed to query provenance file info", status);
     }
 
-    SqliteStmt stmt(db_, "INSERT INTO file_info(path, hash) VALUES(?, ?);");
-    stmt.bind_text(1, path);
-    stmt.bind_int64(2, static_cast<std::int64_t>(file_hash));
-    int rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to insert file_info: " +
-                               std::string(sqlite3_errmsg(db_.get())));
+    std::uint32_t next_id = 1;
+    std::string next_value;
+    status = db_->get(next_file_id_key(), &next_value, "provenance");
+    if (status.ok()) {
+        next_id = rocks::KeyCodec::decode_be32(next_value);
+    } else if (!status.IsNotFound()) {
+        throw_db_error("Failed to read next provenance file id", status);
     }
-    return static_cast<int>(sqlite3_last_insert_rowid(db_.get()));
+
+    const auto encoded =
+        encode_file_record(static_cast<int>(next_id), file_hash);
+    const auto next_encoded = rocks::KeyCodec::encode_be32(next_id + 1);
+    if (txn_batch_) {
+        status = db_->put(*txn_batch_, "provenance", key, encoded);
+        if (!status.ok()) throw_db_error("Failed to insert file info", status);
+        status = db_->put(*txn_batch_, "provenance", file_reverse_key(next_id),
+                          path);
+        if (!status.ok()) {
+            throw_db_error("Failed to insert reverse file info", status);
+        }
+        status = db_->put(*txn_batch_, "provenance", next_file_id_key(),
+                          next_encoded);
+        if (!status.ok()) {
+            throw_db_error("Failed to update next provenance file id", status);
+        }
+    } else {
+        status = db_->put(key, encoded, "provenance");
+        if (!status.ok()) throw_db_error("Failed to insert file info", status);
+        status = db_->put(file_reverse_key(next_id), path, "provenance");
+        if (!status.ok()) {
+            throw_db_error("Failed to insert reverse file info", status);
+        }
+        status = db_->put(next_file_id_key(), next_encoded, "provenance");
+        if (!status.ok()) {
+            throw_db_error("Failed to update next provenance file id", status);
+        }
+    }
+    return static_cast<int>(next_id);
 }
 
 int ProvenanceDatabase::get_file_info_id(const std::string& path) const {
-    SqliteStmt stmt(db_, "SELECT id FROM file_info WHERE path = ?;");
-    stmt.bind_text(1, path);
-    int rc = sqlite3_step(stmt);
-    if (rc == SQLITE_ROW) {
-        return sqlite3_column_int(stmt, 0);
+    std::string value;
+    auto status = db_->get(file_key(path), &value, "provenance");
+    if (status.IsNotFound()) {
+        return -1;
     }
-    return -1;
+    if (!status.ok()) {
+        throw_db_error("Failed to read provenance file info id", status);
+    }
+    return decode_file_id(value);
 }
 
 void ProvenanceDatabase::begin_transaction() {
-    char* err_msg = nullptr;
-    int rc = sqlite3_exec(db_.get(), "BEGIN TRANSACTION;", nullptr, nullptr,
-                          &err_msg);
-    if (rc != SQLITE_OK) {
-        std::string error = err_msg ? std::string(err_msg) : "Unknown error";
-        if (err_msg) sqlite3_free(err_msg);
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to begin transaction: " + error);
-    }
+    txn_batch_ =
+        std::make_unique<rocks::RocksDatabase::Batch>(db_->begin_batch());
 }
 
 void ProvenanceDatabase::commit_transaction() {
-    char* err_msg = nullptr;
-    int rc = sqlite3_exec(db_.get(), "COMMIT;", nullptr, nullptr, &err_msg);
-    if (rc != SQLITE_OK) {
-        std::string error = err_msg ? std::string(err_msg) : "Unknown error";
-        if (err_msg) sqlite3_free(err_msg);
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to commit transaction: " + error);
+    if (!txn_batch_) {
+        return;
+    }
+    auto status = db_->commit_batch(*txn_batch_);
+    txn_batch_.reset();
+    if (!status.ok()) {
+        throw_db_error("Failed to commit provenance RocksDB batch", status);
     }
 }
+
+void ProvenanceDatabase::rollback_transaction() noexcept { txn_batch_.reset(); }
 
 std::string determine_provenance_index_path(const std::string& data_path,
                                             const std::string& index_dir) {
-    fs::path p(data_path);
-    std::string filename = p.filename().string() + ".pidx";
-
-    if (!index_dir.empty()) {
-        return (fs::path(index_dir) / filename).string();
-    }
-
-    return (data_path + ".pidx");
+    fs::path path = index_dir.empty() ? fs::path(data_path).parent_path()
+                                      : fs::path(index_dir);
+    return internal::normalize_index_root((path / ".dftindex").string());
 }
 
-// ---------------------------------------------------------------------------
-// Provenance insert operations
-// ---------------------------------------------------------------------------
-
-void ProvenanceDatabase::insert_info(std::string_view key,
+void ProvenanceDatabase::insert_info(int file_info_id, std::string_view key,
                                      std::string_view value) {
-    queries::insert_provenance_info(db_, key, value);
+    const auto db_key = info_key(file_info_id, key);
+    auto status = txn_batch_
+                      ? db_->put(*txn_batch_, "provenance", db_key, value)
+                      : db_->put(db_key, value, "provenance");
+    if (!status.ok()) {
+        throw_db_error("Failed to insert provenance info", status);
+    }
 }
 
 void ProvenanceDatabase::insert_source(int file_info_id, int source_idx,
                                        std::string_view path,
                                        int num_checkpoints,
                                        std::string_view event_hash) {
-    queries::insert_provenance_source(db_, file_info_id, source_idx, path,
-                                      num_checkpoints, event_hash);
+    std::string value;
+    append_string(value, path);
+    append_u32(value, static_cast<std::uint32_t>(num_checkpoints));
+    append_string(value, event_hash);
+    auto status = txn_batch_
+                      ? db_->put(*txn_batch_, "provenance",
+                                 source_key(file_info_id, source_idx), value)
+                      : db_->put(source_key(file_info_id, source_idx), value,
+                                 "provenance");
+    if (!status.ok()) {
+        throw_db_error("Failed to insert provenance source", status);
+    }
 }
 
-void ProvenanceDatabase::insert_group(std::string_view name,
+void ProvenanceDatabase::insert_group(int file_info_id, std::string_view name,
                                       std::string_view predicate) {
-    queries::insert_provenance_group(db_, name, predicate);
+    const auto db_key = group_key(file_info_id, name);
+    auto status = txn_batch_
+                      ? db_->put(*txn_batch_, "provenance", db_key,
+                                 std::string(predicate))
+                      : db_->put(db_key, std::string(predicate), "provenance");
+    if (!status.ok()) {
+        throw_db_error("Failed to insert provenance group", status);
+    }
 }
 
-void ProvenanceDatabase::insert_segment(int source_idx, int source_checkpoint,
+void ProvenanceDatabase::insert_segment(int file_info_id, int source_idx,
+                                        int source_checkpoint,
                                         int output_line_start,
                                         int output_line_end, int event_count) {
-    queries::insert_provenance_segment(db_, source_idx, source_checkpoint,
-                                       output_line_start, output_line_end,
-                                       event_count);
+    std::string value;
+    append_u32(value, static_cast<std::uint32_t>(output_line_start));
+    append_u32(value, static_cast<std::uint32_t>(output_line_end));
+    append_u32(value, static_cast<std::uint32_t>(event_count));
+    auto status =
+        txn_batch_
+            ? db_->put(*txn_batch_, "provenance",
+                       segment_key(file_info_id, source_idx, source_checkpoint),
+                       value)
+            : db_->put(segment_key(file_info_id, source_idx, source_checkpoint),
+                       value, "provenance");
+    if (!status.ok()) {
+        throw_db_error("Failed to insert provenance segment", status);
+    }
 }
-
-// ---------------------------------------------------------------------------
-// Provenance query operations
-// ---------------------------------------------------------------------------
 
 std::vector<ProvenanceDatabase::ProvenanceSource>
 ProvenanceDatabase::query_sources(int file_info_id) const {
-    return queries::query_provenance_sources(db_, file_info_id);
+    std::vector<ProvenanceSource> results;
+    std::string prefix("ps|");
+    rocks::KeyCodec::append_be32(prefix,
+                                 static_cast<std::uint32_t>(file_info_id));
+    scan_prefix(*db_, prefix, [&](::rocksdb::Iterator& it) {
+        const auto key = std::string(it.key().data(), it.key().size());
+        const auto value = std::string(it.value().data(), it.value().size());
+        ProvenanceSource source;
+        source.source_idx = static_cast<int>(
+            rocks::KeyCodec::decode_be32(std::string_view(key).substr(7, 4)));
+        Cursor cursor(value);
+        source.path = cursor.str();
+        source.num_checkpoints = static_cast<int>(cursor.u32());
+        source.event_hash = cursor.str();
+        results.push_back(std::move(source));
+    });
+    return results;
 }
 
 std::vector<ProvenanceDatabase::ProvenanceSegment>
-ProvenanceDatabase::query_segments(int source_idx) const {
-    return queries::query_provenance_segments(db_, source_idx);
+ProvenanceDatabase::query_segments(int file_info_id, int source_idx) const {
+    std::vector<ProvenanceSegment> results;
+    std::string prefix("px|");
+    rocks::KeyCodec::append_be32(prefix,
+                                 static_cast<std::uint32_t>(file_info_id));
+    rocks::KeyCodec::append_be32(prefix,
+                                 static_cast<std::uint32_t>(source_idx));
+    scan_prefix(*db_, prefix, [&](::rocksdb::Iterator& it) {
+        const auto key = std::string(it.key().data(), it.key().size());
+        const auto value = std::string(it.value().data(), it.value().size());
+        Cursor cursor(value);
+        ProvenanceSegment segment;
+        segment.source_idx = source_idx;
+        segment.source_checkpoint = static_cast<int>(
+            rocks::KeyCodec::decode_be32(std::string_view(key).substr(11, 4)));
+        segment.output_line_start = static_cast<int>(cursor.u32());
+        segment.output_line_end = static_cast<int>(cursor.u32());
+        segment.event_count = static_cast<int>(cursor.u32());
+        results.push_back(std::move(segment));
+    });
+    return results;
 }
 
 std::vector<ProvenanceDatabase::ProvenanceSegment>
-ProvenanceDatabase::query_all_segments() const {
-    return queries::query_all_provenance_segments(db_);
+ProvenanceDatabase::query_all_segments(int file_info_id) const {
+    std::vector<ProvenanceSegment> results;
+    std::string prefix("px|");
+    rocks::KeyCodec::append_be32(prefix,
+                                 static_cast<std::uint32_t>(file_info_id));
+    scan_prefix(*db_, prefix, [&](::rocksdb::Iterator& it) {
+        const auto key = std::string(it.key().data(), it.key().size());
+        const auto value = std::string(it.value().data(), it.value().size());
+        Cursor cursor(value);
+        ProvenanceSegment segment;
+        segment.source_idx = static_cast<int>(
+            rocks::KeyCodec::decode_be32(std::string_view(key).substr(7, 4)));
+        segment.source_checkpoint = static_cast<int>(
+            rocks::KeyCodec::decode_be32(std::string_view(key).substr(11, 4)));
+        segment.output_line_start = static_cast<int>(cursor.u32());
+        segment.output_line_end = static_cast<int>(cursor.u32());
+        segment.event_count = static_cast<int>(cursor.u32());
+        results.push_back(std::move(segment));
+    });
+    return results;
 }
 
-std::string ProvenanceDatabase::query_info(std::string_view key) const {
-    return queries::query_provenance_info(db_, key);
+std::string ProvenanceDatabase::query_info(int file_info_id,
+                                           std::string_view key) const {
+    std::string value;
+    auto status = db_->get(info_key(file_info_id, key), &value, "provenance");
+    if (status.IsNotFound()) {
+        return {};
+    }
+    if (!status.ok()) {
+        throw_db_error("Failed to query provenance info", status);
+    }
+    return value;
 }
 
-std::string ProvenanceDatabase::query_group_name() const {
-    return queries::query_provenance_group_name(db_);
+std::string ProvenanceDatabase::query_group_name(int file_info_id) const {
+    std::string result;
+    const auto prefix = group_prefix(file_info_id);
+    scan_prefix(*db_, prefix, [&](::rocksdb::Iterator& it) {
+        if (result.empty()) {
+            const auto key = std::string(it.key().data(), it.key().size());
+            result = key.substr(prefix.size());
+        }
+    });
+    return result;
 }
 
-std::string ProvenanceDatabase::query_group_predicate() const {
-    return queries::query_provenance_group_predicate(db_);
+std::string ProvenanceDatabase::query_group_predicate(int file_info_id) const {
+    std::string result;
+    scan_prefix(*db_, group_prefix(file_info_id), [&](::rocksdb::Iterator& it) {
+        if (result.empty()) {
+            result = std::string(it.value().data(), it.value().size());
+        }
+    });
+    return result;
 }
 
 }  // namespace dftracer::utils::utilities::indexer

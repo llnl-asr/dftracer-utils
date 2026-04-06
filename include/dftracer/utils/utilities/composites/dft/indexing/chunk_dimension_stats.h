@@ -49,7 +49,7 @@ struct ChunkDimensionStats {
     decompress_value_counts(const std::uint8_t* data, std::size_t len);
 };
 
-/// Result type for querying chunk_dimension_stats from SQLite.
+/// Result type for querying chunk_dimension_stats from the shared index DB.
 struct ChunkDimensionStatsResult {
     std::uint64_t checkpoint_idx;
     std::string dimension;

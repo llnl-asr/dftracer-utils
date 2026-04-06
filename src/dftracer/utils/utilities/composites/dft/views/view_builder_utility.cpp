@@ -26,8 +26,8 @@ ViewBuilderInput& ViewBuilderInput::with_file_path(const std::string& path) {
     return *this;
 }
 
-ViewBuilderInput& ViewBuilderInput::with_idx_path(const std::string& path) {
-    idx_path = path;
+ViewBuilderInput& ViewBuilderInput::with_index_path(const std::string& path) {
+    index_path = path;
     return *this;
 }
 
@@ -62,10 +62,10 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
 
     std::vector<std::uint64_t> candidate_checkpoints;
 
-    if (input.view.query && !input.idx_path.empty()) {
-        indexing::ChunkPrunerInput pruner_input{input.idx_path, input.file_path,
-                                                *input.view.query,
-                                                input.bloom_cache};
+    if (input.view.query && !input.index_path.empty()) {
+        indexing::ChunkPrunerInput pruner_input{
+            input.index_path, input.file_path, *input.view.query,
+            input.bloom_cache};
         indexing::ChunkPrunerUtility pruner;
         auto pruner_output = co_await pruner.process(pruner_input);
 
@@ -96,18 +96,16 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
 
     // Chunk-level time range skip: query per-chunk time bounds from
     // the bloom index and remove chunks that don't overlap the query.
-    if (input.time_range && !input.idx_path.empty() &&
+    if (input.time_range && !input.index_path.empty() &&
         !candidate_checkpoints.empty()) {
         auto [t_begin, t_end] = *input.time_range;
         if (t_begin > 0 || t_end > 0) {
             try {
-                IndexDatabase idx_db(input.idx_path);
+                IndexDatabase idx_db(input.index_path);
                 int fid =
                     idx_db.get_file_info_id(get_logical_path(input.file_path));
                 if (fid >= 0) {
-                    auto chunk_stats =
-                        indexing::queries::query_chunk_statistics(
-                            idx_db.sql_db(), fid);
+                    auto chunk_stats = idx_db.query_chunk_statistics(fid);
 
                     std::unordered_map<std::uint64_t,
                                        std::pair<std::uint64_t, std::uint64_t>>

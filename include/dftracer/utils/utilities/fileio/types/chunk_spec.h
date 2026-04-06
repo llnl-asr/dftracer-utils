@@ -16,7 +16,7 @@ namespace dftracer::utils::utilities::fileio {
  */
 struct ChunkSpec {
     std::string file_path;
-    std::string idx_path;    // Empty for plain text files
+    std::string index_path;  // Empty for plain text files
     double size_mb;
     std::size_t start_byte;  // Starting byte offset (0-based)
     std::size_t end_byte;    // Ending byte offset (exclusive)
@@ -26,13 +26,13 @@ struct ChunkSpec {
     ChunkSpec(std::string path, std::string idx, double mb, std::size_t start,
               std::size_t end)
         : file_path(std::move(path)),
-          idx_path(std::move(idx)),
+          index_path(std::move(idx)),
           size_mb(mb),
           start_byte(start),
           end_byte(end) {}
 
     bool operator==(const ChunkSpec& other) const {
-        return file_path == other.file_path && idx_path == other.idx_path &&
+        return file_path == other.file_path && index_path == other.index_path &&
                size_mb == other.size_mb && start_byte == other.start_byte &&
                end_byte == other.end_byte;
     }
@@ -54,7 +54,7 @@ struct hash<dftracer::utils::utilities::fileio::ChunkSpec> {
                                spec) const noexcept {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
         hasher.update(spec.file_path);
-        hasher.update(spec.idx_path);
+        hasher.update(spec.index_path);
         hasher.update(spec.size_mb);
         hasher.update(spec.start_byte);
         hasher.update(spec.end_byte);

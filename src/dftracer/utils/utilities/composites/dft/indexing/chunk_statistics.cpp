@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
@@ -15,11 +16,18 @@ void ChunkStatistics::update_from_event(std::string_view name,
                                         std::uint64_t dur) {
     ++total_events;
 
-    // 20 digits max per uint64 + ':' separator = 41 chars max
-    char pt_buf[52];
+    constexpr std::size_t pid_tid_buf_size =
+        (2 * std::numeric_limits<std::uint64_t>::digits10) + 3;
+    char pt_buf[pid_tid_buf_size];
     auto [pp, ec1] = std::to_chars(pt_buf, pt_buf + sizeof(pt_buf), pid);
+    if (ec1 != std::errc{} || pp == pt_buf + sizeof(pt_buf)) {
+        throw std::runtime_error("failed to format pid");
+    }
     *pp++ = ':';
     auto [tp, ec2] = std::to_chars(pp, pt_buf + sizeof(pt_buf), tid);
+    if (ec2 != std::errc{}) {
+        throw std::runtime_error("failed to format tid");
+    }
     std::string_view pt_sv(pt_buf, tp - pt_buf);
 
     category_counts[std::string(cat)]++;

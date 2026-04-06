@@ -23,6 +23,21 @@ std::string get_logical_path(std::string_view path) {
     return fs_path.filename().string();
 }
 
+std::string normalize_index_root(std::string_view path) {
+    fs::path input{std::string(path)};
+    if (input.filename() == ".dftindex") {
+        return input.string();
+    }
+    if (input.parent_path().filename() == ".dftindex") {
+        return input.parent_path().string();
+    }
+    if (input.extension() == ".idx" || input.extension() == ".pidx" ||
+        input.has_extension()) {
+        return (input.parent_path() / ".dftindex").string();
+    }
+    return (input / ".dftindex").string();
+}
+
 time_t get_file_modification_time(const std::string &file_path) {
 #if defined(DFTRACER_UTILS_USE_STD_FS)
     // Use std::filesystem when available and working
@@ -118,12 +133,10 @@ std::uint64_t file_size_bytes(const std::string &path) {
     ::close(fd);
     if (pos < 0) return 0;
     return static_cast<std::uint64_t>(pos);
-    if (pos < 0) return 0;
-    return static_cast<std::uint64_t>(pos);
 }
 
-bool index_exists_and_valid(const std::string &idx_path) {
-    return fs::exists(idx_path) && fs::is_regular_file(idx_path);
+bool index_exists_and_valid(const std::string &index_path) {
+    return fs::exists(index_path) && fs::is_directory(index_path);
 }
 
 }  // namespace dftracer::utils::utilities::indexer::internal

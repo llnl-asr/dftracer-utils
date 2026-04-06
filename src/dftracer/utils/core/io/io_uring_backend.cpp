@@ -266,6 +266,8 @@ void IoUringBackend::completion_loop() {
             if (req->awaitable) {
                 req->awaitable->result_ = cqe->res;
                 executor_.enqueue(req->awaitable->handle_);
+            } else if (req->completion != nullptr) {
+                req->completion(req->completion_ctx, cqe->res);
             }
             delete req;
         }
@@ -305,26 +307,44 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
         case IoUringSubmitCtx::Op::FTRUNCATE: {
             ssize_t sync_result = ::ftruncate(uring_ctx->fd, uring_ctx->offset);
             if (sync_result < 0) sync_result = -errno;
-            awaitable->result_ = sync_result;
+            if (awaitable != nullptr) {
+                awaitable->result_ = sync_result;
+            } else if (uring_ctx->completion != nullptr) {
+                uring_ctx->completion(uring_ctx->completion_ctx, sync_result);
+            }
             delete uring_ctx;
-            backend->executor_.enqueue(awaitable->handle_);
+            if (awaitable != nullptr) {
+                backend->executor_.enqueue(awaitable->handle_);
+            }
             return;
         }
         case IoUringSubmitCtx::Op::FSTAT: {
             ssize_t sync_result = ::fstat(uring_ctx->fd, uring_ctx->stat_buf);
             if (sync_result < 0) sync_result = -errno;
-            awaitable->result_ = sync_result;
+            if (awaitable != nullptr) {
+                awaitable->result_ = sync_result;
+            } else if (uring_ctx->completion != nullptr) {
+                uring_ctx->completion(uring_ctx->completion_ctx, sync_result);
+            }
             delete uring_ctx;
-            backend->executor_.enqueue(awaitable->handle_);
+            if (awaitable != nullptr) {
+                backend->executor_.enqueue(awaitable->handle_);
+            }
             return;
         }
         case IoUringSubmitCtx::Op::LSEEK: {
             ssize_t sync_result =
                 ::lseek(uring_ctx->fd, uring_ctx->offset, uring_ctx->whence);
             if (sync_result < 0) sync_result = -errno;
-            awaitable->result_ = sync_result;
+            if (awaitable != nullptr) {
+                awaitable->result_ = sync_result;
+            } else if (uring_ctx->completion != nullptr) {
+                uring_ctx->completion(uring_ctx->completion_ctx, sync_result);
+            }
             delete uring_ctx;
-            backend->executor_.enqueue(awaitable->handle_);
+            if (awaitable != nullptr) {
+                backend->executor_.enqueue(awaitable->handle_);
+            }
             return;
         }
         case IoUringSubmitCtx::Op::SENDFILE: {
@@ -332,9 +352,15 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             ssize_t sync_result = ::sendfile(uring_ctx->dest_fd, uring_ctx->fd,
                                              &off, uring_ctx->len);
             if (sync_result < 0) sync_result = -errno;
-            awaitable->result_ = sync_result;
+            if (awaitable != nullptr) {
+                awaitable->result_ = sync_result;
+            } else if (uring_ctx->completion != nullptr) {
+                uring_ctx->completion(uring_ctx->completion_ctx, sync_result);
+            }
             delete uring_ctx;
-            backend->executor_.enqueue(awaitable->handle_);
+            if (awaitable != nullptr) {
+                backend->executor_.enqueue(awaitable->handle_);
+            }
             return;
         }
         default:
@@ -344,6 +370,8 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
     // Create the request object that will be stored in SQE user_data
     auto* req = new IoUringRequest{};
     req->awaitable = awaitable;
+    req->completion = uring_ctx->completion;
+    req->completion_ctx = uring_ctx->completion_ctx;
 
     std::lock_guard<std::mutex> lock(backend->submit_mutex_);
 
@@ -412,10 +440,16 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
                 break;
         }
         if (result < 0) result = -errno;
-        awaitable->result_ = result;
+        if (awaitable != nullptr) {
+            awaitable->result_ = result;
+        } else if (uring_ctx->completion != nullptr) {
+            uring_ctx->completion(uring_ctx->completion_ctx, result);
+        }
         delete req;
         delete uring_ctx;
-        backend->executor_.enqueue(awaitable->handle_);
+        if (awaitable != nullptr) {
+            backend->executor_.enqueue(awaitable->handle_);
+        }
         return;
     }
 
@@ -536,6 +570,18 @@ IoAwaitable IoUringBackend::submit_pread(int fd, void* buf, std::size_t len,
                                          off_t offset) {
     return make_uring_request(IoUringSubmitCtx::Op::PREAD, fd, buf, len, offset,
                               nullptr, 0, 0, this);
+}
+
+void IoUringBackend::submit_pread_callback(int fd, void* buf, std::size_t len,
+                                           off_t offset,
+                                           IoCompletionFn completion,
+                                           void* context) {
+    auto awaitable = make_uring_request(IoUringSubmitCtx::Op::PREAD, fd, buf,
+                                        len, offset, nullptr, 0, 0, this);
+    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(awaitable.submit_ctx_);
+    uring_ctx->completion = completion;
+    uring_ctx->completion_ctx = context;
+    submit_fn(uring_ctx, nullptr);
 }
 
 IoAwaitable IoUringBackend::submit_pwrite(int fd, const void* buf,

@@ -209,7 +209,7 @@ static void apply_filters(std::string& dsl, std::string_view filters_str) {
     }
 }
 
-/// Direct-scan a small file without any sidecar index.
+/// Direct-scan a small file without any `.dftindex` store.
 /// Streams via async_streaming_gz_lines(), parses JSON, applies
 /// predicate filters, collects matching events as raw JSON strings.
 static coro::CoroTask<void> direct_scan_events(
@@ -447,8 +447,8 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                 ViewBuilderInput builder_input;
                 builder_input.with_view(view)
                     .with_file_path(file_info->path)
-                    .with_idx_path(
-                        file_info->has_bloom_data ? file_info->idx_path : "")
+                    .with_index_path(
+                        file_info->has_bloom_data ? file_info->index_path : "")
                     .with_uncompressed_size(file_info->uncompressed_size)
                     .with_num_checkpoints(file_info->num_checkpoints)
                     .with_bloom_cache(&index.bloom_cache())
@@ -467,7 +467,7 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                     }
                     ViewReaderInput reader_input;
                     reader_input.with_file_path(file_info->path)
-                        .with_idx_path(file_info->idx_path)
+                        .with_index_path(file_info->index_path)
                         .with_byte_range(candidate.start_byte,
                                          candidate.end_byte)
                         .with_checkpoint_idx(candidate.checkpoint_idx)
@@ -555,9 +555,9 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                         ViewBuilderInput builder_input;
                         builder_input.with_view(*view_ptr)
                             .with_file_path(file_info->path)
-                            .with_idx_path(file_info->has_bloom_data
-                                               ? file_info->idx_path
-                                               : "")
+                            .with_index_path(file_info->has_bloom_data
+                                                 ? file_info->index_path
+                                                 : "")
                             .with_uncompressed_size(
                                 file_info->uncompressed_size)
                             .with_num_checkpoints(file_info->num_checkpoints)
@@ -577,7 +577,7 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
                             ViewReaderInput reader_input;
                             reader_input.with_file_path(file_info->path)
-                                .with_idx_path(file_info->idx_path)
+                                .with_index_path(file_info->index_path)
                                 .with_byte_range(candidate.start_byte,
                                                  candidate.end_byte)
                                 .with_checkpoint_idx(candidate.checkpoint_idx)

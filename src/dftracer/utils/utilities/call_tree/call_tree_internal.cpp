@@ -8,6 +8,7 @@
 #include <dftracer/utils/core/common/format_detector.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/reader/internal/line_processor.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <yyjson.h>
@@ -300,7 +301,7 @@ bool TraceReader::read_with_reader(const std::string& trace_file,
         auto format = dftracer::utils::FormatDetector::detect(trace_file);
 
         // For GZIP files, skip Reader API and use direct zlib decompression
-        // since Reader API requires .idx files
+        // since this path expects a prebuilt `.dftindex` store.
         if (format == dftracer::utils::ArchiveFormat::GZIP) {
             return false;  // Will trigger fallback to read_direct which handles
                            // gzip
@@ -313,13 +314,13 @@ bool TraceReader::read_with_reader(const std::string& trace_file,
             return false;
         }
 
-        // Generate index file path
-        std::string idx_file = trace_file + ".idx";
+        std::string index_path = dftracer::utils::utilities::composites::dft::
+            internal::determine_index_path(trace_file, "");
 
         // Create reader (this will auto-build index if needed)
         auto reader =
             dftracer::utils::utilities::reader::internal::ReaderFactory::create(
-                trace_file, idx_file);
+                trace_file, index_path);
         if (!reader || !reader->is_valid()) {
             DFTRACER_UTILS_LOG_ERROR("Failed to create reader for %s",
                                      trace_file.c_str());

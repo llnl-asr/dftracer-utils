@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
@@ -6,6 +7,7 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::composites::dft::internal;
 using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dft_utils_test;
@@ -18,12 +20,13 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
     REQUIRE(!gz_file.empty());
 
     std::string idx_file = env.get_index_path(gz_file);
+    std::string db_root = determine_index_path(gz_file, "");
 
     SUBCASE("IndexerFactory creates valid indexer") {
         auto indexer = IndexerFactory::create(gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
         CHECK(indexer->get_archive_path() == gz_file);
-        CHECK(indexer->get_idx_path() == idx_file);
+        CHECK(indexer->get_index_path() == db_root);
     }
 
     SUBCASE("ReaderFactory creates valid reader") {
@@ -35,7 +38,7 @@ TEST_CASE("Factory Pattern - Basic GZIP functionality") {
         REQUIRE(reader != nullptr);
         CHECK(reader->is_valid());
         CHECK(reader->get_archive_path() == gz_file);
-        CHECK(reader->get_idx_path() == idx_file);
+        CHECK(reader->get_index_path() == db_root);
     }
 
     SUBCASE("Reader factory from files") {
@@ -59,13 +62,14 @@ TEST_CASE("Factory Pattern - Basic TAR.GZ functionality") {
     REQUIRE(!tar_gz_file.empty());
 
     std::string idx_file = env.get_index_path(tar_gz_file);
+    std::string db_root = determine_index_path(tar_gz_file, "");
 
     SUBCASE("IndexerFactory creates valid TAR.GZ indexer") {
         auto indexer =
             IndexerFactory::create(tar_gz_file, idx_file, 1024 * 1024);
         REQUIRE(indexer != nullptr);
         CHECK(indexer->get_archive_path() == tar_gz_file);
-        CHECK(indexer->get_idx_path() == idx_file);
+        CHECK(indexer->get_index_path() == db_root);
     }
 
     SUBCASE("ReaderFactory creates valid TAR.GZ reader") {
@@ -78,7 +82,7 @@ TEST_CASE("Factory Pattern - Basic TAR.GZ functionality") {
         REQUIRE(reader != nullptr);
         CHECK(reader->is_valid());
         CHECK(reader->get_archive_path() == tar_gz_file);
-        CHECK(reader->get_idx_path() == idx_file);
+        CHECK(reader->get_index_path() == db_root);
     }
 }
 

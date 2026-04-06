@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
@@ -17,6 +18,7 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::composites::dft::internal;
 using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dft_utils_test;
@@ -29,6 +31,7 @@ TEST_CASE("TAR.GZ Indexer - Basic functionality") {
     REQUIRE(!tar_gz_file.empty());
 
     std::string idx_file = env.get_index_path(tar_gz_file);
+    std::string db_root = determine_index_path(tar_gz_file, "");
 
     SUBCASE("Build index") {
         auto indexer =
@@ -55,7 +58,7 @@ TEST_CASE("TAR.GZ Indexer - Basic functionality") {
 
         // Test getter methods
         CHECK(indexer->get_archive_path() == tar_gz_file);
-        CHECK(indexer->get_idx_path() == idx_file);
+        CHECK(indexer->get_index_path() == db_root);
 
         // Build index first before accessing metadata
         indexer->build();
@@ -86,6 +89,7 @@ TEST_CASE("TAR.GZ Reader - Basic functionality") {
     REQUIRE(!tar_gz_file.empty());
 
     std::string idx_file = env.get_index_path(tar_gz_file);
+    std::string db_root = determine_index_path(tar_gz_file, "");
 
     // Build index first
     {
@@ -123,7 +127,7 @@ TEST_CASE("TAR.GZ Reader - Basic functionality") {
 
         // Test getter methods
         CHECK(reader->get_archive_path() == tar_gz_file);
-        CHECK(reader->get_idx_path() == idx_file);
+        CHECK(reader->get_index_path() == db_root);
     }
 
     SUBCASE("Read byte range using streaming API") {

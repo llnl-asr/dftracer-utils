@@ -156,9 +156,9 @@ coro::CoroTask<SourceResult> process_source(
             result.output_files.push_back(chunk.path);
         }
 
-        trackers[gi].flush_to_db(plan, plan.groups[gi].name,
-                                 plan.groups[gi].query, writers[gi]->chunks(),
-                                 config.output_dir);
+        co_await trackers[gi].flush_to_db(
+            plan, plan.groups[gi].name, plan.groups[gi].query,
+            writers[gi]->chunks(), config.output_dir);
     }
 
     result.success = true;
@@ -187,12 +187,14 @@ coro::CoroTask<EventRouterResult> route_events(
     futures.reserve(tasks_by_source.size());
 
     for (const auto& [src_idx, src_tasks] : tasks_by_source) {
+        auto* config_ptr = &config;
         futures.push_back(
-            scope.spawn([src_idx, &config, tasks = src_tasks, permits](
+            scope.spawn([src_idx, config_ptr, tasks = src_tasks, permits](
                             CoroScope& s) -> coro::CoroTask<SourceResult> {
                 co_await s.receive(permits);
                 try {
-                    auto r = co_await process_source(src_idx, config, tasks);
+                    auto r =
+                        co_await process_source(src_idx, *config_ptr, tasks);
                     permits->try_send(true);
                     co_return r;
                 } catch (...) {

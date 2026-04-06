@@ -10,7 +10,8 @@
 #include "testing_utilities.h"
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::composites::dft::indexing;
+namespace queries =
+    dftracer::utils::utilities::composites::dft::indexing::queries;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
@@ -29,9 +30,9 @@ TEST_SUITE("ManifestQueries") {
             dft_utils_test::make_unique_test_path("test_manifest_queries")
                 .string();
         fs::create_directories(test_dir);
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
 
-        IndexDatabase idx_db(idx_path);
+        IndexDatabase idx_db(index_path);
         idx_db.init_base_schema();
         idx_db.init_manifest_schema();
         int fid =
@@ -39,26 +40,20 @@ TEST_SUITE("ManifestQueries") {
 
         idx_db.begin_transaction();
 
-        queries::insert_event_range(idx_db.sql_db(), fid, 0, "POSIX", "read",
-                                    {0, 2, 5});
-        queries::insert_event_range(idx_db.sql_db(), fid, 0, "POSIX", "write",
-                                    {1});
-        queries::insert_event_range(idx_db.sql_db(), fid, 0, "APP", "compute",
-                                    {3, 4});
-        queries::insert_event_range(idx_db.sql_db(), fid, 1, "POSIX", "read",
-                                    {0, 1});
+        idx_db.insert_event_range(fid, 0, "POSIX", "read", {0, 2, 5});
+        idx_db.insert_event_range(fid, 0, "POSIX", "write", {1});
+        idx_db.insert_event_range(fid, 0, "APP", "compute", {3, 4});
+        idx_db.insert_event_range(fid, 1, "POSIX", "read", {0, 1});
 
         idx_db.commit_transaction();
 
-        auto all = queries::query_event_ranges(idx_db.sql_db(), fid);
+        auto all = idx_db.query_event_ranges(fid);
         CHECK(all.size() == 4);
 
-        auto ckpt0 =
-            queries::query_event_ranges_for_checkpoint(idx_db.sql_db(), fid, 0);
+        auto ckpt0 = idx_db.query_event_ranges_for_checkpoint(fid, 0);
         CHECK(ckpt0.size() == 3);
 
-        auto ckpt1 =
-            queries::query_event_ranges_for_checkpoint(idx_db.sql_db(), fid, 1);
+        auto ckpt1 = idx_db.query_event_ranges_for_checkpoint(fid, 1);
         CHECK(ckpt1.size() == 1);
         CHECK(ckpt1[0].cat == "POSIX");
         CHECK(ckpt1[0].name == "read");
@@ -73,9 +68,9 @@ TEST_SUITE("ManifestQueries") {
             dft_utils_test::make_unique_test_path("test_manifest_meta_q")
                 .string();
         fs::create_directories(test_dir);
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
 
-        IndexDatabase idx_db(idx_path);
+        IndexDatabase idx_db(index_path);
         idx_db.init_base_schema();
         idx_db.init_manifest_schema();
         int fid =
@@ -83,21 +78,19 @@ TEST_SUITE("ManifestQueries") {
 
         idx_db.begin_transaction();
 
-        queries::insert_metadata_lines(idx_db.sql_db(), fid, 0, "HH", {0, 3});
-        queries::insert_metadata_lines(idx_db.sql_db(), fid, 0, "FH", {1});
-        queries::insert_metadata_lines(idx_db.sql_db(), fid, 1, "HH", {0});
+        idx_db.insert_metadata_lines(fid, 0, "HH", {0, 3});
+        idx_db.insert_metadata_lines(fid, 0, "FH", {1});
+        idx_db.insert_metadata_lines(fid, 1, "HH", {0});
 
         idx_db.commit_transaction();
 
-        auto all = queries::query_metadata_lines(idx_db.sql_db(), fid);
+        auto all = idx_db.query_metadata_lines(fid);
         CHECK(all.size() == 3);
 
-        auto ckpt0 = queries::query_metadata_lines_for_checkpoint(
-            idx_db.sql_db(), fid, 0);
+        auto ckpt0 = idx_db.query_metadata_lines_for_checkpoint(fid, 0);
         CHECK(ckpt0.size() == 2);
 
-        auto ckpt1 = queries::query_metadata_lines_for_checkpoint(
-            idx_db.sql_db(), fid, 1);
+        auto ckpt1 = idx_db.query_metadata_lines_for_checkpoint(fid, 1);
         CHECK(ckpt1.size() == 1);
 
         fs::remove_all(test_dir);
@@ -108,28 +101,27 @@ TEST_SUITE("ManifestQueries") {
             dft_utils_test::make_unique_test_path("test_manifest_delete")
                 .string();
         fs::create_directories(test_dir);
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
 
-        IndexDatabase idx_db(idx_path);
+        IndexDatabase idx_db(index_path);
         idx_db.init_base_schema();
         idx_db.init_manifest_schema();
         int fid =
             idx_db.get_or_create_file_info(get_logical_path("test.pfw.gz"), 0);
 
         idx_db.begin_transaction();
-        queries::insert_event_range(idx_db.sql_db(), fid, 0, "POSIX", "read",
-                                    {0, 1});
-        queries::insert_metadata_lines(idx_db.sql_db(), fid, 0, "HH", {2});
+        idx_db.insert_event_range(fid, 0, "POSIX", "read", {0, 1});
+        idx_db.insert_metadata_lines(fid, 0, "HH", {2});
         idx_db.commit_transaction();
 
-        CHECK(queries::query_event_ranges(idx_db.sql_db(), fid).size() == 1);
-        CHECK(queries::query_metadata_lines(idx_db.sql_db(), fid).size() == 1);
+        CHECK(idx_db.query_event_ranges(fid).size() == 1);
+        CHECK(idx_db.query_metadata_lines(fid).size() == 1);
 
-        queries::delete_event_ranges(idx_db.sql_db(), fid);
-        CHECK(queries::query_event_ranges(idx_db.sql_db(), fid).empty());
+        idx_db.delete_event_ranges(fid);
+        CHECK(idx_db.query_event_ranges(fid).empty());
 
-        queries::delete_metadata_lines(idx_db.sql_db(), fid);
-        CHECK(queries::query_metadata_lines(idx_db.sql_db(), fid).empty());
+        idx_db.delete_metadata_lines(fid);
+        CHECK(idx_db.query_metadata_lines(fid).empty());
 
         fs::remove_all(test_dir);
     }

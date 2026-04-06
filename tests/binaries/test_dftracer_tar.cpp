@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -14,6 +15,14 @@
 // ============================================================================
 
 namespace {
+
+void set_test_library_path(const std::string& binary) {
+    const fs::path build_root = fs::path(binary).parent_path().parent_path();
+    const std::string lib_path =
+        (build_root / "lib").string() + ":" +
+        (build_root / "_deps" / "rocksdb-build").string();
+    ::setenv("LD_LIBRARY_PATH", lib_path.c_str(), 1);
+}
 
 std::string find_tar_binary() {
     const char* env_path = std::getenv("DFTRACER_TAR_PATH");
@@ -34,6 +43,7 @@ int run_tar(const std::string& binary, const std::vector<std::string>& args) {
     pid_t pid = ::fork();
     if (pid < 0) return -1;
     if (pid == 0) {
+        set_test_library_path(binary);
         std::vector<const char*> argv;
         argv.push_back(binary.c_str());
         for (const auto& arg : args) argv.push_back(arg.c_str());
@@ -60,6 +70,7 @@ std::string run_tar_capture(const std::string& binary,
         return "";
     }
     if (pid == 0) {
+        set_test_library_path(binary);
         ::close(pipefd[0]);
         ::dup2(pipefd[1], STDOUT_FILENO);
         ::dup2(pipefd[1], STDERR_FILENO);
@@ -172,9 +183,9 @@ TEST_SUITE("DFTracerTar") {
         int rc = run_tar(binary, {tar_gz, "--build-only"});
         CHECK(rc == 0);
 
-        // The indexer creates a .idx.tar sidecar alongside the archive.
-        std::string sidecar = tar_gz + ".idx.tar";
-        CHECK(fs::exists(sidecar));
+        std::string db_root = dftracer::utils::utilities::composites::dft::
+            internal::determine_index_path(tar_gz, "");
+        CHECK(fs::exists(db_root));
     }
 
     TEST_CASE("force rebuild") {
@@ -196,12 +207,13 @@ TEST_SUITE("DFTracerTar") {
         int rc1 = run_tar(binary, {tar_gz, "--build-only"});
         REQUIRE(rc1 == 0);
 
-        std::string sidecar = tar_gz + ".idx.tar";
-        REQUIRE(fs::exists(sidecar));
+        std::string db_root = dftracer::utils::utilities::composites::dft::
+            internal::determine_index_path(tar_gz, "");
+        REQUIRE(fs::exists(db_root));
 
-        // Force rebuild must also succeed and leave the sidecar intact.
+        // Force rebuild must also succeed and leave the DB root intact.
         int rc2 = run_tar(binary, {tar_gz, "--build-only", "--force-rebuild"});
         CHECK(rc2 == 0);
-        CHECK(fs::exists(sidecar));
+        CHECK(fs::exists(db_root));
     }
 }

@@ -78,6 +78,7 @@ foreach(test_file ${TEST_CPP_SOURCES})
   target_link_libraries(${target_name} PRIVATE doctest::doctest testing_utilities)
   target_set_warnings(${target_name})
   target_enable_coroutine(${target_name})
+  target_add_rpath(${target_name})
   
   # Pass CMAKE_BINARY_DIR to tests that need to execute binaries
   target_compile_definitions(${target_name} PRIVATE CMAKE_BINARY_DIR="${CMAKE_BINARY_DIR}")
@@ -155,6 +156,7 @@ foreach (test_file ${TEST_C_SOURCES})
   add_executable(${target_name} ${test_file})
   target_include_directories(${target_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(${target_name} PRIVATE unity_lib testing_utilities)
+  target_add_rpath(${target_name})
 
   # Set output directory to preserve folder structure in binaries
   get_filename_component(bin_dir ${bin_exec} DIRECTORY)
@@ -216,6 +218,7 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   target_link_libraries(${target_name} PRIVATE doctest::doctest testing_utilities)
   target_set_warnings(${target_name})
   target_enable_coroutine(${target_name})
+  target_add_rpath(${target_name})
 
   get_filename_component(bin_dir ${bin_exec} DIRECTORY)
   get_filename_component(bin_name ${bin_exec} NAME)

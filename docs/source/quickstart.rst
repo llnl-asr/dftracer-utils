@@ -246,7 +246,7 @@ Create and use indexes for faster access:
    from dftracer.utils import Indexer
 
    # Create an indexer
-   indexer = Indexer("trace.pfw.gz", "trace.pfw.gz.idx")
+   indexer = Indexer("trace.pfw.gz")
 
    # Build the index if needed
    if indexer.need_rebuild():

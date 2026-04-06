@@ -53,7 +53,7 @@ TEST_SUITE("TraceStatistics") {
     TEST_CASE("TraceStatistics - to_json produces valid JSON") {
         TraceStatistics ts;
         ts.file_path = "/test/file.pfw.gz";
-        ts.idx_path = "/test/file.pfw.gz.idx";
+        ts.index_path = "/test/file.pfw.gz.idx";
         ts.success = true;
         ts.num_chunks = 2;
 
@@ -97,7 +97,7 @@ TEST_SUITE("TraceStatistics") {
     TEST_CASE("TraceStatistics - to_json with error") {
         TraceStatistics ts;
         ts.file_path = "/test/missing.pfw.gz";
-        ts.idx_path = "/test/missing.pfw.gz.idx";
+        ts.index_path = "/test/missing.pfw.gz.idx";
         ts.success = false;
         ts.error_message = "File not found";
 

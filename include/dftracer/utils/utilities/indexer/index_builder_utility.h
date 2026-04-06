@@ -43,7 +43,7 @@ struct IndexBuildConfig {
 
 struct IndexBuildResult {
     std::string file_path;
-    std::string idx_path;
+    std::string index_path;
     bool success = false;
     bool was_skipped = false;
     bool index_created = false;

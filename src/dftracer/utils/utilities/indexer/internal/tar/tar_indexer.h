@@ -4,25 +4,25 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/sqlite/database.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace dftracer::utils::utilities::indexer::internal::tar {
-
-using dftracer::utils::sqlite::SqliteDatabase;
 
 class TarIndexer : public Indexer {
    public:
     static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
         constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
-    TarIndexer(const std::string &tar_gz_path, const std::string &idx_path,
+    TarIndexer(const std::string &tar_gz_path, const std::string &index_path,
                std::uint64_t checkpoint_size = DEFAULT_CHECKPOINT_SIZE,
                bool force = false);
     ~TarIndexer();
@@ -35,7 +35,7 @@ class TarIndexer : public Indexer {
     bool need_rebuild() const override;
     bool exists() const override;
 
-    const std::string &get_idx_path() const override;
+    const std::string &get_index_path() const override;
     const std::string &get_archive_path() const override;
     const std::string &get_tar_gz_path() const;
     std::uint64_t get_checkpoint_size() const override;
@@ -80,20 +80,20 @@ class TarIndexer : public Indexer {
    private:
     std::string tar_gz_path;
     std::string tar_gz_path_logical_path;
-    std::string idx_path;
+    std::string index_path;
     std::uint64_t ckpt_size;
     bool force_rebuild;
-    SqliteDatabase db;
 
     // Cached values
-    mutable bool cached_is_valid;
-    mutable int cached_archive_id;
-    mutable std::uint64_t cached_max_bytes;
-    mutable std::uint64_t cached_num_lines;
-    mutable std::uint64_t cached_num_files;
-    mutable std::uint64_t cached_checkpoint_size;
+    mutable std::optional<bool> cached_is_valid;
+    mutable std::optional<int> cached_archive_id;
+    mutable std::optional<std::uint64_t> cached_max_bytes;
+    mutable std::optional<std::uint64_t> cached_num_lines;
+    mutable std::optional<std::uint64_t> cached_num_files;
+    mutable std::optional<std::uint64_t> cached_checkpoint_size;
     mutable std::string cached_archive_name;
     mutable std::vector<IndexerCheckpoint> cached_checkpoints;
+    mutable std::mutex cache_mutex;
 
     // Internal methods
     void open();

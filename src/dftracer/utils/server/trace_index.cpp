@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/rocksdb/async.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/server/trace_index.h>
@@ -50,7 +51,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
     for (const auto& entry : entries) {
         FileInfo info;
         info.path = entry.path.string();
-        info.idx_path = internal::determine_index_path(info.path, index_dir_);
+        info.index_path = internal::determine_index_path(info.path, index_dir_);
 
         std::error_code ec;
         auto fsize = fs::file_size(info.path, ec);
@@ -68,8 +69,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 static_cast<double>(info.compressed_size) / (1024.0 * 1024.0);
             small_count++;
         } else {
-            info.has_bloom_data = fs::exists(info.idx_path);
-            info.has_checkpoint_index = fs::exists(info.idx_path);
+            info.has_bloom_data = fs::exists(info.index_path);
+            info.has_checkpoint_index = fs::exists(info.index_path);
             if (!info.has_bloom_data) {
                 needs_build.push_back(idx);
             } else {
@@ -83,7 +84,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
     if (small_count > 0) {
         DFTRACER_UTILS_LOG_INFO(
             "TraceIndex: %zu small file(s) (< %zu bytes) will be "
-            "streamed directly (no sidecar indexes)",
+            "streamed directly (no .dftindex database)",
             small_count, INDEX_SIZE_THRESHOLD);
     }
 
@@ -155,12 +156,12 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                             co_await builder.process(config);
 
                                         if (result.success) {
-                                            info->idx_path =
+                                            info->index_path =
                                                 internal::determine_index_path(
                                                     info->path, *index_dir_ptr);
                                             info->has_bloom_data = true;
                                             info->has_checkpoint_index =
-                                                fs::exists(info->idx_path);
+                                                fs::exists(info->index_path);
                                         } else {
                                             DFTRACER_UTILS_LOG_WARN(
                                                 "TraceIndex: failed to "
@@ -209,29 +210,43 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
                                     if (info->has_bloom_data) {
                                         try {
-                                            indexer::IndexDatabase idx_db(
-                                                info->idx_path);
-                                            auto logical = indexer::internal::
-                                                get_logical_path(info->path);
-                                            int fid = idx_db.get_file_info_id(
-                                                logical);
-                                            if (fid >= 0) {
-                                                auto tb =
-                                                    idx_db.query_time_bounds(
-                                                        fid);
-                                                if (tb.valid) {
-                                                    info->min_timestamp_us =
-                                                        tb.min_timestamp_us;
-                                                    info->max_timestamp_us =
-                                                        tb.max_timestamp_us;
-                                                }
+                                            const std::string path = info->path;
+                                            const std::string index_path =
+                                                info->index_path;
+                                            const auto* path_ptr = &path;
+                                            const auto* index_path_ptr =
+                                                &index_path;
+                                            auto bounds = co_await rocksdb::run(
+                                                [path_ptr, index_path_ptr] {
+                                                    indexer::IndexDatabase
+                                                        idx_db(*index_path_ptr);
+                                                    auto logical =
+                                                        indexer::internal::
+                                                            get_logical_path(
+                                                                *path_ptr);
+                                                    int fid =
+                                                        idx_db.get_file_info_id(
+                                                            logical);
+                                                    if (fid < 0) {
+                                                        return indexer::
+                                                            IndexDatabase::
+                                                                TimeBounds{};
+                                                    }
+                                                    return idx_db
+                                                        .query_time_bounds(fid);
+                                                });
+                                            if (bounds.valid) {
+                                                info->min_timestamp_us =
+                                                    bounds.min_timestamp_us;
+                                                info->max_timestamp_us =
+                                                    bounds.max_timestamp_us;
                                             }
                                         } catch (const std::exception& e) {
                                             DFTRACER_UTILS_LOG_WARN(
                                                 "TraceIndex: failed to "
                                                 "read time bounds from "
                                                 "%s: %s",
-                                                info->idx_path.c_str(),
+                                                info->index_path.c_str(),
                                                 e.what());
                                         }
                                     }
@@ -239,7 +254,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                     auto meta_input =
                                         MetadataCollectorUtilityInput::
                                             from_file(info->path)
-                                                .with_index(info->idx_path);
+                                                .with_index(info->index_path);
                                     auto metadata =
                                         co_await MetadataCollectorUtility{}
                                             .process(meta_input);

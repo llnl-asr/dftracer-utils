@@ -63,6 +63,22 @@ IoAwaitable ThreadPoolBackend::submit_pread(int fd, void* buf, std::size_t len,
                         &executor_, &pool_);
 }
 
+void ThreadPoolBackend::submit_pread_callback(int fd, void* buf,
+                                              std::size_t len, off_t offset,
+                                              IoCompletionFn completion,
+                                              void* context) {
+    auto* req = new IoRequest{};
+    req->op = IoOp::PREAD;
+    req->fd = fd;
+    req->buf = buf;
+    req->len = len;
+    req->offset = offset;
+    req->completion = completion;
+    req->completion_ctx = context;
+    req->pool = &pool_;
+    pool_.submit([req] { execute_request(req); });
+}
+
 IoAwaitable ThreadPoolBackend::submit_pwrite(int fd, const void* buf,
                                              std::size_t len, off_t offset) {
     return make_request(IoOp::PWRITE, fd, const_cast<void*>(buf), len, offset,
@@ -300,8 +316,12 @@ void ThreadPoolBackend::execute_request(IoRequest* req) {
     }
     if (result < 0) result = -errno;
 
-    req->awaitable->result_ = result;
-    req->executor->enqueue(req->awaitable->handle_);
+    if (req->awaitable != nullptr) {
+        req->awaitable->result_ = result;
+        req->executor->enqueue(req->awaitable->handle_);
+    } else if (req->completion != nullptr) {
+        req->completion(req->completion_ctx, result);
+    }
     delete req;
 }
 

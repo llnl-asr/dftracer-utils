@@ -17,7 +17,7 @@ namespace dftracer::utils::utilities::composites::dft {
  */
 struct MetadataCollectorUtilityInput {
     std::string file_path;
-    std::string idx_path;  // Empty for plain files
+    std::string index_path;  // Empty for plain files, otherwise `.dftindex`.
     std::size_t checkpoint_size = dftracer::utils::utilities::indexer::
         internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
@@ -31,7 +31,7 @@ struct MetadataCollectorUtilityInput {
             Indexer::DEFAULT_CHECKPOINT_SIZE,
         bool force = false, bool hash = false)
         : file_path(std::move(fpath)),
-          idx_path(std::move(ipath)),
+          index_path(std::move(ipath)),
           checkpoint_size(ckpt),
           force_rebuild(force),
           compute_hash(hash) {}
@@ -43,7 +43,7 @@ struct MetadataCollectorUtilityInput {
     }
 
     MetadataCollectorUtilityInput& with_index(std::string idx) {
-        idx_path = std::move(idx);
+        index_path = std::move(idx);
         return *this;
     }
 
@@ -63,7 +63,7 @@ struct MetadataCollectorUtilityInput {
     }
 
     bool operator==(const MetadataCollectorUtilityInput& other) const {
-        return file_path == other.file_path && idx_path == other.idx_path &&
+        return file_path == other.file_path && index_path == other.index_path &&
                checkpoint_size == other.checkpoint_size &&
                force_rebuild == other.force_rebuild &&
                compute_hash == other.compute_hash;
@@ -75,7 +75,7 @@ struct MetadataCollectorUtilityInput {
  */
 struct MetadataCollectorUtilityOutput {
     std::string file_path;
-    std::string idx_path;
+    std::string index_path;  // Root-local `.dftindex` path when available.
     double size_mb = 0;
     std::size_t start_line = 0;
     std::size_t end_line = 0;
@@ -98,7 +98,7 @@ struct MetadataCollectorUtilityOutput {
     MetadataCollectorUtilityOutput() = default;
 
     bool operator==(const MetadataCollectorUtilityOutput& other) const {
-        return file_path == other.file_path && idx_path == other.idx_path &&
+        return file_path == other.file_path && index_path == other.index_path &&
                size_mb == other.size_mb && start_line == other.start_line &&
                end_line == other.end_line &&
                valid_events == other.valid_events &&
@@ -119,7 +119,8 @@ struct MetadataCollectorUtilityOutput {
  * files.
  *
  * Supports both plain (.pfw) and compressed (.pfw.gz) files.
- * For compressed files, builds/uses an index for efficient access.
+ * For compressed files, builds/uses the root-local `.dftindex` store for
+ * efficient access.
  *
  * Tagged with Parallelizable - safe for parallel batch processing.
  */

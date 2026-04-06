@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_STREAMING_GZ_LINE_GENERATOR_H
 
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
@@ -11,7 +12,6 @@
 #include <vector>
 
 namespace dftracer::utils::utilities::fileio::lines::sources {
-
 /**
  * @brief Async generator that yields lines from .gz files without an index.
  *
@@ -30,7 +30,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
             "Cannot open compressed file: " + file_path +
             " (errno=" + std::to_string(static_cast<int>(-fd_result)) + ")");
     }
-    int fd = static_cast<int>(fd_result);
+    dftracer::utils::ScopedFd fd(static_cast<int>(fd_result));
 
     constexpr std::size_t READ_BUFFER_SIZE = 256 * 1024;  // 256KB
     std::vector<char> read_buffer(READ_BUFFER_SIZE);
@@ -46,7 +46,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     try {
         while (true) {
             ssize_t bytes_read = co_await ::dftracer::utils::io::pread(
-                fd, read_buffer.data(), READ_BUFFER_SIZE, file_offset);
+                fd.get(), read_buffer.data(), READ_BUFFER_SIZE, file_offset);
 
             if (bytes_read < 0) {
                 throw std::runtime_error(
@@ -94,7 +94,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                                           current_line);
                         }
                         if (end_line > 0 && current_line >= end_line) {
-                            co_await ::dftracer::utils::io::close(fd);
+                            fd.reset();
                             co_return;
                         }
                         line_buffer.clear();
@@ -110,7 +110,6 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
         ex = std::current_exception();
     }
 
-    co_await ::dftracer::utils::io::close(fd);
     if (ex) {
         std::rethrow_exception(ex);
     }

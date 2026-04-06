@@ -12,6 +12,7 @@ This section contains the C++ API documentation for dftracer utilities.
     :caption: C++ Components:
 
     core_infrastructure
+    rocksdb
     reader
     indexer
     pipeline
@@ -20,7 +21,6 @@ This section contains the C++ API documentation for dftracer utilities.
     utilities
     arrow
     io
-    sqlite
     scheduler
     dft_aggregators
     dft_indexing
@@ -39,7 +39,6 @@ The dftracer utilities C++ library is organized into several namespaces:
 - ``dftracer::utils::task_graph`` - DAG-based task graph builder
 - ``dftracer::utils::utilities`` - Composable processing utilities
 - ``dftracer::utils::io`` - Async I/O backends (io_uring, kqueue, thread pool)
-- ``dftracer::utils::sqlite`` - Async SQLite database operations
 - ``dftracer::utils::utilities::composites::dft::aggregators`` - Event aggregation pipeline
 - ``dftracer::utils::utilities::composites::dft::indexing`` - Bloom filter indexing system
 - ``dftracer::utils::utilities::common::arrow`` - Arrow data interchange (RecordBatchBuilder, IpcWriter)
@@ -65,11 +64,6 @@ The dftracer utilities C++ library is organized into several namespaces:
        subgraph IO["dftracer::utils::io"]
            IoBackend["IoBackend"]
            IoAwaitable["IoAwaitable"]
-       end
-
-       subgraph SQLite["dftracer::utils::sqlite"]
-           SqliteDB["SqliteDatabase"]
-           SqliteAwait["SqliteAwaitable"]
        end
 
        subgraph Utilities["dftracer::utils::utilities"]
@@ -100,7 +94,6 @@ The dftracer utilities C++ library is organized into several namespaces:
        Pipeline --> Executor
        Pipeline --> Scheduler
        Executor --> IoBackend
-       Executor --> SqliteDB
        Executor --> CoroTask
        Watchdog --> Executor
        TimerService --> Executor

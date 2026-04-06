@@ -1,5 +1,7 @@
 .PHONY: coverage coverage-clean coverage-view coverage-open test test-coverage test-py build clean format check-format cmake-format lint typecheck help
 
+RUN_TY ?= 0
+
 # Detect build system
 BUILD_GENERATOR := $(shell command -v ninja >/dev/null 2>&1 && echo "Ninja" || echo "Unix Makefiles")
 BUILD_TOOL := $(shell command -v ninja >/dev/null 2>&1 && echo "ninja" || echo "make")
@@ -65,8 +67,15 @@ test-py:
 	@rm -rf .venv_test_py
 	@python3 -m venv .venv_test_py
 	@.venv_test_py/bin/pip install --upgrade pip setuptools wheel
-	@.venv_test_py/bin/pip install -e .[dev]
+	@if [ "$(RUN_TY)" = "1" ]; then \
+		.venv_test_py/bin/pip install -e .[dev] ty; \
+	else \
+		.venv_test_py/bin/pip install -e .[dev]; \
+	fi
 	@.venv_test_py/bin/pytest tests/python -v
+	@if [ "$(RUN_TY)" = "1" ]; then \
+		.venv_test_py/bin/ty check --python "$$(pwd)/.venv_test_py/bin/python" python/; \
+	fi
 	@rm -rf .venv_test_py
 	@echo "Python tests completed successfully!"
 

@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <doctest/doctest.h>
 
@@ -145,9 +146,10 @@ TEST_SUITE("MetadataCollector") {
             REQUIRE(fs::exists(gz_file));
 
             // Create input with index
-            std::string idx_path = gz_file + ".idx";
+            std::string index_path =
+                internal::determine_index_path(gz_file, "");
             auto input = MetadataCollectorUtilityInput::from_file(gz_file)
-                             .with_index(idx_path)
+                             .with_index(index_path)
                              .with_checkpoint_size(1024 * 1024)  // 1MB
                              .with_force_rebuild(true)
                              .with_compute_hash(true);
@@ -165,7 +167,7 @@ TEST_SUITE("MetadataCollector") {
             CHECK(output.format == ArchiveFormat::GZIP);
             CHECK(output.has_index == true);
             CHECK(output.index_valid == true);
-            CHECK(output.idx_path == idx_path);
+            CHECK(output.index_path == index_path);
             CHECK(output.compressed_size > 0);
             CHECK(output.uncompressed_size > 0);
             CHECK(output.compressed_size <
@@ -175,7 +177,7 @@ TEST_SUITE("MetadataCollector") {
             CHECK(output.error_message.empty());
 
             // Verify index file was created
-            CHECK(fs::exists(idx_path));
+            CHECK(fs::exists(index_path));
         }
 
         SUBCASE("Reuse existing index") {
@@ -186,12 +188,13 @@ TEST_SUITE("MetadataCollector") {
             int result = std::system(cmd.c_str());
             REQUIRE(result == 0);
 
-            std::string idx_path = gz_file + ".idx";
+            std::string index_path =
+                internal::determine_index_path(gz_file, "");
 
             // First run - build index
             {
                 auto input = MetadataCollectorUtilityInput::from_file(gz_file)
-                                 .with_index(idx_path)
+                                 .with_index(index_path)
                                  .with_force_rebuild(true)
                                  .with_compute_hash(true);
 
@@ -201,13 +204,13 @@ TEST_SUITE("MetadataCollector") {
                 CHECK(output.success == true);
                 CHECK(output.has_index == true);
                 CHECK(output.index_valid == true);
-                CHECK(fs::exists(idx_path));
+                CHECK(fs::exists(index_path));
             }
 
             // Second run - reuse index (no force rebuild)
             {
                 auto input = MetadataCollectorUtilityInput::from_file(gz_file)
-                                 .with_index(idx_path)
+                                 .with_index(index_path)
                                  .with_force_rebuild(false)
                                  .with_compute_hash(true);
 

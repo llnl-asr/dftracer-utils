@@ -14,7 +14,7 @@ namespace dftracer::utils::utilities::composites::dft::statistics {
 
 struct ChunkDetailScanInput {
     std::string file_path;
-    std::string idx_path;
+    std::string index_path;
     std::size_t checkpoint_size = 0;
     std::size_t start_byte = 0;
     std::size_t end_byte = 0;

@@ -206,9 +206,9 @@ coro::CoroTask<ChunkAggregationOutput> ChunkAggregatorUtility::process(
 
     TraceReaderConfig reader_cfg;
     reader_cfg.file_path = input.file_path;
-    if (!input.idx_path.empty()) {
+    if (!input.index_path.empty()) {
         reader_cfg.index_dir =
-            input.idx_path.substr(0, input.idx_path.rfind('/'));
+            input.index_path.substr(0, input.index_path.rfind('/'));
     }
     reader_cfg.checkpoint_size = input.checkpoint_size;
     TraceReader trace_reader(reader_cfg);

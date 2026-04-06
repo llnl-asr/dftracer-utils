@@ -2,7 +2,6 @@
 #include <dftracer/utils/utilities/composites/dft/event.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/visitors/bloom_visitor.h>
 #include <yyjson.h>
@@ -14,9 +13,6 @@
 using dftracer::utils::utilities::common::json::JsonValue;
 using dftracer::utils::utilities::composites::dft::DFTracerEvent;
 using dftracer::utils::utilities::composites::dft::indexing::BloomFilter;
-namespace queries =
-    dftracer::utils::utilities::composites::dft::indexing::queries;
-
 namespace dftracer::utils::utilities::indexer {
 
 namespace {
@@ -187,17 +183,11 @@ void BloomVisitor::on_line(std::string_view line, std::size_t checkpoint_idx) {
 }
 
 void BloomVisitor::finalize(IndexDatabase& db, int file_id) {
-    auto& sql_db = db.sql_db();
-
     std::unordered_map<std::string, BloomFilter> file_blooms;
     for (const auto& dim : dimensions_) {
         file_blooms.emplace(dim, BloomFilter(config_.expected_entries_per_chunk,
                                              config_.false_positive_rate));
     }
-
-    auto bloom_stmt = queries::prepare_insert_chunk_bloom_filter(sql_db);
-    auto dim_stats_stmt = queries::prepare_insert_chunk_dimension_stats(sql_db);
-    auto hash_stmt = queries::prepare_insert_hash_resolution(sql_db);
 
     std::vector<unsigned char> blob;
 
@@ -211,27 +201,24 @@ void BloomVisitor::finalize(IndexDatabase& db, int file_id) {
 
             const BloomFilter& bf = it->second;
             bf.serialize_into(blob);
-            queries::insert_chunk_bloom_filter(
-                bloom_stmt, file_id, checkpoint_idx, dim, blob.data(),
-                static_cast<int>(blob.size()),
+            db.insert_chunk_bloom_filter(
+                file_id, checkpoint_idx, dim,
+                std::span<const unsigned char>(blob.data(), blob.size()),
                 static_cast<std::uint64_t>(bf.num_entries()));
 
             file_blooms.at(dim).merge_from(bf);
         }
 
-        queries::insert_chunk_statistics(sql_db, file_id, checkpoint_idx,
-                                         chunk.statistics);
+        db.insert_chunk_statistics(file_id, checkpoint_idx, chunk.statistics);
 
         for (const auto& [dim, ds] : chunk.dimension_stats) {
-            queries::insert_chunk_dimension_stats(dim_stats_stmt, file_id,
-                                                  checkpoint_idx, ds,
-                                                  config_.value_counts_cap);
+            db.insert_chunk_dimension_stats(file_id, checkpoint_idx, ds,
+                                            config_.value_counts_cap);
         }
 
         for (const auto& [dim, resolutions] : chunk.hash_resolutions) {
             for (const auto& [hash_val, resolved] : resolutions) {
-                queries::insert_hash_resolution(hash_stmt, file_id, dim,
-                                                hash_val, resolved);
+                db.insert_hash_resolution(file_id, dim, hash_val, resolved);
             }
         }
     }
@@ -239,13 +226,14 @@ void BloomVisitor::finalize(IndexDatabase& db, int file_id) {
     for (const auto& dim : dimensions_) {
         const BloomFilter& bf = file_blooms.at(dim);
         bf.serialize_into(blob);
-        queries::insert_file_bloom_filter(
-            sql_db, file_id, dim, blob.data(), static_cast<int>(blob.size()),
+        db.insert_file_bloom_filter(
+            file_id, dim,
+            std::span<const unsigned char>(blob.data(), blob.size()),
             static_cast<std::uint64_t>(bf.num_entries()));
     }
 
     for (const auto& dim : dimensions_) {
-        queries::insert_index_dimension(sql_db, file_id, dim);
+        db.insert_index_dimension(file_id, dim);
     }
 }
 

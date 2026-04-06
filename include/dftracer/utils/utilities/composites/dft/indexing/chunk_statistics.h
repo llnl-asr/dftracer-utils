@@ -18,7 +18,8 @@ namespace dftracer::utils::utilities::composites::dft::indexing {
  *
  * Tracks event counts by category/name/pid:tid, timestamp ranges,
  * and duration statistics using Welford's online algorithm for variance.
- * Map fields serialize to JSON TEXT for SQLite storage via yyjson.
+ * Map fields serialize to JSON text via yyjson for storage in the
+ * shared `.dftindex` database.
  */
 struct ChunkStatistics {
     std::uint64_t total_events = 0;

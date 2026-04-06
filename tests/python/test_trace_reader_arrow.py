@@ -14,8 +14,8 @@ class TestIterArrow:
         """iter_arrow yields batch objects with __arrow_c_array__."""
         with Environment(lines=50) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
-            batches = list(reader.iter_arrow(batch_size=100))
+            with dft_utils.TraceReader(gz_file) as reader:
+                batches = list(reader.iter_arrow(batch_size=100))
             assert len(batches) >= 1
             for b in batches:
                 assert hasattr(b, "__arrow_c_array__")
@@ -26,8 +26,8 @@ class TestIterArrow:
         """Total rows across all batches equals number of JSON lines."""
         with Environment(lines=50) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
-            batches = list(reader.iter_arrow(batch_size=20))
+            with dft_utils.TraceReader(gz_file) as reader:
+                batches = list(reader.iter_arrow(batch_size=20))
             total_rows = sum(b.num_rows for b in batches)
             assert total_rows == 50
 
@@ -35,9 +35,9 @@ class TestIterArrow:
         """Each batch has at most batch_size rows."""
         with Environment(lines=100) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
             batch_size = 30
-            batches = list(reader.iter_arrow(batch_size=batch_size))
+            with dft_utils.TraceReader(gz_file) as reader:
+                batches = list(reader.iter_arrow(batch_size=batch_size))
             for b in batches:
                 assert b.num_rows <= batch_size
 
@@ -45,8 +45,8 @@ class TestIterArrow:
         """Arrow batches have columns matching JSON keys."""
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
-            batches = list(reader.iter_arrow(batch_size=100))
+            with dft_utils.TraceReader(gz_file) as reader:
+                batches = list(reader.iter_arrow(batch_size=100))
             assert len(batches) == 1
             b = batches[0]
             # Test data has: name, cat, dur, data
@@ -56,10 +56,10 @@ class TestIterArrow:
         """iter_arrow with out-of-range bytes clamps to actual bounds."""
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
             # Out-of-range start_byte is clamped to max, yielding empty
             # (for non-indexed files, clamping may read all data)
-            batches = list(reader.iter_arrow(start_byte=999999999, end_byte=999999999))
+            with dft_utils.TraceReader(gz_file) as reader:
+                batches = list(reader.iter_arrow(start_byte=999999999, end_byte=999999999))
             # Just verify it doesn't crash — clamping behavior varies
             assert isinstance(batches, list)
 
@@ -68,11 +68,11 @@ class TestIterArrow:
         with Environment(lines=50) as env:
             gz_file = env.create_test_gzip_file()
             # Build index for line-based access
-            idx_file = gz_file + ".idx"
-            with dft_utils.Indexer(gz_file, idx_file) as indexer:
+            index_path = env.get_index_path(gz_file)
+            with dft_utils.Indexer(gz_file, index_path) as indexer:
                 indexer.build()
-            reader = dft_utils.TraceReader(gz_file)
-            batches = list(reader.iter_arrow(start_line=10, end_line=20, batch_size=100))
+            with dft_utils.TraceReader(gz_file) as reader:
+                batches = list(reader.iter_arrow(start_line=10, end_line=20, batch_size=100))
             total_rows = sum(b.num_rows for b in batches)
             # end_line is inclusive, so lines 10..20 = 11 lines
             assert total_rows == 11
@@ -85,24 +85,24 @@ class TestReadArrow:
         """read_arrow returns an ArrowTable."""
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
-            table = reader.read_arrow(batch_size=100)
+            with dft_utils.TraceReader(gz_file) as reader:
+                table = reader.read_arrow(batch_size=100)
             assert isinstance(table, ArrowTable)
 
     def test_read_arrow_row_count(self):
         """ArrowTable has correct total row count."""
         with Environment(lines=30) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
-            table = reader.read_arrow(batch_size=100)
+            with dft_utils.TraceReader(gz_file) as reader:
+                table = reader.read_arrow(batch_size=100)
             assert table.num_rows == 30
 
     def test_read_arrow_batch_access(self):
         """ArrowTable provides batch access."""
         with Environment(lines=50) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
-            table = reader.read_arrow(batch_size=20)
+            with dft_utils.TraceReader(gz_file) as reader:
+                table = reader.read_arrow(batch_size=20)
             assert table.num_batches >= 1
             for b in table.batches():
                 # Batches are raw _ArrowBatchCapsule objects (not ArrowBatch wrappers)
@@ -113,8 +113,8 @@ class TestReadArrow:
         """ArrowTable exposes num_batches, num_rows, empty."""
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
-            table = reader.read_arrow(batch_size=100)
+            with dft_utils.TraceReader(gz_file) as reader:
+                table = reader.read_arrow(batch_size=100)
             assert table.num_rows == 20
             assert table.num_batches >= 1
             assert not table.empty
@@ -127,8 +127,8 @@ class TestArrowBatchWrapper:
         """ArrowBatch wraps a capsule from iter_arrow."""
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
-            raw_batches = list(reader.iter_arrow(batch_size=100))
+            with dft_utils.TraceReader(gz_file) as reader:
+                raw_batches = list(reader.iter_arrow(batch_size=100))
             assert len(raw_batches) >= 1
             batch = ArrowBatch(raw_batches[0])
             assert hasattr(batch, "__arrow_c_array__")
@@ -138,8 +138,8 @@ class TestArrowBatchWrapper:
         """to_pandas raises ImportError if pyarrow is not installed."""
         with Environment(lines=5) as env:
             gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file)
-            raw_batches = list(reader.iter_arrow(batch_size=100))
+            with dft_utils.TraceReader(gz_file) as reader:
+                raw_batches = list(reader.iter_arrow(batch_size=100))
             batch = ArrowBatch(raw_batches[0])
             # This test only verifies the method exists; actual conversion
             # depends on pyarrow being installed

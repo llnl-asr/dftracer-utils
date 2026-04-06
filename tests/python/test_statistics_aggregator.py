@@ -17,9 +17,9 @@ class TestStatisticsAggregatorUtility:
     def test_compute_returns_dict(self):
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             result = StatisticsAggregatorUtility().process(gz_file)
@@ -30,9 +30,9 @@ class TestStatisticsAggregatorUtility:
     def test_compute_correct_event_count(self):
         with Environment(lines=30) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             result = StatisticsAggregatorUtility().process(gz_file)
@@ -42,9 +42,9 @@ class TestStatisticsAggregatorUtility:
     def test_compute_has_statistics_fields(self):
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             result = StatisticsAggregatorUtility().process(gz_file)
@@ -57,9 +57,9 @@ class TestStatisticsAggregatorUtility:
     def test_call_delegates_to_process(self):
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
-                gz_file, idx_file, build_bloom=True, index_threshold=0
+                gz_file, index_path, build_bloom=True, index_threshold=0
             ) as indexer:
                 indexer.build()
             util = StatisticsAggregatorUtility()
@@ -75,10 +75,10 @@ class TestStatisticsAggregatorWithoutIndex:
         """Without bloom data the aggregator streams the file and succeeds."""
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 index_threshold=_SKIP_INDEX_THRESHOLD,
             ) as indexer:
@@ -94,10 +94,10 @@ class TestStatisticsAggregatorWithoutIndex:
         """Sequential fallback produces the same event count as indexed path."""
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 index_threshold=_SKIP_INDEX_THRESHOLD,
             ) as indexer:
@@ -111,10 +111,10 @@ class TestStatisticsAggregatorWithoutIndex:
         """Sequential fallback populates all statistics fields."""
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 index_threshold=_SKIP_INDEX_THRESHOLD,
             ) as indexer:

@@ -18,7 +18,8 @@ typedef void *dft_indexer_handle_t;
  * Opaque handle for DFT reader
  */
 typedef void *dft_reader_handle_t;
-dft_reader_handle_t dft_reader_create(const char *gz_path, const char *idx_path,
+dft_reader_handle_t dft_reader_create(const char *gz_path,
+                                      const char *index_path,
                                       size_t index_ckpt_size);
 dft_reader_handle_t dft_reader_create_with_indexer(
     dft_indexer_handle_t indexer);
@@ -73,7 +74,7 @@ class Reader {
     virtual std::size_t get_max_bytes() const = 0;
     virtual std::size_t get_num_lines() const = 0;
     virtual const std::string &get_archive_path() const = 0;
-    virtual const std::string &get_idx_path() const = 0;
+    virtual const std::string &get_index_path() const = 0;
     virtual void set_buffer_size(std::size_t size) = 0;
 
     // Estimate line count for a byte range (for pre-allocation)

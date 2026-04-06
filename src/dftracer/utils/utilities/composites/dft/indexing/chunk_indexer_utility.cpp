@@ -153,7 +153,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
         auto reader_input =
             composites::IndexedReadInput::from_file(input.file_path)
                 .with_checkpoint_size(input.checkpoint_size)
-                .with_index(input.idx_path);
+                .with_index(input.index_path);
 
         composites::IndexedFileReaderUtility reader_utility;
         reader = co_await reader_utility.process(reader_input);

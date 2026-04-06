@@ -40,7 +40,7 @@ using LineBatchProcessUtilityOutput = std::vector<LineOutput>;
  *
  * LineBatchProcessor<MyData> workflow(processor);
  * auto results = workflow.process(LineBatchInput{"/path/to/file.gz",
- * "file.gz.idx"});
+ * "/path/to/.dftindex"});
  * @endcode
  */
 template <typename LineOutput>
@@ -74,10 +74,10 @@ class LineBatchProcessorUtility
         LineBatchProcessUtilityOutput<LineOutput> results;
 
         auto gen = [&]() {
-            if (!input.idx_path.empty()) {
+            if (!input.index_path.empty()) {
                 auto iter_config =
                     fileio::lines::sources::IndexedFileLineIteratorConfig()
-                        .with_file(input.file_path, input.idx_path);
+                        .with_file(input.file_path, input.index_path);
                 if (input.start_line > 0 && input.end_line > 0) {
                     iter_config.with_line_range(input.start_line,
                                                 input.end_line);
@@ -131,10 +131,10 @@ class SimpleLineBatchProcessorUtility
         SimpleLineBatchProcessUtilityOutput<LineOutput> results;
 
         auto gen = [&]() {
-            if (!input.idx_path.empty()) {
+            if (!input.index_path.empty()) {
                 auto iter_config =
                     fileio::lines::sources::IndexedFileLineIteratorConfig()
-                        .with_file(input.file_path, input.idx_path);
+                        .with_file(input.file_path, input.index_path);
                 if (input.start_line > 0 && input.end_line > 0) {
                     iter_config.with_line_range(input.start_line,
                                                 input.end_line);

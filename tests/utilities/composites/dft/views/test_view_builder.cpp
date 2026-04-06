@@ -1,7 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
-#include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
@@ -24,9 +23,9 @@ using dftracer::utils::utilities::indexer::internal::get_logical_path;
 //   1: name={open,close}, cat={POSIX}
 //   2: name={train}, cat={compute}
 //   3: name={forward}, cat={compute,ai_framework}
-static void populate_test_idx(const std::string& idx_path,
+static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {
-    IndexDatabase idx_db(idx_path);
+    IndexDatabase idx_db(index_path);
     idx_db.init_base_schema();
     idx_db.init_bloom_schema();
 
@@ -58,10 +57,9 @@ static void populate_test_idx(const std::string& idx_path,
             file_name_bloom.add(n);
         }
         auto name_blob = name_bloom.serialize();
-        queries::insert_chunk_bloom_filter(
-            idx_db.sql_db(), fid, static_cast<std::uint64_t>(ckpt), "name",
-            name_blob.data(), static_cast<int>(name_blob.size()),
-            name_bloom.num_entries());
+        idx_db.insert_chunk_bloom_filter(
+            fid, static_cast<std::uint64_t>(ckpt), "name", name_blob.data(),
+            static_cast<int>(name_blob.size()), name_bloom.num_entries());
 
         BloomFilter cat_bloom(100, 0.01);
         for (const auto& c : chunks[ckpt].cats) {
@@ -69,25 +67,24 @@ static void populate_test_idx(const std::string& idx_path,
             file_cat_bloom.add(c);
         }
         auto cat_blob = cat_bloom.serialize();
-        queries::insert_chunk_bloom_filter(
-            idx_db.sql_db(), fid, static_cast<std::uint64_t>(ckpt), "cat",
-            cat_blob.data(), static_cast<int>(cat_blob.size()),
-            cat_bloom.num_entries());
+        idx_db.insert_chunk_bloom_filter(
+            fid, static_cast<std::uint64_t>(ckpt), "cat", cat_blob.data(),
+            static_cast<int>(cat_blob.size()), cat_bloom.num_entries());
     }
 
     // File-level bloom filters
     auto name_blob = file_name_bloom.serialize();
-    queries::insert_file_bloom_filter(
-        idx_db.sql_db(), fid, "name", name_blob.data(),
-        static_cast<int>(name_blob.size()), file_name_bloom.num_entries());
+    idx_db.insert_file_bloom_filter(fid, "name", name_blob.data(),
+                                    static_cast<int>(name_blob.size()),
+                                    file_name_bloom.num_entries());
 
     auto cat_blob = file_cat_bloom.serialize();
-    queries::insert_file_bloom_filter(
-        idx_db.sql_db(), fid, "cat", cat_blob.data(),
-        static_cast<int>(cat_blob.size()), file_cat_bloom.num_entries());
+    idx_db.insert_file_bloom_filter(fid, "cat", cat_blob.data(),
+                                    static_cast<int>(cat_blob.size()),
+                                    file_cat_bloom.num_entries());
 
-    queries::insert_index_dimension(idx_db.sql_db(), fid, "name");
-    queries::insert_index_dimension(idx_db.sql_db(), fid, "cat");
+    idx_db.insert_index_dimension(fid, "name");
+    idx_db.insert_index_dimension(fid, "cat");
 
     idx_db.commit_transaction();
 }
@@ -99,14 +96,14 @@ TEST_SUITE("ViewBuilderUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         ViewBuilderInput input;
         input.with_view(ViewDefinition::io_view())
             .with_file_path(file_path)
-            .with_idx_path(idx_path)
+            .with_index_path(index_path)
             .with_uncompressed_size(40000)
             .with_num_checkpoints(4);
 
@@ -135,14 +132,14 @@ TEST_SUITE("ViewBuilderUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         ViewBuilderInput input;
         input.with_view(ViewDefinition::compute_view())
             .with_file_path(file_path)
-            .with_idx_path(idx_path)
+            .with_index_path(index_path)
             .with_uncompressed_size(40000)
             .with_num_checkpoints(4);
 
@@ -165,9 +162,9 @@ TEST_SUITE("ViewBuilderUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         ViewDefinition view;
         view.with_name("nonexistent").with_query(R"(cat == "NONEXISTENT")");
@@ -175,7 +172,7 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderInput input;
         input.with_view(view)
             .with_file_path(file_path)
-            .with_idx_path(idx_path)
+            .with_index_path(index_path)
             .with_uncompressed_size(40000)
             .with_num_checkpoints(4);
 
@@ -196,9 +193,9 @@ TEST_SUITE("ViewBuilderUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
-        populate_test_idx(idx_path, file_path);
+        populate_test_idx(index_path, file_path);
 
         ViewDefinition view;
         view.with_name("time_only").with_query(R"(ts >= 0 and ts <= 100000)");
@@ -206,7 +203,7 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderInput input;
         input.with_view(view)
             .with_file_path(file_path)
-            .with_idx_path(idx_path)
+            .with_index_path(index_path)
             .with_uncompressed_size(40000)
             .with_num_checkpoints(4);
 
@@ -228,7 +225,7 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderInput input;
         input.with_view(view)
             .with_file_path("/fake/file.pfw.gz")
-            .with_idx_path("")  // No bloom index
+            .with_index_path("")  // No bloom index
             .with_uncompressed_size(30000)
             .with_num_checkpoints(3);
 
@@ -249,7 +246,7 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderInput input;
         input.with_view(view)
             .with_file_path("/fake/file.pfw.gz")
-            .with_idx_path("")
+            .with_index_path("")
             .with_uncompressed_size(12000)
             .with_num_checkpoints(3);
 
@@ -281,7 +278,7 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderInput input;
         input.with_view(view)
             .with_file_path("/fake/file.pfw.gz")
-            .with_idx_path("")
+            .with_index_path("")
             .with_uncompressed_size(10000)
             .with_num_checkpoints(0);
 
@@ -301,11 +298,11 @@ TEST_SUITE("ViewBuilderUtility") {
                 .string();
         fs::create_directories(test_dir);
 
-        std::string idx_path = test_dir + "/test.pfw.gz.idx";
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
 
         // Create idx with fhash dimension
-        IndexDatabase idx_db(idx_path);
+        IndexDatabase idx_db(index_path);
         idx_db.init_base_schema();
         idx_db.init_bloom_schema();
         int fid =
@@ -316,15 +313,14 @@ TEST_SUITE("ViewBuilderUtility") {
         fhash_bloom.add("hash123");
         auto blob = fhash_bloom.serialize();
 
-        queries::insert_file_bloom_filter(
-            idx_db.sql_db(), fid, "fhash", blob.data(),
-            static_cast<int>(blob.size()), fhash_bloom.num_entries());
-        queries::insert_chunk_bloom_filter(
-            idx_db.sql_db(), fid, 0, "fhash", blob.data(),
-            static_cast<int>(blob.size()), fhash_bloom.num_entries());
-        queries::insert_index_dimension(idx_db.sql_db(), fid, "fhash");
-        queries::insert_hash_resolution(idx_db.sql_db(), fid, "fhash",
-                                        "hash123", "/data/file.h5");
+        idx_db.insert_file_bloom_filter(fid, "fhash", blob.data(),
+                                        static_cast<int>(blob.size()),
+                                        fhash_bloom.num_entries());
+        idx_db.insert_chunk_bloom_filter(fid, 0, "fhash", blob.data(),
+                                         static_cast<int>(blob.size()),
+                                         fhash_bloom.num_entries());
+        idx_db.insert_index_dimension(fid, "fhash");
+        idx_db.insert_hash_resolution(fid, "fhash", "hash123", "/data/file.h5");
         idx_db.commit_transaction();
 
         // Use "file" alias which should resolve to "fhash"
@@ -334,7 +330,7 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderInput input;
         input.with_view(view)
             .with_file_path(file_path)
-            .with_idx_path(idx_path)
+            .with_index_path(index_path)
             .with_uncompressed_size(10000)
             .with_num_checkpoints(1);
 

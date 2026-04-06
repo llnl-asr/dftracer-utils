@@ -11,26 +11,14 @@ namespace dftracer::utils::utilities::composites::dft::internal {
 std::string determine_index_path(const std::string& file_path,
                                  const std::string& index_dir) {
     fs::path data_path(file_path);
-    std::string base_name =
-        data_path.filename().string() + constants::indexer::EXTENSION;
-
-    if (!index_dir.empty()) {
-        return (fs::path(index_dir) / base_name).string();
-    }
-
-    return (data_path.parent_path() / base_name).string();
+    fs::path root =
+        index_dir.empty() ? data_path.parent_path() : fs::path(index_dir);
+    return (root / ".dftindex").string();
 }
 
 std::string determine_provenance_index_path(const std::string& data_path,
                                             const std::string& index_dir) {
-    fs::path path(data_path);
-    std::string base_name = path.filename().string() + ".pidx";
-
-    if (!index_dir.empty()) {
-        return (fs::path(index_dir) / base_name).string();
-    }
-
-    return (path.parent_path() / base_name).string();
+    return determine_index_path(data_path, index_dir);
 }
 
 bool is_data_transfer_op(std::string_view cat, std::string_view name) {

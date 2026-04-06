@@ -207,7 +207,7 @@ static coro::CoroTask<int> run_reconstruct(const std::string& directory,
                                                       -> coro::CoroTask<void> {
                         co_await s.receive(permits);
                         try {
-                            std::string idx_path =
+                            std::string index_path =
                                 internal::determine_index_path(reorg_file_copy,
                                                                "");
 
@@ -215,14 +215,14 @@ static coro::CoroTask<int> run_reconstruct(const std::string& directory,
                             auto meta_input =
                                 MetadataCollectorUtilityInput::from_file(
                                     reorg_file_copy)
-                                    .with_index(idx_path)
+                                    .with_index(index_path)
                                     .with_checkpoint_size(checkpoint_size);
                             auto meta =
                                 co_await meta_collector.process(meta_input);
 
                             auto reader_input =
                                 IndexedReadInput::from_file(reorg_file_copy)
-                                    .with_index(idx_path)
+                                    .with_index(index_path)
                                     .with_checkpoint_size(checkpoint_size);
                             IndexedFileReaderUtility reader_utility;
                             auto reader =

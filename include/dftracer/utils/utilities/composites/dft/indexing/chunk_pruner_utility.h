@@ -16,7 +16,7 @@ using common::query::Query;
 
 /// Input for chunk pruning: index path, file path, query, optional cache.
 struct ChunkPrunerInput {
-    std::string idx_path;               ///< Path to .idx sidecar file.
+    std::string index_path;             ///< Path to the `.dftindex` store.
     std::string file_path;              ///< Path to trace file.
     Query query;                        ///< Query to evaluate for pruning.
     BloomFilterCache* cache = nullptr;  ///< Optional bloom filter cache.

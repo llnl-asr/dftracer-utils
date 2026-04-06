@@ -121,7 +121,7 @@ struct ChunkIndexState {
 
 struct ChunkIndexerInput {
     std::string file_path;
-    std::string idx_path;
+    std::string index_path;
     std::size_t checkpoint_size = 0;
     std::uint64_t checkpoint_idx = 0;
     std::size_t start_byte = 0;
@@ -137,8 +137,8 @@ struct ChunkIndexerInput {
         return *this;
     }
 
-    ChunkIndexerInput& with_idx_path(const std::string& path) {
-        idx_path = path;
+    ChunkIndexerInput& with_index_path(const std::string& path) {
+        index_path = path;
         return *this;
     }
 

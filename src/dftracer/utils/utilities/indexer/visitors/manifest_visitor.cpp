@@ -1,4 +1,3 @@
-#include <dftracer/utils/core/sqlite/statement.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
@@ -58,38 +57,15 @@ void ManifestVisitor::on_line(std::string_view line,
 }
 
 void ManifestVisitor::finalize(IndexDatabase& db, int file_id) {
-    using dftracer::utils::sqlite::SqliteStmt;
-    auto* raw = db.db();
-
     for (std::size_t ci = 0; ci < event_lines_.size(); ++ci) {
         for (auto& [key, lines] : event_lines_[ci]) {
-            auto packed = queries::pack_line_numbers(lines);
-            SqliteStmt stmt(raw,
-                            "INSERT INTO checkpoint_event_ranges"
-                            "(checkpoint_idx,file_info_id,cat,name,"
-                            "line_numbers,event_count)"
-                            " VALUES(?,?,?,?,?,?);");
-            stmt.bind_int64(1, static_cast<int64_t>(ci));
-            stmt.bind_int(2, file_id);
-            stmt.bind_text(3, key.first);
-            stmt.bind_text(4, key.second);
-            stmt.bind_blob(5, packed.data(), static_cast<int>(packed.size()));
-            stmt.bind_int64(6, static_cast<int64_t>(lines.size()));
-            sqlite3_step(stmt.get());
+            db.insert_event_range(file_id, static_cast<std::uint64_t>(ci),
+                                  key.first, key.second, lines);
         }
 
         for (auto& [meta_type, lines] : metadata_lines_[ci]) {
-            auto packed = queries::pack_line_numbers(lines);
-            SqliteStmt stmt(
-                raw,
-                "INSERT INTO checkpoint_metadata_lines"
-                "(checkpoint_idx,file_info_id,meta_type,line_numbers)"
-                " VALUES(?,?,?,?);");
-            stmt.bind_int64(1, static_cast<int64_t>(ci));
-            stmt.bind_int(2, file_id);
-            stmt.bind_text(3, meta_type);
-            stmt.bind_blob(4, packed.data(), static_cast<int>(packed.size()));
-            sqlite3_step(stmt.get());
+            db.insert_metadata_lines(file_id, static_cast<std::uint64_t>(ci),
+                                     meta_type, lines);
         }
     }
 }

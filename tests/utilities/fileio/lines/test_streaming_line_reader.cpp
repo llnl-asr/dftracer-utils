@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <doctest/doctest.h>
@@ -15,14 +16,10 @@ using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dft_utils_test;
 
 TEST_SUITE("StreamingLineReader") {
-    fs::path test_file =
-        make_unique_test_path("test_streaming_line_reader.txt");
-    fs::path gz_file = make_unique_test_path("test_streaming_line_reader.gz");
-    fs::path tar_gz_file = make_unique_test_path("test_archive.tar.gz");
-    fs::path tgz_file = make_unique_test_path("test_archive.tgz");
-
     TEST_CASE("StreamingLineReader - Basic Plain File Reading") {
         SUBCASE("Read entire plain text file") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 ofs << "Line 1\n";
@@ -50,6 +47,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("Read plain file with line range") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 for (int i = 1; i <= 10; ++i) {
@@ -78,6 +77,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("Read empty file") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);  // Create empty file
             }
@@ -93,6 +94,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("Direct read_plain method") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 ofs << "Direct line 1\n";
@@ -119,6 +122,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("Direct read_plain with line range") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 for (int i = 1; i <= 5; ++i) {
@@ -146,6 +151,11 @@ TEST_SUITE("StreamingLineReader") {
 
     TEST_CASE("StreamingLineReader - Format Detection") {
         SUBCASE("Detect .gz extension without index") {
+            fs::path test_dir =
+                make_unique_test_path("test_streaming_line_reader_gz_dir");
+            fs::create_directories(test_dir);
+            fs::path gz_file = test_dir / "test_streaming_line_reader.gz";
+
             // Create a file with .gz extension (not actually compressed)
             {
                 std::ofstream ofs(gz_file);
@@ -153,9 +163,10 @@ TEST_SUITE("StreamingLineReader") {
             }
 
             // Ensure no index file exists
-            std::string idx_path = gz_file.string() + ".idx";
-            if (fs::exists(idx_path)) {
-                fs::remove(idx_path);
+            std::string index_path = dftracer::utils::utilities::composites::
+                dft::internal::determine_index_path(gz_file.string(), "");
+            if (fs::exists(index_path)) {
+                fs::remove_all(index_path);
             }
 
             auto config =
@@ -170,13 +181,24 @@ TEST_SUITE("StreamingLineReader") {
                 CHECK(std::string(line.content) == "Fake gz content");
             }
 
-            fs::remove(gz_file);
+            fs::remove_all(test_dir);
         }
 
         SUBCASE("Detect .tar.gz extension") {
+            fs::path test_dir =
+                make_unique_test_path("test_streaming_line_reader_targz_dir");
+            fs::create_directories(test_dir);
+            fs::path tar_gz_file = test_dir / "test_archive.tar.gz";
+
             {
                 std::ofstream ofs(tar_gz_file);
                 ofs << "Fake tar.gz content\n";
+            }
+
+            std::string index_path = dftracer::utils::utilities::composites::
+                dft::internal::determine_index_path(tar_gz_file.string(), "");
+            if (fs::exists(index_path)) {
+                fs::remove_all(index_path);
             }
 
             auto config =
@@ -191,13 +213,24 @@ TEST_SUITE("StreamingLineReader") {
                 CHECK(std::string(line.content) == "Fake tar.gz content");
             }
 
-            fs::remove(tar_gz_file);
+            fs::remove_all(test_dir);
         }
 
         SUBCASE("Detect .tgz extension") {
+            fs::path test_dir =
+                make_unique_test_path("test_streaming_line_reader_tgz_dir");
+            fs::create_directories(test_dir);
+            fs::path tgz_file = test_dir / "test_archive.tgz";
+
             {
                 std::ofstream ofs(tgz_file);
                 ofs << "Fake tgz content\n";
+            }
+
+            std::string index_path = dftracer::utils::utilities::composites::
+                dft::internal::determine_index_path(tgz_file.string(), "");
+            if (fs::exists(index_path)) {
+                fs::remove_all(index_path);
             }
 
             auto config =
@@ -211,7 +244,7 @@ TEST_SUITE("StreamingLineReader") {
                 CHECK(std::string(line.content) == "Fake tgz content");
             }
 
-            fs::remove(tgz_file);
+            fs::remove_all(test_dir);
         }
 
         SUBCASE("Auto-detect index file with real compressed file") {
@@ -224,10 +257,11 @@ TEST_SUITE("StreamingLineReader") {
             REQUIRE(indexer != nullptr);
             indexer->build();  // Actually build the index
 
-            std::string idx_path = gz_path + ".idx";
+            std::string index_path = dftracer::utils::utilities::composites::
+                dft::internal::determine_index_path(gz_path, "");
 
             // Verify index file was created
-            CHECK(fs::exists(idx_path));
+            CHECK(fs::exists(index_path));
 
             auto config = StreamingLineReaderConfig().with_file(gz_path);
 
@@ -262,14 +296,16 @@ TEST_SUITE("StreamingLineReader") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            std::string idx_path = gz_path + ".idx";
+            std::string index_path = dftracer::utils::utilities::composites::
+                dft::internal::determine_index_path(gz_path, "");
+            CHECK(fs::exists(index_path));
 
             // Test with explicit index path
             auto config =
                 StreamingLineReaderConfig().with_file(gz_path).with_index(
-                    idx_path);
+                    index_path);
 
-            CHECK(config.index_path() == idx_path);
+            CHECK(config.index_path() == index_path);
 
             auto range = StreamingLineReader::read(config);
 
@@ -284,6 +320,8 @@ TEST_SUITE("StreamingLineReader") {
 
     TEST_CASE("StreamingLineReader - Configuration API") {
         SUBCASE("Fluent configuration API") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 for (int i = 1; i <= 10; ++i) {
@@ -340,6 +378,8 @@ TEST_SUITE("StreamingLineReader") {
 
     TEST_CASE("StreamingLineReader - Special Cases") {
         SUBCASE("File with no trailing newline") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 ofs << "Line 1\n";
@@ -365,6 +405,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("File with empty lines") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 ofs << "Line 1\n";
@@ -396,6 +438,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("Very long lines") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 std::string long_line(10000, 'A');
@@ -437,6 +481,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("Line range beyond file") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 ofs << "Line 1\n";
@@ -464,6 +510,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("Line range starting beyond file") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 ofs << "Line 1\n";
@@ -484,6 +532,8 @@ TEST_SUITE("StreamingLineReader") {
 
     TEST_CASE("StreamingLineReader - Large Files") {
         SUBCASE("Many lines") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 for (int i = 1; i <= 1000; ++i) {
@@ -517,6 +567,8 @@ TEST_SUITE("StreamingLineReader") {
 
     TEST_CASE("StreamingLineReader - Real World Scenarios") {
         SUBCASE("CSV file processing") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 ofs << "Name,Age,City\n";
@@ -545,6 +597,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("Log file processing") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 ofs << "2024-01-01 INFO: Application started\n";
@@ -576,6 +630,8 @@ TEST_SUITE("StreamingLineReader") {
         }
 
         SUBCASE("JSONL file processing") {
+            fs::path test_file =
+                make_unique_test_path("test_streaming_line_reader.txt");
             {
                 std::ofstream ofs(test_file);
                 ofs << R"({"id": 1, "name": "Item 1"})" << "\n";
@@ -614,7 +670,9 @@ TEST_SUITE("StreamingLineReader") {
             REQUIRE(indexer != nullptr);
             indexer->build();
 
-            std::string idx_path = gz_path + ".idx";
+            std::string index_path = dftracer::utils::utilities::composites::
+                dft::internal::determine_index_path(gz_path, "");
+            CHECK(fs::exists(index_path));
 
             auto config =
                 StreamingLineReaderConfig().with_file(gz_path).with_line_range(

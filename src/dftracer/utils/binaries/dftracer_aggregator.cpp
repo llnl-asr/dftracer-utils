@@ -265,6 +265,17 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
     EventAggregatorUtility merger;
     std::atomic<int> global_chunk_idx{0};
 
+    if (force_rebuild && !input_files.empty()) {
+        const std::string shared_index_path =
+            composites::dft::internal::determine_index_path(input_files.front(),
+                                                            index_dir);
+        if (fs::exists(shared_index_path)) {
+            DFTRACER_UTILS_LOG_INFO("Clearing shared index store: %s",
+                                    shared_index_path.c_str());
+            fs::remove_all(shared_index_path);
+        }
+    }
+
     // Streaming aggregation: file producers -> chunk workers -> merger
     auto streaming_task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
@@ -283,23 +294,24 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
                                     -> coro::CoroTask<void> {
                         [[maybe_unused]] auto producer_guard = ch.guard();
                         // Build index
-                        std::string idx_path =
+                        std::string index_path =
                             composites::dft::internal::determine_index_path(
                                 file_path, index_dir);
                         auto idx_input =
                             indexer::IndexBuildConfig::for_file(file_path)
                                 .with_checkpoint_size(checkpoint_size)
-                                .with_force_rebuild(force_rebuild)
+                                .with_force_rebuild(false)
                                 .with_index_dir(index_dir);
-                        indexer::IndexBuilderUtility{}.process(idx_input);
+                        co_await indexer::IndexBuilderUtility{}.process(
+                            idx_input);
 
                         // Collect metadata
                         auto meta_input =
                             composites::dft::MetadataCollectorUtilityInput::
                                 from_file(file_path)
                                     .with_checkpoint_size(checkpoint_size)
-                                    .with_force_rebuild(force_rebuild)
-                                    .with_index(idx_path);
+                                    .with_force_rebuild(false)
+                                    .with_index(index_path);
                         auto metadata =
                             co_await composites::dft::MetadataCollectorUtility{}
                                 .process(meta_input);

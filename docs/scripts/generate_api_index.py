@@ -22,12 +22,12 @@ Defaults:
 from __future__ import annotations
 
 import argparse
-import re
+import os
+import subprocess
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-
 
 # Root namespace prefix - everything under this is considered public API
 ROOT_NS = "dftracer::utils"
@@ -45,7 +45,7 @@ INCLUDE_ROOT = "dftracer/utils"
 GUIDE_PAGES: dict[str, str] = {
     "coro": "coro",
     "io": "io",
-    "sqlite": "sqlite",
+    "rocksdb": "rocksdb",
     "task_graph": "task_graph",
     "utilities.common.arrow": "arrow",
     "utilities.indexer": "indexer",
@@ -58,7 +58,7 @@ GUIDE_PAGES: dict[str, str] = {
 TITLE_OVERRIDES: dict[str, str] = {
     "coro": "Coroutine Primitives",
     "io": "Async I/O",
-    "sqlite": "SQLite",
+    "rocksdb": "RocksDB",
     "task_graph": "Task Graph",
     "server": "HTTP Server",
     "call_tree": "Call Tree",
@@ -86,7 +86,6 @@ TITLE_OVERRIDES: dict[str, str] = {
 }
 
 
-
 def is_inner_type(name: str, all_names: set[str]) -> bool:
     """Check if a name is an inner/nested type of another class.
 
@@ -108,6 +107,10 @@ class APIItem:
     file: str = ""
     brief: str = ""
     is_inner: bool = False
+    line: int | None = None
+    bodyfile: str = ""
+    bodystart: int | None = None
+    bodyend: int | None = None
 
 
 @dataclass
@@ -127,8 +130,7 @@ def parse_doxygen_xml(xml_dir: Path) -> list[APIItem]:
     index_path = xml_dir / "index.xml"
     if not index_path.exists():
         raise FileNotFoundError(
-            f"{index_path} not found. Run doxygen first:\n"
-            f"  cd docs && doxygen Doxyfile"
+            f"{index_path} not found. Run doxygen first:\n  cd docs && doxygen Doxyfile"
         )
 
     tree = ET.parse(index_path)
@@ -159,6 +161,10 @@ def parse_doxygen_xml(xml_dir: Path) -> list[APIItem]:
 
         file_path = ""
         brief = ""
+        line = None
+        bodyfile = ""
+        bodystart = None
+        bodyend = None
         detail_xml = xml_dir / f"{refid}.xml"
         if detail_xml.exists():
             try:
@@ -167,6 +173,21 @@ def parse_doxygen_xml(xml_dir: Path) -> list[APIItem]:
                 loc = droot.find(".//location")
                 if loc is not None:
                     file_path = loc.get("file", "")
+                    bodyfile = loc.get("bodyfile", "")
+                    line_attr = loc.get("line")
+                    bodystart_attr = loc.get("bodystart")
+                    bodyend_attr = loc.get("bodyend")
+                    line = int(line_attr) if line_attr and line_attr.isdigit() else None
+                    bodystart = (
+                        int(bodystart_attr)
+                        if bodystart_attr and bodystart_attr.isdigit()
+                        else None
+                    )
+                    bodyend = (
+                        int(bodyend_attr)
+                        if bodyend_attr and bodyend_attr.isdigit()
+                        else None
+                    )
                 bd = droot.find(".//briefdescription/para")
                 if bd is not None and bd.text:
                     brief = bd.text.strip()
@@ -186,6 +207,10 @@ def parse_doxygen_xml(xml_dir: Path) -> list[APIItem]:
                 refid=refid,
                 file=file_path,
                 brief=brief,
+                line=line,
+                bodyfile=bodyfile,
+                bodystart=bodystart,
+                bodyend=bodyend,
             )
         )
 
@@ -264,9 +289,7 @@ def discover_modules(items: list[APIItem]) -> list[Module]:
     # Build Module objects
     modules: list[Module] = []
     for ns_suffix in sorted(final.keys()):
-        full_ns = (
-            f"{ROOT_NS}::{ns_suffix.replace('.', '::')}" if ns_suffix else ROOT_NS
-        )
+        full_ns = f"{ROOT_NS}::{ns_suffix.replace('.', '::')}" if ns_suffix else ROOT_NS
         title = TITLE_OVERRIDES.get(ns_suffix, _auto_title(ns_suffix))
         filename = _ns_to_filename(ns_suffix)
         guide_page = GUIDE_PAGES.get(ns_suffix)
@@ -309,7 +332,101 @@ def _ns_to_filename(ns_suffix: str) -> str:
     return ns_suffix.replace(".", "/")
 
 
-def generate_module_rst(mod: Module) -> str:
+def detect_repo_url(repo_root: Path) -> str:
+    """Detect the GitHub repository URL for source links."""
+    repo = os.environ.get("READTHEDOCS_GIT_REPOSITORY")
+    if repo:
+        repo = repo.removesuffix(".git")
+        if repo.startswith("git@github.com:"):
+            return repo.replace("git@github.com:", "https://github.com/", 1)
+        if repo.startswith("https://github.com/"):
+            return repo
+        if repo.startswith("github.com/"):
+            return f"https://{repo}"
+
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if repo:
+        return f"https://github.com/{repo}"
+
+    try:
+        remote = (
+            subprocess.check_output(
+                ["git", "remote", "get-url", "origin"],
+                cwd=repo_root,
+                text=True,
+            )
+            .strip()
+            .removesuffix(".git")
+        )
+        if remote.startswith("git@github.com:"):
+            return remote.replace("git@github.com:", "https://github.com/", 1)
+        if remote.startswith("https://github.com/"):
+            return remote
+    except Exception:
+        pass
+
+    return "https://github.com/LLNL/dftracer-utils"
+
+
+def detect_source_ref(repo_root: Path) -> str:
+    """Detect the git ref used for source links."""
+    for env_name in ("READTHEDOCS_GIT_COMMIT_HASH", "GITHUB_SHA"):
+        value = os.environ.get(env_name)
+        if value:
+            return value
+
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                text=True,
+            )
+            .strip()
+        )
+    except Exception:
+        return "develop"
+
+
+def resolve_repo_path(repo_root: Path, item: APIItem) -> str | None:
+    """Resolve a Doxygen location path to a repo-relative source file."""
+    candidates = []
+    if item.bodyfile:
+        candidates.append(item.bodyfile)
+    if item.file:
+        candidates.append(item.file)
+
+    for candidate in candidates:
+        rel = Path(candidate)
+        for base in (repo_root / "include", repo_root / "src"):
+            full = base / rel
+            if full.exists():
+                return full.relative_to(repo_root).as_posix()
+    return None
+
+
+def source_link(repo_root: Path, repo_url: str, source_ref: str, item: APIItem) -> str | None:
+    """Build a GitHub source link for an API item."""
+    rel = resolve_repo_path(repo_root, item)
+    if rel is None:
+        return None
+
+    start = item.bodystart or item.line
+    end = item.bodyend or start
+    url = f"{repo_url}/blob/{source_ref}/{rel}"
+    if start is not None:
+        url += f"#L{start}"
+        if end is not None and end != start:
+            url += f"-L{end}"
+    return url
+
+
+def generate_module_rst(
+    mod: Module,
+    repo_root: Path,
+    repo_url: str,
+    source_ref: str,
+) -> str:
     """Generate RST for a single module page."""
     mod.items.sort(key=lambda x: (x.is_inner, x.name))
 
@@ -320,15 +437,19 @@ def generate_module_rst(mod: Module) -> str:
     lines.append(f"Namespace: ``{mod.full_ns}``")
     lines.append("")
     if mod.guide_page:
-        lines.append(
-            f"For usage guide and examples, see :doc:`/cpp_api/{mod.guide_page}`."
-        )
+        lines.append(f"For usage guide and examples, see :doc:`/cpp_api/{mod.guide_page}`.")
         lines.append("")
 
     top_level = [i for i in mod.items if not i.is_inner]
 
     for item in top_level:
         directive = "doxygenclass" if item.kind == "class" else "doxygenstruct"
+        link = source_link(repo_root, repo_url, source_ref, item)
+        if link:
+            lines.append(f".. rst-class:: api-source-link")
+            lines.append("")
+            lines.append(f"   `source <{link}>`_")
+            lines.append("")
         lines.append(f".. {directive}:: {item.name}")
         lines.append("   :project: dftracer-utils")
         lines.append("   :members:")
@@ -360,7 +481,7 @@ def _build_toctree_hierarchy(
             # Register all ancestor directories
             segments = parent_dir.split("/")
             for i in range(len(segments)):
-                ancestor = "/".join(segments[: i])
+                ancestor = "/".join(segments[:i])
                 child = "/".join(segments[: i + 1])
                 dirs[ancestor].add(child)
 
@@ -427,13 +548,13 @@ def _generate_dir_index(
     # Subdirectories (link to their index)
     child_dirs = sorted(dirs.get(dir_path, set()))
     for child in child_dirs:
-        rel = child[len(dir_path):].lstrip("/") if dir_path else child
+        rel = child[len(dir_path) :].lstrip("/") if dir_path else child
         entries.append(f"{rel}/index")
 
     # Leaf modules in this directory
     leaves = sorted(dir_leaves.get(dir_path, []), key=lambda m: m.filename)
     for mod in leaves:
-        rel = mod.filename[len(dir_path):].lstrip("/") if dir_path else mod.filename
+        rel = mod.filename[len(dir_path) :].lstrip("/") if dir_path else mod.filename
         entries.append(rel)
 
     if entries:
@@ -481,6 +602,9 @@ def _generate_dir_index(
 
 def generate(xml_dir: Path, output_dir: Path) -> None:
     """Main generation entry point. Called by conf.py or CLI."""
+    repo_root = output_dir.parents[3]
+    repo_url = detect_repo_url(repo_root)
+    source_ref = detect_source_ref(repo_root)
     items = parse_doxygen_xml(xml_dir)
     print(f"  Found {len(items)} public API items")
 
@@ -488,11 +612,18 @@ def generate(xml_dir: Path, output_dir: Path) -> None:
 
     # Generate per-module pages
     output_dir.mkdir(parents=True, exist_ok=True)
+    expected_paths = {output_dir / f"{mod.filename}.rst" for mod in modules}
     for mod in modules:
-        rst = generate_module_rst(mod)
+        rst = generate_module_rst(mod, repo_root, repo_url, source_ref)
         out_path = output_dir / f"{mod.filename}.rst"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(rst)
+
+    for stale in output_dir.rglob("*.rst"):
+        if stale.name == "index.rst":
+            continue
+        if stale not in expected_paths:
+            stale.unlink()
 
     # Generate index pages at each directory level
     generate_index_rst(modules, output_dir)

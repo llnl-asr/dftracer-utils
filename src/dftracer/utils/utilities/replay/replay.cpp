@@ -403,13 +403,13 @@ ReplayResult ReplayEngine::replay(const std::string& trace_file,
 
         if (is_compressed) {
             // Handle compressed files with ReaderFactory
-            std::string idx_path =
+            std::string index_path =
                 index_file.empty() ? utilities::composites::dft::internal::
                                          determine_index_path(trace_file, "")
                                    : index_file;
 
             auto reader =
-                reader::internal::ReaderFactory::create(trace_file, idx_path);
+                reader::internal::ReaderFactory::create(trace_file, index_path);
 
             if (!reader) {
                 result.error_messages.push_back(

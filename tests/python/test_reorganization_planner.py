@@ -17,10 +17,10 @@ class TestReorganizationPlannerUtility:
     def test_plan_returns_dict(self):
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 build_manifest=True,
                 index_threshold=0,
@@ -37,10 +37,10 @@ class TestReorganizationPlannerUtility:
     def test_call_delegates_to_process(self):
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 build_manifest=True,
                 index_threshold=0,
@@ -60,10 +60,10 @@ class TestReorganizationPlannerWithoutIndex:
         """Without manifest the planner streams the file and succeeds."""
         with Environment(lines=5) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=128)
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 build_manifest=True,
                 index_threshold=_SKIP_INDEX_THRESHOLD,
@@ -81,10 +81,10 @@ class TestReorganizationPlannerWithoutIndex:
         """Whole-file fallback produces extraction tasks."""
         with Environment(lines=5) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=128)
-            idx_file = gz_file + ".idx"
+            index_path = env.get_index_path(gz_file)
             with dft_utils.Indexer(
                 gz_file,
-                idx_file,
+                index_path,
                 build_bloom=True,
                 build_manifest=True,
                 index_threshold=_SKIP_INDEX_THRESHOLD,

@@ -79,7 +79,7 @@ static coro::CoroTask<EventAggregatorUtilityOutput> run_aggregation(
                                     -> coro::CoroTask<void> {
                         [[maybe_unused]] auto producer_guard = ch.guard();
 
-                        std::string idx_path =
+                        std::string index_path =
                             composites::dft::internal::determine_index_path(
                                 file_path, index_dir);
 
@@ -88,7 +88,7 @@ static coro::CoroTask<EventAggregatorUtilityOutput> run_aggregation(
                                 from_file(file_path)
                                     .with_checkpoint_size(checkpoint_size)
                                     .with_force_rebuild(force_rebuild)
-                                    .with_index(idx_path);
+                                    .with_index(index_path);
                         auto metadata =
                             co_await composites::dft::MetadataCollectorUtility{}
                                 .process(meta_input);
@@ -288,8 +288,19 @@ static coro::CoroTask<int> run_comparator(argparse::ArgumentParser& program) {
         co_return 1;
     }
 
-    // Build indexes upfront so parallel aggregation doesn't race on .idx
+    // Build indexes upfront so parallel aggregation doesn't race on
+    // `.dftindex`.
     {
+        if (config.force_rebuild && !baseline_files.empty()) {
+            const std::string shared_index_path =
+                composites::dft::internal::determine_index_path(
+                    baseline_files.front(), config.index_dir);
+            if (fs::exists(shared_index_path)) {
+                DFTRACER_UTILS_LOG_INFO("Clearing shared index store: %s",
+                                        shared_index_path.c_str());
+                fs::remove_all(shared_index_path);
+            }
+        }
         std::unordered_set<std::string> seen;
         std::vector<std::string> all_files;
         for (const auto& f : baseline_files) {
@@ -306,7 +317,7 @@ static coro::CoroTask<int> run_comparator(argparse::ArgumentParser& program) {
             idx_configs.push_back(
                 indexer::IndexBuildConfig::for_file(file_path)
                     .with_checkpoint_size(config.checkpoint_size)
-                    .with_force_rebuild(config.force_rebuild)
+                    .with_force_rebuild(false)
                     .with_index_dir(config.index_dir));
         }
         std::vector<coro::CoroTask<indexer::IndexBuildResult>> idx_tasks;

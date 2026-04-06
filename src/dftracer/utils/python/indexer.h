@@ -9,7 +9,7 @@
 typedef struct {
     PyObject_HEAD dft_indexer_handle_t handle;
     PyObject *gz_path;
-    PyObject *idx_path;
+    PyObject *index_path;
     std::uint64_t checkpoint_size;
     int build_bloom;
     int build_manifest;

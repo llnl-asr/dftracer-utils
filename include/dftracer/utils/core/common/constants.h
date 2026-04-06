@@ -22,7 +22,7 @@ static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
 static constexpr std::size_t DEFAULT_INDEX_SIZE_THRESHOLD =
     1 * 1024 * 1024;   // 1MB
 extern const char* const& SQL_SCHEMA;
-inline const char* EXTENSION = ".idx";
+inline const char* EXTENSION = ".dftindex";
 }  // namespace indexer
 
 namespace reader {
@@ -45,7 +45,7 @@ static constexpr std::size_t FILE_IO_BUFFER_SIZE =
 #define DFTRACER_UTILS_DEFAULT_BUFFER_SIZE 65536
 #define DFTRACER_UTILS_SKIP_BUFFER_SIZE 131072
 #define DFTRACER_UTILS_FILE_IO_BUFFER_SIZE 262144
-#define DFTRACER_UTILS_INDEX_EXTENSION ".idx"
+#define DFTRACER_UTILS_INDEX_EXTENSION ".dftindex"
 
 extern const char *DFTRACER_UTILS_SQL_SCHEMA;
 

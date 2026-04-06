@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -15,6 +16,14 @@
 // ============================================================================
 
 namespace {
+
+void set_test_library_path(const std::string& binary) {
+    const fs::path build_root = fs::path(binary).parent_path().parent_path();
+    const std::string lib_path =
+        (build_root / "lib").string() + ":" +
+        (build_root / "_deps" / "rocksdb-build").string();
+    ::setenv("LD_LIBRARY_PATH", lib_path.c_str(), 1);
+}
 
 std::string create_pfw_gz(dft_utils_test::TestEnvironment& env, int num_events,
                           int id) {
@@ -46,6 +55,7 @@ int run_index(const std::string& binary, const std::vector<std::string>& args) {
     pid_t pid = ::fork();
     if (pid < 0) return -1;
     if (pid == 0) {
+        set_test_library_path(binary);
         std::vector<const char*> argv;
         argv.push_back(binary.c_str());
         for (const auto& arg : args) argv.push_back(arg.c_str());
@@ -57,21 +67,6 @@ int run_index(const std::string& binary, const std::vector<std::string>& args) {
     ::waitpid(pid, &status, 0);
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     return -1;
-}
-
-// Scan a directory for any file whose name ends with the given suffix.
-bool has_file_with_suffix(const std::string& dir, const std::string& suffix) {
-    if (!fs::exists(dir) || !fs::is_directory(dir)) return false;
-    for (const auto& entry : fs::directory_iterator(dir)) {
-        if (!entry.is_regular_file()) continue;
-        const auto name = entry.path().filename().string();
-        if (name.size() >= suffix.size() &&
-            name.compare(name.size() - suffix.size(), suffix.size(), suffix) ==
-                0) {
-            return true;
-        }
-    }
-    return false;
 }
 
 }  // namespace
@@ -105,12 +100,11 @@ TEST_SUITE("DFTracerIndex") {
         auto f = create_pfw_gz(env, 100, 0);
         REQUIRE(!f.empty());
 
-        // Path convention: file.pfw.gz -> file.pfw.gz.idx (same directory).
         int rc = run_index(binary, {"-d", env.get_dir(), "--force"});
         CHECK(rc == 0);
 
-        // The .idx sidecar must appear next to the input file.
-        CHECK(fs::exists(f + ".idx"));
+        CHECK(fs::exists(dftracer::utils::utilities::composites::dft::internal::
+                             determine_index_path(f, "")));
     }
 
     TEST_CASE("build index with custom index-dir") {
@@ -134,8 +128,8 @@ TEST_SUITE("DFTracerIndex") {
             binary, {"-d", env.get_dir(), "--force", "--index-dir", idx_dir});
         CHECK(rc == 0);
 
-        // A .idx file must appear somewhere inside idx_dir.
-        CHECK(has_file_with_suffix(idx_dir, ".idx"));
+        CHECK(fs::exists(dftracer::utils::utilities::composites::dft::internal::
+                             determine_index_path(f, idx_dir)));
     }
 
     TEST_CASE("build with manifest creates idx") {
@@ -155,8 +149,8 @@ TEST_SUITE("DFTracerIndex") {
             run_index(binary, {"-d", env.get_dir(), "--force", "--manifest"});
         CHECK(rc == 0);
 
-        // The sidecar must be created.
-        CHECK(fs::exists(f + ".idx"));
+        CHECK(fs::exists(dftracer::utils::utilities::composites::dft::internal::
+                             determine_index_path(f, "")));
     }
 
     TEST_CASE("force rebuild runs twice without error") {
@@ -174,11 +168,13 @@ TEST_SUITE("DFTracerIndex") {
 
         int rc1 = run_index(binary, {"-d", env.get_dir(), "--force"});
         CHECK(rc1 == 0);
-        REQUIRE(fs::exists(f + ".idx"));
+        REQUIRE(fs::exists(dftracer::utils::utilities::composites::dft::
+                               internal::determine_index_path(f, "")));
 
         // Second run with --force must overwrite successfully.
         int rc2 = run_index(binary, {"-d", env.get_dir(), "--force"});
         CHECK(rc2 == 0);
-        CHECK(fs::exists(f + ".idx"));
+        CHECK(fs::exists(dftracer::utils::utilities::composites::dft::internal::
+                             determine_index_path(f, "")));
     }
 }

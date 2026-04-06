@@ -66,7 +66,7 @@ struct ChunkExtractorUtilityInput {
         for (const auto& dft_spec : manifest.specs) {
             fileio::ChunkSpec io_spec;
             io_spec.file_path = dft_spec.file_path;
-            io_spec.idx_path = dft_spec.idx_path;
+            io_spec.index_path = dft_spec.index_path;
             io_spec.size_mb = dft_spec.size_mb;
             io_spec.start_byte = dft_spec.start_byte;
             io_spec.end_byte = dft_spec.end_byte;

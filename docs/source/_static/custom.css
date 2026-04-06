@@ -1,0 +1,19 @@
+.api-source-link {
+  float: right;
+  margin: 0 0 0.35rem 1rem;
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.api-source-link a::before {
+  content: "[";
+}
+
+.api-source-link a::after {
+  content: "]";
+}
+
+.api-source-link + dl.cpp,
+.api-source-link + dl.c {
+  margin-top: 0;
+}

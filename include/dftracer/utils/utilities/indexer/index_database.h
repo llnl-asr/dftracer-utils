@@ -1,13 +1,16 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_DATABASE_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_DATABASE_H
 
-#include <dftracer/utils/core/sqlite/database.h>
+#include <dftracer/utils/core/rocksdb/database.h>
+#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
+#include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -18,8 +21,8 @@
 namespace dftracer::utils::utilities::indexer {
 
 /**
- * @brief Unified .idx SQLite database combining checkpoint, bloom filter,
- *        and manifest data in a single sidecar file.
+ * @brief Unified `.dftindex` RocksDB store combining checkpoint, bloom
+ *        filter, manifest, and archive metadata.
  *
  * Schema is additive: call init_base_schema() always, then
  * init_bloom_schema() and/or init_manifest_schema() as needed.
@@ -44,8 +47,27 @@ class IndexDatabase {
     using ChunkDimensionStats = composites::dft::indexing::ChunkDimensionStats;
     using ChunkDimensionStatsResult =
         composites::dft::indexing::ChunkDimensionStatsResult;
+    using IndexerCheckpoint = internal::IndexerCheckpoint;
+    struct TarArchiveMetadata {
+        std::string archive_name;
+        std::uint64_t checkpoint_size = 0;
+        std::uint64_t total_lines = 0;
+        std::uint64_t total_uc_size = 0;
+        std::uint64_t total_files = 0;
+    };
+    struct TarFileRecord {
+        std::string file_name;
+        std::uint64_t file_size = 0;
+        std::uint64_t file_mtime = 0;
+        char typeflag = '\0';
+        std::uint64_t data_offset = 0;
+        std::uint64_t uncompressed_offset = 0;
+    };
 
-    explicit IndexDatabase(const std::string& idx_path);
+    explicit IndexDatabase(
+        const std::string& index_path,
+        dftracer::utils::rocksdb::RocksDatabase::OpenMode open_mode =
+            dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadWrite);
 
     IndexDatabase(const IndexDatabase&) = delete;
     IndexDatabase& operator=(const IndexDatabase&) = delete;
@@ -66,11 +88,16 @@ class IndexDatabase {
 
     int get_or_create_file_info(std::string_view path, std::uint64_t file_hash);
     int get_file_info_id(std::string_view path) const;
+    std::optional<std::uint64_t> get_file_hash(std::string_view path) const;
 
     // Convenience: resolve file path to file_id (handles logical path)
     int find_file(std::string_view file_path) const;
 
     // Metadata queries
+    void insert_file_metadata(int file_id, std::uint64_t checkpoint_size,
+                              std::uint64_t total_lines,
+                              std::uint64_t total_uc_size);
+    std::uint64_t get_checkpoint_size(int file_id) const;
     std::uint64_t get_num_lines(int file_id) const;
     std::uint64_t get_max_bytes(int file_id) const;
 
@@ -80,12 +107,7 @@ class IndexDatabase {
 
     void begin_transaction();
     void commit_transaction();
-
-    sqlite3* db() const { return db_.get(); }
-    dftracer::utils::sqlite::SqliteDatabase& sql_db() { return db_; }
-    const dftracer::utils::sqlite::SqliteDatabase& sql_db() const {
-        return db_;
-    }
+    void rollback_transaction() noexcept;
 
     // -----------------------------------------------------------------------
     // Bloom insert operations
@@ -111,6 +133,7 @@ class IndexDatabase {
 
     void insert_chunk_statistics(int file_id, std::uint64_t checkpoint_idx,
                                  const ChunkStatistics& stats);
+    void insert_checkpoint(int file_id, const IndexerCheckpoint& checkpoint);
 
     void insert_index_dimension(int file_id, std::string_view dimension);
 
@@ -121,6 +144,12 @@ class IndexDatabase {
     void insert_chunk_dimension_stats(int file_id, std::uint64_t checkpoint_idx,
                                       const ChunkDimensionStats& stats,
                                       std::size_t value_counts_cap = 4096);
+    void insert_tar_archive_metadata(int file_id, std::string_view archive_name,
+                                     std::uint64_t checkpoint_size,
+                                     std::uint64_t total_lines,
+                                     std::uint64_t total_uc_size,
+                                     std::uint64_t total_files);
+    void insert_tar_file(int file_id, const TarFileRecord& record);
 
     // -----------------------------------------------------------------------
     // Bloom query operations
@@ -146,6 +175,19 @@ class IndexDatabase {
 
     std::vector<ChunkStatisticsResult> query_chunk_statistics(
         int file_id) const;
+    bool find_checkpoint(int file_id, std::size_t target_offset,
+                         IndexerCheckpoint& checkpoint) const;
+    std::vector<IndexerCheckpoint> query_checkpoints(int file_id) const;
+    std::vector<IndexerCheckpoint> query_checkpoints_for_line_range(
+        int file_id, std::uint64_t start_line, std::uint64_t end_line) const;
+    std::optional<TarArchiveMetadata> query_tar_archive_metadata(
+        int file_id) const;
+    std::vector<TarFileRecord> query_tar_files(int file_id) const;
+    bool find_tar_file(int file_id, std::string_view file_name,
+                       TarFileRecord& record) const;
+    std::vector<TarFileRecord> query_tar_files_in_range(
+        int file_id, std::uint64_t start_offset,
+        std::uint64_t end_offset) const;
 
     TimeBounds query_time_bounds(int file_id) const;
 
@@ -215,7 +257,12 @@ class IndexDatabase {
     void delete_metadata_lines(int file_id);
 
    private:
-    dftracer::utils::sqlite::SqliteDatabase db_;
+    void delete_file_data(int file_id);
+
+    std::string db_path_;
+    dftracer::utils::rocksdb::RocksDatabase::OpenMode open_mode_;
+    std::shared_ptr<dftracer::utils::rocksdb::RocksDatabase> db_;
+    std::unique_ptr<dftracer::utils::rocksdb::RocksDatabase::Batch> txn_batch_;
 };
 
 }  // namespace dftracer::utils::utilities::indexer

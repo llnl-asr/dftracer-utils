@@ -31,7 +31,7 @@ FileMergeValidatorUtility::process(
             (input.file_path.size() >= 3 &&
              input.file_path.substr(input.file_path.size() - 3) == ".gz");
 
-        std::string effective_idx_path = input.index_path;
+        std::string effective_index_path = input.index_path;
 
         if (is_compressed) {
             // Use IndexBuilderUtility for compressed files
@@ -53,7 +53,7 @@ FileMergeValidatorUtility::process(
                 co_return result;
             }
             // Use the actual idx path produced by the builder
-            effective_idx_path = index_result.idx_path;
+            effective_index_path = index_result.index_path;
         }
 
         // Step 2: Create line processor function that validates JSON
@@ -79,7 +79,7 @@ FileMergeValidatorUtility::process(
         fileio::lines::LineReadInput read_input;
         read_input.file_path = input.file_path;
         if (is_compressed) {
-            read_input.idx_path = effective_idx_path;
+            read_input.index_path = effective_index_path;
         }
 
         auto validated_events = co_await processor.process(read_input);
@@ -110,7 +110,7 @@ FileMergeValidatorUtility::process(
 
         if (is_compressed) {
             auto reader = dftracer::utils::utilities::reader::internal::
-                ReaderFactory::create(input.file_path, effective_idx_path);
+                ReaderFactory::create(input.file_path, effective_index_path);
             if (reader) {
                 result.total_lines = reader->get_num_lines();
             }

@@ -70,7 +70,7 @@ void test_indexer_invalid_parameters(void) {
     indexer = dft_indexer_create(NULL, "test.idx", mb_to_b(1.0), 0);
     TEST_ASSERT_NULL(indexer);
 
-    // Test null idx_path
+    // Test null index_path
     indexer = dft_indexer_create("test.gz", NULL, mb_to_b(1.0), 0);
     TEST_ASSERT_NULL(indexer);
 
@@ -184,7 +184,7 @@ void test_reader_invalid_parameters(void) {
     reader = dft_reader_create(NULL, "test.idx", ckpt_size);
     TEST_ASSERT_NULL(reader);
 
-    // Test null idx_path
+    // Test null index_path
     reader = dft_reader_create("test.gz", NULL, ckpt_size);
     TEST_ASSERT_NULL(reader);
 

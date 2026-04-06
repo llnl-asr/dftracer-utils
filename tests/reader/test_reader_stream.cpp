@@ -622,7 +622,7 @@ TEST_CASE("C++ Reader Streaming API - Format identification") {
 
     SUBCASE("Verify metadata access") {
         CHECK(reader->get_archive_path() == gz_file);
-        CHECK(reader->get_idx_path() == idx_file);
+        CHECK(reader->get_index_path() == idx_file);
         CHECK(reader->get_max_bytes() > 0);
     }
 }

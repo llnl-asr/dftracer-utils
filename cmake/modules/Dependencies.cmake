@@ -430,216 +430,225 @@ function(need_yyjson)
   endif()
 endfunction()
 
-# ==============================================================================
-# Database Dependencies
-# ==============================================================================
+# Function to find or build RocksDB
+function(need_rocksdb)
+  find_package(RocksDB 10.10.1 QUIET CONFIG)
+  if(NOT RocksDB_FOUND)
+    find_package(rocksdb 10.10.1 QUIET CONFIG)
+  endif()
+  if(NOT RocksDB_FOUND AND rocksdb_FOUND)
+    set(RocksDB_FOUND TRUE)
+  endif()
+  if(NOT RocksDB_FOUND)
+    find_package(RocksDB 10.10.1 QUIET)
+  endif()
 
-function(need_sqlite3)
-  find_package(SQLite3 3.35 QUIET)
+  if(RocksDB_FOUND)
+    message(STATUS "Found system RocksDB")
 
-  if(SQLite3_FOUND)
-    message(STATUS "Found system SQLite3: ${SQLite3_LIBRARIES}")
-
-    # Prefer the modern target name (SQLite3::SQLite3).
-    # Older CMake versions only provide SQLite::SQLite3 (now deprecated).
-    if(NOT TARGET SQLite3::SQLite3)
-      if(TARGET SQLite::SQLite3)
-        # Wrap the deprecated target
-        add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
-      else()
-        add_library(SQLite3::SQLite3 UNKNOWN IMPORTED)
+    if(NOT TARGET RocksDB::rocksdb)
+      if(TARGET rocksdb)
+        add_library(RocksDB::rocksdb ALIAS rocksdb)
+      elseif(TARGET rocksdb-shared)
+        add_library(RocksDB::rocksdb ALIAS rocksdb-shared)
+      elseif(TARGET RocksDB::RocksDB)
+        add_library(RocksDB::rocksdb ALIAS RocksDB::RocksDB)
+      elseif(DEFINED RocksDB_LIBRARY AND DEFINED RocksDB_INCLUDE_DIR)
+        add_library(RocksDB::rocksdb UNKNOWN IMPORTED)
         set_target_properties(
-          SQLite3::SQLite3
-          PROPERTIES IMPORTED_LOCATION "${SQLite3_LIBRARIES}"
-                     INTERFACE_INCLUDE_DIRECTORIES "${SQLite3_INCLUDE_DIRS}")
+          RocksDB::rocksdb
+          PROPERTIES IMPORTED_LOCATION "${RocksDB_LIBRARY}"
+                     INTERFACE_INCLUDE_DIRECTORIES "${RocksDB_INCLUDE_DIR}")
+      elseif(DEFINED ROCKSDB_LIBRARIES AND DEFINED ROCKSDB_INCLUDE_DIRS)
+        add_library(RocksDB::rocksdb UNKNOWN IMPORTED)
+        set_target_properties(
+          RocksDB::rocksdb
+          PROPERTIES IMPORTED_LOCATION ""
+                     INTERFACE_LINK_LIBRARIES "${ROCKSDB_LIBRARIES}"
+                     INTERFACE_INCLUDE_DIRECTORIES "${ROCKSDB_INCLUDE_DIRS}")
       endif()
     endif()
 
-    # Set variables in parent scope so they persist outside the function
-    set(SQLite3_FOUND
-        ${SQLite3_FOUND}
+    if(NOT TARGET RocksDB::rocksdb)
+      message(
+        FATAL_ERROR
+          "need_rocksdb: RocksDB was found but no usable target could be created."
+      )
+    endif()
+
+    set(RocksDB_FOUND
+        ${RocksDB_FOUND}
         PARENT_SCOPE)
-    set(SQLite3_LIBRARIES
-        ${SQLite3_LIBRARIES}
-        PARENT_SCOPE)
-    set(SQLite3_INCLUDE_DIRS
-        ${SQLite3_INCLUDE_DIRS}
-        PARENT_SCOPE)
-    set(SQLite3_CPM
+    set(RocksDB_CPM
         FALSE
         PARENT_SCOPE)
   else()
-    # Build with CPM
-    if(NOT SQLite3_ADDED)
+    if(NOT rocksdb_ADDED)
       cpmaddpackage(
         NAME
-        SQLite3
-        URL
-        https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip
+        rocksdb
+        GITHUB_REPOSITORY
+        facebook/rocksdb
         VERSION
-        3.46.1
-        DOWNLOAD_ONLY
+        10.10.1
+        GIT_TAG
+        v10.10.1
+        OPTIONS
+        "ROCKSDB_BUILD_SHARED ${DFTRACER_UTILS_BUILD_SHARED}"
+        "WITH_TESTS OFF"
+        "WITH_TOOLS OFF"
+        "WITH_CORE_TOOLS OFF"
+        "WITH_BENCHMARK_TOOLS OFF"
+        "WITH_GFLAGS OFF"
+        "WITH_SNAPPY OFF"
+        "WITH_LZ4 ON"
+        "WITH_ZLIB ON"
+        "WITH_ZSTD OFF"
+        "WITH_BZ2 OFF"
+        "USE_RTTI ON"
+        "FAIL_ON_WARNINGS OFF"
+        FORCE
         YES)
     endif()
 
-    if(SQLite3_ADDED)
-      message(STATUS "Built SQLite3 with CPM")
-
-      set(SQLITE3_TARGETS)
-
-      # Create sqlite3 library from amalgamation
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        add_library(sqlite3_shared SHARED ${SQLite3_SOURCE_DIR}/sqlite3.c)
-        target_include_directories(
-          sqlite3_shared
-          PUBLIC $<BUILD_INTERFACE:${SQLite3_SOURCE_DIR}>
-                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-
-        # Enable common SQLite features
-        target_compile_definitions(
-          sqlite3_shared PUBLIC SQLITE_ENABLE_FTS5 SQLITE_ENABLE_JSON1
-                                SQLITE_ENABLE_RTREE SQLITE_THREADSAFE=1)
-
-        if(NOT WIN32)
-          target_link_libraries(sqlite3_shared PRIVATE pthread dl m)
-        endif()
-
-        set_target_properties(
-          sqlite3_shared
-          PROPERTIES OUTPUT_NAME sqlite3
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        add_library(SQLite::SQLite3 ALIAS sqlite3_shared)
-        list(APPEND SQLITE3_TARGETS sqlite3_shared)
-        message(STATUS "Added SQLite3 shared library")
+    if(TARGET rocksdb AND NOT TARGET RocksDB::rocksdb_static)
+      add_library(RocksDB::rocksdb_static ALIAS rocksdb)
+    endif()
+    if(TARGET rocksdb-shared AND NOT TARGET RocksDB::rocksdb_shared)
+      add_library(RocksDB::rocksdb_shared ALIAS rocksdb-shared)
+    endif()
+    if(NOT TARGET RocksDB::rocksdb)
+      if(TARGET RocksDB::rocksdb_shared)
+        add_library(RocksDB::rocksdb ALIAS rocksdb-shared)
+      elseif(TARGET RocksDB::rocksdb_static)
+        add_library(RocksDB::rocksdb ALIAS rocksdb)
       endif()
+    endif()
 
-      if(DFTRACER_UTILS_BUILD_STATIC)
-        add_library(sqlite3_static STATIC ${SQLite3_SOURCE_DIR}/sqlite3.c)
-        target_include_directories(
-          sqlite3_static
-          PUBLIC $<BUILD_INTERFACE:${SQLite3_SOURCE_DIR}>
-                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    if(rocksdb_ADDED OR TARGET rocksdb OR TARGET rocksdb-shared)
+      message(STATUS "Built RocksDB with CPM")
 
-        # Enable common SQLite features
-        target_compile_definitions(
-          sqlite3_static PUBLIC SQLITE_ENABLE_FTS5 SQLITE_ENABLE_JSON1
-                                SQLITE_ENABLE_RTREE SQLITE_THREADSAFE=1)
+      set(ROCKSDB_LIBRARY_DIR "${CMAKE_BINARY_DIR}/lib")
 
-        if(NOT WIN32)
-          target_link_libraries(sqlite3_static PRIVATE pthread dl m)
-        endif()
-
+      if(TARGET rocksdb)
         set_target_properties(
-          sqlite3_static
-          PROPERTIES OUTPUT_NAME sqlite3
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        add_library(SQLite::SQLite3_static ALIAS sqlite3_static)
-        list(APPEND SQLITE3_TARGETS sqlite3_static)
-        message(STATUS "Added SQLite3 static library")
-
-        # If only static is built, make it the default alias
-        if(NOT DFTRACER_UTILS_BUILD_SHARED)
-          add_library(SQLite::SQLite3 ALIAS sqlite3_static)
+          rocksdb
+          PROPERTIES POSITION_INDEPENDENT_CODE ON
+                     ARCHIVE_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}"
+                     LIBRARY_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}"
+                     RUNTIME_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}")
+        target_compile_definitions(rocksdb PUBLIC ROCKSDB_USE_RTTI)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+          target_compile_options(rocksdb PRIVATE -frtti)
+          target_compile_options(rocksdb PUBLIC -Wno-conversion)
         endif()
-      endif()
-
-      # Make sqlite3 installable
-      if(SQLITE3_TARGETS)
         install(
-          TARGETS ${SQLITE3_TARGETS}
-          EXPORT sqlite3Targets
+          TARGETS rocksdb
+          EXPORT rocksdbTargets
+          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+      endif()
+      if(TARGET rocksdb-shared)
+        set_target_properties(
+          rocksdb-shared
+          PROPERTIES POSITION_INDEPENDENT_CODE ON
+                     ARCHIVE_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}"
+                     LIBRARY_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}"
+                     RUNTIME_OUTPUT_DIRECTORY "${ROCKSDB_LIBRARY_DIR}")
+        target_compile_definitions(rocksdb-shared PUBLIC ROCKSDB_USE_RTTI)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+          target_compile_options(rocksdb-shared PRIVATE -frtti)
+          target_compile_options(rocksdb-shared PUBLIC -Wno-conversion)
+        endif()
+        install(
+          TARGETS rocksdb-shared
+          EXPORT rocksdbTargets
           ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
           LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
           RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
       endif()
 
-      # Install sqlite3 header
-      install(FILES ${SQLite3_SOURCE_DIR}/sqlite3.h
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+      list(APPEND DEPENDENCY_LIBRARY_DIRS "${ROCKSDB_LIBRARY_DIR}")
+      list(REMOVE_DUPLICATES DEPENDENCY_LIBRARY_DIRS)
+      set(DEPENDENCY_LIBRARY_DIRS
+          "${DEPENDENCY_LIBRARY_DIRS}"
+          PARENT_SCOPE)
 
-      # Install the export set
-      install(
-        EXPORT sqlite3Targets
-        FILE sqlite3Targets.cmake
-        NAMESPACE SQLite::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/sqlite3)
+      list(APPEND CMAKE_BUILD_RPATH "${ROCKSDB_LIBRARY_DIR}")
+      list(REMOVE_DUPLICATES CMAKE_BUILD_RPATH)
+      set(CMAKE_BUILD_RPATH
+          "${CMAKE_BUILD_RPATH}"
+          PARENT_SCOPE)
 
-      set(SQLite3_CPM
+      list(APPEND CMAKE_INSTALL_RPATH "${ROCKSDB_LIBRARY_DIR}")
+      list(REMOVE_DUPLICATES CMAKE_INSTALL_RPATH)
+      set(CMAKE_INSTALL_RPATH
+          "${CMAKE_INSTALL_RPATH}"
+          PARENT_SCOPE)
+
+      set(RocksDB_FOUND
+          TRUE
+          PARENT_SCOPE)
+      set(RocksDB_CPM
           TRUE
           PARENT_SCOPE)
     endif()
   endif()
 endfunction()
 
-# Function to link SQLite3 to a target Parameters: TARGET_NAME - name of the
-# target to link SQLite3 to
-function(link_sqlite3 TARGET_NAME LIBRARY_TYPE)
-  # Validate parameters
+function(link_rocksdb TARGET_NAME LIBRARY_TYPE)
   if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_sqlite3: TARGET_NAME is required")
+    message(FATAL_ERROR "link_rocksdb: TARGET_NAME is required")
+  endif()
+
+  if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
+    message(
+      FATAL_ERROR "link_rocksdb: LIBRARY_TYPE must be either STATIC or SHARED")
   endif()
 
   if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_sqlite3: Target '${TARGET_NAME}' does not exist")
+    message(FATAL_ERROR "link_rocksdb: Target '${TARGET_NAME}' does not exist")
   endif()
 
-  # Check if any SQLite3 variant is available
-  set(SQLITE3_AVAILABLE FALSE)
-
-  # Check for CPM-built SQLite3
-  if(TARGET sqlite3_shared OR TARGET sqlite3_static)
-    set(SQLITE3_AVAILABLE TRUE)
-  endif()
-
-  # Check for system SQLite3
-  if(TARGET SQLite::SQLite3)
-    set(SQLITE3_AVAILABLE TRUE)
-  endif()
-
-  if(NOT SQLITE3_AVAILABLE)
+  if(NOT TARGET RocksDB::rocksdb AND NOT TARGET RocksDB::rocksdb_static
+     AND NOT TARGET RocksDB::rocksdb_shared AND NOT TARGET rocksdb
+     AND NOT TARGET rocksdb-shared)
     message(
       FATAL_ERROR
-        "link_sqlite3: No SQLite3 found! Call need_sqlite3() first or ensure system SQLite3 is available."
+        "link_rocksdb: No RocksDB found! Call need_rocksdb() first or ensure system RocksDB is available."
     )
   endif()
 
-  # Link appropriate SQLite3 variant Use PUBLIC linkage since sqlite3.h is
-  # included in public headers
   if(LIBRARY_TYPE STREQUAL "STATIC")
-    # For static libraries, prefer static SQLite3
-    if(TARGET sqlite3_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC sqlite3_static)
-      message(
-        STATUS "Linked ${TARGET_NAME} to CPM-built sqlite3_static")
-    elseif(TARGET sqlite3_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC sqlite3_shared)
-      message(
-        STATUS "Linked ${TARGET_NAME} to CPM-built sqlite3_shared")
-    elseif(TARGET SQLite3::SQLite3)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite3::SQLite3)
-      message(STATUS "Linked ${TARGET_NAME} to SQLite3::SQLite3")
-    elseif(TARGET SQLite::SQLite3)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3)
-      message(STATUS "Linked ${TARGET_NAME} to SQLite::SQLite3")
+    if(TARGET RocksDB::rocksdb_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb_static)
+      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb_static")
+    elseif(TARGET rocksdb)
+      target_link_libraries(${TARGET_NAME} PUBLIC rocksdb)
+      message(STATUS "Linked ${TARGET_NAME} to rocksdb")
+    elseif(TARGET RocksDB::rocksdb)
+      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb)
+      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb")
+    else()
+      message(FATAL_ERROR "Static RocksDB requested for ${TARGET_NAME}, but no static RocksDB target is available")
     endif()
   else()
-    # For shared libraries, prefer shared SQLite3
-    if(TARGET sqlite3_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC sqlite3_shared)
-      message(
-        STATUS "Linked ${TARGET_NAME} to CPM-built sqlite3_shared")
-    elseif(TARGET sqlite3_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC sqlite3_static)
-      message(
-        STATUS "Linked ${TARGET_NAME} to CPM-built sqlite3_static")
-    elseif(TARGET SQLite3::SQLite3)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite3::SQLite3)
-      message(STATUS "Linked ${TARGET_NAME} to SQLite3::SQLite3")
-    elseif(TARGET SQLite::SQLite3)
-      target_link_libraries(${TARGET_NAME} PUBLIC SQLite::SQLite3)
-      message(STATUS "Linked ${TARGET_NAME} to SQLite::SQLite3")
+    if(TARGET RocksDB::rocksdb_shared)
+      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb_shared)
+      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb_shared")
+    elseif(TARGET rocksdb-shared)
+      target_link_libraries(${TARGET_NAME} PUBLIC rocksdb-shared)
+      message(STATUS "Linked ${TARGET_NAME} to rocksdb-shared")
+    elseif(TARGET RocksDB::rocksdb)
+      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb)
+      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb")
+    elseif(TARGET RocksDB::rocksdb_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb_static)
+      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb_static")
+    elseif(TARGET rocksdb)
+      target_link_libraries(${TARGET_NAME} PUBLIC rocksdb)
+      message(STATUS "Linked ${TARGET_NAME} to rocksdb")
     endif()
   endif()
 endfunction()
@@ -647,6 +656,189 @@ endfunction()
 # ==============================================================================
 # Compression Dependencies
 # ==============================================================================
+function(need_lz4)
+  if(DEFINED CACHE{lz4_LIBRARIES} AND NOT EXISTS "${lz4_LIBRARIES}")
+    unset(lz4_LIBRARIES CACHE)
+  endif()
+  if(DEFINED CACHE{lz4_INCLUDE_DIRS} AND NOT EXISTS "${lz4_INCLUDE_DIRS}")
+    unset(lz4_INCLUDE_DIRS CACHE)
+  endif()
+
+  find_path(lz4_INCLUDE_DIRS NAMES lz4.h)
+  find_library(lz4_LIBRARIES NAMES lz4)
+
+  if(lz4_INCLUDE_DIRS AND lz4_LIBRARIES AND EXISTS "${lz4_LIBRARIES}")
+    message(STATUS "Found system lz4: ${lz4_LIBRARIES}")
+
+    if(NOT TARGET lz4::lz4)
+      add_library(lz4::lz4 UNKNOWN IMPORTED)
+      set_target_properties(
+        lz4::lz4
+        PROPERTIES IMPORTED_LOCATION "${lz4_LIBRARIES}"
+                   INTERFACE_INCLUDE_DIRECTORIES "${lz4_INCLUDE_DIRS}")
+    endif()
+
+    set(lz4_FOUND
+        TRUE
+        PARENT_SCOPE)
+    set(lz4_INCLUDE_DIRS
+        ${lz4_INCLUDE_DIRS}
+        PARENT_SCOPE)
+    set(lz4_LIBRARIES
+        ${lz4_LIBRARIES}
+        PARENT_SCOPE)
+    set(lz4_CPM
+        FALSE
+        PARENT_SCOPE)
+    set(lz4_FOUND
+        TRUE
+        CACHE BOOL "lz4 availability" FORCE)
+    set(lz4_INCLUDE_DIRS
+        "${lz4_INCLUDE_DIRS}"
+        CACHE PATH "lz4 include directories" FORCE)
+    set(lz4_LIBRARIES
+        "${lz4_LIBRARIES}"
+        CACHE STRING "lz4 libraries" FORCE)
+  else()
+    if(NOT lz4_ADDED)
+      cpmaddpackage(
+        NAME
+        lz4
+        GITHUB_REPOSITORY
+        lz4/lz4
+        VERSION
+        1.10.0
+        GIT_TAG
+        v1.10.0
+        DOWNLOAD_ONLY
+        YES)
+    endif()
+
+    if(lz4_ADDED)
+      message(STATUS "Built lz4 with CPM")
+
+      set(LZ4_TARGETS)
+      set(LZ4_SOURCES
+          ${lz4_SOURCE_DIR}/lib/lz4.c
+          ${lz4_SOURCE_DIR}/lib/lz4frame.c
+          ${lz4_SOURCE_DIR}/lib/lz4hc.c
+          ${lz4_SOURCE_DIR}/lib/xxhash.c)
+      set(LZ4_SHARED_OUTPUT
+          "${CMAKE_BINARY_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}lz4${CMAKE_SHARED_LIBRARY_SUFFIX}"
+      )
+      set(LZ4_STATIC_OUTPUT
+          "${CMAKE_BINARY_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}lz4${CMAKE_STATIC_LIBRARY_SUFFIX}"
+      )
+      set(LZ4_PREFERRED_OUTPUT "${LZ4_STATIC_OUTPUT}")
+      if(DFTRACER_UTILS_BUILD_SHARED)
+        set(LZ4_PREFERRED_OUTPUT "${LZ4_SHARED_OUTPUT}")
+      endif()
+
+      if(DFTRACER_UTILS_BUILD_STATIC)
+        add_library(lz4_static STATIC ${LZ4_SOURCES})
+        target_include_directories(
+          lz4_static
+          PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
+                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+        set_target_properties(
+          lz4_static
+          PROPERTIES OUTPUT_NAME lz4
+                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+        list(APPEND LZ4_TARGETS lz4_static)
+      endif()
+
+      if(DFTRACER_UTILS_BUILD_SHARED)
+        add_library(lz4_shared SHARED ${LZ4_SOURCES})
+        target_include_directories(
+          lz4_shared
+          PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
+                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+        set_target_properties(
+          lz4_shared
+          PROPERTIES OUTPUT_NAME lz4
+                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+        list(APPEND LZ4_TARGETS lz4_shared)
+      endif()
+
+      if(TARGET lz4_static AND NOT TARGET lz4::lz4_static)
+        add_library(lz4::lz4_static UNKNOWN IMPORTED GLOBAL)
+        set_target_properties(
+          lz4::lz4_static
+          PROPERTIES IMPORTED_LOCATION "${LZ4_STATIC_OUTPUT}"
+                     INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
+        add_dependencies(lz4::lz4_static lz4_static)
+      endif()
+      if(TARGET lz4_shared AND NOT TARGET lz4::lz4_shared)
+        add_library(lz4::lz4_shared UNKNOWN IMPORTED GLOBAL)
+        set_target_properties(
+          lz4::lz4_shared
+          PROPERTIES IMPORTED_LOCATION "${LZ4_SHARED_OUTPUT}"
+                     INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
+        add_dependencies(lz4::lz4_shared lz4_shared)
+      endif()
+      if(NOT TARGET lz4::lz4)
+        add_library(lz4::lz4 UNKNOWN IMPORTED GLOBAL)
+        if(TARGET lz4::lz4_shared)
+          set_target_properties(
+            lz4::lz4
+            PROPERTIES IMPORTED_LOCATION "${LZ4_SHARED_OUTPUT}"
+                       INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
+          add_dependencies(lz4::lz4 lz4_shared)
+        elseif(TARGET lz4::lz4_static)
+          set_target_properties(
+            lz4::lz4
+            PROPERTIES IMPORTED_LOCATION "${LZ4_STATIC_OUTPUT}"
+                       INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
+          add_dependencies(lz4::lz4 lz4_static)
+        endif()
+      endif()
+
+      install(FILES ${lz4_SOURCE_DIR}/lib/lz4.h ${lz4_SOURCE_DIR}/lib/lz4frame.h
+                    ${lz4_SOURCE_DIR}/lib/lz4hc.h ${lz4_SOURCE_DIR}/lib/xxhash.h
+              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+      if(LZ4_TARGETS)
+        install(
+          TARGETS ${LZ4_TARGETS}
+          EXPORT lz4Targets
+          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+        install(
+          EXPORT lz4Targets
+          FILE lz4Targets.cmake
+          NAMESPACE lz4::
+          DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/lz4)
+      endif()
+
+      set(lz4_FOUND
+          TRUE
+          PARENT_SCOPE)
+      set(lz4_INCLUDE_DIRS
+          ${lz4_SOURCE_DIR}/lib
+          PARENT_SCOPE)
+      set(lz4_LIBRARIES
+          ${LZ4_PREFERRED_OUTPUT}
+          PARENT_SCOPE)
+      set(lz4_CPM
+          TRUE
+          PARENT_SCOPE)
+
+      # Seed the variables RocksDB's bundled Findlz4.cmake checks.
+      set(lz4_FOUND
+          TRUE
+          CACHE BOOL "lz4 availability" FORCE)
+      set(lz4_INCLUDE_DIRS
+          "${lz4_SOURCE_DIR}/lib"
+          CACHE PATH "lz4 include directories" FORCE)
+      set(lz4_LIBRARIES
+          "${LZ4_PREFERRED_OUTPUT}"
+          CACHE STRING "lz4 libraries" FORCE)
+    endif()
+  endif()
+endfunction()
 
 function(need_zlib)
   find_package(ZLIB 1.2 QUIET)

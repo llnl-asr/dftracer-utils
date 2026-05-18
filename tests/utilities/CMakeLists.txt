@@ -56,6 +56,13 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/statistics/test_statistics_query.cpp
     common/statistics/test_log2_histogram.cpp
     common/statistics/test_timestamp_histogram.cpp
+
+    # Distribution fitting
+    common/statistics/test_distributions.cpp
+    common/statistics/test_mixture.cpp
+
+    # DLIO config generation
+    dlio/test_barrier_simulator.cpp
     composites/dft/statistics/test_detailed_statistics.cpp
 
     # Query language

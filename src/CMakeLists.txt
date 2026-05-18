@@ -20,6 +20,8 @@ need_readerwriterqueue()
 need_concurrentqueue()
 need_tl_expected()
 need_unordered_dense()
+need_boost_math()
+need_yaml_cpp()
 
 if(DFTRACER_UTILS_ENABLE_ARROW)
   need_nanoarrow()
@@ -117,7 +119,14 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/ddsketch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/log2_histogram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/timestamp_histogram.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/distributions.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/mixture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/json/json_value.cpp
+    # DLIO config generation
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/barrier_simulator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/trace_loader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/optimizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/yaml_emit.cpp
 )
 
 list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
@@ -130,6 +139,7 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/query/query.cpp
     # DFT Aggregators
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregation_runner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregation_merge_operator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/system_metrics_serialization.cpp
@@ -468,6 +478,12 @@ foreach(variant shared static)
       string(TOUPPER ${variant} VARIANT_UPPER)
       link_nanoarrow(dftracer_utils_utilities_${variant} ${VARIANT_UPPER})
     endif()
+
+    # Boost.Math (standalone, header-only) for DLIO distribution fitting.
+    link_boost_math(dftracer_utils_utilities_${variant})
+
+    # yaml-cpp for DLIO config emit.
+    link_yaml_cpp(dftracer_utils_utilities_${variant})
 
     # Link zstd when ENABLE_ZSTD is on so headers propagate to consumers
     # (e.g. arrow ipc_writer.cpp guarded by DFTRACER_UTILS_ENABLE_ZSTD).
@@ -830,7 +846,8 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_organize.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_reconstruct.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_server.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_comparator.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_comparator.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_gen_dlio_config.cpp)
 
   set(DFTRACER_MPI_BINARIES "")
   if(DFTRACER_UTILS_ENABLE_MPI)

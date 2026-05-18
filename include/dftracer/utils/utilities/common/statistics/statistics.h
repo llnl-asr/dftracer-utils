@@ -9,5 +9,7 @@
  */
 
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
+#include <dftracer/utils/utilities/common/statistics/distributions.h>
+#include <dftracer/utils/utilities/common/statistics/statistic.h>
 
 #endif  // DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_STATISTICS_H

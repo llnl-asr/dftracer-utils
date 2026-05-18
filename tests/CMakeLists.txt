@@ -203,6 +203,7 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_stats.cpp
     binaries/test_dftracer_index.cpp
     binaries/test_dftracer_aggregator.cpp
+    binaries/test_dftracer_gen_dlio_config.cpp
     binaries/test_dftracer_organize.cpp
     binaries/test_dftracer_view.cpp
     binaries/test_dftracer_tar.cpp
@@ -306,6 +307,9 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_aggregator")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_AGGREGATOR_PATH=$<TARGET_FILE:dftracer_aggregator>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_gen_dlio_config")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_organize")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_ORGANIZE_PATH=$<TARGET_FILE:dftracer_organize>;DFTRACER_RECONSTRUCT_PATH=$<TARGET_FILE:dftracer_reconstruct>")

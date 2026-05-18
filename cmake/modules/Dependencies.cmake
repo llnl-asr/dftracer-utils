@@ -1767,6 +1767,95 @@ function(link_nanoarrow TARGET_NAME LIBRARY_TYPE)
 endfunction()
 
 # ==============================================================================
+# Boost.Math (standalone, header-only); for statistical distributions
+# ==============================================================================
+
+function(need_boost_math)
+  if(NOT boost_math_ADDED)
+    cpmaddpackage(
+      NAME
+      boost_math
+      GITHUB_REPOSITORY
+      boostorg/math
+      GIT_TAG
+      boost-1.91.0
+      DOWNLOAD_ONLY
+      YES)
+  endif()
+
+  # CPMAddPackage only sets boost_math_SOURCE_DIR in the calling scope. Cache
+  # it so link_boost_math() can find the include dir from anywhere in the tree.
+  if(boost_math_SOURCE_DIR)
+    set(boost_math_SOURCE_DIR
+        "${boost_math_SOURCE_DIR}"
+        CACHE INTERNAL "Boost.Math source tree from CPM")
+    message(STATUS "Added Boost.Math (standalone) headers from ${boost_math_SOURCE_DIR}/include")
+  endif()
+endfunction()
+
+# Apply Boost.Math standalone headers + BOOST_MATH_STANDALONE define as PRIVATE
+# build-only properties. We deliberately avoid an INTERFACE link target so the
+# headers/defines never enter the installed/exported target set.
+function(link_boost_math TARGET_NAME)
+  if(NOT TARGET_NAME)
+    message(FATAL_ERROR "link_boost_math: TARGET_NAME is required")
+  endif()
+  if(NOT TARGET ${TARGET_NAME})
+    message(FATAL_ERROR "link_boost_math: target '${TARGET_NAME}' does not exist")
+  endif()
+  if(NOT boost_math_SOURCE_DIR)
+    message(FATAL_ERROR
+      "link_boost_math: boost_math_SOURCE_DIR is unset; call need_boost_math() first")
+  endif()
+
+  target_include_directories(${TARGET_NAME} SYSTEM PRIVATE
+                             ${boost_math_SOURCE_DIR}/include)
+  target_compile_definitions(${TARGET_NAME} PRIVATE BOOST_MATH_STANDALONE)
+  message(STATUS "Linked ${TARGET_NAME} to Boost.Math (standalone)")
+endfunction()
+
+# ==============================================================================
+# yaml-cpp - YAML emit/parse for DLIO config generation
+# ==============================================================================
+
+function(need_yaml_cpp)
+  if(NOT yaml-cpp_ADDED)
+    cpmaddpackage(
+      NAME
+      yaml-cpp
+      GITHUB_REPOSITORY
+      jbeder/yaml-cpp
+      GIT_TAG
+      yaml-cpp-0.9.0
+      OPTIONS
+      "YAML_CPP_BUILD_TESTS OFF"
+      "YAML_CPP_BUILD_TOOLS OFF"
+      "YAML_CPP_BUILD_CONTRIB OFF"
+      "YAML_BUILD_SHARED_LIBS OFF"
+      "YAML_CPP_INSTALL ON"
+      FORCE
+      YES)
+  endif()
+endfunction()
+
+# Link yaml-cpp PRIVATE so the static library is bundled into the consumer and
+# the header path stays out of the installed/exported target set.
+function(link_yaml_cpp TARGET_NAME)
+  if(NOT TARGET_NAME)
+    message(FATAL_ERROR "link_yaml_cpp: TARGET_NAME is required")
+  endif()
+  if(NOT TARGET ${TARGET_NAME})
+    message(FATAL_ERROR "link_yaml_cpp: target '${TARGET_NAME}' does not exist")
+  endif()
+  if(NOT TARGET yaml-cpp::yaml-cpp)
+    message(FATAL_ERROR
+      "link_yaml_cpp: yaml-cpp::yaml-cpp target missing; call need_yaml_cpp() first")
+  endif()
+  target_link_libraries(${TARGET_NAME} PRIVATE yaml-cpp::yaml-cpp)
+  message(STATUS "Linked ${TARGET_NAME} to yaml-cpp")
+endfunction()
+
+# ==============================================================================
 # Testing Dependencies
 # ==============================================================================
 

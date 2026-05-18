@@ -23,6 +23,9 @@ namespace dftracer::utils::coro {
 template <typename T>
 class ChannelProducer;
 
+template <typename T>
+class ChannelConsumer;
+
 /**
  * Channel<T> - Producer-consumer queue for streaming data
  *
@@ -850,8 +853,24 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         return ChannelProducer<T>(this);
     }
 
+    /**
+     * Get a receive-side handle for capturing into a coroutine lambda:
+     *
+     *   [ch = channel->consumer()](...) -> CoroTask<...> {
+     *       while (auto item = co_await ch.receive()) { ... }
+     *   }
+     */
+    ChannelConsumer<T> consumer() {
+        auto sp = this->weak_from_this().lock();
+        if (sp) {
+            return ChannelConsumer<T>(std::move(sp));
+        }
+        return ChannelConsumer<T>(this);
+    }
+
    private:
     friend class ChannelProducer<T>;
+    friend class ChannelConsumer<T>;
 
     ProducerGuard adopt_producer() {
         return ProducerGuard(this, typename ProducerGuard::Adopt{});
@@ -976,6 +995,35 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     }
 
     ReceiveAwaitable receive() { return ReceiveAwaitable(this); }
+
+    std::optional<T> blocking_receive() {
+        T item;
+        if (queue_.try_dequeue(item)) {
+            mark_item_consumed();
+            if (!wake_one_send_waiter_after_receive()) {
+                cv_writable_.notify_one();
+            }
+            maybe_notify_terminal();
+            return std::optional<T>(std::move(item));
+        }
+
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        while (true) {
+            if (try_receive_locked(item)) {
+                release_slot_if_bounded_locked();
+                lock.unlock();
+                if (!wake_one_send_waiter_after_receive()) {
+                    cv_writable_.notify_one();
+                }
+                maybe_notify_terminal();
+                return std::optional<T>(std::move(item));
+            }
+            if (is_terminal_locked()) {
+                return std::nullopt;
+            }
+            cv_readable_.wait(lock);
+        }
+    }
 
     SendAwaitable send(const T& item) { return SendAwaitable(this, item); }
 
@@ -1130,6 +1178,69 @@ class ChannelProducer {
 
     /// Send an item through the channel (move).
     auto send(T&& item) { return raw_->send(std::move(item)); }
+};
+
+/**
+ * ChannelConsumer<T> - Receive-side handle for Channel<T>
+ *
+ * Holds a raw pointer for operations and optionally a shared_ptr to keep
+ * the channel alive when created from a shared_ptr channel.
+ *
+ * Usage:
+ * @code
+ *     [ch = channel->consumer()](CoroScope& ctx)
+ *         -> CoroTask<void> {
+ *         while (auto item = co_await ch.receive()) {
+ *             process(*item);
+ *         }
+ *     }
+ * @endcode
+ */
+template <typename T>
+class ChannelConsumer {
+    Channel<T>* raw_{nullptr};
+    std::shared_ptr<Channel<T>> shared_;
+
+   public:
+    explicit ChannelConsumer(Channel<T>* ch) : raw_(ch) {}
+
+    explicit ChannelConsumer(std::shared_ptr<Channel<T>> ch)
+        : raw_(ch.get()), shared_(std::move(ch)) {}
+
+    ~ChannelConsumer() = default;
+
+    ChannelConsumer(ChannelConsumer&& other) noexcept
+        : raw_(other.raw_), shared_(std::move(other.shared_)) {
+        other.raw_ = nullptr;
+    }
+
+    ChannelConsumer& operator=(ChannelConsumer&& other) noexcept {
+        if (this != &other) {
+            raw_ = other.raw_;
+            shared_ = std::move(other.shared_);
+            other.raw_ = nullptr;
+        }
+        return *this;
+    }
+
+    ChannelConsumer(const ChannelConsumer& other)
+        : raw_(other.raw_), shared_(other.shared_) {}
+
+    ChannelConsumer& operator=(const ChannelConsumer& other) {
+        if (this != &other) {
+            raw_ = other.raw_;
+            shared_ = other.shared_;
+        }
+        return *this;
+    }
+
+    auto receive() const { return raw_->receive(); }
+
+    std::optional<T> blocking_receive() const {
+        return raw_->blocking_receive();
+    }
+
+    bool is_closed() const { return raw_->is_closed(); }
 };
 
 /**

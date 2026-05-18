@@ -1,427 +1,538 @@
-/**
- * DFTracer Call Tree Utility
- * Standalone binary for building and analyzing call trees from DFTracer trace
- * files
- */
+// Pipeline-driven call_tree binary.
+//
+// DAG:
+//   scan -> build -> merge -> hierarchy -> write_json
+//
+// scan      : enumerate inputs
+// build     : per-file CoroScope fan-out; each file ingests into its own
+//             local CallTree fragment (no shared mutation)
+// merge     : concatenate fragments into ctx.merged
+// hierarchy : per-process CoroScope fan-out; each ProcessCallTree is
+//             independent so parent-child build runs in parallel
+// write_json: per-worker serialization of process slices, ParallelWriter
+//             feeds io_backend for the actual writes
 
-#include <dftracer/utils/call_tree/call_tree.h>
+#include <dftracer/utils/call_tree/internal/call_tree.h>
+#include <dftracer/utils/call_tree/internal/process_call_tree.h>
+#include <dftracer/utils/call_tree/internal/process_key.h>
+#include <dftracer/utils/call_tree/internal/trace_reader.h>
+#include <dftracer/utils/call_tree/json_serializer.h>
+#include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/pipeline/pipeline.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/utilities/fileio/parallel/merge.h>
+#include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
+#include <unistd.h>
 
 #include <algorithm>
-#include <argparse/argparse.hpp>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
-#include <iostream>
-#include <map>
+#include <ctime>
+#include <memory>
 #include <string>
 #include <vector>
 
+#include "common_cli.h"
+
+using namespace dftracer::utils;
+using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::call_tree;
 
-/**
- * Collect trace files from directory or file list
- */
-static std::vector<std::string> collect_trace_files(
-    const std::vector<std::string>& inputs, bool recursive) {
-    std::vector<std::string> trace_files;
+namespace {
 
-    for (const auto& input : inputs) {
-        if (fs::is_directory(input)) {
-            if (recursive) {
-                for (const auto& entry :
-                     fs::recursive_directory_iterator(input)) {
-                    if (entry.is_regular_file()) {
-                        std::string path = entry.path().string();
-                        if ((path.size() >= 4 &&
-                             path.substr(path.size() - 4) == ".pfw") ||
-                            (path.size() >= 7 &&
-                             path.substr(path.size() - 7) == ".pfw.gz")) {
-                            trace_files.push_back(path);
-                        }
-                    }
+class CallTreeArgParse : public cli::ArgParse {
+   public:
+    cli::PipelineArgs pipeline;
+
+    std::vector<std::string> inputs;
+    bool recursive = false;
+    std::string output;
+    bool verbose = false;
+    bool no_save = false;
+    bool gzip = false;
+
+    explicit CallTreeArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        schema(pipeline);
+    }
+
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("inputs")
+            .help("Trace files (.pfw, .pfw.gz) or directories")
+            .nargs(argparse::nargs_pattern::at_least_one);
+        parser().add_argument("-r", "--recursive").flag();
+        parser()
+            .add_argument("-o", "--output")
+            .help("Output JSON path (Chrome Tracing)")
+            .default_value<std::string>("");
+        parser().add_argument("-v", "--verbose").flag();
+        parser().add_argument("--no-save").flag();
+        parser()
+            .add_argument("--gzip")
+            .help("gzip the output (.gz appended if needed)")
+            .flag();
+    }
+
+    void post_parse() override {
+        inputs = parser().get<std::vector<std::string>>("inputs");
+        recursive = parser().get<bool>("--recursive");
+        output = parser().get<std::string>("--output");
+        verbose = parser().get<bool>("--verbose");
+        no_save = parser().get<bool>("--no-save");
+        gzip = parser().get<bool>("--gzip");
+    }
+};
+
+bool is_trace_file(const std::string& path) {
+    return (path.size() >= 4 &&
+            path.compare(path.size() - 4, 4, ".pfw") == 0) ||
+           (path.size() >= 7 &&
+            path.compare(path.size() - 7, 7, ".pfw.gz") == 0);
+}
+
+struct RunCtx {
+    const CallTreeArgParse* cli = nullptr;
+
+    std::vector<std::string> trace_files;
+    std::vector<std::unique_ptr<internal::CallTree>> per_file;
+    internal::CallTree merged;
+    std::vector<internal::ProcessKey> process_keys;
+
+    std::string output_path;
+    bool failed = false;
+
+    double scan_ms = 0;
+    double build_ms = 0;
+    double merge_ms = 0;
+    double hier_ms = 0;
+    double write_ms = 0;
+};
+
+coro::CoroTask<void> task_scan(RunCtx* ctx) {
+    const auto t0 = std::chrono::steady_clock::now();
+    for (const auto& in : ctx->cli->inputs) {
+        std::error_code ec;
+        if (fs::is_directory(in, ec)) {
+            if (ctx->cli->recursive) {
+                for (const auto& e : fs::recursive_directory_iterator(in, ec)) {
+                    if (e.is_regular_file(ec) &&
+                        is_trace_file(e.path().string()))
+                        ctx->trace_files.push_back(e.path().string());
                 }
             } else {
-                for (const auto& entry : fs::directory_iterator(input)) {
-                    if (entry.is_regular_file()) {
-                        std::string path = entry.path().string();
-                        if ((path.size() >= 4 &&
-                             path.substr(path.size() - 4) == ".pfw") ||
-                            (path.size() >= 7 &&
-                             path.substr(path.size() - 7) == ".pfw.gz")) {
-                            trace_files.push_back(path);
-                        }
-                    }
+                for (const auto& e : fs::directory_iterator(in, ec)) {
+                    if (e.is_regular_file(ec) &&
+                        is_trace_file(e.path().string()))
+                        ctx->trace_files.push_back(e.path().string());
                 }
             }
-        } else if (fs::is_regular_file(input)) {
-            trace_files.push_back(input);
-        } else {
-            DFTRACER_UTILS_LOG_ERROR("Input not found or not accessible: %s",
-                                     input.c_str());
+        } else if (fs::is_regular_file(in, ec)) {
+            ctx->trace_files.push_back(in);
+        }
+    }
+    std::sort(ctx->trace_files.begin(), ctx->trace_files.end());
+    if (ctx->trace_files.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("%s", "no trace files found");
+        ctx->failed = true;
+    }
+    ctx->scan_ms = std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - t0)
+                       .count();
+    if (ctx->cli->verbose && !ctx->failed) {
+        std::printf("[scan] %.2f ms: %zu files\n", ctx->scan_ms,
+                    ctx->trace_files.size());
+        std::fflush(stdout);
+    }
+    co_return;
+}
+
+coro::CoroTask<void> ingest_one_file(std::string path, internal::CallTree* tree,
+                                     std::atomic<std::size_t>* total) {
+    auto counts = co_await internal::read_trace_file_async(std::move(path),
+                                                           tree, nullptr);
+    total->fetch_add(counts.processed, std::memory_order_relaxed);
+}
+
+coro::CoroTask<void> ingest_all_files(
+    CoroScope* child, const std::vector<std::string>* paths,
+    const std::vector<std::unique_ptr<internal::CallTree>>* per_file,
+    std::atomic<std::size_t>* total) {
+    for (std::size_t i = 0; i < paths->size(); ++i) {
+        std::string path = (*paths)[i];
+        internal::CallTree* tree = (*per_file)[i].get();
+        child->spawn([path = std::move(path), tree,
+                      total](CoroScope&) mutable -> coro::CoroTask<void> {
+            co_await ingest_one_file(std::move(path), tree, total);
+        });
+    }
+    co_return;
+}
+
+coro::CoroTask<void> task_build(RunCtx* ctx, CoroScope* scope) {
+    if (ctx->failed) co_return;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    const std::size_t n = ctx->trace_files.size();
+    ctx->per_file.clear();
+    ctx->per_file.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        ctx->per_file.push_back(std::make_unique<internal::CallTree>());
+        ctx->per_file.back()->initialize();
+    }
+
+    std::atomic<std::size_t> total_events{0};
+    std::atomic<std::size_t>* total_ptr = &total_events;
+
+    const std::vector<std::string>* paths_ptr = &ctx->trace_files;
+    const std::vector<std::unique_ptr<internal::CallTree>>* per_file_ptr =
+        &ctx->per_file;
+
+    co_await scope->scope(
+        [paths_ptr, per_file_ptr,
+         total_ptr](CoroScope& child) mutable -> coro::CoroTask<void> {
+            co_await ingest_all_files(&child, paths_ptr, per_file_ptr,
+                                      total_ptr);
+        });
+
+    ctx->build_ms = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+    if (ctx->cli->verbose) {
+        std::printf("[build] %.2f ms: %zu events across %zu files\n",
+                    ctx->build_ms, total_events.load(), n);
+        std::fflush(stdout);
+    }
+    co_return;
+}
+
+coro::CoroTask<void> task_merge(RunCtx* ctx) {
+    if (ctx->failed) co_return;
+    const auto t0 = std::chrono::steady_clock::now();
+    ctx->merged.initialize();
+    for (auto& t : ctx->per_file) {
+        if (t) ctx->merged.merge_from(std::move(*t));
+    }
+    ctx->per_file.clear();
+    ctx->process_keys = ctx->merged.keys();
+    ctx->merge_ms = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+    if (ctx->cli->verbose) {
+        std::printf("[merge] %.2f ms: %zu processes\n", ctx->merge_ms,
+                    ctx->process_keys.size());
+        std::fflush(stdout);
+    }
+    co_return;
+}
+
+coro::CoroTask<void> hier_one_process(internal::CallTree* tree,
+                                      internal::ProcessKey key) {
+    tree->build_hierarchy_for_process(key);
+    co_return;
+}
+
+coro::CoroTask<void> hier_all_processes(
+    CoroScope* child, internal::CallTree* tree,
+    const std::vector<internal::ProcessKey>* keys) {
+    for (auto k : *keys) {
+        child->spawn([tree, k](CoroScope&) mutable -> coro::CoroTask<void> {
+            co_await hier_one_process(tree, k);
+        });
+    }
+    co_return;
+}
+
+coro::CoroTask<void> task_hierarchy(RunCtx* ctx, CoroScope* scope) {
+    if (ctx->failed) co_return;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    internal::CallTree* tree = &ctx->merged;
+    const std::vector<internal::ProcessKey>* keys_ptr = &ctx->process_keys;
+    co_await scope->scope(
+        [tree, keys_ptr](CoroScope& child) mutable -> coro::CoroTask<void> {
+            co_await hier_all_processes(&child, tree, keys_ptr);
+        });
+
+    ctx->hier_ms = std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - t0)
+                       .count();
+    if (ctx->cli->verbose) {
+        std::printf("[hierarchy] %.2f ms\n", ctx->hier_ms);
+        std::fflush(stdout);
+    }
+    co_return;
+}
+
+// Serialize all events for a single process slice into `out`. Each event is
+// followed by ",\n"; trim the final separator at concatenation time.
+void serialize_process_slice(const internal::ProcessCallTree& pgraph,
+                             const internal::ProcessKey& key,
+                             internal::JsonSerializer& serializer,
+                             std::size_t starting_index, std::string& out) {
+    static constexpr std::size_t EVT_BUF = 16384;
+    char buffer[EVT_BUF];
+    std::size_t event_idx = starting_index;
+    for (std::uint64_t root_id : pgraph.root_calls) {
+        std::vector<std::uint64_t> stack;
+        stack.push_back(root_id);
+        while (!stack.empty()) {
+            std::uint64_t node_id = stack.back();
+            stack.pop_back();
+            auto it = pgraph.calls.find(node_id);
+            if (it == pgraph.calls.end()) continue;
+            const auto& node = it->second;
+            std::size_t written = serializer.serialize_node(
+                buffer, static_cast<int>(event_idx++), *node, key.pid, key.tid);
+            // serialize_node returns size including trailing newline; strip it
+            // and add ",\n" so concatenation produces valid
+            // JSON-array-of-lines.
+            if (written > 0) {
+                out.append(buffer, written - 1);
+                out.append(",\n", 2);
+            }
+            const auto& children = node->get_children();
+            for (auto cit = children.rbegin(); cit != children.rend(); ++cit) {
+                stack.push_back(*cit);
+            }
+        }
+    }
+}
+
+coro::CoroTask<void> serialize_slice(const internal::CallTree* merged,
+                                     internal::ProcessKey key,
+                                     const std::string* hostname_hash,
+                                     std::vector<std::string>* slice_buffers,
+                                     std::size_t index,
+                                     std::uint64_t starting_index) {
+    auto* pgraph = const_cast<internal::CallTree*>(merged)->get(key);
+    if (pgraph) {
+        internal::JsonSerializer serializer;
+        char init[8];
+        serializer.initialize(init, *hostname_hash);
+        (void)init;
+        serialize_process_slice(*pgraph, key, serializer, starting_index,
+                                (*slice_buffers)[index]);
+    }
+    co_return;
+}
+
+coro::CoroTask<void> serialize_all_slices(
+    CoroScope* child, const internal::CallTree* merged,
+    const std::vector<internal::ProcessKey>* keys,
+    const std::string* hostname_hash, std::vector<std::string>* slice_buffers,
+    std::uint64_t stride) {
+    for (std::size_t i = 0; i < keys->size(); ++i) {
+        internal::ProcessKey k = (*keys)[i];
+        std::uint64_t start_idx = i * stride;
+        child->spawn([merged, k, start_idx, i, hostname_hash, slice_buffers](
+                         CoroScope&) mutable -> coro::CoroTask<void> {
+            co_await serialize_slice(merged, k, hostname_hash, slice_buffers, i,
+                                     start_idx);
+        });
+    }
+    co_return;
+}
+
+coro::CoroTask<void> task_write_json(RunCtx* ctx, CoroScope* scope) {
+    if (ctx->failed || ctx->cli->no_save) co_return;
+    const auto t0 = std::chrono::steady_clock::now();
+
+    const std::size_t n = ctx->process_keys.size();
+    std::vector<std::string> slice_buffers(n);
+    static constexpr std::uint64_t IDX_STRIDE = 1ull << 20;
+
+    char hostname[256] = {};
+    gethostname(hostname, sizeof(hostname) - 1);
+    std::string hostname_hash(hostname);
+
+    std::vector<std::string>* slice_buffers_ptr = &slice_buffers;
+    const std::string* hostname_hash_ptr = &hostname_hash;
+    const internal::CallTree* merged = &ctx->merged;
+    const std::vector<internal::ProcessKey>* keys_ptr = &ctx->process_keys;
+
+    co_await scope->scope(
+        [merged, keys_ptr, hostname_hash_ptr,
+         slice_buffers_ptr](CoroScope& child) mutable -> coro::CoroTask<void> {
+            co_await serialize_all_slices(&child, merged, keys_ptr,
+                                          hostname_hash_ptr, slice_buffers_ptr,
+                                          IDX_STRIDE);
+        });
+
+    std::string header;
+    header.append("[\n", 2);
+    {
+        internal::JsonSerializer serializer;
+        char init_buf[8];
+        serializer.initialize(init_buf, hostname_hash);
+        (void)init_buf;
+        char buf[8192];
+        std::time_t now = std::time(nullptr);
+        char ts[64];
+        std::strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S",
+                      std::localtime(&now));
+        std::size_t w = serializer.serialize_metadata(buf, "timestamp", ts, "M",
+                                                      0, 0, true);
+        if (w > 0) header.append(buf, w - 1);
+        header.append(",\n", 2);
+        w = serializer.serialize_metadata(buf, "format", "call_tree", "M", 0, 0,
+                                          true);
+        if (w > 0) header.append(buf, w - 1);
+        header.append(",\n", 2);
+    }
+
+    fileio::parallel::WriterConfig wc;
+    wc.layout = fileio::parallel::FileLayout::SHARDED;
+    wc.gzip = ctx->cli->gzip;
+    auto writer = fileio::parallel::make_writer(wc);
+
+    const std::size_t total_workers = n + 1;
+    if (co_await writer->open(ctx->output_path, total_workers, ctx->cli->gzip,
+                              scope) != 0) {
+        DFTRACER_UTILS_LOG_ERROR("failed to open writer: %s",
+                                 ctx->output_path.c_str());
+        ctx->failed = true;
+        co_return;
+    }
+
+    if (co_await writer->write_chunk(
+            0, ByteView(header.data(), header.size())) != 0) {
+        ctx->failed = true;
+    }
+
+    for (std::size_t i = 0; i < n && !ctx->failed; ++i) {
+        std::string& b = slice_buffers[i];
+        if (i + 1 == n) {
+            if (b.size() >= 2 && b[b.size() - 2] == ',' &&
+                b[b.size() - 1] == '\n') {
+                b.resize(b.size() - 2);
+                b.append("\n]\n", 3);
+            } else {
+                b.append("]\n", 2);
+            }
+        }
+        if (co_await writer->write_chunk(i + 1, ByteView(b.data(), b.size())) !=
+            0) {
+            ctx->failed = true;
+            break;
         }
     }
 
-    return trace_files;
+    if (co_await writer->close() != 0) ctx->failed = true;
+
+    if (!ctx->failed) {
+        auto shards = writer->output_paths();
+        if (co_await fileio::parallel::merge_shards(ctx->output_path, shards) !=
+            0) {
+            DFTRACER_UTILS_LOG_ERROR("merge_shards failed for %s",
+                                     ctx->output_path.c_str());
+            ctx->failed = true;
+        }
+    }
+
+    ctx->write_ms = std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+    if (ctx->cli->verbose) {
+        std::printf("[write] %.2f ms -> %s\n", ctx->write_ms,
+                    ctx->output_path.c_str());
+        std::fflush(stdout);
+    }
+    co_return;
 }
 
-/**
- * Analyze call patterns in the tree
- */
-static void analyze_call_patterns(const std::vector<CallTreeNodeInfo>& nodes) {
-    printf("\n--- Call Pattern Analysis ---\n");
-
-    if (nodes.empty()) {
-        printf("No nodes to analyze\n");
-        return;
-    }
-
-    // Find most frequently called functions
-    std::map<std::string, size_t> call_counts;
-    for (const auto& node : nodes) {
-        call_counts[node.name]++;
-    }
-
-    // Sort by frequency
-    std::vector<std::pair<std::string, size_t>> sorted_calls(
-        call_counts.begin(), call_counts.end());
-    std::sort(sorted_calls.begin(), sorted_calls.end(),
-              [](const auto& a, const auto& b) { return a.second > b.second; });
-
-    printf("Top 10 most frequently called functions:\n");
-    for (size_t i = 0; i < std::min(sorted_calls.size(), size_t(10)); i++) {
-        printf("  %2zu. %-30s : %zu calls\n", i + 1,
-               sorted_calls[i].first.c_str(), sorted_calls[i].second);
-    }
-}
-
-/**
- * Analyze timing statistics
- */
-static void analyze_timing(const std::vector<CallTreeNodeInfo>& nodes) {
-    printf("\n--- Timing Analysis ---\n");
-
-    if (nodes.empty()) {
-        printf("No nodes to analyze\n");
-        return;
-    }
-
-    // Calculate timing statistics
-    std::vector<std::uint64_t> durations;
-    durations.reserve(nodes.size());
-
-    for (const auto& node : nodes) {
-        durations.push_back(node.duration_us);
-    }
-
-    std::sort(durations.begin(), durations.end());
-
-    std::uint64_t total = 0;
-    for (auto d : durations) {
-        total += d;
-    }
-    double avg =
-        static_cast<double>(total) / static_cast<double>(durations.size());
-
-    std::uint64_t min_time = durations.front();
-    std::uint64_t max_time = durations.back();
-    std::uint64_t median = durations[durations.size() / 2];
-    std::uint64_t p95 = durations[static_cast<size_t>(
-        static_cast<double>(durations.size()) * 0.95)];
-    std::uint64_t p99 = durations[static_cast<size_t>(
-        static_cast<double>(durations.size()) * 0.99)];
-
-    printf("Duration statistics (milliseconds):\n");
-    printf("  Min:    %.3f ms\n", static_cast<double>(min_time) / 1000.0);
-    printf("  Max:    %.3f ms\n", static_cast<double>(max_time) / 1000.0);
-    printf("  Mean:   %.3f ms\n", avg / 1000.0);
-    printf("  Median: %.3f ms\n", static_cast<double>(median) / 1000.0);
-    printf("  95th:   %.3f ms\n", static_cast<double>(p95) / 1000.0);
-    printf("  99th:   %.3f ms\n", static_cast<double>(p99) / 1000.0);
-}
-
-/**
- * Find critical path (longest duration calls)
- */
-static void find_critical_path(const std::vector<CallTreeNodeInfo>& nodes) {
-    printf("\n--- Critical Path (Longest Duration Calls) ---\n");
-
-    if (nodes.empty()) {
-        printf("No nodes to analyze\n");
-        return;
-    }
-
-    // Find top 10 longest running calls
-    std::vector<CallTreeNodeInfo> sorted_nodes = nodes;
-    std::sort(sorted_nodes.begin(), sorted_nodes.end(),
-              [](const auto& a, const auto& b) {
-                  return a.duration_us > b.duration_us;
-              });
-
-    printf("Top 10 longest running calls:\n");
-    for (size_t i = 0; i < std::min(sorted_nodes.size(), size_t(10)); i++) {
-        const auto& node = sorted_nodes[i];
-        printf("  %2zu. %-30s [%-15s] - %10.3f ms (level %d)\n", i + 1,
-               node.name.c_str(), node.category.c_str(),
-               static_cast<double>(node.duration_us) / 1000.0, node.level);
-    }
-}
-
-/**
- * Analyze by category
- */
-static void analyze_by_category(const std::vector<CallTreeNodeInfo>& nodes) {
-    printf("\n--- Analysis by Category ---\n");
-
-    if (nodes.empty()) {
-        printf("No nodes to analyze\n");
-        return;
-    }
-
-    std::map<std::string, size_t> category_counts;
-    std::map<std::string, std::uint64_t> category_durations;
-
-    for (const auto& node : nodes) {
-        category_counts[node.category]++;
-        category_durations[node.category] += node.duration_us;
-    }
-
-    printf("Nodes by category:\n");
-    for (const auto& [category, count] : category_counts) {
-        double avg_duration =
-            static_cast<double>(category_durations[category]) /
-            static_cast<double>(count) / 1000.0;
-        printf("  %-20s: %6zu nodes, avg duration: %.3f ms\n", category.c_str(),
-               count, avg_duration);
-    }
-}
-
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
 
     argparse::ArgumentParser program("dftracer_call_tree",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(
-        "DFTracer Call Tree utility - builds and analyzes call trees from "
-        "DFTracer trace files");
+        "Build a call tree from DFTracer trace files and emit Chrome Tracing "
+        "JSON.");
 
-    // Input files/directories
-    program.add_argument("inputs")
-        .help(
-            "Trace files (.pfw, .pfw.gz) or directories containing trace files")
-        .nargs(argparse::nargs_pattern::at_least_one);
+    CallTreeArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
 
-    // Processing options
-    program.add_argument("-r", "--recursive")
-        .help("Recursively search directories for trace files")
-        .flag();
+    RunCtx ctx;
+    ctx.cli = &cli;
 
-    program.add_argument("--pattern")
-        .help("File pattern for trace files (default: *.pfw.gz)")
-        .default_value(std::string("*.pfw.gz"));
-
-    // Output options
-    program.add_argument("-o", "--output")
-        .help(
-            "Output file path for serialized call tree (default: "
-            "auto-generated from input)")
-        .default_value(std::string(""));
-
-    program.add_argument("--json")
-        .help("Also save call tree in JSON (Chrome Tracing) format")
-        .flag();
-
-    program.add_argument("--text")
-        .help("Export call tree to text file")
-        .default_value(std::string(""));
-
-    // Analysis options
-    program.add_argument("--max-depth")
-        .help("Maximum depth for tree printing (0=unlimited)")
-        .default_value(0)
-        .scan<'i', int>();
-
-    program.add_argument("--analyze")
-        .help(
-            "Perform detailed analysis (call patterns, timing, critical path)")
-        .flag();
-
-    program.add_argument("-v", "--verbose")
-        .help("Enable verbose output")
-        .flag();
-
-    program.add_argument("--stats-only")
-        .help("Only print statistics, skip tree traversal")
-        .flag();
-
-    program.add_argument("--no-save")
-        .help("Don't save output files, only print analysis")
-        .flag();
-
-    // Parse arguments
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        std::cerr << err.what() << std::endl;
-        std::cerr << program;
-        return 1;
-    }
-
-    // Get arguments
-    auto inputs = program.get<std::vector<std::string>>("inputs");
-    bool recursive = program.get<bool>("--recursive");
-    std::string pattern = program.get<std::string>("--pattern");
-    std::string output_path = program.get<std::string>("--output");
-    bool save_json = program.get<bool>("--json");
-    std::string text_file = program.get<std::string>("--text");
-    int max_depth = program.get<int>("--max-depth");
-    bool analyze = program.get<bool>("--analyze");
-    bool verbose = program.get<bool>("--verbose");
-    bool stats_only = program.get<bool>("--stats-only");
-    bool no_save = program.get<bool>("--no-save");
-
-    // Collect trace files
-    printf("=== DFTracer Call Tree Builder ===\n\n");
-
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-    // For single directory input, use load_from_directory
-    // For multiple inputs or files, collect manually
-    CallTree tree;
-    bool loaded = false;
-
-    if (inputs.size() == 1 && fs::is_directory(inputs[0])) {
-        printf("Loading traces from directory: %s\n", inputs[0].c_str());
-        if (verbose) {
-            printf("  Pattern: %s\n", pattern.c_str());
-            printf("  Recursive: %s\n", recursive ? "yes" : "no");
+    if (cli.output.empty()) {
+        std::string base = "call_tree";
+        if (!cli.inputs.empty()) {
+            fs::path p(cli.inputs.front());
+            if (fs::is_directory(p))
+                base = p.filename().string();
+            else
+                base = p.stem().string();
+            if (base.empty()) base = "call_tree";
         }
-
-        loaded = tree.load_from_directory(inputs[0], pattern);
-        if (!loaded) {
-            fprintf(stderr, "Failed to load traces from directory: %s\n",
-                    inputs[0].c_str());
-            return 1;
-        }
+        ctx.output_path = base + ".pfw";
     } else {
-        auto trace_files = collect_trace_files(inputs, recursive);
-        if (trace_files.empty()) {
-            fprintf(stderr, "No trace files found in the specified inputs.\n");
-            return 1;
-        }
-
-        printf("Found %zu trace file(s) to process:\n", trace_files.size());
-        if (verbose) {
-            for (const auto& file : trace_files) {
-                printf("  %s\n", file.c_str());
-            }
-        }
-
-        // Load first directory for now (CallTree API expects directory)
-        // This is a limitation of the current API
-        fprintf(stderr,
-                "Note: Multi-file input not yet supported. Use directory input "
-                "instead.\n");
-        return 1;
+        ctx.output_path = cli.output;
+    }
+    if (cli.gzip &&
+        (ctx.output_path.size() < 3 ||
+         ctx.output_path.compare(ctx.output_path.size() - 3, 3, ".gz") != 0)) {
+        ctx.output_path += ".gz";
     }
 
-    printf("Loaded %zu trace files\n", tree.get_num_trace_files());
-    printf("\n");
+    auto pipeline_config =
+        cli::build_pipeline_config("DFTracer CallTree", cli.pipeline);
+    Pipeline pipeline(pipeline_config);
 
-    // Generate call tree
-    printf("Generating call tree structure...\n");
-    if (!tree.generate()) {
-        fprintf(stderr, "Failed to generate call tree\n");
-        return 1;
-    }
-    printf("Call tree generation complete\n\n");
+    RunCtx* ctx_ptr = &ctx;
+    auto scan = make_task(
+        [ctx_ptr](CoroScope&) -> coro::CoroTask<void> {
+            co_await task_scan(ctx_ptr);
+        },
+        "scan");
+    auto build = make_task(
+        [ctx_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            co_await task_build(ctx_ptr, &scope);
+        },
+        "build");
+    auto merge = make_task(
+        [ctx_ptr](CoroScope&) -> coro::CoroTask<void> {
+            co_await task_merge(ctx_ptr);
+        },
+        "merge");
+    auto hierarchy = make_task(
+        [ctx_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            co_await task_hierarchy(ctx_ptr, &scope);
+        },
+        "hierarchy");
+    auto write = make_task(
+        [ctx_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            co_await task_write_json(ctx_ptr, &scope);
+        },
+        "write_json");
 
-    auto gen_time = std::chrono::high_resolution_clock::now();
-    auto gen_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        gen_time - start_time);
-    if (verbose) {
-        printf("Generation time: %lld ms\n\n",
-               static_cast<long long>(gen_duration.count()));
-    }
+    build->depends_on(scan);
+    merge->depends_on(build);
+    hierarchy->depends_on(merge);
+    write->depends_on(hierarchy);
 
-    // Print statistics
-    printf("=== Call Tree Statistics ===\n");
-    tree.print_statistics();
+    pipeline.set_source(scan);
+    pipeline.set_destination(write);
+    pipeline.execute();
 
-    // Print tree structure
-    if (!stats_only) {
-        printf("\n=== Call Tree Structure ===\n");
-        tree.print_depth_first(max_depth);
-    }
-
-    // Perform detailed analysis if requested
-    if (analyze) {
-        printf("\n=== Detailed Analysis ===\n");
-        auto nodes = tree.get_nodes_depth_first();
-        printf("Retrieved %zu nodes for analysis\n", nodes.size());
-
-        analyze_call_patterns(nodes);
-        analyze_timing(nodes);
-        find_critical_path(nodes);
-        analyze_by_category(nodes);
-    }
-
-    // Save outputs
-    if (!no_save) {
-        printf("\n=== Saving Outputs ===\n");
-
-        // Set custom output path if specified
-        if (!output_path.empty()) {
-            tree.set_output_path(output_path);
-        }
-
-        // Save binary format
-        std::string bin_file = tree.get_output_path();
-        printf("Saving binary call tree to: %s\n", bin_file.c_str());
-        if (tree.save_to_file()) {
-            printf("  Successfully saved!\n");
-        } else {
-            fprintf(stderr, "  Failed to save binary file\n");
-        }
-
-        // Save JSON format if requested
-        if (save_json) {
-            std::string json_file = bin_file;
-            // Replace .calltree extension with .pfw
-            if (json_file.size() >= 9 &&
-                json_file.substr(json_file.size() - 9) == ".calltree") {
-                json_file = json_file.substr(0, json_file.size() - 9) + ".pfw";
-            } else {
-                json_file += ".pfw";
-            }
-
-            printf("Saving JSON call tree to: %s\n", json_file.c_str());
-            if (tree.save_to_json(json_file)) {
-                printf("  Successfully saved! (Chrome Tracing compatible)\n");
-            } else {
-                fprintf(stderr, "  Failed to save JSON file\n");
-            }
-        }
-
-        // Save text format if requested
-        if (!text_file.empty()) {
-            printf("Exporting call tree to text file: %s\n", text_file.c_str());
-            if (tree.print_depth_first_to_file(text_file, max_depth)) {
-                printf("  Successfully exported!\n");
-            } else {
-                fprintf(stderr, "  Failed to export text file\n");
-            }
-        }
+    if (cli.verbose && !ctx.failed) {
+        std::printf(
+            "[done] scan=%.1fms build=%.1fms merge=%.1fms hierarchy=%.1fms "
+            "write=%.1fms\n",
+            ctx.scan_ms, ctx.build_ms, ctx.merge_ms, ctx.hier_ms, ctx.write_ms);
     }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        end_time - start_time);
-
-    printf("\n=== Completed ===\n");
-    printf("Total execution time: %lld ms\n",
-           static_cast<long long>(total_duration.count()));
-
-    return 0;
+    return ctx.failed ? 1 : 0;
 }
+
+}  // namespace
+
+int main(int argc, char** argv) { return run(argc, argv); }

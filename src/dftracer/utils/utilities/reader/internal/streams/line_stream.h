@@ -12,14 +12,6 @@
 
 namespace dftracer::utils::utilities::reader::internal {
 
-/**
- * @brief Stream that returns one single line at a time from a LINE_BYTES
- * stream.
- *
- * Wraps a LINE_BYTES stream and provides single-line reading.
- * Each call to read() returns exactly one complete line (with newline).
- * Can optionally filter by line range when line numbers are specified.
- */
 class LineStream : public ReaderStream {
    private:
     std::unique_ptr<internal::ReaderStream> underlying_stream_;
@@ -34,6 +26,14 @@ class LineStream : public ReaderStream {
     std::size_t initial_line_;
     std::size_t output_position_;
     std::size_t span_pos_;
+
+    enum class ParseResult { HAS_LINE, NEED_MORE_DATA, FINISHED };
+
+    struct DirectOutputResult {
+        std::size_t bytes_written;
+        bool need_more_data;
+        bool finished;
+    };
 
    public:
     explicit LineStream(std::unique_ptr<ReaderStream> underlying_stream,
@@ -56,22 +56,37 @@ class LineStream : public ReaderStream {
     ~LineStream() override { reset(); }
 
     coro::CoroTask<std::span<const char>> read_async() override {
-        if (!underlying_stream_) {
+        if (!underlying_stream_ || is_finished_) {
             co_return {};
         }
 
-        if (is_finished_) {
-            co_return {};
-        }
+        while (true) {
+            auto result = try_parse_next_line();
 
-        // Parse next line into current_line_
-        if (!co_await parse_next_line()) {
-            co_return {};
-        }
+            if (result == ParseResult::HAS_LINE) {
+                co_return std::span<const char>(current_line_.data(),
+                                                current_line_.size());
+            }
+            if (result == ParseResult::FINISHED) {
+                co_return {};
+            }
 
-        // Return view to current_line_
-        co_return std::span<const char>(current_line_.data(),
-                                        current_line_.size());
+            if (underlying_stream_->done()) {
+                if (handle_eof_line()) {
+                    co_return std::span<const char>(current_line_.data(),
+                                                    current_line_.size());
+                }
+                is_finished_ = true;
+                co_return {};
+            }
+
+            current_span_ = co_await underlying_stream_->read_async();
+            span_pos_ = 0;
+            if (current_span_.empty()) {
+                is_finished_ = true;
+                co_return {};
+            }
+        }
     }
 
     coro::CoroTask<std::size_t> read_async(char* buffer,
@@ -80,7 +95,6 @@ class LineStream : public ReaderStream {
             co_return 0;
         }
 
-        // Handle any pending line from previous call
         if (has_pending_line_) {
             co_return output_pending_line(buffer, buffer_size);
         }
@@ -89,19 +103,40 @@ class LineStream : public ReaderStream {
             co_return 0;
         }
 
-        // Try fast path: direct output from read_buffer_ to output buffer
-        std::size_t written = co_await try_direct_output(buffer, buffer_size);
+        while (true) {
+            auto direct = try_direct_output(buffer, buffer_size);
+            if (direct.bytes_written > 0) {
+                co_return direct.bytes_written;
+            }
+            if (direct.finished) {
+                co_return 0;
+            }
 
-        if (written > 0) {
-            co_return written;
+            if (!direct.need_more_data) {
+                auto result = try_parse_next_line();
+                if (result == ParseResult::HAS_LINE) {
+                    co_return output_pending_line(buffer, buffer_size);
+                }
+                if (result == ParseResult::FINISHED) {
+                    co_return 0;
+                }
+            }
+
+            if (underlying_stream_->done()) {
+                if (handle_eof_line()) {
+                    co_return output_pending_line(buffer, buffer_size);
+                }
+                is_finished_ = true;
+                co_return 0;
+            }
+
+            current_span_ = co_await underlying_stream_->read_async();
+            span_pos_ = 0;
+            if (current_span_.empty()) {
+                is_finished_ = true;
+                co_return 0;
+            }
         }
-
-        // Slow path: need to use intermediate storage
-        if (!co_await parse_next_line()) {
-            co_return 0;
-        }
-
-        co_return output_pending_line(buffer, buffer_size);
     }
 
     bool done() const override { return is_finished_ && !has_pending_line_; }
@@ -121,10 +156,6 @@ class LineStream : public ReaderStream {
     }
 
    private:
-    // ========================================================================
-    // Range Checking Helpers
-    // ========================================================================
-
     bool is_beyond_range() const {
         return end_line_ > 0 && current_line_number_ > end_line_;
     }
@@ -133,32 +164,13 @@ class LineStream : public ReaderStream {
         if (start_line_ == 0 && end_line_ == 0) {
             return true;
         }
-
         bool after_start =
             (start_line_ == 0 || current_line_number_ >= start_line_);
         bool before_end = (end_line_ == 0 || current_line_number_ <= end_line_);
-
         return after_start && before_end;
     }
 
-    // ========================================================================
-    // Buffer Management
-    // ========================================================================
-
-    coro::CoroTask<bool> refill_span_if_needed() {
-        if (span_pos_ < current_span_.size()) {
-            co_return true;
-        }
-
-        if (underlying_stream_->done()) {
-            co_return false;
-        }
-
-        // Get new span from underlying stream (zero-copy)
-        current_span_ = co_await underlying_stream_->read_async();
-        span_pos_ = 0;
-        co_return !current_span_.empty();
-    }
+    bool has_data_in_span() const { return span_pos_ < current_span_.size(); }
 
     const char* find_next_newline() const {
         return static_cast<const char*>(
@@ -172,80 +184,91 @@ class LineStream : public ReaderStream {
         span_pos_ = current_span_.size();
     }
 
-    // ========================================================================
-    // Fast Path: Direct Output (No Intermediate Storage)
-    // ========================================================================
-
-    /**
-     * @brief Attempt to write a line directly from read_buffer_ to output
-     * buffer.
-     *
-     * This fast path avoids intermediate string copies when:
-     * - No accumulated data exists
-     * - A complete line fits in the output buffer
-     *
-     * Uses a loop to skip filtered lines efficiently.
-     *
-     * @return Number of bytes written, or 0 if fast path unavailable
-     */
-    coro::CoroTask<std::size_t> try_direct_output(char* buffer,
-                                                  std::size_t buffer_size) {
-        // Fast path requires no accumulated data
-        if (!line_accumulator_.empty()) {
-            co_return 0;
+    ParseResult try_parse_next_line() {
+        if (is_beyond_range()) {
+            is_finished_ = true;
+            return ParseResult::FINISHED;
         }
 
-        // Loop to skip filtered lines efficiently
+        while (has_data_in_span()) {
+            const char* newline_ptr = find_next_newline();
+
+            if (!newline_ptr) {
+                accumulate_remaining_span();
+                return ParseResult::NEED_MORE_DATA;
+            }
+
+            std::size_t newline_pos = newline_ptr - current_span_.data();
+            if (process_complete_line(newline_pos)) {
+                return ParseResult::HAS_LINE;
+            }
+        }
+
+        return ParseResult::NEED_MORE_DATA;
+    }
+
+    DirectOutputResult try_direct_output(char* buffer,
+                                         std::size_t buffer_size) {
+        if (!line_accumulator_.empty()) {
+            return {0, false, false};
+        }
+
         while (true) {
             if (is_beyond_range()) {
                 is_finished_ = true;
-                co_return 0;
+                return {0, false, true};
             }
 
-            if (!co_await refill_span_if_needed()) {
-                co_return 0;
+            if (!has_data_in_span()) {
+                return {0, true, false};
             }
 
             const char* newline_ptr = find_next_newline();
             if (!newline_ptr) {
-                // No complete line available, must use slow path
-                co_return 0;
+                return {0, false, false};
             }
 
             std::size_t newline_pos = newline_ptr - current_span_.data();
             std::size_t line_length = newline_pos - span_pos_ + 1;
 
-            // Line must fit in output buffer for fast path
             if (line_length > buffer_size) {
-                co_return 0;
+                return {0, false, false};
             }
 
             bool should_output = should_output_current_line();
 
             if (is_beyond_range()) {
                 is_finished_ = true;
-                co_return 0;
+                return {0, false, true};
             }
 
             current_line_number_++;
 
             if (should_output) {
-                // Direct copy: span -> output buffer (zero-copy from underlying
-                // stream!)
                 std::memcpy(buffer, current_span_.data() + span_pos_,
                             line_length);
                 span_pos_ = newline_pos + 1;
-                co_return line_length;
+                return {line_length, false, false};
             }
 
-            // Line filtered out, skip and continue to next
             span_pos_ = newline_pos + 1;
         }
     }
 
-    // ========================================================================
-    // Slow Path: Parse and Store Line
-    // ========================================================================
+    bool handle_eof_line() {
+        if (line_accumulator_.empty()) {
+            return false;
+        }
+        current_line_ = std::move(line_accumulator_);
+        line_accumulator_.clear();
+        if (should_output_current_line() && !is_beyond_range()) {
+            has_pending_line_ = true;
+            output_position_ = 0;
+            current_line_number_++;
+            return true;
+        }
+        return false;
+    }
 
     void finalize_line_with_accumulator(std::size_t line_length) {
         line_accumulator_.append(current_span_.data() + span_pos_, line_length);
@@ -262,7 +285,6 @@ class LineStream : public ReaderStream {
     bool process_complete_line(std::size_t newline_pos) {
         std::size_t line_length = newline_pos - span_pos_;
 
-        // Build complete line with or without accumulated data
         if (!line_accumulator_.empty()) {
             finalize_line_with_accumulator(line_length);
         } else {
@@ -286,59 +308,9 @@ class LineStream : public ReaderStream {
             return true;
         }
 
-        // Line filtered out, continue parsing
         current_line_.clear();
         return false;
     }
-
-    coro::CoroTask<bool> parse_next_line() {
-        if (is_beyond_range()) {
-            is_finished_ = true;
-            co_return false;
-        }
-
-        while (true) {
-            if (!co_await refill_span_if_needed()) {
-                break;
-            }
-
-            // Process all complete lines in current span
-            while (span_pos_ < current_span_.size()) {
-                const char* newline_ptr = find_next_newline();
-
-                if (!newline_ptr) {
-                    accumulate_remaining_span();
-                    break;
-                }
-
-                std::size_t newline_pos = newline_ptr - current_span_.data();
-
-                if (process_complete_line(newline_pos)) {
-                    co_return true;
-                }
-            }
-        }
-
-        // Handle final line at EOF without trailing newline
-        if (underlying_stream_->done() && !line_accumulator_.empty()) {
-            current_line_ = std::move(line_accumulator_);
-            line_accumulator_.clear();
-
-            if (should_output_current_line() && !is_beyond_range()) {
-                has_pending_line_ = true;
-                output_position_ = 0;
-                current_line_number_++;
-                co_return true;
-            }
-        }
-
-        is_finished_ = true;
-        co_return false;
-    }
-
-    // ========================================================================
-    // Output Helpers
-    // ========================================================================
 
     std::size_t output_pending_line(char* buffer, std::size_t buffer_size) {
         if (output_position_ >= current_line_.size()) {

@@ -22,7 +22,8 @@ class RocksDBManager {
 
     std::shared_ptr<RocksDatabase> get_or_open(
         const std::string& db_path,
-        RocksDatabase::OpenMode open_mode = RocksDatabase::OpenMode::ReadWrite);
+        RocksDatabase::OpenMode open_mode = RocksDatabase::OpenMode::ReadWrite,
+        RocksDatabase::CfOptionsOverride cf_override = nullptr);
     void reset(const std::string& db_path);
     void shutdown();
 

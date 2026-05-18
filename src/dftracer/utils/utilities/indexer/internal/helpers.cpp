@@ -40,7 +40,6 @@ std::string normalize_index_root(std::string_view path) {
 
 time_t get_file_modification_time(const std::string &file_path) {
 #if defined(DFTRACER_UTILS_USE_STD_FS)
-    // Use std::filesystem when available and working
     auto ftime = fs::last_write_time(file_path);
     auto sctp =
         std::chrono::time_point_cast<std::chrono::system_clock::duration>(

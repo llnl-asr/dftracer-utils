@@ -551,11 +551,30 @@ def _generate_dir_index(
         rel = child[len(dir_path) :].lstrip("/") if dir_path else child
         entries.append(f"{rel}/index")
 
-    # Leaf modules in this directory
+    # Leaf modules in this directory; ones that collide with a subdir of the
+    # same name are emitted as "<name>/_namespace" so the namespace page lives
+    # inside the subdir's toctree (see resolved_filename in generate()).
+    child_names = {c.rsplit("/", 1)[-1] for c in child_dirs}
     leaves = sorted(dir_leaves.get(dir_path, []), key=lambda m: m.filename)
     for mod in leaves:
         rel = mod.filename[len(dir_path) :].lstrip("/") if dir_path else mod.filename
+        if rel in child_names:
+            continue
         entries.append(rel)
+
+    # Also include the namespace overview page when this dir's name was a
+    # colliding leaf in the parent (file written as "<this>/_namespace.rst").
+    if dir_path:
+        leaf_name = dir_path.rsplit("/", 1)[-1] if "/" in dir_path else dir_path
+        parent_dir = dir_path.rsplit("/", 1)[0] if "/" in dir_path else ""
+        parent_leaves = dir_leaves.get(parent_dir, [])
+        for mod in parent_leaves:
+            parent_rel = (
+                mod.filename[len(parent_dir) :].lstrip("/") if parent_dir else mod.filename
+            )
+            if parent_rel == leaf_name:
+                entries.insert(0, "_namespace")
+                break
 
     if entries:
         lines.append(".. toctree::")
@@ -578,11 +597,25 @@ def _generate_dir_index(
         lines.append("     - Items")
         lines.append("     - Namespace")
 
+        collisions = {
+            m.filename
+            for m in all_modules
+            if any(
+                other.filename.startswith(m.filename + "/")
+                for other in all_modules
+                if other is not m
+            )
+        }
         total = 0
         for mod in all_modules:
             count = len(mod.items)
             total += count
-            lines.append(f"   * - :doc:`{mod.filename}`")
+            doc_path = (
+                f"{mod.filename}/_namespace"
+                if mod.filename in collisions
+                else mod.filename
+            )
+            lines.append(f"   * - :doc:`{doc_path}`")
             lines.append(f"     - {count}")
             lines.append(f"     - ``{mod.full_ns}``")
 
@@ -610,12 +643,27 @@ def generate(xml_dir: Path, output_dir: Path) -> None:
 
     modules = discover_modules(items)
 
+    # Detect leaf modules whose filename collides with a sibling subdir:
+    # e.g. "utilities/composites.rst" + directory "utilities/composites/".
+    # Re-route those leaves into "<filename>/_namespace.rst" so the namespace
+    # page lives under the subdir's toctree and Sphinx does not orphan it.
+    dir_paths = {mod.filename.rsplit("/", 1)[0] for mod in modules if "/" in mod.filename}
+    dir_paths |= {
+        "/".join(mod.filename.split("/")[: i + 1])
+        for mod in modules
+        for i in range(len(mod.filename.split("/")) - 1)
+    }
+    collisions = {mod.filename for mod in modules if mod.filename in dir_paths}
+
+    def resolved_filename(mod: "Module") -> str:
+        return f"{mod.filename}/_namespace" if mod.filename in collisions else mod.filename
+
     # Generate per-module pages
     output_dir.mkdir(parents=True, exist_ok=True)
-    expected_paths = {output_dir / f"{mod.filename}.rst" for mod in modules}
+    expected_paths = {output_dir / f"{resolved_filename(mod)}.rst" for mod in modules}
     for mod in modules:
         rst = generate_module_rst(mod, repo_root, repo_url, source_ref)
-        out_path = output_dir / f"{mod.filename}.rst"
+        out_path = output_dir / f"{resolved_filename(mod)}.rst"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(rst)
 

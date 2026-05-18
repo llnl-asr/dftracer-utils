@@ -87,12 +87,42 @@ void node_to_string(std::ostringstream& os, const QueryNode& node) {
         node.data);
 }
 
+void collect_fields_impl(const QueryNode& node,
+                         dftracer::utils::StringViewSet& out) {
+    std::visit(
+        [&out](auto&& n) {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, CompareNode>) {
+                out.insert(n.field.path);
+            } else if constexpr (std::is_same_v<T, InNode>) {
+                out.insert(n.field.path);
+            } else if constexpr (std::is_same_v<T, NotInNode>) {
+                out.insert(n.field.path);
+            } else if constexpr (std::is_same_v<T, AndNode>) {
+                collect_fields_impl(*n.left, out);
+                collect_fields_impl(*n.right, out);
+            } else if constexpr (std::is_same_v<T, OrNode>) {
+                collect_fields_impl(*n.left, out);
+                collect_fields_impl(*n.right, out);
+            } else if constexpr (std::is_same_v<T, NotNode>) {
+                collect_fields_impl(*n.operand, out);
+            }
+        },
+        node.data);
+}
+
 }  // namespace
 
 std::string to_string(const QueryNode& node) {
     std::ostringstream os;
     node_to_string(os, node);
     return os.str();
+}
+
+dftracer::utils::StringViewSet collect_fields(const QueryNode& node) {
+    dftracer::utils::StringViewSet fields;
+    collect_fields_impl(node, fields);
+    return fields;
 }
 
 }  // namespace dftracer::utils::utilities::common::query

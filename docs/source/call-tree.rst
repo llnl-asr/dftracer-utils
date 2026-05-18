@@ -136,57 +136,113 @@ CallTree
 Serialization
 -------------
 
+Serialization moved to coroutine-based ``save_binary`` / ``save_arrow``
+free functions in ``dftracer/utils/call_tree/mpi/serializable.h``. The
+legacy ``CallTree::save_to_file`` / ``save_to_json`` / ``load_from_file``
+methods have been removed; the API now exposes
+``CallTree::internal_tree()`` for direct access to the underlying
+``internal::CallTree`` consumed by the save/load coroutines.
+
 **Save to binary format:**
 
-.. code-block:: cpp
-
-   // Save to default path (based on input directory)
-   tree.save_to_file();
-
-   // Save to custom path
-   tree.save_to_file("output.calltree");
-
-**Save to JSON (Chrome Tracing / Perfetto):**
+The custom binary format uses a shared string dictionary (name, category,
+arg keys / string values share storage) and preserves typed args
+(``int`` / ``uint`` / ``double`` / ``bool`` instead of flattening to
+strings).
 
 .. code-block:: cpp
 
-   // Compatible with chrome://tracing and Perfetto UI
-   tree.save_to_json("output.pfw");
+   #include <dftracer/utils/call_tree/call_tree.h>
+   #include <dftracer/utils/call_tree/mpi/serializable.h>
+   #include <dftracer/utils/core/pipeline/pipeline.h>
+   #include <dftracer/utils/core/tasks/task.h>
 
-**Save to text file:**
+   using namespace dftracer::utils;
+   using namespace dftracer::utils::call_tree;
+
+   CallTree tree;
+   tree.load_from_directory("/path/to/traces", "*.pfw.gz");
+   tree.generate();
+
+   auto task = make_task(
+       [&tree](CoroScope& scope) -> coro::CoroTask<void> {
+           co_await save_binary(&scope, tree.internal_tree(),
+                                "output.calltree");
+           co_return;
+       },
+       "save_binary");
+
+   Pipeline pipeline(PipelineConfig().with_name("calltree-save"));
+   pipeline.set_source({task});
+   pipeline.execute();
+
+**Save to Arrow IPC (.arrow):**
+
+Columnar Arrow IPC with buffer-level zstd compression and
+dictionary-encoded ``name`` / ``category`` columns. Readable directly by
+``pyarrow``, ``polars``, ``nanoarrow``, and DuckDB. Requires the build to
+be configured with ``DFTRACER_UTILS_ENABLE_ARROW_IPC=ON``.
+
+.. code-block:: cpp
+
+   auto task = make_task(
+       [&tree](CoroScope& scope) -> coro::CoroTask<void> {
+           co_await save_arrow(&scope, tree.internal_tree(),
+                               "output.arrow");
+           co_return;
+       },
+       "save_arrow");
+
+**Load a previously saved tree:**
+
+Both loaders are coroutines that return a fresh ``internal::CallTree``:
+
+.. code-block:: cpp
+
+   auto task = make_task([](CoroScope& scope) -> coro::CoroTask<void> {
+       auto loaded = co_await load_binary(&scope, "output.calltree");
+       // or: auto loaded = co_await load_arrow(&scope, "output.arrow");
+       printf("Loaded tree: %zu nodes\n", loaded->num_nodes());
+       co_return;
+   }, "load");
+
+**Save to text file (still available on the high-level API):**
 
 .. code-block:: cpp
 
    tree.print_depth_first_to_file("output.txt", 5);  // Max depth 5
 
-**Load from previously saved file:**
-
-.. code-block:: cpp
-
-   CallTree loaded_tree;
-   loaded_tree.load_from_file("output.calltree");
-
-   auto stats = loaded_tree.get_statistics();
-   printf("Loaded tree: %zu nodes, %zu levels\n",
-          stats.total_nodes, stats.num_levels);
-
 Output Formats
 --------------
 
-Binary Format
-~~~~~~~~~~~~~
+Binary Format (``.calltree``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Efficient binary serialization preserving all call tree information including node hierarchy, timing, function names, categories, and arguments.
+Compact custom format with a global string dictionary and typed args; best
+for round-tripping trees between dftracer-utils runs (for example, between
+a coordinator and downstream MPI ranks). Backed by the
+``CALLTREE_BINARY_VERSION = 2`` header.
+
+Arrow IPC (``.arrow``)
+~~~~~~~~~~~~~~~~~~~~~~
+
+Columnar Arrow IPC file with zstd buffer compression and
+dictionary-encoded ``name`` / ``category`` columns. Best for analysis
+pipelines that already speak Arrow (pyarrow, polars, DuckDB, nanoarrow).
 
 JSON Format (Chrome Tracing)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Follows the Chrome Tracing format specification, viewable in ``chrome://tracing`` or `Perfetto UI <https://ui.perfetto.dev/>`_. Shows timeline of function calls with nested relationships and duration.
+The ``dftracer_call_tree`` CLI emits Chrome Tracing JSON (gzipped with
+``--gzip``) suitable for ``chrome://tracing`` and
+`Perfetto UI <https://ui.perfetto.dev/>`_. Programmatic JSON export is no
+longer exposed on the ``CallTree`` C++ API.
 
 Text Format
 ~~~~~~~~~~~
 
-Human-readable text with indentation showing hierarchical structure, function names, categories, and timing at each level.
+Human-readable text with indentation showing hierarchical structure,
+function names, categories, and timing at each level.
 
 Performance Considerations
 --------------------------

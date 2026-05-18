@@ -1,11 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_QUERY_EVALUATOR_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_QUERY_EVALUATOR_H
 
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/common/query/ast.h>
-
-#include <string>
-#include <unordered_map>
 
 namespace dftracer::utils::utilities::common::query {
 
@@ -15,7 +13,7 @@ using json::JsonValue;
 bool evaluate(const QueryNode& node, const JsonValue& event);
 
 /// Typed key-value map for non-JSON evaluation contexts.
-using ValueMap = std::unordered_map<std::string, LiteralValue>;
+using ValueMap = dftracer::utils::StringViewMap<LiteralValue>;
 
 /// Evaluate against a typed key-value map.
 /// Missing fields evaluate to false.

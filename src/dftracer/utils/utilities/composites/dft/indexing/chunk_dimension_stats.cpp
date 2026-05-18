@@ -8,53 +8,74 @@
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
 void ChunkDimensionStats::observe(std::string_view value) {
+    if (last_key_ != nullptr && *last_key_ == value) {
+        ++*last_counter_;
+        return;
+    }
+
     if (!value_counts) {
         value_counts.emplace();
     }
 
-    // NOTE(perf): transparent lookup: find with string_view, only construct
-    // string on insert
     auto it = value_counts->find(value);
-    bool inserted = false;
-    if (it == value_counts->end()) {
-        auto [new_it, _] = value_counts->emplace(std::string(value), 0);
-        it = new_it;
-        inserted = true;
-    }
-    it->second++;
-
-    if (inserted) {
-        distinct_count = value_counts->size();
+    if (it != value_counts->end()) {
+        it->second++;
+        last_key_ = &it->first;
+        last_counter_ = &it->second;
+        return;
     }
 
-    // NOTE(perf): min/max: fast-path for uint dimensions compare as integers
+    auto [new_it, _] = value_counts->emplace(std::string(value), 1);
+    it = new_it;
+    distinct_count = value_counts->size();
+    last_key_ = &it->first;
+    last_counter_ = &it->second;
+
+    const std::string& val_ref = it->first;
+
     if (value_type == "uint") {
         std::uint64_t val = 0;
         auto [ptr, ec] =
             std::from_chars(value.data(), value.data() + value.size(), val);
         if (ec == std::errc()) {
             if (min_value.empty()) {
-                min_value = it->first;
-                max_value = it->first;
+                min_value = val_ref;
+                max_value = val_ref;
             } else {
                 std::uint64_t cur_min = 0, cur_max = 0;
                 std::from_chars(min_value.data(),
                                 min_value.data() + min_value.size(), cur_min);
                 std::from_chars(max_value.data(),
                                 max_value.data() + max_value.size(), cur_max);
-                if (val < cur_min) min_value = it->first;
-                if (val > cur_max) max_value = it->first;
+                if (val < cur_min) min_value = val_ref;
+                if (val > cur_max) max_value = val_ref;
             }
             return;
         }
     }
 
-    const std::string& val_ref = it->first;
     if (min_value.empty() || val_ref < min_value) {
         min_value = val_ref;
     }
     if (max_value.empty() || val_ref > max_value) {
         max_value = val_ref;
+    }
+}
+
+void ChunkDimensionStats::observe_range_only(std::uint64_t value) {
+    distinct_count++;
+    auto str = std::to_string(value);
+    if (min_value.empty()) {
+        min_value = str;
+        max_value = str;
+    } else {
+        std::uint64_t cur_min = 0, cur_max = 0;
+        std::from_chars(min_value.data(), min_value.data() + min_value.size(),
+                        cur_min);
+        std::from_chars(max_value.data(), max_value.data() + max_value.size(),
+                        cur_max);
+        if (value < cur_min) min_value = str;
+        if (value > cur_max) max_value = str;
     }
 }
 
@@ -99,23 +120,10 @@ ChunkDimensionStats::compress_value_counts(std::size_t cap_bytes) const {
     auto raw = serialize_value_counts();
     if (raw.empty()) return std::nullopt;
 
-    // NOTE(perf): Reuse zlib stream across calls, deflateReset resets state
-    // without reallocating internal buffers.
-    struct ZlibDeflater {
-        z_stream strm{};
-        bool init = false;
-        ~ZlibDeflater() {
-            if (init) deflateEnd(&strm);
-        }
-    };
-    static thread_local ZlibDeflater zd;
-    if (!zd.init) {
-        deflateInit(&zd.strm, Z_DEFAULT_COMPRESSION);
-        zd.init = true;
-    } else {
-        deflateReset(&zd.strm);
+    z_stream strm{};
+    if (deflateInit(&strm, Z_DEFAULT_COMPRESSION) != Z_OK) {
+        return std::nullopt;
     }
-    auto& strm = zd.strm;
 
     uLongf compressed_len = compressBound(static_cast<uLong>(raw.size()));
     std::vector<std::uint8_t> compressed(compressed_len);
@@ -126,9 +134,13 @@ ChunkDimensionStats::compress_value_counts(std::size_t cap_bytes) const {
     strm.avail_out = static_cast<uInt>(compressed_len);
 
     int rc = deflate(&strm, Z_FINISH);
-    if (rc != Z_STREAM_END) return std::nullopt;
+    if (rc != Z_STREAM_END) {
+        deflateEnd(&strm);
+        return std::nullopt;
+    }
 
     compressed.resize(strm.total_out);
+    deflateEnd(&strm);
     if (compressed.size() > cap_bytes) return std::nullopt;
 
     return compressed;
@@ -153,10 +165,10 @@ std::uint64_t read_u64_le(const std::uint8_t* p) {
 }
 }  // namespace
 
-std::unordered_map<std::string, std::uint64_t>
+dftracer::utils::StringViewMap<std::uint64_t>
 ChunkDimensionStats::deserialize_value_counts(const std::uint8_t* data,
                                               std::size_t len) {
-    std::unordered_map<std::string, std::uint64_t> result;
+    dftracer::utils::StringViewMap<std::uint64_t> result;
     if (!data || len < 4) return result;
 
     std::size_t pos = 0;
@@ -182,7 +194,7 @@ ChunkDimensionStats::deserialize_value_counts(const std::uint8_t* data,
     return result;
 }
 
-std::unordered_map<std::string, std::uint64_t>
+dftracer::utils::StringViewMap<std::uint64_t>
 ChunkDimensionStats::decompress_value_counts(const std::uint8_t* data,
                                              std::size_t len) {
     if (!data || len == 0) return {};

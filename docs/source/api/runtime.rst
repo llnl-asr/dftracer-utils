@@ -8,11 +8,15 @@ Pipeline/DAG overhead.
 Runtime Class
 -------------
 
-.. autoclass:: dftracer.utils.Runtime
+.. autoclass:: dftracer.utils.Runtime(threads: int = 0, io_threads: int = 0)
    :members:
    :undoc-members:
    :show-inheritance:
    :special-members: __enter__, __exit__
+
+The ``threads`` argument sizes the compute pool; ``io_threads`` sizes a
+separate pool dedicated to blocking I/O tasks. Both default to ``0``,
+which lets the runtime auto-size based on the host.
 
 TaskHandle Class
 ----------------
@@ -40,7 +44,7 @@ without a return value.
 
    import dftracer.utils as dft
 
-   rt = dft.Runtime(threads=8, python_threads=4)
+   rt = dft.Runtime(threads=8, io_threads=4)
 
    # Submit a Python callable
    h = rt.submit(lambda x, y: x + y, 3, 4, name="add")

@@ -4,12 +4,22 @@
  */
 
 #include <dftracer/utils/call_tree/call_tree.h>
+#include <dftracer/utils/call_tree/internal/call_tree.h>
+#include <dftracer/utils/call_tree/mpi/serializable.h>
+#include <dftracer/utils/core/pipeline/pipeline.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/tasks/task.h>
+
 #include <cstdio>
 #include <algorithm>
 #include <numeric>
 #include <map>
 
 using namespace dftracer::utils::call_tree;
+using dftracer::utils::CoroScope;
+using dftracer::utils::Pipeline;
+using dftracer::utils::make_task;
+namespace coro = dftracer::utils::coro;
 
 static void analyze_call_patterns(const std::vector<CallTreeNodeInfo>& nodes) {
     printf("\n--- Call Pattern Analysis ---\n");
@@ -122,12 +132,26 @@ int main(int argc, char* argv[]) {
     // Also print the built-in statistics
     tree.print_statistics();
     
-    // Save analysis results in JSON format for downstream processing
+    // Save analysis results. For Chrome Tracing JSON use the
+    // dftracer_call_tree binary; for fast C++ round-trip use save_binary;
+    // for Arrow tooling use save_arrow. Both run inside a Pipeline.
     printf("\nSaving analysis results...\n");
-    if (tree.save_to_json("analysis_output.pfw")) {
-        printf("✓ JSON output saved to: analysis_output.pfw\n");
-        printf("  This file can be imported into Chrome Tracing, Perfetto,\n");
-        printf("  or analyzed with DFAnalyzer tools.\n");
+    bool arrow_ok = false;
+    {
+        Pipeline pipeline;
+        auto save = make_task(
+            [&](CoroScope& scope) -> coro::CoroTask<void> {
+                arrow_ok = co_await save_arrow(&scope, tree.internal_tree(),
+                                               "analysis_output.arrow");
+            },
+            "save_call_tree");
+        pipeline.set_source(save);
+        pipeline.set_destination(save);
+        pipeline.execute();
+    }
+    if (arrow_ok) {
+        printf("Arrow IPC output saved to: analysis_output.arrow\n");
+        printf("  Readable by pyarrow / polars / dfanalyzer.\n");
     }
     
     printf("\n=== Analysis complete ===\n");

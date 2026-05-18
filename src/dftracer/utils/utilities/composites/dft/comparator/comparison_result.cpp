@@ -87,8 +87,16 @@ std::vector<MetricComparison> build_metadata_metrics(
 double compute_cohens_d(const MetricStats& base, std::uint64_t n_base,
                         const MetricStats& var, std::uint64_t n_var) {
     if (n_base < 2 || n_var < 2) return 0.0;
-    double var_base = base.m2 / static_cast<double>(n_base);
-    double var_var = var.m2 / static_cast<double>(n_var);
+    // `m2` now holds the raw power sum sum_x^2 (not Welford central M2).
+    // Convert to population variance: Var = (sum_x^2 - (sum_x)^2 / n) / n.
+    auto pop_var = [](const MetricStats& ms, std::uint64_t n) {
+        const double nd = static_cast<double>(n);
+        const double sx = static_cast<double>(ms.total);
+        const double central = ms.m2 - sx * sx / nd;
+        return (central > 0.0 ? central : 0.0) / nd;
+    };
+    double var_base = pop_var(base, n_base);
+    double var_var = pop_var(var, n_var);
     double pooled = std::sqrt((var_base + var_var) / 2.0);
     if (pooled < 1e-15) return 0.0;
     return (var.mean - base.mean) / pooled;

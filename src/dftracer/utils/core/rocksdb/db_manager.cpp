@@ -10,7 +10,8 @@ RocksDBManager& RocksDBManager::instance() {
 }
 
 std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
-    const std::string& db_path, RocksDatabase::OpenMode open_mode) {
+    const std::string& db_path, RocksDatabase::OpenMode open_mode,
+    RocksDatabase::CfOptionsOverride cf_override) {
     for (;;) {
         bool needs_upgrade = false;
         bool do_open = false;
@@ -67,9 +68,13 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
 
         std::shared_ptr<RocksDatabase> database;
         try {
-            database = std::make_shared<RocksDatabase>(
-                db_path,
-                needs_upgrade ? RocksDatabase::OpenMode::ReadWrite : open_mode);
+            database = std::make_shared<RocksDatabase>();
+            if (cf_override) {
+                database->set_cf_options_override(std::move(cf_override));
+            }
+            database->open(db_path, needs_upgrade
+                                        ? RocksDatabase::OpenMode::ReadWrite
+                                        : open_mode);
         } catch (...) {
             std::lock_guard<std::mutex> lock(mutex_);
             opening_.erase(db_path);

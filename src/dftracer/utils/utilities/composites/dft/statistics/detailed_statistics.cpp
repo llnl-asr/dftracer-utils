@@ -1,8 +1,9 @@
 #include <dftracer/utils/utilities/composites/dft/statistics/detailed_statistics.h>
-#include <yyjson.h>
 
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
+#include <sstream>
 
 namespace dftracer::utils::utilities::composites::dft::statistics {
 
@@ -71,96 +72,87 @@ void DetailedStatistics::merge(const DetailedStatistics& other) {
     chunks_skipped += other.chunks_skipped;
 }
 
-// Helper: serialize a DistributionStats into a yyjson mutable object
-static yyjson_mut_val* distribution_to_json(yyjson_mut_doc* doc,
-                                            const DistributionStats& dist) {
-    yyjson_mut_val* obj = yyjson_mut_obj(doc);
-
-    yyjson_mut_obj_add_uint(doc, obj, "count", dist.count());
-    yyjson_mut_obj_add_real(doc, obj, "sum", dist.sum);
-    yyjson_mut_obj_add_real(doc, obj, "mean", dist.mean());
-    yyjson_mut_obj_add_real(doc, obj, "stddev", dist.stddev());
+namespace {
+void write_distribution_json(std::ostringstream& ss,
+                             const DistributionStats& dist) {
+    ss << "{\"count\":" << dist.count();
+    ss << ",\"sum\":" << dist.sum;
+    ss << ",\"mean\":" << dist.mean();
+    ss << ",\"stddev\":" << dist.stddev();
 
     if (dist.count() > 0 && !dist.sketch.empty()) {
-        yyjson_mut_obj_add_real(doc, obj, "min", dist.sketch.min());
-        yyjson_mut_obj_add_real(doc, obj, "max", dist.sketch.max());
-
-        yyjson_mut_val* pctls = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_real(doc, pctls, "p10", dist.sketch.quantile(0.1));
-        yyjson_mut_obj_add_real(doc, pctls, "p25", dist.sketch.quantile(0.25));
-        yyjson_mut_obj_add_real(doc, pctls, "p50", dist.sketch.quantile(0.5));
-        yyjson_mut_obj_add_real(doc, pctls, "p75", dist.sketch.quantile(0.75));
-        yyjson_mut_obj_add_real(doc, pctls, "p90", dist.sketch.quantile(0.9));
-        yyjson_mut_obj_add_real(doc, pctls, "p95", dist.sketch.quantile(0.95));
-        yyjson_mut_obj_add_real(doc, pctls, "p99", dist.sketch.quantile(0.99));
-        yyjson_mut_obj_add_val(doc, obj, "percentiles", pctls);
+        ss << ",\"min\":" << dist.sketch.min();
+        ss << ",\"max\":" << dist.sketch.max();
+        ss << ",\"percentiles\":{";
+        ss << "\"p10\":" << dist.sketch.quantile(0.1);
+        ss << ",\"p25\":" << dist.sketch.quantile(0.25);
+        ss << ",\"p50\":" << dist.sketch.quantile(0.5);
+        ss << ",\"p75\":" << dist.sketch.quantile(0.75);
+        ss << ",\"p90\":" << dist.sketch.quantile(0.9);
+        ss << ",\"p95\":" << dist.sketch.quantile(0.95);
+        ss << ",\"p99\":" << dist.sketch.quantile(0.99);
+        ss << '}';
     }
 
-    // Direct serialization to avoid string roundtrip
-    yyjson_mut_val* hist_val = dist.histogram.to_yyjson(doc);
-    yyjson_mut_obj_add_val(doc, obj, "histogram", hist_val);
-
-    return obj;
+    ss << ",\"histogram\":" << dist.histogram.to_json();
+    ss << '}';
 }
 
-// Helper: serialize IOEventMetrics into a yyjson mutable object
-static yyjson_mut_val* io_metrics_to_json(yyjson_mut_doc* doc,
-                                          const IOEventMetrics& io) {
-    yyjson_mut_val* obj = yyjson_mut_obj(doc);
-    yyjson_mut_obj_add_val(doc, obj, "duration",
-                           distribution_to_json(doc, io.duration));
-    yyjson_mut_obj_add_val(doc, obj, "size",
-                           distribution_to_json(doc, io.size));
+void write_io_metrics_json(std::ostringstream& ss, const IOEventMetrics& io) {
+    ss << "{\"duration\":";
+    write_distribution_json(ss, io.duration);
+    ss << ",\"size\":";
+    write_distribution_json(ss, io.size);
     if (io.bandwidth.count() > 0) {
-        yyjson_mut_obj_add_val(doc, obj, "bandwidth",
-                               distribution_to_json(doc, io.bandwidth));
+        ss << ",\"bandwidth\":";
+        write_distribution_json(ss, io.bandwidth);
     }
     if (io.offset.count() > 0) {
-        yyjson_mut_obj_add_val(doc, obj, "offset",
-                               distribution_to_json(doc, io.offset));
+        ss << ",\"offset\":";
+        write_distribution_json(ss, io.offset);
     }
-    return obj;
+    ss << '}';
 }
+}  // namespace
 
 std::string DetailedStatistics::to_json() const {
-    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_val* root = yyjson_mut_obj(doc);
-    yyjson_mut_doc_set_root(doc, root);
+    std::ostringstream ss;
+    ss << std::setprecision(17);
+    ss << '{';
 
-    // Scan progress
-    yyjson_mut_obj_add_uint(doc, root, "events_scanned", events_scanned);
-    yyjson_mut_obj_add_uint(doc, root, "chunks_scanned", chunks_scanned);
-    yyjson_mut_obj_add_uint(doc, root, "chunks_skipped", chunks_skipped);
+    ss << "\"events_scanned\":" << events_scanned;
+    ss << ",\"chunks_scanned\":" << chunks_scanned;
+    ss << ",\"chunks_skipped\":" << chunks_skipped;
 
-    // Global duration
-    yyjson_mut_obj_add_val(doc, root, "duration",
-                           distribution_to_json(doc, duration));
+    ss << ",\"duration\":";
+    write_distribution_json(ss, duration);
 
-    // Grouped duration
     if (!grouped_duration.empty()) {
-        yyjson_mut_val* gd = yyjson_mut_obj(doc);
+        ss << ",\"grouped_duration\":{";
+        bool first = true;
         for (const auto& [key, dist] : grouped_duration) {
-            yyjson_mut_obj_add_val(doc, gd, key.c_str(),
-                                   distribution_to_json(doc, dist));
+            if (!first) ss << ',';
+            first = false;
+            ss << '"' << key << "\":";
+            write_distribution_json(ss, dist);
         }
-        yyjson_mut_obj_add_val(doc, root, "grouped_duration", gd);
+        ss << '}';
     }
 
-    // Grouped I/O
     if (!grouped_io.empty()) {
-        yyjson_mut_val* gio = yyjson_mut_obj(doc);
+        ss << ",\"grouped_io\":{";
+        bool first = true;
         for (const auto& [key, io] : grouped_io) {
-            yyjson_mut_obj_add_val(doc, gio, key.c_str(),
-                                   io_metrics_to_json(doc, io));
+            if (!first) ss << ',';
+            first = false;
+            ss << '"' << key << "\":";
+            write_io_metrics_json(ss, io);
         }
-        yyjson_mut_obj_add_val(doc, root, "grouped_io", gio);
+        ss << '}';
     }
 
-    char* json_str = yyjson_mut_write(doc, YYJSON_WRITE_PRETTY, nullptr);
-    std::string result(json_str ? json_str : "{}");
-    if (json_str) free(json_str);
-    yyjson_mut_doc_free(doc);
-    return result;
+    ss << '}';
+    return ss.str();
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::statistics

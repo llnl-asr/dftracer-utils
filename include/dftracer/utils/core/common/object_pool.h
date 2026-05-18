@@ -7,28 +7,11 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <mutex>
 #include <new>
-#include <unordered_map>
 
 namespace dftracer::utils {
 
-/**
- * @brief Lock-free LIFO stack (Treiber stack) with ABA-safe tagged pointers.
- *
- * Intrusive: the `next` pointer is stored in the first 8 bytes of the
- * block itself (valid since blocks are at least sizeof(void*) bytes).
- *
- * ABA protection: x86-64 uses 48-bit virtual addresses. A 16-bit
- * generation counter is packed into the upper bits of a 64-bit atomic.
- *
- * Reference: Treiber, R.K. (1986) "Systems Programming: Coping with
- * Parallelism", IBM Technical Report.
- */
 class TreiberStack {
-    // Intrusive next-pointer stored in the first sizeof(void*) bytes of
-    // freed blocks. Accessed via atomic_ref so TSAN can track the
-    // happens-before relationship through the CAS on head_.
     static void store_next(void* block, void* next) noexcept {
         std::atomic_ref<void*>(*reinterpret_cast<void**>(block))
             .store(next, std::memory_order_release);
@@ -81,7 +64,6 @@ class TreiberStack {
 
     static void* unpack_ptr(std::uint64_t packed) noexcept {
         auto raw = static_cast<std::uintptr_t>(packed & PTR_MASK);
-        // Sign-extend bit 47 for canonical x86-64 addresses
         if (raw & (1ULL << 47)) {
             raw |= ~PTR_MASK;
         }
@@ -93,18 +75,6 @@ class TreiberStack {
     }
 };
 
-/**
- * @brief Thread-safe, lock-free object pool with size-bucketed freelists.
- *
- * Uses TreiberStack (LIFO) per size class. After warmup, allocations are
- * zero-malloc: freed blocks are recycled immediately.
- *
- * Usage:
- * @code
- *   void* p = ObjectPool::instance().allocate(256);
- *   ObjectPool::instance().deallocate(p, 256);
- * @endcode
- */
 class ObjectPool {
    public:
     static ObjectPool& instance() {
@@ -113,15 +83,20 @@ class ObjectPool {
     }
 
     void* allocate(std::size_t size) {
-        auto& stack = get_stack(size);
-        void* block = stack.pop();
+        auto* stack = get_stack(size);
+        if (!stack) return ::operator new(size);
+        void* block = stack->pop();
         if (block) return block;
         return ::operator new(size);
     }
 
     void deallocate(void* block, std::size_t size) {
-        auto& stack = get_stack(size);
-        stack.push(block);
+        auto* stack = get_stack(size);
+        if (!stack) {
+            ::operator delete(block);
+            return;
+        }
+        stack->push(block);
     }
 
     ObjectPool(const ObjectPool&) = delete;
@@ -131,16 +106,16 @@ class ObjectPool {
     ObjectPool() = default;
 
     ~ObjectPool() {
-        // Drain all fast buckets
         for (auto& stack : fast_buckets_) {
             while (void* block = stack.pop()) {
                 ::operator delete(block);
             }
         }
-        // Drain all slow buckets
-        for (auto& [_, stack] : slow_buckets_) {
-            while (void* block = stack.pop()) {
-                ::operator delete(block);
+        for (auto& slot : slow_table_) {
+            if (slot.bucket.load(std::memory_order_relaxed) != 0) {
+                while (void* block = slot.stack.pop()) {
+                    ::operator delete(block);
+                }
             }
         }
     }
@@ -149,18 +124,45 @@ class ObjectPool {
     static constexpr std::size_t MAX_FAST_SIZE = 4096;
     static constexpr std::size_t NUM_FAST_BUCKETS = MAX_FAST_SIZE / ALIGNMENT;
 
+    static constexpr std::size_t SLOW_TABLE_SIZE = 256;
+    static constexpr std::size_t SLOW_TABLE_MASK = SLOW_TABLE_SIZE - 1;
+
     std::array<TreiberStack, NUM_FAST_BUCKETS> fast_buckets_;
 
-    std::mutex slow_mutex_;
-    std::unordered_map<std::size_t, TreiberStack> slow_buckets_;
+    struct SlowSlot {
+        std::atomic<std::size_t> bucket{0};
+        TreiberStack stack;
+    };
+    std::array<SlowSlot, SLOW_TABLE_SIZE> slow_table_;
 
-    TreiberStack& get_stack(std::size_t size) {
+    TreiberStack* get_stack(std::size_t size) {
         std::size_t bucket = (size + ALIGNMENT - 1) / ALIGNMENT;
         if (bucket > 0 && bucket <= NUM_FAST_BUCKETS) {
-            return fast_buckets_[bucket - 1];
+            return &fast_buckets_[bucket - 1];
         }
-        std::lock_guard<std::mutex> lock(slow_mutex_);
-        return slow_buckets_[bucket];
+        return find_slow_stack(bucket);
+    }
+
+    TreiberStack* find_slow_stack(std::size_t bucket) {
+        auto h = bucket;
+        for (std::size_t i = 0; i < SLOW_TABLE_SIZE; ++i) {
+            auto idx = (h + i) & SLOW_TABLE_MASK;
+            auto& slot = slow_table_[idx];
+            auto existing = slot.bucket.load(std::memory_order_acquire);
+            if (existing == bucket) return &slot.stack;
+            if (existing == 0) {
+                std::size_t expected = 0;
+                if (slot.bucket.compare_exchange_strong(
+                        expected, bucket, std::memory_order_release,
+                        std::memory_order_acquire)) {
+                    return &slot.stack;
+                }
+                if (slot.bucket.load(std::memory_order_acquire) == bucket) {
+                    return &slot.stack;
+                }
+            }
+        }
+        return nullptr;
     }
 };
 

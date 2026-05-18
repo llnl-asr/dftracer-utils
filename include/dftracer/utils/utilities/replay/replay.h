@@ -2,8 +2,10 @@
 #define DFTRACER_UTILS_UTILITIES_REPLAY_REPLAY_H
 
 #include <dftracer/utils/call_tree/call_tree.h>
-#include <dftracer/utils/utilities/reader/internal/line_processor.h>
-#include <dftracer/utils/utilities/reader/internal/reader.h>
+#include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/utilities/common/json/parser.h>
 #include <dftracer/utils/utilities/replay/trace.h>
 
 #include <chrono>
@@ -90,6 +92,13 @@ struct ReplayConfig {
     // MPI options
     int mpi_rank = 0;  // MPI rank of this process
     int mpi_size = 1;  // Total number of MPI processes
+
+    // Optional observation hook fired in dispatch_trace after apply_timing
+    // returns and before the executor runs. Used by fidelity tests to
+    // measure dispatch lateness vs. the trace's wall-clock anchor; left
+    // unset in production so the per-event branch is the only cost.
+    std::function<void(const Trace&, std::chrono::steady_clock::time_point)>
+        on_dispatch;
 };
 
 /**
@@ -102,8 +111,9 @@ struct ReplayResult {
     std::size_t failed_events = 0;
     std::chrono::microseconds total_duration{0};
     std::chrono::microseconds execution_duration{0};
-    std::unordered_map<std::string, std::size_t> function_counts;
-    std::unordered_map<std::string, std::size_t> category_counts;
+    // Keys are non-owning views into the replay StringIntern pool.
+    std::unordered_map<std::string_view, std::size_t> function_counts;
+    std::unordered_map<std::string_view, std::size_t> category_counts;
     std::vector<std::string> error_messages;
 
     // Extended statistics
@@ -164,7 +174,10 @@ class PosixExecutor : public TraceExecutor {
     std::string get_name() const override { return "POSIX"; }
 
    private:
-    std::unordered_map<std::string, int> open_files_;
+    // Keys are interned via the replay StringIntern pool.
+    std::unordered_map<std::string_view, int> open_files_;
+    // Scratch buffer reused across reads and writes.
+    std::vector<char> io_buffer_;
 
     bool execute_open(const Trace& trace, const ReplayConfig& config);
     bool execute_close(const Trace& trace, const ReplayConfig& config);
@@ -172,6 +185,9 @@ class PosixExecutor : public TraceExecutor {
     bool execute_write(const Trace& trace, const ReplayConfig& config);
     bool execute_seek(const Trace& trace, const ReplayConfig& config);
     bool execute_stat(const Trace& trace, const ReplayConfig& config);
+
+    // Ensure io_buffer_ has at least `size` bytes; grow with 'A' fill.
+    void ensure_io_buffer(std::size_t size);
 };
 
 /**
@@ -188,9 +204,6 @@ class DFTracerExecutor : public TraceExecutor {
     void sleep_for_duration(double duration_microseconds);
 };
 
-// Forward declaration
-class ReplayLineProcessor;
-
 /**
  * Main replay engine that coordinates trace reading and execution
  *
@@ -205,8 +218,6 @@ class ReplayLineProcessor;
  *   result.print_summary();
  */
 class ReplayEngine {
-    friend class ReplayLineProcessor;
-
    public:
     /**
      * Construct replay engine with configuration
@@ -255,6 +266,43 @@ class ReplayEngine {
     ReplayResult replay_with_call_tree(const std::string& trace_dir,
                                        const std::string& pattern = "*.pfw.gz");
 
+    /**
+     * Process a single trace event already loaded into a JsonParser.
+     * Public so callers driving their own TraceReader::read_json loop can
+     * feed events in directly without going through replay(file).
+     */
+    bool process_trace_line(
+        dftracer::utils::utilities::common::json::JsonParser& parser,
+        ReplayResult& result);
+
+    /**
+     * Stream parsed Trace events from the given trace files. Drives
+     * TraceReader::read_json under the hood; each call yields one event.
+     * Used to plug replay into a producer task inside a Pipeline.
+     */
+    coro::AsyncGenerator<Trace> stream_traces(
+        const std::vector<std::string>& files);
+
+    /**
+     * Drive a producer/consumer pipeline that decouples read+parse from
+     * timing+execute. The producer fills a bounded channel from
+     * stream_traces; a single consumer drains it and dispatches events
+     * (apply_timing → executor->execute). Read latency is hidden behind
+     * the consumer's per-event work + sleep_for, eliminating the
+     * dispatch lateness that the sequential path accumulates on large
+     * gz-compressed traces.
+     *
+     * @param scope Parent CoroScope (typically a Pipeline task scope).
+     * @param files Trace files to replay in order.
+     * @param result Aggregated counts and per-event stats are written
+     *               here. Must outlive the awaited coroutine.
+     * @param channel_capacity Max in-flight parsed Traces. Default 4096.
+     */
+    coro::CoroTask<void> run_pipelined(dftracer::utils::CoroScope& scope,
+                                       const std::vector<std::string>& files,
+                                       ReplayResult& result,
+                                       std::size_t channel_capacity = 4096);
+
    private:
     ReplayConfig config_;
     std::vector<std::unique_ptr<TraceExecutor>> executors_;
@@ -263,14 +311,18 @@ class ReplayEngine {
     bool first_timestamp_set_ = false;
 
     /**
-     * Process a single trace line (JSON)
+     * Update result counts and execute one already-parsed Trace.
+     * Extracted from process_trace_line so the pipeline consumer and the
+     * sync per-line path share the same dispatch semantics.
      */
-    bool process_trace_line(const std::string& line, ReplayResult& result);
+    void dispatch_trace(const Trace& trace, ReplayResult& result);
 
     /**
-     * Parse JSON trace into Trace structure
+     * Populate a Trace from a parsed JsonParser document.
      */
-    bool parse_trace_json(const std::string& json_line, Trace& trace);
+    bool parse_trace_json(
+        dftracer::utils::utilities::common::json::JsonParser& parser,
+        Trace& trace);
 
     /**
      * Apply timing logic before executing trace
@@ -312,21 +364,6 @@ class ReplayEngine {
     void replay_call_tree_node(
         const dftracer::utils::call_tree::CallTreeNodeInfo& node,
         ReplayResult& result);
-};
-
-/**
- * Line processor for handling trace lines during replay
- */
-class ReplayLineProcessor
-    : public dftracer::utils::utilities::reader::internal::LineProcessor {
-   public:
-    explicit ReplayLineProcessor(ReplayEngine& engine, ReplayResult& result);
-
-    coro::CoroTask<bool> process(const char* data, std::size_t length) override;
-
-   private:
-    ReplayEngine& engine_;
-    ReplayResult& result_;
 };
 
 }  // namespace dftracer::utils::utilities::replay

@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/rocksdb/key_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
+#include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/scan_prefix.h>
 #include <dftracer/utils/utilities/indexer/provenance_database.h>
 
@@ -11,8 +12,9 @@
 namespace dftracer::utils::utilities::indexer {
 
 namespace rocks = dftracer::utils::rocksdb;
+namespace cf = rocks::cf;
 
-using internal::IndexerError;
+using namespace internal;
 
 namespace {
 
@@ -82,60 +84,23 @@ std::string group_key(int file_info_id, std::string_view name) {
     return key;
 }
 
-std::string segment_key(int file_info_id, int source_idx,
-                        int source_checkpoint) {
+std::string segment_key(int file_info_id, int source_idx, int source_checkpoint,
+                        int segment_seq) {
     std::string key("px|");
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_info_id));
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(source_idx));
     rocks::KeyCodec::append_be32(key,
                                  static_cast<std::uint32_t>(source_checkpoint));
+    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(segment_seq));
     return key;
 }
-
-void append_string(std::string& out, std::string_view value) {
-    rocks::KeyCodec::append_be32(out, static_cast<std::uint32_t>(value.size()));
-    out.append(value.data(), value.size());
-}
-
-void append_u32(std::string& out, std::uint32_t value) {
-    rocks::KeyCodec::append_be32(out, value);
-}
-
-class Cursor {
-   public:
-    explicit Cursor(std::string_view data) : data_(data) {}
-
-    std::uint32_t u32() {
-        auto part = take(4);
-        return rocks::KeyCodec::decode_be32(part);
-    }
-
-    std::string str() {
-        const auto len = static_cast<std::size_t>(u32());
-        auto bytes = take(len);
-        return std::string(bytes.data(), bytes.size());
-    }
-
-   private:
-    std::string_view take(std::size_t len) {
-        if (offset_ + len > data_.size()) {
-            throw std::runtime_error("Corrupt provenance payload");
-        }
-        auto part = data_.substr(offset_, len);
-        offset_ += len;
-        return part;
-    }
-
-    std::string_view data_;
-    std::size_t offset_ = 0;
-};
 
 template <typename Fn>
 void scan_prefix(const rocks::RocksDatabase& db, std::string_view prefix,
                  Fn&& fn) {
     internal::scan_prefix_iterator(
         "Failed to scan provenance prefix", prefix,
-        [&] { return db.new_iterator("provenance"); }, std::forward<Fn>(fn));
+        [&] { return db.new_iterator(cf::PROVENANCE); }, std::forward<Fn>(fn));
 }
 
 }  // namespace
@@ -156,22 +121,23 @@ int ProvenanceDatabase::get_or_create_file_info(const std::string& path,
                                                 std::uint64_t file_hash) {
     const auto key = file_key(path);
     std::string value;
-    auto status = db_->get(key, &value, "provenance");
+    auto status = db_->get(key, &value, cf::PROVENANCE);
     if (status.ok()) {
         const auto id = decode_file_id(value);
         if (decode_hash(value) == file_hash) {
             return id;
         }
         const auto encoded = encode_file_record(id, file_hash);
-        status = txn_batch_ ? db_->put(*txn_batch_, "provenance", key, encoded)
-                            : db_->put(key, encoded, "provenance");
+        status = txn_batch_
+                     ? db_->put(*txn_batch_, cf::PROVENANCE, key, encoded)
+                     : db_->put(key, encoded, cf::PROVENANCE);
         if (!status.ok()) {
             throw_db_error("Failed to update provenance file info", status);
         }
         status = txn_batch_
-                     ? db_->put(*txn_batch_, "provenance", file_reverse_key(id),
-                                path)
-                     : db_->put(file_reverse_key(id), path, "provenance");
+                     ? db_->put(*txn_batch_, cf::PROVENANCE,
+                                file_reverse_key(id), path)
+                     : db_->put(file_reverse_key(id), path, cf::PROVENANCE);
         if (!status.ok()) {
             throw_db_error("Failed to update provenance reverse file info",
                            status);
@@ -184,7 +150,7 @@ int ProvenanceDatabase::get_or_create_file_info(const std::string& path,
 
     std::uint32_t next_id = 1;
     std::string next_value;
-    status = db_->get(next_file_id_key(), &next_value, "provenance");
+    status = db_->get(next_file_id_key(), &next_value, cf::PROVENANCE);
     if (status.ok()) {
         next_id = rocks::KeyCodec::decode_be32(next_value);
     } else if (!status.IsNotFound()) {
@@ -195,26 +161,26 @@ int ProvenanceDatabase::get_or_create_file_info(const std::string& path,
         encode_file_record(static_cast<int>(next_id), file_hash);
     const auto next_encoded = rocks::KeyCodec::encode_be32(next_id + 1);
     if (txn_batch_) {
-        status = db_->put(*txn_batch_, "provenance", key, encoded);
+        status = db_->put(*txn_batch_, cf::PROVENANCE, key, encoded);
         if (!status.ok()) throw_db_error("Failed to insert file info", status);
-        status = db_->put(*txn_batch_, "provenance", file_reverse_key(next_id),
-                          path);
+        status = db_->put(*txn_batch_, cf::PROVENANCE,
+                          file_reverse_key(next_id), path);
         if (!status.ok()) {
             throw_db_error("Failed to insert reverse file info", status);
         }
-        status = db_->put(*txn_batch_, "provenance", next_file_id_key(),
+        status = db_->put(*txn_batch_, cf::PROVENANCE, next_file_id_key(),
                           next_encoded);
         if (!status.ok()) {
             throw_db_error("Failed to update next provenance file id", status);
         }
     } else {
-        status = db_->put(key, encoded, "provenance");
+        status = db_->put(key, encoded, cf::PROVENANCE);
         if (!status.ok()) throw_db_error("Failed to insert file info", status);
-        status = db_->put(file_reverse_key(next_id), path, "provenance");
+        status = db_->put(file_reverse_key(next_id), path, cf::PROVENANCE);
         if (!status.ok()) {
             throw_db_error("Failed to insert reverse file info", status);
         }
-        status = db_->put(next_file_id_key(), next_encoded, "provenance");
+        status = db_->put(next_file_id_key(), next_encoded, cf::PROVENANCE);
         if (!status.ok()) {
             throw_db_error("Failed to update next provenance file id", status);
         }
@@ -224,7 +190,7 @@ int ProvenanceDatabase::get_or_create_file_info(const std::string& path,
 
 int ProvenanceDatabase::get_file_info_id(const std::string& path) const {
     std::string value;
-    auto status = db_->get(file_key(path), &value, "provenance");
+    auto status = db_->get(file_key(path), &value, cf::PROVENANCE);
     if (status.IsNotFound()) {
         return -1;
     }
@@ -263,8 +229,8 @@ void ProvenanceDatabase::insert_info(int file_info_id, std::string_view key,
                                      std::string_view value) {
     const auto db_key = info_key(file_info_id, key);
     auto status = txn_batch_
-                      ? db_->put(*txn_batch_, "provenance", db_key, value)
-                      : db_->put(db_key, value, "provenance");
+                      ? db_->put(*txn_batch_, cf::PROVENANCE, db_key, value)
+                      : db_->put(db_key, value, cf::PROVENANCE);
     if (!status.ok()) {
         throw_db_error("Failed to insert provenance info", status);
     }
@@ -279,10 +245,10 @@ void ProvenanceDatabase::insert_source(int file_info_id, int source_idx,
     append_u32(value, static_cast<std::uint32_t>(num_checkpoints));
     append_string(value, event_hash);
     auto status = txn_batch_
-                      ? db_->put(*txn_batch_, "provenance",
+                      ? db_->put(*txn_batch_, cf::PROVENANCE,
                                  source_key(file_info_id, source_idx), value)
                       : db_->put(source_key(file_info_id, source_idx), value,
-                                 "provenance");
+                                 cf::PROVENANCE);
     if (!status.ok()) {
         throw_db_error("Failed to insert provenance source", status);
     }
@@ -291,30 +257,27 @@ void ProvenanceDatabase::insert_source(int file_info_id, int source_idx,
 void ProvenanceDatabase::insert_group(int file_info_id, std::string_view name,
                                       std::string_view predicate) {
     const auto db_key = group_key(file_info_id, name);
-    auto status = txn_batch_
-                      ? db_->put(*txn_batch_, "provenance", db_key,
-                                 std::string(predicate))
-                      : db_->put(db_key, std::string(predicate), "provenance");
+    auto status =
+        txn_batch_ ? db_->put(*txn_batch_, cf::PROVENANCE, db_key,
+                              std::string(predicate))
+                   : db_->put(db_key, std::string(predicate), cf::PROVENANCE);
     if (!status.ok()) {
         throw_db_error("Failed to insert provenance group", status);
     }
 }
 
 void ProvenanceDatabase::insert_segment(int file_info_id, int source_idx,
-                                        int source_checkpoint,
+                                        int source_checkpoint, int segment_seq,
                                         int output_line_start,
                                         int output_line_end, int event_count) {
     std::string value;
     append_u32(value, static_cast<std::uint32_t>(output_line_start));
     append_u32(value, static_cast<std::uint32_t>(output_line_end));
     append_u32(value, static_cast<std::uint32_t>(event_count));
-    auto status =
-        txn_batch_
-            ? db_->put(*txn_batch_, "provenance",
-                       segment_key(file_info_id, source_idx, source_checkpoint),
-                       value)
-            : db_->put(segment_key(file_info_id, source_idx, source_checkpoint),
-                       value, "provenance");
+    auto key =
+        segment_key(file_info_id, source_idx, source_checkpoint, segment_seq);
+    auto status = txn_batch_ ? db_->put(*txn_batch_, cf::PROVENANCE, key, value)
+                             : db_->put(key, value, cf::PROVENANCE);
     if (!status.ok()) {
         throw_db_error("Failed to insert provenance segment", status);
     }
@@ -391,7 +354,7 @@ ProvenanceDatabase::query_all_segments(int file_info_id) const {
 std::string ProvenanceDatabase::query_info(int file_info_id,
                                            std::string_view key) const {
     std::string value;
-    auto status = db_->get(info_key(file_info_id, key), &value, "provenance");
+    auto status = db_->get(info_key(file_info_id, key), &value, cf::PROVENANCE);
     if (status.IsNotFound()) {
         return {};
     }

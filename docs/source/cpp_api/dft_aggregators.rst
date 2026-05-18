@@ -53,7 +53,7 @@ boundary event association, and Perfetto trace output.
        end
 
        subgraph Merge["Merge & Resolve"]
-           EA["EventAggregatorUtility"]
+           EA["EventAggregator"]
            AR["AssociationResolverUtility"]
        end
 
@@ -180,13 +180,33 @@ predicates for early chunk skipping when available.
 
 Tagged ``Parallelizable`` — multiple instances run concurrently across chunks.
 
-EventAggregatorUtility
-~~~~~~~~~~~~~~~~~~~~~~
+EventAggregator
+~~~~~~~~~~~~~~~
 
-Merges per-chunk aggregation results into a unified output.
+Unified event aggregator (formerly ``EventAggregatorUtility`` and the
+internal ``RocksDbAggregator``, now merged into one class). Holds a
+``RocksDatabase`` handle and merges per-chunk aggregation results into a
+unified output, deduplicating file counts and collecting association
+trackers for downstream resolution.
 
-Combines metrics from all chunks, deduplicates file counts, and
-collects association trackers for downstream resolution.
+AggregationVisitor
+~~~~~~~~~~~~~~~~~~
+
+``DftEventVisitor`` subclass that accumulates ``AggregationMetrics`` per
+``AggregationKey`` directly from parsed events during a scan, so the
+aggregation pass can share a single parse with bloom and manifest
+visitors via ``DftEventDispatcher``. Defined in
+``dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h``.
+
+DftEventDispatcher
+~~~~~~~~~~~~~~~~~~
+
+Fan-out adapter that implements the ``IndexVisitor`` interface, parses
+each line once, and dispatches the parsed ``DftEvent`` to a list of
+registered ``DftEventVisitor`` instances (``BloomVisitor``,
+``ManifestVisitor``, ``AggregationVisitor``, ...). This collapses
+multiple visitor passes into a single read of the input. Defined in
+``dftracer/utils/utilities/composites/dft/dft_event_dispatcher.h``.
 
 Association Tracking
 --------------------

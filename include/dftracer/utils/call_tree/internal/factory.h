@@ -5,8 +5,7 @@
 
 #include <cstdint>
 #include <memory>
-#include <string>
-#include <unordered_map>
+#include <string_view>
 #include <vector>
 
 namespace dftracer::utils::call_tree {
@@ -46,10 +45,12 @@ class CallTreeFactory {
      * Create a new CallTreeNode from trace event data
      * The factory manages the lifecycle of created nodes
      */
-    std::shared_ptr<CallTreeNode> create_node(
-        std::uint64_t id, const std::string& name, const std::string& category,
-        std::uint64_t start_time, std::uint64_t duration, int level,
-        const std::unordered_map<std::string, std::string>& args = {});
+    std::shared_ptr<CallTreeNode> create_node(std::uint64_t id,
+                                              std::string_view name,
+                                              std::string_view category,
+                                              std::uint64_t start_time,
+                                              std::uint64_t duration, int level,
+                                              ArgsMap args = {});
 
     /**
      * Get total number of nodes created by this factory

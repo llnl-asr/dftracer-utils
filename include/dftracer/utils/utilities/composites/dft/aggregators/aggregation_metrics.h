@@ -16,6 +16,7 @@ namespace dftracer::utils::utilities::composites::dft::aggregators {
 using common::statistics::DDSketch;
 
 struct MetricStats {
+    std::uint64_t count = 0;
     std::uint64_t total = 0;
     std::uint64_t min = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t max = 0;
@@ -30,7 +31,8 @@ struct MetricStats {
         : sketch_accuracy_(relative_accuracy) {}
 
     MetricStats(const MetricStats& other)
-        : total(other.total),
+        : count(other.count),
+          total(other.total),
           min(other.min),
           max(other.max),
           mean(other.mean),
@@ -43,6 +45,7 @@ struct MetricStats {
 
     MetricStats& operator=(const MetricStats& other) {
         if (this != &other) {
+            count = other.count;
             total = other.total;
             min = other.min;
             max = other.max;
@@ -60,13 +63,11 @@ struct MetricStats {
     MetricStats(MetricStats&&) = default;
     MetricStats& operator=(MetricStats&&) = default;
 
-    void update(std::uint64_t value, std::uint64_t count,
-                bool compute_percentiles = false);
-    void merge_from(const MetricStats& other, std::uint64_t n1,
-                    std::uint64_t n2, std::uint64_t n);
-    double get_stddev(std::uint64_t count) const;
-    double get_skewness(std::uint64_t count) const;
-    double get_kurtosis(std::uint64_t count) const;
+    void update(std::uint64_t value, bool compute_percentiles = false);
+    void merge_from(const MetricStats& other);
+    double get_stddev() const;
+    double get_skewness() const;
+    double get_kurtosis() const;
 };
 
 using CustomMetricsMap =
@@ -146,12 +147,8 @@ struct AggregationMetrics {
     void update_timestamp_clamped(std::uint64_t event_ts, std::uint64_t dur,
                                   std::uint64_t bucket_start,
                                   std::uint64_t bucket_size);
-    void update_custom_metric(const std::string& name, std::uint64_t value,
+    void update_custom_metric(std::string_view name, std::uint64_t value,
                               bool compute_percentiles = false);
-
-    double get_stddev_duration() const;
-    double get_stddev_size() const;
-    double get_custom_stddev(const std::string& name) const;
 
     void merge_from(const AggregationMetrics& other);
 };

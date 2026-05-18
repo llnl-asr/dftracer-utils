@@ -6,7 +6,7 @@
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
-using AggregatorSummaryInput = EventAggregatorUtilityOutput;
+using AggregatorSummaryInput = EventAggregatorOutput;
 using AggregatorSummaryOutput = void;
 
 class AggregatorSummaryUtility

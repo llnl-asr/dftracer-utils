@@ -77,6 +77,14 @@ TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
         p->set_value();
     };
 
+    // Set the executor on the task's promise so awaitables (e.g. channels)
+    // that capture `get_root_promise()->get_executor()` can schedule
+    // resumption. Without this, awaiters end up with executor=nullptr because
+    // the wrapping `coro::Coro` doesn't extend PromiseBase and the
+    // root-promise chain stops at the user's CoroTask.
+    if (task.handle()) {
+        task.handle().promise().set_executor(executor_.get());
+    }
     auto coro = wrapper(std::move(task), promise, executor_.get(), tid);
     TaskIndex id = executor_->enqueue_tracked(std::move(coro), name, tid);
 
@@ -141,5 +149,9 @@ void Runtime::shutdown() {
 }
 
 std::size_t Runtime::threads() const { return threads_; }
+
+std::size_t Runtime::io_threads() const {
+    return executor_ ? executor_->get_io_pool_size() : 0;
+}
 
 }  // namespace dftracer::utils

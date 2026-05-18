@@ -3,6 +3,7 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_query_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 
@@ -19,17 +20,13 @@ using dftracer::utils::utilities::indexer::internal::get_logical_path;
 static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {
     IndexDatabase idx_db(index_path);
-    idx_db.init_base_schema();
-    idx_db.init_bloom_schema();
+    auto writer = idx_db.begin_write();
+    writer->init_schema();
 
     int fid =
-        idx_db.get_or_create_file_info(get_logical_path(file_path), 12345);
+        writer->get_or_create_file_info(get_logical_path(file_path), 12345);
 
-    idx_db.begin_transaction();
-
-    // Create chunk bloom filters for 3 checkpoints
     for (int ckpt = 0; ckpt < 3; ++ckpt) {
-        // name dimension
         BloomFilter name_bloom(100, 0.01);
         if (ckpt == 0) {
             name_bloom.add("read");
@@ -43,11 +40,10 @@ static void populate_test_idx(const std::string& index_path,
         }
 
         auto blob = name_bloom.serialize();
-        idx_db.insert_chunk_bloom_filter(
+        writer->insert_chunk_bloom_filter(
             fid, static_cast<std::uint64_t>(ckpt), "name", blob.data(),
             static_cast<int>(blob.size()), name_bloom.num_entries());
 
-        // cat dimension
         BloomFilter cat_bloom(100, 0.01);
         if (ckpt == 0 || ckpt == 2) {
             cat_bloom.add("POSIX");
@@ -56,12 +52,11 @@ static void populate_test_idx(const std::string& index_path,
         }
 
         auto cat_blob = cat_bloom.serialize();
-        idx_db.insert_chunk_bloom_filter(
+        writer->insert_chunk_bloom_filter(
             fid, static_cast<std::uint64_t>(ckpt), "cat", cat_blob.data(),
             static_cast<int>(cat_blob.size()), cat_bloom.num_entries());
     }
 
-    // Create file-level bloom filters (merged from all chunks)
     BloomFilter file_name_bloom(100, 0.01);
     file_name_bloom.add("read");
     file_name_bloom.add("write");
@@ -69,42 +64,38 @@ static void populate_test_idx(const std::string& index_path,
     file_name_bloom.add("close");
     file_name_bloom.add("stat");
     auto name_blob = file_name_bloom.serialize();
-    idx_db.insert_file_bloom_filter(fid, "name", name_blob.data(),
-                                    static_cast<int>(name_blob.size()),
-                                    file_name_bloom.num_entries());
+    writer->insert_file_bloom_filter(fid, "name", name_blob.data(),
+                                     static_cast<int>(name_blob.size()),
+                                     file_name_bloom.num_entries());
 
     BloomFilter file_cat_bloom(100, 0.01);
     file_cat_bloom.add("POSIX");
     file_cat_bloom.add("storage");
     auto cat_blob = file_cat_bloom.serialize();
-    idx_db.insert_file_bloom_filter(fid, "cat", cat_blob.data(),
-                                    static_cast<int>(cat_blob.size()),
-                                    file_cat_bloom.num_entries());
+    writer->insert_file_bloom_filter(fid, "cat", cat_blob.data(),
+                                     static_cast<int>(cat_blob.size()),
+                                     file_cat_bloom.num_entries());
 
-    // Add fhash with resolution
     BloomFilter fhash_bloom(100, 0.01);
     fhash_bloom.add("abc123");
     auto fhash_blob = fhash_bloom.serialize();
-    idx_db.insert_file_bloom_filter(fid, "fhash", fhash_blob.data(),
-                                    static_cast<int>(fhash_blob.size()),
-                                    fhash_bloom.num_entries());
+    writer->insert_file_bloom_filter(fid, "fhash", fhash_blob.data(),
+                                     static_cast<int>(fhash_blob.size()),
+                                     fhash_bloom.num_entries());
 
     for (int ckpt = 0; ckpt < 3; ++ckpt) {
         auto blob = fhash_bloom.serialize();
-        idx_db.insert_chunk_bloom_filter(
+        writer->insert_chunk_bloom_filter(
             fid, static_cast<std::uint64_t>(ckpt), "fhash", blob.data(),
             static_cast<int>(blob.size()), fhash_bloom.num_entries());
     }
 
-    // Hash resolutions
-    idx_db.insert_hash_resolution(fid, "fhash", "abc123", "./data/file.h5");
+    writer->insert_hash_table_entry(0, "abc123", "./data/file.h5");
 
-    // Record dimensions
-    idx_db.insert_index_dimension(fid, "name");
-    idx_db.insert_index_dimension(fid, "cat");
-    idx_db.insert_index_dimension(fid, "fhash");
-
-    idx_db.commit_transaction();
+    writer->insert_index_dimension(fid, "name");
+    writer->insert_index_dimension(fid, "cat");
+    writer->insert_index_dimension(fid, "fhash");
+    writer->commit();
 }
 
 TEST_SUITE("BloomQueryUtility") {

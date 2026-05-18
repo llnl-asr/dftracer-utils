@@ -65,8 +65,11 @@ option(DFTRACER_UTILS_ENABLE_ASAN "Enable AddressSanitizer" OFF)
 option(DFTRACER_UTILS_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 option(DFTRACER_UTILS_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
+option(DFTRACER_USE_ZLIB_NG "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)
+option(DFTRACER_UTILS_ENABLE_ZSTD "Enable ZSTD compression for RocksDB" ON)
+option(DFTRACER_UTILS_ENABLE_LZ4 "Enable LZ4 compression for RocksDB" OFF)
 
 if(DFTRACER_UTILS_TESTS)
   message(STATUS "Building tests")
@@ -134,6 +137,18 @@ if(HAVE_SYS_EVENT_H)
 else()
   set(DFTRACER_UTILS_HAVE_KQUEUE OFF)
   message(STATUS "kqueue support: disabled (sys/event.h not found)")
+endif()
+
+# lustreapi: optional for stripe_count / stripe_size queries. When absent, the
+# parallel writer treats Lustre like an opaque POSIX filesystem.
+check_include_file("lustre/lustreapi.h" HAVE_LUSTRE_LUSTREAPI_H)
+find_library(LUSTREAPI_LIBRARY NAMES lustreapi)
+if(HAVE_LUSTRE_LUSTREAPI_H AND LUSTREAPI_LIBRARY)
+  set(DFTRACER_UTILS_HAVE_LUSTREAPI ON)
+  message(STATUS "lustreapi support: enabled (${LUSTREAPI_LIBRARY})")
+else()
+  set(DFTRACER_UTILS_HAVE_LUSTREAPI OFF)
+  message(STATUS "lustreapi support: disabled (header or library not found)")
 endif()
 
 # Set C++ standard

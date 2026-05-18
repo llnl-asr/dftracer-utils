@@ -18,6 +18,10 @@ The most common use case is reading trace files:
    # Open a compressed trace file (auto-detects index sidecar)
    reader = TraceReader("trace.pfw.gz")
 
+   # ...or pass a directory; TraceReader scans for .pfw / .pfw.gz files
+   # and streams them transparently as a single logical input.
+   reader = TraceReader("./traces")
+
    # Read all lines
    lines = reader.read_lines()
    for line in lines:

@@ -58,13 +58,10 @@ struct ChunkIndexerConfig {
 };
 
 // Hash resolution maps (collected once per file from metadata events)
-using HashResolveMap =
-    std::shared_ptr<std::unordered_map<std::string, std::string>>;
+using HashResolveMap = std::shared_ptr<StringViewMap<std::string>>;
 
 // Hash resolution entry: dimension -> {hash -> resolved_value}
-using HashResolutions =
-    std::unordered_map<std::string,
-                       std::unordered_map<std::string, std::string>>;
+using HashResolutions = StringViewMap<StringViewMap<std::string>>;
 
 // Tracks which dimensions have been indexed per chunk for incremental updates
 struct IndexedDimensions {

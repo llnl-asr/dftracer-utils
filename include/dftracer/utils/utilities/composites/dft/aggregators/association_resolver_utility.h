@@ -15,13 +15,13 @@
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
 struct AssociationResolverInput {
-    EventAggregatorUtilityOutput aggregations;
+    EventAggregatorOutput aggregations;
     std::vector<std::shared_ptr<AssociationTracker>> trackers;
     AggregationConfig config;
 };
 
 struct AssociationResolverOutput {
-    EventAggregatorUtilityOutput aggregations;
+    EventAggregatorOutput aggregations;
     std::unordered_set<std::uint64_t> root_pids;
     std::uint64_t trace_duration = 0;
     BoundaryTimeRangesMap boundary_ranges;
@@ -36,10 +36,9 @@ class AssociationResolverUtility
         const AssociationResolverInput& input) override;
 
    private:
-    void compute_trace_metadata(
-        const AssociationTracker& tracker,
-        const EventAggregatorUtilityOutput& aggregations,
-        AssociationResolverOutput& output);
+    void compute_trace_metadata(const AssociationTracker& tracker,
+                                const EventAggregatorOutput& aggregations,
+                                AssociationResolverOutput& output);
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

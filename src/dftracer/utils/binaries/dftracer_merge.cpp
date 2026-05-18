@@ -1,18 +1,95 @@
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/utilities.h>
 
-#include <argparse/argparse.hpp>
 #include <chrono>
+
+#include "common_cli.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites;
+
+class MergeArgParse : public cli::ArgParse {
+   public:
+    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_DOT,
+                                 "Directory containing .pfw or .pfw.gz files"};
+    cli::PipelineArgs pipeline;
+    cli::WatchdogArgs watchdog;
+
+    bool force = false;
+    std::string output;
+    bool compress = false;
+    bool verbose = false;
+    bool gzip_only = false;
+    bool verify = false;
+    std::size_t channel_capacity = 100;
+    std::size_t batch_size_kb = 256;
+
+    explicit MergeArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        schema(directory, pipeline, watchdog);
+    }
+
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("-f", "--force")
+            .help("Override existing output file and force index recreation")
+            .flag();
+
+        parser()
+            .add_argument("-o", "--output")
+            .help("Output file path (should have .pfw extension)")
+            .default_value<std::string>("combined.pfw");
+
+        parser()
+            .add_argument("-c", "--compress")
+            .help("Compress output file with gzip")
+            .flag();
+
+        parser()
+            .add_argument("-v", "--verbose")
+            .help("Enable verbose mode")
+            .flag();
+
+        parser()
+            .add_argument("-g", "--gzip-only")
+            .help("Process only .pfw.gz files")
+            .flag();
+
+        parser()
+            .add_argument("--verify")
+            .help("Verify merged output by comparing input/output hashes")
+            .flag();
+
+        parser()
+            .add_argument("--channel-capacity")
+            .help("Channel buffer capacity for batch streaming (default: 100)")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(100));
+
+        parser()
+            .add_argument("--batch-size")
+            .help("Batch byte budget in KB (default: 256)")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(256));
+    }
+
+    void post_parse() override {
+        force = parser().get<bool>("--force");
+        output = parser().get<std::string>("--output");
+        compress = parser().get<bool>("--compress");
+        verbose = parser().get<bool>("--verbose");
+        gzip_only = parser().get<bool>("--gzip-only");
+        verify = parser().get<bool>("--verify");
+        channel_capacity = parser().get<std::size_t>("--channel-capacity");
+        batch_size_kb = parser().get<std::size_t>("--batch-size");
+    }
+};
+
+static int run_merge(const MergeArgParse& cli);
 
 int main(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
@@ -23,117 +100,24 @@ int main(int argc, char** argv) {
         "Merge DFTracer .pfw or .pfw.gz files into a single JSON array file "
         "using streaming producer-consumer pattern");
 
-    program.add_argument("-d", "--directory")
-        .help("Directory containing .pfw or .pfw.gz files")
-        .default_value<std::string>(".");
+    MergeArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
 
-    program.add_argument("-o", "--output")
-        .help("Output file path (should have .pfw extension)")
-        .default_value<std::string>("combined.pfw");
+    return run_merge(cli);
+}
 
-    program.add_argument("-f", "--force")
-        .help("Override existing output file and force index recreation")
-        .flag();
-
-    program.add_argument("-c", "--compress")
-        .help("Compress output file with gzip")
-        .flag();
-
-    program.add_argument("-v", "--verbose").help("Enable verbose mode").flag();
-
-    program.add_argument("-g", "--gzip-only")
-        .help("Process only .pfw.gz files")
-        .flag();
-
-    program.add_argument("--executor-threads")
-        .help(
-            "Number of executor threads for parallel processing (default: "
-            "number of CPU cores)")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
-
-    program.add_argument("--verify")
-        .help("Verify merged output by comparing input/output hashes")
-        .flag();
-
-    program.add_argument("--channel-capacity")
-        .help("Channel buffer capacity for batch streaming (default: 100)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(100));
-
-    program.add_argument("--batch-size")
-        .help("Batch byte budget in KB (default: 256)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(256));
-
-    program.add_argument("--disable-watchdog")
-        .help("Disable watchdog for hang detection")
-        .flag();
-
-    program.add_argument("--watchdog-global-timeout")
-        .help(
-            "Watchdog global timeout for pipeline execution in seconds (0 = no "
-            "timeout)")
-        .scan<'d', int>()
-        .default_value(0);
-
-    program.add_argument("--watchdog-task-timeout")
-        .help("Watchdog default task timeout in seconds (0 = no timeout)")
-        .scan<'d', int>()
-        .default_value(0);
-
-    program.add_argument("--watchdog-interval")
-        .help("Watchdog check interval in seconds")
-        .scan<'d', int>()
-        .default_value(1);
-
-    program.add_argument("--watchdog-warning-threshold")
-        .help("Watchdog long-running task warning threshold in seconds")
-        .scan<'d', int>()
-        .default_value(300);
-
-    program.add_argument("--watchdog-idle-timeout")
-        .help("Watchdog idle timeout in seconds (0 = use default)")
-        .scan<'d', int>()
-        .default_value(300);
-
-    program.add_argument("--watchdog-deadlock-timeout")
-        .help("Watchdog deadlock timeout in seconds (0 = use default)")
-        .scan<'d', int>()
-        .default_value(600);
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error occurred: %s", err.what());
-        std::cerr << program << std::endl;
-        return 1;
-    }
-
-    std::string input_dir = program.get<std::string>("--directory");
-    std::string output_file = program.get<std::string>("--output");
-    bool force_override = program.get<bool>("--force");
-    bool compress_output = program.get<bool>("--compress");
-    [[maybe_unused]] bool verbose = program.get<bool>("--verbose");
-    bool gzip_only = program.get<bool>("--gzip-only");
-    bool verify = program.get<bool>("--verify");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
-    std::size_t channel_capacity =
-        program.get<std::size_t>("--channel-capacity");
-    std::size_t batch_size_kb = program.get<std::size_t>("--batch-size");
+static int run_merge(const MergeArgParse& cli) {
+    const auto input_dir = fs::absolute(cli.directory.value).string();
+    const auto output_file = fs::absolute(cli.output).string();
+    const auto force_override = cli.force;
+    const auto compress_output = cli.compress;
+    [[maybe_unused]] const auto verbose = cli.verbose;
+    const auto gzip_only = cli.gzip_only;
+    const auto verify = cli.verify;
+    const auto channel_capacity = cli.channel_capacity;
+    const auto batch_size_kb = cli.batch_size_kb;
     std::size_t batch_byte_budget = batch_size_kb * 1024;
-    bool disable_watchdog = program.get<bool>("--disable-watchdog");
-    int global_timeout = program.get<int>("--watchdog-global-timeout");
-    int task_timeout = program.get<int>("--watchdog-task-timeout");
-    int watchdog_interval = program.get<int>("--watchdog-interval");
-    int warning_threshold = program.get<int>("--watchdog-warning-threshold");
-    int idle_timeout = program.get<int>("--watchdog-idle-timeout");
-    int deadlock_timeout = program.get<int>("--watchdog-deadlock-timeout");
-
-    input_dir = fs::absolute(input_dir).string();
-    output_file = fs::absolute(output_file).string();
 
     if (output_file.size() < 4 ||
         output_file.substr(output_file.size() - 4) != ".pfw") {
@@ -194,16 +178,12 @@ int main(int argc, char** argv) {
     std::printf("  Verify: %s\n", verify ? "true" : "false");
     std::printf("  Channel capacity: %zu\n", channel_capacity);
     std::printf("  Batch size: %zu KB\n", batch_size_kb);
-    std::printf("  Executor threads: %zu\n", executor_threads);
+    std::printf("  Executor threads: %zu\n", cli.pipeline.executor_threads);
     std::printf("==========================================\n\n");
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    // Step 1: Create channel and buffer pool for streaming batches
     auto channel = coro::make_channel<StreamingMergeBatch>(channel_capacity);
-    // Pool size = channel capacity + num producers, so producers never block
-    // waiting for buffers (avoids deadlock when all executor threads are
-    // producers and the consumer can't run to release buffers).
     std::size_t pool_size = channel_capacity + input_files.size();
     auto buf_pool =
         make_buffer_pool<std::string>(pool_size, [batch_byte_budget]() {
@@ -216,23 +196,10 @@ int main(int argc, char** argv) {
     producer_results.resize(input_files.size());
     StreamingFileConsumerOutput consumer_result;
 
-    // Step 2: Create pipeline
-    auto pipeline_config =
-        PipelineConfig()
-            .with_name("DFTracer Merge")
-            .with_compute_threads(executor_threads)
-            .with_watchdog(!disable_watchdog)
-            .with_global_timeout(std::chrono::seconds(global_timeout))
-            .with_task_timeout(std::chrono::seconds(task_timeout))
-            .with_watchdog_interval(std::chrono::seconds(watchdog_interval))
-            .with_warning_threshold(std::chrono::seconds(warning_threshold))
-            .with_executor_idle_timeout(std::chrono::seconds(idle_timeout))
-            .with_executor_deadlock_timeout(
-                std::chrono::seconds(deadlock_timeout));
-
+    auto pipeline_config = cli::build_pipeline_config(
+        "DFTracer Merge", cli.pipeline, cli.watchdog);
     Pipeline pipeline(pipeline_config);
 
-    // Step 3: Create producer tasks
     std::vector<std::shared_ptr<Task>> producer_tasks;
     for (std::size_t i = 0; i < input_files.size(); ++i) {
         auto* input_files_ptr = &input_files;
@@ -259,7 +226,6 @@ int main(int argc, char** argv) {
         producer_tasks.push_back(producer_task);
     }
 
-    // Step 4: Create consumer task
     auto* consumer_result_ptr = &consumer_result;
     auto consumer_task = make_task(
         [channel, buf_pool, output_file, compress_output,
@@ -275,7 +241,6 @@ int main(int argc, char** argv) {
         },
         "Consumer");
 
-    // Step 5: Execute pipeline
     std::vector<std::shared_ptr<Task>> all_tasks;
     all_tasks.insert(all_tasks.end(), producer_tasks.begin(),
                      producer_tasks.end());

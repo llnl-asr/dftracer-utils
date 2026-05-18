@@ -3,6 +3,18 @@ Replay
 
 The replay utility replays DFTracer trace files by reading recorded events and executing them in a configurable replay mode. It supports plain text and gzipped traces, dry-run analysis, timing-aware replay, and filtered execution for focused testing.
 
+.. note::
+
+   The engine is now pipelined with C++20 coroutines and channels: trace
+   reading, JSON parsing, filtering, and execution run as concurrent stages
+   communicating through bounded channels, so a slow executor no longer
+   blocks the reader. JSON parsing uses the shared
+   :cpp:class:`dftracer::utils::utilities::common::json::JsonParser`
+   (on-demand simdjson) which reuses one padded buffer per stage. String
+   handling and file I/O have been re-tuned with a fixed read buffer and
+   ``string_view`` line slicing; the public ``ReplayEngine`` /
+   ``ReplayConfig`` / ``ReplayResult`` API is unchanged.
+
 .. code-block:: cpp
 
    #include <dftracer/utils/utilities/replay/replay.h>

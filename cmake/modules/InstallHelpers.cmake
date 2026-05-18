@@ -196,54 +196,6 @@ else()
     endif()
 endif()
 
-# YYJSON dependency
-find_library(YYJSON_LIBRARY_BUNDLED
-    NAMES yyjson libyyjson
-    PATHS \${_IMPORT_PREFIX}/lib
-    NO_DEFAULT_PATH
-)
-
-if(YYJSON_LIBRARY_BUNDLED)
-    # Found yyjson that was built with this package
-    find_path(YYJSON_INCLUDE_DIR_BUNDLED
-        NAMES yyjson.h
-        PATHS \${_IMPORT_PREFIX}/include
-        NO_DEFAULT_PATH
-    )
-
-    if(YYJSON_INCLUDE_DIR_BUNDLED)
-        # Create shared target if not exists
-        if(NOT TARGET yyjson::yyjson)
-            add_library(yyjson::yyjson UNKNOWN IMPORTED)
-            set_target_properties(yyjson::yyjson PROPERTIES
-                IMPORTED_LOCATION \"\${YYJSON_LIBRARY_BUNDLED}\"
-                INTERFACE_INCLUDE_DIRECTORIES \"\${YYJSON_INCLUDE_DIR_BUNDLED}\"
-            )
-        endif()
-
-        # Also look for static version
-        find_library(YYJSON_STATIC_LIBRARY_BUNDLED
-            NAMES yyjson_static libyyjson_static
-            PATHS \${_IMPORT_PREFIX}/lib
-            NO_DEFAULT_PATH
-        )
-
-        if(YYJSON_STATIC_LIBRARY_BUNDLED AND NOT TARGET yyjson::yyjson_static)
-            add_library(yyjson::yyjson_static UNKNOWN IMPORTED)
-            set_target_properties(yyjson::yyjson_static PROPERTIES
-                IMPORTED_LOCATION \"\${YYJSON_STATIC_LIBRARY_BUNDLED}\"
-                INTERFACE_INCLUDE_DIRECTORIES \"\${YYJSON_INCLUDE_DIR_BUNDLED}\"
-            )
-        endif()
-    endif()
-else()
-    # Try to find system yyjson (require minimum version 0.10.0)
-    find_dependency(yyjson 0.10.0 QUIET)
-    if(NOT yyjson_FOUND)
-        message(WARNING \"yyjson not found or version too old. Minimum version 0.10.0 is required.\")
-    endif()
-endif()
-
 # GHC_FILESYSTEM dependency (header-only)
 find_path(GHC_FILESYSTEM_INCLUDE_DIR_BUNDLED
     NAMES ghc/filesystem.hpp
@@ -259,6 +211,70 @@ if(GHC_FILESYSTEM_INCLUDE_DIR_BUNDLED AND NOT TARGET ghc_filesystem)
 else()
     # Try to find system ghc_filesystem
     find_dependency(ghc_filesystem QUIET)
+endif()
+
+# UNORDERED_DENSE dependency (header-only)
+find_path(UNORDERED_DENSE_INCLUDE_DIR_BUNDLED
+    NAMES ankerl/unordered_dense.h
+    PATHS \${_IMPORT_PREFIX}/include
+    NO_DEFAULT_PATH
+)
+
+if(UNORDERED_DENSE_INCLUDE_DIR_BUNDLED AND NOT TARGET unordered_dense::unordered_dense)
+    add_library(unordered_dense::unordered_dense INTERFACE IMPORTED)
+    set_target_properties(unordered_dense::unordered_dense PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES \"\${UNORDERED_DENSE_INCLUDE_DIR_BUNDLED}\"
+    )
+else()
+    find_dependency(unordered_dense QUIET)
+endif()
+
+# SIMDJSON dependency
+find_library(SIMDJSON_LIBRARY_BUNDLED
+    NAMES simdjson libsimdjson
+    PATHS \${_IMPORT_PREFIX}/lib
+    NO_DEFAULT_PATH
+)
+
+if(SIMDJSON_LIBRARY_BUNDLED)
+    # Found simdjson that was built with this package
+    find_path(SIMDJSON_INCLUDE_DIR_BUNDLED
+        NAMES simdjson.h
+        PATHS \${_IMPORT_PREFIX}/include
+        NO_DEFAULT_PATH
+    )
+
+    if(SIMDJSON_INCLUDE_DIR_BUNDLED)
+        # Create shared target if not exists
+        if(NOT TARGET simdjson::simdjson)
+            add_library(simdjson::simdjson UNKNOWN IMPORTED)
+            set_target_properties(simdjson::simdjson PROPERTIES
+                IMPORTED_LOCATION \"\${SIMDJSON_LIBRARY_BUNDLED}\"
+                INTERFACE_INCLUDE_DIRECTORIES \"\${SIMDJSON_INCLUDE_DIR_BUNDLED}\"
+            )
+        endif()
+
+        # Also look for static version
+        find_library(SIMDJSON_STATIC_LIBRARY_BUNDLED
+            NAMES simdjson_static libsimdjson_static
+            PATHS \${_IMPORT_PREFIX}/lib
+            NO_DEFAULT_PATH
+        )
+
+        if(SIMDJSON_STATIC_LIBRARY_BUNDLED AND NOT TARGET simdjson::simdjson_static)
+            add_library(simdjson::simdjson_static UNKNOWN IMPORTED)
+            set_target_properties(simdjson::simdjson_static PROPERTIES
+                IMPORTED_LOCATION \"\${SIMDJSON_STATIC_LIBRARY_BUNDLED}\"
+                INTERFACE_INCLUDE_DIRECTORIES \"\${SIMDJSON_INCLUDE_DIR_BUNDLED}\"
+            )
+        endif()
+    endif()
+else()
+    # Try to find system simdjson (require minimum version 3.0.0)
+    find_dependency(simdjson 3.0.0 QUIET)
+    if(NOT simdjson_FOUND)
+        message(WARNING \"simdjson not found or version too old. Minimum version 3.0.0 is required.\")
+    endif()
 endif()
 
 # CPP-LOGGER dependency
@@ -286,6 +302,151 @@ if(CPP_LOGGER_LIBRARY_BUNDLED)
 else()
     # Try to find system cpp-logger
     find_dependency(cpp-logger QUIET)
+endif()
+
+# LZ4 dependency (used by RocksDB)
+find_library(LZ4_LIBRARY_BUNDLED
+    NAMES lz4 liblz4
+    PATHS \${_IMPORT_PREFIX}/lib
+    NO_DEFAULT_PATH
+)
+
+if(LZ4_LIBRARY_BUNDLED)
+    find_path(LZ4_INCLUDE_DIR_BUNDLED
+        NAMES lz4.h
+        PATHS \${_IMPORT_PREFIX}/include
+        NO_DEFAULT_PATH
+    )
+
+    if(LZ4_INCLUDE_DIR_BUNDLED AND NOT TARGET lz4::lz4)
+        add_library(lz4::lz4 UNKNOWN IMPORTED)
+        set_target_properties(lz4::lz4 PROPERTIES
+            IMPORTED_LOCATION \"\${LZ4_LIBRARY_BUNDLED}\"
+            INTERFACE_INCLUDE_DIRECTORIES \"\${LZ4_INCLUDE_DIR_BUNDLED}\"
+        )
+    endif()
+else()
+    find_dependency(lz4 QUIET)
+endif()
+
+# ZSTD dependency (compression)
+find_library(ZSTD_LIBRARY_BUNDLED
+    NAMES zstd libzstd
+    PATHS \${_IMPORT_PREFIX}/lib
+    NO_DEFAULT_PATH
+)
+
+if(ZSTD_LIBRARY_BUNDLED)
+    find_path(ZSTD_INCLUDE_DIR_BUNDLED
+        NAMES zstd.h
+        PATHS \${_IMPORT_PREFIX}/include
+        NO_DEFAULT_PATH
+    )
+
+    if(ZSTD_INCLUDE_DIR_BUNDLED AND NOT TARGET zstd::libzstd_shared)
+        add_library(zstd::libzstd_shared UNKNOWN IMPORTED)
+        set_target_properties(zstd::libzstd_shared PROPERTIES
+            IMPORTED_LOCATION \"\${ZSTD_LIBRARY_BUNDLED}\"
+            INTERFACE_INCLUDE_DIRECTORIES \"\${ZSTD_INCLUDE_DIR_BUNDLED}\"
+        )
+    endif()
+
+    # Also look for static version
+    find_library(ZSTD_STATIC_LIBRARY_BUNDLED
+        NAMES zstd_static libzstd_static
+        PATHS \${_IMPORT_PREFIX}/lib
+        NO_DEFAULT_PATH
+    )
+
+    if(ZSTD_STATIC_LIBRARY_BUNDLED AND NOT TARGET zstd::libzstd_static)
+        add_library(zstd::libzstd_static UNKNOWN IMPORTED)
+        set_target_properties(zstd::libzstd_static PROPERTIES
+            IMPORTED_LOCATION \"\${ZSTD_STATIC_LIBRARY_BUNDLED}\"
+            INTERFACE_INCLUDE_DIRECTORIES \"\${ZSTD_INCLUDE_DIR_BUNDLED}\"
+        )
+    endif()
+else()
+    find_dependency(zstd QUIET)
+endif()
+
+# ROCKSDB dependency (database for indexing)
+find_library(ROCKSDB_LIBRARY_BUNDLED
+    NAMES rocksdb librocksdb
+    PATHS \${_IMPORT_PREFIX}/lib
+    NO_DEFAULT_PATH
+)
+
+if(ROCKSDB_LIBRARY_BUNDLED)
+    find_path(ROCKSDB_INCLUDE_DIR_BUNDLED
+        NAMES rocksdb/db.h
+        PATHS \${_IMPORT_PREFIX}/include
+        NO_DEFAULT_PATH
+    )
+
+    if(ROCKSDB_INCLUDE_DIR_BUNDLED AND NOT TARGET RocksDB::rocksdb)
+        add_library(RocksDB::rocksdb UNKNOWN IMPORTED)
+        set_target_properties(RocksDB::rocksdb PROPERTIES
+            IMPORTED_LOCATION \"\${ROCKSDB_LIBRARY_BUNDLED}\"
+            INTERFACE_INCLUDE_DIRECTORIES \"\${ROCKSDB_INCLUDE_DIR_BUNDLED}\"
+        )
+    endif()
+
+    # Also look for static version
+    find_library(ROCKSDB_STATIC_LIBRARY_BUNDLED
+        NAMES rocksdb_static librocksdb_static rocksdb
+        PATHS \${_IMPORT_PREFIX}/lib
+        NO_DEFAULT_PATH
+    )
+
+    if(ROCKSDB_STATIC_LIBRARY_BUNDLED AND NOT TARGET RocksDB::rocksdb-shared)
+        add_library(RocksDB::rocksdb-shared UNKNOWN IMPORTED)
+        set_target_properties(RocksDB::rocksdb-shared PROPERTIES
+            IMPORTED_LOCATION \"\${ROCKSDB_STATIC_LIBRARY_BUNDLED}\"
+            INTERFACE_INCLUDE_DIRECTORIES \"\${ROCKSDB_INCLUDE_DIR_BUNDLED}\"
+        )
+    endif()
+else()
+    find_dependency(RocksDB QUIET)
+endif()
+
+# NANOARROW dependency (Arrow support)
+find_library(NANOARROW_LIBRARY_BUNDLED
+    NAMES nanoarrow libnanoarrow
+    PATHS \${_IMPORT_PREFIX}/lib
+    NO_DEFAULT_PATH
+)
+
+if(NANOARROW_LIBRARY_BUNDLED)
+    find_path(NANOARROW_INCLUDE_DIR_BUNDLED
+        NAMES nanoarrow/nanoarrow.h
+        PATHS \${_IMPORT_PREFIX}/include
+        NO_DEFAULT_PATH
+    )
+
+    if(NANOARROW_INCLUDE_DIR_BUNDLED AND NOT TARGET nanoarrow::nanoarrow)
+        add_library(nanoarrow::nanoarrow UNKNOWN IMPORTED)
+        set_target_properties(nanoarrow::nanoarrow PROPERTIES
+            IMPORTED_LOCATION \"\${NANOARROW_LIBRARY_BUNDLED}\"
+            INTERFACE_INCLUDE_DIRECTORIES \"\${NANOARROW_INCLUDE_DIR_BUNDLED}\"
+        )
+    endif()
+
+    # Also look for static version
+    find_library(NANOARROW_STATIC_LIBRARY_BUNDLED
+        NAMES nanoarrow_static libnanoarrow_static
+        PATHS \${_IMPORT_PREFIX}/lib
+        NO_DEFAULT_PATH
+    )
+
+    if(NANOARROW_STATIC_LIBRARY_BUNDLED AND NOT TARGET nanoarrow::nanoarrow_static)
+        add_library(nanoarrow::nanoarrow_static UNKNOWN IMPORTED)
+        set_target_properties(nanoarrow::nanoarrow_static PROPERTIES
+            IMPORTED_LOCATION \"\${NANOARROW_STATIC_LIBRARY_BUNDLED}\"
+            INTERFACE_INCLUDE_DIRECTORIES \"\${NANOARROW_INCLUDE_DIR_BUNDLED}\"
+        )
+    endif()
+else()
+    find_dependency(nanoarrow QUIET)
 endif()
 
 # Include the targets file

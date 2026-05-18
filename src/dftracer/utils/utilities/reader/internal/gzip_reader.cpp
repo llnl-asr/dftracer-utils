@@ -368,6 +368,7 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
     std::size_t start = config.start();
     std::size_t end = config.end();
     std::size_t buffer_size = config.buffer_size();
+    bool extend_to_line_boundary = config.extend_to_line_boundary();
 
     // Convert line range to byte range if needed
     std::size_t start_bytes = start;
@@ -472,6 +473,8 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             // Single line-aligned bytes at a time
             auto line_byte_stream =
                 std::make_unique<GzipLineByteStream>(buffer_size);
+            line_byte_stream->set_extend_to_line_boundary(
+                extend_to_line_boundary);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
 
@@ -488,6 +491,8 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             // Multiple line-aligned bytes per read
             auto line_byte_stream =
                 std::make_unique<GzipLineByteStream>(buffer_size);
+            line_byte_stream->set_extend_to_line_boundary(
+                extend_to_line_boundary);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
             return line_byte_stream;
@@ -496,6 +501,8 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             // Single parsed line per read
             auto line_byte_stream =
                 std::make_unique<GzipLineByteStream>(buffer_size);
+            line_byte_stream->set_extend_to_line_boundary(
+                extend_to_line_boundary);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
 
@@ -511,6 +518,8 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             // Multiple parsed lines per read
             auto line_byte_stream =
                 std::make_unique<GzipLineByteStream>(buffer_size);
+            line_byte_stream->set_extend_to_line_boundary(
+                extend_to_line_boundary);
             line_byte_stream->initialize(gz_path, start_bytes, end_bytes,
                                          *indexer);
 

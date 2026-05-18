@@ -1,26 +1,28 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/core/rocksdb/column_families.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_augmentation.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_resolver_utility.h>
-#include <dftracer/utils/utilities/composites/dft/aggregators/chunk_aggregator_utility.h>
-#include <dftracer/utils/utilities/composites/dft/aggregators/chunk_mapper_utility.h>
-#include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator_utility.h>
-#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
-#include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #endif
 
-#include <unistd.h>
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 
 #include <algorithm>
 #include <atomic>
-#include <ctime>
 #include <set>
+#include <unordered_set>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
@@ -53,13 +55,8 @@ AggregatorInput& AggregatorInput::with_force_rebuild(bool force) {
     return *this;
 }
 
-AggregatorInput& AggregatorInput::with_chunk_size_mb(std::size_t mb) {
-    chunk_size_mb = mb;
-    return *this;
-}
-
-AggregatorInput& AggregatorInput::with_batch_size_mb(std::size_t mb) {
-    batch_size_mb = mb;
+AggregatorInput& AggregatorInput::with_parallelism(std::size_t n) {
+    parallelism = n;
     return *this;
 }
 
@@ -80,25 +77,35 @@ using common::arrow::RecordBatchBuilder;
 ArrowExportResult AggregationBatch::to_arrow() const {
     RecordBatchBuilder builder;
 
-    // Discover the union of extra key IDs and custom metric names.
-    std::set<std::uint32_t> extra_key_id_set;
-    std::set<std::string_view, std::less<>> custom_metric_name_set;
-    for (const auto& [key, metrics] : entries) {
-        if (key.extra_keys && !key.extra_keys->empty()) {
-            for (const auto& [k, v] : *key.extra_keys) {
-                extra_key_id_set.insert(k);
+    // Use precomputed global columns if available, otherwise discover locally.
+    std::vector<std::uint32_t> local_extra_key_ids;
+    std::vector<std::string> local_custom_metric_names;
+    if (!global_extra_key_ids || !global_custom_metric_names) {
+        std::set<std::uint32_t> extra_key_id_set;
+        std::set<std::string_view, std::less<>> custom_metric_name_set;
+        for (const auto& entry : entries) {
+            if (entry.key.extra_keys && !entry.key.extra_keys->empty()) {
+                for (const auto& [k, v] : *entry.key.extra_keys) {
+                    extra_key_id_set.insert(k);
+                }
+            }
+            if (entry.metrics.custom_metrics &&
+                !entry.metrics.custom_metrics->empty()) {
+                for (const auto& [name, _] : *entry.metrics.custom_metrics) {
+                    custom_metric_name_set.insert(name);
+                }
             }
         }
-        if (metrics.custom_metrics && !metrics.custom_metrics->empty()) {
-            for (const auto& [name, _] : *metrics.custom_metrics) {
-                custom_metric_name_set.insert(name);
-            }
-        }
+        local_extra_key_ids.assign(extra_key_id_set.begin(),
+                                   extra_key_id_set.end());
+        local_custom_metric_names.assign(custom_metric_name_set.begin(),
+                                         custom_metric_name_set.end());
     }
-    std::vector<std::uint32_t> extra_key_ids(extra_key_id_set.begin(),
-                                             extra_key_id_set.end());
-    std::vector<std::string_view> custom_metric_names(
-        custom_metric_name_set.begin(), custom_metric_name_set.end());
+    const auto& extra_key_ids =
+        global_extra_key_ids ? *global_extra_key_ids : local_extra_key_ids;
+    const auto& custom_metric_names = global_custom_metric_names
+                                          ? *global_custom_metric_names
+                                          : local_custom_metric_names;
 
     // Build schema: batch_type + fixed columns + extra keys + custom metrics
     std::vector<common::arrow::ColumnSpec> schema = {
@@ -114,11 +121,16 @@ ArrowExportResult AggregationBatch::to_arrow() const {
         {"size_std", ColumnType::DOUBLE},   {"ts", ColumnType::UINT64},
         {"te", ColumnType::UINT64},
     };
+    // Add CI columns when batch has approximated entries
+    if (has_approximated_entries) {
+        schema.push_back({"count_ci_lower", ColumnType::DOUBLE});
+        schema.push_back({"count_ci_upper", ColumnType::DOUBLE});
+    }
     for (auto id : extra_key_ids) {
         schema.push_back({std::string(aggregation_intern().resolve(id)),
                           ColumnType::STRING});
     }
-    // Custom metric suffixed names — need owned strings for ColumnSpec
+    // Custom metric suffixed names
     struct MetricSuffix {
         const char* suffix;
         ColumnType type;
@@ -141,7 +153,9 @@ ArrowExportResult AggregationBatch::to_arrow() const {
     builder.declare_schema(schema);
     builder.reserve(entries.size());
 
-    for (const auto& [key, metrics] : entries) {
+    for (const auto& entry : entries) {
+        const auto& key = entry.key;
+        const auto& metrics = entry.metrics;
         std::size_t ci = 0;
         builder.append_int64(ci++, static_cast<int64_t>(batch_type));
         builder.append_string(ci++, key.cat());
@@ -157,12 +171,12 @@ ArrowExportResult AggregationBatch::to_arrow() const {
                               metrics.count > 0 ? metrics.duration.min : 0);
         builder.append_uint64(ci++, metrics.duration.max);
         builder.append_double(ci++, metrics.duration.mean);
-        builder.append_double(ci++, metrics.get_stddev_duration());
+        builder.append_double(ci++, metrics.duration.get_stddev());
         builder.append_uint64(ci++, metrics.size.total);
         builder.append_uint64(ci++, metrics.count > 0 ? metrics.size.min : 0);
         builder.append_uint64(ci++, metrics.size.max);
         builder.append_double(ci++, metrics.size.mean);
-        builder.append_double(ci++, metrics.get_stddev_size());
+        builder.append_double(ci++, metrics.size.get_stddev());
         builder.append_uint64(ci++, metrics.ts);
         builder.append_uint64(ci++, metrics.te);
 
@@ -192,7 +206,7 @@ ArrowExportResult AggregationBatch::to_arrow() const {
                     builder.append_uint64(ci++, metrics.count > 0 ? ms.min : 0);
                     builder.append_uint64(ci++, ms.max);
                     builder.append_double(ci++, ms.mean);
-                    builder.append_double(ci++, ms.get_stddev(metrics.count));
+                    builder.append_double(ci++, ms.get_stddev());
                     continue;
                 }
             }
@@ -200,7 +214,268 @@ ArrowExportResult AggregationBatch::to_arrow() const {
                 builder.append_null(ci++);
         }
 
+        // Add CI columns when batch has approximated entries
+        if (has_approximated_entries) {
+            builder.append_double(ci++, entry.count_ci.lower);
+            builder.append_double(ci++, entry.count_ci.upper);
+        }
+
         builder.end_row();
+    }
+
+    return builder.finish();
+}
+
+// ---------------------------------------------------------------------------
+// AggregationBatch::to_dfanalyzer_arrow
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// IO category constants matching dfanalyzer IOCategory enum
+enum class IOCategory : std::int8_t {
+    READ = 1,
+    WRITE = 2,
+    METADATA = 3,
+    PCTL = 4,
+    IPC = 5,
+    OTHER = 6,
+    SYNC = 7,
+};
+
+IOCategory get_io_category(std::string_view func_name) {
+    // Read functions
+    if (func_name == "read" || func_name == "pread" || func_name == "readv" ||
+        func_name == "preadv" || func_name == "fread") {
+        return IOCategory::READ;
+    }
+    // Write functions
+    if (func_name == "write" || func_name == "pwrite" ||
+        func_name == "writev" || func_name == "pwritev" ||
+        func_name == "fwrite") {
+        return IOCategory::WRITE;
+    }
+    // Sync functions
+    if (func_name == "fsync" || func_name == "fdatasync" ||
+        func_name == "msync" || func_name == "sync") {
+        return IOCategory::SYNC;
+    }
+    // Metadata functions
+    if (func_name == "open" || func_name == "open64" || func_name == "close" ||
+        func_name == "fopen" || func_name == "fopen64" ||
+        func_name == "fclose" || func_name == "stat" || func_name == "fstat" ||
+        func_name == "lstat" || func_name == "fstatat" ||
+        func_name == "__xstat" || func_name == "__xstat64" ||
+        func_name == "__lxstat" || func_name == "__lxstat64" ||
+        func_name == "__fxstat" || func_name == "__fxstat64" ||
+        func_name == "access" || func_name == "lseek" ||
+        func_name == "lseek64" || func_name == "fseek" ||
+        func_name == "ftell" || func_name == "seek" || func_name == "fcntl" ||
+        func_name == "ftruncate" || func_name == "mkdir" ||
+        func_name == "rmdir" || func_name == "unlink" ||
+        func_name == "remove" || func_name == "rename" || func_name == "link" ||
+        func_name == "readlink" || func_name == "opendir" ||
+        func_name == "closedir" || func_name == "readdir") {
+        return IOCategory::METADATA;
+    }
+    return IOCategory::OTHER;
+}
+
+std::string resolve_hash(
+    const std::unordered_map<std::string, std::string>* hash_table,
+    std::string_view hash) {
+    if (!hash_table || hash.empty()) return std::string(hash);
+    auto it = hash_table->find(std::string(hash));
+    if (it != hash_table->end()) return it->second;
+    return std::string(hash);
+}
+
+std::string build_proc_name(std::string_view host_name, std::string_view hhash,
+                            std::uint64_t pid, std::uint64_t tid) {
+    std::string result = "app#";
+    if (!host_name.empty()) {
+        result.append(host_name);
+    } else if (!hhash.empty()) {
+        result.append(hhash);
+    } else {
+        result.append("unknown");
+    }
+    result.push_back('#');
+    result.append(std::to_string(pid));
+    result.push_back('#');
+    result.append(std::to_string(tid));
+    return result;
+}
+
+}  // namespace
+
+ArrowExportResult AggregationBatch::to_dfanalyzer_arrow(
+    const DfanalyzerContext& ctx) const {
+    RecordBatchBuilder builder;
+
+    // Bucket width in microseconds
+    auto bucket_width_us =
+        static_cast<std::uint64_t>(ctx.time_granularity * ctx.time_resolution);
+
+    if (batch_type == AggregationBatchType::SYSTEM) {
+        // System metrics schema
+        std::vector<common::arrow::ColumnSpec> schema = {
+            {"host_hash", ColumnType::STRING},
+            {"time_range", ColumnType::INT64},
+            {"sys_cpu_iowait_pct", ColumnType::DOUBLE},
+            {"sys_cpu_user_pct", ColumnType::DOUBLE},
+            {"sys_cpu_system_pct", ColumnType::DOUBLE},
+            {"sys_cpu_idle_pct", ColumnType::DOUBLE},
+            {"sys_core_iowait_pct_max", ColumnType::DOUBLE},
+            {"sys_core_iowait_pct_p95", ColumnType::DOUBLE},
+            {"sys_mem_dirty", ColumnType::DOUBLE},
+            {"sys_mem_cached", ColumnType::DOUBLE},
+            {"sys_mem_available", ColumnType::DOUBLE},
+        };
+        builder.declare_schema(schema);
+        builder.reserve(entries.size());
+
+        for (const auto& entry : entries) {
+            const auto& key = entry.key;
+            const auto& metrics = entry.metrics;
+            std::size_t ci = 0;
+
+            builder.append_string(ci++, key.hhash());
+            auto time_range =
+                bucket_width_us > 0
+                    ? static_cast<std::int64_t>(
+                          (key.time_bucket - ctx.time_origin) / bucket_width_us)
+                    : 0;
+            builder.append_int64(ci++, time_range);
+
+            // Extract system metrics from custom_metrics
+            auto get_metric = [&](const char* name) -> double {
+                if (!metrics.custom_metrics) return 0.0;
+                auto it = metrics.custom_metrics->find(name);
+                if (it == metrics.custom_metrics->end()) return 0.0;
+                return it->second.mean;
+            };
+            auto get_metric_max = [&](const char* name) -> double {
+                if (!metrics.custom_metrics) return 0.0;
+                auto it = metrics.custom_metrics->find(name);
+                if (it == metrics.custom_metrics->end()) return 0.0;
+                return static_cast<double>(it->second.max);
+            };
+
+            builder.append_double(ci++, get_metric("iowait_pct"));
+            builder.append_double(ci++, get_metric("user_pct"));
+            builder.append_double(ci++, get_metric("system_pct"));
+            builder.append_double(ci++, get_metric("idle_pct"));
+            builder.append_double(ci++, get_metric_max("iowait_pct"));
+            builder.append_double(ci++,
+                                  get_metric("iowait_pct"));  // p95 approx
+            builder.append_double(ci++, get_metric("Dirty"));
+            builder.append_double(ci++, get_metric("Cached"));
+            builder.append_double(ci++, get_metric("MemAvailable"));
+
+            builder.end_row();
+        }
+    } else {
+        // Events/Profiles schema
+        std::vector<common::arrow::ColumnSpec> schema = {
+            {"cat", ColumnType::STRING},
+            {"func_name", ColumnType::STRING},
+            {"pid", ColumnType::INT64},
+            {"tid", ColumnType::INT64},
+            {"file_hash", ColumnType::STRING},
+            {"host_hash", ColumnType::STRING},
+            {"file_name", ColumnType::STRING},
+            {"host_name", ColumnType::STRING},
+            {"proc_name", ColumnType::STRING},
+            {"io_cat", ColumnType::INT64},
+            {"acc_pat", ColumnType::INT64},
+            {"count", ColumnType::INT64},
+            {"time", ColumnType::DOUBLE},
+            {"size", ColumnType::INT64},
+            {"time_min", ColumnType::DOUBLE},
+            {"time_max", ColumnType::DOUBLE},
+            {"size_min", ColumnType::INT64},
+            {"size_max", ColumnType::INT64},
+            {"time_range", ColumnType::INT64},
+            {"time_start", ColumnType::INT64},
+            {"time_end", ColumnType::INT64},
+        };
+        builder.declare_schema(schema);
+        builder.reserve(entries.size());
+
+        for (const auto& entry : entries) {
+            const auto& key = entry.key;
+            const auto& metrics = entry.metrics;
+            std::size_t ci = 0;
+
+            auto fhash = key.fhash();
+            auto hhash = key.hhash();
+            auto file_name = resolve_hash(ctx.file_hashes, fhash);
+            auto host_name = resolve_hash(ctx.host_hashes, hhash);
+            auto proc_name =
+                build_proc_name(host_name, hhash, key.pid, key.tid);
+            auto io_cat = get_io_category(key.name());
+
+            builder.append_string(ci++, key.cat());
+            builder.append_string(ci++, key.name());
+            builder.append_int64(ci++, static_cast<std::int64_t>(key.pid));
+            builder.append_int64(ci++, static_cast<std::int64_t>(key.tid));
+            builder.append_string(ci++, fhash);
+            builder.append_string(ci++, hhash);
+            builder.append_string(ci++, file_name);
+            builder.append_string(ci++, host_name);
+            builder.append_string(ci++, proc_name);
+            builder.append_int64(ci++, static_cast<std::int64_t>(io_cat));
+            builder.append_int64(ci++, 0);  // acc_pat always 0
+
+            builder.append_int64(ci++,
+                                 static_cast<std::int64_t>(metrics.count));
+            // time: duration in seconds (dur_total is in us)
+            builder.append_double(ci++,
+                                  static_cast<double>(metrics.duration.total) /
+                                      ctx.time_resolution);
+            // size: nullable (0 means null)
+            if (metrics.size.total > 0) {
+                builder.append_int64(
+                    ci++, static_cast<std::int64_t>(metrics.size.total));
+            } else {
+                builder.append_null(ci++);
+            }
+            // time_min/max in seconds
+            builder.append_double(
+                ci++, metrics.count > 0
+                          ? static_cast<double>(metrics.duration.min) /
+                                ctx.time_resolution
+                          : 0.0);
+            builder.append_double(ci++,
+                                  static_cast<double>(metrics.duration.max) /
+                                      ctx.time_resolution);
+            // size_min/max: nullable
+            if (metrics.size.total > 0 && metrics.count > 0) {
+                builder.append_int64(
+                    ci++, static_cast<std::int64_t>(metrics.size.min));
+                builder.append_int64(
+                    ci++, static_cast<std::int64_t>(metrics.size.max));
+            } else {
+                builder.append_null(ci++);
+                builder.append_null(ci++);
+            }
+
+            // time_range: normalized bucket index
+            auto time_range =
+                bucket_width_us > 0
+                    ? static_cast<std::int64_t>(
+                          (key.time_bucket - ctx.time_origin) / bucket_width_us)
+                    : 0;
+            builder.append_int64(ci++, time_range);
+            // time_start/end: relative to time_origin (still in us)
+            builder.append_int64(
+                ci++, static_cast<std::int64_t>(metrics.ts - ctx.time_origin));
+            builder.append_int64(
+                ci++, static_cast<std::int64_t>(metrics.te - ctx.time_origin));
+
+            builder.end_row();
+        }
     }
 
     return builder.finish();
@@ -208,179 +483,244 @@ ArrowExportResult AggregationBatch::to_arrow() const {
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
 
 // ---------------------------------------------------------------------------
-// AggregatorUtility::process
+// AggregatorUtility::process - parallel, RocksDB-backed, fused pipeline
 // ---------------------------------------------------------------------------
 
 coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     const AggregatorInput& input) {
-    // Resolve index directory — create a temp one if not specified.
-    std::string effective_index_dir = input.index_dir;
-    std::string temp_index_dir;
-    if (effective_index_dir.empty()) {
-        try {
-            auto temp_path = fs::temp_directory_path();
-            temp_path /= "dftracer_idx_" + std::to_string(std::time(nullptr)) +
-                         "_" + std::to_string(getpid());
-            temp_index_dir = temp_path.string();
-            fs::create_directories(temp_index_dir);
-        } catch (const fs::filesystem_error&) {
-            temp_index_dir = "/tmp/dftracer_idx_" +
-                             std::to_string(std::time(nullptr)) + "_" +
-                             std::to_string(getpid());
-            fs::create_directories(temp_index_dir);
-        }
-        effective_index_dir = temp_index_dir;
+    if (!has_context()) {
+        DFTRACER_UTILS_LOG_ERROR(
+            "AggregatorUtility requires CoroScope context. "
+            "Use Runtime::scope() to run this utility.");
+        co_return;
+    }
+    CoroScope& scope = context();
+
+    // Determine parallelism
+    std::size_t parallelism = input.parallelism;
+    if (parallelism == 0) {
+        parallelism = dftracer_utils_hardware_concurrency();
     }
 
-    // Discover input files.
-    filesystem::PatternDirectoryScannerUtility scanner;
-    filesystem::PatternDirectoryScannerUtilityInput scan_input{
-        input.directory, {".pfw", ".pfw.gz"}, false};
-    auto matched_entries = co_await scanner.process(scan_input);
+    // Resolve files and index path with aggregation cache check
+    indexing::IndexResolverUtility resolver;
+    indexing::ResolverInput resolver_input;
+    resolver_input.directory = input.directory;
+    resolver_input.index_dir = input.index_dir;
+    resolver_input.require_aggregation = !input.force_rebuild;
+    resolver_input.aggregation_config = input.config;
+    auto scan_result = co_await scope.spawn(resolver, resolver_input);
 
-    std::vector<std::string> input_files;
-    input_files.reserve(matched_entries.size());
-    for (const auto& entry : matched_entries) {
-        input_files.push_back(entry.path.string());
-    }
-
-    if (input_files.empty()) {
+    if (scan_result.all_files.empty()) {
         DFTRACER_UTILS_LOG_WARN("No .pfw or .pfw.gz files found in: %s",
                                 input.directory.c_str());
-        co_yield AggregationBatch{};
         co_return;
     }
 
-    // Sequential pipeline: index → metadata → chunk map → aggregate → merge.
-    // Parallelism at the file/chunk level is left to the caller (e.g. the
-    // CLI binary uses CoroScope workers; Python callers use the Runtime).
-    EventAggregatorUtility merger;
-    std::atomic<int> global_chunk_idx{0};
+    DFTRACER_UTILS_LOG_INFO(
+        "Found %zu files (%zu need checkpoint, %zu need aggregation, %zu "
+        "cached)",
+        scan_result.all_files.size(), scan_result.needs_checkpoint.size(),
+        scan_result.needs_aggregation.size(), scan_result.cached.size());
 
-    if (input.force_rebuild && !input_files.empty()) {
-        const std::string shared_index_path =
-            composites::dft::internal::determine_index_path(
-                input_files.front(), effective_index_dir);
-        if (fs::exists(shared_index_path)) {
-            fs::remove_all(shared_index_path);
-        }
+    const auto& shared_index_path = scan_result.index_path;
+
+    // Force rebuild: clear existing index
+    if (input.force_rebuild && fs::exists(shared_index_path)) {
+        DFTRACER_UTILS_LOG_INFO("Clearing shared index store: %s",
+                                shared_index_path.c_str());
+        fs::remove_all(shared_index_path);
     }
 
-    for (const auto& file_path : input_files) {
-        bool is_compressed =
-            file_path.size() >= 3 &&
-            file_path.compare(file_path.size() - 3, 3, ".gz") == 0;
+    // Open RocksDB-backed aggregator with merge operator
+    auto agg_db = EventAggregator::open_with_merge_operator(shared_index_path);
+    auto merger = std::make_unique<EventAggregator>(agg_db, 0);
 
-        std::string idx_path;
-        if (is_compressed) {
-            idx_path = composites::dft::internal::determine_index_path(
-                file_path, effective_index_dir);
-            auto idx_input = indexer::IndexBuildConfig::for_file(file_path)
-                                 .with_checkpoint_size(input.checkpoint_size)
-                                 .with_force_rebuild(false)
-                                 .with_index_dir(effective_index_dir);
-            co_await indexer::IndexBuilderUtility{}.process(idx_input);
-        }
-
-        // Collect file metadata (line count, size, etc.).
-        auto meta_input =
-            composites::dft::MetadataCollectorUtilityInput::from_file(file_path)
-                .with_checkpoint_size(input.checkpoint_size)
-                .with_force_rebuild(false)
-                .with_index(idx_path);
-        auto metadata =
-            co_await composites::dft::MetadataCollectorUtility{}.process(
-                meta_input);
-
-        if (!metadata.success) {
-            DFTRACER_UTILS_LOG_WARN("Skipping file (metadata failed): %s",
-                                    file_path.c_str());
-            continue;
-        }
-
-        // Partition the file into byte-range chunks.
-        FileChunkMapperUtility file_mapper;
-        auto file_chunks = co_await file_mapper.process(
-            FileChunkMapperInput::from_metadata(metadata)
-                .with_config(input.config)
-                .with_checkpoint_size(input.checkpoint_size)
-                .with_target_chunk_size(input.chunk_size_mb)
-                .with_batch_size(input.batch_size_mb * 1024 * 1024));
-
-        int start_idx =
-            global_chunk_idx.fetch_add(static_cast<int>(file_chunks.size()));
-        for (int i = 0; i < static_cast<int>(file_chunks.size()); ++i) {
-            file_chunks[i].chunk_index = start_idx + i;
-        }
-
-        for (auto& chunk : file_chunks) {
-            ChunkAggregatorUtility agg;
-            auto output = co_await agg.process(chunk);
-            merger.merge_chunk(std::move(output));
-        }
+    // Build list of files needing work (checkpoint or aggregation)
+    std::vector<std::string> files_needing_work;
+    files_needing_work.reserve(scan_result.needs_checkpoint.size() +
+                               scan_result.needs_aggregation.size());
+    for (auto& item : scan_result.needs_checkpoint) {
+        files_needing_work.push_back(std::move(item.file_path));
+    }
+    for (auto& item : scan_result.needs_aggregation) {
+        files_needing_work.push_back(std::move(item.file_path));
     }
 
-    // Finalize the merged aggregation map.
-    auto agg_results = merger.finalize();
+    // Index and aggregate in parallel using fused pipeline
+    if (!files_needing_work.empty()) {
+        auto agg_config_ptr = std::make_shared<AggregationConfig>(input.config);
 
-    // Resolve process-parent associations and boundary events.
-    AssociationResolverInput resolver_input;
-    resolver_input.trackers = std::move(agg_results.trackers);
-    resolver_input.aggregations = std::move(agg_results);
-    resolver_input.config = input.config;
+        auto batch_config = std::make_shared<indexer::IndexBuildBatchConfig>();
+        batch_config->file_paths = std::move(files_needing_work);
+        batch_config->index_dir = input.index_dir;
+        batch_config->checkpoint_size = input.checkpoint_size;
+        batch_config->parallelism = parallelism;
+        batch_config->force_rebuild = false;  // Already handled above
+        batch_config->use_batch_write = true;
 
-    AssociationResolverUtility resolver;
-    auto resolver_output = co_await resolver.process(resolver_input);
+        // Attach AggregationVisitor to each file during parsing
+        batch_config->dft_visitor_factory =
+            [agg_db, agg_config_ptr](const std::string& file_path)
+            -> std::vector<std::unique_ptr<composites::dft::DftEventVisitor>> {
+            std::vector<std::unique_ptr<composites::dft::DftEventVisitor>>
+                visitors;
+            visitors.push_back(std::make_unique<AggregationVisitor>(
+                agg_db, 0, *agg_config_ptr, file_path));
+            return visitors;
+        };
 
-    // Yield resolved aggregations in bounded batches, separated by type.
-    const std::size_t batch_sz = input.event_batch_size;
-    const auto& resolved = resolver_output.aggregations;
+        auto batch_result = co_await indexer::IndexBatchBuilderUtility::process(
+            &scope, std::move(batch_config));
 
-    auto yield_map = [&](AggregationMap& map, AggregationBatchType type)
-        -> coro::AsyncGenerator<AggregationBatch> {
-        AggregationBatch batch;
-        batch.batch_type = type;
-        batch.total_events_processed = resolved.total_events_processed;
-        batch.total_files_processed = resolved.total_files_processed;
-        batch.total_bytes_processed = resolved.total_bytes_processed;
-        for (auto& [key, metrics] : map) {
-            batch.entries.emplace_back(std::move(key), std::move(metrics));
-            if (batch.entries.size() >= batch_sz) {
-                co_yield std::move(batch);
-                batch = AggregationBatch{};
-                batch.batch_type = type;
-                batch.total_events_processed = resolved.total_events_processed;
-                batch.total_files_processed = resolved.total_files_processed;
-                batch.total_bytes_processed = resolved.total_bytes_processed;
+        // Drain visitors and merge results
+        std::vector<std::string> processed_files;
+        for (auto& file_visitors : batch_result.extra_visitors) {
+            for (auto& visitor : file_visitors) {
+                auto* agg_visitor =
+                    dynamic_cast<AggregationVisitor*>(visitor.get());
+                if (agg_visitor) {
+                    for (const auto& k : agg_visitor->observed_extra_keys())
+                        merger->add_observed_extra_key(k);
+                    for (const auto& m : agg_visitor->observed_custom_metrics())
+                        merger->add_observed_custom_metric(m);
+                    auto output = agg_visitor->take_output();
+                    processed_files.push_back(output.file_path);
+                    merger->merge_chunk(std::move(output));
+                }
             }
+            file_visitors.clear();
         }
-        if (!batch.entries.empty()) {
-            co_yield std::move(batch);
+
+        // Write global config and per-file markers for cache detection
+        if (!processed_files.empty()) {
+            namespace rcf = dftracer::utils::rocksdb::cf;
+            indexer::IndexDatabase idx_db(
+                shared_index_path,
+                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+
+            auto batch = agg_db->begin_batch();
+
+            // Write global config (0xFFFE key)
+            AggGlobalConfig global_cfg;
+            global_cfg.time_interval_us = input.config.time_interval_us;
+            global_cfg.config_hash = input.config.compute_hash();
+            agg_db->put(batch, rcf::AGGREGATION,
+                        std::string_view(AGG_GLOBAL_CONFIG_KEY, 2),
+                        serialize_agg_global_config(global_cfg));
+
+            // Write per-file markers (0xFFFF + file_id keys)
+            for (const auto& file_path : processed_files) {
+                int file_id = idx_db.find_file(file_path);
+                if (file_id >= 0) {
+                    agg_db->put(batch, rcf::AGGREGATION,
+                                make_agg_file_key(file_id), "");
+                }
+            }
+
+            agg_db->commit_batch(batch);
         }
+    }
+
+    // Get observed columns for consistent Arrow schema
+    auto obs = merger->observed_columns();
+    auto global_extra_key_ids =
+        std::make_shared<std::vector<std::uint32_t>>(obs.extra_key_ids);
+    auto global_custom_metric_names =
+        std::make_shared<std::vector<std::string>>(obs.custom_metric_names);
+
+    // Stable, deterministic schema ordering
+    std::sort(global_extra_key_ids->begin(), global_extra_key_ids->end());
+    std::sort(global_custom_metric_names->begin(),
+              global_custom_metric_names->end());
+
+    // Yield batches by scanning the merged aggregator
+    const std::size_t batch_sz = input.event_batch_size;
+
+    const std::size_t total_events = merger->total_events();
+    const std::size_t total_files = merger->total_files();
+
+    auto make_batch = [&](AggregationBatchType type) {
+        AggregationBatch b;
+        b.batch_type = type;
+        b.total_events_processed = total_events;
+        b.total_files_processed = total_files;
+        b.global_extra_key_ids = global_extra_key_ids.get();
+        b.global_custom_metric_names = global_custom_metric_names.get();
+        return b;
     };
 
-    // Events
-    auto event_gen = yield_map(resolver_output.aggregations.aggregations,
-                               AggregationBatchType::EVENT);
-    while (auto b = co_await event_gen.next()) co_yield std::move(*b);
+    // Collect entries grouped by type (scan callback is synchronous)
+    std::vector<AggregationEntry> event_entries;
+    std::vector<AggregationEntry> profile_entries;
+    std::vector<AggregationEntry> system_entries;
 
-    // Profiles
-    auto profile_gen =
-        yield_map(resolver_output.aggregations.profile_aggregations,
-                  AggregationBatchType::PROFILE);
-    while (auto b = co_await profile_gen.next()) co_yield std::move(*b);
+    std::size_t total_keys = 0;
+    merger->scan([&](AggMapType map_type, const AggregationKey& key,
+                     AggregationMetrics& metrics) {
+        total_keys++;
+        switch (map_type) {
+            case AggMapType::EVENT:
+                event_entries.emplace_back(key, std::move(metrics));
+                break;
+            case AggMapType::PROFILE:
+                profile_entries.emplace_back(key, std::move(metrics));
+                break;
+            case AggMapType::SYSTEM:
+                system_entries.emplace_back(key, std::move(metrics));
+                break;
+        }
+        return true;
+    });
 
-    // System
-    auto system_gen =
-        yield_map(resolver_output.aggregations.system_aggregations,
-                  AggregationBatchType::SYSTEM);
-    while (auto b = co_await system_gen.next()) co_yield std::move(*b);
-
-    // Clean up the temporary index directory if we created it.
-    if (!temp_index_dir.empty()) {
-        std::error_code ec;
-        fs::remove_all(temp_index_dir, ec);
+    // Setup augmentation if needed
+    std::optional<AugmentationConfig> aug_config;
+    if (scan_result.needs_augmentation) {
+        aug_config = AugmentationConfig{scan_result.stored_time_interval_us,
+                                        input.config.time_interval_us};
+        DFTRACER_UTILS_LOG_INFO("Augmenting time interval: %lu us -> %lu us",
+                                scan_result.stored_time_interval_us,
+                                input.config.time_interval_us);
     }
+
+    auto yield_batch = [&](AggregationBatch batch) -> AggregationBatch {
+        if (aug_config) {
+            return augment_batch(batch, *aug_config);
+        }
+        return batch;
+    };
+
+    // Yield event batches
+    for (std::size_t i = 0; i < event_entries.size(); i += batch_sz) {
+        AggregationBatch batch = make_batch(AggregationBatchType::EVENT);
+        std::size_t end = std::min(i + batch_sz, event_entries.size());
+        for (std::size_t j = i; j < end; ++j) {
+            batch.entries.push_back(std::move(event_entries[j]));
+        }
+        co_yield yield_batch(std::move(batch));
+    }
+
+    // Yield profile batches
+    for (std::size_t i = 0; i < profile_entries.size(); i += batch_sz) {
+        AggregationBatch batch = make_batch(AggregationBatchType::PROFILE);
+        std::size_t end = std::min(i + batch_sz, profile_entries.size());
+        for (std::size_t j = i; j < end; ++j) {
+            batch.entries.push_back(std::move(profile_entries[j]));
+        }
+        co_yield yield_batch(std::move(batch));
+    }
+
+    // Yield system batches
+    for (std::size_t i = 0; i < system_entries.size(); i += batch_sz) {
+        AggregationBatch batch = make_batch(AggregationBatchType::SYSTEM);
+        std::size_t end = std::min(i + batch_sz, system_entries.size());
+        for (std::size_t j = i; j < end; ++j) {
+            batch.entries.push_back(std::move(system_entries[j]));
+        }
+        co_yield yield_batch(std::move(batch));
+    }
+
+    DFTRACER_UTILS_LOG_INFO("Aggregation complete: %zu keys", total_keys);
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

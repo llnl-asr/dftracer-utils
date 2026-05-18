@@ -30,14 +30,14 @@ using dftracer::utils::utilities::composites::dft::DFTracerEvent;
 struct ChunkAggregatorInput {
     std::string file_path;
     std::string index_path;
-    std::size_t start_byte;
-    std::size_t end_byte;
-    std::size_t start_line;
-    std::size_t end_line;
+    std::size_t start_byte = 0;
+    std::size_t end_byte = 0;
+    std::size_t start_line = 0;
+    std::size_t end_line = 0;
     AggregationConfig config;
     std::optional<common::query::Query> query;
-    std::size_t checkpoint_size;
-    int chunk_index;
+    std::size_t checkpoint_size = 0;
+    int chunk_index = 0;
 
     std::size_t batch_size = 4 * 1024 * 1024;
 
@@ -87,17 +87,6 @@ struct ChunkAggregatorInput {
 class ChunkAggregatorUtility
     : public utilities::Utility<ChunkAggregatorInput, ChunkAggregationOutput,
                                 utilities::tags::Parallelizable> {
-   private:
-    std::uint64_t compute_time_bucket(std::uint64_t timestamp,
-                                      std::uint64_t duration,
-                                      const AggregationConfig& config) const;
-
-    AggregationKey build_key(const DFTracerEvent& ev,
-                             const AggregationConfig& config) const;
-
-    void update_entry(const DFTracerEvent& ev, const AggregationConfig& config,
-                      AggregationMap& aggregations, const AggregationKey& key);
-
    public:
     ChunkAggregatorUtility() = default;
 

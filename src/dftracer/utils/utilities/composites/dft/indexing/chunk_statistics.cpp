@@ -1,11 +1,13 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstring>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
@@ -30,9 +32,19 @@ void ChunkStatistics::update_from_event(std::string_view name,
     }
     std::string_view pt_sv(pt_buf, tp - pt_buf);
 
-    category_counts[std::string(cat)]++;
-    name_counts[std::string(name)]++;
-    pid_tid_counts[std::string(pt_sv)]++;
+    // Increment counts with a single lookup — allocate a string only on
+    // first observation.
+    auto bump = [](auto& map, std::string_view key) {
+        auto it = map.find(key);
+        if (it == map.end()) {
+            map.emplace(std::string(key), 1);
+        } else {
+            it->second++;
+        }
+    };
+    bump(category_counts, cat);
+    bump(name_counts, name);
+    bump(pid_tid_counts, pt_sv);
 
     if (ts < min_timestamp_us) min_timestamp_us = ts;
     std::uint64_t end_ts = ts + dur;
@@ -58,9 +70,16 @@ void ChunkStatistics::update_from_event(std::string_view name,
     double dur_d = static_cast<double>(dur);
     duration_sketch.add(dur_d);
     duration_histogram.add(dur);
+    timestamp_histogram.add(ts);
 
-    auto [sketch_it, _3] =
-        name_duration_sketches.try_emplace(std::string(name));
+    // name_duration_sketches: transparent find, allocate only on first
+    // observation, then reuse the interned key for the other name_*_ maps.
+    auto sketch_it = name_duration_sketches.find(name);
+    if (sketch_it == name_duration_sketches.end()) {
+        auto [new_it, _] = name_duration_sketches.emplace(
+            std::string(name), common::statistics::DDSketch{});
+        sketch_it = new_it;
+    }
     sketch_it->second.add(dur_d);
 
     const std::string& name_key = sketch_it->first;
@@ -105,6 +124,7 @@ void ChunkStatistics::merge_from(const ChunkStatistics& other) {
 
     duration_sketch.merge(other.duration_sketch);
     duration_histogram.merge(other.duration_histogram);
+    timestamp_histogram.merge(other.timestamp_histogram);
 
     for (const auto& [k, v] : other.name_duration_sketches) {
         name_duration_sketches[k].merge(v);
@@ -135,82 +155,66 @@ double ChunkStatistics::duration_variance() const {
 }
 
 std::string ChunkStatistics::name_category_json() const {
-    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_val* root = yyjson_mut_obj(doc);
-    yyjson_mut_doc_set_root(doc, root);
-
+    std::ostringstream ss;
+    ss << '{';
+    bool first = true;
     for (const auto& [key, value] : name_category) {
-        yyjson_mut_obj_add_str(doc, root, key.c_str(), value.c_str());
+        if (!first) ss << ',';
+        first = false;
+        ss << '"' << key << "\":\"" << value << '"';
     }
-
-    char* json_str = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, nullptr);
-    std::string result(json_str ? json_str : "{}");
-    if (json_str) free(json_str);
-    yyjson_mut_doc_free(doc);
-    return result;
+    ss << '}';
+    return ss.str();
 }
 
-std::unordered_map<std::string, std::string>
-ChunkStatistics::parse_string_map_json(const std::string& json) {
-    std::unordered_map<std::string, std::string> result;
+StringViewMap<std::string> ChunkStatistics::parse_string_map_json(
+    const std::string& json) {
+    StringViewMap<std::string> result;
 
-    yyjson_doc* doc =
-        yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-    if (!doc) return result;
+    simdjson::dom::parser parser;
+    auto parse_result = parser.parse(json.data(), json.size());
+    if (parse_result.error()) return result;
 
-    yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!root || !yyjson_is_obj(root)) {
-        yyjson_doc_free(doc);
-        return result;
-    }
+    auto root = parse_result.value_unsafe();
+    if (!root.is_object()) return result;
 
-    yyjson_obj_iter iter;
-    yyjson_obj_iter_init(root, &iter);
-    yyjson_val* key;
-    while ((key = yyjson_obj_iter_next(&iter))) {
-        yyjson_val* val = yyjson_obj_iter_get_val(key);
-        if (yyjson_is_str(val)) {
-            result[yyjson_get_str(key)] = yyjson_get_str(val);
+    auto obj = root.get_object().value_unsafe();
+    for (auto field : obj) {
+        auto val_result = field.value.get_string();
+        if (!val_result.error()) {
+            result[std::string(field.key)] =
+                std::string(val_result.value_unsafe());
         }
     }
-
-    yyjson_doc_free(doc);
     return result;
 }
 
 std::string ChunkStatistics::name_duration_histograms_json() const {
-    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_val* root = yyjson_mut_obj(doc);
-    yyjson_mut_doc_set_root(doc, root);
-
+    std::ostringstream ss;
+    ss << '{';
+    bool first = true;
     for (const auto& [key, hist] : name_duration_histograms) {
-        yyjson_mut_val* arr = hist.to_yyjson(doc);
-        yyjson_mut_obj_add_val(doc, root, key.c_str(), arr);
+        if (!first) ss << ',';
+        first = false;
+        ss << '"' << key << "\":" << hist.to_json();
     }
-
-    char* json_str = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, nullptr);
-    std::string result(json_str ? json_str : "{}");
-    if (json_str) free(json_str);
-    yyjson_mut_doc_free(doc);
-    return result;
+    ss << '}';
+    return ss.str();
 }
 
 namespace {
-std::string double_map_to_json(
-    const std::unordered_map<std::string, double>& map) {
-    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_val* root = yyjson_mut_obj(doc);
-    yyjson_mut_doc_set_root(doc, root);
-
+template <typename Map>
+std::string double_map_to_json(const Map& map) {
+    std::ostringstream ss;
+    ss << std::setprecision(17) << '{';
+    bool first = true;
     for (const auto& [key, value] : map) {
-        yyjson_mut_obj_add_real(doc, root, key.c_str(), value);
+        if (!first) ss << ',';
+        first = false;
+        ss << '"' << key << "\":" << value;
     }
-
-    char* json_str = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, nullptr);
-    std::string result(json_str ? json_str : "{}");
-    if (json_str) free(json_str);
-    yyjson_mut_doc_free(doc);
-    return result;
+    ss << '}';
+    return ss.str();
 }
 }  // namespace
 
@@ -258,89 +262,82 @@ std::vector<std::uint8_t> ChunkStatistics::serialize_name_duration_sketches()
     return buf;
 }
 
-std::unordered_map<std::string, double> ChunkStatistics::parse_double_map_json(
+StringViewMap<double> ChunkStatistics::parse_double_map_json(
     const std::string& json) {
-    std::unordered_map<std::string, double> result;
+    StringViewMap<double> result;
 
-    yyjson_doc* doc =
-        yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-    if (!doc) return result;
+    simdjson::dom::parser parser;
+    auto parse_result = parser.parse(json.data(), json.size());
+    if (parse_result.error()) return result;
 
-    yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!root || !yyjson_is_obj(root)) {
-        yyjson_doc_free(doc);
-        return result;
-    }
+    auto root = parse_result.value_unsafe();
+    if (!root.is_object()) return result;
 
-    yyjson_obj_iter iter;
-    yyjson_obj_iter_init(root, &iter);
-    yyjson_val* key;
-    while ((key = yyjson_obj_iter_next(&iter))) {
-        yyjson_val* val = yyjson_obj_iter_get_val(key);
-        if (yyjson_is_real(val)) {
-            result[yyjson_get_str(key)] = yyjson_get_real(val);
-        } else if (yyjson_is_int(val)) {
-            result[yyjson_get_str(key)] =
-                static_cast<double>(yyjson_get_int(val));
-        } else if (yyjson_is_uint(val)) {
-            result[yyjson_get_str(key)] =
-                static_cast<double>(yyjson_get_uint(val));
+    auto obj = root.get_object().value_unsafe();
+    for (auto field : obj) {
+        auto double_result = field.value.get_double();
+        if (!double_result.error()) {
+            result[std::string(field.key)] = double_result.value_unsafe();
+        } else {
+            auto int_result = field.value.get_int64();
+            if (!int_result.error()) {
+                result[std::string(field.key)] =
+                    static_cast<double>(int_result.value_unsafe());
+            } else {
+                auto uint_result = field.value.get_uint64();
+                if (!uint_result.error()) {
+                    result[std::string(field.key)] =
+                        static_cast<double>(uint_result.value_unsafe());
+                }
+            }
         }
     }
-
-    yyjson_doc_free(doc);
     return result;
 }
 
-std::unordered_map<std::string, common::statistics::Log2Histogram>
+StringViewMap<common::statistics::Log2Histogram>
 ChunkStatistics::parse_histogram_map_json(const std::string& json) {
-    std::unordered_map<std::string, common::statistics::Log2Histogram> result;
+    StringViewMap<common::statistics::Log2Histogram> result;
 
-    yyjson_doc* doc =
-        yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-    if (!doc) return result;
+    simdjson::dom::parser parser;
+    auto parse_result = parser.parse(json.data(), json.size());
+    if (parse_result.error()) return result;
 
-    yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!root || !yyjson_is_obj(root)) {
-        yyjson_doc_free(doc);
-        return result;
-    }
+    auto root = parse_result.value_unsafe();
+    if (!root.is_object()) return result;
 
-    yyjson_obj_iter iter;
-    yyjson_obj_iter_init(root, &iter);
-    yyjson_val* key;
-    while ((key = yyjson_obj_iter_next(&iter))) {
-        yyjson_val* val = yyjson_obj_iter_get_val(key);
-        if (!yyjson_is_arr(val)) continue;
+    auto obj = root.get_object().value_unsafe();
+    for (auto field : obj) {
+        if (!field.value.is_array()) continue;
 
         common::statistics::Log2Histogram hist;
-        std::size_t idx, max;
-        yyjson_val* pair;
-        yyjson_arr_foreach(val, idx, max, pair) {
-            if (!yyjson_is_arr(pair) || yyjson_arr_size(pair) != 2) continue;
-            yyjson_val* bin_idx_val = yyjson_arr_get(pair, 0);
-            yyjson_val* count_val = yyjson_arr_get(pair, 1);
-            if (!yyjson_is_uint(bin_idx_val) || !yyjson_is_uint(count_val))
-                continue;
+        auto arr = field.value.get_array().value_unsafe();
+        for (auto pair : arr) {
+            if (!pair.is_array()) continue;
+            auto pair_arr = pair.get_array().value_unsafe();
+            if (pair_arr.size() != 2) continue;
+
+            auto bin_idx_result = pair_arr.at(0).get_uint64();
+            auto count_result = pair_arr.at(1).get_uint64();
+            if (bin_idx_result.error() || count_result.error()) continue;
+
             auto bin_idx =
-                static_cast<std::size_t>(yyjson_get_uint(bin_idx_val));
-            auto count = yyjson_get_uint(count_val);
+                static_cast<std::size_t>(bin_idx_result.value_unsafe());
+            auto count = count_result.value_unsafe();
             if (bin_idx < common::statistics::Log2Histogram::NUM_BINS) {
                 hist.add(common::statistics::Log2Histogram::bin_lower(bin_idx),
                          count);
             }
         }
-        result[yyjson_get_str(key)] = std::move(hist);
+        result[std::string(field.key)] = std::move(hist);
     }
-
-    yyjson_doc_free(doc);
     return result;
 }
 
-std::unordered_map<std::string, common::statistics::DDSketch>
+StringViewMap<common::statistics::DDSketch>
 ChunkStatistics::deserialize_name_duration_sketches(const std::uint8_t* data,
                                                     std::size_t len) {
-    std::unordered_map<std::string, common::statistics::DDSketch> result;
+    StringViewMap<common::statistics::DDSketch> result;
     if (!data || len < sizeof(std::uint32_t)) return result;
 
     const std::uint8_t* p = data;

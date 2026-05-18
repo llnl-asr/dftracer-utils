@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 #include <functional>
 #include <sstream>
@@ -8,12 +9,14 @@
 
 namespace dftracer::utils::utilities::composites::dft::internal {
 
-std::string determine_index_path(const std::string& file_path,
+std::string determine_index_path(const std::string& path,
                                  const std::string& index_dir) {
-    fs::path data_path(file_path);
-    fs::path root =
-        index_dir.empty() ? data_path.parent_path() : fs::path(index_dir);
-    return (root / ".dftindex").string();
+    fs::path data_path(path);
+    fs::path root = index_dir.empty() ? (fs::is_directory(data_path)
+                                             ? data_path
+                                             : data_path.parent_path())
+                                      : fs::path(index_dir);
+    return indexer::internal::normalize_index_root(root.string());
 }
 
 std::string determine_provenance_index_path(const std::string& data_path,

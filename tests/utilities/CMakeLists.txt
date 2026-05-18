@@ -55,6 +55,7 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/statistics/test_statistics_aggregator.cpp
     composites/dft/statistics/test_statistics_query.cpp
     common/statistics/test_log2_histogram.cpp
+    common/statistics/test_timestamp_histogram.cpp
     composites/dft/statistics/test_detailed_statistics.cpp
 
     # Query language
@@ -67,9 +68,13 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/aggregators/test_aggregation_metrics.cpp
     composites/dft/aggregators/test_aggregation_key.cpp
     composites/dft/aggregators/test_aggregation_config.cpp
+    composites/dft/aggregators/test_aggregation_serialization.cpp
     composites/dft/aggregators/test_aggregator_utility.cpp
     composites/dft/aggregators/test_chunk_aggregator_utility.cpp
     composites/dft/aggregators/test_event_aggregator_utility.cpp
+    composites/dft/aggregators/test_aggregation_augmentation.cpp
+    composites/dft/aggregators/test_system_metrics.cpp
+    composites/dft/aggregators/test_system_metrics_merge_operator.cpp
 
     # DFT Comparator Composites
     composites/dft/comparator/test_comparison_result.cpp
@@ -82,6 +87,7 @@ set(UTILITIES_TEST_SOURCES
     indexer/test_index_database.cpp
     indexer/test_provenance_database.cpp
     indexer/test_index_builder.cpp
+    indexer/test_sst_ingest_spike.cpp
 
     # Compression
     compression/zlib/test_streaming_compressor.cpp
@@ -100,6 +106,12 @@ set(UTILITIES_TEST_SOURCES
     fileio/test_file_reader.cpp
     fileio/test_streaming_file_reader.cpp
     fileio/test_streaming_file_writer.cpp
+
+    # I/O Parallel
+    fileio/parallel/test_layout_sizing.cpp
+    fileio/parallel/test_striped_writer.cpp
+    fileio/parallel/test_sharded_writer.cpp
+    fileio/parallel/test_padded_striped_writer.cpp
 
     # I/O Lines
     fileio/lines/test_streaming_line_reader.cpp
@@ -160,6 +172,7 @@ endif()
 # +++++++++++++++++++++++++++++++++++++++++
 
 if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
+  # IPC Writer tests
   set(ARROW_IPC_TEST_SOURCE common/arrow/test_arrow_ipc_writer.cpp)
   string(REPLACE ".cpp" "" arrow_ipc_bin_exec ${ARROW_IPC_TEST_SOURCE})
   string(REPLACE "/" "_" arrow_ipc_target "utilities_${arrow_ipc_bin_exec}")
@@ -188,6 +201,37 @@ if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
   add_test(NAME utilities/${arrow_ipc_bin_exec} COMMAND ${arrow_ipc_target})
   set_tests_properties(utilities/${arrow_ipc_bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${arrow_ipc_workdir}")
+
+  # IPC Reader tests
+  set(ARROW_IPC_READER_SOURCE common/arrow/test_arrow_ipc_reader.cpp)
+  string(REPLACE ".cpp" "" arrow_ipc_reader_bin ${ARROW_IPC_READER_SOURCE})
+  string(REPLACE "/" "_" arrow_ipc_reader_target "utilities_${arrow_ipc_reader_bin}")
+
+  add_executable(${arrow_ipc_reader_target} ${ARROW_IPC_READER_SOURCE})
+  target_include_directories(${arrow_ipc_reader_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+  target_link_libraries(${arrow_ipc_reader_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
+  link_nanoarrow(${arrow_ipc_reader_target} STATIC)
+  target_set_warnings(${arrow_ipc_reader_target})
+  target_enable_coroutine(${arrow_ipc_reader_target})
+
+  get_filename_component(arrow_ipc_reader_dir ${arrow_ipc_reader_bin} DIRECTORY)
+  get_filename_component(arrow_ipc_reader_name ${arrow_ipc_reader_bin} NAME)
+  if(arrow_ipc_reader_dir)
+    set_target_properties(${arrow_ipc_reader_target} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${arrow_ipc_reader_dir}")
+  endif()
+  set_target_properties(${arrow_ipc_reader_target} PROPERTIES OUTPUT_NAME ${arrow_ipc_reader_name})
+
+  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${arrow_ipc_reader_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+    target_link_libraries(${arrow_ipc_reader_target} PRIVATE --coverage)
+  endif()
+
+  set(arrow_ipc_reader_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${arrow_ipc_reader_target}")
+  file(MAKE_DIRECTORY "${arrow_ipc_reader_workdir}")
+  add_test(NAME utilities/${arrow_ipc_reader_bin} COMMAND ${arrow_ipc_reader_target})
+  set_tests_properties(utilities/${arrow_ipc_reader_bin} PROPERTIES
+                       WORKING_DIRECTORY "${arrow_ipc_reader_workdir}")
 endif()
 
 # +++++++++++++++++++++++++++++++++++++++++

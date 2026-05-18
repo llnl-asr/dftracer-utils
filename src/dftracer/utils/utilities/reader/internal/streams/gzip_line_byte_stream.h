@@ -22,6 +22,7 @@ class GzipLineByteStream : public GzipStream {
     std::vector<char> partial_line_buffer_;
     std::size_t actual_start_bytes_;
     std::size_t bytes_returned_;  // Track how many bytes we've returned to user
+    bool extend_to_line_boundary_ = false;
 
     // Buffer for zero-copy reads
     std::vector<char> buffer_;
@@ -38,6 +39,8 @@ class GzipLineByteStream : public GzipStream {
           buffer_pos_(0) {
         partial_line_buffer_.reserve(1 * 1024 * 1024);
     }
+
+    void set_extend_to_line_boundary(bool v) { extend_to_line_boundary_ = v; }
 
     void initialize(const std::string &gz_path, std::size_t start_bytes,
                     std::size_t end_bytes,
@@ -145,10 +148,42 @@ class GzipLineByteStream : public GzipStream {
         }
 
         if (is_at_target_end()) {
-            DFTRACER_UTILS_LOG_DEBUG(
-                "GzipLineByteStream: at target end, current_position=%zu, "
-                "target_end_bytes=%zu",
-                current_position_, target_end_bytes_);
+            if (extend_to_line_boundary_ && !partial_line_buffer_.empty() &&
+                current_position_ < max_file_bytes_) {
+                std::size_t partial_size = partial_line_buffer_.size();
+                if (partial_size <= buffer_.size()) {
+                    std::memcpy(buffer_.data(), partial_line_buffer_.data(),
+                                partial_size);
+                    std::size_t avail = buffer_.size() - partial_size;
+                    std::size_t cap = static_cast<std::size_t>(
+                        max_file_bytes_ - current_position_);
+                    std::size_t to_read = std::min(avail, cap);
+                    std::size_t got = 0;
+                    bool ok = co_await inflater_.read(
+                        fd_, file_offset_,
+                        reinterpret_cast<unsigned char *>(buffer_.data() +
+                                                          partial_size),
+                        to_read, got);
+                    if (ok && got > 0) {
+                        current_position_ += got;
+                        std::size_t total = partial_size + got;
+                        std::size_t emit = 0;
+                        for (std::size_t i = partial_size; i < total; ++i) {
+                            if (buffer_[i] == '\n') {
+                                emit = i + 1;
+                                break;
+                            }
+                        }
+                        partial_line_buffer_.clear();
+                        is_finished_ = true;
+                        if (emit > 0) {
+                            bytes_returned_ += emit;
+                            co_return emit;
+                        }
+                        co_return 0;
+                    }
+                }
+            }
             is_finished_ = true;
             co_return 0;
         }

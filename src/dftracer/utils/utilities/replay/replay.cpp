@@ -1,22 +1,21 @@
 #include <dftracer/utils/call_tree/call_tree.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/utilities/common/json/parser.h>
+#include <dftracer/utils/utilities/composites/dft/event.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+#include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <dftracer/utils/utilities/replay/replay.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <yyjson.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
-#include <fstream>
-#include <iomanip>
-#include <iostream>
 #include <random>
 #include <thread>
 
@@ -24,117 +23,16 @@ namespace dftracer::utils::utilities::replay {
 
 namespace {
 
-/**
- * Trim whitespace and validate JSON string
- */
-bool json_trim_and_validate(const char* input, std::size_t input_length,
-                            const char*& trimmed, std::size_t& trimmed_length) {
-    if (!input || input_length == 0) {
-        return false;
-    }
-
-    // Trim leading whitespace
-    std::size_t start = 0;
-    while (start < input_length &&
-           (input[start] == ' ' || input[start] == '\t' ||
-            input[start] == '\n' || input[start] == '\r')) {
-        start++;
-    }
-
-    // Trim trailing whitespace and comma
-    std::size_t end = input_length;
-    while (end > start && (input[end - 1] == ' ' || input[end - 1] == '\t' ||
-                           input[end - 1] == '\n' || input[end - 1] == '\r' ||
-                           input[end - 1] == ',')) {
-        end--;
-    }
-
-    if (start >= end) {
-        return false;
-    }
-
-    trimmed = input + start;
-    trimmed_length = end - start;
-
-    // Basic validation: must start with '{' and end with '}'
-    if (trimmed[0] != '{' || trimmed[trimmed_length - 1] != '}') {
-        return false;
-    }
-
-    return true;
+// Process-wide intern pool for replay strings. Function names, categories,
+// and per-file hashes (fhash/hhash) have either small bounded cardinality
+// (~tens for cat/name) or stable identity per file (fhash).
+dftracer::utils::StringIntern& replay_intern() {
+    static dftracer::utils::StringIntern instance;
+    return instance;
 }
 
-/**
- * Parse a JSON string value from yyjson
- */
-std::string get_json_string(yyjson_val* val, const char* key,
-                            const std::string& default_value = "") {
-    yyjson_val* field = yyjson_obj_get(val, key);
-    if (field && yyjson_is_str(field)) {
-        return yyjson_get_str(field);
-    }
-    return default_value;
-}
-
-/**
- * Parse a JSON uint64 value from yyjson
- */
-std::uint64_t get_json_uint64(yyjson_val* val, const char* key,
-                              std::uint64_t default_value = 0) {
-    yyjson_val* field = yyjson_obj_get(val, key);
-    if (field && yyjson_is_uint(field)) {
-        return yyjson_get_uint(field);
-    } else if (field && yyjson_is_int(field)) {
-        std::int64_t int_val = yyjson_get_int(field);
-        return int_val >= 0 ? static_cast<std::uint64_t>(int_val)
-                            : default_value;
-    }
-    return default_value;
-}
-
-/**
- * Parse a JSON double value from yyjson
- */
-double get_json_double(yyjson_val* val, const char* key,
-                       double default_value = 0.0) {
-    yyjson_val* field = yyjson_obj_get(val, key);
-    if (field && yyjson_is_real(field)) {
-        return yyjson_get_real(field);
-    } else if (field && yyjson_is_uint(field)) {
-        return static_cast<double>(yyjson_get_uint(field));
-    } else if (field && yyjson_is_int(field)) {
-        return static_cast<double>(yyjson_get_int(field));
-    }
-    return default_value;
-}
-
-/**
- * Get a string value from args object
- */
-std::string get_args_string(yyjson_val* root, const char* key,
-                            const std::string& default_value = "") {
-    yyjson_val* args = yyjson_obj_get(root, "args");
-    if (args && yyjson_is_obj(args)) {
-        return get_json_string(args, key, default_value);
-    }
-    return default_value;
-}
-
-/**
- * Get an int64 value from args object
- */
-std::int64_t get_args_int64(yyjson_val* root, const char* key,
-                            std::int64_t default_value = 0) {
-    yyjson_val* args = yyjson_obj_get(root, "args");
-    if (args && yyjson_is_obj(args)) {
-        yyjson_val* field = yyjson_obj_get(args, key);
-        if (field && yyjson_is_int(field)) {
-            return yyjson_get_int(field);
-        } else if (field && yyjson_is_uint(field)) {
-            return static_cast<std::int64_t>(yyjson_get_uint(field));
-        }
-    }
-    return default_value;
+std::string_view intern_sv(std::string_view sv) {
+    return replay_intern().intern(sv);
 }
 
 /**
@@ -161,11 +59,12 @@ bool ensure_directory_exists(const std::string& path) {
 // =============================================================================
 
 bool PosixExecutor::execute(const Trace& trace, const ReplayConfig& config) {
-    const std::string& func_name = trace.func_name;
+    std::string_view func_name = trace.func_name;
 
     if (config.dry_run) {
-        DFTRACER_UTILS_LOG_DEBUG("DRY RUN: Would execute POSIX %s",
-                                 func_name.c_str());
+        DFTRACER_UTILS_LOG_DEBUG("DRY RUN: Would execute POSIX %.*s",
+                                 static_cast<int>(func_name.size()),
+                                 func_name.data());
         return true;
     }
 
@@ -186,8 +85,9 @@ bool PosixExecutor::execute(const Trace& trace, const ReplayConfig& config) {
         return execute_stat(trace, config);
     }
 
-    DFTRACER_UTILS_LOG_DEBUG("Unsupported POSIX function: %s",
-                             func_name.c_str());
+    DFTRACER_UTILS_LOG_DEBUG("Unsupported POSIX function: %.*s",
+                             static_cast<int>(func_name.size()),
+                             func_name.data());
     return false;
 }
 
@@ -200,10 +100,17 @@ bool PosixExecutor::execute_open(const Trace& trace,
     DFTRACER_UTILS_LOG_DEBUG("Executing POSIX open");
 
     if (!trace.fhash.empty()) {
-        std::string file_path =
-            config.output_directory.empty()
-                ? ("replay_file_" + trace.fhash)
-                : (config.output_directory + "/replay_file_" + trace.fhash);
+        std::string file_path;
+        if (config.output_directory.empty()) {
+            file_path.reserve(12 + trace.fhash.size());
+            file_path = "replay_file_";
+        } else {
+            file_path.reserve(config.output_directory.size() + 13 +
+                              trace.fhash.size());
+            file_path = config.output_directory;
+            file_path += "/replay_file_";
+        }
+        file_path.append(trace.fhash.data(), trace.fhash.size());
 
         ensure_directory_exists(file_path);
 
@@ -231,11 +138,18 @@ bool PosixExecutor::execute_close(const Trace& trace,
     if (it != open_files_.end()) {
         close(it->second);
         open_files_.erase(it);
-        DFTRACER_UTILS_LOG_DEBUG("Closed file with hash %s",
-                                 trace.fhash.c_str());
+        DFTRACER_UTILS_LOG_DEBUG("Closed file with hash %.*s",
+                                 static_cast<int>(trace.fhash.size()),
+                                 trace.fhash.data());
     }
 
     return true;
+}
+
+void PosixExecutor::ensure_io_buffer(std::size_t size) {
+    if (io_buffer_.size() < size) {
+        io_buffer_.resize(size, 'A');
+    }
 }
 
 bool PosixExecutor::execute_read(const Trace& trace,
@@ -245,10 +159,11 @@ bool PosixExecutor::execute_read(const Trace& trace,
 
     auto it = open_files_.find(trace.fhash);
     if (it != open_files_.end() && trace.size > 0) {
-        std::vector<char> buffer(std::min(static_cast<std::size_t>(trace.size),
-                                          config.max_file_size));
+        std::size_t n = std::min(static_cast<std::size_t>(trace.size),
+                                 config.max_file_size);
+        ensure_io_buffer(n);
         [[maybe_unused]] ssize_t bytes_read =
-            read(it->second, buffer.data(), buffer.size());
+            read(it->second, io_buffer_.data(), n);
         DFTRACER_UTILS_LOG_DEBUG("Read %zd bytes", bytes_read);
     }
 
@@ -264,9 +179,9 @@ bool PosixExecutor::execute_write(const Trace& trace,
     if (it != open_files_.end() && trace.size > 0) {
         std::size_t write_size = std::min(static_cast<std::size_t>(trace.size),
                                           config.max_file_size);
-        std::vector<char> buffer(write_size, 'A');
+        ensure_io_buffer(write_size);
         [[maybe_unused]] ssize_t bytes_written =
-            write(it->second, buffer.data(), buffer.size());
+            write(it->second, io_buffer_.data(), write_size);
         DFTRACER_UTILS_LOG_DEBUG("Wrote %zd bytes", bytes_written);
     }
 
@@ -295,8 +210,9 @@ bool PosixExecutor::execute_stat([[maybe_unused]] const Trace& trace,
     DFTRACER_UTILS_LOG_DEBUG("Executing POSIX stat");
 
     if (!trace.fhash.empty()) {
-        DFTRACER_UTILS_LOG_DEBUG("Would stat file with hash %s",
-                                 trace.fhash.c_str());
+        DFTRACER_UTILS_LOG_DEBUG("Would stat file with hash %.*s",
+                                 static_cast<int>(trace.fhash.size()),
+                                 trace.fhash.data());
     }
 
     return true;
@@ -322,16 +238,17 @@ bool DFTracerExecutor::execute(const Trace& trace, const ReplayConfig& config) {
 
     if (config.no_sleep) {
         if (config.verbose && duration_us >= 100000.0) {
-            std::cout << "DFTracer would sleep for " << std::fixed
-                      << std::setprecision(3) << duration_us / 1000.0
-                      << " ms for " << trace.func_name << " (skipped)"
-                      << std::endl;
+            std::printf("DFTracer would sleep for %.3f ms for %.*s (skipped)\n",
+                        duration_us / 1000.0,
+                        static_cast<int>(trace.func_name.size()),
+                        trace.func_name.data());
         }
     } else {
         if (config.verbose && duration_us >= 100.0) {
-            std::cout << "DFTracer sleeping for " << std::fixed
-                      << std::setprecision(3) << duration_us / 1000.0
-                      << " ms for " << trace.func_name << std::endl;
+            std::printf("DFTracer sleeping for %.3f ms for %.*s\n",
+                        duration_us / 1000.0,
+                        static_cast<int>(trace.func_name.size()),
+                        trace.func_name.data());
         }
         sleep_for_duration(duration_us);
     }
@@ -385,6 +302,96 @@ void ReplayEngine::add_executor(std::unique_ptr<TraceExecutor> executor) {
     executors_.push_back(std::move(executor));
 }
 
+coro::AsyncGenerator<Trace> ReplayEngine::stream_traces(
+    const std::vector<std::string>& files) {
+    using reader::ReadConfig;
+    using reader::TraceReader;
+    using reader::TraceReaderConfig;
+
+    for (const auto& file : files) {
+        TraceReaderConfig cfg;
+        cfg.file_path = file;
+        cfg.auto_build_index = true;
+        TraceReader rdr(std::move(cfg));
+        auto gen = rdr.read_json(ReadConfig{});
+        while (auto opt = co_await gen.next()) {
+            if (!opt->parser) continue;
+            Trace trace;
+            if (parse_trace_json(*opt->parser, trace)) {
+                co_yield std::move(trace);
+            }
+        }
+    }
+}
+
+coro::CoroTask<void> ReplayEngine::run_pipelined(
+    dftracer::utils::CoroScope& scope, const std::vector<std::string>& files,
+    ReplayResult& result, std::size_t channel_capacity) {
+    coro::Channel<Trace> ch_instance(channel_capacity);
+    auto* channel = &ch_instance;
+
+    co_await scope.scope([this, channel, &files,
+                          &result](dftracer::utils::CoroScope& child)
+                             -> coro::CoroTask<void> {
+        // Producer
+        child.spawn([this, channel, &files](
+                        dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+            auto producer = channel->producer();
+            auto guard = producer.guard();
+            auto gen = stream_traces(files);
+            while (auto trace = co_await gen.next()) {
+                if (!co_await producer.send(std::move(*trace))) {
+                    co_return;
+                }
+            }
+            co_return;
+        });
+
+        // Consumer
+        child.spawn([this, channel, &result](
+                        dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+            auto consumer = channel->consumer();
+            while (auto item = co_await consumer.receive()) {
+                dispatch_trace(*item, result);
+            }
+            co_return;
+        });
+        co_return;
+    });
+
+    co_return;
+}
+
+namespace {
+
+// Sync drive used by the existing replay(file)/replay(vector) entry points.
+// Pipeline-driven callers use ReplayEngine::run_pipelined instead.
+coro::CoroTask<void> replay_file_async(ReplayEngine* engine,
+                                       std::string trace_file,
+                                       std::string index_file,
+                                       ReplayResult* result) {
+    using reader::ReadConfig;
+    using reader::TraceReader;
+    using reader::TraceReaderConfig;
+
+    TraceReaderConfig cfg;
+    cfg.file_path = std::move(trace_file);
+    if (!index_file.empty()) {
+        cfg.index_dir = std::move(index_file);
+    }
+    cfg.auto_build_index = true;
+
+    TraceReader rdr(std::move(cfg));
+    auto gen = rdr.read_json(ReadConfig{});
+    while (auto opt = co_await gen.next()) {
+        if (!opt->parser) continue;
+        engine->process_trace_line(*opt->parser, *result);
+    }
+    co_return;
+}
+
+}  // namespace
+
 ReplayResult ReplayEngine::replay(const std::string& trace_file,
                                   const std::string& index_file) {
     ReplayResult result;
@@ -394,60 +401,7 @@ ReplayResult ReplayEngine::replay(const std::string& trace_file,
     auto start_time = std::chrono::steady_clock::now();
 
     try {
-        // Check if the file is compressed
-        bool is_compressed =
-            (trace_file.size() >= 3 &&
-             trace_file.substr(trace_file.size() - 3) == ".gz") ||
-            (trace_file.size() >= 7 &&
-             trace_file.substr(trace_file.size() - 7) == ".tar.gz");
-
-        if (is_compressed) {
-            // Handle compressed files with ReaderFactory
-            std::string index_path =
-                index_file.empty() ? utilities::composites::dft::internal::
-                                         determine_index_path(trace_file, "")
-                                   : index_file;
-
-            auto reader =
-                reader::internal::ReaderFactory::create(trace_file, index_path);
-
-            if (!reader) {
-                result.error_messages.push_back(
-                    "Failed to create reader for file: " + trace_file);
-                return result;
-            }
-
-            // Create line processor for handling trace lines
-            ReplayLineProcessor processor(*this, result);
-
-            // Read all lines using the line processor
-            reader->read_lines_with_processor(0, reader->get_num_lines(),
-                                              processor);
-        } else {
-            // Handle plain text files directly
-            std::ifstream file(trace_file);
-            if (!file.is_open()) {
-                result.error_messages.push_back(
-                    "Failed to open plain text file: " + trace_file);
-                return result;
-            }
-
-            std::string line;
-            while (std::getline(file, line)) {
-                // Skip empty lines and bracket lines
-                if (line.empty() || line == "[" || line == "]") {
-                    continue;
-                }
-
-                // Remove trailing comma if present
-                if (!line.empty() && line.back() == ',') {
-                    line.pop_back();
-                }
-
-                process_trace_line(line, result);
-            }
-        }
-
+        replay_file_async(this, trace_file, index_file, &result).get();
     } catch (const std::exception& e) {
         result.error_messages.push_back("Exception during replay: " +
                                         std::string(e.what()));
@@ -497,14 +451,17 @@ ReplayResult ReplayEngine::replay(const std::vector<std::string>& trace_files) {
     return aggregated_result;
 }
 
-bool ReplayEngine::process_trace_line(const std::string& line,
+bool ReplayEngine::process_trace_line(common::json::JsonParser& parser,
                                       ReplayResult& result) {
     Trace trace;
-
-    if (!parse_trace_json(line, trace)) {
+    if (!parse_trace_json(parser, trace)) {
         return false;
     }
+    dispatch_trace(trace, result);
+    return true;
+}
 
+void ReplayEngine::dispatch_trace(const Trace& trace, ReplayResult& result) {
     result.total_events++;
     result.function_counts[trace.func_name]++;
     result.category_counts[trace.cat]++;
@@ -536,18 +493,25 @@ bool ReplayEngine::process_trace_line(const std::string& line,
     if (config_.max_events > 0 &&
         result.executed_events >= config_.max_events) {
         // Silently skip - limit already reached
-        return false;
+        return;
     }
 
     if (!should_execute_trace(trace)) {
         result.filtered_events++;
-        return true;
+        return;
     }
 
     // Apply timing logic (skip during dry-run or dftracer-mode)
     if (config_.maintain_timing && !config_.dry_run && !config_.dftracer_mode &&
         trace.time_start > 0 && trace.type == TraceType::Regular) {
         apply_timing(trace);
+    }
+
+    // Fidelity-observation point: callers can hook here to capture the
+    // wall-clock time at which each event is about to be dispatched and
+    // compare it against the trace timeline. No production paths set this.
+    if (config_.on_dispatch) {
+        config_.on_dispatch(trace, std::chrono::steady_clock::now());
     }
 
     // Find and execute with appropriate executor
@@ -565,62 +529,57 @@ bool ReplayEngine::process_trace_line(const std::string& line,
             result.executed_events++;
         } else {
             result.failed_events++;
-            result.error_messages.push_back("Failed to execute " +
-                                            trace.func_name + " with " +
-                                            executor->get_name());
+            std::string msg = "Failed to execute ";
+            msg.append(trace.func_name);
+            msg += " with ";
+            msg += executor->get_name();
+            result.error_messages.push_back(std::move(msg));
         }
     } else {
         result.failed_events++;
         if (config_.verbose) {
             DFTRACER_UTILS_LOG_DEBUG(
-                "No executor found for function: %s (category: %s)",
-                trace.func_name.c_str(), trace.cat.c_str());
+                "No executor found for function: %.*s (category: %.*s)",
+                static_cast<int>(trace.func_name.size()),
+                trace.func_name.data(), static_cast<int>(trace.cat.size()),
+                trace.cat.data());
         }
     }
-
-    return true;
 }
 
-bool ReplayEngine::parse_trace_json(const std::string& json_line,
+bool ReplayEngine::parse_trace_json(common::json::JsonParser& parser,
                                     Trace& trace) {
-    const char* trimmed;
-    std::size_t trimmed_length;
-    if (!json_trim_and_validate(json_line.c_str(), json_line.length(), trimmed,
-                                trimmed_length)) {
+    composites::dft::DFTracerEvent ev;
+    // parse_ondemand returns false only when no "ph" was found; other fields
+    // are still populated. Match the legacy DOM-based behavior, which keyed
+    // validity on a non-empty name and treated missing ph as Regular.
+    composites::dft::DFTracerEvent::parse_ondemand(parser, ev);
+
+    if (ev.name.empty()) {
         return false;
     }
 
-    yyjson_doc* doc = yyjson_read(trimmed, trimmed_length, 0);
-    if (!doc) {
-        return false;
-    }
+    trace.func_name = intern_sv(ev.name);
+    trace.cat = intern_sv(ev.cat);
+    trace.pid = ev.pid;
+    trace.tid = ev.tid;
+    trace.time_start = ev.ts;
+    trace.duration = static_cast<double>(ev.dur);
+    trace.time_end = trace.time_start + ev.dur;
 
-    yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!root || !yyjson_is_obj(root)) {
-        yyjson_doc_free(doc);
-        return false;
-    }
+    // ArgsValueProxy::get<string_view> returns a view directly into the
+    // variant's owned string without copying; we then intern so the view
+    // outlives ev/ArgsMap (which die at the end of this function).
+    auto fhash_sv = ev.args["fhash"].get<std::string_view>(std::string_view{});
+    auto hhash_sv = ev.args["hhash"].get<std::string_view>(std::string_view{});
+    trace.fhash = fhash_sv.empty() ? std::string_view{} : intern_sv(fhash_sv);
+    trace.hhash = hhash_sv.empty() ? std::string_view{} : intern_sv(hhash_sv);
+    trace.size =
+        ev.args["size"].get<std::int64_t>(static_cast<std::int64_t>(-1));
+    trace.offset =
+        ev.args["offset"].get<std::int64_t>(static_cast<std::int64_t>(-1));
 
-    // Parse basic fields
-    trace.func_name = get_json_string(root, "name");
-    trace.cat = get_json_string(root, "cat");
-    std::string phase = get_json_string(root, "ph");
-
-    trace.pid = get_json_uint64(root, "pid");
-    trace.tid = get_json_uint64(root, "tid");
-    trace.time_start = get_json_uint64(root, "ts");
-    trace.duration = get_json_double(root, "dur");
-    trace.time_end =
-        trace.time_start + static_cast<std::uint64_t>(trace.duration);
-
-    // Parse arguments
-    trace.fhash = get_args_string(root, "fhash");
-    trace.hhash = get_args_string(root, "hhash");
-    trace.size = get_args_int64(root, "size", -1);
-    trace.offset = get_args_int64(root, "offset", -1);
-
-    // Determine trace type
-    if (phase == "M") {
+    if (ev.ph == "M") {
         if (trace.func_name == "FH") {
             trace.type = TraceType::FileHash;
         } else if (trace.func_name == "HH") {
@@ -632,10 +591,8 @@ bool ReplayEngine::parse_trace_json(const std::string& json_line,
         trace.type = TraceType::Regular;
     }
 
-    trace.is_valid = !trace.func_name.empty();
-
-    yyjson_doc_free(doc);
-    return trace.is_valid;
+    trace.is_valid = true;
+    return true;
 }
 
 void ReplayEngine::apply_timing(const Trace& trace) {
@@ -644,7 +601,16 @@ void ReplayEngine::apply_timing(const Trace& trace) {
     }
 
     if (!first_timestamp_set_) {
+        // Anchor BOTH clocks on the first event. The wall-clock anchor was
+        // initialized at engine construction time, but for any consumer
+        // path with warmup (e.g. Pipeline producer fills, channel hops),
+        // that anchor is "behind" by the warmup gap. Without resetting it
+        // here, the next event sees replay_elapsed >> trace_elapsed and
+        // we never sleep, collapsing the timing model. The trace-time
+        // anchor is set on first event regardless, so co-locating the
+        // wall-clock reset here keeps the two in lockstep.
         first_trace_timestamp_ = trace.time_start;
+        replay_start_time_ = std::chrono::steady_clock::now();
         first_timestamp_set_ = true;
         return;
     }
@@ -669,17 +635,16 @@ void ReplayEngine::apply_timing(const Trace& trace) {
         const std::uint64_t MAX_SLEEP_US = 10 * 1000 * 1000;
         if (sleep_us > MAX_SLEEP_US) {
             if (config_.verbose) {
-                std::cout << "Warning: Capping sleep from "
-                          << static_cast<double>(sleep_us) / 1000.0 << " ms to "
-                          << MAX_SLEEP_US / 1000.0 << " ms" << std::endl;
+                std::printf("Warning: Capping sleep from %.3f ms to %.3f ms\n",
+                            static_cast<double>(sleep_us) / 1000.0,
+                            static_cast<double>(MAX_SLEEP_US) / 1000.0);
             }
             sleep_us = MAX_SLEEP_US;
         }
 
         if (config_.verbose && sleep_us > 1000) {
-            std::cout << "Timing sleep: "
-                      << static_cast<double>(sleep_us) / 1000.0 << " ms"
-                      << std::endl;
+            std::printf("Timing sleep: %.3f ms\n",
+                        static_cast<double>(sleep_us) / 1000.0);
         }
 
         std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
@@ -735,15 +700,16 @@ bool ReplayEngine::should_execute_trace(const Trace& trace) const {
         return false;
     }
 
-    // Check function filters
     if (!config_.filter_functions.empty()) {
-        if (config_.filter_functions.find(trace.func_name) ==
+        std::string key(trace.func_name);
+        if (config_.filter_functions.find(key) ==
             config_.filter_functions.end()) {
             return false;
         }
     }
     if (!config_.exclude_functions.empty()) {
-        if (config_.exclude_functions.find(trace.func_name) !=
+        std::string key(trace.func_name);
+        if (config_.exclude_functions.find(key) !=
             config_.exclude_functions.end()) {
             return false;
         }
@@ -751,13 +717,15 @@ bool ReplayEngine::should_execute_trace(const Trace& trace) const {
 
     // Check category filters
     if (!config_.filter_categories.empty()) {
-        if (config_.filter_categories.find(trace.cat) ==
+        std::string key(trace.cat);
+        if (config_.filter_categories.find(key) ==
             config_.filter_categories.end()) {
             return false;
         }
     }
     if (!config_.exclude_categories.empty()) {
-        if (config_.exclude_categories.find(trace.cat) !=
+        std::string key(trace.cat);
+        if (config_.exclude_categories.find(key) !=
             config_.exclude_categories.end()) {
             return false;
         }
@@ -945,8 +913,8 @@ void ReplayEngine::replay_call_tree_node(
     ReplayResult& result) {
     // Convert CallTreeNodeInfo to Trace structure
     Trace trace;
-    trace.func_name = node.name;
-    trace.cat = node.category;
+    trace.func_name = intern_sv(node.name);
+    trace.cat = intern_sv(node.category);
     trace.time_start = node.start_time_us;
     trace.duration = static_cast<double>(node.duration_us);
     trace.time_end = trace.time_start + node.duration_us;
@@ -975,13 +943,13 @@ void ReplayEngine::replay_call_tree_node(
     }
 
     auto fhash_it = args.find("fhash");
-    if (fhash_it != args.end()) {
-        trace.fhash = fhash_it->second;
+    if (fhash_it != args.end() && !fhash_it->second.empty()) {
+        trace.fhash = intern_sv(fhash_it->second);
     }
 
     auto hhash_it = args.find("hhash");
-    if (hhash_it != args.end()) {
-        trace.hhash = hhash_it->second;
+    if (hhash_it != args.end() && !hhash_it->second.empty()) {
+        trace.hhash = intern_sv(hhash_it->second);
     }
 
     auto size_it = args.find("size");
@@ -1064,32 +1032,22 @@ void ReplayEngine::replay_call_tree_node(
             result.executed_events++;
         } else {
             result.failed_events++;
-            result.error_messages.push_back("Failed to execute " +
-                                            trace.func_name + " with " +
-                                            executor->get_name());
+            std::string msg = "Failed to execute ";
+            msg.append(trace.func_name);
+            msg += " with ";
+            msg += executor->get_name();
+            result.error_messages.push_back(std::move(msg));
         }
     } else {
         result.failed_events++;
         if (config_.verbose) {
             DFTRACER_UTILS_LOG_DEBUG(
-                "No executor found for function: %s (category: %s)",
-                trace.func_name.c_str(), trace.cat.c_str());
+                "No executor found for function: %.*s (category: %.*s)",
+                static_cast<int>(trace.func_name.size()),
+                trace.func_name.data(), static_cast<int>(trace.cat.size()),
+                trace.cat.data());
         }
     }
-}
-
-// =============================================================================
-// ReplayLineProcessor Implementation
-// =============================================================================
-
-ReplayLineProcessor::ReplayLineProcessor(ReplayEngine& engine,
-                                         ReplayResult& result)
-    : engine_(engine), result_(result) {}
-
-coro::CoroTask<bool> ReplayLineProcessor::process(const char* data,
-                                                  std::size_t length) {
-    std::string line(data, length);
-    co_return engine_.process_trace_line(line, result_);
 }
 
 // =============================================================================
@@ -1097,66 +1055,62 @@ coro::CoroTask<bool> ReplayLineProcessor::process(const char* data,
 // =============================================================================
 
 void ReplayResult::print_summary(bool verbose) const {
-    std::cout << "\n=== Replay Summary ===" << std::endl;
-    std::cout << "Total events: " << total_events << std::endl;
-    std::cout << "Executed: " << executed_events << std::endl;
-    std::cout << "Filtered: " << filtered_events << std::endl;
-    std::cout << "Failed: " << failed_events << std::endl;
+    std::printf("\n=== Replay Summary ===\n");
+    std::printf("Total events: %zu\n", total_events);
+    std::printf("Executed: %zu\n", executed_events);
+    std::printf("Filtered: %zu\n", filtered_events);
+    std::printf("Failed: %zu\n", failed_events);
 
     double success_rate = total_events > 0
                               ? (static_cast<double>(executed_events) /
                                  static_cast<double>(total_events) * 100.0)
                               : 0.0;
-    std::cout << "Success rate: " << std::fixed << std::setprecision(2)
-              << success_rate << "%" << std::endl;
+    std::printf("Success rate: %.2f%%\n", success_rate);
 
-    std::cout << "\nTiming:" << std::endl;
-    std::cout << "  Total duration: "
-              << static_cast<double>(total_duration.count()) / 1000.0 << " ms"
-              << std::endl;
-    std::cout << "  Execution duration: "
-              << static_cast<double>(execution_duration.count()) / 1000.0
-              << " ms" << std::endl;
+    std::printf("\nTiming:\n");
+    std::printf("  Total duration: %.3f ms\n",
+                static_cast<double>(total_duration.count()) / 1000.0);
+    std::printf("  Execution duration: %.3f ms\n",
+                static_cast<double>(execution_duration.count()) / 1000.0);
 
     if (first_timestamp != UINT64_MAX && last_timestamp > 0) {
-        std::cout << "  Trace timespan: "
-                  << static_cast<double>(last_timestamp - first_timestamp) /
-                         1000000.0
-                  << " seconds" << std::endl;
+        std::printf(
+            "  Trace timespan: %.6f seconds\n",
+            static_cast<double>(last_timestamp - first_timestamp) / 1000000.0);
     }
 
-    std::cout << "\nI/O Statistics:" << std::endl;
-    std::cout << "  Bytes read: " << total_bytes_read << " ("
-              << static_cast<double>(total_bytes_read) / (1024.0 * 1024.0)
-              << " MB)" << std::endl;
-    std::cout << "  Bytes written: " << total_bytes_written << " ("
-              << static_cast<double>(total_bytes_written) / (1024.0 * 1024.0)
-              << " MB)" << std::endl;
+    std::printf("\nI/O Statistics:\n");
+    std::printf("  Bytes read: %zu (%.2f MB)\n", total_bytes_read,
+                static_cast<double>(total_bytes_read) / (1024.0 * 1024.0));
+    std::printf("  Bytes written: %zu (%.2f MB)\n", total_bytes_written,
+                static_cast<double>(total_bytes_written) / (1024.0 * 1024.0));
 
-    std::cout << "\nProcess/Thread Statistics:" << std::endl;
-    std::cout << "  Unique PIDs: " << pid_counts.size() << std::endl;
-    std::cout << "  Unique TIDs: " << tid_counts.size() << std::endl;
+    std::printf("\nProcess/Thread Statistics:\n");
+    std::printf("  Unique PIDs: %zu\n", pid_counts.size());
+    std::printf("  Unique TIDs: %zu\n", tid_counts.size());
 
     if (verbose) {
         if (!pid_counts.empty()) {
-            std::cout << "\n  Events per PID:" << std::endl;
+            std::printf("\n  Events per PID:\n");
             for (const auto& [pid, count] : pid_counts) {
-                std::cout << "    PID " << pid << ": " << count << " events"
-                          << std::endl;
+                std::printf("    PID %u: %zu events\n", pid, count);
             }
         }
 
         if (!tid_counts.empty() && tid_counts.size() > 1) {
-            std::cout << "\n  Events per TID:" << std::endl;
+            std::printf("\n  Events per TID:\n");
             for (const auto& [tid, count] : tid_counts) {
-                std::cout << "    TID " << tid << ": " << count << " events"
-                          << std::endl;
+                std::printf("    TID %u: %zu events\n", tid, count);
             }
         }
 
         if (!function_counts.empty()) {
-            std::cout << "\n  Top functions by count:" << std::endl;
-            std::vector<std::pair<std::string, std::size_t>> sorted_funcs(
+            std::printf("\n  Top functions by count:\n");
+            // function_counts keys are string_views into the replay intern
+            // pool; sorting needs an indexable copy. Keep the views to avoid
+            // re-allocating strings for the dictionary entries (read,
+            // write, ...).
+            std::vector<std::pair<std::string_view, std::size_t>> sorted_funcs(
                 function_counts.begin(), function_counts.end());
             std::sort(sorted_funcs.begin(), sorted_funcs.end(),
                       [](const auto& a, const auto& b) {
@@ -1166,36 +1120,36 @@ void ReplayResult::print_summary(bool verbose) const {
             std::size_t max_display =
                 std::min(sorted_funcs.size(), std::size_t(10));
             for (std::size_t i = 0; i < max_display; i++) {
-                std::cout << "    " << std::setw(30) << std::left
-                          << sorted_funcs[i].first << ": "
-                          << sorted_funcs[i].second << std::endl;
+                std::printf("    %-30.*s: %zu\n",
+                            static_cast<int>(sorted_funcs[i].first.size()),
+                            sorted_funcs[i].first.data(),
+                            sorted_funcs[i].second);
             }
         }
 
         if (!category_counts.empty()) {
-            std::cout << "\n  Events per category:" << std::endl;
+            std::printf("\n  Events per category:\n");
             for (const auto& [cat, count] : category_counts) {
-                std::cout << "    " << std::setw(20) << std::left << cat << ": "
-                          << count << std::endl;
+                std::printf("    %-20.*s: %zu\n", static_cast<int>(cat.size()),
+                            cat.data(), count);
             }
         }
     }
 
     if (!error_messages.empty()) {
-        std::cout << "\n=== Errors (" << error_messages.size()
-                  << " total) ===" << std::endl;
+        std::printf("\n=== Errors (%zu total) ===\n", error_messages.size());
         std::size_t max_errors =
             std::min(error_messages.size(), std::size_t(10));
         for (std::size_t i = 0; i < max_errors; i++) {
-            std::cout << "  " << error_messages[i] << std::endl;
+            std::printf("  %s\n", error_messages[i].c_str());
         }
         if (error_messages.size() > 10) {
-            std::cout << "  ... and " << (error_messages.size() - 10)
-                      << " more errors" << std::endl;
+            std::printf("  ... and %zu more errors\n",
+                        error_messages.size() - 10);
         }
     }
 
-    std::cout << "=====================" << std::endl;
+    std::printf("=====================\n");
 }
 
 }  // namespace dftracer::utils::utilities::replay

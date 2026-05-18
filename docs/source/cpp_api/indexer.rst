@@ -143,17 +143,50 @@ calls visitors in order:
 3. ``on_line(line, checkpoint_idx)`` -- called for every line in the file
 4. ``finalize(db, file_id)`` -- called once after the scan to persist results
 
+Indexer / CheckpointIndexer
+---------------------------
+
+The low-level checkpoint indexer is exposed as ``Indexer`` (formerly named
+``BatchIndexer``); the previous ``Indexer`` class is now ``CheckpointIndexer``
+in the internal namespace. ``SingleFileIndexer`` has been removed; use
+``IndexBuilderUtility`` or ``IndexBatchBuilderUtility`` instead.
+
+IndexBatchBuilderUtility
+------------------------
+
+Batched variant of ``IndexBuilderUtility`` that processes a list of files in
+parallel against a shared ``IndexDatabaseWriterContext``, yielding an
+``IndexBuildBatchResult`` with aggregated metrics. Configured via
+``IndexBuildBatchConfig`` (file list, parallelism, checkpoint size, bloom and
+manifest toggles, shared sink).
+
+IndexBuildBatchConfig
+~~~~~~~~~~~~~~~~~~~~~
+
+Configuration struct for ``IndexBatchBuilderUtility``: file slices, output
+directory, checkpoint size, bloom/manifest flags, and the shared
+``IndexBatchSink`` (typically an ``IndexDatabaseWriterContext``) that
+receives encoded batches from all workers.
+
+IndexDatabaseWriterContext
+--------------------------
+
+Implements ``IndexBatchSink`` and owns a thread-safe writer pipeline into a
+RocksDB-backed ``IndexDatabase``. Workers in ``IndexBatchBuilderUtility``
+submit encoded index batches to this context, which serializes them into
+checkpoint, bloom, manifest, and statistics column families.
+
 BloomVisitor
 ------------
 
-Implements ``IndexVisitor`` to build per-chunk bloom filters and statistics
-during the indexing scan. Each checkpoint chunk gets its own set of bloom
-filters (one per configured dimension) plus per-chunk event counts and
-timestamp/duration distributions.
+Implements ``DftEventVisitor`` to build per-chunk bloom filters and
+statistics during the indexing scan. Each checkpoint chunk gets its own set
+of bloom filters (one per configured dimension) plus per-chunk event counts
+and timestamp/duration distributions.
 
 .. code-block:: cpp
 
-    #include <dftracer/utils/utilities/indexer/visitors/bloom_visitor.h>
+    #include <dftracer/utils/utilities/composites/dft/visitors/bloom_visitor.h>
 
     BloomVisitor visitor(bloom_config, {"name", "cat", "pid"});
     visitor.begin(num_checkpoints);
@@ -168,14 +201,15 @@ timestamp/duration distributions.
 ManifestVisitor
 ---------------
 
-Implements ``IndexVisitor`` to build per-checkpoint event routing manifests.
-During the scan, it collects which lines belong to which ``(cat, name)`` event
-pair within each checkpoint. The resulting manifests enable the reorganization
-pipeline to selectively read only the lines needed for a given event group.
+Implements ``DftEventVisitor`` to build per-checkpoint event routing
+manifests. During the scan, it collects which lines belong to which
+``(cat, name)`` event pair within each checkpoint. The resulting manifests
+enable the reorganization pipeline to selectively read only the lines needed
+for a given event group.
 
 .. code-block:: cpp
 
-    #include <dftracer/utils/utilities/indexer/visitors/manifest_visitor.h>
+    #include <dftracer/utils/utilities/composites/dft/visitors/manifest_visitor.h>
 
     ManifestVisitor visitor;
     visitor.begin(num_checkpoints);
@@ -184,6 +218,14 @@ pipeline to selectively read only the lines needed for a given event group.
 
     // Later, query the manifest:
     auto ranges = db.query_event_ranges_for_checkpoint(file_id, checkpoint_idx);
+
+IndexResolverUtility
+--------------------
+
+Resolves a directory or file list into a set of ``FileWorkItem`` entries by
+opening or building per-file indexes and emitting line-range work items
+suitable for parallel scan / aggregation / replay pipelines. Defined in
+``dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h``.
 
 ProvenanceDatabase
 ------------------

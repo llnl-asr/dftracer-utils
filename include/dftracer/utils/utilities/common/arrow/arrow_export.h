@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARROW_EXPORT_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARROW_EXPORT_H
 
+#include <dftracer/utils/core/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <cstdint>

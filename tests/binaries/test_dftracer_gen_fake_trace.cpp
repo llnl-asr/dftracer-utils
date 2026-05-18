@@ -151,10 +151,10 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         std::string rank0 = out_dir + "/rank_0.pfw.gz";
         REQUIRE(fs::exists(rank0));
 
-        // DFTracer events are JSON objects; first line starts with '{'.
+        // First line is the opening JSON array bracket.
         auto first = gz_first_line(rank0);
         REQUIRE(!first.empty());
-        CHECK(first.front() == '{');
+        CHECK(first.front() == '[');
     }
 
     TEST_CASE("deterministic output with fixed seed") {

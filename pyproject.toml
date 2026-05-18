@@ -38,6 +38,20 @@ dev = [
 requires = ["scikit-build-core >=0.10"]
 build-backend = "scikit_build_core.build"
 
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "CMakeLists.txt" },
+  { file = "CMakePresets.json" },
+  { file = "cmake/**/*.cmake" },
+  { file = "cmake/modules/**/*.cmake" },
+  { file = "include/**/*.h" },
+  { file = "src/**/*.h" },
+  { file = "src/**/*.cpp" },
+  { file = "python/**/*.py" },
+  { file = "python/**/*.pyi" },
+]
+
 [tool.scikit-build]
 metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
 minimum-version = "build-system.requires"

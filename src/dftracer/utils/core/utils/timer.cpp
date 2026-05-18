@@ -1,8 +1,11 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/utils/timer.h>
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdio>
+#include <utility>
+#include <vector>
 
 namespace dftracer::utils {
 
@@ -53,6 +56,42 @@ std::int64_t Timer::elapsed() const {
         return std::chrono::duration_cast<std::chrono::nanoseconds>(end_time -
                                                                     start_time)
             .count();
+    }
+}
+
+void Timer::increment(const std::string& key, std::uint64_t by) {
+    counters_[key] += by;
+}
+
+void Timer::set_counter(const std::string& key, std::uint64_t value) {
+    counters_[key] = value;
+}
+
+const std::unordered_map<std::string, std::uint64_t>& Timer::counters() const {
+    return counters_;
+}
+
+void Timer::print_stages(const std::string& prefix) const {
+    if (counters_.empty()) return;
+
+    std::vector<std::pair<std::string, std::uint64_t>> sorted(counters_.begin(),
+                                                              counters_.end());
+    std::sort(sorted.begin(), sorted.end());
+
+    std::uint64_t total_ns = 0;
+    for (const auto& [_, ns] : sorted) total_ns += ns;
+
+    if (!name_.empty()) {
+        std::printf("%s%s (%.2f ms)\n", prefix.c_str(), name_.c_str(),
+                    static_cast<double>(total_ns) / 1e6);
+    }
+    for (std::size_t i = 0; i < sorted.size(); ++i) {
+        const auto& [key, ns] = sorted[i];
+        bool last = (i + 1 == sorted.size());
+        double ms = static_cast<double>(ns) / 1e6;
+        double pct = total_ns > 0 ? 100.0 * ns / total_ns : 0.0;
+        std::printf("%s%s %-28s %8.2f ms  (%5.1f%%)\n", prefix.c_str(),
+                    last ? "\\-- " : "|-- ", key.c_str(), ms, pct);
     }
 }
 

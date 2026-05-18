@@ -289,9 +289,10 @@ TEST_SUITE("DFTracerOrganize") {
         fs::create_directories(org_dir);
         fs::create_directories(rec_dir);
 
-        int rc_org =
-            run_binary(org_binary, {"-d", env.get_dir(), "-o", org_dir,
-                                    "--groups", R"(io:cat == "POSIX")"});
+        // Route all events (POSIX and STDIO) to properly test round-trip
+        int rc_org = run_binary(org_binary,
+                                {"-d", env.get_dir(), "-o", org_dir, "--groups",
+                                 R"(io:cat == "POSIX" || cat == "STDIO")"});
         REQUIRE(rc_org == 0);
 
         int rc_rec = run_binary(

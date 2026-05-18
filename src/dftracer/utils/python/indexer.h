@@ -13,12 +13,11 @@ typedef struct {
     std::uint64_t checkpoint_size;
     int build_bloom;
     int build_manifest;
-    std::uint64_t index_threshold;
     PyObject *runtime_obj;  // RuntimeObject* or NULL (uses default)
-} IndexerObject;
+} CheckpointIndexerObject;
 
-extern PyTypeObject IndexerType;
+extern PyTypeObject CheckpointIndexerType;
 
-int init_indexer(PyObject *m);
+int init_checkpoint_indexer(PyObject *m);
 
 #endif

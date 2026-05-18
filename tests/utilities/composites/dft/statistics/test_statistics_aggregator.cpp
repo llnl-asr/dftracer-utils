@@ -3,6 +3,7 @@
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 
@@ -16,13 +17,14 @@ using namespace dftracer::utils::utilities::composites::dft::internal;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
 using dftracer::utils::utilities::indexer::IndexDatabase;
+using dftracer::utils::utilities::indexer::IndexDatabaseWriterContext;
 using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
 static void write_chunk(
-    IndexDatabase& db, int fid, std::uint64_t checkpoint_idx,
+    IndexDatabaseWriterContext& writer, int fid, std::uint64_t checkpoint_idx,
     ChunkStatistics& stats,
     const std::vector<std::pair<std::string, std::string>>& dim_values) {
-    db.insert_chunk_statistics(fid, checkpoint_idx, stats);
+    writer.insert_chunk_statistics(fid, checkpoint_idx, stats);
 
     std::unordered_map<std::string, ChunkDimensionStats> dim_stats;
     for (const auto& [dim, val] : dim_values) {
@@ -32,27 +34,24 @@ static void write_chunk(
         ds.observe(val);
     }
     for (const auto& [dim, ds] : dim_stats) {
-        db.insert_chunk_dimension_stats(fid, checkpoint_idx, ds);
+        writer.insert_chunk_dimension_stats(fid, checkpoint_idx, ds);
     }
 }
 
 static void populate_test_db(const std::string& db_root,
                              const std::string& file_path) {
     IndexDatabase idx_db(db_root);
-    idx_db.init_base_schema();
-    idx_db.init_bloom_schema();
+    auto writer = idx_db.begin_write();
+    writer->init_schema();
 
     int fid =
-        idx_db.get_or_create_file_info(get_logical_path(file_path), 12345);
+        writer->get_or_create_file_info(get_logical_path(file_path), 12345);
 
-    idx_db.begin_transaction();
-
-    // Chunk 0: 2 events
     {
         ChunkStatistics stats;
         stats.update_from_event("read", "POSIX", 1, 1, 1000, 100);
         stats.update_from_event("write", "POSIX", 1, 2, 2000, 200);
-        write_chunk(idx_db, fid, 0, stats,
+        write_chunk(*writer, fid, 0, stats,
                     {{"cat", "POSIX"},
                      {"cat", "POSIX"},
                      {"name", "read"},
@@ -61,20 +60,18 @@ static void populate_test_db(const std::string& db_root,
                      {"pid_tid", "1:2"}});
     }
 
-    // Chunk 1: 1 event
     {
         ChunkStatistics stats;
         stats.update_from_event("open", "storage", 2, 1, 5000, 50);
-        write_chunk(idx_db, fid, 1, stats,
+        write_chunk(*writer, fid, 1, stats,
                     {{"cat", "storage"}, {"name", "open"}, {"pid_tid", "2:1"}});
     }
 
-    // Chunk 2: 2 events
     {
         ChunkStatistics stats;
         stats.update_from_event("read", "POSIX", 1, 1, 8000, 300);
         stats.update_from_event("stat", "POSIX", 3, 1, 9000, 10);
-        write_chunk(idx_db, fid, 2, stats,
+        write_chunk(*writer, fid, 2, stats,
                     {{"cat", "POSIX"},
                      {"cat", "POSIX"},
                      {"name", "read"},
@@ -83,7 +80,7 @@ static void populate_test_db(const std::string& db_root,
                      {"pid_tid", "3:1"}});
     }
 
-    idx_db.commit_transaction();
+    writer->commit();
 }
 
 TEST_SUITE("StatisticsAggregatorUtility") {
@@ -179,11 +176,13 @@ TEST_SUITE("StatisticsAggregatorUtility") {
             determine_index_path(test_dir + "/test.pfw.gz", "");
         std::string file_path = "/fake/test.pfw.gz";
 
-        // Create idx with file_info but no chunk_statistics
         IndexDatabase idx_db(db_root);
-        idx_db.init_base_schema();
-        idx_db.init_bloom_schema();
-        idx_db.get_or_create_file_info(get_logical_path(file_path), 12345);
+        {
+            auto writer = idx_db.begin_write();
+            writer->init_schema();
+            writer->get_or_create_file_info(get_logical_path(file_path), 12345);
+            writer->commit();
+        }
 
         StatisticsAggregatorUtility aggregator;
         StatisticsAggregatorInput input;
@@ -211,31 +210,30 @@ TEST_SUITE("StatisticsAggregatorUtility") {
         std::string file_path = "/fake/test.pfw.gz";
 
         IndexDatabase idx_db(db_root);
-        idx_db.init_base_schema();
-        idx_db.init_bloom_schema();
-        int fid =
-            idx_db.get_or_create_file_info(get_logical_path(file_path), 12345);
-
-        idx_db.begin_transaction();
-
-        // Chunk 0: durations 10, 20
+        int fid;
         {
-            ChunkStatistics stats;
-            stats.update_from_event("op", "cat", 1, 1, 1000, 10);
-            stats.update_from_event("op", "cat", 1, 1, 2000, 20);
-            idx_db.insert_chunk_statistics(fid, 0, stats);
-        }
+            auto writer = idx_db.begin_write();
+            writer->init_schema();
+            fid = writer->get_or_create_file_info(get_logical_path(file_path),
+                                                  12345);
 
-        // Chunk 1: durations 30, 40, 50
-        {
-            ChunkStatistics stats;
-            stats.update_from_event("op", "cat", 1, 1, 3000, 30);
-            stats.update_from_event("op", "cat", 1, 1, 4000, 40);
-            stats.update_from_event("op", "cat", 1, 1, 5000, 50);
-            idx_db.insert_chunk_statistics(fid, 1, stats);
-        }
+            {
+                ChunkStatistics stats;
+                stats.update_from_event("op", "cat", 1, 1, 1000, 10);
+                stats.update_from_event("op", "cat", 1, 1, 2000, 20);
+                writer->insert_chunk_statistics(fid, 0, stats);
+            }
 
-        idx_db.commit_transaction();
+            {
+                ChunkStatistics stats;
+                stats.update_from_event("op", "cat", 1, 1, 3000, 30);
+                stats.update_from_event("op", "cat", 1, 1, 4000, 40);
+                stats.update_from_event("op", "cat", 1, 1, 5000, 50);
+                writer->insert_chunk_statistics(fid, 1, stats);
+            }
+
+            writer->commit();
+        }
 
         StatisticsAggregatorUtility aggregator;
         StatisticsAggregatorInput input;

@@ -4,7 +4,6 @@
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
-namespace fs = std::filesystem;
 using namespace dftracer::utils::utilities::indexer;
 
 TEST_SUITE("ProvenanceDatabase") {
@@ -35,7 +34,7 @@ TEST_SUITE("ProvenanceDatabase") {
         db.insert_info(file_id, "tool", "dftracer_organize");
         db.insert_group(file_id, "group0", "cat == POSIX");
         db.insert_source(file_id, 7, "/src/a.pfw.gz", 12, "hash7");
-        db.insert_segment(file_id, 7, 3, 100, 140, 9);
+        db.insert_segment(file_id, 7, 3, 0, 100, 140, 9);
 
         auto sources = db.query_sources(file_id);
         REQUIRE(sources.size() == 1);
@@ -72,15 +71,13 @@ TEST_SUITE("ProvenanceDatabase") {
         CHECK(file_b > 0);
         CHECK(file_a != file_b);
 
-        db.begin_transaction();
         db.insert_group(file_a, "io", R"(cat == "POSIX")");
         db.insert_source(file_a, 0, "/src/trace0.pfw.gz", 3, "ha");
-        db.insert_segment(file_a, 0, 1, 0, 5, 3);
+        db.insert_segment(file_a, 0, 1, 0, 0, 5, 3);
 
         db.insert_group(file_b, "compute", R"(cat == "APP")");
         db.insert_source(file_b, 1, "/src/trace1.pfw.gz", 2, "hb");
-        db.insert_segment(file_b, 1, 0, 0, 3, 1);
-        db.commit_transaction();
+        db.insert_segment(file_b, 1, 0, 0, 0, 3, 1);
 
         CHECK(db.get_file_info_id(out_a) == file_a);
         CHECK(db.get_file_info_id(out_b) == file_b);
@@ -106,22 +103,18 @@ TEST_SUITE("ProvenanceDatabase") {
         const auto out = (root / "group.pfw.gz").string();
 
         const int original_id = db.get_or_create_file_info(out, 0x1111);
-        db.begin_transaction();
         db.insert_info(original_id, "tool", "dftracer_organize");
         db.insert_group(original_id, "io", R"(cat == "POSIX")");
         db.insert_source(original_id, 0, "/src/trace0.pfw.gz", 4, "old");
-        db.insert_segment(original_id, 0, 0, 0, 4, 2);
-        db.commit_transaction();
+        db.insert_segment(original_id, 0, 0, 0, 0, 4, 2);
 
         const int rebuilt_id = db.get_or_create_file_info(out, 0x2222);
         CHECK(rebuilt_id == original_id);
 
-        db.begin_transaction();
         db.insert_info(rebuilt_id, "tool", "dftracer_organize_v2");
         db.insert_group(rebuilt_id, "io", R"(cat == "MPI")");
         db.insert_source(rebuilt_id, 0, "/src/trace0.pfw.gz", 8, "new");
-        db.insert_segment(rebuilt_id, 0, 0, 10, 18, 5);
-        db.commit_transaction();
+        db.insert_segment(rebuilt_id, 0, 0, 0, 10, 18, 5);
 
         CHECK(db.query_info(rebuilt_id, "tool") == "dftracer_organize_v2");
         CHECK(db.query_group_predicate(rebuilt_id) == R"(cat == "MPI")");
@@ -138,27 +131,5 @@ TEST_SUITE("ProvenanceDatabase") {
         CHECK(segments[0].event_count == 5);
     }
 
-    TEST_CASE("rollback discards provenance writes") {
-        auto root = dft_utils_test::make_unique_test_path("prov_rollback");
-        fs::create_directories(root);
-
-        ProvenanceDatabase db((root / ".dftindex").string());
-        db.init_schema();
-
-        const int file_id =
-            db.get_or_create_file_info((root / "out.pfw.gz").string(), 0xCAFE);
-
-        db.begin_transaction();
-        db.insert_info(file_id, "tool", "dftracer_organize");
-        db.insert_group(file_id, "group0", "cat == POSIX");
-        db.insert_source(file_id, 7, "/src/a.pfw.gz", 12, "hash7");
-        db.insert_segment(file_id, 7, 3, 100, 140, 9);
-        db.rollback_transaction();
-
-        CHECK(db.query_info(file_id, "tool").empty());
-        CHECK(db.query_group_name(file_id).empty());
-        CHECK(db.query_group_predicate(file_id).empty());
-        CHECK(db.query_sources(file_id).empty());
-        CHECK(db.query_segments(file_id, 7).empty());
-    }
+    // Transaction rollback test removed — writes commit immediately.
 }

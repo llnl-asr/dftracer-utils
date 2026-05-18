@@ -1,11 +1,7 @@
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/server/http_connection.h>
@@ -16,28 +12,65 @@
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/server/viz_api.h>
 
-#include <argparse/argparse.hpp>
 #include <cstdint>
 #include <cstdio>
 #include <string>
-#include <thread>
+
+#include "common_cli.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::server;
 
-static coro::CoroTask<int> run_server(argparse::ArgumentParser& program) {
-    std::string bind_addr = program.get<std::string>("--bind");
-    uint16_t port = program.get<uint16_t>("--port");
-    std::string directory = program.get<std::string>("--directory");
-    std::string index_dir = program.get<std::string>("--index-dir");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
+class ServerArgParse : public cli::ArgParse {
+   public:
+    cli::DirectoryArgs directory{cli::DirMode::REQUIRED};
+    cli::PipelineArgs pipeline;
 
-    // When no explicit index dir is given, default to the trace
-    // directory so `.dftindex` stores persist across restarts
-    // and don't need to be rebuilt every time.
+    std::string index_dir;
+    std::string bind_addr = "0.0.0.0";
+    uint16_t port = 8080;
+
+    explicit ServerArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        schema(directory, pipeline);
+    }
+
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("--index-dir")
+            .help(
+                "Directory for root-local .dftindex stores (default: same as "
+                "--directory)")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("-b", "--bind")
+            .help("Bind address")
+            .default_value<std::string>("0.0.0.0");
+
+        parser()
+            .add_argument("-p", "--port")
+            .help("Listen port")
+            .scan<'d', uint16_t>()
+            .default_value(static_cast<uint16_t>(8080));
+    }
+
+    void post_parse() override {
+        index_dir = parser().get<std::string>("--index-dir");
+        bind_addr = parser().get<std::string>("--bind");
+        port = parser().get<uint16_t>("--port");
+    }
+};
+
+static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
+    const auto& bind_addr = cli->bind_addr;
+    auto port = cli->port;
+    const auto& dir = cli->directory.value;
+    auto index_dir = cli->index_dir;
+    auto executor_threads = cli->pipeline.executor_threads;
+
     if (index_dir.empty()) {
-        index_dir = directory;
+        index_dir = dir;
         std::fprintf(stderr, "Using trace directory for indexes: %s\n",
                      index_dir.c_str());
     } else {
@@ -45,28 +78,22 @@ static coro::CoroTask<int> run_server(argparse::ArgumentParser& program) {
     }
 
     auto pipeline_config =
-        PipelineConfig()
-            .with_name("DFTracer Server")
-            .with_compute_threads(executor_threads)
-            .with_watchdog(false)  // Server is long-lived; no watchdog
-            .with_global_timeout(std::chrono::seconds(0))  // Run forever
-            .with_task_timeout(std::chrono::seconds(0))  // No per-task timeout
-            .with_io_backend(
-                io::IoBackendType::THREADPOOL)  // Thread pool IO for server
-            .with_io_batch_size(1);
+        cli::build_pipeline_config("DFTracer Server", cli->pipeline);
+    pipeline_config.with_io_backend(io::IoBackendType::THREADPOOL)
+        .with_io_batch_size(1)
+        .with_watchdog(false)
+        .with_global_timeout(std::chrono::seconds(0))
+        .with_task_timeout(std::chrono::seconds(0));
 
     Pipeline pipeline(pipeline_config);
 
-    // Build trace index (scan directory, load bloom indexes)
-    TraceIndex trace_index(directory, index_dir, executor_threads);
+    TraceIndex trace_index(dir, index_dir, executor_threads);
     co_await trace_index.initialize();
 
-    // Set up router
     Router router;
     register_trace_api(router, trace_index);
     register_viz_api(router, trace_index);
 
-    // Start TCP listener
     TcpListener listener(bind_addr, port);
     if (!listener.start()) {
         DFTRACER_UTILS_LOG_ERROR("Failed to bind to %s:%u", bind_addr.c_str(),
@@ -77,9 +104,8 @@ static coro::CoroTask<int> run_server(argparse::ArgumentParser& program) {
     std::fprintf(stderr, "DFTracer server listening on %s:%u\n",
                  bind_addr.c_str(), port);
     std::fprintf(stderr, "Serving %zu trace files from %s\n",
-                 trace_index.file_count(), directory.c_str());
+                 trace_index.file_count(), dir.c_str());
 
-    // Register listen fd so signal handler can unblock accept().
     g_listen_fd.store(listener.fd(), std::memory_order_release);
 
     auto server_task = make_task(
@@ -97,10 +123,6 @@ static coro::CoroTask<int> run_server(argparse::ArgumentParser& program) {
     pipeline.set_source(server_task);
     pipeline.set_destination(server_task);
 
-    // Run until SIGINT/SIGTERM.
-    // Signal handler sets g_shutdown_requested, which causes accept_loop
-    // to break, CoroScope drains in-flight handlers, and
-    // pipeline.execute() returns.
     pipeline.execute();
 
     std::fprintf(stderr, "Server shut down gracefully\n");
@@ -117,40 +139,11 @@ int main(int argc, char** argv) {
         "Serve DFTracer trace data over HTTP. Query, filter, and stream "
         "trace events via REST API.");
 
-    program.add_argument("-b", "--bind")
-        .help("Bind address")
-        .default_value<std::string>("0.0.0.0");
-
-    program.add_argument("-p", "--port")
-        .help("Listen port")
-        .scan<'d', uint16_t>()
-        .default_value(static_cast<uint16_t>(8080));
-
-    program.add_argument("-d", "--directory")
-        .help("Directory containing trace files")
-        .required();
-
-    program.add_argument("--index-dir")
-        .help(
-            "Directory for root-local .dftindex stores (default: same as "
-            "--directory)")
-        .default_value<std::string>("");
-
-    program.add_argument("--executor-threads")
-        .help("Number of worker threads")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
+    ServerArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
 
     install_signal_handlers();
 
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
-        std::cerr << program;
-        return 1;
-    }
-
-    return run_server(program).get();
+    return run_server(&cli).get();
 }

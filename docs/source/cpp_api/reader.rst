@@ -22,7 +22,25 @@ decompression.
 
 The reader also supports query-based event filtering: when a query string is
 provided and an index exists, non-matching chunks are pruned entirely, and
-per-event filtering is applied to the remaining chunks.
+per-event filtering is applied to the remaining chunks. Conjunctions of
+equality predicates (``cat == 'io' AND name == 'read'``) are compiled into
+a vectorized predicate evaluator that runs against the index bloom dimensions
+before any line is decompressed.
+
+``TraceReader`` also accepts a **directory** as ``file_path``: when given a
+directory, it enumerates trace files inside it, opens one indexed reader per
+file, and yields lines / Arrow batches in file order. Batch chunk pruning is
+delegated to ``ChunkPrunerUtility``, which evaluates the compiled query
+against all candidate chunks in one pass and feeds the resulting line-range
+work items back to the per-file readers.
+
+When ``DFTRACER_UTILS_ENABLE_ARROW`` is set, ``TraceReader::read_arrow()``
+exports record batches via the Arrow C Data Interface
+(``ArrowExportResult``), which can be sent directly across the FFI boundary
+to Python / DuckDB / Polars without a copy. The ``ReadConfig::flatten_objects``
+flag expands one level of nested JSON objects (e.g. ``args``) into
+``parent.child`` columns with native Arrow types instead of serializing them
+as JSON strings.
 
 Getting Started
 ---------------
@@ -120,6 +138,13 @@ filtering. All fields have sensible defaults; pass a default-constructed
 - ``multi_line`` -- allow multiple lines per raw chunk (default true)
 - ``buffer_size`` -- internal read buffer size (default 4 MB)
 - ``query`` -- query DSL string for event filtering (empty = no filter)
+- ``chunk_prune_only`` -- when true, the query is used only for chunk-level
+  pruning via the index; per-line filtering is skipped (caller handles it)
+- ``skip_pruning`` -- skip the reader's own chunk pruner pass; the caller's
+  ``start_line``/``end_line`` window is trusted (used by the checkpoint-level
+  work-item dispatcher to avoid re-running ``ChunkPrunerUtility`` per item)
+- ``flatten_objects`` -- expand one level of nested JSON objects into
+  ``parent.child`` columns with native Arrow types in ``read_arrow()``
 
 Helper methods: ``has_line_range()`` and ``has_byte_range()`` test whether
 non-default range bounds have been set.
@@ -135,7 +160,9 @@ indexed) based on whether an index exists and what range the caller requests.
 **Async generators:**
 
 - ``read_lines(config)`` -- yields ``Line`` structs (``content`` + ``line_number``) with optional query filtering and chunk pruning
+- ``read_json(config)`` -- yields ``JsonLine`` records (parsed once with simdjson) for callers that would otherwise re-parse each line
 - ``read_raw(config)`` -- yields ``std::span<const char>`` byte chunks
+- ``read_arrow(config, batch_size)`` -- yields ``ArrowExportResult`` record batches via the Arrow C Data Interface (requires ``DFTRACER_UTILS_ENABLE_ARROW``)
 
 **Metadata queries:**
 

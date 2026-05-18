@@ -101,7 +101,6 @@ timeout thresholds. All fields have sensible defaults.
        std::size_t io_pool_size = 4;
        io::IoBackendType io_backend_type = io::IoBackendType::AUTO;
        unsigned io_batch_threshold = 16;
-       std::size_t db_pool_size = 2;
    };
 
 **Key fields:**
@@ -116,7 +115,6 @@ timeout thresholds. All fields have sensible defaults.
   (``AUTO``, ``IO_URING``, ``THREAD_POOL``).
 - ``io_batch_threshold`` -- Minimum number of I/O operations to batch before
   submitting to the backend.
-- ``db_pool_size`` -- Number of threads in the dedicated database work pool.
 
 **Example -- high-throughput configuration:**
 
@@ -127,7 +125,6 @@ timeout thresholds. All fields have sensible defaults.
        .io_pool_size = 8,
        .io_backend_type = io::IoBackendType::IO_URING,
        .io_batch_threshold = 32,
-       .db_pool_size = 4
    };
 
 Progress Tracking

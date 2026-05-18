@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_QUERY_QUERY_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_QUERY_QUERY_H
 
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/query/ast.h>
 #include <dftracer/utils/utilities/common/query/evaluator.h>
 #include <dftracer/utils/utilities/common/query/parser.h>
@@ -33,13 +34,21 @@ class Query {
     const std::string& source() const { return source_; }
     /// Serialize AST back to query DSL string.
     std::string to_string() const;
+    /// Fields referenced by this query, precomputed at construction.
+    const dftracer::utils::StringViewSet& fields() const { return fields_; }
+    bool references(std::string_view field) const {
+        return fields_.count(field) > 0;
+    }
 
    private:
     Query(QueryNodePtr root, std::string source)
-        : root_(std::move(root)), source_(std::move(source)) {}
+        : root_(std::move(root)),
+          source_(std::move(source)),
+          fields_(collect_fields(*root_)) {}
 
     QueryNodePtr root_;
     std::string source_;
+    dftracer::utils::StringViewSet fields_;
 };
 
 /// Parse a query string, throwing QueryParseError on failure.

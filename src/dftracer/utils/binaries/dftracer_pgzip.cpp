@@ -1,16 +1,12 @@
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/compression/zlib/types.h>
 #include <zlib.h>
 
-#include <argparse/argparse.hpp>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -18,7 +14,51 @@
 #include <mutex>
 #include <vector>
 
+#include "common_cli.h"
+
 using namespace dftracer::utils;
+
+class PgzipArgParse : public cli::ArgParse {
+   public:
+    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_DOT,
+                                 "Directory containing .pfw files"};
+    cli::PipelineArgs pipeline;
+    cli::WatchdogArgs watchdog;
+
+    bool verbose = false;
+    int compression_level = Z_DEFAULT_COMPRESSION;
+    std::size_t chunk_size = 4 * 1024 * 1024;
+
+    explicit PgzipArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        schema(directory, pipeline, watchdog);
+    }
+
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("-v", "--verbose")
+            .help("Enable verbose output")
+            .flag();
+
+        parser()
+            .add_argument("-l", "--compression-level")
+            .help("Compression level (0-9, default: Z_DEFAULT_COMPRESSION)")
+            .scan<'d', int>()
+            .default_value(Z_DEFAULT_COMPRESSION);
+
+        parser()
+            .add_argument("--chunk-size")
+            .help("Chunk size in bytes for parallel compression (default: 4MB)")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(4 * 1024 * 1024));
+    }
+
+    void post_parse() override {
+        verbose = parser().get<bool>("--verbose");
+        compression_level = parser().get<int>("--compression-level");
+        chunk_size = parser().get<std::size_t>("--chunk-size");
+    }
+};
 
 namespace {
 
@@ -41,7 +81,6 @@ struct CompressedChunk {
     std::string data;
 };
 
-// Top-level coroutine: reads file and sends chunks to channel.
 static coro::CoroTask<void> chunk_reader(
     coro::ChannelProducer<ChunkWork> producer, const std::string* file_path,
     std::size_t chunk_size) {
@@ -67,9 +106,8 @@ static coro::CoroTask<void> chunk_reader(
     co_return;
 }
 
-// Top-level coroutine: compresses chunks and sends to output channel.
 static coro::CoroTask<void> chunk_compressor(
-    std::shared_ptr<coro::Channel<ChunkWork>> input_chan,
+    coro::ChannelConsumer<ChunkWork> input_chan,
     coro::ChannelProducer<CompressedChunk> out_producer,
     int compression_level) {
     auto guard = out_producer.guard();
@@ -83,7 +121,7 @@ static coro::CoroTask<void> chunk_compressor(
 
     std::string out_buf(64 * 1024, '\0');
 
-    while (auto work = co_await input_chan->receive()) {
+    while (auto work = co_await input_chan.receive()) {
         std::string compressed;
         compressed.reserve(work->data.size());
 
@@ -117,9 +155,8 @@ static coro::CoroTask<void> chunk_compressor(
     co_return;
 }
 
-// Top-level coroutine: receives compressed chunks and writes in order.
 static coro::CoroTask<void> chunk_writer(
-    std::shared_ptr<coro::Channel<CompressedChunk>> output_chan,
+    coro::ChannelConsumer<CompressedChunk> output_chan,
     const std::string* output_path) {
     std::ofstream ofs(*output_path, std::ios::binary);
     if (!ofs.is_open()) co_return;
@@ -127,7 +164,7 @@ static coro::CoroTask<void> chunk_writer(
     std::size_t next_expected = 0;
     std::map<std::size_t, std::string> pending;
 
-    while (auto chunk = co_await output_chan->receive()) {
+    while (auto chunk = co_await output_chan.receive()) {
         if (chunk->index == next_expected) {
             ofs.write(chunk->data.data(),
                       static_cast<std::streamsize>(chunk->data.size()));
@@ -150,7 +187,6 @@ static coro::CoroTask<void> chunk_writer(
     co_return;
 }
 
-// Compress a single file using parallel chunk compression.
 static coro::CoroTask<FileResult> compress_file_parallel(
     CoroScope& ctx, const std::string& file_path, int compression_level,
     std::size_t num_workers, std::size_t chunk_size) {
@@ -182,27 +218,29 @@ static coro::CoroTask<FileResult> compress_file_parallel(
         const auto* file_path_ptr = &file_path;
         const auto* output_path_ptr = &result.output_path;
 
-        co_await ctx.scope([input_chan, output_chan, file_path_ptr,
+        co_await ctx.scope([&input_chan, &output_chan, file_path_ptr,
                             output_path_ptr, compression_level, num_workers,
                             chunk_size](
                                CoroScope& scope) -> coro::CoroTask<void> {
-            scope.spawn([input_chan, file_path_ptr,
-                         chunk_size](CoroScope&) -> coro::CoroTask<void> {
-                co_await chunk_reader(input_chan->producer(), file_path_ptr,
-                                      chunk_size);
+            scope.spawn([ch = input_chan->producer(), file_path_ptr,
+                         chunk_size](
+                            CoroScope&) mutable -> coro::CoroTask<void> {
+                co_await chunk_reader(std::move(ch), file_path_ptr, chunk_size);
             });
 
             for (std::size_t w = 0; w < num_workers; ++w) {
-                scope.spawn([input_chan, output_chan, compression_level](
-                                CoroScope&) -> coro::CoroTask<void> {
-                    co_await chunk_compressor(
-                        input_chan, output_chan->producer(), compression_level);
+                scope.spawn([in_ch = input_chan->consumer(),
+                             out_ch = output_chan->producer(),
+                             compression_level](
+                                CoroScope&) mutable -> coro::CoroTask<void> {
+                    co_await chunk_compressor(in_ch, std::move(out_ch),
+                                              compression_level);
                 });
             }
 
-            scope.spawn([output_chan,
+            scope.spawn([ch = output_chan->consumer(),
                          output_path_ptr](CoroScope&) -> coro::CoroTask<void> {
-                co_await chunk_writer(output_chan, output_path_ptr);
+                co_await chunk_writer(ch, output_path_ptr);
             });
 
             co_return;
@@ -230,85 +268,12 @@ static coro::CoroTask<FileResult> compress_file_parallel(
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_pgzip",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Parallel gzip compression for DFTracer .pfw files. "
-        "Splits each file into chunks and compresses them in parallel "
-        "as independent gzip members.");
-
-    program.add_argument("-d", "--directory")
-        .help("Directory containing .pfw files")
-        .default_value<std::string>(".");
-
-    program.add_argument("-v", "--verbose")
-        .help("Enable verbose output")
-        .flag();
-
-    program.add_argument("--executor-threads")
-        .help("Number of worker threads (default: number of CPU cores)")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
-
-    program.add_argument("-l", "--compression-level")
-        .help("Compression level (0-9, default: Z_DEFAULT_COMPRESSION)")
-        .scan<'d', int>()
-        .default_value(Z_DEFAULT_COMPRESSION);
-
-    program.add_argument("--chunk-size")
-        .help("Chunk size in bytes for parallel compression (default: 4MB)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(4 * 1024 * 1024));
-
-    program.add_argument("--disable-watchdog")
-        .help("Disable watchdog for hang detection")
-        .flag();
-
-    program.add_argument("--watchdog-global-timeout")
-        .help("Watchdog global timeout in seconds (0 = no timeout)")
-        .scan<'d', int>()
-        .default_value(0);
-
-    program.add_argument("--watchdog-task-timeout")
-        .help("Watchdog default task timeout in seconds (0 = no timeout)")
-        .scan<'d', int>()
-        .default_value(0);
-
-    program.add_argument("--watchdog-idle-timeout")
-        .help("Watchdog idle timeout in seconds (0 = use default)")
-        .scan<'d', int>()
-        .default_value(300);
-
-    program.add_argument("--watchdog-deadlock-timeout")
-        .help("Watchdog deadlock timeout in seconds (0 = use default)")
-        .scan<'d', int>()
-        .default_value(600);
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error occurred: %s", err.what());
-        std::cerr << program << std::endl;
-        return 1;
-    }
-
-    std::string input_dir = program.get<std::string>("--directory");
-    bool verbose = program.get<bool>("--verbose");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
-    int compression_level = program.get<int>("--compression-level");
-    std::size_t chunk_size = program.get<std::size_t>("--chunk-size");
-    bool disable_watchdog = program.get<bool>("--disable-watchdog");
-    int global_timeout = program.get<int>("--watchdog-global-timeout");
-    int task_timeout = program.get<int>("--watchdog-task-timeout");
-    int idle_timeout = program.get<int>("--watchdog-idle-timeout");
-    int deadlock_timeout = program.get<int>("--watchdog-deadlock-timeout");
-
-    input_dir = fs::absolute(input_dir).string();
+static int run_pgzip(const PgzipArgParse& cli) {
+    const auto input_dir = fs::absolute(cli.directory.value).string();
+    const auto verbose = cli.verbose;
+    const auto executor_threads = cli.pipeline.executor_threads;
+    const auto compression_level = cli.compression_level;
+    const auto chunk_size = cli.chunk_size;
 
     std::vector<std::string> input_files;
     for (const auto& entry : fs::directory_iterator(input_dir)) {
@@ -338,17 +303,8 @@ int main(int argc, char** argv) {
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    auto pipeline_config =
-        PipelineConfig()
-            .with_name("DFTracer Parallel Gzip")
-            .with_compute_threads(executor_threads)
-            .with_watchdog(!disable_watchdog)
-            .with_global_timeout(std::chrono::seconds(global_timeout))
-            .with_task_timeout(std::chrono::seconds(task_timeout))
-            .with_executor_idle_timeout(std::chrono::seconds(idle_timeout))
-            .with_executor_deadlock_timeout(
-                std::chrono::seconds(deadlock_timeout));
-
+    auto pipeline_config = cli::build_pipeline_config(
+        "DFTracer Parallel Gzip", cli.pipeline, cli.watchdog);
     Pipeline pipeline(pipeline_config);
 
     std::vector<FileResult> results;
@@ -364,7 +320,7 @@ int main(int argc, char** argv) {
             auto file_chan =
                 coro::make_channel<std::size_t>(executor_threads * 2);
 
-            co_await ctx.scope([file_chan, files_ptr, results_ptr, mutex_ptr,
+            co_await ctx.scope([&file_chan, files_ptr, results_ptr, mutex_ptr,
                                 compression_level, executor_threads, chunk_size,
                                 verbose](
                                    CoroScope& scope) -> coro::CoroTask<void> {
@@ -379,11 +335,11 @@ int main(int argc, char** argv) {
                     });
 
                 for (std::size_t w = 0; w < executor_threads; ++w) {
-                    scope.spawn([file_chan, files_ptr, results_ptr, mutex_ptr,
-                                 compression_level, executor_threads,
-                                 chunk_size, verbose](
+                    scope.spawn([ch = file_chan->consumer(), files_ptr,
+                                 results_ptr, mutex_ptr, compression_level,
+                                 executor_threads, chunk_size, verbose](
                                     CoroScope& wctx) -> coro::CoroTask<void> {
-                        while (auto fi_opt = co_await file_chan->receive()) {
+                        while (auto fi_opt = co_await ch.receive()) {
                             const auto& path = (*files_ptr)[*fi_opt];
 
                             auto result = co_await compress_file_parallel(
@@ -472,4 +428,21 @@ int main(int argc, char** argv) {
     std::printf("==========================================\n");
 
     return successful == input_files.size() ? 0 : 1;
+}
+
+int main(int argc, char** argv) {
+    DFTRACER_UTILS_LOGGER_INIT();
+
+    argparse::ArgumentParser program("dftracer_pgzip",
+                                     DFTRACER_UTILS_PACKAGE_VERSION);
+    program.add_description(
+        "Parallel gzip compression for DFTracer .pfw files. "
+        "Splits each file into chunks and compresses them in parallel "
+        "as independent gzip members.");
+
+    PgzipArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
+
+    return run_pgzip(cli);
 }

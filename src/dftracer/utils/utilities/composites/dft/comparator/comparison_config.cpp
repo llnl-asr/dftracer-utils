@@ -1,6 +1,7 @@
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_config.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -27,78 +28,74 @@ std::vector<std::string> split_csv(const std::string& s) {
 }  // namespace
 
 // static
-bool ComparisonConfig::parse_node(void* yyjson_val_ptr, ComparisonNode& node,
-                                  std::string& error) {
-    auto* val = static_cast<yyjson_val*>(yyjson_val_ptr);
-    if (!val || !yyjson_is_obj(val)) {
+bool ComparisonConfig::parse_node(simdjson::dom::element val,
+                                  ComparisonNode& node, std::string& error) {
+    if (!val.is_object()) {
         error = "node must be a JSON object";
         return false;
     }
 
-    yyjson_val* name_val = yyjson_obj_get(val, "name");
-    if (!name_val || !yyjson_is_str(name_val)) {
+    auto name_result = val["name"];
+    if (name_result.error() || !name_result.value_unsafe().is_string()) {
         error = "node missing required string field 'name'";
         return false;
     }
-    node.name = yyjson_get_str(name_val);
+    node.name = std::string(name_result.value_unsafe().get_string().value());
 
-    yyjson_val* query_val = yyjson_obj_get(val, "query");
-    if (query_val && yyjson_is_str(query_val)) {
-        node.query = yyjson_get_str(query_val);
+    auto query_result = val["query"];
+    if (!query_result.error() && query_result.value_unsafe().is_string()) {
+        node.query =
+            std::string(query_result.value_unsafe().get_string().value());
     }
 
-    yyjson_val* gb_val = yyjson_obj_get(val, "group_by");
-    if (gb_val && yyjson_is_arr(gb_val)) {
-        std::size_t idx, max;
-        yyjson_val* elem;
-        yyjson_arr_foreach(gb_val, idx, max, elem) {
-            if (yyjson_is_str(elem)) {
-                node.group_by.push_back(yyjson_get_str(elem));
+    auto gb_result = val["group_by"];
+    if (!gb_result.error() && gb_result.value_unsafe().is_array()) {
+        for (auto elem : gb_result.value_unsafe().get_array()) {
+            if (elem.is_string()) {
+                node.group_by.push_back(std::string(elem.get_string().value()));
             }
         }
     }
 
-    yyjson_val* metrics_val = yyjson_obj_get(val, "metrics");
-    if (metrics_val && yyjson_is_arr(metrics_val)) {
+    auto metrics_result = val["metrics"];
+    if (!metrics_result.error() && metrics_result.value_unsafe().is_array()) {
         std::vector<std::string> metrics;
-        std::size_t idx, max;
-        yyjson_val* elem;
-        yyjson_arr_foreach(metrics_val, idx, max, elem) {
-            if (yyjson_is_str(elem)) {
-                metrics.push_back(yyjson_get_str(elem));
+        for (auto elem : metrics_result.value_unsafe().get_array()) {
+            if (elem.is_string()) {
+                metrics.push_back(std::string(elem.get_string().value()));
             }
         }
         node.metrics = std::move(metrics);
     }
 
-    yyjson_val* pct_val = yyjson_obj_get(val, "percentiles");
-    if (pct_val && yyjson_is_arr(pct_val)) {
+    auto pct_result = val["percentiles"];
+    if (!pct_result.error() && pct_result.value_unsafe().is_array()) {
         std::vector<double> percentiles;
-        std::size_t idx, max;
-        yyjson_val* elem;
-        yyjson_arr_foreach(pct_val, idx, max, elem) {
-            if (yyjson_is_num(elem)) {
-                percentiles.push_back(yyjson_get_num(elem));
+        for (auto elem : pct_result.value_unsafe().get_array()) {
+            if (elem.is_double() || elem.is_int64() || elem.is_uint64()) {
+                percentiles.push_back(elem.get_double().value());
             }
         }
         node.percentiles = std::move(percentiles);
     }
 
-    yyjson_val* thr_val = yyjson_obj_get(val, "threshold_pct");
-    if (thr_val && yyjson_is_num(thr_val)) {
-        node.threshold_pct = yyjson_get_num(thr_val);
+    auto thr_result = val["threshold_pct"];
+    if (!thr_result.error()) {
+        auto thr_val = thr_result.value_unsafe();
+        if (thr_val.is_double() || thr_val.is_int64() || thr_val.is_uint64()) {
+            node.threshold_pct = thr_val.get_double().value();
+        }
     }
 
-    yyjson_val* sort_val = yyjson_obj_get(val, "sort_by");
-    if (sort_val && yyjson_is_str(sort_val)) {
-        node.sort_by = yyjson_get_str(sort_val);
+    auto sort_result = val["sort_by"];
+    if (!sort_result.error() && sort_result.value_unsafe().is_string()) {
+        node.sort_by =
+            std::string(sort_result.value_unsafe().get_string().value());
     }
 
-    yyjson_val* children_val = yyjson_obj_get(val, "children");
-    if (children_val && yyjson_is_arr(children_val)) {
-        std::size_t idx, max;
-        yyjson_val* child_elem;
-        yyjson_arr_foreach(children_val, idx, max, child_elem) {
+    auto children_result = val["children"];
+    if (!children_result.error() && children_result.value_unsafe().is_array()) {
+        for (auto child_elem : children_result.value_unsafe().get_array()) {
             ComparisonNode child;
             if (!parse_node(child_elem, child, error)) return false;
             node.children.push_back(std::move(child));
@@ -111,94 +108,107 @@ bool ComparisonConfig::parse_node(void* yyjson_val_ptr, ComparisonNode& node,
 // static
 std::optional<ComparisonConfig> ComparisonConfig::from_json_file(
     const std::string& path, std::string& error) {
-    yyjson_doc* doc = yyjson_read_file(path.c_str(), 0, nullptr, nullptr);
-    if (!doc) {
+    std::ifstream file(path);
+    if (!file) {
         error = "failed to read or parse JSON file: " + path;
         return std::nullopt;
     }
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
 
-    yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!root || !yyjson_is_obj(root)) {
-        yyjson_doc_free(doc);
+    simdjson::dom::parser parser;
+    auto result = parser.parse(content);
+    if (result.error()) {
+        error = "failed to parse JSON file: " + path;
+        return std::nullopt;
+    }
+
+    auto root = result.value_unsafe();
+    if (!root.is_object()) {
         error = "JSON root must be an object";
         return std::nullopt;
     }
 
     ComparisonConfig cfg;
 
-    yyjson_val* baseline_val = yyjson_obj_get(root, "baseline");
-    if (!baseline_val || !yyjson_is_str(baseline_val)) {
-        yyjson_doc_free(doc);
+    auto baseline_result = root["baseline"];
+    if (baseline_result.error() ||
+        !baseline_result.value_unsafe().is_string()) {
         error = "missing required string field 'baseline'";
         return std::nullopt;
     }
-    cfg.baseline = yyjson_get_str(baseline_val);
+    cfg.baseline =
+        std::string(baseline_result.value_unsafe().get_string().value());
 
-    yyjson_val* variant_val = yyjson_obj_get(root, "variant");
-    if (!variant_val || !yyjson_is_str(variant_val)) {
-        yyjson_doc_free(doc);
+    auto variant_result = root["variant"];
+    if (variant_result.error() || !variant_result.value_unsafe().is_string()) {
         error = "missing required string field 'variant'";
         return std::nullopt;
     }
-    cfg.variant = yyjson_get_str(variant_val);
+    cfg.variant =
+        std::string(variant_result.value_unsafe().get_string().value());
 
-    yyjson_val* defaults_val = yyjson_obj_get(root, "defaults");
-    if (defaults_val && yyjson_is_obj(defaults_val)) {
-        yyjson_val* dm = yyjson_obj_get(defaults_val, "metrics");
-        if (dm && yyjson_is_arr(dm)) {
+    auto defaults_result = root["defaults"];
+    if (!defaults_result.error() &&
+        defaults_result.value_unsafe().is_object()) {
+        auto defaults_val = defaults_result.value_unsafe();
+
+        auto dm_result = defaults_val["metrics"];
+        if (!dm_result.error() && dm_result.value_unsafe().is_array()) {
             cfg.defaults.metrics.clear();
-            std::size_t idx, max;
-            yyjson_val* elem;
-            yyjson_arr_foreach(dm, idx, max, elem) {
-                if (yyjson_is_str(elem)) {
-                    cfg.defaults.metrics.push_back(yyjson_get_str(elem));
+            for (auto elem : dm_result.value_unsafe().get_array()) {
+                if (elem.is_string()) {
+                    cfg.defaults.metrics.push_back(
+                        std::string(elem.get_string().value()));
                 }
             }
         }
 
-        yyjson_val* dp = yyjson_obj_get(defaults_val, "percentiles");
-        if (dp && yyjson_is_arr(dp)) {
+        auto dp_result = defaults_val["percentiles"];
+        if (!dp_result.error() && dp_result.value_unsafe().is_array()) {
             cfg.defaults.percentiles.clear();
-            std::size_t idx, max;
-            yyjson_val* elem;
-            yyjson_arr_foreach(dp, idx, max, elem) {
-                if (yyjson_is_num(elem)) {
-                    cfg.defaults.percentiles.push_back(yyjson_get_num(elem));
+            for (auto elem : dp_result.value_unsafe().get_array()) {
+                if (elem.is_double() || elem.is_int64() || elem.is_uint64()) {
+                    cfg.defaults.percentiles.push_back(
+                        elem.get_double().value());
                 }
             }
         }
 
-        yyjson_val* dt = yyjson_obj_get(defaults_val, "threshold_pct");
-        if (dt && yyjson_is_num(dt)) {
-            cfg.defaults.threshold_pct = yyjson_get_num(dt);
+        auto dt_result = defaults_val["threshold_pct"];
+        if (!dt_result.error()) {
+            auto dt_val = dt_result.value_unsafe();
+            if (dt_val.is_double() || dt_val.is_int64() || dt_val.is_uint64()) {
+                cfg.defaults.threshold_pct = dt_val.get_double().value();
+            }
         }
 
-        yyjson_val* ti = yyjson_obj_get(defaults_val, "time_interval_ms");
-        if (ti && yyjson_is_num(ti)) {
-            cfg.defaults.time_interval_ms = yyjson_get_num(ti);
+        auto ti_result = defaults_val["time_interval_ms"];
+        if (!ti_result.error()) {
+            auto ti_val = ti_result.value_unsafe();
+            if (ti_val.is_double() || ti_val.is_int64() || ti_val.is_uint64()) {
+                cfg.defaults.time_interval_ms = ti_val.get_double().value();
+            }
         }
 
-        yyjson_val* ds = yyjson_obj_get(defaults_val, "sort_by");
-        if (ds && yyjson_is_str(ds)) {
-            cfg.defaults.sort_by = yyjson_get_str(ds);
+        auto ds_result = defaults_val["sort_by"];
+        if (!ds_result.error() && ds_result.value_unsafe().is_string()) {
+            cfg.defaults.sort_by =
+                std::string(ds_result.value_unsafe().get_string().value());
         }
     }
 
-    yyjson_val* nodes_val = yyjson_obj_get(root, "nodes");
-    if (nodes_val && yyjson_is_arr(nodes_val)) {
-        std::size_t idx, max;
-        yyjson_val* node_elem;
-        yyjson_arr_foreach(nodes_val, idx, max, node_elem) {
+    auto nodes_result = root["nodes"];
+    if (!nodes_result.error() && nodes_result.value_unsafe().is_array()) {
+        for (auto node_elem : nodes_result.value_unsafe().get_array()) {
             ComparisonNode node;
             if (!parse_node(node_elem, node, error)) {
-                yyjson_doc_free(doc);
                 return std::nullopt;
             }
             cfg.nodes.push_back(std::move(node));
         }
     }
 
-    yyjson_doc_free(doc);
     return cfg;
 }
 

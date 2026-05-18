@@ -273,6 +273,47 @@ function(need_nonstd_span)
   endif()
 endfunction()
 
+function(need_unordered_dense)
+  if(NOT unordered_dense_ADDED)
+    cpmaddpackage(
+      NAME
+      unordered_dense
+      GITHUB_REPOSITORY
+      martinus/unordered_dense
+      VERSION
+      4.4.0
+      OPTIONS
+      "UNORDERED_DENSE_INSTALL ON"
+      FORCE
+      YES)
+  endif()
+endfunction()
+
+function(link_unordered_dense TARGET_NAME)
+  if(NOT TARGET_NAME)
+    message(FATAL_ERROR "link_unordered_dense: TARGET_NAME is required")
+  endif()
+
+  if(NOT TARGET ${TARGET_NAME})
+    message(
+      FATAL_ERROR
+        "link_unordered_dense: Target '${TARGET_NAME}' does not exist")
+  endif()
+
+  if(NOT TARGET unordered_dense::unordered_dense)
+    message(
+      FATAL_ERROR
+        "link_unordered_dense: ankerl::unordered_dense not found! Call need_unordered_dense() first."
+    )
+  endif()
+
+  get_target_property(UD_INC unordered_dense::unordered_dense
+                      INTERFACE_INCLUDE_DIRECTORIES)
+  target_include_directories(${TARGET_NAME} PUBLIC
+    "$<BUILD_INTERFACE:${UD_INC}>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+endfunction()
+
 function(need_tl_expected)
   # tl::expected is only needed when C++23 std::expected is unavailable
   if(CMAKE_CXX_STANDARD GREATER_EQUAL 23)
@@ -353,80 +394,94 @@ function(link_tl_expected TARGET_NAME)
 endfunction()
 
 # ==============================================================================
-# JSON and Serialization Dependencies
+# simdjson - SIMD-accelerated JSON parser (On-Demand API for zero-copy)
 # ==============================================================================
 
-function(need_yyjson)
-  if(NOT yyjson_ADDED)
+function(need_simdjson)
+  if(NOT simdjson_ADDED)
     cpmaddpackage(
       NAME
-      yyjson
+      simdjson
       GITHUB_REPOSITORY
-      ibireme/yyjson
+      simdjson/simdjson
       VERSION
-      0.12.0
+      4.6.1
       GIT_TAG
-      0.12.0
-      FORCE
-      YES
+      v4.6.1
       DOWNLOAD_ONLY
       YES)
   endif()
 
-  set(YYJSON_SOVERSION 0)
-  set(YYJSON_TARGETS)
+  if(simdjson_ADDED AND NOT TARGET simdjson)
+    message(STATUS "Building simdjson library (v4.6.1)")
 
-  if(DFTRACER_UTILS_BUILD_STATIC)
-    add_library(yyjson_static STATIC ${yyjson_SOURCE_DIR}/src/yyjson.h
-                                     ${yyjson_SOURCE_DIR}/src/yyjson.c)
-    target_include_directories(
-      yyjson_static PUBLIC $<BUILD_INTERFACE:${yyjson_SOURCE_DIR}/src>)
-    set_target_properties(
-      yyjson_static
-      PROPERTIES VERSION ${PROJECT_VERSION}
-                 SOVERSION ${YYJSON_SOVERSION}
-                 ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-    add_library(yyjson::yyjson_static ALIAS yyjson_static)
-    list(APPEND YYJSON_TARGETS yyjson_static)
-    message(STATUS "Added yyjson static library")
-  endif()
+    # simdjson is a single-header + single-source library
+    set(SIMDJSON_SOURCES
+      ${simdjson_SOURCE_DIR}/singleheader/simdjson.h
+      ${simdjson_SOURCE_DIR}/singleheader/simdjson.cpp)
 
-  if(DFTRACER_UTILS_BUILD_SHARED)
-    add_library(yyjson_shared SHARED ${yyjson_SOURCE_DIR}/src/yyjson.h
-                                     ${yyjson_SOURCE_DIR}/src/yyjson.c)
-    target_include_directories(
-      yyjson_shared PUBLIC $<BUILD_INTERFACE:${yyjson_SOURCE_DIR}/src>)
-    set_target_properties(
-      yyjson_shared
-      PROPERTIES VERSION ${PROJECT_VERSION}
-                 SOVERSION ${YYJSON_SOVERSION}
-                 OUTPUT_NAME yyjson
-                 LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                 ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-    add_library(yyjson::yyjson ALIAS yyjson_shared)
-    list(APPEND YYJSON_TARGETS yyjson_shared)
-    message(STATUS "Added yyjson shared library")
-  elseif(DFTRACER_UTILS_BUILD_STATIC)
-    # If only static is built, make it the default alias
-    add_library(yyjson::yyjson ALIAS yyjson_static)
-  endif()
+    set(SIMDJSON_TARGETS)
 
-  install(FILES ${yyjson_SOURCE_DIR}/src/yyjson.h
-          DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-  if(YYJSON_TARGETS)
-    install(
-      TARGETS ${YYJSON_TARGETS}
-      EXPORT yyjsonTargets
-      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    if(DFTRACER_UTILS_BUILD_STATIC)
+      add_library(simdjson_static STATIC ${SIMDJSON_SOURCES})
+      target_include_directories(
+        simdjson_static SYSTEM PUBLIC
+        $<BUILD_INTERFACE:${simdjson_SOURCE_DIR}/singleheader>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      target_compile_features(simdjson_static PUBLIC cxx_std_17)
+      # Suppress warnings from simdjson (third-party code)
+      target_compile_options(simdjson_static PRIVATE -w)
+      set_target_properties(
+        simdjson_static
+        PROPERTIES
+          OUTPUT_NAME simdjson
+          ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+          POSITION_INDEPENDENT_CODE ON)
+      add_library(simdjson::simdjson_static ALIAS simdjson_static)
+      list(APPEND SIMDJSON_TARGETS simdjson_static)
+      message(STATUS "Added simdjson static library")
+    endif()
 
-    # Install the export set so other projects can find yyjson
-    install(
-      EXPORT yyjsonTargets
-      FILE yyjsonTargets.cmake
-      NAMESPACE yyjson::
-      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/yyjson)
+    if(DFTRACER_UTILS_BUILD_SHARED)
+      add_library(simdjson_shared SHARED ${SIMDJSON_SOURCES})
+      target_include_directories(
+        simdjson_shared SYSTEM PUBLIC
+        $<BUILD_INTERFACE:${simdjson_SOURCE_DIR}/singleheader>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      target_compile_features(simdjson_shared PUBLIC cxx_std_17)
+      # Suppress warnings from simdjson (third-party code)
+      target_compile_options(simdjson_shared PRIVATE -w)
+      set_target_properties(
+        simdjson_shared
+        PROPERTIES
+          OUTPUT_NAME simdjson
+          LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+          ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+      add_library(simdjson::simdjson ALIAS simdjson_shared)
+      list(APPEND SIMDJSON_TARGETS simdjson_shared)
+      message(STATUS "Added simdjson shared library")
+    elseif(DFTRACER_UTILS_BUILD_STATIC)
+      add_library(simdjson::simdjson ALIAS simdjson_static)
+    endif()
+
+    # Install header
+    install(FILES ${simdjson_SOURCE_DIR}/singleheader/simdjson.h
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+    if(SIMDJSON_TARGETS)
+      install(
+        TARGETS ${SIMDJSON_TARGETS}
+        EXPORT simdjsonTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+      install(
+        EXPORT simdjsonTargets
+        FILE simdjsonTargets.cmake
+        NAMESPACE simdjson::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/simdjson)
+    endif()
   endif()
 endfunction()
 
@@ -497,13 +552,13 @@ function(need_rocksdb)
         "ROCKSDB_BUILD_SHARED ${DFTRACER_UTILS_BUILD_SHARED}"
         "WITH_TESTS OFF"
         "WITH_TOOLS OFF"
-        "WITH_CORE_TOOLS OFF"
+        "WITH_CORE_TOOLS ON"
         "WITH_BENCHMARK_TOOLS OFF"
         "WITH_GFLAGS OFF"
         "WITH_SNAPPY OFF"
-        "WITH_LZ4 ON"
+        "WITH_LZ4 ${DFTRACER_UTILS_ENABLE_LZ4}"
         "WITH_ZLIB ON"
-        "WITH_ZSTD OFF"
+        "WITH_ZSTD ${DFTRACER_UTILS_ENABLE_ZSTD}"
         "WITH_BZ2 OFF"
         "USE_RTTI ON"
         "FAIL_ON_WARNINGS OFF"
@@ -586,6 +641,23 @@ function(need_rocksdb)
       set(CMAKE_INSTALL_RPATH
           "${CMAKE_INSTALL_RPATH}"
           PARENT_SCOPE)
+
+      # Stage rocksdb's ldb (and sst_dump) into bin/ and reuse the standard
+      # $ORIGIN/../lib rpath helper so they find librocksdb.so without
+      # LD_LIBRARY_PATH. Install alongside our own binaries and ship a
+      # venv wrapper when building a Python wheel.
+      foreach(tool ldb sst_dump)
+        if(TARGET ${tool})
+          set_target_properties(
+            ${tool} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+                               "${CMAKE_BINARY_DIR}/bin")
+          target_add_rpath(${tool})
+          install(TARGETS ${tool} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+          if(SKBUILD)
+            create_python_wrapper(${tool})
+          endif()
+        endif()
+      endforeach()
 
       set(RocksDB_FOUND
           TRUE
@@ -840,7 +912,130 @@ function(need_lz4)
   endif()
 endfunction()
 
+function(_try_zlib_ng OUT_VAR)
+  set(${OUT_VAR}
+      FALSE
+      PARENT_SCOPE)
+
+  cpmaddpackage(
+    NAME
+    zlib-ng
+    GITHUB_REPOSITORY
+    zlib-ng/zlib-ng
+    VERSION
+    2.3.3
+    GIT_TAG
+    2.3.3
+    OPTIONS
+    "ZLIB_COMPAT ON"
+    "ZLIB_ENABLE_TESTS OFF"
+    "ZLIBNG_ENABLE_TESTS OFF"
+    "WITH_GTEST OFF"
+    "WITH_OPTIM ON"
+    "WITH_NEW_STRATEGIES ON"
+    "WITH_NATIVE_INSTRUCTIONS OFF"
+    "INSTALL_UTILS OFF"
+    "SKIP_INSTALL_ALL ON")
+
+  if(NOT zlib-ng_ADDED)
+    message(WARNING "zlib-ng CPM add failed; will fall back to madler/zlib")
+    return()
+  endif()
+
+  # zlib-ng compat mode: real targets are `zlib-ng` (shared) and
+  # `zlib-ng-static` (static); `zlib`/`zlibstatic` are ALIAS-only and cannot
+  # have properties or further aliases set on them.
+  set(ZLIB_NG_TARGETS)
+  if(DFTRACER_UTILS_BUILD_SHARED AND TARGET zlib-ng)
+    get_target_property(_zng_type zlib-ng TYPE)
+    if(_zng_type STREQUAL "SHARED_LIBRARY")
+      set_target_properties(
+        zlib-ng PROPERTIES OUTPUT_NAME dftracer_zlib LIBRARY_OUTPUT_DIRECTORY
+                                                     ${CMAKE_BINARY_DIR}/lib)
+      target_include_directories(
+        zlib-ng PUBLIC $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+      add_library(dftracer_zlib_shared ALIAS zlib-ng)
+      add_library(dftracer::zlib ALIAS zlib-ng)
+      list(APPEND ZLIB_NG_TARGETS zlib-ng)
+      message(STATUS "Using zlib-ng (compat, shared) as dftracer_zlib")
+    endif()
+  endif()
+
+  if(DFTRACER_UTILS_BUILD_STATIC AND TARGET zlib-ng-static)
+    set_target_properties(
+      zlib-ng-static PROPERTIES OUTPUT_NAME dftracer_zlib
+                                ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+    target_include_directories(
+      zlib-ng-static PUBLIC $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    add_library(dftracer_zlib_static ALIAS zlib-ng-static)
+    add_library(dftracer::zlibstatic ALIAS zlib-ng-static)
+    if(NOT TARGET dftracer::zlib)
+      add_library(dftracer::zlib ALIAS zlib-ng-static)
+    endif()
+    list(APPEND ZLIB_NG_TARGETS zlib-ng-static)
+    message(STATUS "Using zlib-ng (compat, static) as dftracer_zlib")
+  endif()
+
+  if(NOT ZLIB_NG_TARGETS)
+    message(WARNING "zlib-ng targets not found after CPM add; falling back")
+    return()
+  endif()
+
+  install(
+    TARGETS ${ZLIB_NG_TARGETS}
+    EXPORT ZlibTargets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  install(
+    EXPORT ZlibTargets
+    FILE ZlibTargets.cmake
+    NAMESPACE dftracer::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
+
+  # Compat headers: zlib-ng generates zlib.h/zconf.h in its binary dir when
+  # ZLIB_COMPAT=ON. Fall back to source dir if generated copy is absent.
+  foreach(hdr zlib.h zconf.h)
+    if(EXISTS "${zlib-ng_BINARY_DIR}/${hdr}")
+      install(FILES "${zlib-ng_BINARY_DIR}/${hdr}"
+              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    elseif(EXISTS "${zlib-ng_SOURCE_DIR}/${hdr}")
+      install(FILES "${zlib-ng_SOURCE_DIR}/${hdr}"
+              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    endif()
+  endforeach()
+
+  set(ZLIB_SOURCE_DIR
+      ${zlib-ng_SOURCE_DIR}
+      PARENT_SCOPE)
+  set(ZLIB_BINARY_DIR
+      ${zlib-ng_BINARY_DIR}
+      PARENT_SCOPE)
+  set(${OUT_VAR}
+      TRUE
+      PARENT_SCOPE)
+endfunction()
+
 function(need_zlib)
+  if(DFTRACER_USE_ZLIB_NG)
+    _try_zlib_ng(_ZLIB_NG_OK)
+    if(_ZLIB_NG_OK)
+      set(ZLIB_CPM
+          TRUE
+          PARENT_SCOPE)
+      set(ZLIB_SOURCE_DIR
+          ${ZLIB_SOURCE_DIR}
+          PARENT_SCOPE)
+      set(ZLIB_BINARY_DIR
+          ${ZLIB_BINARY_DIR}
+          PARENT_SCOPE)
+      set(ZLIB_FOUND
+          FALSE
+          PARENT_SCOPE)
+      return()
+    endif()
+  endif()
+
   find_package(ZLIB 1.2 QUIET)
 
   if(ZLIB_FOUND)
@@ -1132,50 +1327,119 @@ function(link_zlib TARGET_NAME LIBRARY_TYPE)
   endif()
 endfunction()
 
+function(need_zstd)
+  find_package(zstd QUIET CONFIG)
+  if(NOT zstd_FOUND)
+    find_path(zstd_INCLUDE_DIRS NAMES zstd.h)
+    find_library(zstd_LIBRARIES NAMES zstd)
+    if(zstd_INCLUDE_DIRS AND zstd_LIBRARIES)
+      set(zstd_FOUND TRUE)
+    endif()
+  endif()
+
+  if(zstd_FOUND)
+    message(STATUS "Found system zstd")
+    if(NOT TARGET zstd::libzstd_shared AND NOT TARGET zstd::libzstd_static)
+      if(DEFINED zstd_LIBRARIES)
+        add_library(zstd::libzstd_shared UNKNOWN IMPORTED)
+        set_target_properties(
+          zstd::libzstd_shared
+          PROPERTIES IMPORTED_LOCATION "${zstd_LIBRARIES}"
+                     INTERFACE_INCLUDE_DIRECTORIES "${zstd_INCLUDE_DIRS}")
+      endif()
+    endif()
+    set(zstd_FOUND
+        TRUE
+        PARENT_SCOPE)
+    set(zstd_CPM
+        FALSE
+        PARENT_SCOPE)
+  else()
+    if(NOT zstd_ADDED)
+      cpmaddpackage(
+        NAME
+        zstd
+        GITHUB_REPOSITORY
+        facebook/zstd
+        VERSION
+        1.5.7
+        GIT_TAG
+        v1.5.7
+        SOURCE_SUBDIR
+        build/cmake
+        OPTIONS
+        "ZSTD_BUILD_PROGRAMS OFF"
+        "ZSTD_BUILD_TESTS OFF"
+        "ZSTD_BUILD_SHARED ${DFTRACER_UTILS_BUILD_SHARED}"
+        "ZSTD_BUILD_STATIC ON")
+    endif()
+
+    if(zstd_ADDED)
+      message(STATUS "Built zstd with CPM")
+      set(zstd_FOUND
+          TRUE
+          PARENT_SCOPE)
+      set(zstd_CPM
+          TRUE
+          PARENT_SCOPE)
+      set(zstd_FOUND
+          TRUE
+          CACHE BOOL "zstd availability" FORCE)
+    endif()
+  endif()
+endfunction()
+
 # ==============================================================================
 # Hashing and Cryptography Dependencies
 # ==============================================================================
 
-function(link_yyjson TARGET_NAME LIBRARY_TYPE)
+function(link_simdjson TARGET_NAME LIBRARY_TYPE)
   # Validate parameters
   if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_yyjson: TARGET_NAME is required")
+    message(FATAL_ERROR "link_simdjson: TARGET_NAME is required")
   endif()
 
   if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
     message(
-      FATAL_ERROR "link_yyjson: LIBRARY_TYPE must be either STATIC or SHARED")
+      FATAL_ERROR "link_simdjson: LIBRARY_TYPE must be either STATIC or SHARED")
   endif()
 
   if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_yyjson: Target '${TARGET_NAME}' does not exist")
+    message(FATAL_ERROR "link_simdjson: Target '${TARGET_NAME}' does not exist")
   endif()
 
-  # Link appropriate yyjson variant Use PUBLIC linkage since yyjson headers may
-  # be included in public headers
+  # Link appropriate simdjson variant
   if(LIBRARY_TYPE STREQUAL "STATIC")
-    # For static libraries, prefer static yyjson if available
-    if(TARGET yyjson_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC yyjson::yyjson_static)
-      message(STATUS "Linked ${TARGET_NAME} to yyjson_static")
-    elseif(TARGET yyjson_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC yyjson::yyjson)
-      message(STATUS "Linked ${TARGET_NAME} to yyjson (shared)")
+    # For static libraries, prefer static simdjson if available
+    if(TARGET simdjson_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson_static)
+      message(STATUS "Linked ${TARGET_NAME} to simdjson_static")
+    elseif(TARGET simdjson_shared)
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
+      message(STATUS "Linked ${TARGET_NAME} to simdjson (shared)")
+    elseif(TARGET simdjson::simdjson)
+      # System / find_package() simdjson (e.g. Homebrew on macOS).
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
+      message(STATUS "Linked ${TARGET_NAME} to system simdjson::simdjson")
     else()
       message(
-        FATAL_ERROR "link_yyjson: No yyjson found! Call need_yyjson() first.")
+        FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
     endif()
   else() # SHARED
-    # For shared libraries, prefer shared yyjson if available
-    if(TARGET yyjson_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC yyjson::yyjson)
-      message(STATUS "Linked ${TARGET_NAME} to yyjson (shared)")
-    elseif(TARGET yyjson_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC yyjson::yyjson_static)
-      message(STATUS "Linked ${TARGET_NAME} to yyjson_static")
+    # For shared libraries, prefer shared simdjson if available
+    if(TARGET simdjson_shared)
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
+      message(STATUS "Linked ${TARGET_NAME} to simdjson (shared)")
+    elseif(TARGET simdjson_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson_static)
+      message(STATUS "Linked ${TARGET_NAME} to simdjson_static")
+    elseif(TARGET simdjson::simdjson)
+      # System / find_package() simdjson (e.g. Homebrew on macOS).
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
+      message(STATUS "Linked ${TARGET_NAME} to system simdjson::simdjson")
     else()
       message(
-        FATAL_ERROR "link_yyjson: No yyjson found! Call need_yyjson() first.")
+        FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
     endif()
   endif()
 endfunction()
@@ -1350,12 +1614,16 @@ function(need_nanoarrow)
           nanoarrow_static
           PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      endif()
-      target_compile_definitions(nanoarrow_static
-                                 PUBLIC DFTRACER_UTILS_ENABLE_ARROW)
-      if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
-        target_compile_definitions(nanoarrow_static
-                                   PUBLIC DFTRACER_UTILS_ENABLE_ARROW_IPC)
+        # Enable zstd compression for Arrow IPC
+        if(DFTRACER_UTILS_ENABLE_ZSTD)
+          target_compile_definitions(nanoarrow_static
+                                     PRIVATE NANOARROW_IPC_WITH_ZSTD)
+          if(TARGET zstd::libzstd_static)
+            target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_static)
+          elseif(TARGET zstd::libzstd_shared)
+            target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_shared)
+          endif()
+        endif()
       endif()
       set_target_properties(
         nanoarrow_static
@@ -1380,12 +1648,16 @@ function(need_nanoarrow)
           nanoarrow_shared
           PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      endif()
-      target_compile_definitions(nanoarrow_shared
-                                 PUBLIC DFTRACER_UTILS_ENABLE_ARROW)
-      if(DFTRACER_UTILS_ENABLE_ARROW_IPC)
-        target_compile_definitions(nanoarrow_shared
-                                   PUBLIC DFTRACER_UTILS_ENABLE_ARROW_IPC)
+        # Enable zstd compression for Arrow IPC
+        if(DFTRACER_UTILS_ENABLE_ZSTD)
+          target_compile_definitions(nanoarrow_shared
+                                     PRIVATE NANOARROW_IPC_WITH_ZSTD)
+          if(TARGET zstd::libzstd_shared)
+            target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_shared)
+          elseif(TARGET zstd::libzstd_static)
+            target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_static)
+          endif()
+        endif()
       endif()
       set_target_properties(
         nanoarrow_shared

@@ -2,9 +2,9 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/composites/file_merger_utility.h>
 #include <doctest/doctest.h>
+#include <simdjson.h>
 #include <testing_utilities.h>
 #include <unistd.h>
-#include <yyjson.h>
 
 #include <fstream>
 #include <sstream>
@@ -156,13 +156,13 @@ TEST_SUITE("FileMerger") {
                 }
 
                 // Parse each JSON line
-                yyjson_doc *doc = yyjson_read(line.c_str(), line.size(), 0);
-                if (doc != nullptr) {
-                    yyjson_val *root = yyjson_doc_get_root(doc);
-                    if (yyjson_is_obj(root)) {
+                simdjson::dom::parser parser;
+                auto result = parser.parse(line);
+                if (!result.error()) {
+                    auto root = result.value_unsafe();
+                    if (root.is_object()) {
                         event_count++;
                     }
-                    yyjson_doc_free(doc);
                 }
             }
             ifs.close();

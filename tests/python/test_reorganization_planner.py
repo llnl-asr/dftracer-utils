@@ -1,8 +1,6 @@
 """Tests for ReorganizationPlannerUtility."""
 
-import sys
-
-import dftracer.utils as dft_utils
+from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 from dftracer.utils.dftracer_utils_ext import ReorganizationPlannerUtility
 
 from .common import Environment
@@ -10,7 +8,6 @@ from .common import Environment
 # Threshold large enough to guarantee bloom/manifest are skipped for any
 # test fixture, making WithoutIndex tests deterministic regardless of
 # fixture size.
-_SKIP_INDEX_THRESHOLD = sys.maxsize
 
 
 class TestReorganizationPlannerUtility:
@@ -18,12 +15,11 @@ class TestReorganizationPlannerUtility:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
+            with NativeIndexer(
                 gz_file,
                 index_path,
                 build_bloom=True,
                 build_manifest=True,
-                index_threshold=0,
             ) as indexer:
                 indexer.build()
             groups = [{"name": "posix", "query": 'cat == "POSIX"'}]
@@ -38,12 +34,11 @@ class TestReorganizationPlannerUtility:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
+            with NativeIndexer(
                 gz_file,
                 index_path,
                 build_bloom=True,
                 build_manifest=True,
-                index_threshold=0,
             ) as indexer:
                 indexer.build()
             util = ReorganizationPlannerUtility()
@@ -61,12 +56,11 @@ class TestReorganizationPlannerWithoutIndex:
         with Environment(lines=5) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=128)
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
+            with NativeIndexer(
                 gz_file,
                 index_path,
                 build_bloom=True,
-                build_manifest=True,
-                index_threshold=_SKIP_INDEX_THRESHOLD,
+                build_manifest=False,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_manifest
@@ -82,12 +76,11 @@ class TestReorganizationPlannerWithoutIndex:
         with Environment(lines=5) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=128)
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
+            with NativeIndexer(
                 gz_file,
                 index_path,
                 build_bloom=True,
-                build_manifest=True,
-                index_threshold=_SKIP_INDEX_THRESHOLD,
+                build_manifest=False,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_manifest

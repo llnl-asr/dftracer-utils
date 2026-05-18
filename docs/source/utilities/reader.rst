@@ -15,7 +15,39 @@ Streaming reader for compressed trace files with support for line-based and byte
 Overview
 --------
 
-The reader provides random access into indexed compressed files (``.pfw.gz`` + ``.idx``). It supports multiple stream types for different access patterns and both synchronous and asynchronous reads.
+The reader provides random access into indexed compressed files
+(``.pfw.gz`` + ``.dftindex``). It supports multiple stream types for
+different access patterns and both synchronous and asynchronous reads.
+
+The high-level :cpp:class:`dftracer::utils::utilities::reader::TraceReader`
+exposes:
+
+- **Directory input** (Python binding): when constructed with a directory,
+  all matching ``.pfw.gz`` files share one ``.dftindex`` root and are
+  processed in parallel (each file becomes one or more checkpoint-level
+  work items routed across the runtime thread pool).
+- **JSON streaming** (``read_json``): each line is parsed once with a
+  reused ``simdjson`` ondemand ``JsonParser``; the yielded ``JsonLine``
+  borrows the parser until the next ``next()`` call.
+- **Arrow streaming** (``read_arrow``, Python ``iter_arrow_stream``):
+  yields native ``ArrowExportResult`` record batches sized at
+  ``batch_size`` rows. The Python binding exposes this as an Arrow C
+  Data Interface stream (no Python-side row materialisation).
+- **Query filtering**: an optional ``query`` DSL string is compiled into
+  AND-of-EQ probes when possible. The compiled probes evaluate directly
+  against simdjson fields, with a uniform-match shortcut when every
+  candidate chunk fully matches the predicate (no per-event re-evaluation).
+- **Line-range work items**: the dispatcher splits a file's checkpoints
+  into independent line-range work items that the runtime executes in
+  parallel; ``ReadConfig::skip_pruning`` lets the dispatcher avoid
+  re-running the chunk pruner per work item.
+- **Batch chunk pruning**: a single pruner pass per file feeds all work
+  items, using ``ChunkPrunerUtility`` over bloom filters, chunk
+  statistics, and the manifest CF.
+- **flatten_objects**: when set, top-level JSON object values
+  (e.g. ``args``) are expanded one level into ``parent.child`` columns
+  with native Arrow types; deeper nesting still round-trips as a JSON
+  text column.
 
 ReaderFactory
 -------------

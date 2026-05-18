@@ -39,6 +39,27 @@ using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::ProvenanceDatabase;
 namespace tags = dftracer::utils::utilities::tags;
 
+static ExtractionPlan run_planner(const ReorganizationPlannerInput& input) {
+    Runtime rt(4);
+    ExtractionPlan result;
+    auto* result_ptr = &result;
+
+    auto task = run_coro_scope(
+        rt.executor(),
+        [input, result_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            auto planner = std::make_shared<ReorganizationPlannerUtility>();
+            UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
+                            tags::NeedsContext>
+                exec(planner, BehaviorChain<ReorganizationPlannerInput,
+                                            ExtractionPlan>{});
+            *result_ptr = co_await exec.execute_with_context(scope, input);
+        });
+
+    rt.submit(std::move(task), "run_planner").wait();
+    rt.shutdown();
+    return result;
+}
+
 // Test trace layout:
 // Line 0: HH metadata
 // Line 1: FH metadata
@@ -103,8 +124,7 @@ static void build_idx(const std::string& trace_file,
                                             indexer::IndexBuildResult>{});
             auto config = IndexBuildConfig::for_file(trace_file)
                               .with_index_dir(index_dir)
-                              .with_manifest(true)
-                              .with_index_threshold(0);
+                              .with_manifest(true);
             *result_ptr = co_await exec.execute_with_context(scope, config);
         });
 
@@ -260,8 +280,6 @@ static void write_group_provenance(
         int fid = pdb.get_or_create_file_info(gz_path, 0);
         REQUIRE(fid >= 0);
 
-        pdb.begin_transaction();
-
         pdb.insert_info(fid, "version", "1.0");
         pdb.insert_info(fid, "tool", "dftracer_organize");
         pdb.insert_group(fid, g.name, g.query);
@@ -285,14 +303,13 @@ static void write_group_provenance(
         for (const auto& [src_idx, ckpts] : segment_events) {
             for (const auto& [ckpt, count] : ckpts) {
                 pdb.insert_segment(fid, static_cast<int>(src_idx),
-                                   static_cast<int>(ckpt), output_line,
+                                   static_cast<int>(ckpt), /*seq=*/0,
+                                   output_line,
                                    output_line + static_cast<int>(count),
                                    static_cast<int>(count));
                 output_line += static_cast<int>(count);
             }
         }
-
-        pdb.commit_transaction();
     }
 }
 
@@ -312,14 +329,13 @@ TEST_SUITE("ReconstructIntegration") {
         build_idx(trace_file, input_dir);
 
         // Step 2: Plan reorganization
-        ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput planner_input;
         planner_input.source_files = {trace_file};
         planner_input.groups = {{"io", R"(cat == "POSIX")"},
                                 {"compute", R"(cat == "APP")"}};
         planner_input.index_dir = input_dir;
 
-        auto plan = planner.process(planner_input).get();
+        auto plan = run_planner(planner_input);
         REQUIRE(plan.tasks.size() > 0);
 
         // Step 3: Execute extraction
@@ -518,14 +534,13 @@ TEST_SUITE("ReconstructIntegration") {
         std::string trace_file = create_test_trace(input_dir);
         build_idx(trace_file, input_dir);
 
-        ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput planner_input;
         planner_input.source_files = {trace_file};
         planner_input.groups = {{"io", R"(cat == "POSIX")"},
                                 {"compute", R"(cat == "APP")"}};
         planner_input.index_dir = input_dir;
 
-        auto plan = planner.process(planner_input).get();
+        auto plan = run_planner(planner_input);
         REQUIRE(plan.tasks.size() > 0);
 
         std::map<std::string, FILE*> group_files;

@@ -1,5 +1,5 @@
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/tree_table_formatter.h>
-#include <yyjson.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -625,81 +625,119 @@ const char* sig_str(Significance s) {
     return "NEGLIGIBLE";
 }
 
-yyjson_mut_val* build_metric_json(yyjson_mut_doc* doc,
-                                  const MetricComparison& mc) {
-    auto safe = [](double v) { return std::isfinite(v) ? v : 0.0; };
-    yyjson_mut_val* obj = yyjson_mut_obj(doc);
-    yyjson_mut_obj_add_str(doc, obj, "name", mc.metric_name.c_str());
-    yyjson_mut_obj_add_real(doc, obj, "baseline", safe(mc.baseline_value));
-    yyjson_mut_obj_add_real(doc, obj, "variant", safe(mc.variant_value));
-    yyjson_mut_obj_add_real(doc, obj, "delta", safe(mc.delta));
-    yyjson_mut_obj_add_real(doc, obj, "pct_change", safe(mc.pct_change));
-    yyjson_mut_obj_add_real(doc, obj, "cohens_d", safe(mc.cohens_d));
-    yyjson_mut_obj_add_str(doc, obj, "significance", sig_str(mc.significance));
-    yyjson_mut_obj_add_bool(doc, obj, "is_regression", mc.is_regression);
-    return obj;
-}
-
-yyjson_mut_val* build_metrics_arr(yyjson_mut_doc* doc,
-                                  const std::vector<MetricComparison>& ms) {
-    yyjson_mut_val* arr = yyjson_mut_arr(doc);
-    for (const auto& mc : ms) {
-        yyjson_mut_arr_append(arr, build_metric_json(doc, mc));
+std::string escape_json_string(const std::string& s) {
+    std::string result;
+    result.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '"':
+                result += "\\\"";
+                break;
+            case '\\':
+                result += "\\\\";
+                break;
+            case '\b':
+                result += "\\b";
+                break;
+            case '\f':
+                result += "\\f";
+                break;
+            case '\n':
+                result += "\\n";
+                break;
+            case '\r':
+                result += "\\r";
+                break;
+            case '\t':
+                result += "\\t";
+                break;
+            default:
+                result += c;
+                break;
+        }
     }
-    return arr;
+    return result;
 }
 
-yyjson_mut_val* build_group_json(yyjson_mut_doc* doc,
-                                 const GroupComparison& g) {
-    yyjson_mut_val* obj = yyjson_mut_obj(doc);
-    yyjson_mut_obj_add_str(doc, obj, "label", g.label.c_str());
-    yyjson_mut_obj_add_val(doc, obj, "metrics",
-                           build_metrics_arr(doc, g.metrics));
-    return obj;
+std::string double_to_json(double v) {
+    if (!std::isfinite(v)) return "0";
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.15g", v);
+    return buf;
 }
 
-yyjson_mut_val* build_node_json(yyjson_mut_doc* doc, const NodeResult& node);
+void build_metric_json(std::ostringstream& out, const MetricComparison& mc) {
+    auto safe = [](double v) { return std::isfinite(v) ? v : 0.0; };
+    out << "{";
+    out << "\"name\":\"" << escape_json_string(mc.metric_name) << "\",";
+    out << "\"baseline\":" << double_to_json(safe(mc.baseline_value)) << ",";
+    out << "\"variant\":" << double_to_json(safe(mc.variant_value)) << ",";
+    out << "\"delta\":" << double_to_json(safe(mc.delta)) << ",";
+    out << "\"pct_change\":" << double_to_json(safe(mc.pct_change)) << ",";
+    out << "\"cohens_d\":" << double_to_json(safe(mc.cohens_d)) << ",";
+    out << "\"significance\":\"" << sig_str(mc.significance) << "\",";
+    out << "\"is_regression\":" << (mc.is_regression ? "true" : "false");
+    out << "}";
+}
 
-yyjson_mut_val* build_node_json(yyjson_mut_doc* doc, const NodeResult& node) {
-    yyjson_mut_val* obj = yyjson_mut_obj(doc);
-    yyjson_mut_obj_add_str(doc, obj, "name", node.name.c_str());
-    yyjson_mut_obj_add_str(doc, obj, "query", node.composed_query.c_str());
+void build_metrics_arr(std::ostringstream& out,
+                       const std::vector<MetricComparison>& ms) {
+    out << "[";
+    for (std::size_t i = 0; i < ms.size(); ++i) {
+        if (i > 0) out << ",";
+        build_metric_json(out, ms[i]);
+    }
+    out << "]";
+}
+
+void build_group_json(std::ostringstream& out, const GroupComparison& g) {
+    out << "{";
+    out << "\"label\":\"" << escape_json_string(g.label) << "\",";
+    out << "\"metrics\":";
+    build_metrics_arr(out, g.metrics);
+    out << "}";
+}
+
+void build_node_json(std::ostringstream& out, const NodeResult& node);
+
+void build_node_json(std::ostringstream& out, const NodeResult& node) {
+    out << "{";
+    out << "\"name\":\"" << escape_json_string(node.name) << "\",";
+    out << "\"query\":\"" << escape_json_string(node.composed_query) << "\",";
 
     // summary
-    yyjson_mut_val* summary = yyjson_mut_obj(doc);
-    yyjson_mut_obj_add_val(doc, summary, "metrics",
-                           build_metrics_arr(doc, node.summary.metrics));
-    yyjson_mut_obj_add_val(doc, obj, "summary", summary);
+    out << "\"summary\":{\"metrics\":";
+    build_metrics_arr(out, node.summary.metrics);
+    out << "},";
 
     // groups
-    yyjson_mut_val* groups_arr = yyjson_mut_arr(doc);
-    for (const auto& g : node.groups) {
-        yyjson_mut_arr_append(groups_arr, build_group_json(doc, g));
+    out << "\"groups\":[";
+    for (std::size_t i = 0; i < node.groups.size(); ++i) {
+        if (i > 0) out << ",";
+        build_group_json(out, node.groups[i]);
     }
-    yyjson_mut_obj_add_val(doc, obj, "groups", groups_arr);
+    out << "],";
 
     // children
-    yyjson_mut_val* children_arr = yyjson_mut_arr(doc);
-    for (const auto& child : node.children) {
-        yyjson_mut_arr_append(children_arr, build_node_json(doc, child));
+    out << "\"children\":[";
+    for (std::size_t i = 0; i < node.children.size(); ++i) {
+        if (i > 0) out << ",";
+        build_node_json(out, node.children[i]);
     }
-    yyjson_mut_obj_add_val(doc, obj, "children", children_arr);
+    out << "]";
 
-    return obj;
+    out << "}";
 }
 
-yyjson_mut_val* build_meta_json(yyjson_mut_doc* doc, const TraceMetadata& m) {
-    yyjson_mut_val* obj = yyjson_mut_obj(doc);
-    yyjson_mut_obj_add_int(doc, obj, "files",
-                           static_cast<int64_t>(m.file_count));
-    yyjson_mut_obj_add_int(doc, obj, "processes",
-                           static_cast<int64_t>(m.process_count));
-    yyjson_mut_obj_add_int(doc, obj, "threads",
-                           static_cast<int64_t>(m.thread_count));
-    yyjson_mut_obj_add_real(doc, obj, "total_bytes", m.total_bytes);
-    yyjson_mut_obj_add_real(doc, obj, "total_io_time_us", m.total_io_time_us);
-    yyjson_mut_obj_add_real(doc, obj, "makespan_us", m.makespan_us);
-    return obj;
+void build_meta_json(std::ostringstream& out, const TraceMetadata& m) {
+    out << "{";
+    out << "\"files\":" << m.file_count << ",";
+    out << "\"processes\":" << m.process_count << ",";
+    out << "\"threads\":" << m.thread_count << ",";
+    out << "\"total_bytes\":" << double_to_json(m.total_bytes) << ",";
+    out << "\"total_io_time_us\":" << double_to_json(m.total_io_time_us) << ",";
+    out << "\"makespan_us\":" << double_to_json(m.makespan_us);
+    out << "}";
 }
 
 }  // namespace
@@ -710,40 +748,31 @@ yyjson_mut_val* build_meta_json(yyjson_mut_doc* doc, const TraceMetadata& m) {
 
 std::string TreeTableFormatter::render_json(
     const ComparisonOutput& output) const {
-    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_val* root = yyjson_mut_obj(doc);
-    yyjson_mut_doc_set_root(doc, root);
+    std::ostringstream out;
 
-    yyjson_mut_obj_add_str(doc, root, "baseline", output.baseline_path.c_str());
-    yyjson_mut_obj_add_str(doc, root, "variant", output.variant_path.c_str());
-    yyjson_mut_obj_add_val(doc, root, "baseline_meta",
-                           build_meta_json(doc, output.baseline_meta));
-    yyjson_mut_obj_add_val(doc, root, "variant_meta",
-                           build_meta_json(doc, output.variant_meta));
-    yyjson_mut_obj_add_real(doc, root, "execution_time_ms",
-                            output.execution_time_ms);
+    out << "{";
+    out << "\"baseline\":\"" << escape_json_string(output.baseline_path)
+        << "\",";
+    out << "\"variant\":\"" << escape_json_string(output.variant_path) << "\",";
+    out << "\"baseline_meta\":";
+    build_meta_json(out, output.baseline_meta);
+    out << ",";
+    out << "\"variant_meta\":";
+    build_meta_json(out, output.variant_meta);
+    out << ",";
+    out << "\"execution_time_ms\":" << double_to_json(output.execution_time_ms)
+        << ",";
 
-    yyjson_mut_val* nodes_arr = yyjson_mut_arr(doc);
-    for (const auto& node : output.nodes) {
-        yyjson_mut_arr_append(nodes_arr, build_node_json(doc, node));
+    out << "\"nodes\":[";
+    for (std::size_t i = 0; i < output.nodes.size(); ++i) {
+        if (i > 0) out << ",";
+        build_node_json(out, output.nodes[i]);
     }
-    yyjson_mut_obj_add_val(doc, root, "nodes", nodes_arr);
+    out << "]";
 
-    yyjson_write_err write_err = {};
-    std::size_t json_len = 0;
-    char* json = yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, nullptr,
-                                       &json_len, &write_err);
-    if (!json) {
-        yyjson_mut_doc_free(doc);
-        throw std::runtime_error(
-            std::string("JSON serialization failed: ") +
-            (write_err.msg ? write_err.msg : "unknown error"));
-    }
-    std::string result(json, json_len);
-    free(json);  // NOLINT(cppcoreguidelines-no-malloc)
-    yyjson_mut_doc_free(doc);
+    out << "}";
 
-    return result;
+    return out.str();
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::comparator

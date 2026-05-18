@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/utilities/composites/dft/statistics/trace_statistics.h>
 #include <doctest/doctest.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <cmath>
 #include <limits>
@@ -63,35 +63,36 @@ TEST_SUITE("TraceStatistics") {
         std::string json = ts.to_json();
 
         // Parse and validate the JSON
-        yyjson_doc* doc =
-            yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-        REQUIRE(doc != nullptr);
+        simdjson::dom::parser parser;
+        auto result = parser.parse(json);
+        REQUIRE(!result.error());
 
-        yyjson_val* root = yyjson_doc_get_root(doc);
-        REQUIRE(yyjson_is_obj(root));
+        auto root = result.value_unsafe();
+        REQUIRE(root.is_object());
 
-        CHECK(std::string(yyjson_get_str(yyjson_obj_get(root, "file_path"))) ==
+        CHECK(std::string(root["file_path"].get_string().value()) ==
               "/test/file.pfw.gz");
-        CHECK(yyjson_get_bool(yyjson_obj_get(root, "success")) == true);
-        CHECK(yyjson_get_uint(yyjson_obj_get(root, "total_events")) == 2);
-        CHECK(yyjson_get_uint(yyjson_obj_get(root, "num_chunks")) == 2);
-        CHECK(yyjson_get_uint(yyjson_obj_get(root, "num_categories")) == 2);
-        CHECK(yyjson_get_uint(yyjson_obj_get(root, "num_unique_names")) == 2);
+        CHECK(root["success"].get_bool().value() == true);
+        CHECK(root["total_events"].get_uint64().value() == 2);
+        CHECK(root["num_chunks"].get_uint64().value() == 2);
+        CHECK(root["num_categories"].get_uint64().value() == 2);
+        CHECK(root["num_unique_names"].get_uint64().value() == 2);
 
         // Check time_range object exists
-        yyjson_val* time_range = yyjson_obj_get(root, "time_range");
-        REQUIRE(yyjson_is_obj(time_range));
+        auto time_range = root["time_range"];
+        REQUIRE(!time_range.error());
+        REQUIRE(time_range.is_object());
 
         // Check duration object exists
-        yyjson_val* duration = yyjson_obj_get(root, "duration");
-        REQUIRE(yyjson_is_obj(duration));
-        CHECK(yyjson_get_uint(yyjson_obj_get(duration, "count")) == 2);
+        auto duration = root["duration"];
+        REQUIRE(!duration.error());
+        REQUIRE(duration.is_object());
+        CHECK(duration["count"].get_uint64().value() == 2);
 
         // Check category_counts object exists
-        yyjson_val* cats = yyjson_obj_get(root, "category_counts");
-        REQUIRE(yyjson_is_obj(cats));
-
-        yyjson_doc_free(doc);
+        auto cats = root["category_counts"];
+        REQUIRE(!cats.error());
+        REQUIRE(cats.is_object());
     }
 
     TEST_CASE("TraceStatistics - to_json with error") {
@@ -103,15 +104,13 @@ TEST_SUITE("TraceStatistics") {
 
         std::string json = ts.to_json();
 
-        yyjson_doc* doc =
-            yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-        REQUIRE(doc != nullptr);
+        simdjson::dom::parser parser;
+        auto result = parser.parse(json);
+        REQUIRE(!result.error());
 
-        yyjson_val* root = yyjson_doc_get_root(doc);
-        CHECK(yyjson_get_bool(yyjson_obj_get(root, "success")) == false);
-        CHECK(std::string(yyjson_get_str(yyjson_obj_get(root, "error"))) ==
+        auto root = result.value_unsafe();
+        CHECK(root["success"].get_bool().value() == false);
+        CHECK(std::string(root["error"].get_string().value()) ==
               "File not found");
-
-        yyjson_doc_free(doc);
     }
 }

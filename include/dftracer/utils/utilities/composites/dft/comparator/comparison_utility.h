@@ -10,15 +10,15 @@
 
 namespace dftracer::utils::utilities::composites::dft::comparator {
 
-using aggregators::EventAggregatorUtilityOutput;
+using aggregators::EventAggregatorOutput;
 
 /// Paired baseline/variant aggregation outputs for a single comparison
 /// node.
 struct ComparisonVisitorPair {
     /// Aggregation output for the baseline run.
-    EventAggregatorUtilityOutput baseline;
+    EventAggregatorOutput baseline;
     /// Aggregation output for the variant run.
-    EventAggregatorUtilityOutput variant;
+    EventAggregatorOutput variant;
     /// Resolved config node for this visitor.
     ComparisonNode node;
 };

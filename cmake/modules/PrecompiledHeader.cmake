@@ -81,9 +81,20 @@ function(detect_common_headers)
   set(FILTERED_SOURCES "")
   foreach(SOURCE_FILE ${ALL_SOURCES})
     # Exclude Python binding files (only built when DFTRACER_UTILS_BUILD_PYTHON is ON)
-    if(NOT SOURCE_FILE MATCHES "/python/")
-      list(APPEND FILTERED_SOURCES "${SOURCE_FILE}")
+    if(SOURCE_FILE MATCHES "/python/")
+      continue()
     endif()
+    # Exclude MPI-guarded sources when MPI is off. They still live on
+    # disk and include <mpi.h>, which would otherwise land in the PCH
+    # (MIN_COUNT=2 is easy to hit) and break every non-MPI target
+    # because no MPI include path is attached.
+    if(NOT DFTRACER_UTILS_ENABLE_MPI)
+      if(SOURCE_FILE MATCHES "/mpi/"
+         OR SOURCE_FILE MATCHES "_mpi\\.(cpp|cc|cxx|h|hpp)$")
+        continue()
+      endif()
+    endif()
+    list(APPEND FILTERED_SOURCES "${SOURCE_FILE}")
   endforeach()
 
   set(ALL_SOURCES "${FILTERED_SOURCES}")

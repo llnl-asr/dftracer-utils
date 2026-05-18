@@ -5,7 +5,8 @@
  * @file json.h
  * @brief Common JSON utilities for the dftracer-utils library.
  *
- * Provides JsonValue - a lightweight zero-cost wrapper around yyjson_val*.
+ * Provides JsonValue - a lightweight zero-cost wrapper around simdjson DOM
+ * elements.
  */
 
 #include <dftracer/utils/utilities/common/json/json_value.h>
@@ -14,10 +15,9 @@
 
 namespace dftracer::utils::utilities::common::json {
 
-/// Stack buffer size for yyjson_alc_pool used in per-line JSON parsing.
-/// 4KB is sufficient for typical trace events (few hundred bytes each).
-/// If a line exceeds this, yyjson silently falls back to malloc.
-inline constexpr std::size_t YYJSON_LINE_POOL_SIZE = 4096;
+/// Default capacity for simdjson parser buffer.
+/// 1MB is sufficient for most JSON documents.
+inline constexpr std::size_t SIMDJSON_DEFAULT_CAPACITY = 1 << 20;
 
 }  // namespace dftracer::utils::utilities::common::json
 

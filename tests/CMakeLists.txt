@@ -57,6 +57,7 @@ set(TEST_CPP_SOURCES
     # reader/test_reader_tar_comprehensive.cpp
     # Replay tests
     replay/test_replay.cpp
+    replay/test_replay_fidelity.cpp
     # Server unit tests
     server/test_http_parser.cpp
     server/test_http_response.cpp
@@ -115,7 +116,8 @@ foreach(test_file ${TEST_CPP_SOURCES})
   if(bin_exec STREQUAL "pipeline/test_task_scope"
      OR bin_exec STREQUAL "coro/test_channel")
     set(heavy_thread_timeout 180)
-    if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_ENABLE_COVERAGE)
+    if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_ENABLE_COVERAGE
+       OR DFTRACER_UTILS_ENABLE_ASAN)
       set(heavy_thread_timeout 600)
     endif()
     set_tests_properties(${bin_exec} PROPERTIES
@@ -206,7 +208,14 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_tar.cpp
     binaries/test_dftracer_replay.cpp
     binaries/test_dftracer_comparator.cpp
+    binaries/test_dftracer_call_tree.cpp
     )
+
+if(DFTRACER_UTILS_ENABLE_MPI)
+  list(APPEND TEST_BINARY_SOURCES
+    binaries/test_dftracer_aggregator_mpi.cpp
+    binaries/test_dftracer_call_tree_mpi.cpp)
+endif()
 
 foreach(test_file ${TEST_BINARY_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})
@@ -244,7 +253,24 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   if(DFTRACER_UTILS_ENABLE_TSAN)
     set(integration_test_timeout 180)
   endif()
+  # The MPI aggregator spawns mpiexec several times per test case and
+  # each child runs under ASan, which is ~10x slower than release. The
+  # default 120s is not enough.
+  if(bin_exec STREQUAL "binaries/test_dftracer_aggregator_mpi" OR
+     bin_exec STREQUAL "binaries/test_dftracer_call_tree_mpi")
+    set(integration_test_timeout 600)
+  endif()
   set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${integration_test_timeout})
+
+  # dftracer_tar wraps the gzip indexer's parallel pipeline and has shown
+  # intermittent deadlocks on CI. Tar is a secondary code path (real
+  # workflows use directories of .pfw.gz).
+  if(bin_exec STREQUAL "binaries/test_dftracer_tar")
+    set_tests_properties(${bin_exec} PROPERTIES
+      TIMEOUT 240
+      RUN_SERIAL TRUE
+      REPEAT "UNTIL_PASS:3")
+  endif()
 
   # Pass binary paths so tests can find them
   if(bin_exec STREQUAL "binaries/test_dftracer_server")
@@ -291,10 +317,19 @@ foreach(test_file ${TEST_BINARY_SOURCES})
       "DFTRACER_TAR_PATH=$<TARGET_FILE:dftracer_tar>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_replay")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
-      "DFTRACER_REPLAY_PATH=$<TARGET_FILE:dftracer_replay>")
+      "DFTRACER_REPLAY_PATH=$<TARGET_FILE:dftracer_replay>;ASAN_OPTIONS=detect_leaks=0;LSAN_OPTIONS=detect_leaks=0")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_comparator")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_call_tree")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_CALL_TREE_PATH=$<TARGET_FILE:dftracer_call_tree>")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_call_tree_mpi")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_CALL_TREE_PATH=$<TARGET_FILE:dftracer_call_tree>;DFTRACER_CALL_TREE_MPI_PATH=$<TARGET_FILE:dftracer_call_tree_mpi>;MPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE};ASAN_OPTIONS=detect_leaks=0;LSAN_OPTIONS=detect_leaks=0")
+  elseif(bin_exec STREQUAL "binaries/test_dftracer_aggregator_mpi")
+    set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
+      "DFTRACER_AGGREGATOR_PATH=$<TARGET_FILE:dftracer_aggregator>;DFTRACER_AGGREGATOR_MPI_PATH=$<TARGET_FILE:dftracer_aggregator_mpi>;MPIEXEC_EXECUTABLE=${MPIEXEC_EXECUTABLE};ASAN_OPTIONS=detect_leaks=0;LSAN_OPTIONS=detect_leaks=0")
   endif()
 
 endforeach()

@@ -2,7 +2,8 @@
 
 namespace dftracer::utils::utilities::common::query {
 
-Query::Query(const Query& other) : source_(other.source_) {
+Query::Query(const Query& other)
+    : source_(other.source_), fields_(other.fields_) {
     auto result = parse(source_);
     if (!result) throw QueryParseError(result.error());
     root_ = std::move(*result);
@@ -11,6 +12,7 @@ Query::Query(const Query& other) : source_(other.source_) {
 Query& Query::operator=(const Query& other) {
     if (this != &other) {
         source_ = other.source_;
+        fields_ = other.fields_;
         auto result = parse(source_);
         if (!result) throw QueryParseError(result.error());
         root_ = std::move(*result);

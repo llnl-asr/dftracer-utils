@@ -116,6 +116,12 @@ class CallTree {
      */
     void add_call(const ProcessKey& key, std::shared_ptr<CallTreeNode> call);
 
+    // Moves every ProcessCallTree out of `other` into this tree. When both
+    // sides share a ProcessKey, calls/call_sequence from `other` are appended.
+    // `other` is left empty; intended for joining per-file CallTree fragments
+    // built concurrently into a single merged tree.
+    void merge_from(CallTree&& other);
+
     /**
      * Build parent-child relationships after all traces loaded
      * Called by TraceReader after all data is loaded

@@ -232,7 +232,7 @@ class ReaderInflater : public Inflater {
      * Check if the stream has reached the end
      */
     bool is_at_end() const {
-        return stream.avail_in == 0 && stream.avail_out == sizeof(out_buffer);
+        return stream.avail_in == 0 && stream.avail_out == BUFFER_SIZE;
     }
 };
 

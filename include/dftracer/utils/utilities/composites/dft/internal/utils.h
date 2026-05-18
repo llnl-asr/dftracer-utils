@@ -11,17 +11,19 @@ namespace dftracer::utils::utilities::composites::dft::internal {
 bool is_data_transfer_op(std::string_view cat, std::string_view name);
 
 /**
- * @brief Determine the root-local RocksDB index path for a given data file.
+ * @brief Determine the root-local RocksDB index path for a given input path.
  *
  * When a custom index directory is provided, the index root is
  * `<index_dir>/.dftindex`. Otherwise, the index root is placed alongside the
- * data file as `<file_dir>/.dftindex`.
+ * input path:
+ * - file path: `<file_dir>/.dftindex`
+ * - directory path: `<directory>/.dftindex`
  *
- * @param file_path Path to the data file (e.g., "data/trace.pfw.gz")
+ * @param path Path to a data file or directory
  * @param index_dir Optional custom directory for the index root.
  * @return Path to the owning `.dftindex` directory.
  */
-std::string determine_index_path(const std::string& file_path,
+std::string determine_index_path(const std::string& path,
                                  const std::string& index_dir = "");
 
 /**

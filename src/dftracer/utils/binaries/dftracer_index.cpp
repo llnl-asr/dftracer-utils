@@ -1,40 +1,122 @@
+#include <concurrentqueue.h>
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/platform_compat.h>
-#include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
 
-#include <argparse/argparse.hpp>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <sstream>
-#include <thread>
+
+#include "common_cli.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::indexer;
 
-static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
-    std::string log_dir = program.get<std::string>("--directory");
-    std::string dimensions_str = program.get<std::string>("--dimensions");
-    bool force_rebuild = program.get<bool>("--force");
-    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
-    std::string index_dir = program.get<std::string>("--index-dir");
-    std::size_t expected_entries =
-        program.get<std::size_t>("--expected-entries");
-    double false_positive_rate = program.get<double>("--false-positive-rate");
-    bool build_manifest = program.get<bool>("--manifest");
+class IndexArgParse : public cli::ArgParse {
+   public:
+    cli::DirectoryArgs directory;
+    cli::PipelineArgs pipeline;
+    cli::IndexingArgs indexing;
+
+    std::string dimensions;
+    bool manifest = false;
+    bool rebuild_summaries = false;
+    std::size_t read_batch_size = 4;
+    std::size_t expected_entries = 1024;
+    double false_positive_rate = 0.01;
+
+    explicit IndexArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        indexing.index_dir_help =
+            "Directory where .dftindex stores are created";
+        indexing.force_help = "Force index recreation even if already built";
+        schema(directory, pipeline, indexing);
+    }
+
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("--dimensions")
+            .help(
+                "Comma-separated extra dimensions to index from args "
+                "(e.g., args.level,args.mode,args.io.size)")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--manifest")
+            .help(
+                "Also build manifest data in the .dftindex store "
+                "(per-checkpoint event line routing)")
+            .flag();
+
+        parser()
+            .add_argument("--rebuild-summaries")
+            .help(
+                "Rebuild ROOT_* aggregated summaries after ingest. Off by "
+                "default; ROOT_* CFs are only used by summary tools like "
+                "dftracer_info. Bloom-filter chunk-skipping queries do not "
+                "need them.")
+            .flag();
+
+        parser()
+            .add_argument("--read-batch-size")
+            .help("Batch read size in MB for stream processing (default: 4)")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(4));
+
+        parser()
+            .add_argument("--expected-entries")
+            .help(
+                "Expected entries per chunk for bloom filter sizing (default: "
+                "1024)")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(1024));
+
+        parser()
+            .add_argument("--false-positive-rate")
+            .help("Bloom filter false positive rate (default: 0.01)")
+            .scan<'g', double>()
+            .default_value(0.01);
+    }
+
+    void post_parse() override {
+        dimensions = parser().get<std::string>("--dimensions");
+        manifest = parser().get<bool>("--manifest");
+        rebuild_summaries = parser().get<bool>("--rebuild-summaries");
+        read_batch_size = parser().get<std::size_t>("--read-batch-size");
+        expected_entries = parser().get<std::size_t>("--expected-entries");
+        false_positive_rate = parser().get<double>("--false-positive-rate");
+    }
+};
+
+static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
+    const auto log_dir = fs::absolute(cli->directory.value).string();
+    const auto& dimensions_str = cli->dimensions;
+    const auto force_rebuild = cli->indexing.force;
+    const auto checkpoint_size = cli->indexing.checkpoint_size;
+    const auto executor_threads = cli->pipeline.executor_threads;
+    // When --index-dir is not provided, place coord/staging/ingest DBs next to
+    // the input data so they line up with each file's per-file index_path
+    // (which determine_index_path(file, "") resolves to
+    // <file_parent>/.dftindex). The top-level scanner is non-recursive, so all
+    // input files share log_dir.
+    const auto index_dir =
+        cli->indexing.index_dir.empty() ? log_dir : cli->indexing.index_dir;
+    const auto expected_entries = cli->expected_entries;
+    const auto false_positive_rate = cli->false_positive_rate;
+    const auto build_manifest = cli->manifest;
+    const auto rebuild_summaries = cli->rebuild_summaries;
 
     auto split_string = [](const std::string& str) {
         std::vector<std::string> result;
@@ -49,21 +131,29 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
         return result;
     };
 
-    std::vector<std::string> extra_dimensions = split_string(dimensions_str);
+    std::vector<std::string> user_dimensions = split_string(dimensions_str);
+
+    std::vector<std::string> extra_dimensions(
+        dftracer::utils::utilities::indexer::DEFAULT_EXTRA_DIMENSIONS.begin(),
+        dftracer::utils::utilities::indexer::DEFAULT_EXTRA_DIMENSIONS.end());
+    for (const auto& dim : user_dimensions) {
+        if (std::find(extra_dimensions.begin(), extra_dimensions.end(), dim) ==
+            extra_dimensions.end()) {
+            extra_dimensions.push_back(dim);
+        }
+    }
 
     ChunkIndexerConfig indexer_config;
     indexer_config.extra_dimensions = extra_dimensions;
     indexer_config.expected_entries_per_chunk = expected_entries;
     indexer_config.false_positive_rate = false_positive_rate;
 
-    // Default bloom dimensions + any user-supplied extras.
-    std::vector<std::string> all_dimensions =
-        dftracer::utils::utilities::indexer::default_bloom_dimensions();
+    std::vector<std::string> all_dimensions(
+        dftracer::utils::utilities::indexer::DEFAULT_BLOOM_DIMENSIONS.begin(),
+        dftracer::utils::utilities::indexer::DEFAULT_BLOOM_DIMENSIONS.end());
     for (const auto& dim : extra_dimensions) {
         all_dimensions.push_back(dim);
     }
-
-    log_dir = fs::absolute(log_dir).string();
 
     std::printf("==========================================\n");
     std::printf("DFTracer Bloom Indexer\n");
@@ -106,104 +196,98 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
 
-    auto pipeline_config = PipelineConfig()
-                               .with_name("DFTracer Bloom Indexer")
-                               .with_compute_threads(executor_threads)
-                               .with_watchdog(false);
+    auto pipeline_config =
+        cli::build_pipeline_config("DFTracer Bloom Indexer", cli->pipeline);
 
     Pipeline pipeline(pipeline_config);
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
-    std::atomic<std::size_t> total_events{0};
-    std::atomic<std::size_t> total_checkpoints_processed{0};
-    std::atomic<std::size_t> total_files_processed{0};
-    std::atomic<std::size_t> total_files_skipped{0};
+    std::vector<int> preassigned_file_ids;
+    {
+        IndexDatabase coord_db(index_dir);
+        coord_db.init_schema();
+        preassigned_file_ids =
+            coord_db.register_files(input_files, build_manifest);
+    }
 
+    const std::string staging_root =
+        (fs::path(index_dir) / ".dftindex_staging").string();
+    fs::create_directories(staging_root);
+
+    auto artifacts_queue = std::make_shared<moodycamel::ConcurrentQueue<
+        IndexDatabaseSstWriterContext::Artifacts>>();
+    auto batch_counter = std::make_shared<std::atomic<std::size_t>>(0);
+
+    auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+    batch_config->file_paths = std::move(input_files);
+    batch_config->preassigned_file_ids = std::move(preassigned_file_ids);
+    batch_config->index_dir = index_dir;
+    batch_config->checkpoint_size = checkpoint_size;
+    batch_config->parallelism = executor_threads;
+    batch_config->force_rebuild = force_rebuild;
+    batch_config->build_manifest = build_manifest;
+    batch_config->bloom_config = indexer_config;
+    batch_config->bloom_dimensions = all_dimensions;
+    batch_config->rebuild_root_summaries = false;
+
+    batch_config->sink_factory =
+        [staging_root, batch_counter]() -> std::unique_ptr<IndexBatchSink> {
+        const std::size_t idx =
+            batch_counter->fetch_add(1, std::memory_order_relaxed);
+        return std::make_unique<IndexDatabaseSstWriterContext>(
+            staging_root, "batch_" + std::to_string(idx));
+    };
+    batch_config->sink_commit = [artifacts_queue](IndexBatchSink& sink) {
+        auto& sst = static_cast<IndexDatabaseSstWriterContext&>(sink);
+        auto a = sst.commit();
+        if (!a.empty()) artifacts_queue->enqueue(std::move(a));
+    };
+
+    IndexBuildBatchResult batch_result;
     auto streaming_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                auto* total_events_ptr = &total_events;
-                auto* total_checkpoints_ptr = &total_checkpoints_processed;
-                auto* total_processed_ptr = &total_files_processed;
-                auto* total_skipped_ptr = &total_files_skipped;
-                auto* all_dims_ptr = &all_dimensions;
-                auto* files_ptr = &input_files;
-                auto* index_dir_ptr = &index_dir;
-                // Bounded fan-out: channel limits concurrent file processing
-                // to avoid memory pressure from unbounded coroutine spawning.
-                auto file_chan =
-                    coro::make_channel<std::size_t>(executor_threads * 2);
-
-                // Producer: push file indices into channel
-                scope.spawn([ch = file_chan->producer(),
-                             num_files = input_files.size()](
-                                CoroScope&) mutable -> coro::CoroTask<void> {
-                    auto guard = ch.guard();
-                    for (std::size_t i = 0; i < num_files; ++i) {
-                        if (!co_await ch.send(i)) {
-                            co_return;
-                        }
-                    }
-                    co_return;
-                });
-
-                // Workers: consume from channel, process one file at a time
-                for (std::size_t w = 0; w < executor_threads; ++w) {
-                    scope.spawn([file_chan, files_ptr, indexer_config,
-                                 build_manifest, index_dir_ptr, checkpoint_size,
-                                 force_rebuild, all_dims_ptr, total_events_ptr,
-                                 total_checkpoints_ptr, total_processed_ptr,
-                                 total_skipped_ptr](
-                                    CoroScope&) -> coro::CoroTask<void> {
-                        while (auto fi_opt = co_await file_chan->receive()) {
-                            std::size_t fi = *fi_opt;
-                            const auto& file_path = (*files_ptr)[fi];
-
-                            IndexBuilderUtility builder;
-                            auto config =
-                                IndexBuildConfig::for_file(file_path)
-                                    .with_index_dir(*index_dir_ptr)
-                                    .with_checkpoint_size(checkpoint_size)
-                                    .with_force_rebuild(force_rebuild)
-                                    .with_bloom(true)
-                                    .with_manifest(build_manifest)
-                                    .with_index_threshold(0)
-                                    .with_bloom_config(indexer_config)
-                                    .with_bloom_dimensions(*all_dims_ptr);
-
-                            auto result = co_await builder.process(config);
-
-                            if (result.was_skipped) {
-                                (*total_skipped_ptr)++;
-                            } else if (result.success) {
-                                (*total_processed_ptr)++;
-                                (*total_events_ptr) += result.events_processed;
-                                (*total_checkpoints_ptr) +=
-                                    result.chunks_processed;
-                            } else {
-                                (*total_skipped_ptr)++;
-                                if (!result.error_message.empty()) {
-                                    DFTRACER_UTILS_LOG_ERROR(
-                                        "Index failed for %s: %s",
-                                        file_path.c_str(),
-                                        result.error_message.c_str());
-                                }
-                            }
-                        }
-                        co_return;
-                    });
-                }
-                co_return;
-            });
-
-            co_return;
+        [&batch_result,
+         batch_config](CoroScope& scope) -> coro::CoroTask<void> {
+            batch_result = co_await IndexBatchBuilderUtility::process(
+                &scope, std::move(batch_config));
         },
         "StreamingIndex");
 
     pipeline.set_source(streaming_task);
     pipeline.set_destination(streaming_task);
     pipeline.execute();
+
+    SstArtifactRegistry registry;
+    {
+        IndexDatabaseSstWriterContext::Artifacts a;
+        while (artifacts_queue->try_dequeue(a)) {
+            registry.append(std::move(a));
+        }
+    }
+    DFTRACER_UTILS_LOG_INFO(
+        "dftracer_index: %zu SSTs in registry (chunk_bloom=%zu file_bloom=%zu)",
+        registry.chunk_bloom().size() + registry.file_bloom().size() +
+            registry.chunk_stats().size(),
+        registry.chunk_bloom().size(), registry.file_bloom().size());
+    {
+        IndexDatabase ingest_db(index_dir);
+        auto t0 = std::chrono::high_resolution_clock::now();
+        ingest_db.bulk_ingest(registry, {});
+        auto t1 = std::chrono::high_resolution_clock::now();
+        if (rebuild_summaries) {
+            ingest_db.rebuild_root_summaries();
+        }
+        auto t2 = std::chrono::high_resolution_clock::now();
+        DFTRACER_UTILS_LOG_INFO(
+            "dftracer_index: bulk_ingest=%.2fms "
+            "rebuild_root_summaries=%.2fms%s",
+            std::chrono::duration<double, std::milli>(t1 - t0).count(),
+            std::chrono::duration<double, std::milli>(t2 - t1).count(),
+            rebuild_summaries ? "" : " (skipped)");
+    }
+
+    std::error_code ec;
+    fs::remove_all(staging_root, ec);
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
@@ -213,11 +297,11 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
     std::printf("Bloom Index Results\n");
     std::printf("==========================================\n");
     std::printf("  Execution time: %.2f seconds\n", duration.count() / 1000.0);
-    std::printf("  Files processed: %zu\n", total_files_processed.load());
-    std::printf("  Files skipped: %zu\n", total_files_skipped.load());
-    std::printf("  Checkpoints indexed: %zu\n",
-                total_checkpoints_processed.load());
-    std::printf("  Events processed: %zu\n", total_events.load());
+    std::printf("  Files processed: %zu\n", batch_result.indexed);
+    std::printf("  Files skipped: %zu\n", batch_result.skipped);
+    std::printf("  Files failed: %zu\n", batch_result.failed);
+    std::printf("  Events processed: %zu\n",
+                static_cast<std::size_t>(batch_result.total_events));
     std::printf("  Dimensions indexed: %zu\n", all_dimensions.size());
     std::printf("  Dimensions: ");
     for (std::size_t i = 0; i < all_dimensions.size(); ++i) {
@@ -235,13 +319,6 @@ static coro::CoroTask<int> run_index(argparse::ArgumentParser& program) {
 int main(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
 
-    auto default_checkpoint_size_str =
-        std::to_string(indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE) +
-        " B (" +
-        std::to_string(indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE /
-                       (1024 * 1024)) +
-        " MB)";
-
     argparse::ArgumentParser program("dftracer_index",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(
@@ -249,67 +326,9 @@ int main(int argc, char** argv) {
         "Creates root-local .dftindex databases enabling fast chunk-skipping "
         "queries.");
 
-    program.add_argument("-d", "--directory")
-        .help("Input directory containing .pfw or .pfw.gz files")
-        .default_value<std::string>(".");
+    IndexArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
 
-    program.add_argument("--dimensions")
-        .help(
-            "Comma-separated extra dimensions to index from args "
-            "(e.g., args.level,args.mode,args.io.size)")
-        .default_value<std::string>("");
-
-    program.add_argument("-f", "--force")
-        .help("Force index recreation even if already built")
-        .flag();
-
-    program.add_argument("--checkpoint-size")
-        .help("Checkpoint size for gzip indexing in bytes (default: " +
-              default_checkpoint_size_str + ")")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(
-            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
-
-    program.add_argument("--executor-threads")
-        .help("Number of worker threads for parallel processing")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
-
-    program.add_argument("--index-dir")
-        .help("Directory where .dftindex stores are created")
-        .default_value<std::string>("");
-
-    program.add_argument("--expected-entries")
-        .help(
-            "Expected entries per chunk for bloom filter sizing (default: "
-            "1024)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(1024));
-
-    program.add_argument("--false-positive-rate")
-        .help("Bloom filter false positive rate (default: 0.01)")
-        .scan<'g', double>()
-        .default_value(0.01);
-
-    program.add_argument("--read-batch-size")
-        .help("Batch read size in MB for stream processing (default: 4)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(4));
-
-    program.add_argument("--manifest")
-        .help(
-            "Also build manifest data in the .dftindex store "
-            "(per-checkpoint event line routing)")
-        .flag();
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error occurred: %s", err.what());
-        std::fprintf(stderr, "%s\n", program.help().str().c_str());
-        return 1;
-    }
-
-    return run_index(program).get();
+    return run_index(&cli).get();
 }

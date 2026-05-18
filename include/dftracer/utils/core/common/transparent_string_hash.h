@@ -1,27 +1,25 @@
 #ifndef DFTRACER_UTILS_CORE_COMMON_TRANSPARENT_STRING_HASH_H
 #define DFTRACER_UTILS_CORE_COMMON_TRANSPARENT_STRING_HASH_H
 
+#include <ankerl/unordered_dense.h>
+
 #include <cstddef>
-#include <functional>
+#include <string>
 #include <string_view>
 
 namespace dftracer::utils {
 
-/**
- * @brief Transparent hash for std::unordered_map<std::string, ...> that
- * accepts std::string_view lookups without constructing std::string.
- *
- * Usage:
- * @code
- *   std::unordered_map<std::string, int, TransparentStringHash,
- *                      TransparentStringEqual> map;
- *   map[some_string_view];  // no std::string construction for lookup
- * @endcode
- */
 struct TransparentStringHash {
     using is_transparent = void;
+    using is_avalanching = void;
     std::size_t operator()(std::string_view sv) const noexcept {
-        return std::hash<std::string_view>{}(sv);
+        return ankerl::unordered_dense::hash<std::string_view>{}(sv);
+    }
+    std::size_t operator()(const std::string& s) const noexcept {
+        return ankerl::unordered_dense::hash<std::string_view>{}(s);
+    }
+    std::size_t operator()(const char* s) const noexcept {
+        return ankerl::unordered_dense::hash<std::string_view>{}(s);
     }
 };
 
@@ -31,6 +29,15 @@ struct TransparentStringEqual {
         return a == b;
     }
 };
+
+template <typename V>
+using StringViewMap =
+    ankerl::unordered_dense::map<std::string, V, TransparentStringHash,
+                                 TransparentStringEqual>;
+
+using StringViewSet =
+    ankerl::unordered_dense::set<std::string, TransparentStringHash,
+                                 TransparentStringEqual>;
 
 }  // namespace dftracer::utils
 

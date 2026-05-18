@@ -71,8 +71,8 @@ class ProvenanceDatabase {
                       std::string_view predicate);
 
     void insert_segment(int file_info_id, int source_idx, int source_checkpoint,
-                        int output_line_start, int output_line_end,
-                        int event_count);
+                        int segment_seq, int output_line_start,
+                        int output_line_end, int event_count);
 
     // -----------------------------------------------------------------------
     // Provenance query operations

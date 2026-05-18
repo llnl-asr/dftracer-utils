@@ -1,4 +1,7 @@
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
+#include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/reorganization_planner.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
@@ -6,7 +9,11 @@
 #include <string>
 #include <vector>
 
+using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
+using dftracer::utils::utilities::behaviors::BehaviorChain;
+using dftracer::utils::utilities::behaviors::UtilityExecutor;
+namespace tags = dftracer::utils::utilities::tags;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
 
 static Runtime *get_runtime(ReorganizationPlannerObject *self) {
@@ -129,11 +136,17 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
 
     Py_BEGIN_ALLOW_THREADS try {
         Runtime *rt = get_runtime(self);
-        auto task = [plan_p, input_copy]() -> CoroTask<void> {
-            ReorganizationPlannerUtility util;
-            *plan_p = co_await util.process(input_copy);
-        };
-        rt->submit(task(), "reorganization-planner").get();
+        auto task = run_coro_scope(
+            rt->executor(),
+            [plan_p, input_copy](CoroScope &scope) -> CoroTask<void> {
+                auto planner = std::make_shared<ReorganizationPlannerUtility>();
+                UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
+                                tags::NeedsContext>
+                    exec(planner, BehaviorChain<ReorganizationPlannerInput,
+                                                ExtractionPlan>{});
+                *plan_p = co_await exec.execute_with_context(scope, input_copy);
+            });
+        rt->submit(std::move(task), "reorganization-planner").wait();
     } catch (const std::exception &e) {
         error_msg = e.what();
     }

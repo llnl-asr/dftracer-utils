@@ -2,7 +2,6 @@
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/yield.h>
 #include <dftracer/utils/core/io/io_backend_factory.h>
-#include <dftracer/utils/core/io/io_thread_pool.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
@@ -32,8 +31,6 @@ Executor* Executor::set_current(Executor* e) noexcept {
     return old;
 }
 
-io::IoThreadPool* Executor::db_pool() noexcept { return db_pool_.get(); }
-
 // Thread-local list of coroutine handles to destroy after the current
 // resume() returns.  FinalAwaiter pushes here instead of the shared
 // destroy_queue_ to avoid another worker freeing the frame while
@@ -61,15 +58,20 @@ Executor::Executor(const ExecutorConfig& config)
     : num_threads_(config.num_threads == 0
                        ? dftracer_utils_hardware_concurrency()
                        : config.num_threads),
-      last_activity_time_(std::chrono::steady_clock::now()),
+      last_activity_ns_(
+          std::chrono::steady_clock::now().time_since_epoch().count()),
       idle_timeout_(config.idle_timeout),
       deadlock_timeout_(config.deadlock_timeout),
-      io_pool_size_(config.io_pool_size),
+      io_pool_size_(config.io_pool_size == 0
+                        ? dftracer_utils_hardware_concurrency()
+                        : config.io_pool_size),
       io_backend_type_(config.io_backend_type),
-      io_batch_threshold_(config.io_batch_threshold),
-      db_pool_size_(config.db_pool_size) {
+      io_batch_threshold_(config.io_batch_threshold) {
     if (num_threads_ == 0) {
-        num_threads_ = 2;  // Fallback if hardware_concurrency returns 0
+        num_threads_ = 2;
+    }
+    if (io_pool_size_ == 0) {
+        io_pool_size_ = 2;
     }
     DFTRACER_UTILS_LOG_DEBUG(
         "Executor created with %zu threads, idle_timeout=%lld s, "
@@ -99,9 +101,6 @@ void Executor::start() {
     io_backend_ = io::create_io_backend(*this, io_pool_size_, io_backend_type_,
                                         io_batch_threshold_);
     io_backend_->start();
-
-    db_pool_ = std::make_unique<io::IoThreadPool>(db_pool_size_);
-    db_pool_->start();
 
     // Create all worker contexts first so workers_ is stable before any
     // worker thread can try to iterate/steal from it.
@@ -143,11 +142,6 @@ void Executor::shutdown() {
     // completion thread may still call enqueue() -> wake_all_workers()
     // which accesses WorkerContext cv/mutex, so workers_ must remain
     // alive until the completion thread has exited.
-    if (db_pool_) {
-        db_pool_->stop();
-        db_pool_.reset();
-    }
-
     if (io_backend_) {
         io_backend_->stop();
         io_backend_.reset();
@@ -258,12 +252,7 @@ void Executor::worker_thread(WorkerContext* context) {
                 }
             }
             drain_destroy_queue();
-            std::unique_lock<std::mutex> lock(context->queue_mutex);
-            context->cv.wait(lock, [this, observed_signal] {
-                return !running_.load(std::memory_order_acquire) ||
-                       work_signal_.load(std::memory_order_acquire) !=
-                           observed_signal;
-            });
+            work_signal_.wait(observed_signal, std::memory_order_acquire);
         }
     }
 
@@ -308,33 +297,11 @@ void Executor::signal_global_work() {
     wake_one_worker();
 }
 
-void Executor::wake_one_worker() {
-    const std::size_t worker_count = workers_.size();
-    if (worker_count == 0) {
-        return;
-    }
-
-    const std::size_t worker_index =
-        next_worker_.fetch_add(1, std::memory_order_relaxed) % worker_count;
-    // Lock-then-unlock the worker's mutex before notifying.
-    // This ensures the worker is either before its predicate check (and will
-    // see the updated atomic state) or inside cv.wait (and will receive the
-    // notification). Without this, a notification sent between predicate
-    // evaluation and cv.wait entry is lost, causing the worker to hang.
-    workers_[worker_index]->queue_mutex.lock();
-    workers_[worker_index]->queue_mutex.unlock();
-    workers_[worker_index]->cv.notify_one();
-}
+void Executor::wake_one_worker() { work_signal_.notify_one(); }
 
 void Executor::wake_all_workers() {
-    for (auto& worker : workers_) {
-        // Lock-then-unlock ensures the worker is either before its predicate
-        // check or inside cv.wait before the notification is sent.
-        // See wake_one_worker() for detailed rationale.
-        worker->queue_mutex.lock();
-        worker->queue_mutex.unlock();
-        worker->cv.notify_all();
-    }
+    work_signal_.fetch_add(1, std::memory_order_release);
+    work_signal_.notify_all();
 }
 
 // Helper function for when_all.h (avoids circular dependency)
@@ -382,9 +349,11 @@ bool Executor::is_responsive() const {
 
     if (active >= num_threads_) {
         // All threads busy - check if making progress
-        std::lock_guard<std::mutex> lock(activity_mutex_);
         auto now = std::chrono::steady_clock::now();
-        auto idle_time = now - last_activity_time_;
+        auto last_ns = last_activity_ns_.load(std::memory_order_acquire);
+        auto last_tp = std::chrono::steady_clock::time_point(
+            std::chrono::steady_clock::duration(last_ns));
+        auto idle_time = now - last_tp;
 
         // If all threads busy but no activity for deadlock_timeout,
         // likely deadlocked
@@ -403,8 +372,9 @@ bool Executor::is_responsive() const {
 }
 
 void Executor::mark_activity() {
-    std::lock_guard<std::mutex> lock(activity_mutex_);
-    last_activity_time_ = std::chrono::steady_clock::now();
+    last_activity_ns_.store(
+        std::chrono::steady_clock::now().time_since_epoch().count(),
+        std::memory_order_release);
 }
 
 void Executor::update_task_location(TaskIndex task_id,

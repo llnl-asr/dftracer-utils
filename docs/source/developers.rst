@@ -331,27 +331,33 @@ For hot loops, reuse a single ``HasherUtility`` instance with ``reset()``:
 Anti-Patterns to Avoid
 ~~~~~~~~~~~~~~~~~~~~~~
 
-**Storing JsonValue beyond yyjson_doc lifetime**
+**Storing JsonValue / simdjson views beyond the parser's lifetime**
 
-``JsonValue`` is a non-owning view into a ``yyjson_doc``. Never store it across the document's lifetime.
+``JsonValue`` (and the underlying ``simdjson::ondemand::value`` /
+``simdjson::dom::element``) is a non-owning view into the parser's buffer.
+Never store it across the parser's or the input buffer's lifetime.
 
 .. code-block:: cpp
 
-    // WRONG: doc destroyed, but view stored
+    #include <simdjson.h>
+
+    // WRONG: parser/buffer destroyed, but view stored
     JsonValue stored_value;
     {
-        yyjson_doc* doc = yyjson_read_file("config.json", NULL);
-        stored_value = yyjson_get_obj(doc);
-        yyjson_doc_free(doc);
+        simdjson::ondemand::parser parser;
+        auto padded = simdjson::padded_string::load("config.json");
+        auto doc = parser.iterate(padded);
+        stored_value = doc.find_field("root").value();
     }
-    // stored_value now points to freed memory!
-    
-    // CORRECT: copy data before doc destruction
+    // stored_value now points into freed parser/buffer memory!
+
+    // CORRECT: copy the data out before the parser goes out of scope
     {
-        yyjson_doc* doc = yyjson_read_file("config.json", NULL);
-        auto data = serialize_json_value(yyjson_get_obj(doc));
-        yyjson_doc_free(doc);
-        // data is now safe
+        simdjson::ondemand::parser parser;
+        auto padded = simdjson::padded_string::load("config.json");
+        auto doc = parser.iterate(padded);
+        auto data = serialize_json_value(doc.find_field("root").value());
+        // data owns its copy; safe to use after the parser is destroyed
     }
 
 **Instantiating IOExecutor directly**

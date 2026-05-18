@@ -3,6 +3,57 @@ Command-Line Tools
 
 DFTracer Utils provides several command-line utilities for working with DFTracer trace files and compressed archives.
 
+.. _cli-shared-flags:
+
+Shared CLI Flags
+----------------
+
+Most tools wire in a common set of argument schemas defined in
+``src/dftracer/utils/binaries/common_cli.h``. The flags below have identical
+semantics across every binary that exposes the relevant schema and are not
+repeated in each tool's section.
+
+**Pipeline (``PipelineArgs``)**
+
+- ``--executor-threads <count>`` - Number of worker threads for parallel
+  processing (default: number of CPU cores)
+- ``--io-threads <count>`` - Number of I/O threads (default: number of CPU
+  cores)
+- ``--time-profiling`` - Print stage timing breakdown to stderr
+
+**Indexing (``IndexingArgs``)**
+
+- ``--index-dir <path>`` - Directory for ``.dftindex`` stores
+- ``--checkpoint-size <bytes>`` - Checkpoint size for gzip indexing in bytes
+  (default: 33554432 B / 32 MB)
+- ``-f, --force`` - Force index recreation
+
+**Query (``QueryArgs``)**
+
+- ``--query <query>`` - Query DSL filter
+  (e.g., ``'cat == "POSIX" and dur > 1000'``)
+
+**Watchdog (``WatchdogArgs``)**
+
+- ``--disable-watchdog`` - Disable watchdog for hang detection
+- ``--watchdog-global-timeout <s>`` - Watchdog global timeout for pipeline
+  execution in seconds (0 = no timeout, default: 0)
+- ``--watchdog-task-timeout <s>`` - Watchdog default task timeout in seconds
+  (0 = no timeout, default: 0)
+- ``--watchdog-interval <s>`` - Watchdog check interval in seconds
+  (default: 1)
+- ``--watchdog-warning-threshold <s>`` - Watchdog long-running task warning
+  threshold in seconds (default: 300)
+- ``--watchdog-idle-timeout <s>`` - Watchdog idle timeout in seconds
+  (0 = use default, default: 300)
+- ``--watchdog-deadlock-timeout <s>`` - Watchdog deadlock timeout in seconds
+  (0 = use default, default: 600)
+
+**Inputs (``DirectoryArgs`` / ``FilesArgs``)**
+
+- ``-d, --directory <path>`` - Directory containing trace files
+- ``--files <files...>`` - Trace files (``.pfw``, ``.pfw.gz``)
+
 dftracer_reader
 ---------------
 
@@ -357,6 +408,12 @@ dftracer_index
 - ``--false-positive-rate <rate>`` - Bloom filter false positive rate (default: 0.01)
 - ``--read-batch-size <MB>`` - Batch read size in MB for stream processing (default: 4)
 - ``--manifest`` - Also build manifest tables in .idx (per-checkpoint event line routing)
+- ``--rebuild-summaries`` - Rebuild ``ROOT_*`` aggregated summaries after ingest.
+  Off by default; ``ROOT_*`` CFs are only consumed by summary tools such as
+  ``dftracer_info``. Bloom-filter chunk-skipping queries do not require them.
+
+This binary also accepts the shared :ref:`cli-shared-flags` (Pipeline,
+Watchdog, Indexing).
 
 **Example:**
 
@@ -771,3 +828,108 @@ dftracer_comparator
             }
         ]
     }
+
+dftracer_aggregator_mpi
+-----------------------
+
+**Description:** MPI driver for the distributed-SST aggregator. Each rank
+produces per-rank aggregation SSTs; rank 0 bulk-ingests and the ranks jointly
+write the final gzip JSON output. Requires the build to be configured with
+``DFTRACER_UTILS_ENABLE_MPI=ON``.
+
+The pipeline is structured as a five-task DAG executed inside the standard
+``Pipeline`` runtime:
+
+``scan -> phase_a -> phase_b -> phase_c -> merge``
+
+- **scan** - Cooperative gzip-member pre-scan, ``Allgatherv`` of the member
+  map, and deterministic Longest-Processing-Time (LPT) assignment of work
+  units to ranks.
+- **phase_a** - Each rank runs the distributed-SST indexer + aggregation
+  visitor on its slice and writes SSTs (and ``tracker.bin``) to its rank
+  staging directory. SSTs are optionally moved to a shared-FS staging root
+  for the coordinator.
+- **phase_b** - Rank 0 ``Gatherv`` of artifact lists and a single
+  ``IndexDatabase::bulk_ingest`` + tracker merge.
+- **phase_c** - Each rank writes a shard-prefixed Perfetto gzip JSON slice
+  using ``PerfettoTraceWriterUtility``.
+- **merge** - Parallel ``pwrite`` on Lustre-striped output or serial
+  concatenation otherwise.
+
+**Usage:**
+
+.. code-block:: bash
+
+    mpirun -n <N> dftracer_aggregator_mpi [OPTIONS]
+
+**Options:**
+
+- ``-d, --directory <path>`` - Input directory containing .pfw or .pfw.gz
+  files (default: ``.``)
+- ``-o, --output <path>`` - Output gzip JSON path. ``.gz`` is appended if
+  missing (default: ``aggregated_output.json.gz``)
+- ``-t, --time-interval <ms>`` - Time interval in milliseconds for bucketing
+  (default: 5000)
+- ``--staging-dir <path>`` - Per-rank SST staging root. Defaults to
+  ``<index_dir>/_staging``; each rank writes to ``<staging_dir>/rank_<R>``.
+- ``--shared-staging <path>`` - Shared-FS staging root. When set and
+  different from ``--staging-dir``, each rank moves its SSTs and
+  ``tracker.bin`` from the (node-local) staging dir to
+  ``<shared-staging>/rank_<R>`` before the coordinator ingest. Required for
+  multi-node runs where ``--staging-dir`` points at node-local NVMe.
+- ``--keep-staging`` - Keep per-rank SST staging dirs after a successful
+  ingest
+
+This binary also accepts the shared :ref:`cli-shared-flags` (Pipeline and
+Indexing schemas). Per-rank ``--executor-threads`` / ``--io-threads`` are
+automatically scaled down by the detected processes-per-node count so
+co-located ranks do not oversubscribe cores.
+
+**Example:**
+
+.. code-block:: bash
+
+    # 16 ranks on one node, node-local staging
+    mpirun -n 16 dftracer_aggregator_mpi -d ./traces -o agg.json.gz
+
+    # Multi-node run with shared staging on Lustre
+    mpirun -n 64 dftracer_aggregator_mpi -d /lustre/traces \
+        --staging-dir /local/nvme/_staging \
+        --shared-staging /lustre/scratch/_staging \
+        -o /lustre/out/agg.json.gz
+
+dftracer_call_tree_mpi
+----------------------
+
+**Description:** MPI driver for parallel call-tree construction. Each rank
+owns a slice of PIDs, emits a Chrome Tracing JSON shard, and rank 0 merges
+the shards. Wraps the ``MPICallTreeBuilder`` engine
+(``discover_pids -> build -> hierarchy -> write -> merge`` coro phases).
+Requires ``DFTRACER_UTILS_ENABLE_MPI=ON``.
+
+**Usage:**
+
+.. code-block:: bash
+
+    mpirun -n <N> dftracer_call_tree_mpi [OPTIONS] <input>
+
+**Options:**
+
+- ``input`` - Input directory containing trace files [required]
+- ``-o, --output <path>`` - Output JSON path (default: ``call_tree.pfw``)
+- ``--staging-dir <path>`` - Shared-FS staging root for per-rank shards
+  (default: ``<output>.shards/``)
+- ``--gzip`` - gzip the merged output (``.gz`` appended if needed)
+- ``-v, --verbose`` - Verbose progress logging
+- ``--keep-staging`` - Keep per-rank shard files after merge
+
+This binary also accepts the shared :ref:`cli-shared-flags` (Pipeline);
+per-rank thread counts are scaled down by the detected processes-per-node
+count.
+
+**Example:**
+
+.. code-block:: bash
+
+    # 32 ranks across nodes; gzip merged output
+    mpirun -n 32 dftracer_call_tree_mpi ./traces -o call_tree.pfw --gzip

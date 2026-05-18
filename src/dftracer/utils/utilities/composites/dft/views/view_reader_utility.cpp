@@ -7,7 +7,7 @@
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <cstring>
 #include <string>
@@ -134,10 +134,7 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
 
     ViewReaderBatch batch;
 
-    // NOTE(perf): reusable yyjson allocator
-    char yy_buf[common::json::YYJSON_LINE_POOL_SIZE];
-    yyjson_alc yy_alc;
-    yyjson_alc_pool_init(&yy_alc, yy_buf, sizeof(yy_buf));
+    simdjson::dom::parser parser;
 
     while (!stream->done()) {
         auto chunk = co_await stream->read_async();
@@ -155,13 +152,10 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
             std::size_t line_len = newline - line_start;
 
             if (line_len > 0) {
-                yyjson_doc* doc =
-                    yyjson_read_opts(const_cast<char*>(line_start), line_len,
-                                     YYJSON_READ_NOFLAG, &yy_alc, nullptr);
-
-                if (doc) {
-                    yyjson_val* root = yyjson_doc_get_root(doc);
-                    if (root && yyjson_is_obj(root)) {
+                auto result = parser.parse(line_start, line_len);
+                if (!result.error()) {
+                    auto root = result.value_unsafe();
+                    if (root.is_object()) {
                         JsonValue json(root);
                         std::string_view ph =
                             json["ph"].get<std::string_view>();
@@ -206,7 +200,6 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
                             }
                         }
                     }
-                    yyjson_doc_free(doc);
                 }
             }
 
@@ -241,69 +234,56 @@ using common::arrow::RecordBatchBuilder;
 
 ArrowExportResult ViewReaderBatch::to_arrow() const {
     RecordBatchBuilder builder;
+    return to_arrow(builder);
+}
+
+ArrowExportResult ViewReaderBatch::to_arrow(RecordBatchBuilder& builder) const {
     builder.reserve(events.size());
-    std::vector<yyjson_doc*> held_docs;
     std::vector<std::string> held_serialized;
+    simdjson::dom::parser parser;
 
     for (const auto& event_str : events) {
-        yyjson_doc* doc = yyjson_read(event_str.data(), event_str.size(), 0);
-        if (!doc) continue;
-        yyjson_val* root = yyjson_doc_get_root(doc);
-        if (!root || !yyjson_is_obj(root)) {
-            yyjson_doc_free(doc);
-            continue;
-        }
-        held_docs.push_back(doc);
+        auto result = parser.parse(event_str.data(), event_str.size());
+        if (result.error()) continue;
+        auto elem = result.value_unsafe();
+        if (!elem.is_object()) continue;
 
-        yyjson_obj_iter it;
-        yyjson_obj_iter_init(root, &it);
-        yyjson_val* key;
-        while ((key = yyjson_obj_iter_next(&it))) {
-            yyjson_val* val = yyjson_obj_iter_get_val(key);
-            std::string_view key_sv(yyjson_get_str(key), yyjson_get_len(key));
+        auto obj_result = elem.get_object();
+        if (obj_result.error()) continue;
+        auto obj = obj_result.value_unsafe();
 
-            if (yyjson_is_int(val)) {
+        for (auto field : obj) {
+            std::string_view key_sv = field.key;
+            auto val = field.value;
+
+            if (val.is_int64()) {
                 auto ci = builder.add_or_get_column(key_sv, ColumnType::INT64);
-                builder.append_int64(ci, yyjson_get_sint(val));
-            } else if (yyjson_is_uint(val)) {
+                builder.append_int64(ci, val.get_int64().value_unsafe());
+            } else if (val.is_uint64()) {
                 auto ci = builder.add_or_get_column(key_sv, ColumnType::UINT64);
-                builder.append_uint64(ci, yyjson_get_uint(val));
-            } else if (yyjson_is_real(val)) {
+                builder.append_uint64(ci, val.get_uint64().value_unsafe());
+            } else if (val.is_double()) {
                 auto ci = builder.add_or_get_column(key_sv, ColumnType::DOUBLE);
-                builder.append_double(ci, yyjson_get_real(val));
-            } else if (yyjson_is_bool(val)) {
+                builder.append_double(ci, val.get_double().value_unsafe());
+            } else if (val.is_bool()) {
                 auto ci = builder.add_or_get_column(key_sv, ColumnType::BOOL);
-                builder.append_bool(ci, yyjson_get_bool(val));
-            } else if (yyjson_is_str(val)) {
+                builder.append_bool(ci, val.get_bool().value_unsafe());
+            } else if (val.is_string()) {
                 auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
-                builder.append_string(
-                    ci,
-                    std::string_view(yyjson_get_str(val), yyjson_get_len(val)));
-            } else if (yyjson_is_null(val)) {
-                // Only append null to an existing column; skip if new —
-                // we don't know the type yet and STRING would corrupt later
-                // typed appends.
+                builder.append_string(ci, val.get_string().value_unsafe());
+            } else if (val.is_null()) {
                 auto existing = builder.find_column(key_sv);
                 if (existing) builder.append_null(*existing);
             } else {
                 auto ci = builder.add_or_get_column(key_sv, ColumnType::STRING);
-                std::size_t jlen;
-                char* js = yyjson_val_write(val, 0, &jlen);
-                if (js) {
-                    held_serialized.emplace_back(js, jlen);
-                    free(js);
-                    builder.append_string(ci, held_serialized.back());
-                } else {
-                    builder.append_null(ci);
-                }
+                held_serialized.push_back(simdjson::minify(val));
+                builder.append_string(ci, held_serialized.back());
             }
         }
         builder.end_row();
     }
 
-    auto result = builder.finish();
-    for (auto* d : held_docs) yyjson_doc_free(d);
-    return result;
+    return builder.finish();
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::views

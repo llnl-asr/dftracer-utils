@@ -5,65 +5,54 @@
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
-void MetricStats::update(std::uint64_t value, std::uint64_t count,
-                         bool compute_percentiles) {
+// Representation note:
+//   count, total -> plain integer running sums (bit-exact regardless of
+//                   merge order; overflow guarded by u64 range for typical
+//                   trace magnitudes).
+//   m2, m3, m4   -> REPURPOSED. Now hold raw power sums:
+//                     m2 = sum_x^2
+//                     m3 = sum_x^3
+//                     m4 = sum_x^4
+//                   Instead of Welford central moments. Merge becomes
+//                   plain addition, making it commutative + associative.
+//                   Integer-valued inputs with v^k representable in
+//                   double mantissa (<= 2^52) keep additions exact, so
+//                   serial and MPI outputs match bit-for-bit. Stddev /
+//                   skewness / kurtosis are computed at read time by
+//                   converting power sums to central moments.
+//   mean         -> Not maintained incrementally; filled in at emit time
+//                   by the aggregator from (total / count).
+void MetricStats::update(std::uint64_t value, bool compute_percentiles) {
+    count++;
     total += value;
     if (value < min) min = value;
     if (value > max) max = value;
 
-    double n = static_cast<double>(count);
-    double delta = static_cast<double>(value) - mean;
-    double delta_n = delta / n;
-    double delta_n2 = delta_n * delta_n;
-    double term1 = delta * delta_n * (n - 1);
-
-    m4 += term1 * delta_n2 * (n * n - 3 * n + 3) + 6 * delta_n2 * m2 -
-          4 * delta_n * m3;
-    m3 += term1 * delta_n * (n - 2) - 3 * delta_n * m2;
-    m2 += term1;
-    mean += delta_n;
+    const double v = static_cast<double>(value);
+    const double v2 = v * v;
+    m2 += v2;
+    m3 += v2 * v;
+    m4 += v2 * v2;
+    mean = static_cast<double>(total) / static_cast<double>(count);
 
     if (compute_percentiles) {
         if (!sketch) {
             sketch = std::make_unique<DDSketch>(sketch_accuracy_);
         }
-        sketch->add(static_cast<double>(value));
+        sketch->add(v);
     }
 }
 
-void MetricStats::merge_from(const MetricStats& other, std::uint64_t n1,
-                             std::uint64_t n2, std::uint64_t n) {
+void MetricStats::merge_from(const MetricStats& other) {
+    count += other.count;
     total += other.total;
     min = std::min(min, other.min);
     max = std::max(max, other.max);
-
-    if (n > 0) {
-        double delta = other.mean - mean;
-        double delta2 = delta * delta;
-        double delta3 = delta * delta2;
-        double delta4 = delta2 * delta2;
-
-        double n1_d = static_cast<double>(n1);
-        double n2_d = static_cast<double>(n2);
-        double n_d = static_cast<double>(n);
-
-        double mean_new = (n1_d * mean + n2_d * other.mean) / n_d;
-
-        m4 = m4 + other.m4 +
-             delta4 * n1_d * n2_d * (n1_d * n1_d - n1_d * n2_d + n2_d * n2_d) /
-                 (n_d * n_d * n_d) +
-             6 * delta2 * (n1_d * n1_d * other.m2 + n2_d * n2_d * m2) /
-                 (n_d * n_d) +
-             4 * delta * (n1_d * other.m3 - n2_d * m3) / n_d;
-
-        m3 = m3 + other.m3 +
-             delta3 * n1_d * n2_d * (n1_d - n2_d) / (n_d * n_d) +
-             3 * delta * (n1_d * other.m2 - n2_d * m2) / n_d;
-
-        m2 = m2 + other.m2 + delta2 * n1_d * n2_d / n_d;
-
-        mean = mean_new;
-    }
+    m2 += other.m2;
+    m3 += other.m3;
+    m4 += other.m4;
+    mean = count > 0 ? static_cast<double>(total) / static_cast<double>(count)
+                     : 0.0;
 
     if (other.sketch) {
         if (!sketch) {
@@ -73,32 +62,59 @@ void MetricStats::merge_from(const MetricStats& other, std::uint64_t n1,
     }
 }
 
-double MetricStats::get_stddev(std::uint64_t count) const {
+// Convert power sums (m2=sum_x^2, m3=sum_x^3, m4=sum_x^4) and
+// (count, total) into the central moments needed for stddev / skewness
+// / kurtosis. Well-known identities:
+//   mu = total / n
+//   M2 = sum_x^2 - n * mu^2
+//   M3 = sum_x^3 - 3 * mu * sum_x^2 + 2 * n * mu^3
+//   M4 = sum_x^4 - 4 * mu * sum_x^3 + 6 * mu^2 * sum_x^2 - 3 * n * mu^4
+static void central_moments(std::uint64_t count, std::uint64_t total, double m2,
+                            double m3, double m4, double& M2, double& M3,
+                            double& M4, double& n, double& mu) {
+    n = static_cast<double>(count);
+    mu = static_cast<double>(total) / n;
+    M2 = m2 - n * mu * mu;
+    M3 = m3 - 3.0 * mu * m2 + 2.0 * n * mu * mu * mu;
+    M4 = m4 - 4.0 * mu * m3 + 6.0 * mu * mu * m2 - 3.0 * n * mu * mu * mu * mu;
+    // Rounding can push nonneg moments slightly negative.
+    if (M2 < 0.0) M2 = 0.0;
+    if (M4 < 0.0) M4 = 0.0;
+}
+
+double MetricStats::get_stddev() const {
     if (count < 2) return 0.0;
-    return std::sqrt(m2 / static_cast<double>(count - 1));
+    double M2, M3, M4, n, mu;
+    central_moments(count, total, m2, m3, m4, M2, M3, M4, n, mu);
+    const double var = M2 / (n - 1.0);
+    return var > 0.0 ? std::sqrt(var) : 0.0;
 }
 
-double MetricStats::get_skewness(std::uint64_t count) const {
-    if (count < 3 || m2 == 0.0) return 0.0;
-    double n = static_cast<double>(count);
-    return std::sqrt(n) * m3 / std::pow(m2, 1.5);
+double MetricStats::get_skewness() const {
+    if (count < 3) return 0.0;
+    double M2, M3, M4, n, mu;
+    central_moments(count, total, m2, m3, m4, M2, M3, M4, n, mu);
+    if (M2 == 0.0) return 0.0;
+    return std::sqrt(n) * M3 / std::pow(M2, 1.5);
 }
 
-double MetricStats::get_kurtosis(std::uint64_t count) const {
-    if (count < 4 || m2 == 0.0) return 0.0;
-    double n = static_cast<double>(count);
-    return n * m4 / (m2 * m2) - 3.0;
+double MetricStats::get_kurtosis() const {
+    if (count < 4) return 0.0;
+    double M2, M3, M4, n, mu;
+    central_moments(count, total, m2, m3, m4, M2, M3, M4, n, mu);
+    if (M2 == 0.0) return 0.0;
+    return n * M4 / (M2 * M2) - 3.0;
 }
 
 void AggregationMetrics::update_duration(std::uint64_t dur,
                                          bool compute_percentiles) {
     count++;
-    duration.update(dur, count, compute_percentiles);
+    duration.update(dur, compute_percentiles);
 }
 
 void AggregationMetrics::update_size(std::uint64_t sz,
                                      bool compute_percentiles) {
-    size.update(sz, count, compute_percentiles);
+    size.update(sz, compute_percentiles);
 }
 
 void AggregationMetrics::update_timestamp(std::uint64_t event_ts,
@@ -122,42 +138,26 @@ void AggregationMetrics::update_timestamp_clamped(std::uint64_t event_ts,
     if (clamped_te > te) te = clamped_te;
 }
 
-void AggregationMetrics::update_custom_metric(const std::string& name,
+void AggregationMetrics::update_custom_metric(std::string_view name,
                                               std::uint64_t value,
                                               bool compute_percentiles) {
     if (!custom_metrics) {
         custom_metrics = std::make_unique<CustomMetricsMap>();
     }
-    if (custom_metrics->find(name) == custom_metrics->end()) {
-        custom_metrics->emplace(name, MetricStats(sketch_accuracy));
-    }
-    (*custom_metrics)[name].update(value, count, compute_percentiles);
-}
-
-double AggregationMetrics::get_stddev_duration() const {
-    return duration.get_stddev(count);
-}
-
-double AggregationMetrics::get_stddev_size() const {
-    return size.get_stddev(count);
-}
-
-double AggregationMetrics::get_custom_stddev(const std::string& name) const {
-    if (!custom_metrics) return 0.0;
     auto it = custom_metrics->find(name);
-    if (it == custom_metrics->end()) return 0.0;
-    return it->second.get_stddev(count);
+    if (it == custom_metrics->end()) {
+        auto [new_it, _] = custom_metrics->emplace(
+            std::string(name), MetricStats(sketch_accuracy));
+        it = new_it;
+    }
+    it->second.update(value, compute_percentiles);
 }
 
 void AggregationMetrics::merge_from(const AggregationMetrics& other) {
-    std::uint64_t n1 = count;
-    std::uint64_t n2 = other.count;
-    std::uint64_t n = n1 + n2;
+    count += other.count;
 
-    count = n;
-
-    duration.merge_from(other.duration, n1, n2, n);
-    size.merge_from(other.size, n1, n2, n);
+    duration.merge_from(other.duration);
+    size.merge_from(other.size);
 
     ts = std::min(ts, other.ts);
     te = std::max(te, other.te);
@@ -167,7 +167,13 @@ void AggregationMetrics::merge_from(const AggregationMetrics& other) {
             custom_metrics = std::make_unique<CustomMetricsMap>();
         }
         for (const auto& [name, other_metric] : *other.custom_metrics) {
-            (*custom_metrics)[name].merge_from(other_metric, n1, n2, n);
+            auto it = custom_metrics->find(name);
+            if (it == custom_metrics->end()) {
+                auto [new_it, _] =
+                    custom_metrics->emplace(name, MetricStats(sketch_accuracy));
+                it = new_it;
+            }
+            it->second.merge_from(other_metric);
         }
     }
 }

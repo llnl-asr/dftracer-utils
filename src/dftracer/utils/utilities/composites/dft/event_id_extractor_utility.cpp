@@ -1,6 +1,6 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 namespace dftracer::utils::utilities::composites::dft {
 
@@ -8,37 +8,32 @@ coro::CoroTask<EventIdExtractionOutput> EventIdExtractor::process(
     const EventIdExtractionInput& input) {
     EventId event;
 
-    yyjson_doc* doc =
-        yyjson_read(input.json_data.data(), input.json_data.size(), 0);
-    if (!doc) {
-        co_return event;  // Invalid JSON
+    simdjson::dom::parser parser;
+    auto result = parser.parse(input.json_data.data(), input.json_data.size());
+    if (result.error()) {
+        co_return event;
     }
 
-    yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!yyjson_is_obj(root)) {
-        yyjson_doc_free(doc);
-        co_return event;  // Not a JSON object
+    auto root = result.value_unsafe();
+    if (!root.is_object()) {
+        co_return event;
     }
 
-    // Extract id
-    yyjson_val* id_val = yyjson_obj_get(root, "id");
-    if (id_val && yyjson_is_int(id_val)) {
-        event.id = yyjson_get_int(id_val);
+    auto id_result = root["id"].get_int64();
+    if (!id_result.error()) {
+        event.id = id_result.value_unsafe();
     }
 
-    // Extract pid
-    yyjson_val* pid_val = yyjson_obj_get(root, "pid");
-    if (pid_val && yyjson_is_int(pid_val)) {
-        event.pid = yyjson_get_int(pid_val);
+    auto pid_result = root["pid"].get_int64();
+    if (!pid_result.error()) {
+        event.pid = pid_result.value_unsafe();
     }
 
-    // Extract tid
-    yyjson_val* tid_val = yyjson_obj_get(root, "tid");
-    if (tid_val && yyjson_is_int(tid_val)) {
-        event.tid = yyjson_get_int(tid_val);
+    auto tid_result = root["tid"].get_int64();
+    if (!tid_result.error()) {
+        event.tid = tid_result.value_unsafe();
     }
 
-    yyjson_doc_free(doc);
     co_return event;
 }
 

@@ -198,6 +198,39 @@ Example
        return 0;
    }
 
+Parallel File Writers
+---------------------
+
+The ``dftracer/utils/utilities/fileio/parallel/`` module provides
+high-throughput multi-stream file writers used by the reorganization and
+aggregation pipelines. The unified ``ParallelWriter`` class implements
+three on-disk layouts (selected via ``FileLayout`` in
+``parallel/layout.h``):
+
+- **Striped** -- one output file split into Lustre-friendly stripes,
+  each fed by an independent producer coroutine.
+- **Padded striped** -- striped layout with per-stripe alignment padding
+  for filesystems that prefer aligned writes.
+- **Sharded** -- one output file per shard, used when downstream
+  consumers want independent shards rather than a single concatenated
+  file.
+
+Sizing is Lustre-aware: ``LayoutInfo`` and ``WriterSizing`` derive stripe
+size and per-stripe buffer counts from the detected ``FilesystemKind``
+(Lustre vs generic POSIX). Internally, writes are coalesced via
+``coro::Channel``-based queues so that producer coroutines can submit
+small line-sized payloads without per-write ``write()`` syscalls.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
+    #include <dftracer/utils/utilities/fileio/parallel/layout.h>
+
+    WriterConfig cfg;
+    cfg.layout = FileLayout::STRIPED;
+    cfg.output_path = "merged.pfw";
+    ParallelWriter writer(cfg);
+
 Sync Fallback Behavior
 ~~~~~~~~~~~~~~~~~~~~~~
 

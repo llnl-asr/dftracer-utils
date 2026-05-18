@@ -86,8 +86,7 @@ TEST_SUITE("ManifestIndexBuilder") {
 
         auto config = IndexBuildConfig::for_file(trace_file)
                           .with_index_dir(test_dir)
-                          .with_manifest(true)
-                          .with_index_threshold(0);
+                          .with_manifest(true);
 
         auto result = run_index_build(config);
 
@@ -97,8 +96,7 @@ TEST_SUITE("ManifestIndexBuilder") {
         CHECK(fs::exists(result.index_path));
 
         IndexDatabase idx_db(result.index_path);
-        idx_db.init_base_schema();
-        idx_db.init_manifest_schema();
+        idx_db.init_schema();
         int fid = idx_db.get_file_info_id(get_logical_path(trace_file));
         REQUIRE(fid >= 0);
 
@@ -136,7 +134,6 @@ TEST_SUITE("ManifestIndexBuilder") {
             auto config = IndexBuildConfig::for_file(trace_file)
                               .with_index_dir(test_dir)
                               .with_manifest(true)
-                              .with_index_threshold(0)
                               .with_force_rebuild(false);
 
             auto result = run_index_build(config);
@@ -149,7 +146,6 @@ TEST_SUITE("ManifestIndexBuilder") {
             auto config = IndexBuildConfig::for_file(trace_file)
                               .with_index_dir(test_dir)
                               .with_manifest(true)
-                              .with_index_threshold(0)
                               .with_force_rebuild(false);
 
             auto result = run_index_build(config);

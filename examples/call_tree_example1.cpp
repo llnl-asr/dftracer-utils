@@ -4,9 +4,19 @@
  */
 
 #include <dftracer/utils/call_tree/call_tree.h>
+#include <dftracer/utils/call_tree/internal/call_tree.h>
+#include <dftracer/utils/call_tree/mpi/serializable.h>
+#include <dftracer/utils/core/pipeline/pipeline.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/tasks/task.h>
+
 #include <cstdio>
 
 using namespace dftracer::utils::call_tree;
+using dftracer::utils::CoroScope;
+using dftracer::utils::Pipeline;
+using dftracer::utils::make_task;
+namespace coro = dftracer::utils::coro;
 
 int main(int argc, char* argv[]) {
     printf("=== CallTree API Example 1: Basic Usage ===\n");
@@ -59,30 +69,29 @@ int main(int argc, char* argv[]) {
     }
     printf("\n");
     
-    // Save to file
-    printf("Step 6: Serialize call tree to binary file\n");
-    std::string output_file = tree.get_output_path();
-    printf("  Default output path: %s\n", output_file.c_str());
-    
-    if (tree.save_to_file()) {
-        printf("  Successfully saved!\n");
+    // Step 6: persist via the coroutine save APIs driven by a Pipeline.
+    printf("Step 6: Save call tree (custom binary + Arrow IPC)\n");
+    const std::string bin_path = "nodes-1_calltree.bin";
+    const std::string arrow_path = "nodes-1_calltree.arrow";
+    bool bin_ok = false, arrow_ok = false;
+    {
+        Pipeline pipeline;
+        auto save = make_task(
+            [&](CoroScope& scope) -> coro::CoroTask<void> {
+                bin_ok = co_await save_binary(&scope, tree.internal_tree(),
+                                              bin_path);
+                arrow_ok = co_await save_arrow(&scope, tree.internal_tree(),
+                                               arrow_path);
+            },
+            "save_call_tree");
+        pipeline.set_source(save);
+        pipeline.set_destination(save);
+        pipeline.execute();
     }
-    printf("\n");
-    
-    // Save to JSON format
-    printf("Step 7: Serialize call tree to JSON (Chrome Tracing format)\n");
-    if (tree.save_to_json()) {
-        printf("  Successfully saved to JSON!\n");
-    }
-    printf("\n");
-    
-    // Print tree to text file
-    printf("Step 8: Export call tree to text file\n");
-    std::string text_file = "nodes-1_calltree.txt";
-    if (tree.print_depth_first_to_file(text_file)) {
-        printf("  Exported to: %s\n", text_file.c_str());
-    }
-    
+    printf("  Binary: %s -> %s\n", bin_path.c_str(), bin_ok ? "ok" : "failed");
+    printf("  Arrow:  %s -> %s\n", arrow_path.c_str(),
+           arrow_ok ? "ok" : "failed");
+
     printf("\n=== Example completed successfully ===\n");
     
     return 0;

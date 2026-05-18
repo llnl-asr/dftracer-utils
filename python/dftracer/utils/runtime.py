@@ -121,18 +121,19 @@ class Runtime:
 
     Example::
 
-        with Runtime(threads=8, python_threads=4) as rt:
+        with Runtime(threads=8, io_threads=8, python_threads=4) as rt:
             h = rt.submit(lambda x: x * 2, 21)
             assert h.get() == 42
 
     Args:
         threads: Number of C++ executor threads (0 = hardware_concurrency).
+        io_threads: Number of C++ I/O threads (0 = hardware_concurrency).
         python_threads: Number of Python ThreadPoolExecutor threads
             (0 = min(32, threads)).
     """
 
-    def __init__(self, threads: int = 0, python_threads: int = 0) -> None:
-        self._native = _NativeRuntime(threads)
+    def __init__(self, threads: int = 0, io_threads: int = 0, python_threads: int = 0) -> None:
+        self._native = _NativeRuntime(threads=threads, io_threads=io_threads)
         self._init_fields(python_threads)
 
     def _init_fields(self, python_threads: int = 0) -> None:
@@ -356,6 +357,11 @@ class Runtime:
     def threads(self) -> int:
         """Number of C++ worker threads."""
         return self._native.threads
+
+    @property
+    def io_threads(self) -> int:
+        """Number of C++ I/O threads."""
+        return self._native.io_threads
 
     @property
     def python_threads(self) -> int:

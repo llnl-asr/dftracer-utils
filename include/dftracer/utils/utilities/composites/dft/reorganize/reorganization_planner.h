@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_REORGANIZE_REORGANIZATION_PLANNER_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_REORGANIZE_REORGANIZATION_PLANNER_H
 
+#include <dftracer/utils/core/utilities/tags/needs_context.h>
 #include <dftracer/utils/core/utilities/utility.h>
 
 #include <cstddef>
@@ -47,7 +48,8 @@ struct ReorganizationPlannerInput {
 };
 
 class ReorganizationPlannerUtility
-    : public utilities::Utility<ReorganizationPlannerInput, ExtractionPlan> {
+    : public utilities::Utility<ReorganizationPlannerInput, ExtractionPlan,
+                                utilities::tags::NeedsContext> {
    public:
     ReorganizationPlannerUtility() = default;
 

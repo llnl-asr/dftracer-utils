@@ -1,7 +1,7 @@
 Indexer
 =================
 
-Unified indexing and reading infrastructure for compressed trace files. Builds sidecar ``.idx`` files that enable efficient random access, bloom-filter-accelerated queries, and event-level manifest routing — all in a single decompression pass.
+Unified indexing and reading infrastructure for compressed trace files. Builds a sidecar ``.dftindex`` RocksDB store (and optional flat-file SSTs) that enables efficient random access, bloom-filter-accelerated queries, event-level manifest routing, and distributed aggregation, all from a single decompression pass.
 
 .. code-block:: cpp
 
@@ -11,19 +11,25 @@ Unified indexing and reading infrastructure for compressed trace files. Builds s
 Overview
 --------
 
-The indexer builds sidecar ``.idx`` files with an additive SQLite schema:
+The indexer writes column families into a shared ``.dftindex`` RocksDB store
+(or, for distributed builds, a content-addressed SST staging directory that
+is ingested into the store):
 
 - **Checkpoints** — byte offsets and decompression dictionaries for random access
 - **Bloom filters** — per-chunk bloom filters for fast event filtering (optional)
 - **Chunk statistics** — per-chunk event counts, duration distributions (optional)
-- **Manifest** — per-chunk event-to-line routing for reorganization (optional)
+- **Manifest** — per-chunk (cat, name) -> line numbers for sparse query routing (optional)
+- **Aggregation / system metrics** — distributed aggregation CFs populated via
+  ``SstFileWriter::Merge`` operands
 
-A separate ``.pidx`` file stores provenance data for reorganization tracking.
+SST files staged on disk are **content-addressed** (FNV-1a 64-bit fingerprint
+over the SST payload) so identical SSTs produced by different ranks collapse
+to a single ingest, and re-ingesting is idempotent. String IDs in the
+``names`` and ``cats`` CFs are deterministic FNV-1a hashes so the same name
+maps to the same id across processes.
 
-Sidecar files:
-
-- ``.idx`` — Unified content index (checkpoints + bloom filters + chunk statistics + manifest)
-- ``.pidx`` — Provenance index (reorganization tracking)
+A separate ``.pidx`` provenance store tracks source-to-output mapping for
+reorganized files.
 
 IndexBuilder
 ------------
@@ -63,6 +69,54 @@ Single-pass index builder. Decompresses each file once and builds all requested 
 
    // Later: all features present, skips entirely
    co_await builder.process(config2);  // "Skipping already-indexed file"
+
+IndexBatchBuilderUtility
+------------------------
+
+Builds many files in a single pipelined pass. Parses files in parallel
+(``parallelism`` workers) and routes their parsed artifacts (bloom rows,
+manifest entries, aggregation merge operands, extra-visitor SSTs) to a
+write phase. Supports batched flushing (``flush_every_files``) to bound
+peak memory, distributed SST sinks via ``sink_factory`` / ``sink_commit``,
+preassigned file ids, and per-file gzip-member slicing for cross-rank file
+splitting (the MPI driver pre-scans each ``.pfw.gz`` for member boundaries
+and assigns disjoint ``[member_begin, member_end)`` ranges to ranks).
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
+
+   IndexBuildBatchConfig cfg;
+   cfg.file_paths = {"a.pfw.gz", "b.pfw.gz", "c.pfw.gz"};
+   cfg.index_dir = "/data/.dftindex";
+   cfg.parallelism = 16;
+   cfg.build_manifest = true;
+   cfg.use_batch_write = true;
+   cfg.rebuild_root_summaries = true;
+   cfg.flush_every_files = 8;
+
+   auto batch = co_await IndexBatchBuilderUtility::process(scope,
+       std::make_shared<IndexBuildBatchConfig>(std::move(cfg)));
+
+IndexDatabaseWriterContext
+--------------------------
+
+Implements ``IndexBatchSink`` over a coordinator-owned RocksDB store: each
+batch's parsed artifacts are buffered, then committed atomically via
+``WriteBatch``. ``IndexDatabaseSstWriterContext`` is the SST-staging
+variant used by the distributed indexer; its outputs are content-addressed
+SST files later ingested into the coordinator store.
+
+IndexResolverUtility
+--------------------
+
+Resolves the index directory for a given trace file, building the index on
+demand when ``auto_build_index`` is set. Lives in
+``composites/dft/indexing/`` because it depends on the DFT visitor set.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
 
 IndexDatabase
 -------------
@@ -192,10 +246,17 @@ Interface for processing decompressed lines during index building. Implementatio
        virtual void finalize(IndexDatabase& db, int file_id) = 0;
    };
 
-Built-in visitors:
+Built-in event visitors live in ``composites/dft/visitors/`` (they extend
+``DftEventVisitor`` and are wrapped by ``DftEventDispatcher``, which
+implements ``IndexVisitor``):
 
-- **BloomVisitor** — parses JSON events, populates bloom filters and chunk statistics
-- **ManifestVisitor** — tracks (category, name) to line number mappings per checkpoint
+- **BloomVisitor** (``composites/dft/visitors/bloom_visitor.h``) - parses
+  JSON events, populates bloom filters and chunk statistics
+- **ManifestVisitor** (``composites/dft/visitors/manifest_visitor.h``) -
+  tracks (category, name) -> line numbers per checkpoint for sparse query
+  acceleration
+- **AggregationVisitor** (``composites/dft/aggregators/aggregation_visitor.h``)
+  - emits per-chunk aggregation and system-metric merge operands
 
 Low-level IndexerFactory
 ------------------------

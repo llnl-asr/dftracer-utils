@@ -8,11 +8,23 @@
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
 namespace {
-constexpr std::size_t HEADER_SIZE =
-    12;  // 4 bytes num_hashes + 4 bytes num_entries + 4 bytes num_bits
+constexpr std::size_t HEADER_SIZE = 12;
+constexpr std::size_t BLOCK_BYTES = 32;  // 8 x u32 = 256 bits
+constexpr std::size_t BLOCK_BITS = BLOCK_BYTES * 8;
+constexpr std::size_t BLOCK_WORDS = BLOCK_BYTES / 4;
+
+// Split block Bloom filter SALT array, taken verbatim from the Apache
+// Parquet spec (parquet-format/BloomFilter.md). Eight odd 32-bit
+// constants; each (h2 * SALT[i]) >> 27 picks one of 32 bits in word i
+// of the 256-bit block, with the 8 bit-selectors empirically
+// uncorrelated. See Apple, "Split block Bloom filters", arXiv:2101.01719.
+constexpr std::uint32_t SALT[BLOCK_WORDS] = {
+    0x47b6137bU, 0x44974d91U, 0x8824ad5bU, 0xa2b7289dU,
+    0x705495c7U, 0x2df1424bU, 0x9efc4947U, 0x5c6bfb31U,
+};
 
 void write_u32_le(unsigned char* buf, std::uint32_t val) {
-    if (!buf) return;  // Defensive check to silence compiler warning
+    if (!buf) return;
     buf[0] = static_cast<unsigned char>(val & 0xFF);
     buf[1] = static_cast<unsigned char>((val >> 8) & 0xFF);
     buf[2] = static_cast<unsigned char>((val >> 16) & 0xFF);
@@ -25,6 +37,20 @@ std::uint32_t read_u32_le(const unsigned char* buf) {
            (static_cast<std::uint32_t>(buf[2]) << 16) |
            (static_cast<std::uint32_t>(buf[3]) << 24);
 }
+
+inline std::size_t block_index(std::uint64_t h1, std::size_t num_blocks) {
+    return static_cast<std::size_t>(
+        (static_cast<__uint128_t>(h1) * num_blocks) >> 64);
+}
+
+inline void compute_block_mask(std::uint64_t h2,
+                               std::uint32_t (&out)[BLOCK_WORDS]) {
+    auto h32 = static_cast<std::uint32_t>(h2 ^ (h2 >> 32));
+    for (std::size_t i = 0; i < BLOCK_WORDS; ++i) {
+        std::uint32_t y = h32 * SALT[i];
+        out[i] = 1U << (y >> 27);
+    }
+}
 }  // namespace
 
 std::size_t BloomFilter::optimal_num_bits(std::size_t n, double p) {
@@ -34,7 +60,12 @@ std::size_t BloomFilter::optimal_num_bits(std::size_t n, double p) {
     auto m = static_cast<std::size_t>(
         std::ceil(-static_cast<double>(n) * std::log(p) /
                   (std::log(2.0) * std::log(2.0))));
-    return std::max(m, static_cast<std::size_t>(64));
+    // Round up to a whole number of 512-bit blocks. Blocked bloom filters
+    // pay ~10-15% extra memory for the same FPR vs classical; bump the
+    // requested bit count to compensate before rounding.
+    m = static_cast<std::size_t>(static_cast<double>(m) * 1.15);
+    m = std::max(m, BLOCK_BITS);
+    return ((m + BLOCK_BITS - 1) / BLOCK_BITS) * BLOCK_BITS;
 }
 
 std::size_t BloomFilter::optimal_num_hashes(std::size_t m, std::size_t n) {
@@ -49,8 +80,7 @@ BloomFilter::BloomFilter(std::size_t expected_entries,
     : num_bits_(optimal_num_bits(expected_entries, false_positive_rate)),
       num_hashes_(optimal_num_hashes(num_bits_, expected_entries)),
       num_entries_(0) {
-    std::size_t num_bytes = (num_bits_ + 7) / 8;
-    bits_.resize(num_bytes, 0);
+    bits_.assign(num_bits_ / 8, 0);
 }
 
 BloomFilter::BloomFilter(std::vector<unsigned char> bits, std::size_t num_bits,
@@ -85,41 +115,67 @@ void BloomFilter::compute_hashes(std::string_view value, std::uint64_t& h1,
                                  std::uint64_t& h2) const {
     hasher_.reset();
     hasher_.update(value);
-    h1 = hasher_.get_hash().value;
-    // Second hash: mix with a different seed using FNV-like mixing
-    std::uint64_t seed = 0x517cc1b727220a95ULL;
-    h2 = h1 * seed + 0x9e3779b97f4a7c15ULL;
-    h2 ^= (h2 >> 33);
-    h2 *= 0xff51afd7ed558ccdULL;
-    h2 ^= (h2 >> 33);
+    std::uint64_t raw = hasher_.get_hash().value;
+    // FNV-1a leaves correlated high bits for similar short keys, which
+    // breaks Lemire reduction in the blocked path. Run a SplitMix64-style
+    // finisher to fully avalanche, then derive a second hash for masking.
+    h1 = raw;
+    h1 = (h1 ^ (h1 >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    h1 = (h1 ^ (h1 >> 27)) * 0x94d049bb133111ebULL;
+    h1 ^= (h1 >> 31);
+    h2 = raw + 0x9e3779b97f4a7c15ULL;
+    h2 = (h2 ^ (h2 >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    h2 = (h2 ^ (h2 >> 27)) * 0x94d049bb133111ebULL;
+    h2 ^= (h2 >> 31);
 }
 
 std::size_t BloomFilter::nth_hash(std::uint64_t h1, std::uint64_t h2,
                                   std::size_t n) const {
-    // Kirsch-Mitzenmacher: g_i(x) = h1(x) + i * h2(x)
     return static_cast<std::size_t>((h1 + n * h2) % num_bits_);
 }
 
 void BloomFilter::add(std::string_view value) {
+    if (last_value_valid_ && value.size() == last_value_size_ &&
+        std::memcmp(last_value_buf_.data(), value.data(), value.size()) == 0) {
+        ++num_entries_;
+        return;
+    }
+
     std::uint64_t h1, h2;
     compute_hashes(value, h1, h2);
 
-    for (std::size_t i = 0; i < num_hashes_; ++i) {
-        std::size_t bit_pos = nth_hash(h1, h2, i);
-        bits_[bit_pos / 8] |= static_cast<std::uint8_t>(1u << (bit_pos % 8));
-    }
+    std::size_t num_blocks = num_bits_ / BLOCK_BITS;
+    std::size_t blk = block_index(h1, num_blocks);
+    auto* block =
+        reinterpret_cast<std::uint32_t*>(bits_.data() + blk * BLOCK_BYTES);
+
+    std::uint32_t mask[BLOCK_WORDS];
+    compute_block_mask(h2, mask);
+    for (std::size_t i = 0; i < BLOCK_WORDS; ++i) block[i] |= mask[i];
     ++num_entries_;
+
+    if (value.size() <= LAST_VALUE_CAP) {
+        std::memcpy(last_value_buf_.data(), value.data(), value.size());
+        last_value_size_ = value.size();
+        last_value_valid_ = true;
+    } else {
+        last_value_valid_ = false;
+    }
 }
 
 bool BloomFilter::possibly_contains(std::string_view value) const {
     std::uint64_t h1, h2;
     compute_hashes(value, h1, h2);
 
-    for (std::size_t i = 0; i < num_hashes_; ++i) {
-        std::size_t bit_pos = nth_hash(h1, h2, i);
-        if (!(bits_[bit_pos / 8] & (1u << (bit_pos % 8)))) {
-            return false;
-        }
+    std::size_t num_blocks = num_bits_ / BLOCK_BITS;
+    std::size_t blk = block_index(h1, num_blocks);
+    const auto* block = reinterpret_cast<const std::uint32_t*>(
+        bits_.data() + blk * BLOCK_BYTES);
+
+    std::uint32_t mask[BLOCK_WORDS];
+    compute_block_mask(h2, mask);
+    for (std::size_t i = 0; i < BLOCK_WORDS; ++i) {
+        if ((block[i] & mask[i]) != mask[i]) return false;
     }
     return true;
 }
@@ -131,9 +187,11 @@ void BloomFilter::merge_from(const BloomFilter& other) {
             "BloomFilter::merge_from: incompatible filter parameters");
     }
 
-    for (std::size_t i = 0; i < bits_.size(); ++i) {
-        bits_[i] |= other.bits_[i];
-    }
+    auto* dst = reinterpret_cast<std::uint64_t*>(bits_.data());
+    const auto* src =
+        reinterpret_cast<const std::uint64_t*>(other.bits_.data());
+    std::size_t n = bits_.size() / 8;
+    for (std::size_t i = 0; i < n; ++i) dst[i] |= src[i];
     num_entries_ += other.num_entries_;
 }
 

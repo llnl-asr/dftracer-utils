@@ -62,94 +62,69 @@ def _install_rtd_extension_stub() -> None:
         return
 
     ext = types.ModuleType(ext_name)
-    JSONPrimitive = str | int | float | bool | None
 
     class _BaseNative:
         """RTD stub for native extension classes."""
         pass
 
-    class TaskHandle(_BaseNative):
-        """Handle to a submitted task.
+    class _ArrowBatchCapsule(_BaseNative):
+        """Internal Arrow batch wrapper implementing __arrow_c_array__ protocol."""
 
-        Returned by asynchronous utility calls and by
-        :class:`dftracer.utils.Runtime`. The handle can be waited on,
-        queried for completion, or used to fetch the task result.
+        @property
+        def num_rows(self) -> int:
+            return 0
+
+        @property
+        def num_columns(self) -> int:
+            return 0
+
+        def __arrow_c_array__(self, requested_schema: object = None) -> tuple[object, object]:
+            return (None, None)
+
+    class _ArrowBatchStream(_BaseNative):
+        """Zero-iteration Arrow stream backed by the C++ coroutine channel.
+
+        Implements the Arrow C Data Interface stream protocol. Pass directly
+        to ``pyarrow.RecordBatchReader.from_stream()`` or ``pyarrow.table()``.
+        Single-use: consuming ``__arrow_c_stream__`` once exhausts the object.
         """
 
-        name = ""
-        task_id = 0
-
-        def get(self) -> object | None:
-            """Block until the task completes and return its result."""
+        def __arrow_c_stream__(self, requested_schema: object = None) -> object:
             return None
 
-        def wait(self) -> None:
-            """Block until the task completes."""
-            return None
+    class JsonDictValue(_BaseNative):
+        """Zero-copy wrapper over a parsed DFTracer JSON event.
 
-        def done(self) -> bool:
-            """Return ``True`` when the task has completed."""
-            return True
-
-    class Runtime(_BaseNative):
-        """Lightweight task runtime for native and Python work.
-
-        The runtime owns the executor threads used by coroutine-backed
-        readers, indexers, and utilities. The higher-level Python
-        wrapper in :mod:`dftracer.utils.runtime` builds on this native
-        object to support Python callables and richer task tracking.
+        Supports dict-like access: ``event['name']``, ``event['args']['ret']``.
+        Call ``.to_dict()`` to materialize a regular Python dict.
         """
 
-        threads = 0
+        def __getitem__(self, key: str) -> object:
+            raise KeyError(key)
 
-        def __init__(self, threads: int = 0) -> None:
-            """Create a runtime with an optional worker-thread count."""
-            super().__init__(threads)
-            self.threads = threads
+        def __len__(self) -> int:
+            return 0
 
-        def shutdown(self) -> None:
-            """Stop the runtime and release worker resources."""
-            return None
+        def __contains__(self, key: str) -> bool:
+            return False
 
-        def wait_all(self) -> None:
-            """Block until all submitted native work completes."""
-            return None
+        def keys(self) -> list[str]:
+            return []
 
-        def get_progress(self) -> dict[str, object]:
-            """Return runtime progress metadata."""
+        def values(self) -> list[object]:
+            return []
+
+        def items(self) -> list[tuple[str, object]]:
+            return []
+
+        def get(self, key: str, default: object = None) -> object:
+            return default
+
+        def to_dict(self) -> dict[str, object]:
             return {}
 
-        def is_responsive(self) -> bool:
-            """Return whether the watchdog still considers the runtime healthy."""
-            return True
-
-        def set_timeout(self, global_ms: int = 0) -> None:
-            """Set a global watchdog timeout in milliseconds."""
-            return None
-
-        def set_default_task_timeout(self, ms: int = 0) -> None:
-            """Set the default per-task timeout in milliseconds."""
-            return None
-
-        def __enter__(self) -> "Runtime":
-            """Enter the runtime context manager."""
-            return self
-
-        def __exit__(
-            self,
-            exc_type: type[BaseException] | None,
-            exc_val: BaseException | None,
-            exc_tb: TracebackType | None,
-        ) -> None:
-            """Exit the runtime context manager."""
-            return None
-
     class IndexerCheckpoint(_BaseNative):
-        """Information about a single checkpoint in a ``.dftindex`` store.
-
-        Checkpoints map compressed and uncompressed offsets and carry
-        per-chunk metadata used for seeking and chunk-level pruning.
-        """
+        """Information about a checkpoint in the index."""
 
         checkpoint_idx = 0
         uc_offset = 0
@@ -159,13 +134,238 @@ def _install_rtd_extension_stub() -> None:
         bits = 0
         num_lines = 0
 
-    class Indexer(_BaseNative):
-        """Build and query a root-local ``.dftindex`` RocksDB store.
+    class Runtime(_BaseNative):
+        """Lightweight coroutine runtime wrapping Executor + Watchdog.
 
-        The indexer extracts checkpoints and optional bloom/manifest
-        data for a compressed DFTracer trace. Readers and higher-level
-        utilities use this store for chunk pruning and random access.
+        Note: For user-facing API, use dftracer.utils.Runtime (Python wrapper)
+        which adds submit(), Python callable support, and error handling.
         """
+
+        def __init__(self, threads: int = 0, io_threads: int = 0) -> None:
+            self._threads = threads
+            self._io_threads = io_threads
+
+        def shutdown(self) -> None:
+            return None
+
+        def wait_all(self) -> None:
+            return None
+
+        def get_progress(self) -> dict[str, object]:
+            return {}
+
+        def is_responsive(self) -> bool:
+            return True
+
+        def set_timeout(self, global_ms: int = 0) -> None:
+            return None
+
+        def set_default_task_timeout(self, ms: int = 0) -> None:
+            return None
+
+        @property
+        def threads(self) -> int:
+            return self._threads
+
+        @property
+        def io_threads(self) -> int:
+            return self._io_threads
+
+        def __enter__(self) -> "Runtime":
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> None:
+            return None
+
+    class Indexer(_BaseNative):
+        """Indexer with resolve/build pattern for tiered indexing."""
+
+        def __init__(
+            self,
+            directory: str = "",
+            files: list[str] | None = None,
+            index_dir: str = "",
+            require_checkpoint: bool = True,
+            require_bloom: bool = True,
+            require_manifest: bool = True,
+            require_aggregation: bool = False,
+            time_interval_ms: float = 5000.0,
+            group_keys: list[str] | None = None,
+            custom_metric_fields: list[str] | None = None,
+            compute_percentiles: bool = False,
+            checkpoint_size: int = 32 * 1024 * 1024,
+            parallelism: int = 0,
+            force_rebuild: bool = False,
+            runtime: Runtime | None = None,
+        ) -> None:
+            """Create an indexer for trace files.
+
+            At least one of 'directory' or 'files' must be provided.
+
+            Args:
+                directory: Path to the directory containing trace files.
+                files: List of specific file paths to index.
+                index_dir: Directory for `.dftindex` stores. If empty, uses
+                    directory-local paths.
+                require_checkpoint: If True, build checkpoint index (tier 1).
+                require_bloom: If True, build bloom filter data (tier 2).
+                require_manifest: If True, build manifest data (tier 2).
+                require_aggregation: If True, build aggregation data (tier 3).
+                time_interval_ms: Time interval for aggregation in milliseconds.
+                group_keys: Keys to group by for aggregation.
+                custom_metric_fields: Custom metric fields for aggregation.
+                compute_percentiles: If True, compute percentiles during aggregation.
+                parallelism: Number of parallel indexers. 0 = auto.
+                force_rebuild: If True, rebuild indices even if they exist.
+                runtime: Runtime instance for thread pool control.
+            """
+            return None
+
+        def resolve(self) -> dict[str, object]:
+            """Resolve which files need indexing.
+
+            Returns:
+                Dictionary with 'ready' and 'needs_work' file lists.
+            """
+            return {}
+
+        def build(self) -> dict[str, object]:
+            """Build indices for files that need work.
+
+            Returns:
+                Dictionary with build status and statistics.
+            """
+            return {}
+
+        def ensure_indexed(self) -> dict[str, object]:
+            """Ensure all files are indexed by calling resolve then build if needed.
+
+            Returns:
+                Dictionary with 'ready' and 'needs_work' file lists after indexing.
+            """
+            return {}
+
+        def get_checkpoint_indexer(self, file_path: str) -> "CheckpointIndexer":
+            """Get a checkpoint indexer for a specific file.
+
+            Args:
+                file_path: Path to the trace file (.pfw/.pfw.gz).
+
+            Returns:
+                CheckpointIndexer instance for checkpoint-level operations.
+            """
+            return CheckpointIndexer(file_path)
+
+        def get_hash_table(self, hash_type: str) -> dict[str, str]:
+            """Get hash table mapping hash values to original strings.
+
+            Args:
+                hash_type: Type of hash table ('file', 'host', or 'string').
+
+            Returns:
+                Dict mapping hash strings to original values.
+
+            Raises:
+                ValueError: If hash_type is not valid.
+            """
+            return {}
+
+        def query_file_pids(self, file_id: int) -> set:
+            """Query PIDs observed in a specific file.
+
+            Args:
+                file_id: File identifier (0-based index).
+
+            Returns:
+                Set of PIDs (int) observed in the file.
+            """
+            return set()
+
+        def query_all_file_pids(self) -> dict[int, set]:
+            """Query all file-to-PIDs mappings.
+
+            Returns:
+                Dict mapping file_id to set of PIDs observed in that file.
+            """
+            return {}
+
+        def query_file_info(self) -> tuple[dict[int, str], dict[int, set]]:
+            """Query file ID to path mapping and per-file PIDs in one call.
+
+            Returns:
+                Tuple of (file_id_to_path, file_pids).
+            """
+            return ({}, {})
+
+        def iter_aggregation(
+            self,
+            type: str = "events",
+            batch_size: int = 10000,
+        ) -> Iterator[object]:
+            """Iterate over aggregation data as Arrow batches.
+
+            Args:
+                type: 'events', 'profiles', or 'system'
+                batch_size: Number of entries per batch (default 10000)
+
+            Returns:
+                Iterator over Arrow batch capsules.
+            """
+            return iter(())
+
+        def iter_arrow_dfanalyzer(
+            self,
+            type: str = "events",
+            batch_size: int = 10000,
+            time_granularity: float = 1.0,
+            time_resolution: float = 1e6,
+            query: str | None = None,
+        ) -> Iterator[object]:
+            """Iterate over aggregation data as dfanalyzer-compatible Arrow batches.
+
+            Args:
+                type: 'events', 'profiles', or 'system'
+                batch_size: Number of entries per batch (default 10000)
+                time_granularity: Bucket width in seconds (default 1.0)
+                time_resolution: Microseconds per output time unit (default 1e6)
+                query: Optional query filter (e.g., "pid == 1234 or pid == 5678")
+
+            Returns:
+                Iterator over Arrow batch capsules with dfanalyzer schema.
+            """
+            return iter(())
+
+        def iter_arrow_dfanalyzer_all(
+            self,
+            batch_size: int = 10000,
+            time_granularity: float = 1.0,
+            time_resolution: float = 1e6,
+            query: str | None = None,
+            group_by: list[str] | None = None,
+        ) -> dict[str, list[object]]:
+            """Iterate over all aggregation types in a single scan.
+
+            Args:
+                batch_size: Number of entries per batch (default 10000)
+                time_granularity: Bucket width in seconds (default 1.0)
+                time_resolution: Microseconds per output time unit (default 1e6)
+                query: Optional query filter (e.g., "pid == 1234 or pid == 5678")
+                group_by: Optional list of columns to group by for coarse in-scan
+                    aggregation. When provided, output schema is reduced to the
+                    requested group columns plus aggregated metrics.
+
+            Returns:
+                Dict with 'events', 'profiles', 'system' keys containing Arrow batches.
+            """
+            return {"events": [], "profiles": [], "system": []}
+
+    class CheckpointIndexer(_BaseNative):
+        """Checkpoint indexer for single-file checkpoint-level operations."""
 
         def __init__(
             self,
@@ -175,50 +375,90 @@ def _install_rtd_extension_stub() -> None:
             force_rebuild: bool = False,
             build_bloom: bool = False,
             build_manifest: bool = False,
-            index_threshold: int = 8388608,
             runtime: Runtime | None = None,
         ) -> None:
-            """Create an indexer for a compressed DFTracer trace."""
-            self.gz_path = gz_path
-            self.index_path = index_path or ""
-            self.checkpoint_size = checkpoint_size
-            self.has_bloom = build_bloom
-            self.has_manifest = build_manifest
+            """Create a checkpoint indexer for a gzip file.
+
+            Args:
+                gz_path: Path to the gzip trace file.
+                index_path: Path to the `.dftindex` store. If None, uses the
+                    root-local `.dftindex` next to ``gz_path``.
+                checkpoint_size: Checkpoint size in bytes for index building.
+                force_rebuild: If True, rebuild the index even if it exists.
+                build_bloom: If True, build bloom filter data in the index.
+                build_manifest: If True, build manifest data in the index.
+                runtime: Runtime instance for thread pool control.
+                    If None, uses the default global Runtime.
+            """
+            self._gz_path = gz_path
+            self._index_path = index_path or ""
+            self._checkpoint_size = checkpoint_size
+            self._has_bloom = build_bloom
+            self._has_manifest = build_manifest
 
         def build(self) -> None:
-            """Build the index store for the configured trace file."""
+            """Build the index."""
             return None
 
         def need_rebuild(self) -> bool:
-            """Return whether the index is missing or stale."""
+            """Check if index needs rebuilding."""
             return False
 
         def exists(self) -> bool:
-            """Return whether the index store already exists."""
+            """Check if the `.dftindex` store exists."""
             return False
 
         def get_max_bytes(self) -> int:
-            """Return the maximum decompressed byte position in the trace."""
+            """Get maximum byte position."""
             return 0
 
         def get_num_lines(self) -> int:
-            """Return the number of lines recorded in the index."""
+            """Get number of lines."""
             return 0
 
-        def get_checkpoints(self) -> list["IndexerCheckpoint"]:
-            """Return all checkpoints stored for the trace."""
+        def get_checkpoints(self) -> list[IndexerCheckpoint]:
+            """Get all checkpoints."""
             return []
 
-        def find_checkpoint(self, target_offset: int) -> "IndexerCheckpoint | None":
-            """Return the checkpoint closest to a decompressed offset."""
+        def find_checkpoint(self, target_offset: int) -> IndexerCheckpoint | None:
+            """Find checkpoint for target offset."""
             return None
 
         def close(self) -> None:
-            """Release this Python wrapper's native indexer handle."""
+            """Release this Python wrapper's native indexer handle.
+
+            This does not force-close the shared RocksDB instance for the same
+            ``.dftindex`` path.
+            """
             return None
 
-        def __enter__(self) -> "Indexer":
-            """Enter the indexer context manager."""
+        @property
+        def gz_path(self) -> str:
+            """Get gzip path."""
+            return self._gz_path
+
+        @property
+        def index_path(self) -> str:
+            """Get the `.dftindex` path."""
+            return self._index_path
+
+        @property
+        def checkpoint_size(self) -> int:
+            """Get checkpoint size."""
+            return self._checkpoint_size
+
+        @property
+        def has_bloom(self) -> bool:
+            """Whether bloom filter data exists in the `.dftindex` store."""
+            return self._has_bloom
+
+        @property
+        def has_manifest(self) -> bool:
+            """Whether manifest data exists in the `.dftindex` store."""
+            return self._has_manifest
+
+        def __enter__(self) -> "CheckpointIndexer":
+            """Enter the runtime context for the with statement."""
             return self
 
         def __exit__(
@@ -227,97 +467,70 @@ def _install_rtd_extension_stub() -> None:
             exc_val: BaseException | None,
             exc_tb: TracebackType | None,
         ) -> None:
-            """Exit the indexer context manager."""
+            """Release this Python wrapper on context exit.
+
+            This does not force-close the shared RocksDB instance for the same
+            ``.dftindex`` path.
+            """
             return None
 
-    class JSON(_BaseNative):
-        """Lazy JSON wrapper backed by yyjson.
+    class TaskHandle(_BaseNative):
+        """Handle to a submitted C++ coroutine task."""
 
-        Nested objects are exposed as additional :class:`JSON` wrappers
-        so callers can inspect large trace records without eagerly
-        converting the entire payload to Python dictionaries.
-        """
+        def get(self) -> object:
+            """Block until task completes and return result. Raises on error."""
+            return None
 
-        def __init__(self, json_str: str) -> None:
-            """Create a lazy JSON wrapper from a JSON string."""
-            self._json_str = json_str
+        def wait(self) -> None:
+            """Block until task completes. Raises on error."""
+            return None
 
-        def get(
-            self,
-            key: str,
-            default: "JSON | JSONPrimitive" = None,
-        ) -> "JSON | JSONPrimitive":
-            """Look up a key and return ``default`` when it is absent."""
-            return default
+        def done(self) -> bool:
+            """Return True if task has completed."""
+            return True
 
-        def keys(self) -> list[str]:
-            """Return the keys in the current JSON object."""
-            return []
+        @property
+        def name(self) -> str:
+            """Task name."""
+            return ""
 
-        def values(self) -> list["JSON | JSONPrimitive"]:
-            """Return the values in the current JSON object."""
-            return []
-
-        def items(self) -> list[tuple[str, "JSON | JSONPrimitive"]]:
-            """Return key-value pairs in the current JSON object."""
-            return []
-
-        def unwrap(self) -> dict[str, object] | list[object] | JSONPrimitive:
-            """Convert the lazy wrapper into native Python data."""
-            return {}
-
-        def copy(self) -> "JSON":
-            """Return a shallow copy of the current lazy JSON wrapper."""
-            return self
-
-        def __contains__(self, key: str) -> bool:
-            """Return ``True`` when a key exists in the object."""
-            return False
-
-        def __getitem__(self, key: str) -> "JSON | JSONPrimitive":
-            """Return a field value or nested :class:`JSON` wrapper."""
-            raise KeyError(key)
-
-        def __len__(self) -> int:
-            """Return the number of items in the current JSON object."""
+        @property
+        def task_id(self) -> int:
+            """Task identifier."""
             return 0
 
-        def __bool__(self) -> bool:
-            """Return whether the current JSON value is non-empty."""
-            return False
-
-        def __str__(self) -> str:
-            """Return a JSON-like string representation."""
-            return "{}"
-
-        def __repr__(self) -> str:
-            """Return a developer-facing representation."""
-            return "JSON('{}')"
-
     class TraceReader(_BaseNative):
-        """Read DFTracer traces with optional index-assisted pruning.
-
-        ``TraceReader`` chooses between sequential and indexed access
-        based on the file format and the presence of a shared
-        root-local ``.dftindex`` store. It exposes line, raw-byte,
-        JSON, and Arrow-based views over the same trace data.
-        """
+        """Smart trace file reader that auto-selects sequential vs indexed reading."""
 
         def __init__(
             self,
-            file_path: str,
+            path: str,
             index_dir: str = "",
             checkpoint_size: int = 33554432,
             auto_build_index: bool = False,
-            index_threshold: int = 8388608,
-            runtime: Runtime | None = None,
+            runtime: Runtime | object | None = None,
         ) -> None:
-            """Create a trace reader for plain or compressed DFTracer files."""
-            self.file_path = file_path
-            self.index_dir = index_dir
-            self.checkpoint_size = checkpoint_size
-            self.auto_build_index = auto_build_index
-            self.index_threshold = index_threshold
+            """Create a TraceReader.
+
+            Args:
+                path: Path to a trace file (.pfw/.pfw.gz) or a directory.
+                    When a directory is given, all iter/read methods discover
+                    .pfw and .pfw.gz files recursively and process them in
+                    parallel on the Runtime thread pool.
+                index_dir: Directory to search for ``.dftindex`` stores.
+                    Empty string (default) searches next to the trace file.
+                checkpoint_size: Checkpoint interval in bytes for index
+                    building (default 32 MB).
+                auto_build_index: If True, automatically build an index
+                    when none exists.
+                runtime: Runtime instance for thread pool control.
+                    If None, uses the default global Runtime.
+
+            Raises:
+                RuntimeError: If *file_path* does not exist or cannot be opened.
+            """
+            self._path = path
+            self._index_dir = index_dir
 
         def read_lines(
             self,
@@ -327,10 +540,12 @@ def _install_rtd_extension_stub() -> None:
             end_byte: int = 0,
             buffer_size: int = 4194304,
             query: str | None = None,
-        ) -> list[str]:
-            """Materialize decoded lines into a Python list.
+        ) -> list[memoryview]:
+            """Read lines from the trace file and return as a list.
 
-            Supports optional line/byte ranges and query-based filtering.
+            Lines are 1-indexed. Pass ``start_line=0, end_line=0`` (the
+            defaults) to read all lines. Out-of-range values are clamped
+            to the actual file bounds.
             """
             return []
 
@@ -342,12 +557,48 @@ def _install_rtd_extension_stub() -> None:
             end_byte: int = 0,
             buffer_size: int = 4194304,
             query: str | None = None,
-        ) -> Iterator[str]:
-            """Stream decoded lines from the trace.
+            memory_budget: int = 0,
+        ) -> Iterator[memoryview]:
+            """Return a streaming iterator over decoded lines.
 
-            The returned iterator yields one UTF-8 decoded line at a time.
+            The C++ coroutine runs on the Runtime thread pool and pushes
+            lines into a bounded queue; Python ``__next__`` pops from it.
             """
             return iter(())
+
+        def iter_json(
+            self,
+            start_line: int = 0,
+            end_line: int = 0,
+            start_byte: int = 0,
+            end_byte: int = 0,
+            buffer_size: int = 4194304,
+            query: str | None = None,
+            batch_size: int = 1024,
+            memory_budget: int = 0,
+        ) -> Iterator["JsonDictValue"]:
+            """Return a streaming iterator over parsed JSON events.
+
+            Each event is parsed once in C++ and yielded as a zero-copy
+            :class:`JsonDictValue` wrapper. No double-parsing overhead.
+            """
+            return iter(())
+
+        def read_json(
+            self,
+            start_line: int = 0,
+            end_line: int = 0,
+            start_byte: int = 0,
+            end_byte: int = 0,
+            buffer_size: int = 4194304,
+            query: str | None = None,
+            batch_size: int = 1024,
+        ) -> list["JsonDictValue"]:
+            """Read all events as parsed :class:`JsonDictValue` wrappers (list).
+
+            Equivalent to ``list(iter_json(...))``.
+            """
+            return []
 
         def iter_raw(
             self,
@@ -359,11 +610,12 @@ def _install_rtd_extension_stub() -> None:
             multi_line: bool = True,
             buffer_size: int = 4194304,
             query: str | None = None,
-        ) -> Iterator[bytes]:
-            """Stream raw byte chunks from the trace.
+            memory_budget: int = 0,
+        ) -> Iterator[memoryview]:
+            """Return a streaming iterator over raw byte chunks.
 
-            Byte-range reads can be aligned to line boundaries and can
-            optionally return multi-line chunks.
+            When ``query`` is set and an index exists, chunk-level pruning
+            skips non-matching chunks. No per-event filtering is applied.
             """
             return iter(())
 
@@ -377,32 +629,12 @@ def _install_rtd_extension_stub() -> None:
             multi_line: bool = True,
             buffer_size: int = 4194304,
             query: str | None = None,
-        ) -> list[bytes]:
-            """Materialize raw byte chunks into a Python list."""
-            return []
+        ) -> list[memoryview]:
+            """Read raw byte chunks and return as a list.
 
-        def iter_lines_json(
-            self,
-            start_line: int = 0,
-            end_line: int = 0,
-            start_byte: int = 0,
-            end_byte: int = 0,
-            buffer_size: int = 4194304,
-            query: str | None = None,
-        ) -> Iterator["JSON"]:
-            """Stream lazy :class:`JSON` objects for trace events."""
-            return iter(())
-
-        def read_lines_json(
-            self,
-            start_line: int = 0,
-            end_line: int = 0,
-            start_byte: int = 0,
-            end_byte: int = 0,
-            buffer_size: int = 4194304,
-            query: str | None = None,
-        ) -> list["JSON"]:
-            """Materialize trace events as lazy :class:`JSON` objects."""
+            When ``query`` is set and an index exists, chunk-level pruning
+            skips non-matching chunks. No per-event filtering is applied.
+            """
             return []
 
         def iter_arrow(
@@ -414,9 +646,44 @@ def _install_rtd_extension_stub() -> None:
             end_byte: int = 0,
             buffer_size: int = 4194304,
             query: str | None = None,
-        ) -> Iterator["ArrowBatch"]:
-            """Stream Arrow batches parsed from trace events."""
+            flatten_objects: bool = False,
+            normalize: bool = False,
+            memory_budget: int = 0,
+        ) -> Iterator["_ArrowBatchCapsule"]:
+            """Return iterator over Arrow record batches.
+
+            Each batch is an ``_ArrowBatchCapsule`` implementing the Arrow
+            PyCapsule protocol (``__arrow_c_array__``).  Wrap with
+            :class:`~dftracer.utils.arrow.ArrowBatch` for convenience
+            methods, or pass directly to ``pyarrow.record_batch()``.
+            """
             return iter(())
+
+        def iter_arrow_stream(
+            self,
+            batch_size: int = 10000,
+            start_line: int = 0,
+            end_line: int = 0,
+            start_byte: int = 0,
+            end_byte: int = 0,
+            buffer_size: int = 4194304,
+            query: str | None = None,
+            flatten_objects: bool = False,
+            normalize: bool = False,
+            memory_budget: int = 0,
+        ) -> "_ArrowBatchStream":
+            """Return an Arrow C Data Interface stream over record batches.
+
+            PyArrow can drain the producer channel in a single C-side call:
+
+                rbr = pa.RecordBatchReader.from_stream(reader.iter_arrow_stream())
+                for batch in rbr:
+                    ...
+
+            Equivalent data to :meth:`iter_arrow`, but without per-batch
+            Python <-> C transitions.
+            """
+            return _ArrowBatchStream()
 
         def read_arrow(
             self,
@@ -427,20 +694,144 @@ def _install_rtd_extension_stub() -> None:
             end_byte: int = 0,
             buffer_size: int = 4194304,
             query: str | None = None,
-        ) -> "ArrowTable | None":
-            """Materialize Arrow batches as a single table-like result."""
+            flatten_objects: bool = False,
+            normalize: bool = False,
+        ) -> object:
+            """Read all events as an ArrowTable.
+
+            Equivalent to collecting all batches from :meth:`iter_arrow`
+            into an :class:`~dftracer.utils.arrow.ArrowTable`.
+            """
             return None
 
         def get_max_bytes(self) -> int:
-            """Return indexed decompressed size when available."""
+            """Get the maximum byte position in the decompressed trace.
+
+            Returns the decompressed size for indexed files, file size for
+            plain text files, or 0 for compressed files without an index.
+            """
             return 0
 
         def get_num_lines(self) -> int:
-            """Return indexed line count when available."""
+            """Get the total number of lines in the trace.
+
+            Returns the line count for indexed files, or 0 for files
+            without an index (use :attr:`num_lines` property for fallback
+            counting).
+            """
             return 0
 
+        @property
+        def path(self) -> str:
+            """Path to the trace file or directory."""
+            return self._path
+
+        @property
+        def index_dir(self) -> str:
+            """Directory searched for `.dftindex` stores."""
+            return self._index_dir
+
+        @property
+        def has_index(self) -> bool:
+            """True if a checkpoint index was found at construction time."""
+            return False
+
+        @property
+        def num_lines(self) -> int:
+            """Total line count (reads all lines to compute if needed)."""
+            return 0
+
+        def write_arrow(
+            self,
+            path: str,
+            views: list[str | dict[str, object]] | None = None,
+            chunk_size_mb: int = 32,
+            compression: str = "zstd",
+            batch_size: int = 10000,
+        ) -> dict[str, object]:
+            """Write trace data to Arrow IPC files with optional view-based partitioning.
+
+            Args:
+                path: Output directory for Arrow IPC files.
+                views: List of view definitions. Each can be:
+                    - A string: predefined view name ('io', 'compute', 'dlio')
+                    - A dict with 'name' and optional 'query', 'include_metadata'
+                    If None, writes all events to 'all' partition.
+                chunk_size_mb: Maximum uncompressed size per file in MB.
+                compression: 'zstd' or 'none'.
+                batch_size: Events per Arrow batch.
+
+            Returns:
+                Dict with partitions, total_rows, total_bytes, chunks_scanned, chunks_skipped.
+            """
+            return {}
+
+        def get_view_chunks(
+            self,
+            view: str | dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            """Get candidate chunks for a view after bloom filter pruning.
+
+            Args:
+                view: View definition (string or dict with 'name' and optional 'query').
+
+            Returns:
+                Dict with chunks list, total_checkpoints, skipped_checkpoints, file_may_match.
+            """
+            return {}
+
+        def write_view_chunk(
+            self,
+            output_file: str,
+            checkpoint_idx: int,
+            start_byte: int,
+            end_byte: int,
+            view: str | dict[str, object] | None = None,
+            compression: str = "zstd",
+            batch_size: int = 10000,
+        ) -> dict[str, object]:
+            """Write a single chunk to an Arrow IPC file.
+
+            Args:
+                output_file: Path to output Arrow IPC file.
+                checkpoint_idx: Checkpoint index.
+                start_byte: Start byte offset.
+                end_byte: End byte offset.
+                view: View definition.
+                compression: 'zstd' or 'none'.
+                batch_size: Events per batch.
+
+            Returns:
+                Dict with output_file, events_matched, rows_written, bytes_written.
+            """
+            return {}
+
+        def write_view_chunks(
+            self,
+            chunks: list[dict[str, object]],
+            output_dir: str,
+            view: str | dict[str, object] | None = None,
+            compression: str = "zstd",
+            batch_size: int = 10000,
+        ) -> dict[str, object]:
+            """Write multiple chunks to Arrow IPC files in parallel.
+
+            All chunks are processed concurrently on the Runtime thread pool.
+
+            Args:
+                chunks: List of dicts with checkpoint_idx, start_byte, end_byte.
+                output_dir: Directory for output Arrow IPC files.
+                view: View definition.
+                compression: 'zstd' or 'none'.
+                batch_size: Events per batch.
+
+            Returns:
+                Dict with results list, total_rows, total_events_matched.
+            """
+            return {}
+
         def __enter__(self) -> "TraceReader":
-            """Enter the trace-reader context manager."""
+            """Enter the runtime context for the with statement."""
             return self
 
         def __exit__(
@@ -449,95 +840,11 @@ def _install_rtd_extension_stub() -> None:
             exc_val: BaseException | None,
             exc_tb: TracebackType | None,
         ) -> None:
-            """Exit the trace-reader context manager."""
+            """Exit the runtime context for the with statement."""
             return None
-
-    class AggregatorUtility(_BaseNative):
-        """Aggregate trace events into Arrow-ready time buckets."""
-
-        def __init__(self, runtime: Runtime | None = None) -> None:
-            """Create an aggregation utility bound to an optional runtime."""
-            self.runtime = runtime
-
-        def process(
-            self,
-            source_dir: str,
-            output_path: str = "",
-            time_interval_ms: float = 5000.0,
-            query: str = "",
-            index_dir: str = "",
-            force_rebuild: bool = False,
-            custom_metric_fields: list[str] | None = None,
-            compute_percentiles: bool = False,
-        ) -> "ArrowTable | None":
-            """Aggregate trace events into a materialized Arrow-style result."""
-            return None
-
-        def iter_arrow(
-            self,
-            source_dir: str,
-            output_path: str = "",
-            time_interval_ms: float = 5000.0,
-            query: str = "",
-            index_dir: str = "",
-            force_rebuild: bool = False,
-            custom_metric_fields: list[str] | None = None,
-            compute_percentiles: bool = False,
-        ) -> Iterator["ArrowBatch"]:
-            """Stream Arrow batches for aggregated trace metrics."""
-            return iter(())
-
-    class ComparatorUtility(_BaseNative):
-        """Compare baseline and variant traces."""
-
-        def __init__(self, runtime: Runtime | None = None) -> None:
-            """Create a comparator utility bound to an optional runtime."""
-            self.runtime = runtime
-
-        def compare(
-            self,
-            baseline: str,
-            variant: str,
-            query: str = "",
-            time_interval_ms: float = 5000.0,
-            threshold: float = 0.0,
-            index_dir: str = "",
-            force_rebuild: bool = False,
-        ) -> "ArrowTable | None":
-            """Return comparison results as Arrow-compatible output."""
-            return None
-
-        def compare_json(
-            self,
-            baseline: str,
-            variant: str,
-            query: str = "",
-            time_interval_ms: float = 5000.0,
-            threshold: float = 0.0,
-            index_dir: str = "",
-            force_rebuild: bool = False,
-        ) -> str:
-            """Return comparison results as JSON."""
-            return "{}"
-
-        def compare_table(
-            self,
-            baseline: str,
-            variant: str,
-            query: str = "",
-            time_interval_ms: float = 5000.0,
-            threshold: float = 0.0,
-            index_dir: str = "",
-            force_rebuild: bool = False,
-        ) -> str:
-            """Return comparison results as a formatted text table."""
-            return ""
 
     class StatisticsQueryUtility(_BaseNative):
-        """Query summary or top-N statistics from a trace."""
-
         def __init__(self, runtime: Runtime | None = None) -> None:
-            """Create a statistics-query utility bound to an optional runtime."""
             self.runtime = runtime
 
         def process(
@@ -546,94 +853,297 @@ def _install_rtd_extension_stub() -> None:
             query_type: str = "summary",
             top_n: int = 10,
             index_dir: str = "",
-            auto_build_index: bool = False,
-            index_threshold: int = 8388608,
         ) -> dict[str, object]:
-            """Return scalar statistics derived from the trace."""
+            return {}
+
+        def __call__(
+            self,
+            file_path: str,
+            query_type: str = "summary",
+            top_n: int = 10,
+            index_dir: str = "",
+        ) -> dict[str, object]:
             return {}
 
     class StatisticsAggregatorUtility(_BaseNative):
-        """Aggregate core statistics from a trace into a Python dictionary."""
-
         def __init__(self, runtime: Runtime | None = None) -> None:
-            """Create a statistics-aggregator utility bound to an optional runtime."""
             self.runtime = runtime
 
         def process(
             self,
             file_path: str,
             index_dir: str = "",
-            auto_build_index: bool = False,
-            index_threshold: int = 8388608,
         ) -> dict[str, object]:
-            """Return aggregate trace statistics."""
+            return {}
+
+        def __call__(
+            self,
+            file_path: str,
+            index_dir: str = "",
+        ) -> dict[str, object]:
             return {}
 
     class MetadataCollectorUtility(_BaseNative):
-        """Collect file metadata and index-aware trace metadata."""
-
         def __init__(self, runtime: Runtime | None = None) -> None:
-            """Create a metadata collector bound to an optional runtime."""
             self.runtime = runtime
 
         def process(
             self,
             file_path: str,
             index_dir: str = "",
-            checkpoint_size: int = 33554432,
-            force_rebuild: bool = False,
-            index_threshold: int = 8388608,
         ) -> dict[str, object]:
-            """Return metadata for a DFTracer trace file."""
+            return {}
+
+        def __call__(
+            self,
+            file_path: str,
+            index_dir: str = "",
+        ) -> dict[str, object]:
             return {}
 
     class ReorganizationPlannerUtility(_BaseNative):
-        """Build a semantic reorganization plan for trace files."""
-
         def __init__(self, runtime: Runtime | None = None) -> None:
-            """Create a reorganization planner bound to an optional runtime."""
             self.runtime = runtime
 
         def process(
             self,
             source_files: list[str],
-            groups: list[dict[str, object]],
+            groups: list[dict[str, str]] | None = None,
             index_dir: str = "",
-            checkpoint_size: int = 33554432,
-            force_rebuild: bool = False,
-            index_threshold: int = 8388608,
         ) -> dict[str, object]:
-            """Return a reorganization plan for the requested groups."""
+            return {}
+
+        def __call__(
+            self,
+            source_files: list[str],
+            groups: list[dict[str, str]] | None = None,
+            index_dir: str = "",
+        ) -> dict[str, object]:
             return {}
 
     class ReconstructionPlannerUtility(_BaseNative):
-        """Build a reconstruction plan from reorganized traces."""
-
         def __init__(self, runtime: Runtime | None = None) -> None:
-            """Create a reconstruction planner bound to an optional runtime."""
             self.runtime = runtime
 
         def process(
             self,
             reorganized_files: list[str],
-            provenance_dir: str = "",
+            index_dir: str = "",
         ) -> dict[str, object]:
-            """Return a reconstruction plan for reorganized trace files."""
             return {}
 
-    ext.Indexer = Indexer
-    ext.IndexerCheckpoint = IndexerCheckpoint
-    ext.JSON = JSON
-    ext.Runtime = Runtime
-    ext.TaskHandle = TaskHandle
-    ext.TraceReader = TraceReader
-    ext.AggregatorUtility = AggregatorUtility
-    ext.ComparatorUtility = ComparatorUtility
-    ext.MetadataCollectorUtility = MetadataCollectorUtility
-    ext.ReconstructionPlannerUtility = ReconstructionPlannerUtility
-    ext.ReorganizationPlannerUtility = ReorganizationPlannerUtility
-    ext.StatisticsAggregatorUtility = StatisticsAggregatorUtility
-    ext.StatisticsQueryUtility = StatisticsQueryUtility
+        def __call__(
+            self,
+            reorganized_files: list[str],
+            index_dir: str = "",
+        ) -> dict[str, object]:
+            return {}
+
+    class AggregatorUtility(_BaseNative):
+        def __init__(self, runtime: Runtime | None = None) -> None:
+            self.runtime = runtime
+
+        def process(
+            self,
+            directory: str,
+            time_interval_ms: float = 5000.0,
+            group_keys: list[str] | None = None,
+            categories: list[str] | None = None,
+            names: list[str] | None = None,
+            index_dir: str = "",
+            checkpoint_size: int = 33554432,
+            force_rebuild: bool = False,
+            chunk_size_mb: int = 64,
+            batch_size_mb: int = 4,
+            event_batch_size: int = 10000,
+            custom_metric_fields: list[str] | None = None,
+            compute_percentiles: bool = False,
+        ) -> object:
+            return None
+
+        def __call__(
+            self,
+            directory: str,
+            time_interval_ms: float = 5000.0,
+            group_keys: list[str] | None = None,
+            categories: list[str] | None = None,
+            names: list[str] | None = None,
+            index_dir: str = "",
+            checkpoint_size: int = 33554432,
+            force_rebuild: bool = False,
+            chunk_size_mb: int = 64,
+            batch_size_mb: int = 4,
+            event_batch_size: int = 10000,
+            custom_metric_fields: list[str] | None = None,
+            compute_percentiles: bool = False,
+        ) -> object:
+            return None
+
+        def iter_arrow(
+            self,
+            directory: str,
+            time_interval_ms: float = 5000.0,
+            group_keys: list[str] | None = None,
+            categories: list[str] | None = None,
+            names: list[str] | None = None,
+            index_dir: str = "",
+            checkpoint_size: int = 33554432,
+            force_rebuild: bool = False,
+            chunk_size_mb: int = 64,
+            batch_size_mb: int = 4,
+            event_batch_size: int = 10000,
+            custom_metric_fields: list[str] | None = None,
+            compute_percentiles: bool = False,
+        ) -> Iterator[object]:
+            return iter(())
+
+    class ComparatorUtility(_BaseNative):
+        def __init__(self, runtime: Runtime | None = None) -> None:
+            self.runtime = runtime
+
+        def compare(
+            self,
+            baseline: str,
+            variant: str,
+            query: str = "",
+            group_by: str = "",
+            format: str = "table",
+            time_interval_ms: float = 5000.0,
+            threshold: float = 0.0,
+            executor_threads: int = 0,
+            index_dir: str = "",
+            force_rebuild: bool = False,
+            config: str = "",
+        ) -> object:
+            return None
+
+        def __call__(
+            self,
+            baseline: str,
+            variant: str,
+            query: str = "",
+            group_by: str = "",
+            format: str = "table",
+            time_interval_ms: float = 5000.0,
+            threshold: float = 0.0,
+            executor_threads: int = 0,
+            index_dir: str = "",
+            force_rebuild: bool = False,
+            config: str = "",
+        ) -> object:
+            return None
+
+        def compare_json(
+            self,
+            baseline: str,
+            variant: str,
+            query: str = "",
+            group_by: str = "",
+            format: str = "table",
+            time_interval_ms: float = 5000.0,
+            threshold: float = 0.0,
+            executor_threads: int = 0,
+            index_dir: str = "",
+            force_rebuild: bool = False,
+            config: str = "",
+        ) -> str:
+            return "{}"
+
+        def compare_table(
+            self,
+            baseline: str,
+            variant: str,
+            query: str = "",
+            group_by: str = "",
+            format: str = "table",
+            time_interval_ms: float = 5000.0,
+            threshold: float = 0.0,
+            executor_threads: int = 0,
+            index_dir: str = "",
+            force_rebuild: bool = False,
+            config: str = "",
+        ) -> str:
+            return ""
+
+    class IndexDatabase(_BaseNative):
+        """Handle to a .dftindex RocksDB store.
+
+        Used by the distributed indexer coordinator to pre-register files,
+        reserve file_id ranges, bulk-ingest worker-produced SSTs, and rebuild
+        root summaries.
+        """
+
+        def __init__(self, index_path: str) -> None:
+            self._index_path = index_path
+
+        def init_schema(self) -> None:
+            return None
+
+        def register_files(self, paths: list[str], build_manifest: bool = False) -> list[int]:
+            """Register each path in the DEFAULT-CF file registry and return
+            the assigned file_ids (parallel to `paths`). Idempotent for files
+            with matching hash."""
+            return []
+
+        def reserve_file_id_range(self, count: int) -> int:
+            """Atomically reserve `count` contiguous file_ids; return first."""
+            return 0
+
+        def bulk_ingest(
+            self,
+            registry: "SstArtifactRegistry",
+            skip_cfs: object = None,
+        ) -> None:
+            """Ingest all SSTs collected in the registry.
+
+            skip_cfs is an optional iterable of CF names whose SSTs are left
+            outside the unified DB. Distributed builds pass
+            {"aggregation", "system_metrics"} to keep per-worker AGG/SYS SSTs
+            addressable via `agg_manifest.json` for parallel reads at analyze
+            time. See `dftracer.utils.dask.consolidate_index` to fold them
+            back into the unified DB later.
+            """
+            return None
+
+        def rebuild_root_summaries(self) -> None:
+            """Recompute ROOT_* summary column families from per-file CFs."""
+            return None
+
+        def write_agg_global_config(self, time_interval_us: int, config_hash: int = 0) -> None:
+            """Write the aggregation global-config marker into the AGGREGATION CF.
+
+            Required for `Indexer.iter_arrow_dfanalyzer_all` on distributed
+            builds (which never materialise the key via worker SSTs) and
+            post-consolidate indices.
+            """
+            return None
+
+        def write_agg_file_markers(self, file_ids: object) -> None:
+            """Write per-file aggregation completion markers into the AGGREGATION CF.
+
+            Each marker is ``\\xFF\\xFF + file_id_be32``. The index resolver uses
+            their presence to decide whether each file has aggregated data; if
+            missing, ``ensure_indexed()`` concludes the aggregation tier is
+            incomplete and re-runs the entire build. Distributed_index must
+            call this after ``bulk_ingest`` so subsequent ``read_trace`` calls
+            do not redundantly re-aggregate.
+            """
+            return None
+
+        def write_aggregation_tracker(self, blobs: list[bytes]) -> None:
+            """Merge serialized AssociationTracker blobs and write the result
+            to the AGGREGATION CF under the ``__tracker__`` key."""
+            return None
+
+    class SstArtifactRegistry(_BaseNative):
+        """Thread-safe collector for SST artifact paths produced by workers."""
+
+        def __init__(self) -> None:
+            pass
+
+        def append(self, artifacts_dict: dict[str, str | None]) -> None:
+            """Add a per-batch Artifacts dict as returned by `build_sst_batch`."""
+            return None
 
     def get_default_runtime() -> Runtime:
         """Return the process-wide default runtime."""
@@ -643,41 +1153,176 @@ def _install_rtd_extension_stub() -> None:
         """Replace or clear the process-wide default runtime."""
         return None
 
-    ext.get_default_runtime = get_default_runtime
-    ext.set_default_runtime = set_default_runtime
-    for name in [
+    def read_arrow_files_parallel(
+        paths: list[str],
+        runtime: Runtime | None = None,
+    ) -> dict[str, object]:
+        """Read multiple Arrow IPC files in parallel using the Runtime.
+
+        Args:
+            paths: List of file paths to read.
+            runtime: Optional Runtime object. Uses default if not provided.
+
+        Returns:
+            dict with:
+                - file_results: List of per-file results, each with:
+                    - path: File path
+                    - success: True if read succeeded
+                    - error: Error message if failed, else None
+                    - total_rows: Number of rows in file
+                    - batches: List of ArrowBatch objects
+                - total_rows: Total rows across all files
+                - total_batches: Total batches across all files
+                - files_read: Number of files read successfully
+                - files_failed: Number of files that failed
+        """
+        return {}
+
+    def build_sst_batch(
+        files: list[str],
+        file_ids: list[int],
+        staging_dir: str,
+        batch_id: str,
+        index_dir: str = "",
+        checkpoint_size: int = 33554432,
+        build_manifest: bool = False,
+        force_rebuild: bool = False,
+        bloom_dimensions: list[str] | None = None,
+        parallelism: int = 0,
+        flush_every_files: int = 0,
+        runtime: Runtime | object | None = None,
+        aggregation_config: object = None,
+        file_slices: object = None,
+    ) -> tuple[list[dict[str, str | None]], bytes]:
+        """Run the indexer pipeline with an SST sink. Returns
+        `(artifact_dicts, tracker_blob)`. `tracker_blob` is the serialized
+        merged AssociationTracker for the batch (empty bytes when
+        `aggregation_config` is None). `file_slices` enables intra-file
+        parallelism; entries are `None` (whole file) or
+        `(member_begin, member_end, checkpoint_idx_base,
+        skip_file_scoped_writes, members)`."""
+        return ([], b"")
+
+    def plan_lpt_partition(
+        entries: list[tuple[str, int]], num_workers: int
+    ) -> list[list[tuple[str, int]]]:
+        """Greedy LPT bin-packing of (path, size) tuples into num_workers
+        buckets, minimising the maximum per-worker total size."""
+        return []
+
+    def scan_files(
+        directory: str,
+        patterns: list[str] | None = None,
+        recursive: bool = False,
+        runtime: Runtime | object | None = None,
+    ) -> list[tuple[str, int]]:
+        """Parallel directory scan returning (path, size) tuples for regular
+        files matching the patterns."""
+        return []
+
+    def enable_aggregation_deterministic_ids() -> None:
+        """Flip the global aggregation StringIntern into deterministic-id mode
+        so the same string maps to the same 32-bit id in every worker process."""
+        return None
+
+    def move_artifacts(
+        artifacts: dict[str, str | None], dest_dir: str
+    ) -> dict[str, str | None]:
+        """Move every populated SST in `artifacts` into `dest_dir` via the
+        C++ rename/copy helper, returning a fresh dict with the new paths."""
+        return {}
+
+    def enumerate_gzip_members(
+        files: list[str],
+        runtime: Runtime | object | None = None,
+    ) -> list[list[tuple[int, int]]]:
+        """Cooperative async scan of gzip member offsets. Returns lists of
+        `(c_offset, c_size)` parallel to `files`; empty for non-gzip files."""
+        return []
+
+    def plan_work_units(
+        member_map: list[list[tuple[int, int]]],
+        num_workers: int,
+        target_c_size: int = 0,
+    ) -> list[list[tuple[int, int, int, int]]]:
+        """Deterministic LPT assignment of intra-file gzip-member slices across
+        workers. Returns per-worker lists of
+        `(file_idx, member_begin, member_end, c_size)`."""
+        return []
+
+    def scan_aggregation_manifest(
+        agg_ssts: list[str],
+        sys_ssts: list[str],
+        scratch_dir: str,
+        meta_index_path: str,
+        batch_size: int = 10000,
+        time_granularity: float = 1.0,
+        time_resolution: float = 1e6,
+        query: str | None = None,
+        group_by: list[str] | None = None,
+        shard_begin: int = 0,
+        shard_end: int = 4096,
+        runtime: Runtime | object | None = None,
+        file_hashes: dict[str, str] | None = None,
+        host_hashes: dict[str, str] | None = None,
+    ) -> dict[str, list["_ArrowBatchCapsule"]]:
+        """Scan a worker's slice of the distributed aggregation manifest.
+
+        Ingests `agg_ssts` + `sys_ssts` into a scratch IndexDatabase at
+        `scratch_dir` (caller owns the directory lifecycle) and runs the
+        dfanalyzer aggregation scan over `[shard_begin, shard_end)`.
+        `meta_index_path` is the unified .dftindex used to resolve file /
+        host hashes.
+
+        Returns the same dict shape as `Indexer.iter_arrow_dfanalyzer_all`:
+        `{"events": [...], "profiles": [...], "system": [...]}`.
+        """
+        return {"events": [], "profiles": [], "system": []}
+
+    _class_symbols = [
+        "_ArrowBatchCapsule",
+        "_ArrowBatchStream",
         "AggregatorUtility",
+        "CheckpointIndexer",
         "ComparatorUtility",
+        "IndexDatabase",
         "Indexer",
         "IndexerCheckpoint",
-        "JSON",
+        "JsonDictValue",
         "MetadataCollectorUtility",
         "ReconstructionPlannerUtility",
         "ReorganizationPlannerUtility",
         "Runtime",
+        "SstArtifactRegistry",
         "StatisticsAggregatorUtility",
         "StatisticsQueryUtility",
         "TaskHandle",
         "TraceReader",
-    ]:
-        getattr(ext, name).__module__ = ext_name
-    ext.__all__ = [
-        "AggregatorUtility",
-        "ComparatorUtility",
-        "Indexer",
-        "IndexerCheckpoint",
-        "JSON",
-        "MetadataCollectorUtility",
-        "ReconstructionPlannerUtility",
-        "ReorganizationPlannerUtility",
-        "Runtime",
-        "StatisticsAggregatorUtility",
-        "StatisticsQueryUtility",
-        "TaskHandle",
-        "TraceReader",
+    ]
+    _function_symbols = [
+        "build_sst_batch",
+        "enable_aggregation_deterministic_ids",
+        "enumerate_gzip_members",
         "get_default_runtime",
+        "move_artifacts",
+        "plan_lpt_partition",
+        "plan_work_units",
+        "read_arrow_files_parallel",
+        "scan_aggregation_manifest",
+        "scan_files",
         "set_default_runtime",
     ]
+
+    _local = locals()
+    for _name in _class_symbols + _function_symbols:
+        setattr(ext, _name, _local[_name])
+
+    for _name in _class_symbols:
+        getattr(ext, _name).__module__ = ext_name
+    for _name in _function_symbols:
+        getattr(ext, _name).__module__ = ext_name
+
+    ext.__all__ = sorted(_class_symbols + _function_symbols)
     sys.modules[ext_name] = ext
 
 

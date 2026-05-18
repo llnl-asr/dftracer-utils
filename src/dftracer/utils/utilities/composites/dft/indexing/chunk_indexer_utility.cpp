@@ -1,19 +1,17 @@
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/utilities/common/json/json_value.h>
-#include <dftracer/utils/utilities/composites/dft/event.h>
+#include <dftracer/utils/utilities/common/json/json_doc_guard.h>
+#include <dftracer/utils/utilities/common/json/parser.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
-#include <yyjson.h>
 
 #include <cstring>
 #include <map>
 #include <string_view>
 
-// Import JsonValue from common json namespace
-using dftracer::utils::utilities::common::json::JsonValue;
-using dftracer::utils::utilities::composites::dft::DFTracerEvent;
+using dftracer::utils::utilities::common::json::JsonParser;
+using dftracer::utils::utilities::common::json::ondemand_value_to_string;
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
@@ -29,23 +27,6 @@ static const std::string DIM_NAME = "name";
 static const std::string DIM_CAT = "cat";
 static const std::string DIM_PID = "pid";
 static const std::string DIM_TID = "tid";
-
-// Convert a JsonValue to string for bloom filter insertion.
-// Handles strings, integers, floats, bools.
-std::string json_value_to_string(const JsonValue& val) {
-    if (val.is_string()) {
-        return val.get<std::string>();
-    } else if (val.is_uint()) {
-        return std::to_string(val.get<std::uint64_t>());
-    } else if (val.is_int()) {
-        return std::to_string(val.get<std::int64_t>());
-    } else if (val.is_number()) {
-        return std::to_string(val.get<double>());
-    } else if (val.is_bool()) {
-        return val.get<bool>() ? "true" : "false";
-    }
-    return {};
-}
 
 // Build set of dimensions to index based on config
 std::vector<std::string> get_target_dimensions(
@@ -206,6 +187,19 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
         event_lines;
     std::map<std::string, std::vector<std::uint32_t>> metadata_lines;
 
+    // On-Demand parser for lazy field access - only parses what we use
+    JsonParser parser;
+
+    // Pre-check which bloom filters we need
+    const bool need_name = output.bloom_filters.count(DIM_NAME) > 0;
+    const bool need_cat = output.bloom_filters.count(DIM_CAT) > 0;
+    const bool need_pid = output.bloom_filters.count(DIM_PID) > 0;
+    const bool need_tid = output.bloom_filters.count(DIM_TID) > 0;
+    const bool need_hhash = output.bloom_filters.count(DIM_HHASH) > 0;
+    const bool need_fhash = output.bloom_filters.count(DIM_FHASH) > 0;
+    const bool need_shash = output.bloom_filters.count(DIM_SHASH) > 0;
+    const bool has_extra_dims = !input.config.extra_dimensions.empty();
+
     while (!stream->done()) {
         auto chunk = co_await stream->read_async();
 
@@ -229,153 +223,209 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
             std::size_t line_len = newline - line_start;
 
             if (line_len > 0) {
-                yyjson_read_flag flg = YYJSON_READ_NOFLAG;
-                yyjson_doc* doc =
-                    yyjson_read_opts(const_cast<char*>(line_start), line_len,
-                                     flg, nullptr, nullptr);
+                std::string_view line_sv(line_start, line_len);
+                if (!parser.parse(line_sv)) {
+                    pos = (newline - data) + 1;
+                    line_number++;
+                    continue;
+                }
 
-                if (doc) {
-                    yyjson_val* root = yyjson_doc_get_root(doc);
-                    if (root && yyjson_is_obj(root)) {
-                        JsonValue json(root);
-                        DFTracerEvent ev;
-                        if (!DFTracerEvent::parse(json, ev)) {
-                            yyjson_doc_free(doc);
-                            pos = (newline - data) + 1;
-                            line_number++;
-                            continue;
+                // Extract ph first to determine event type
+                auto ph = parser.get_string("ph");
+                if (!ph) {
+                    pos = (newline - data) + 1;
+                    line_number++;
+                    continue;
+                }
+
+                bool is_metadata = (*ph == "M");
+
+                if (is_metadata) {
+                    // Metadata event: extract name and args in single pass
+                    // Re-parse to get fresh document state
+                    parser.parse(line_sv);
+
+                    std::string event_name;
+                    std::string hash_val;
+                    std::string resolved;
+
+                    parser.for_each_field([&](std::string_view key,
+                                              simdjson::ondemand::value val) {
+                        if (key == "name") {
+                            auto s = val.get_string();
+                            if (!s.error()) event_name = std::string(s.value());
+                        } else if (key == "args") {
+                            auto obj = val.get_object();
+                            if (!obj.error()) {
+                                for (auto field : obj.value()) {
+                                    if (field.error()) continue;
+                                    auto fkey = field.unescaped_key();
+                                    if (fkey.error()) continue;
+                                    auto fval = field.value();
+                                    if (fval.error()) continue;
+
+                                    if (fkey.value() == "value") {
+                                        auto s = fval.value().get_string();
+                                        if (!s.error())
+                                            hash_val = std::string(s.value());
+                                    } else if (fkey.value() == "name") {
+                                        auto s = fval.value().get_string();
+                                        if (!s.error())
+                                            resolved = std::string(s.value());
+                                    }
+                                }
+                            }
                         }
+                    });
 
-                        if (ev.is_metadata()) {
-                            // Metadata event: collect hash resolutions
-                            if (ev.args.exists()) {
-                                std::string hash_val =
-                                    ev.args["value"].get<std::string>();
-                                std::string resolved =
-                                    ev.args["name"].get<std::string>();
+                    if (!hash_val.empty() && !resolved.empty()) {
+                        if (event_name == "HH") {
+                            output.hash_resolutions[DIM_HHASH][hash_val] =
+                                resolved;
+                        } else if (event_name == "FH") {
+                            output.hash_resolutions[DIM_FHASH][hash_val] =
+                                resolved;
+                        } else if (event_name == "SH") {
+                            output.hash_resolutions[DIM_SHASH][hash_val] =
+                                resolved;
+                        }
+                    }
 
-                                if (!hash_val.empty() && !resolved.empty()) {
-                                    if (ev.name == "HH") {
-                                        output.hash_resolutions[DIM_HHASH]
-                                                               [hash_val] =
-                                            resolved;
-                                    } else if (ev.name == "FH") {
-                                        output.hash_resolutions[DIM_FHASH]
-                                                               [hash_val] =
-                                            resolved;
-                                    } else if (ev.name == "SH") {
-                                        output.hash_resolutions[DIM_SHASH]
-                                                               [hash_val] =
-                                            resolved;
-                                    }
+                    if (collect_manifest) {
+                        metadata_lines[event_name].push_back(line_number);
+                    }
+                } else {
+                    // Regular event: re-parse for fresh state and extract
+                    // fields
+                    parser.parse(line_sv);
+                    auto name_opt = parser.get_string("name");
+                    std::string_view name = name_opt.value_or("");
+                    auto cat_opt = parser.get_string("cat");
+                    std::string_view cat = cat_opt.value_or("");
+
+                    auto pid = parser.get_uint64("pid").value_or(0);
+                    auto tid = parser.get_uint64("tid").value_or(0);
+                    auto ts = parser.get_uint64("ts").value_or(0);
+                    auto dur = parser.get_uint64("dur").value_or(0);
+
+                    // Update statistics
+                    output.statistics.update_from_event(name, cat, pid, tid, ts,
+                                                        dur);
+
+                    // Add to bloom filters
+                    if (need_name && !name.empty()) {
+                        output.bloom_filters[DIM_NAME].add(name);
+                    }
+
+                    if (need_cat && !cat.empty()) {
+                        output.bloom_filters[DIM_CAT].add(cat);
+                    }
+
+                    if (need_pid) {
+                        char pid_buf[32];
+                        int n =
+                            std::snprintf(pid_buf, sizeof(pid_buf), "%llu",
+                                          static_cast<unsigned long long>(pid));
+                        output.bloom_filters[DIM_PID].add(
+                            std::string_view(pid_buf, n));
+                    }
+
+                    if (need_tid) {
+                        char tid_buf[32];
+                        int n =
+                            std::snprintf(tid_buf, sizeof(tid_buf), "%llu",
+                                          static_cast<unsigned long long>(tid));
+                        output.bloom_filters[DIM_TID].add(
+                            std::string_view(tid_buf, n));
+                    }
+
+                    // Process args for hash dimensions and extra dimensions
+                    if (need_hhash || need_fhash || need_shash ||
+                        has_extra_dims) {
+                        parser.for_each_field("args", [&](std::string_view key,
+                                                          simdjson::ondemand::
+                                                              value val) {
+                            if (need_hhash && key == "hhash") {
+                                auto s = val.get_string();
+                                if (!s.error() && !s.value().empty()) {
+                                    output.bloom_filters[DIM_HHASH].add(
+                                        s.value());
                                 }
-                            }
-                            if (collect_manifest) {
-                                std::string meta_type(ev.name);
-                                metadata_lines[meta_type].push_back(
-                                    line_number);
-                            }
-                        } else {
-                            // Regular event: index into bloom filters + stats
-
-                            // Update statistics (always update for accuracy)
-                            output.statistics.update_from_event(
-                                ev.name, ev.cat, ev.pid, ev.tid, ev.ts, ev.dur);
-
-                            // Add to bloom filters for missing dimensions only
-                            auto it = output.bloom_filters.find(DIM_NAME);
-                            if (it != output.bloom_filters.end() &&
-                                !ev.name.empty()) {
-                                it->second.add(ev.name);
-                            }
-
-                            it = output.bloom_filters.find(DIM_CAT);
-                            if (it != output.bloom_filters.end() &&
-                                !ev.cat.empty()) {
-                                it->second.add(ev.cat);
-                            }
-
-                            it = output.bloom_filters.find(DIM_PID);
-                            if (it != output.bloom_filters.end()) {
-                                char pid_buf[32];
-                                int n = std::snprintf(
-                                    pid_buf, sizeof(pid_buf), "%llu",
-                                    static_cast<unsigned long long>(ev.pid));
-                                it->second.add(std::string_view(pid_buf, n));
-                            }
-
-                            it = output.bloom_filters.find(DIM_TID);
-                            if (it != output.bloom_filters.end()) {
-                                char tid_buf[32];
-                                int n = std::snprintf(
-                                    tid_buf, sizeof(tid_buf), "%llu",
-                                    static_cast<unsigned long long>(ev.tid));
-                                it->second.add(std::string_view(tid_buf, n));
-                            }
-
-                            if (ev.args.exists()) {
-                                // Hash dimensions: add hash to bloom
-                                it = output.bloom_filters.find(DIM_HHASH);
-                                if (it != output.bloom_filters.end()) {
-                                    std::string_view hhash =
-                                        ev.args["hhash"]
-                                            .get<std::string_view>();
-                                    if (!hhash.empty()) {
-                                        it->second.add(hhash);
-                                    }
+                            } else if (need_fhash && key == "fhash") {
+                                auto s = val.get_string();
+                                if (!s.error() && !s.value().empty()) {
+                                    output.bloom_filters[DIM_FHASH].add(
+                                        s.value());
                                 }
-
-                                it = output.bloom_filters.find(DIM_FHASH);
-                                if (it != output.bloom_filters.end()) {
-                                    std::string_view fhash =
-                                        ev.args["fhash"]
-                                            .get<std::string_view>();
-                                    if (!fhash.empty()) {
-                                        it->second.add(fhash);
-                                    }
+                            } else if (need_shash && (key == "cmd_hash" ||
+                                                      key == "exec_hash")) {
+                                auto s = val.get_string();
+                                if (!s.error() && !s.value().empty()) {
+                                    output.bloom_filters[DIM_SHASH].add(
+                                        s.value());
                                 }
-
-                                it = output.bloom_filters.find(DIM_SHASH);
-                                if (it != output.bloom_filters.end()) {
-                                    // shash can be under cmd_hash or exec_hash
-                                    std::string_view shash =
-                                        ev.args["cmd_hash"]
-                                            .get<std::string_view>();
-                                    if (shash.empty()) {
-                                        shash = ev.args["exec_hash"]
-                                                    .get<std::string_view>();
-                                    }
-                                    if (!shash.empty()) {
-                                        it->second.add(shash);
-                                    }
-                                }
-
-                                // Extra dimensions: arbitrary nested dot-paths
+                            } else if (has_extra_dims) {
+                                // Check if this key matches any extra dimension
                                 for (const auto& dim :
                                      input.config.extra_dimensions) {
-                                    it = output.bloom_filters.find(dim);
-                                    if (it != output.bloom_filters.end()) {
-                                        JsonValue val = ev.args.at(dim.c_str());
-                                        if (val.exists()) {
-                                            std::string str_val =
-                                                json_value_to_string(val);
-                                            if (!str_val.empty()) {
-                                                it->second.add(str_val);
+                                    // Check for exact match (flat key)
+                                    if (key == dim) {
+                                        std::string str_val =
+                                            ondemand_value_to_string(val);
+                                        if (!str_val.empty()) {
+                                            output.bloom_filters[dim].add(
+                                                str_val);
+                                        }
+                                        break;
+                                    }
+                                    // Check for nested key (e.g., "io.size")
+                                    auto dot_pos = dim.find('.');
+                                    if (dot_pos != std::string::npos) {
+                                        std::string_view prefix(dim.data(),
+                                                                dot_pos);
+                                        if (key == prefix) {
+                                            // Navigate into nested object
+                                            std::string_view suffix(
+                                                dim.data() + dot_pos + 1,
+                                                dim.size() - dot_pos - 1);
+                                            auto obj = val.get_object();
+                                            if (!obj.error()) {
+                                                for (auto field : obj.value()) {
+                                                    if (field.error()) continue;
+                                                    auto fkey =
+                                                        field.unescaped_key();
+                                                    if (fkey.error()) continue;
+                                                    if (fkey.value() ==
+                                                        suffix) {
+                                                        auto fval =
+                                                            field.value();
+                                                        if (fval.error())
+                                                            continue;
+                                                        std::string str_val =
+                                                            ondemand_value_to_string(
+                                                                fval.value());
+                                                        if (!str_val.empty()) {
+                                                            output
+                                                                .bloom_filters
+                                                                    [dim]
+                                                                .add(str_val);
+                                                        }
+                                                        break;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-
-                            if (collect_manifest) {
-                                event_lines[{std::string(ev.cat),
-                                             std::string(ev.name)}]
-                                    .push_back(line_number);
-                            }
-                            output.events_processed++;
-                        }
+                        });
                     }
-                    yyjson_doc_free(doc);
+
+                    if (collect_manifest) {
+                        event_lines[{std::string(cat), std::string(name)}]
+                            .push_back(line_number);
+                    }
+                    output.events_processed++;
                 }
             }
 

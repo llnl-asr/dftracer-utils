@@ -248,6 +248,68 @@ Read lines from ``.gz`` files without building an index, using streaming decompr
        process(*line);
    }
 
+Parallel Writers
+----------------
+
+Layout-aware parallel writers for multi-worker output. The ``ParallelWriter``
+interface is implemented by three concrete layouts under
+``fileio/parallel/``:
+
+- **StripedWriter** — single output file, atomic-offset ``pwrite`` per
+  worker. Used on local FS and PFS without padded stripes.
+- **PaddedStripedWriter** — single output file where each worker chunk is
+  padded to a full PFS stripe so per-stripe writes never cross workers.
+  Recommended for Lustre/GPFS when the stripe size is at least
+  ``MIN_PADDED_STRIPE_BYTES`` (1 MiB).
+- **ShardedWriter** — N output files, one per worker, glob-named by
+  ordinal. Used on NFS where atomic-offset ``pwrite`` is not reliable.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
+    #include <dftracer/utils/utilities/fileio/parallel/layout.h>
+
+    using namespace dftracer::utils::utilities::fileio::parallel;
+
+    auto info   = detect_layout("/lustre/.../output.pfw.gz");
+    auto sizing = compute_writer_sizing(info, /*baseline_workers=*/64,
+                                        /*default_flush=*/4 << 20,
+                                        /*headroom=*/1 << 20,
+                                        /*padded=*/true);
+
+    WriterConfig cfg{
+        .layout = info.layout,
+        .stripe_size = info.stripe_size,
+        .gzip = true,
+    };
+    auto writer = make_writer(cfg);
+    co_await writer->open("output.pfw.gz", sizing.num_workers,
+                          /*gzip_extension=*/true, scope);
+
+    co_await writer->write_header(header_bytes);
+    co_await writer->write_chunk(worker_id, chunk_bytes);
+    auto member = writer->last_member(worker_id);  // offset+length of the gzip member
+    co_await writer->write_footer(footer_bytes);
+    co_await writer->close();
+
+The writer collects per-chunk ``MemberSpan`` entries (offset + length of
+each independently decompressable gzip member) and exposes them via
+``member_layout()`` after close. ``shard_base_offsets()`` remaps shard-local
+offsets to merged-file offsets for sharded layouts.
+
+Layout detection (``detect_layout``) classifies a path's filesystem as
+Lustre, GPFS, BeeGFS, NFS, or LOCAL and picks ``SHARDED`` on NFS,
+``STRIPED`` elsewhere; ``compute_writer_sizing`` caps worker count at the
+PFS stripe count and sets ``flush_threshold`` to the stripe size for
+padded layouts so each compressed flush coalesces into one stripe.
+
+.. note::
+
+    Compressor generators consumed by the parallel writer are wrapped in
+    smart pointers (``std::unique_ptr<ManualStreamingCompressorUtility>``)
+    so they can be moved across coroutine frames without leaking the
+    underlying zlib stream.
+
 Async vs Synchronous
 --------------------
 

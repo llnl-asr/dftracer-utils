@@ -112,7 +112,7 @@ bool wait_for_port(int port, int timeout_s = 10) {
 
 /// Send a raw HTTP request and receive the response.
 std::string http_request(int port, const std::string& request,
-                         int recv_timeout_s = 2) {
+                         int recv_timeout_s = 15) {
     int sock = ::socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) return "";
 

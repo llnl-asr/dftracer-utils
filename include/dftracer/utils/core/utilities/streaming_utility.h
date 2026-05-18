@@ -2,7 +2,9 @@
 #define DFTRACER_UTILS_CORE_UTILITIES_STREAMING_UTILITY_H
 
 #include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/core/utilities/tags/needs_context.h>
 #include <dftracer/utils/core/utilities/utility.h>
+#include <dftracer/utils/core/utilities/utility_traits.h>
 
 namespace dftracer::utils::utilities {
 
@@ -46,6 +48,25 @@ class StreamingUtility : public UtilityBase<I, Tags...> {
     static constexpr std::string_view get_name() { return sig_; }
 
     virtual coro::AsyncGenerator<Batch> process(const I& input) = 0;
+
+    /// Bind context for streaming utilities with NeedsContext tag.
+    /// Unlike Utility::process which is wrapped by CoroScope::spawn,
+    /// streaming utilities need explicit context binding since their
+    /// AsyncGenerator cannot be spawned directly.
+    void bind_context(CoroScope& ctx) {
+        static_assert(
+            has_tag_v<tags::NeedsContext, StreamingUtility<I, Batch, Tags...>>,
+            "bind_context requires NeedsContext tag");
+        this->set_context(ctx);
+    }
+
+    /// Unbind context after streaming completes.
+    void unbind_context() {
+        static_assert(
+            has_tag_v<tags::NeedsContext, StreamingUtility<I, Batch, Tags...>>,
+            "unbind_context requires NeedsContext tag");
+        this->clear_context();
+    }
 };
 
 }  // namespace dftracer::utils::utilities

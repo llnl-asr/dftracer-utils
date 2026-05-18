@@ -1,9 +1,9 @@
 #include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/rocksdb/db_manager.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
@@ -14,15 +14,17 @@
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
-#include <argparse/argparse.hpp>
 #include <cstdint>
 #include <cstdio>
 #include <random>
 #include <string>
 #include <vector>
+
+#include "common_cli.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
@@ -30,19 +32,23 @@ using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 namespace compression = dftracer::utils::utilities::compression;
 namespace util_io = dftracer::utils::utilities::fileio;
-using dftracer::utils::utilities::indexer::IndexBuildConfig;
-using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
 // ---------------------------------------------------------------------------
-// TraceWriter – compresses via ManualStreamingCompressorUtility and writes
+// TraceWriter - compresses via ManualStreamingCompressorUtility and writes
 //               via StreamingFileWriterUtility.  Natural deflate blocks
 //               provide block boundaries for the gzip indexer.
 // ---------------------------------------------------------------------------
 class TraceWriter {
    public:
-    explicit TraceWriter(const std::string& path) : writer_(path) {}
+    explicit TraceWriter(const std::string& path,
+                         std::size_t flush_threshold = 4 * 1024 * 1024)
+        : writer_(path), flush_threshold_(flush_threshold) {
+        buf_.reserve(flush_threshold * 2);
+    }
 
     ~TraceWriter() { close(); }
 
@@ -50,16 +56,26 @@ class TraceWriter {
     TraceWriter& operator=(const TraceWriter&) = delete;
 
     void write(const std::string& s) {
-        [this, &s]() -> coro::CoroTask<void> {
-            auto gen = compressor_.compress(ByteView(s));
+        buf_ += s;
+        if (buf_.size() >= flush_threshold_) {
+            flush();
+        }
+    }
+
+    void flush() {
+        if (buf_.empty()) return;
+        [this]() -> coro::CoroTask<void> {
+            auto gen = compressor_.compress(ByteView(buf_));
             while (auto chunk = co_await gen.next()) {
                 co_await writer_.process(*chunk);
             }
         }()
-                            .get();
+                        .get();
+        buf_.clear();
     }
 
     void close() {
+        flush();
         [this]() -> coro::CoroTask<void> {
             auto gen = compressor_.finalize_stream();
             while (auto chunk = co_await gen.next()) {
@@ -73,6 +89,8 @@ class TraceWriter {
    private:
     compression::zlib::ManualStreamingCompressorUtility compressor_;
     util_io::StreamingFileWriterUtility writer_;
+    std::string buf_;
+    std::size_t flush_threshold_;
 };
 
 // ---------------------------------------------------------------------------
@@ -216,7 +234,7 @@ struct QuerySpec {
 };
 
 static coro::CoroTask<int> run_verify(
-    const std::vector<std::string>& file_paths,
+    CoroScope& scope, const std::vector<std::string>& file_paths,
     const std::vector<QuerySpec>& queries, std::size_t ckpt_size) {
     // Extra dimensions: arbitrary dot-paths into args
     std::vector<std::string> extra_dims = {"ret", "count", "offset", "epoch",
@@ -237,17 +255,33 @@ static coro::CoroTask<int> run_verify(
     std::printf("Verify: building bloom indices\n");
     std::printf("==========================================\n");
 
+    // Batch-build gzip indexes for all files
+    {
+        std::vector<std::string> abs_paths;
+        abs_paths.reserve(file_paths.size());
+        for (const auto& fp : file_paths) {
+            abs_paths.push_back(fs::absolute(fp).string());
+        }
+
+        auto index_path = internal::determine_index_path(abs_paths.front(), "");
+        dftracer::utils::rocksdb::RocksDBManager::instance().reset(index_path);
+
+        auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+        batch_config->file_paths = std::move(abs_paths);
+        batch_config->checkpoint_size = ckpt_size;
+        batch_config->parallelism = file_paths.size();
+        batch_config->use_batch_write = true;
+        batch_config->rebuild_root_summaries = true;
+
+        co_await IndexBatchBuilderUtility::process(&scope,
+                                                   std::move(batch_config));
+    }
+
     for (const auto& file_path : file_paths) {
         std::string abs_path = fs::absolute(file_path).string();
-
-        // 1. Build gzip index
         std::string index_path = internal::determine_index_path(abs_path, "");
-        auto idx_input = IndexBuildConfig::for_file(abs_path)
-                             .with_checkpoint_size(ckpt_size)
-                             .with_force_rebuild(true);
-        co_await IndexBuilderUtility{}.process(idx_input);
 
-        // 2. Collect metadata
+        // Collect metadata
         auto meta_input = MetadataCollectorUtilityInput::from_file(abs_path)
                               .with_checkpoint_size(ckpt_size)
                               .with_force_rebuild(false)
@@ -265,16 +299,16 @@ static coro::CoroTask<int> run_verify(
             std::string idx_path_bidx =
                 internal::determine_index_path(abs_path, "");
             IndexDatabase idx_db(idx_path_bidx);
-            idx_db.init_base_schema();
-            idx_db.init_bloom_schema();
+            auto writer = idx_db.begin_write();
+            writer->init_schema();
 
             std::uint64_t file_hash_val = 0;
             if (fs::exists(abs_path)) {
                 file_hash_val =
                     static_cast<std::uint64_t>(fs::file_size(abs_path));
             }
-            int fid = idx_db.get_or_create_file_info(get_logical_path(abs_path),
-                                                     file_hash_val);
+            int fid = writer->get_or_create_file_info(
+                get_logical_path(abs_path), file_hash_val);
 
             std::size_t file_size = metadata.uncompressed_size;
             std::size_t num_ckpts = metadata.num_checkpoints;
@@ -299,7 +333,6 @@ static coro::CoroTask<int> run_verify(
                 }
             }
 
-            idx_db.begin_transaction();
             std::unordered_map<std::string, BloomFilter> file_blooms;
             HashResolutions all_hr;
             std::size_t total_events = 0;
@@ -320,7 +353,7 @@ static coro::CoroTask<int> run_verify(
 
                 for (auto& [dim, bloom] : output.bloom_filters) {
                     auto blob = bloom.serialize();
-                    idx_db.insert_chunk_bloom_filter(
+                    writer->insert_chunk_bloom_filter(
                         fid, output.checkpoint_idx, dim, blob.data(),
                         static_cast<int>(blob.size()), bloom.num_entries());
 
@@ -332,8 +365,8 @@ static coro::CoroTask<int> run_verify(
                     }
                 }
 
-                idx_db.insert_chunk_statistics(fid, output.checkpoint_idx,
-                                               output.statistics);
+                writer->insert_chunk_statistics(fid, output.checkpoint_idx,
+                                                output.statistics);
 
                 for (auto& [dim, resolutions] : output.hash_resolutions) {
                     for (auto& [h, resolved] : resolutions) {
@@ -344,20 +377,14 @@ static coro::CoroTask<int> run_verify(
 
             for (auto& [dim, bloom] : file_blooms) {
                 auto blob = bloom.serialize();
-                idx_db.insert_file_bloom_filter(fid, dim, blob.data(),
-                                                static_cast<int>(blob.size()),
-                                                bloom.num_entries());
-            }
-            for (const auto& [dim, resolutions] : all_hr) {
-                for (const auto& [h, resolved] : resolutions) {
-                    idx_db.insert_hash_resolution(fid, dim, h, resolved);
-                }
+                writer->insert_file_bloom_filter(fid, dim, blob.data(),
+                                                 static_cast<int>(blob.size()),
+                                                 bloom.num_entries());
             }
             for (const auto& dim : all_dimensions) {
-                idx_db.insert_index_dimension(fid, dim);
+                writer->insert_index_dimension(fid, dim);
             }
-
-            idx_db.commit_transaction();
+            writer->commit();
 
             std::string basename = fs::path(abs_path).filename().string();
             std::printf("  %s: indexed (%zu events, %zu chunks)\n",
@@ -435,6 +462,117 @@ static coro::CoroTask<int> run_verify(
     co_return 0;
 }
 
+class GenFakeTraceArgParse : public cli::ArgParse {
+   public:
+    cli::PipelineArgs pipeline;
+
+    std::string output_dir;
+    int num_ranks = 8;
+    int num_hosts = 4;
+    int num_epochs = 500;
+    int steps_per_epoch = 1000;
+    int checkpoint_every = 5;
+    int validation_every = 2;
+    int num_train_files = 8;
+    int num_val_files = 2;
+    int step_dur_ms = 100;
+    std::uint64_t base_seed = 42;
+    bool verify = false;
+    std::size_t checkpoint_size = 2 * 1024 * 1024;
+
+    explicit GenFakeTraceArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        schema(pipeline);
+    }
+
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("-o", "--output-dir")
+            .help("Output directory for trace files")
+            .required();
+        parser()
+            .add_argument("-p", "--num-processes")
+            .help("Number of ranks")
+            .scan<'d', int>()
+            .default_value(8);
+        parser()
+            .add_argument("-H", "--num-hosts")
+            .help("Number of hosts")
+            .scan<'d', int>()
+            .default_value(4);
+        parser()
+            .add_argument("-e", "--num-epochs")
+            .help("Training epochs")
+            .scan<'d', int>()
+            .default_value(500);
+        parser()
+            .add_argument("-s", "--steps-per-epoch")
+            .help("Steps per epoch")
+            .scan<'d', int>()
+            .default_value(1000);
+        parser()
+            .add_argument("--checkpoint-every")
+            .help("Checkpoint every N epochs")
+            .scan<'d', int>()
+            .default_value(5);
+        parser()
+            .add_argument("--validation-every")
+            .help("Validate every N epochs")
+            .scan<'d', int>()
+            .default_value(2);
+        parser()
+            .add_argument("--num-train-files")
+            .help("Training data shards")
+            .scan<'d', int>()
+            .default_value(8);
+        parser()
+            .add_argument("--num-val-files")
+            .help("Validation data shards")
+            .scan<'d', int>()
+            .default_value(2);
+        parser()
+            .add_argument("--step-duration-ms")
+            .help("Base step duration in milliseconds")
+            .scan<'d', int>()
+            .default_value(100);
+        parser()
+            .add_argument("--seed")
+            .help("Random seed for duration jitter")
+            .scan<'d', std::uint64_t>()
+            .default_value(static_cast<std::uint64_t>(42));
+        parser()
+            .add_argument("--verify")
+            .help(
+                "After generation, build bloom indices and run queries to "
+                "verify chunk-skipping works")
+            .flag();
+        parser()
+            .add_argument("--checkpoint-size")
+            .help(
+                "Gzip checkpoint size in bytes for indexing (default: 2 MB). "
+                "Smaller values produce more chunks and better demonstrate "
+                "chunk-level bloom filter skipping.")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(2 * 1024 * 1024));
+    }
+
+    void post_parse() override {
+        output_dir = parser().get<std::string>("--output-dir");
+        num_ranks = parser().get<int>("--num-processes");
+        num_hosts = parser().get<int>("--num-hosts");
+        num_epochs = parser().get<int>("--num-epochs");
+        steps_per_epoch = parser().get<int>("--steps-per-epoch");
+        checkpoint_every = parser().get<int>("--checkpoint-every");
+        validation_every = parser().get<int>("--validation-every");
+        num_train_files = parser().get<int>("--num-train-files");
+        num_val_files = parser().get<int>("--num-val-files");
+        step_dur_ms = parser().get<int>("--step-duration-ms");
+        base_seed = parser().get<std::uint64_t>("--seed");
+        verify = parser().get<bool>("--verify");
+        checkpoint_size = parser().get<std::size_t>("--checkpoint-size");
+    }
+};
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -448,96 +586,23 @@ int main(int argc, char** argv) {
         "Produces per-rank .pfw.gz files with known patterns "
         "suitable for testing bloom-filter indexing.");
 
-    program.add_argument("-o", "--output-dir")
-        .help("Output directory for trace files")
-        .required();
+    GenFakeTraceArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
 
-    program.add_argument("-p", "--num-processes")
-        .help("Number of ranks")
-        .scan<'d', int>()
-        .default_value(8);
-
-    program.add_argument("-H", "--num-hosts")
-        .help("Number of hosts")
-        .scan<'d', int>()
-        .default_value(4);
-
-    program.add_argument("-e", "--num-epochs")
-        .help("Training epochs")
-        .scan<'d', int>()
-        .default_value(500);
-
-    program.add_argument("-s", "--steps-per-epoch")
-        .help("Steps per epoch")
-        .scan<'d', int>()
-        .default_value(1000);
-
-    program.add_argument("--checkpoint-every")
-        .help("Checkpoint every N epochs")
-        .scan<'d', int>()
-        .default_value(5);
-
-    program.add_argument("--validation-every")
-        .help("Validate every N epochs")
-        .scan<'d', int>()
-        .default_value(2);
-
-    program.add_argument("--num-train-files")
-        .help("Training data shards")
-        .scan<'d', int>()
-        .default_value(8);
-
-    program.add_argument("--num-val-files")
-        .help("Validation data shards")
-        .scan<'d', int>()
-        .default_value(2);
-
-    program.add_argument("--step-duration-ms")
-        .help("Base step duration in milliseconds")
-        .scan<'d', int>()
-        .default_value(100);
-
-    program.add_argument("--seed")
-        .help("Random seed for duration jitter")
-        .scan<'d', std::uint64_t>()
-        .default_value(static_cast<std::uint64_t>(42));
-
-    program.add_argument("--verify")
-        .help(
-            "After generation, build bloom indices and run queries to "
-            "verify chunk-skipping works")
-        .flag();
-
-    program.add_argument("--checkpoint-size")
-        .help(
-            "Gzip checkpoint size in bytes for indexing (default: 2 MB). "
-            "Smaller values produce more chunks and better demonstrate "
-            "chunk-level bloom filter skipping.")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(2 * 1024 * 1024));
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        std::fprintf(stderr, "Error: %s\n", err.what());
-        std::fprintf(stderr, "%s\n", program.help().str().c_str());
-        return 1;
-    }
-
-    const std::string output_dir = program.get<std::string>("--output-dir");
-    const int num_ranks = program.get<int>("--num-processes");
-    const int num_hosts = program.get<int>("--num-hosts");
-    const int num_epochs = program.get<int>("--num-epochs");
-    const int steps_per_epoch = program.get<int>("--steps-per-epoch");
-    const int checkpoint_every = program.get<int>("--checkpoint-every");
-    const int validation_every = program.get<int>("--validation-every");
-    const int num_train_files = program.get<int>("--num-train-files");
-    const int num_val_files = program.get<int>("--num-val-files");
-    const int step_dur_ms = program.get<int>("--step-duration-ms");
-    const std::uint64_t base_seed = program.get<std::uint64_t>("--seed");
-    const bool verify = program.get<bool>("--verify");
-    const std::size_t checkpoint_size =
-        program.get<std::size_t>("--checkpoint-size");
+    const auto& output_dir = cli.output_dir;
+    const int num_ranks = cli.num_ranks;
+    const int num_hosts = cli.num_hosts;
+    const int num_epochs = cli.num_epochs;
+    const int steps_per_epoch = cli.steps_per_epoch;
+    const int checkpoint_every = cli.checkpoint_every;
+    const int validation_every = cli.validation_every;
+    const int num_train_files = cli.num_train_files;
+    const int num_val_files = cli.num_val_files;
+    const int step_dur_ms = cli.step_dur_ms;
+    const std::uint64_t base_seed = cli.base_seed;
+    const bool verify = cli.verify;
+    const std::size_t checkpoint_size = cli.checkpoint_size;
 
     // Convert base step duration to microseconds
     const std::uint64_t step_dur_us =
@@ -607,8 +672,8 @@ int main(int argc, char** argv) {
     // -----------------------------------------------------------------------
     // Generate one file per rank (parallel via pipeline)
     // -----------------------------------------------------------------------
-    auto pipeline_config = PipelineConfig::default_config().with_name(
-        "DFTracer Fake Trace Generator");
+    auto pipeline_config = cli::build_pipeline_config(
+        "DFTracer Fake Trace Generator", cli.pipeline);
     Pipeline pipeline(pipeline_config);
 
     auto* generated_files_ptr = &generated_files;
@@ -632,10 +697,11 @@ int main(int argc, char** argv) {
              host_hashes_ptr, host_names_ptr, train_file_names_ptr,
              train_file_hashes_ptr, val_file_names_ptr, val_file_hashes_ptr,
              ckpt_file_name_ptr, ckref_ptr, script_name_ptr, sref_ptr,
-             rank_event_counts_ptr]([[maybe_unused]] CoroScope& ctx)
-                -> coro::CoroTask<std::size_t> {
+             rank_event_counts_ptr](
+                [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
                 const std::string& path = (*generated_files_ptr)[rank];
                 TraceWriter writer(path);
+                writer.write("[\n");
                 const std::string& sref = *sref_ptr;
                 const std::string& ckref = *ckref_ptr;
 
@@ -1058,60 +1124,70 @@ int main(int argc, char** argv) {
                     }
                 }
 
+                writer.write("]\n");
                 writer.close();
                 (*rank_event_counts_ptr)[rank] = rank_events;
-                co_return rank_events;
+                co_return;
             },
             "Rank-" + std::to_string(rank));
         rank_tasks.push_back(task);
     }
 
-    pipeline.set_source(rank_tasks);
-    pipeline.execute();
+    // Summary task (prints results after generation)
+    auto* rank_event_counts_for_summary = &rank_event_counts;
+    auto* generated_files_for_summary = &generated_files;
+    auto summary_task = make_task(
+        [num_ranks, checkpoint_every, validation_every,
+         rank_event_counts_for_summary, generated_files_for_summary,
+         val_file_hashes, train_file_hashes, host_hashes,
+         host_names]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+            std::size_t total_events = 0;
+            for (int rank = 0; rank < num_ranks; ++rank) {
+                std::printf("  rank %d: %zu events -> %s\n", rank,
+                            (*rank_event_counts_for_summary)[rank],
+                            (*generated_files_for_summary)[rank].c_str());
+                total_events += (*rank_event_counts_for_summary)[rank];
+            }
 
-    std::size_t total_events = 0;
-    for (int rank = 0; rank < num_ranks; ++rank) {
-        std::printf("  rank %d: %zu events -> %s\n", rank,
-                    rank_event_counts[rank], generated_files[rank].c_str());
-        total_events += rank_event_counts[rank];
+            std::printf("\n==========================================\n");
+            std::printf("Generation complete\n");
+            std::printf("==========================================\n");
+            std::printf("  Total events: %zu\n", total_events);
+            std::printf("  Total files:  %d\n", num_ranks);
+            std::printf("\nInteresting queries for bloom filter testing:\n");
+            std::printf(
+                "  1. name=pwrite                   (checkpoint I/O, ~%d%% of "
+                "epochs)\n",
+                checkpoint_every > 0 ? 100 / checkpoint_every : 0);
+            std::printf("  2. fhash=%s  (validation data, ~%d%% of epochs)\n",
+                        val_file_hashes[0].c_str(),
+                        validation_every > 0 ? 100 / validation_every : 0);
+            if (!train_file_hashes.empty()) {
+                std::printf("  3. fhash=%s  (rank-specific train shard)\n",
+                            train_file_hashes[0].c_str());
+            }
+            std::printf("  4. hhash=%s  (host-specific, %s)\n",
+                        host_hashes[0].c_str(), host_names[0].c_str());
+            std::printf(
+                "  5. name=allreduce                (every step, dense)\n");
+            std::printf(
+                "  6. name=fsync                    (checkpoint only, "
+                "sparse)\n");
+            std::printf("==========================================\n");
+            co_return;
+        },
+        "Summary");
+
+    for (const auto& rt : rank_tasks) {
+        summary_task->depends_on(rt);
     }
 
-    // -----------------------------------------------------------------------
-    // Summary banner
-    // -----------------------------------------------------------------------
-    std::printf("\n==========================================\n");
-    std::printf("Generation complete\n");
-    std::printf("==========================================\n");
-    std::printf("  Total events: %zu\n", total_events);
-    std::printf("  Total files:  %d\n", num_ranks);
-    std::printf("\nInteresting queries for bloom filter testing:\n");
-    std::printf(
-        "  1. name=pwrite                   (checkpoint I/O, ~%d%% of "
-        "epochs)\n",
-        checkpoint_every > 0 ? 100 / checkpoint_every : 0);
-    std::printf("  2. fhash=%s  (validation data, ~%d%% of epochs)\n",
-                val_file_hashes[0].c_str(),
-                validation_every > 0 ? 100 / validation_every : 0);
-    if (!train_file_hashes.empty()) {
-        std::printf("  3. fhash=%s  (rank-specific train shard)\n",
-                    train_file_hashes[0].c_str());
-    }
-    std::printf("  4. hhash=%s  (host-specific, %s)\n", host_hashes[0].c_str(),
-                host_names[0].c_str());
-    std::printf("  5. name=allreduce                (every step, dense)\n");
-    std::printf(
-        "  6. name=fsync                    (checkpoint only, sparse)\n");
-    std::printf("==========================================\n");
+    std::shared_ptr<Task> final_task = summary_task;
+    std::shared_ptr<Task> verify_task;
 
-    // -----------------------------------------------------------------------
-    // Verify mode: build bloom indices and run queries
-    // -----------------------------------------------------------------------
     if (verify) {
         std::vector<QuerySpec> test_queries;
 
-        // --- Single-dimension queries ---
-
-        // name dimension
         test_queries.push_back(
             {"name=pwrite (sparse, ckpt only)", {{"name", {"pwrite"}}}});
         test_queries.push_back(
@@ -1120,24 +1196,19 @@ int main(int argc, char** argv) {
             {"name=fsync (sparse, ckpt only)", {{"name", {"fsync"}}}});
         test_queries.push_back(
             {"name=val_forward (periodic)", {{"name", {"val_forward"}}}});
-
-        // cat dimension
         test_queries.push_back(
             {"cat=POSIX (all I/O events)", {{"cat", {"POSIX"}}}});
         test_queries.push_back(
             {"cat=APP (all compute events)", {{"cat", {"APP"}}}});
 
-        // pid dimension (rank-specific)
         std::string pid0 = std::to_string(1000);
         test_queries.push_back(
             {"pid=" + pid0 + " (rank 0 only)", {{"pid", {pid0}}}});
 
-        // tid dimension (io thread vs main thread)
         std::string tid_io_0 = std::to_string(10001);
         test_queries.push_back(
             {"tid=" + tid_io_0 + " (rank 0 io thread)", {{"tid", {tid_io_0}}}});
 
-        // fhash dimension (resolved file names)
         test_queries.push_back({"fhash=" + val_file_names[0] + " (resolved)",
                                 {{"fhash", {val_file_hashes[0]}}}});
         if (!train_file_hashes.empty()) {
@@ -1147,36 +1218,22 @@ int main(int argc, char** argv) {
         }
         test_queries.push_back(
             {"fhash=ckpt (resolved)", {{"fhash", {ckpt_file_hash}}}});
-
-        // hhash dimension (host-specific)
         test_queries.push_back({"hhash=" + host_names[0] + " (resolved)",
                                 {{"hhash", {host_hashes[0]}}}});
-
-        // sref dimension (script hash)
         test_queries.push_back(
             {"shash=train_unet3d (resolved)", {{"shash", {script_hash}}}});
 
-        // --- Multi-dimension AND queries ---
-
-        // name AND cat (checkpoint writes that are POSIX I/O)
         test_queries.push_back({"name=pwrite AND cat=POSIX",
                                 {{"name", {"pwrite"}}, {"cat", {"POSIX"}}}});
-
-        // name AND fhash (fsync on checkpoint file only)
         test_queries.push_back(
             {"name=fsync AND fhash=ckpt",
              {{"name", {"fsync"}}, {"fhash", {ckpt_file_hash}}}});
-
-        // cat AND hhash (POSIX I/O on node-0)
         test_queries.push_back(
             {"cat=POSIX AND hhash=" + host_names[0],
              {{"cat", {"POSIX"}}, {"hhash", {host_hashes[0]}}}});
-
-        // cat AND pid (APP events for rank 0)
         test_queries.push_back(
             {"cat=APP AND pid=" + pid0, {{"cat", {"APP"}}, {"pid", {pid0}}}});
 
-        // name AND hhash AND fhash (read on node-0 for train shard 0)
         if (!train_file_hashes.empty()) {
             test_queries.push_back(
                 {"name=read AND hhash=" + host_names[0] + " AND fhash=shard_0",
@@ -1185,23 +1242,15 @@ int main(int argc, char** argv) {
                   {"fhash", {train_file_hashes[0]}}}});
         }
 
-        // --- OR-within dimension queries ---
-
-        // name = pwrite OR write (all checkpoint write ops)
         test_queries.push_back({"name=pwrite|write (ckpt writes)",
                                 {{"name", {"pwrite", "write"}}}});
-
-        // name = open OR close (all open/close ops)
         test_queries.push_back({"name=open|close (all open/close)",
                                 {{"name", {"open", "close"}}}});
-
-        // fhash = any val file (all validation I/O)
         test_queries.push_back(
             {"fhash=any val file (OR)",
              {{"fhash", std::vector<std::string>(val_file_hashes.begin(),
                                                  val_file_hashes.end())}}});
 
-        // --- Negative tests ---
         test_queries.push_back(
             {"name=NONEXISTENT (expect 0)", {{"name", {"NONEXISTENT"}}}});
         test_queries.push_back(
@@ -1209,7 +1258,25 @@ int main(int argc, char** argv) {
         test_queries.push_back({"name=pwrite AND cat=APP (impossible)",
                                 {{"name", {"pwrite"}}, {"cat", {"APP"}}}});
 
-        return run_verify(generated_files, test_queries, checkpoint_size).get();
+        auto* gf_ptr = &generated_files;
+        verify_task = make_task(
+            [gf_ptr, test_queries = std::move(test_queries),
+             checkpoint_size](CoroScope& ctx) -> coro::CoroTask<int> {
+                co_return co_await run_verify(ctx, *gf_ptr, test_queries,
+                                              checkpoint_size);
+            },
+            "Verify");
+
+        verify_task->depends_on(summary_task);
+        final_task = verify_task;
+    }
+
+    pipeline.set_source(rank_tasks);
+    pipeline.set_destination(final_task);
+    pipeline.execute();
+
+    if (verify && verify_task) {
+        return verify_task->get<int>();
     }
 
     return 0;

@@ -109,7 +109,7 @@ coro::CoroTask<AssociationResolverOutput> AssociationResolverUtility::process(
 
 void AssociationResolverUtility::compute_trace_metadata(
     const AssociationTracker& tracker,
-    const EventAggregatorUtilityOutput& /*aggregations*/,
+    const EventAggregatorOutput& /*aggregations*/,
     AssociationResolverOutput& output) {
     const auto& intervals = tracker.get_all_intervals();
 

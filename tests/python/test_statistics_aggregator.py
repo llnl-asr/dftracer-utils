@@ -1,8 +1,6 @@
 """Tests for StatisticsAggregatorUtility."""
 
-import sys
-
-import dftracer.utils as dft_utils
+from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 from dftracer.utils.dftracer_utils_ext import StatisticsAggregatorUtility
 
 from .common import Environment
@@ -10,7 +8,6 @@ from .common import Environment
 # Threshold large enough to guarantee bloom/manifest are skipped for any
 # test fixture, making WithoutIndex tests deterministic regardless of
 # fixture size.
-_SKIP_INDEX_THRESHOLD = sys.maxsize
 
 
 class TestStatisticsAggregatorUtility:
@@ -18,9 +15,7 @@ class TestStatisticsAggregatorUtility:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             result = StatisticsAggregatorUtility().process(gz_file)
             assert isinstance(result, dict)
@@ -31,9 +26,7 @@ class TestStatisticsAggregatorUtility:
         with Environment(lines=30) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             result = StatisticsAggregatorUtility().process(gz_file)
             assert result["success"] is True
@@ -43,9 +36,7 @@ class TestStatisticsAggregatorUtility:
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             result = StatisticsAggregatorUtility().process(gz_file)
             assert "num_categories" in result
@@ -58,9 +49,7 @@ class TestStatisticsAggregatorUtility:
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             util = StatisticsAggregatorUtility()
             result = util(gz_file)
@@ -76,11 +65,10 @@ class TestStatisticsAggregatorWithoutIndex:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
+            with NativeIndexer(
                 gz_file,
                 index_path,
-                build_bloom=True,
-                index_threshold=_SKIP_INDEX_THRESHOLD,
+                build_bloom=False,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_bloom
@@ -95,11 +83,10 @@ class TestStatisticsAggregatorWithoutIndex:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
+            with NativeIndexer(
                 gz_file,
                 index_path,
-                build_bloom=True,
-                index_threshold=_SKIP_INDEX_THRESHOLD,
+                build_bloom=False,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_bloom
@@ -112,11 +99,10 @@ class TestStatisticsAggregatorWithoutIndex:
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
+            with NativeIndexer(
                 gz_file,
                 index_path,
-                build_bloom=True,
-                index_threshold=_SKIP_INDEX_THRESHOLD,
+                build_bloom=False,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_bloom

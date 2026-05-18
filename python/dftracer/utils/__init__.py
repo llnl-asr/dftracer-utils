@@ -1,11 +1,11 @@
 from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
+from .arrow import read_arrow, write_arrow  # noqa: F401
 from .dftracer_utils_ext import (
-    JSON,  # noqa: F401
-    Indexer,  # noqa: F401
+    CheckpointIndexer,  # noqa: F401
     IndexerCheckpoint,  # noqa: F401
-    TraceReader,  # noqa: F401
+    JsonDictValue,  # noqa: F401
 )
 from .dftracer_utils_ext import (
     get_default_runtime as _get_default_native_runtime,
@@ -13,8 +13,14 @@ from .dftracer_utils_ext import (
 from .dftracer_utils_ext import (
     set_default_runtime as _set_default_native_runtime,
 )
+from .indexer import (  # noqa: F401
+    AggregationConfig,
+    Indexer,
+    IndexStatus,
+)
 from .query import Expr, Field  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
+from .trace_reader import TraceReader  # noqa: F401
 
 _default_wrapper: Optional["Runtime"] = None
 
@@ -46,13 +52,19 @@ except PackageNotFoundError:
 
 
 __all__ = [
+    "AggregationConfig",
+    "CheckpointIndexer",
     "Expr",
     "Field",
     "Indexer",
     "IndexerCheckpoint",
+    "IndexStatus",
+    "JsonDictValue",
     "TraceReader",
     "Runtime",
     "TaskHandle",
     "get_default_runtime",
+    "read_arrow",
     "set_default_runtime",
+    "write_arrow",
 ]

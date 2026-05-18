@@ -19,8 +19,6 @@ static constexpr std::size_t INFLATE_BUFFER_SIZE = 262144;  // 256KB
 #endif
 static constexpr std::uint64_t DEFAULT_CHECKPOINT_SIZE =
     32 * 1024 * 1024;  // 32MB
-static constexpr std::size_t DEFAULT_INDEX_SIZE_THRESHOLD =
-    1 * 1024 * 1024;   // 1MB
 extern const char* const& SQL_SCHEMA;
 inline const char* EXTENSION = ".dftindex";
 }  // namespace indexer
@@ -41,7 +39,6 @@ static constexpr std::size_t FILE_IO_BUFFER_SIZE =
 #define DFTRACER_UTILS_ZLIB_WINDOW_SIZE 32768
 #define DFTRACER_UTILS_ZLIB_GZIP_WINDOW_BITS 31
 #define DFTRACER_UTILS_DEFAULT_CHECKPOINT_SIZE (32 * 1024 * 1024)
-#define DFTRACER_UTILS_DEFAULT_INDEX_SIZE_THRESHOLD (1 * 1024 * 1024)
 #define DFTRACER_UTILS_DEFAULT_BUFFER_SIZE 65536
 #define DFTRACER_UTILS_SKIP_BUFFER_SIZE 131072
 #define DFTRACER_UTILS_FILE_IO_BUFFER_SIZE 262144

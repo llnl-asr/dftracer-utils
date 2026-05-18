@@ -1,9 +1,13 @@
 #include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/generator.h>
+#include <dftracer/utils/core/coro/yield.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
 #include <fcntl.h>
+
+#include <memory>
 
 namespace dftracer::utils::utilities::fileio {
 
@@ -77,6 +81,13 @@ coro::CoroTask<void> ChunkWriter::write_line(ByteView line) {
         chunk_index_++;
         co_await open_next_chunk();
     }
+
+    // Yield every 256 events to prevent stack overflow from synchronous
+    // coroutine completion chains. This is internal to ChunkWriter so
+    // callers don't need to manage yielding.
+    if ((total_events_ & 0xff) == 0) {
+        co_await coro::yield();
+    }
 }
 
 coro::CoroTask<void> ChunkWriter::write_bytes(ByteView data) {
@@ -93,11 +104,17 @@ coro::CoroTask<void> ChunkWriter::flush_buffer() {
     if (write_buffer_.empty()) co_return;
 
     if (compressor_) {
-        auto gen = compressor_->compress(
-            ByteView(write_buffer_.data(), write_buffer_.size()));
-        while (auto chunk = co_await gen.next()) {
-            co_await io::write(fd_, chunk->as<char>(), chunk->size());
-            total_bytes_ += chunk->size();
+        using GenType = coro::AsyncGenerator<ByteView>;
+        auto gen = std::make_unique<GenType>(compressor_->compress(
+            ByteView(write_buffer_.data(), write_buffer_.size())));
+        while (true) {
+            auto chunk = co_await gen->next();
+            if (!chunk) break;
+            const char* data = chunk->as<char>();
+            std::size_t size = chunk->size();
+            chunk.reset();
+            co_await io::write(fd_, data, size);
+            total_bytes_ += size;
         }
     } else {
         co_await io::write(fd_, write_buffer_.data(), write_buffer_.size());
@@ -108,10 +125,17 @@ coro::CoroTask<void> ChunkWriter::flush_buffer() {
 
 coro::CoroTask<void> ChunkWriter::flush_raw(const char* data, std::size_t len) {
     if (compressor_) {
-        auto gen = compressor_->compress(ByteView(data, len));
-        while (auto chunk = co_await gen.next()) {
-            co_await io::write(fd_, chunk->as<char>(), chunk->size());
-            total_bytes_ += chunk->size();
+        using GenType = coro::AsyncGenerator<ByteView>;
+        auto gen = std::make_unique<GenType>(
+            compressor_->compress(ByteView(data, len)));
+        while (true) {
+            auto chunk = co_await gen->next();
+            if (!chunk) break;
+            const char* cdata = chunk->as<char>();
+            std::size_t csize = chunk->size();
+            chunk.reset();
+            co_await io::write(fd_, cdata, csize);
+            total_bytes_ += csize;
         }
     } else {
         co_await io::write(fd_, data, len);
@@ -131,10 +155,16 @@ coro::CoroTask<void> ChunkWriter::finalize_current_chunk() {
     }
 
     if (compressor_) {
-        auto fin = compressor_->finalize_stream();
-        while (auto chunk = co_await fin.next()) {
-            co_await io::write(fd_, chunk->as<char>(), chunk->size());
-            total_bytes_ += chunk->size();
+        using GenType = coro::AsyncGenerator<ByteView>;
+        auto fin = std::make_unique<GenType>(compressor_->finalize_stream());
+        while (true) {
+            auto chunk = co_await fin->next();
+            if (!chunk) break;
+            const char* data = chunk->as<char>();
+            std::size_t size = chunk->size();
+            chunk.reset();
+            co_await io::write(fd_, data, size);
+            total_bytes_ += size;
         }
         compressor_.reset();
     }
@@ -142,12 +172,18 @@ coro::CoroTask<void> ChunkWriter::finalize_current_chunk() {
     co_await io::close(fd_);
     fd_ = -1;
 
+    auto path = chunk_path(chunk_index_);
     chunks_.push_back(ChunkInfo{
-        .path = chunk_path(chunk_index_),
+        .path = path,
         .bytes_written = current_chunk_bytes_,
         .events_written = current_chunk_events_,
         .chunk_index = chunk_index_,
     });
+
+    if (config_.on_chunk_complete) {
+        config_.on_chunk_complete(static_cast<std::size_t>(chunk_index_), path,
+                                  current_chunk_events_, current_chunk_bytes_);
+    }
 }
 
 coro::CoroTask<void> ChunkWriter::close() {

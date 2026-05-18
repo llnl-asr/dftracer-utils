@@ -5,7 +5,6 @@
 #include <dftracer/utils/core/tasks/task.h>
 
 #include <any>
-#include <sstream>
 
 namespace dftracer::utils {
 
@@ -20,7 +19,6 @@ Pipeline::Pipeline(const PipelineConfig& config)
     exec_cfg.io_pool_size = config.io_thread_count;
     exec_cfg.io_backend_type = config.io_backend_type;
     exec_cfg.io_batch_threshold = config.io_batch_threshold;
-    exec_cfg.db_pool_size = config.db_pool_size;
 
     std::unique_ptr<Watchdog> watchdog;
     if (config.enable_watchdog) {

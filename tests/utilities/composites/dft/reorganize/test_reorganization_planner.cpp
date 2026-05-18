@@ -27,6 +27,27 @@ using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::ProvenanceDatabase;
 namespace tags = dftracer::utils::utilities::tags;
 
+static ExtractionPlan run_planner(const ReorganizationPlannerInput& input) {
+    Runtime rt(4);
+    ExtractionPlan result;
+    auto* result_ptr = &result;
+
+    auto task = run_coro_scope(
+        rt.executor(),
+        [input, result_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            auto planner = std::make_shared<ReorganizationPlannerUtility>();
+            UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
+                            tags::NeedsContext>
+                exec(planner, BehaviorChain<ReorganizationPlannerInput,
+                                            ExtractionPlan>{});
+            *result_ptr = co_await exec.execute_with_context(scope, input);
+        });
+
+    rt.submit(std::move(task), "run_planner").wait();
+    rt.shutdown();
+    return result;
+}
+
 // Create a test trace with known events:
 // Line 0: HH metadata
 // Line 1: FH metadata
@@ -77,8 +98,7 @@ static void build_idx(const std::string& trace_file,
                                             indexer::IndexBuildResult>{});
             auto config = IndexBuildConfig::for_file(trace_file)
                               .with_index_dir(index_dir)
-                              .with_manifest(true)
-                              .with_index_threshold(0);
+                              .with_manifest(true);
             *result_ptr = co_await exec.execute_with_context(scope, config);
         });
 
@@ -133,13 +153,12 @@ TEST_SUITE("ReorganizationPlanner") {
         std::string trace_file = create_planner_test_trace(test_dir);
         build_idx(trace_file, test_dir);
 
-        ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput input;
         input.source_files = {trace_file};
         input.groups = {{"io", R"(cat == "POSIX")"}};
         input.index_dir = test_dir;
 
-        auto plan = planner.process(input).get();
+        auto plan = run_planner(input);
 
         // Should have 2 groups: "io" + auto-created "remainder"
         CHECK(plan.groups.size() == 2);
@@ -197,14 +216,13 @@ TEST_SUITE("ReorganizationPlanner") {
         std::string trace_file = create_planner_test_trace(test_dir);
         build_idx(trace_file, test_dir);
 
-        ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput input;
         input.source_files = {trace_file};
         input.groups = {{"io", R"(cat == "POSIX")"},
                         {"compute", R"(cat == "APP")"}};
         input.index_dir = test_dir;
 
-        auto plan = planner.process(input).get();
+        auto plan = run_planner(input);
 
         CHECK(plan.groups.size() == 3);
 
@@ -235,14 +253,13 @@ TEST_SUITE("ReorganizationPlanner") {
         std::string trace_file = create_planner_test_trace(test_dir);
         build_idx(trace_file, test_dir);
 
-        ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput input;
         input.source_files = {trace_file};
         input.groups = {{"io", R"(cat == "POSIX")"},
                         {"compute", R"(cat == "APP")"}};
         input.index_dir = test_dir;
 
-        auto plan = planner.process(input).get();
+        auto plan = run_planner(input);
 
         for (const auto& t : plan.tasks) {
             if (t.target_group == "remainder") {
@@ -271,16 +288,12 @@ TEST_SUITE("ReorganizationPlanner") {
         pdb.init_schema();
         int fid = pdb.get_or_create_file_info("test.pfw.gz", 0);
 
-        pdb.begin_transaction();
-
         pdb.insert_info(fid, "version", "1.0");
         pdb.insert_info(fid, "created_at", "2026-02-17");
         pdb.insert_source(fid, 0, "/data/trace.pfw.gz", 9, "abc123");
         pdb.insert_group(fid, "io", R"(cat == "POSIX")");
-        pdb.insert_segment(fid, 0, 0, 0, 100, 50);
-        pdb.insert_segment(fid, 0, 1, 100, 200, 45);
-
-        pdb.commit_transaction();
+        pdb.insert_segment(fid, 0, 0, 0, 0, 100, 50);
+        pdb.insert_segment(fid, 0, 1, 0, 100, 200, 45);
 
         CHECK(pdb.query_info(fid, "version") == "1.0");
         CHECK(pdb.query_info(fid, "created_at") == "2026-02-17");

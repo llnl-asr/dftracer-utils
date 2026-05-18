@@ -7,9 +7,9 @@
 namespace dftracer::utils::utilities::common::json {
 
 JsonValue JsonValue::at(const char* path) const {
-    if (!val_ || !path) return JsonValue(nullptr);
+    if (!valid_ || !path) return JsonValue();
 
-    JsonValue current(val_);
+    JsonValue current = *this;
     const char* start = path;
 
     while (*start) {
@@ -22,18 +22,11 @@ JsonValue JsonValue::at(const char* path) const {
             continue;
         }
 
-        char key_buf[256];
-        if (key_len >= sizeof(key_buf)) {
-            std::string key_str(start, key_len);
-            current = current[key_str.c_str()];
-        } else {
-            std::memcpy(key_buf, start, key_len);
-            key_buf[key_len] = '\0';
-            current = current[key_buf];
-        }
+        std::string_view key_sv(start, key_len);
+        current = current[key_sv];
 
         if (!current.exists()) {
-            return JsonValue(nullptr);
+            return JsonValue();
         }
 
         start = (*end == '.') ? end + 1 : end;
@@ -76,23 +69,14 @@ coro::CoroTask<JsonParserOutput> StringJsonParserUtility::process(
     const StringJsonParserInput& input) {
     content_ = input.content;
 
-    yyjson_doc* doc =
-        yyjson_read(content_.content.data(), content_.content.size(), 0);
-
-    yyjson_val* json_object = nullptr;
-    if (doc) {
-        json_object = yyjson_doc_get_root(doc);
-        owned_doc_ = std::shared_ptr<yyjson_doc>(doc, [](yyjson_doc* d) {
-            if (d) yyjson_doc_free(d);
-        });
+    auto result =
+        parser_.parse(content_.content.data(), content_.content.size());
+    if (result.error()) {
+        co_return JsonValue();
     }
-
-    co_return JsonValue(json_object);
+    co_return JsonValue(result.value_unsafe());
 }
 
-void StringJsonParserUtility::reset() {
-    owned_doc_.reset();
-    content_ = utilities::text::Text{};
-}
+void StringJsonParserUtility::reset() { content_ = utilities::text::Text{}; }
 
 }  // namespace dftracer::utils::utilities::common::json

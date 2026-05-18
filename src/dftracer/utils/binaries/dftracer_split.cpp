@@ -1,8 +1,6 @@
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/task_graph/task_graph.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
@@ -14,9 +12,10 @@
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <unistd.h>
 
-#include <argparse/argparse.hpp>
 #include <chrono>
 #include <cinttypes>
+
+#include "common_cli.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::task_graph;
@@ -26,142 +25,83 @@ using ChunkManifest =
 using ExtractInput = utilities::composites::dft::ChunkExtractorUtilityInput;
 using ExtractResult = utilities::composites::dft::ChunkExtractorUtilityOutput;
 
-int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+class SplitArgParse : public cli::ArgParse {
+   public:
+    cli::DirectoryArgs directory;
+    cli::PipelineArgs pipeline;
+    cli::IndexingArgs indexing;
+    cli::WatchdogArgs watchdog;
 
-    auto default_checkpoint_size_str =
-        std::to_string(dftracer::utils::utilities::indexer::internal::Indexer::
-                           DEFAULT_CHECKPOINT_SIZE) +
-        " B (" +
-        std::to_string(dftracer::utils::utilities::indexer::internal::Indexer::
-                           DEFAULT_CHECKPOINT_SIZE /
-                       (1024 * 1024)) +
-        " MB)";
+    std::string app_name = "app";
+    std::string output_dir = "./split";
+    int chunk_size_mb = 4;
+    bool compress = true;
+    bool verbose = false;
+    bool verify = false;
 
-    argparse::ArgumentParser program("dftracer_split",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Split DFTracer traces into equal-sized chunks using explicit pipeline "
-        "with maximum parallelism");
-
-    program.add_argument("-n", "--app-name")
-        .help("Application name for output files")
-        .default_value<std::string>("app");
-
-    program.add_argument("-d", "--directory")
-        .help("Input directory containing .pfw or .pfw.gz files")
-        .default_value<std::string>(".");
-
-    program.add_argument("-o", "--output")
-        .help("Output directory for split files")
-        .default_value<std::string>("./split");
-
-    program.add_argument("-s", "--chunk-size")
-        .help("Chunk size in MB")
-        .scan<'d', int>()
-        .default_value(4);
-
-    program.add_argument("-f", "--force")
-        .help("Override existing files and force index recreation")
-        .flag();
-
-    program.add_argument("-c", "--compress")
-        .help("Compress output files with gzip")
-        .flag()
-        .default_value(true);
-
-    program.add_argument("-v", "--verbose").help("Enable verbose mode").flag();
-
-    program.add_argument("--checkpoint-size")
-        .help("Checkpoint size for indexing in bytes (default: " +
-              default_checkpoint_size_str + ")")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(
-            dftracer::utils::utilities::indexer::internal::Indexer::
-                DEFAULT_CHECKPOINT_SIZE));
-
-    program.add_argument("--executor-threads")
-        .help(
-            "Number of executor threads for parallel processing (default: "
-            "number "
-            "of CPU cores)")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
-
-    program.add_argument("--index-dir")
-        .help("Directory to store index files (default: system temp directory)")
-        .default_value<std::string>("");
-
-    program.add_argument("--verify")
-        .help("Verify output chunks match input by comparing event IDs")
-        .flag();
-
-    program.add_argument("--disable-watchdog")
-        .help("Disable watchdog for hang detection")
-        .flag();
-
-    program.add_argument("--watchdog-global-timeout")
-        .help(
-            "Watchdog global timeout for pipeline execution in seconds (0 = no "
-            "timeout)")
-        .scan<'d', int>()
-        .default_value(0);
-
-    program.add_argument("--watchdog-task-timeout")
-        .help("Watchdog default task timeout in seconds (0 = no timeout)")
-        .scan<'d', int>()
-        .default_value(0);
-
-    program.add_argument("--watchdog-interval")
-        .help("Watchdog check interval in seconds")
-        .scan<'d', int>()
-        .default_value(1);
-
-    program.add_argument("--watchdog-warning-threshold")
-        .help("Watchdog long-running task warning threshold in seconds")
-        .scan<'d', int>()
-        .default_value(300);
-
-    program.add_argument("--watchdog-idle-timeout")
-        .help("Watchdog idle timeout in seconds (0 = use default)")
-        .scan<'d', int>()
-        .default_value(300);
-
-    program.add_argument("--watchdog-deadlock-timeout")
-        .help("Watchdog deadlock timeout in seconds (0 = use default)")
-        .scan<'d', int>()
-        .default_value(600);
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error occurred: %s", err.what());
-        std::cerr << program << std::endl;
-        return 1;
+    explicit SplitArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        indexing.force_help =
+            "Override existing files and force index recreation";
+        schema(directory, pipeline, indexing, watchdog);
     }
 
-    // Parse arguments
-    std::string app_name = program.get<std::string>("--app-name");
-    std::string log_dir = program.get<std::string>("--directory");
-    std::string output_dir = program.get<std::string>("--output");
-    int chunk_size_mb = program.get<int>("--chunk-size");
-    bool force = program.get<bool>("--force");
-    bool compress = program.get<bool>("--compress");
-    bool verify = program.get<bool>("--verify");
-    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
-    std::string index_dir = program.get<std::string>("--index-dir");
-    bool disable_watchdog = program.get<bool>("--disable-watchdog");
-    int global_timeout = program.get<int>("--watchdog-global-timeout");
-    int task_timeout = program.get<int>("--watchdog-task-timeout");
-    int watchdog_interval = program.get<int>("--watchdog-interval");
-    int warning_threshold = program.get<int>("--watchdog-warning-threshold");
-    int idle_timeout = program.get<int>("--watchdog-idle-timeout");
-    int deadlock_timeout = program.get<int>("--watchdog-deadlock-timeout");
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("-n", "--app-name")
+            .help("Application name for output files")
+            .default_value<std::string>("app");
 
-    // Setup temp index directory
+        parser()
+            .add_argument("-o", "--output")
+            .help("Output directory for split files")
+            .default_value<std::string>("./split");
+
+        parser()
+            .add_argument("-s", "--chunk-size")
+            .help("Chunk size in MB")
+            .scan<'d', int>()
+            .default_value(4);
+
+        parser()
+            .add_argument("-c", "--compress")
+            .help("Compress output files with gzip")
+            .flag()
+            .default_value(true);
+
+        parser()
+            .add_argument("-v", "--verbose")
+            .help("Enable verbose mode")
+            .flag();
+
+        parser()
+            .add_argument("--verify")
+            .help("Verify output chunks match input by comparing event IDs")
+            .flag();
+    }
+
+    void post_parse() override {
+        app_name = parser().get<std::string>("--app-name");
+        output_dir = parser().get<std::string>("--output");
+        chunk_size_mb = parser().get<int>("--chunk-size");
+        compress = parser().get<bool>("--compress");
+        verbose = parser().get<bool>("--verbose");
+        verify = parser().get<bool>("--verify");
+    }
+};
+
+static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
+    const auto log_dir = fs::absolute(cli->directory.value).string();
+    const auto output_dir = fs::absolute(cli->output_dir).string();
+    const auto& app_name = cli->app_name;
+    const auto chunk_size_mb = cli->chunk_size_mb;
+    const auto force = cli->indexing.force;
+    const auto compress = cli->compress;
+    const auto verify = cli->verify;
+    const auto checkpoint_size = cli->indexing.checkpoint_size;
+    const auto executor_threads = cli->pipeline.executor_threads;
+    auto index_dir = cli->indexing.index_dir;
+
     std::string temp_index_dir;
     if (index_dir.empty()) {
         temp_index_dir = fs::temp_directory_path() /
@@ -172,9 +112,6 @@ int main(int argc, char** argv) {
         DFTRACER_UTILS_LOG_INFO("Created temporary index directory: %s",
                                 index_dir.c_str());
     }
-
-    log_dir = fs::absolute(log_dir).string();
-    output_dir = fs::absolute(output_dir).string();
 
     std::printf("==========================================\n");
     std::printf("DFTracer Split (Explicit Pipeline)\n");
@@ -193,20 +130,8 @@ int main(int argc, char** argv) {
         fs::create_directories(output_dir);
     }
 
-    // Create pipeline with configuration
-    auto pipeline_config =
-        PipelineConfig()
-            .with_name("DFTracer Split")
-            .with_compute_threads(executor_threads)
-            .with_watchdog(!disable_watchdog)
-            .with_global_timeout(std::chrono::seconds(global_timeout))
-            .with_task_timeout(std::chrono::seconds(task_timeout))
-            .with_watchdog_interval(std::chrono::seconds(watchdog_interval))
-            .with_warning_threshold(std::chrono::seconds(warning_threshold))
-            .with_executor_idle_timeout(std::chrono::seconds(idle_timeout))
-            .with_executor_deadlock_timeout(
-                std::chrono::seconds(deadlock_timeout));
-
+    auto pipeline_config = cli::build_pipeline_config(
+        "DFTracer Split", cli->pipeline, cli->watchdog);
     Pipeline pipeline(pipeline_config);
 
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -227,7 +152,7 @@ int main(int argc, char** argv) {
     if (input_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in %s",
                                  log_dir.c_str());
-        return 1;
+        co_return 1;
     }
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
@@ -247,30 +172,53 @@ int main(int argc, char** argv) {
     auto graph = TaskGraph::builder(
         {.name = "DFTracerSplit", .max_concurrency = executor_threads});
 
-    DFTRACER_UTILS_LOG_INFO("%s", "Creating file processing tasks...");
+    DFTRACER_UTILS_LOG_INFO("%s", "Creating batch index task...");
 
     auto* input_files_ptr = &input_files;
+    auto batch_index_task = make_task(
+        [input_files_ptr, checkpoint_size, index_dir,
+         executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
+            auto index_path =
+                utilities::composites::dft::internal::determine_index_path(
+                    input_files_ptr->front(), index_dir);
+            dftracer::utils::rocksdb::RocksDBManager::instance().reset(
+                index_path);
+
+            auto batch_config =
+                std::make_shared<utilities::indexer::IndexBuildBatchConfig>();
+            batch_config->file_paths = *input_files_ptr;
+            batch_config->index_dir = index_dir;
+            batch_config->checkpoint_size = checkpoint_size;
+            batch_config->parallelism = executor_threads;
+            batch_config->use_batch_write = true;
+            batch_config->rebuild_root_summaries = true;
+
+            auto result =
+                co_await utilities::indexer::IndexBatchBuilderUtility::process(
+                    &ctx, std::move(batch_config));
+            for (const auto& r : result.results) {
+                if (!r.success && !r.error_message.empty()) {
+                    DFTRACER_UTILS_LOG_ERROR("Auto-indexing failed for %s: %s",
+                                             r.file_path.c_str(),
+                                             r.error_message.c_str());
+                }
+            }
+        },
+        "BatchIndex");
+    graph.add(batch_index_task);
+
+    DFTRACER_UTILS_LOG_INFO("%s", "Creating file processing tasks...");
+
     auto file_metadata = graph.parallel<Metadata>(
         input_files.size(),
-        [input_files_ptr, checkpoint_size, force, index_dir, verify](
+        [input_files_ptr, checkpoint_size, index_dir, verify](
             CoroScope&, std::size_t idx) -> coro::CoroTask<Metadata> {
             const auto& file_path = (*input_files_ptr)[idx];
 
-            // Determine index path
             std::string index_path =
                 utilities::composites::dft::internal::determine_index_path(
                     file_path, index_dir);
 
-            // Build index
-            auto idx_input =
-                utilities::indexer::IndexBuildConfig::for_file(file_path)
-                    .with_checkpoint_size(checkpoint_size)
-                    .with_force_rebuild(false)
-                    .with_index_dir(index_dir);
-            co_await utilities::indexer::IndexBuilderUtility{}.process(
-                idx_input);
-
-            // Collect metadata
             auto meta_input =
                 utilities::composites::dft::MetadataCollectorUtilityInput::
                     from_file(file_path)
@@ -284,6 +232,10 @@ int main(int argc, char** argv) {
                     .process(meta_input);
         },
         {.name = "ProcessFile"});
+
+    for (const auto& meta_task : file_metadata.tasks()) {
+        meta_task->depends_on(batch_index_task);
+    }
 
     DFTRACER_UTILS_LOG_INFO("%s", "Creating chunk mapping task...");
 
@@ -359,7 +311,6 @@ int main(int argc, char** argv) {
                 results.push_back(co_await future);
             }
 
-            // Sort by chunk index
             std::sort(results.begin(), results.end(),
                       [](const ExtractResult& a, const ExtractResult& b) {
                           return a.chunk_index < b.chunk_index;
@@ -384,20 +335,15 @@ int main(int argc, char** argv) {
             std::vector<Metadata> all_metadata;
         };
 
-        // Verification task receives both extraction results and metadata.
-        // Both are passed via combiner so the scheduler keeps parent
-        // results alive until this task consumes them.
         task_verify_chunks = make_task(
             [](CoroScope&, const VerifyInput& input)
                 -> coro::CoroTask<
                     utilities::composites::ChunkVerificationUtilityOutput> {
-                // Sum output hashes from extraction results
                 std::size_t output_hash = 0;
                 for (const auto& chunk : input.chunks) {
                     output_hash += chunk.event_hash;
                 }
 
-                // Sum input hashes from metadata (computed during collection)
                 std::size_t input_hash = 0;
                 for (const auto& meta : input.all_metadata) {
                     if (!meta.success) continue;
@@ -411,8 +357,6 @@ int main(int argc, char** argv) {
             },
             "VerifyChunks");
 
-        // Depend on both extract results and metadata tasks.
-        // The combiner collects parent outputs into the typed struct.
         task_verify_chunks->depends_on(task_extract_chunks);
         for (const auto& meta_task : file_metadata.tasks()) {
             task_verify_chunks->depends_on(meta_task);
@@ -420,8 +364,6 @@ int main(int argc, char** argv) {
 
         task_verify_chunks->with_combiner(
             [](const std::vector<std::any>& inputs) -> std::any {
-                // inputs[0] = ExtractChunksOutput (from extract task)
-                // inputs[1..N] = Metadata (from each metadata task)
                 auto chunks = std::any_cast<ExtractChunksOutput>(inputs[0]);
 
                 std::vector<Metadata> all_metadata;
@@ -441,12 +383,10 @@ int main(int argc, char** argv) {
     // Phase 4: Execute Pipeline
     DFTRACER_UTILS_LOG_INFO("%s", "Executing pipeline...");
 
-    pipeline.set_source(file_metadata.tasks());
+    pipeline.set_source(batch_index_task);
     pipeline.set_destination(final_task);
     pipeline.execute();
 
-    // Get results from the destination task only (intermediate task values
-    // are released after pipeline execution)
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
@@ -476,7 +416,6 @@ int main(int argc, char** argv) {
         std::printf("    Output hash: 0x%016" PRIx64 "\n",
                     verify_result.output_hash);
     } else {
-        // Without verification: extract task IS the destination, safe to read
         auto extraction_results =
             task_extract_chunks->get<ExtractChunksOutput>();
 
@@ -503,12 +442,27 @@ int main(int argc, char** argv) {
 
     std::printf("==========================================\n");
 
-    // Cleanup temporary index directory if created
     if (!temp_index_dir.empty() && fs::exists(temp_index_dir)) {
         DFTRACER_UTILS_LOG_INFO("Cleaning up temporary index directory: %s",
                                 temp_index_dir.c_str());
         fs::remove_all(temp_index_dir);
     }
 
-    return exit_code;
+    co_return exit_code;
+}
+
+int main(int argc, char** argv) {
+    DFTRACER_UTILS_LOGGER_INIT();
+
+    argparse::ArgumentParser program("dftracer_split",
+                                     DFTRACER_UTILS_PACKAGE_VERSION);
+    program.add_description(
+        "Split DFTracer traces into equal-sized chunks using explicit pipeline "
+        "with maximum parallelism");
+
+    SplitArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
+
+    return run_split(&cli).get();
 }

@@ -70,6 +70,34 @@ static CoroTask<std::vector<std::string>> collect_lines(
     co_return lines;
 }
 
+struct ParsedEvent {
+    std::string name;
+    std::string cat;
+    std::string ph;
+};
+
+static CoroTask<std::vector<ParsedEvent>> collect_json_events(
+    AsyncGenerator<JsonLine> gen) {
+    std::vector<ParsedEvent> events;
+    while (auto opt = co_await gen.next()) {
+        auto* p = opt->parser;
+        ParsedEvent ev;
+        if (auto v = p->get_string("name")) ev.name = std::string(*v);
+        if (auto v = p->get_string("cat")) ev.cat = std::string(*v);
+        if (auto v = p->get_string("ph")) ev.ph = std::string(*v);
+        events.push_back(std::move(ev));
+    }
+    co_return events;
+}
+
+static CoroTask<std::size_t> count_json_lines(AsyncGenerator<JsonLine> gen) {
+    std::size_t n = 0;
+    while (auto opt = co_await gen.next()) {
+        ++n;
+    }
+    co_return n;
+}
+
 }  // namespace
 
 TEST_SUITE("TraceReader") {
@@ -510,8 +538,8 @@ TEST_SUITE("TraceReader") {
         IndexBuilderUtility builder;
         auto build_result = builder
                                 .process(IndexBuildConfig::for_file(gz)
-                                             .with_bloom(true)
-                                             .with_index_threshold(0))
+
+                                             )
                                 .get();
         REQUIRE(build_result.success);
 
@@ -559,8 +587,8 @@ TEST_SUITE("TraceReader") {
         IndexBuilderUtility builder;
         auto build_result = builder
                                 .process(IndexBuildConfig::for_file(gz)
-                                             .with_bloom(true)
-                                             .with_index_threshold(0))
+
+                                             )
                                 .get();
         REQUIRE(build_result.success);
 
@@ -581,5 +609,248 @@ TEST_SUITE("TraceReader") {
         rc_posix.query = R"(cat == "POSIX")";
         auto posix_bytes = count_raw_bytes(reader.read_raw(rc_posix)).get();
         CHECK(posix_bytes == all_bytes);
+    }
+
+    TEST_CASE("Chunk pruning skips non-matching checkpoints") {
+        TestEnvironment env(100);
+        std::string pfw = env.get_dir() + "/multi_ckpt.pfw";
+        constexpr int POSIX_BEFORE = 100;
+        constexpr int COMPUTE_COUNT = 5;
+        constexpr int POSIX_AFTER = 100;
+        constexpr int TOTAL = POSIX_BEFORE + COMPUTE_COUNT + POSIX_AFTER;
+        // Each line is ~550 bytes (padded args). 205 events * 550 = ~112KB.
+        // With 32KB checkpoint window -> 3-4 checkpoints.
+        // COMPUTE events cluster in one checkpoint in the middle.
+        std::string pad(400, 'x');
+        {
+            std::ofstream out(pfw);
+            for (int i = 0; i < POSIX_BEFORE; ++i) {
+                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    << (1000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
+                    << R"("}})" << "\n";
+            }
+            for (int i = 0; i < COMPUTE_COUNT; ++i) {
+                out << R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)"
+                    << (100000 + i) << R"(,"dur":500,"args":{"pad":")" << pad
+                    << R"("}})" << "\n";
+            }
+            for (int i = 0; i < POSIX_AFTER; ++i) {
+                out << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    << (200000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
+                    << R"("}})" << "\n";
+            }
+        }
+        std::string gz = pfw + ".gz";
+        REQUIRE(dft_utils_test::compress_file_to_gzip(pfw, gz));
+        fs::remove(pfw);
+
+        using dftracer::utils::utilities::indexer::IndexBuildConfig;
+        using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+        IndexBuilderUtility builder;
+        auto build_result = builder
+                                .process(IndexBuildConfig::for_file(gz)
+                                             .with_checkpoint_size(32 * 1024)
+                                             .with_manifest(true))
+                                .get();
+        REQUIRE(build_result.success);
+
+        TraceReader reader({.file_path = gz, .checkpoint_size = 32 * 1024});
+        REQUIRE(reader.has_index());
+
+        auto all = count_lines(reader.read_lines()).get();
+        REQUIRE(all == TOTAL);
+
+        // Selective query: only COMPUTE events (5 out of 205)
+        ReadConfig rc_compute;
+        rc_compute.query = R"(cat == "COMPUTE")";
+        auto compute_lines = collect_lines(reader.read_lines(rc_compute)).get();
+        CHECK(compute_lines.size() == COMPUTE_COUNT);
+        for (const auto& line : compute_lines) {
+            CHECK(line.find("\"cat\":\"COMPUTE\"") != std::string::npos);
+        }
+
+        // Full category query should still return all POSIX
+        ReadConfig rc_posix;
+        rc_posix.query = R"(cat == "POSIX")";
+        auto posix_lines = collect_lines(reader.read_lines(rc_posix)).get();
+        CHECK(posix_lines.size() == POSIX_BEFORE + POSIX_AFTER);
+
+        // No match
+        ReadConfig rc_none;
+        rc_none.query = R"(cat == "NONEXISTENT")";
+        auto none_lines = count_lines(reader.read_lines(rc_none)).get();
+        CHECK(none_lines == 0);
+    }
+}
+
+TEST_SUITE("TraceReader::read_json") {
+    TEST_CASE("read_json returns parsed events") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        auto events = collect_json_events(reader.read_json()).get();
+        CHECK(events.size() > 0);
+        for (const auto& ev : events) {
+            CHECK_FALSE(ev.ph.empty());
+        }
+    }
+
+    TEST_CASE("read_json count matches read_lines count") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        auto line_count = count_lines(reader.read_lines()).get();
+        auto json_count = count_json_lines(reader.read_json()).get();
+        CHECK(json_count <= line_count);
+        CHECK(json_count > 0);
+    }
+
+    TEST_CASE("read_json query filters events") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        auto all = count_json_lines(reader.read_json()).get();
+        REQUIRE(all > 0);
+
+        ReadConfig rc;
+        rc.query = R"(cat == "POSIX")";
+        auto events = collect_json_events(reader.read_json(rc)).get();
+        CHECK(events.size() > 0);
+        CHECK(events.size() <= all);
+        for (const auto& ev : events) {
+            CHECK(ev.cat == "POSIX");
+        }
+    }
+
+    TEST_CASE("read_json query with no matches returns zero") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        ReadConfig rc;
+        rc.query = R"(cat == "NONEXISTENT")";
+        auto n = count_json_lines(reader.read_json(rc)).get();
+        CHECK(n == 0);
+    }
+
+    TEST_CASE("read_json with AND query") {
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        TraceReader reader({.file_path = gz_file});
+
+        ReadConfig rc;
+        rc.query = R"(cat == "POSIX" and name == "read")";
+        auto events = collect_json_events(reader.read_json(rc)).get();
+        CHECK(events.size() > 0);
+        for (const auto& ev : events) {
+            CHECK(ev.cat == "POSIX");
+            CHECK(ev.name == "read");
+        }
+    }
+
+    TEST_CASE("read_json matches read_lines query count") {
+        TestEnvironment env(100);
+        std::string pfw = env.get_dir() + "/json_vs_lines.pfw";
+        {
+            std::ofstream out(pfw);
+            for (int i = 0; i < 100; ++i) {
+                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    << (1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
+            }
+            for (int i = 0; i < 50; ++i) {
+                out << R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)"
+                    << (100000 + i) << R"(,"dur":500,"args":{}})" << "\n";
+            }
+        }
+
+        TraceReader reader({.file_path = pfw});
+
+        ReadConfig rc;
+        rc.query = R"(cat == "POSIX")";
+        auto line_count = count_lines(reader.read_lines(rc)).get();
+        auto json_count = count_json_lines(reader.read_json(rc)).get();
+        CHECK(line_count == json_count);
+        CHECK(json_count == 100);
+
+        fs::remove(pfw);
+    }
+
+    TEST_CASE("read_json works with index and chunk pruning") {
+        TestEnvironment env(100);
+        std::string pfw = env.get_dir() + "/json_indexed.pfw";
+        std::string pad(400, 'x');
+        {
+            std::ofstream out(pfw);
+            for (int i = 0; i < 100; ++i) {
+                out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    << (1000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
+                    << R"("}})" << "\n";
+            }
+            for (int i = 0; i < 5; ++i) {
+                out << R"({"ph":"X","name":"train","cat":"COMPUTE","pid":2,"tid":2,"ts":)"
+                    << (100000 + i) << R"(,"dur":500,"args":{"pad":")" << pad
+                    << R"("}})" << "\n";
+            }
+            for (int i = 0; i < 100; ++i) {
+                out << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    << (200000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
+                    << R"("}})" << "\n";
+            }
+        }
+        std::string gz = pfw + ".gz";
+        REQUIRE(dft_utils_test::compress_file_to_gzip(pfw, gz));
+        fs::remove(pfw);
+
+        using dftracer::utils::utilities::indexer::IndexBuildConfig;
+        using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+        IndexBuilderUtility builder;
+        auto build_result = builder
+                                .process(IndexBuildConfig::for_file(gz)
+                                             .with_checkpoint_size(32 * 1024)
+                                             .with_manifest(true))
+                                .get();
+        REQUIRE(build_result.success);
+
+        TraceReader reader({.file_path = gz, .checkpoint_size = 32 * 1024});
+        REQUIRE(reader.has_index());
+
+        ReadConfig rc;
+        rc.query = R"(cat == "COMPUTE")";
+        auto events = collect_json_events(reader.read_json(rc)).get();
+        CHECK(events.size() == 5);
+        for (const auto& ev : events) {
+            CHECK(ev.cat == "COMPUTE");
+        }
+
+        ReadConfig rc_posix;
+        rc_posix.query = R"(cat == "POSIX")";
+        auto posix_count = count_json_lines(reader.read_json(rc_posix)).get();
+        CHECK(posix_count == 200);
+
+        ReadConfig rc_none;
+        rc_none.query = R"(cat == "NONEXISTENT")";
+        auto none_count = count_json_lines(reader.read_json(rc_none)).get();
+        CHECK(none_count == 0);
+    }
+
+    TEST_CASE("read_json parser fields are accessible") {
+        auto test_file = make_unique_test_path("json_parser_fields.pfw");
+        {
+            std::ofstream out(test_file);
+            out << R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":1000,"dur":10,"args":{"ret":1}})"
+                << "\n";
+        }
+
+        TraceReader reader({.file_path = test_file.string()});
+        auto events = collect_json_events(reader.read_json()).get();
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].name == "read");
+        CHECK(events[0].cat == "POSIX");
+        CHECK(events[0].ph == "X");
+
+        fs::remove(test_file);
     }
 }

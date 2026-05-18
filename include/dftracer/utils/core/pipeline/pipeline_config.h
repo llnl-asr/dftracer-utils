@@ -69,11 +69,10 @@ struct PipelineConfig {
         600};     // Executor deadlock timeout (10 minutes)
     std::chrono::microseconds timeslice_duration{
         10'000};  // Coroutine yield timeslice (10ms, 0 = disabled)
-    std::size_t io_thread_count = 4;   // I/O thread pool size
+    std::size_t io_thread_count = 0;   // 0 = hardware_concurrency
     io::IoBackendType io_backend_type =
         io::IoBackendType::AUTO;       // Backend selection
     unsigned io_batch_threshold = 16;  // SQE batch threshold (0 = per-op)
-    std::size_t db_pool_size = 2;      // Blocking DB async thread pool size
 
     /**
      * Set pipeline name
@@ -197,14 +196,6 @@ struct PipelineConfig {
      */
     PipelineConfig& with_io_batch_size(unsigned threshold) {
         io_batch_threshold = threshold;
-        return *this;
-    }
-
-    /**
-     * Set blocking DB async thread pool size (default 2)
-     */
-    PipelineConfig& with_db_pool_size(std::size_t size) {
-        db_pool_size = size;
         return *this;
     }
 

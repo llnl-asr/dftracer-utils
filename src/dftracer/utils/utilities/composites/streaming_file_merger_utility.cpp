@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
+#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <utility>
 
@@ -12,15 +13,7 @@ namespace dftracer::utils::utilities::composites {
 
 namespace {
 
-// FNV-1a hash for byte-level verification
-inline std::size_t fnv1a_line(const char* data, std::size_t len) {
-    std::size_t h = 14695981039346656037ULL;
-    for (std::size_t i = 0; i < len; ++i) {
-        h ^= static_cast<std::size_t>(static_cast<unsigned char>(data[i]));
-        h *= 1099511628211ULL;
-    }
-    return h;
-}
+namespace hash = dftracer::utils::utilities::hash;
 
 // Check if a line is an array delimiter ([ or ]) after trimming whitespace.
 inline bool is_array_delimiter(const char* data, std::size_t len) {
@@ -102,7 +95,7 @@ StreamingFileProducerUtility::process_async(
             ++result.events_sent;
 
             if (input.verify) {
-                batch_hash += fnv1a_line(trimmed, trimmed_length);
+                batch_hash += hash::fnv1a_hash(trimmed, trimmed_length);
             }
 
             if (local_buf.size() >= batch_budget) {

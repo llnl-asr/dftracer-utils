@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_DETAILED_STATISTICS_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_DETAILED_STATISTICS_H
 
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
 
@@ -51,14 +52,14 @@ struct DetailedStatistics {
     DistributionStats duration;
 
     // Per-group-key duration statistics
-    std::unordered_map<std::string, DistributionStats> grouped_duration;
+    StringViewMap<DistributionStats> grouped_duration;
 
     // Per-group-key I/O metrics (only for groups with I/O events)
-    std::unordered_map<std::string, IOEventMetrics> grouped_io;
+    StringViewMap<IOEventMetrics> grouped_io;
 
     // Maps group key -> category string (e.g. "POSIX", "dlio_benchmark")
     // Used by the display layer to split events by category.
-    std::unordered_map<std::string, std::string> group_key_category;
+    StringViewMap<std::string> group_key_category;
 
     // Scan progress
     std::uint64_t events_scanned = 0;

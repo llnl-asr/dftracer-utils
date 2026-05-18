@@ -1,5 +1,5 @@
 #include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -197,62 +197,51 @@ std::string Log2Histogram::render_blocks(std::size_t max_width,
     return out.str();
 }
 
-yyjson_mut_val* Log2Histogram::to_yyjson(yyjson_mut_doc* doc) const {
-    yyjson_mut_val* arr = yyjson_mut_arr(doc);
+std::string Log2Histogram::to_json() const {
+    std::ostringstream ss;
+    ss << '[';
+    bool first = true;
     for (std::size_t i = 0; i < NUM_BINS; ++i) {
         if (bins_[i] == 0) continue;
-        yyjson_mut_val* pair = yyjson_mut_arr(doc);
-        yyjson_mut_arr_add_uint(doc, pair, static_cast<std::uint64_t>(i));
-        yyjson_mut_arr_add_uint(doc, pair, bins_[i]);
-        yyjson_mut_arr_append(arr, pair);
+        if (!first) ss << ',';
+        first = false;
+        ss << '[' << i << ',' << bins_[i] << ']';
     }
-    return arr;
-}
-
-std::string Log2Histogram::to_json() const {
-    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_val* arr = to_yyjson(doc);
-    yyjson_mut_doc_set_root(doc, arr);
-
-    char* json_str = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, nullptr);
-    std::string result(json_str ? json_str : "[]");
-    if (json_str) free(json_str);
-    yyjson_mut_doc_free(doc);
-    return result;
+    ss << ']';
+    return ss.str();
 }
 
 Log2Histogram Log2Histogram::from_json(const std::string& json) {
     Log2Histogram hist;
 
-    yyjson_doc* doc =
-        yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-    if (!doc) return hist;
+    simdjson::dom::parser parser;
+    auto result = parser.parse(json.data(), json.size());
+    if (result.error()) return hist;
 
-    yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!root || !yyjson_is_arr(root)) {
-        yyjson_doc_free(doc);
-        return hist;
-    }
+    auto root = result.value_unsafe();
+    if (!root.is_array()) return hist;
 
-    std::size_t idx, max;
-    yyjson_val* pair;
-    yyjson_arr_foreach(root, idx, max, pair) {
-        if (!yyjson_is_arr(pair) || yyjson_arr_size(pair) != 2) continue;
-        yyjson_val* bin_idx_val = yyjson_arr_get(pair, 0);
-        yyjson_val* count_val = yyjson_arr_get(pair, 1);
-        if (!yyjson_is_uint(bin_idx_val) || !yyjson_is_uint(count_val))
-            continue;
+    simdjson::dom::array root_arr;
+    if (root.get(root_arr)) return hist;
+
+    for (auto pair : root_arr) {
+        if (!pair.is_array()) continue;
+        simdjson::dom::array arr;
+        if (pair.get(arr)) continue;
+        if (arr.size() != 2) continue;
+
+        auto bin_idx_result = arr.at(0).get_uint64();
+        auto count_result = arr.at(1).get_uint64();
+        if (bin_idx_result.error() || count_result.error()) continue;
 
         std::size_t bin_idx =
-            static_cast<std::size_t>(yyjson_get_uint(bin_idx_val));
-        std::uint64_t count = yyjson_get_uint(count_val);
+            static_cast<std::size_t>(bin_idx_result.value_unsafe());
+        std::uint64_t count = count_result.value_unsafe();
         if (bin_idx < NUM_BINS) {
             hist.bins_[bin_idx] += count;
             hist.total_count_ += count;
         }
     }
-
-    yyjson_doc_free(doc);
     return hist;
 }
 

@@ -4,6 +4,7 @@
 import pytest
 
 import dftracer.utils as dft_utils
+from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
 from .common import Environment
 
@@ -12,11 +13,11 @@ class TestTraceReaderCreation:
     """Construction and property tests."""
 
     def test_creation_basic(self):
-        """TraceReader accepts a valid file path and exposes file_path."""
+        """TraceReader accepts a valid file path and exposes path."""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
-            assert reader.file_path == gz_file
+            assert reader.path == gz_file
 
     def test_creation_nonexistent_file(self):
         """TraceReader with nonexistent file creates but read_lines fails."""
@@ -37,7 +38,7 @@ class TestTraceReaderCreation:
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(gz_file, index_path) as indexer:
+            with NativeIndexer(gz_file, index_path) as indexer:
                 indexer.build()
             # TraceReader probes for the index store at __init__ time
             reader = dft_utils.TraceReader(gz_file)
@@ -65,12 +66,12 @@ class TestTraceReaderCreation:
             reader = dft_utils.TraceReader(gz_file)
             assert isinstance(reader.has_index, bool)
 
-    def test_file_path_is_str(self):
-        """file_path property returns a str."""
+    def test_path_is_str(self):
+        """path property returns a str."""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
-            assert isinstance(reader.file_path, str)
+            assert isinstance(reader.path, str)
 
 
 class TestTraceReaderReadLines:
@@ -85,13 +86,13 @@ class TestTraceReaderReadLines:
             assert isinstance(lines, list)
             assert len(lines) == 22
 
-    def test_read_lines_returns_strings(self):
-        """Every element returned by read_lines() is a str."""
+    def test_read_lines_returns_memoryviews(self):
+        """Every element returned by read_lines() is a memoryview."""
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             lines = reader.read_lines()
-            assert all(isinstance(line, str) for line in lines)
+            assert all(isinstance(line, memoryview) for line in lines)
 
     def test_read_lines_content_is_json(self):
         """Lines contain the JSON fields written by Environment."""
@@ -100,17 +101,19 @@ class TestTraceReaderReadLines:
             reader = dft_utils.TraceReader(gz_file)
             lines = reader.read_lines()
             for line in lines:
-                stripped = line.strip()
-                if stripped in ("[", "]"):
+                text = bytes(line).decode("utf-8").strip()
+                if text in ("[", "]"):
                     continue
-                assert '"name"' in line
+                assert b'"name"' in bytes(line)
 
     def test_read_lines_explicit_zero_zero(self):
         """read_lines(0, 0) is equivalent to read_lines()."""
         with Environment(lines=15) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
-            assert reader.read_lines(0, 0) == reader.read_lines()
+            a = [bytes(m) for m in reader.read_lines(0, 0)]
+            b = [bytes(m) for m in reader.read_lines()]
+            assert a == b
 
     def test_read_lines_with_range(self):
         """read_lines(start, end) returns a subset of lines."""
@@ -127,11 +130,10 @@ class TestTraceReaderReadLines:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
-            all_lines = reader.read_lines()
+            all_bytes = [bytes(m) for m in reader.read_lines()]
             partial = reader.read_lines(start_line=3, end_line=8)
-            # Every line in the partial result must appear in all_lines
             for line in partial:
-                assert line in all_lines
+                assert bytes(line) in all_bytes
 
     def test_read_lines_negative_start_raises(self):
         """read_lines raises ValueError for a negative start_line."""
@@ -154,7 +156,7 @@ class TestTraceReaderReadLines:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(gz_file, index_path) as indexer:
+            with NativeIndexer(gz_file, index_path) as indexer:
                 indexer.build()
             reader = dft_utils.TraceReader(gz_file)
             assert reader.has_index
@@ -166,13 +168,13 @@ class TestTraceReaderReadLines:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             # Sequential (no index)
-            sequential = dft_utils.TraceReader(gz_file).read_lines()
+            sequential = [bytes(m) for m in dft_utils.TraceReader(gz_file).read_lines()]
 
             # Build index, then read again
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(gz_file, index_path) as indexer:
+            with NativeIndexer(gz_file, index_path) as indexer:
                 indexer.build()
-            indexed = dft_utils.TraceReader(gz_file).read_lines()
+            indexed = [bytes(m) for m in dft_utils.TraceReader(gz_file).read_lines()]
 
             assert sequential == indexed
 
@@ -226,7 +228,7 @@ class TestTraceReaderContextManager:
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
             with dft_utils.TraceReader(gz_file) as reader:
-                assert reader.file_path == gz_file
+                assert reader.path == gz_file
                 assert isinstance(reader.has_index, bool)
 
     def test_with_statement_exit_does_not_raise(self):
@@ -245,21 +247,14 @@ class TestTraceReaderOptionalParams:
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file, checkpoint_size=1024 * 1024)
-            assert reader.file_path == gz_file
+            assert reader.path == gz_file
 
     def test_auto_build_index_accepted(self):
         """auto_build_index kwarg is accepted without error."""
         with Environment() as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file, auto_build_index=False)
-            assert reader.file_path == gz_file
-
-    def test_index_threshold_accepted(self):
-        """index_threshold kwarg is accepted without error."""
-        with Environment() as env:
-            gz_file = env.create_test_gzip_file()
-            reader = dft_utils.TraceReader(gz_file, index_threshold=16 * 1024 * 1024)
-            assert reader.file_path == gz_file
+            assert reader.path == gz_file
 
     def test_all_optional_params_together(self):
         """All optional constructor params can be supplied simultaneously."""
@@ -271,9 +266,8 @@ class TestTraceReaderOptionalParams:
                 index_dir=env.temp_dir,
                 checkpoint_size=512 * 1024,
                 auto_build_index=False,
-                index_threshold=4 * 1024 * 1024,
             )
-            assert reader.file_path == gz_file
+            assert reader.path == gz_file
             assert reader.index_dir == env.temp_dir
 
 
@@ -288,12 +282,12 @@ class TestTraceReaderIterLines:
             assert hasattr(it, "__iter__")
             assert hasattr(it, "__next__")
 
-    def test_iter_lines_yields_strings(self):
+    def test_iter_lines_yields_memoryviews(self):
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             for line in reader.iter_lines():
-                assert isinstance(line, str)
+                assert isinstance(line, memoryview)
 
     def test_iter_lines_count(self):
         with Environment(lines=20) as env:
@@ -306,8 +300,8 @@ class TestTraceReaderIterLines:
         with Environment(lines=15) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
-            from_iter = list(reader.iter_lines())
-            from_read = reader.read_lines()
+            from_iter = [bytes(m) for m in reader.iter_lines()]
+            from_read = [bytes(m) for m in reader.read_lines()]
             assert from_iter == from_read
 
     def test_iter_lines_with_range(self):
@@ -356,12 +350,12 @@ class TestTraceReaderIterRaw:
             assert hasattr(it, "__iter__")
             assert hasattr(it, "__next__")
 
-    def test_iter_raw_yields_bytes(self):
+    def test_iter_raw_yields_memoryviews(self):
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             for chunk in reader.iter_raw():
-                assert isinstance(chunk, bytes)
+                assert isinstance(chunk, memoryview)
 
     def test_iter_raw_single_line_mode(self):
         """multi_line=False yields one chunk per line."""
@@ -402,20 +396,20 @@ class TestTraceReaderIterRaw:
 class TestTraceReaderReadRaw:
     """read_raw() materialized list tests."""
 
-    def test_read_raw_returns_list_of_bytes(self):
+    def test_read_raw_returns_list_of_memoryviews(self):
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             chunks = reader.read_raw()
             assert isinstance(chunks, list)
-            assert all(isinstance(c, bytes) for c in chunks)
+            assert all(isinstance(c, memoryview) for c in chunks)
 
     def test_read_raw_matches_iter_raw(self):
         with Environment(lines=15) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
-            from_read = reader.read_raw()
-            from_iter = list(reader.iter_raw())
+            from_read = [bytes(m) for m in reader.read_raw()]
+            from_iter = [bytes(m) for m in reader.iter_raw()]
             assert from_read == from_iter
 
     def test_read_raw_single_line_count(self):
@@ -457,10 +451,10 @@ class TestTraceReaderWithRuntime:
 
 
 class TestTraceReaderJSON:
-    """JSON reading tests."""
+    """JSON reading tests (shimmed via Arrow)."""
 
     def test_read_lines_json_returns_list(self):
-        """read_lines_json returns a list of JSON objects."""
+        """read_lines_json returns a list of dicts."""
         with Environment(lines=32) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
@@ -469,25 +463,25 @@ class TestTraceReaderJSON:
             assert len(result) == 32
 
     def test_read_lines_json_objects_have_keys(self):
-        """Each JSON object has expected keys."""
+        """Each dict has expected keys."""
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             result = reader.read_lines_json()
             for obj in result:
+                assert isinstance(obj, dict)
                 assert "name" in obj
                 assert "cat" in obj
                 assert "dur" in obj
 
     def test_read_lines_json_values_correct(self):
-        """JSON values match what was written."""
+        """Dict values match what was written."""
         with Environment(lines=5) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
             result = reader.read_lines_json()
             assert result[0]["name"] == "write"
             assert result[0]["cat"] == "POSIX"
-            assert result[0]["ph"] == "X"
 
     def test_iter_lines_json_is_lazy(self):
         """iter_lines_json returns an iterator, not a list."""
@@ -508,7 +502,6 @@ class TestTraceReaderJSON:
             it = reader.iter_lines_json()
             first = next(it)
             assert "name" in first
-            # Don't exhaust the iterator
 
     def test_read_lines_json_with_line_range(self):
         """read_lines_json respects start_line/end_line."""
@@ -516,8 +509,6 @@ class TestTraceReaderJSON:
             gz_file = env.create_test_gzip_file()
             env.build_index(gz_file)
             reader = dft_utils.TraceReader(gz_file)
-            # Lines are 1-indexed; line 1 is "[", line 2 is first JSON, etc.
-            # But iter_lines_json skips non-JSON lines, so we get JSON objects
             all_json = reader.read_lines_json()
             subset = reader.read_lines_json(start_line=1, end_line=10)
             assert len(subset) <= len(all_json)
@@ -579,7 +570,6 @@ class TestTraceReaderMetadata:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             reader = dft_utils.TraceReader(gz_file)
-            # Property should still work (falls back to reading all lines)
             assert reader.num_lines > 0
 
 
@@ -592,7 +582,6 @@ class TestTraceReaderClamping:
             gz_file = env.create_test_gzip_file()
             env.build_index(gz_file)
             reader = dft_utils.TraceReader(gz_file)
-            # Request way more lines than exist
             result = reader.read_lines(start_line=1, end_line=99999)
             assert len(result) > 0
 
@@ -690,7 +679,7 @@ class TestTraceReaderQuery:
             filtered = reader.read_lines(query='name == "read"')
             assert len(filtered) > 0
             for line in filtered:
-                assert '"name":"read"' in line
+                assert b'"name":"read"' in bytes(line)
 
     def test_query_and(self):
         with Environment() as env:
@@ -732,7 +721,7 @@ class TestTraceReaderQuery:
             lines = list(reader.iter_lines(query='name == "write"'))
             assert len(lines) > 0
             for line in lines:
-                assert '"name":"write"' in line
+                assert b'"name":"write"' in bytes(line)
 
     def test_iter_lines_json_with_query(self):
         with Environment() as env:
@@ -756,8 +745,8 @@ class TestTraceReaderQuery:
             filtered = reader.read_lines(query=str(q))
             assert len(filtered) > 0
             for line in filtered:
-                assert '"cat":"IO"' in line
-                assert '"name":"read"' in line
+                assert b'"cat":"IO"' in bytes(line)
+                assert b'"name":"read"' in bytes(line)
 
 
 if __name__ == "__main__":

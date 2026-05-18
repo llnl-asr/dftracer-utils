@@ -1,14 +1,15 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_VIEWS_VIEW_READER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_VIEWS_VIEW_READER_UTILITY_H
 
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/utilities/streaming_utility.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
-
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
+#include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #endif
 
 #include <cstddef>
@@ -56,6 +57,8 @@ struct ViewReaderBatch {
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     common::arrow::ArrowExportResult to_arrow() const;
+    common::arrow::ArrowExportResult to_arrow(
+        common::arrow::RecordBatchBuilder& builder) const;
 #endif
 };
 

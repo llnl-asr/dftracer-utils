@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_query_utility.h>
 #include <doctest/doctest.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <string>
 
@@ -189,18 +189,16 @@ TEST_SUITE("StatisticsQueryUtility") {
             auto output = query.process(input).get();
             std::string json = output.to_json();
 
-            yyjson_doc* doc =
-                yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-            REQUIRE(doc != nullptr);
+            simdjson::dom::parser parser;
+            auto result = parser.parse(json);
+            REQUIRE(!result.error());
 
-            yyjson_val* root = yyjson_doc_get_root(doc);
-            REQUIRE(yyjson_is_obj(root));
+            auto root = result.value_unsafe();
+            REQUIRE(root.is_object());
 
             // query_type field should always be present
-            CHECK(yyjson_obj_get(root, "query_type") != nullptr);
-            CHECK(yyjson_obj_get(root, "total_events") != nullptr);
-
-            yyjson_doc_free(doc);
+            CHECK(!root["query_type"].error());
+            CHECK(!root["total_events"].error());
         }
     }
 }

@@ -6,6 +6,8 @@
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/pipeline/watchdog.h>
 #include <dftracer/utils/core/task_handle.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/utilities/utility_traits.h>
 
 #include <atomic>
 #include <chrono>
@@ -18,6 +20,23 @@
 #include <vector>
 
 namespace dftracer::utils {
+
+namespace detail {
+
+template <typename UtilityT, typename InputT>
+coro::CoroTask<void> run_scoped_utility(CoroScope& scope, UtilityT* utility,
+                                        InputT input) {
+    utility->set_context(scope);
+    try {
+        co_await utility->process(std::move(input));
+        utility->clear_context();
+    } catch (...) {
+        utility->clear_context();
+        throw;
+    }
+}
+
+}  // namespace detail
 
 /// Lightweight wrapper around Executor + Watchdog for running coroutines
 /// on a thread pool without Pipeline/Scheduler/DAG overhead.
@@ -41,6 +60,44 @@ class Runtime {
     template <typename T>
     TypedTaskHandle<T> submit(coro::CoroTask<T> task, std::string name = "");
 
+    /// Submit a scoped task (provides CoroScope to the lambda).
+    /// Returns immediately, task runs on executor.
+    ///
+    /// Usage:
+    /// @code
+    /// auto handle = rt->scope("my_task", [](CoroScope& scope) ->
+    /// CoroTask<void> {
+    ///     scope.spawn([](CoroScope& s) -> CoroTask<void> { co_return; });
+    ///     co_await scope.join();
+    /// });
+    /// handle.get();  // wait when needed
+    /// @endcode
+    template <typename Func>
+        requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&>
+    TaskHandle scope(std::string name, Func&& func) {
+        return submit(run_coro_scope(executor_.get(), std::forward<Func>(func)),
+                      std::move(name));
+    }
+
+    /// Submit a NeedsContext utility with automatic context injection.
+    ///
+    /// Usage:
+    /// @code
+    /// AggregatorUtility util;
+    /// rt->scope("aggregator", util, input).get();
+    /// @endcode
+    template <typename UtilityT, typename InputT,
+              typename DecayedUtility = std::remove_reference_t<UtilityT>>
+        requires utilities::has_tag_v<utilities::tags::NeedsContext,
+                                      DecayedUtility>
+    TaskHandle scope(std::string name, UtilityT& utility, InputT input) {
+        return submit(
+            run_coro_scope(executor_.get(),
+                           detail::run_scoped_utility<UtilityT, InputT>,
+                           &utility, std::move(input)),
+            std::move(name));
+    }
+
     /// Wait for all outstanding tasks to complete.
     void wait_all();
 
@@ -52,6 +109,7 @@ class Runtime {
 
     void shutdown();
     std::size_t threads() const;
+    std::size_t io_threads() const;
     Executor* executor() { return executor_.get(); }
     Watchdog* watchdog() { return watchdog_.get(); }
 
@@ -107,6 +165,14 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
         vp->set_value();
     };
 
+    // Set the executor on the task's promise so awaitables (e.g. channels)
+    // that capture `get_root_promise()->get_executor()` can schedule
+    // resumption. Without this, awaiters end up with executor=nullptr because
+    // the wrapping `coro::Coro` doesn't extend PromiseBase and the
+    // root-promise chain stops at the user's CoroTask.
+    if (task.handle()) {
+        task.handle().promise().set_executor(executor_.get());
+    }
     auto coro = wrapper(std::move(task), typed_promise, void_promise,
                         executor_.get(), tid);
     TaskIndex id = executor_->enqueue_tracked(std::move(coro), name, tid);

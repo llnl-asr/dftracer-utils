@@ -2,35 +2,61 @@
 #include <dftracer/utils/call_tree/internal/call_tree.h>
 #include <dftracer/utils/call_tree/internal/process_key.h>
 #include <dftracer/utils/call_tree/internal/trace_reader.h>
-#include <dftracer/utils/call_tree/json_serializer.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
-#include <ctime>
-#include <fstream>
-#include <iomanip>
-#include <iostream>
 #include <set>
-#include <sstream>
 
 namespace dftracer::utils::call_tree {
 
 namespace internal {
 
-/**
- * Internal implementation class (PIMPL pattern)
- * Hides complex CallTree internals from public API
- */
+namespace {
+
+std::unordered_map<std::string, std::string> args_to_string_map(
+    const ArgsMap& args) {
+    std::unordered_map<std::string, std::string> out;
+    args.for_each_member(
+        [&](std::string_view k,
+            dftracer::utils::utilities::composites::dft::ArgsValueProxy v) {
+            std::string val;
+            if (v.is_string())
+                val = v.get<std::string>();
+            else if (v.is_int())
+                val = std::to_string(v.get<std::int64_t>());
+            else if (v.is_uint())
+                val = std::to_string(v.get<std::uint64_t>());
+            else if (v.is_number())
+                val = std::to_string(v.get<double>());
+            else if (v.is_bool())
+                val = v.get<bool>() ? "true" : "false";
+            out.emplace(std::string(k), std::move(val));
+        });
+    return out;
+}
+
+void fill_node_info(const CallTreeNode& node, CallTreeNodeInfo& info) {
+    info.id = node.get_id();
+    info.name = std::string(node.get_name());
+    info.category = std::string(node.get_category());
+    info.start_time_us = node.get_start_time();
+    info.duration_us = node.get_duration();
+    info.level = node.get_level();
+    info.parent_id = node.get_parent_id();
+    info.num_children = node.get_children().size();
+    info.children_ids = node.get_children();
+    info.args = args_to_string_map(node.get_args());
+}
+
+}  // namespace
+
 class CallTreeImpl {
    public:
     CallTree graph;
     std::vector<std::string> trace_files;
     std::string trace_directory;
-    std::string output_path;
     bool is_generated;
 
     CallTreeImpl() : is_generated(false) { graph.initialize(); }
@@ -99,58 +125,12 @@ class CallTreeImpl {
         }
 
         const auto& node = it->second;
-
-        // Add current node
         CallTreeNodeInfo info;
-        info.id = node->get_id();
-        info.name = node->get_name();
-        info.category = node->get_category();
-        info.start_time_us = node->get_start_time();
-        info.duration_us = node->get_duration();
-        info.level = node->get_level();
-        info.parent_id = node->get_parent_id();
-        info.num_children = node->get_children().size();
-        info.children_ids = node->get_children();
-        info.args = node->get_args();
+        fill_node_info(*node, info);
+        nodes.push_back(std::move(info));
 
-        nodes.push_back(info);
-
-        // Recursively traverse children
         for (std::uint64_t child_id : node->get_children()) {
             traverse_depth_first(process_graph, child_id, nodes);
-        }
-    }
-
-    void print_node_recursive(const ProcessCallTree& process_graph,
-                              std::uint64_t node_id, int indent, int max_depth,
-                              std::ostream& out) const {
-        if (max_depth > 0 && indent >= max_depth) {
-            return;
-        }
-
-        auto it = process_graph.calls.find(node_id);
-        if (it == process_graph.calls.end()) {
-            return;
-        }
-
-        const auto& node = it->second;
-
-        // Print indentation
-        for (int i = 0; i < indent; i++) {
-            out << "  ";
-        }
-
-        // Print node info
-        out << node->get_name() << " [" << node->get_category() << "] "
-            << "level=" << node->get_level() << " "
-            << "dur=" << (static_cast<double>(node->get_duration()) / 1000.0)
-            << "ms "
-            << "children=" << node->get_children().size() << "\n";
-
-        // Print children
-        for (std::uint64_t child_id : node->get_children()) {
-            print_node_recursive(process_graph, child_id, indent + 1, max_depth,
-                                 out);
         }
     }
 
@@ -174,9 +154,11 @@ class CallTreeImpl {
         }
 
         // Print node info
-        printf("%s [%s] level=%d dur=%.3fms children=%zu\n",
-               node->get_name().c_str(), node->get_category().c_str(),
-               node->get_level(),
+        auto nm = node->get_name();
+        auto ct = node->get_category();
+        printf("%.*s [%.*s] level=%d dur=%.3fms children=%zu\n",
+               static_cast<int>(nm.size()), nm.data(),
+               static_cast<int>(ct.size()), ct.data(), node->get_level(),
                static_cast<double>(node->get_duration()) / 1000.0,
                node->get_children().size());
 
@@ -243,11 +225,6 @@ bool CallTree::load_from_directory(const std::string& trace_dir,
     if (found) {
         DFTRACER_UTILS_LOG_INFO("Found %zu trace files in %s",
                                 impl_->trace_files.size(), trace_dir.c_str());
-
-        // Set default output path
-        fs::path dir_path(trace_dir);
-        std::string dir_name = dir_path.filename().string();
-        impl_->output_path = dir_name + ".calltree";
     }
 
     return found;
@@ -305,44 +282,6 @@ void CallTree::print_depth_first(int max_depth) const {
     }
 }
 
-bool CallTree::print_depth_first_to_file(const std::string& filename,
-                                         int max_depth) const {
-    if (!impl_->is_generated) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "%s", "Call tree not generated. Call generate() first.");
-        return false;
-    }
-
-    std::ofstream file(filename);
-    if (!file.is_open()) {
-        DFTRACER_UTILS_LOG_ERROR("Cannot open file for writing: %s",
-                                 filename.c_str());
-        return false;
-    }
-
-    auto keys = impl_->graph.keys();
-
-    for (const auto& key : keys) {
-        auto* process_graph = impl_->graph.get(key);
-        if (!process_graph) continue;
-
-        file << "\n=== Process/Thread: PID=" << key.pid << ", TID=" << key.tid
-             << ", Node=" << key.node_id << " ===" << std::endl;
-        file << "Total nodes: " << process_graph->calls.size() << std::endl;
-        file << "Root calls: " << process_graph->root_calls.size() << std::endl;
-        file << std::endl;
-
-        for (std::uint64_t root_id : process_graph->root_calls) {
-            impl_->print_node_recursive(*process_graph, root_id, 0, max_depth,
-                                        file);
-        }
-    }
-
-    file.close();
-    DFTRACER_UTILS_LOG_INFO("Call tree printed to: %s", filename.c_str());
-    return true;
-}
-
 std::vector<CallTreeNodeInfo> CallTree::get_nodes_depth_first() const {
     std::vector<CallTreeNodeInfo> all_nodes;
 
@@ -364,241 +303,6 @@ std::vector<CallTreeNodeInfo> CallTree::get_nodes_depth_first() const {
     }
 
     return all_nodes;
-}
-
-std::string CallTree::get_output_path() const { return impl_->output_path; }
-
-void CallTree::set_output_path(const std::string& path) {
-    impl_->output_path = path;
-}
-
-bool CallTree::save_to_file(const std::string& filename) const {
-    if (!impl_->is_generated) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "%s", "Call tree not generated. Call generate() first.");
-        return false;
-    }
-
-    std::string output_file = filename.empty() ? impl_->output_path : filename;
-
-    std::ofstream file(output_file, std::ios::binary);
-    if (!file.is_open()) {
-        DFTRACER_UTILS_LOG_ERROR("Cannot open file for writing: %s",
-                                 output_file.c_str());
-        return false;
-    }
-
-    // Write header
-    const char magic[8] = {'C', 'A', 'L', 'L', 'T', 'R', 'E', 'E'};
-    file.write(magic, 8);
-
-    std::uint32_t version = 1;
-    file.write(reinterpret_cast<const char*>(&version), sizeof(version));
-
-    // Get nodes in depth-first order
-    auto nodes = get_nodes_depth_first();
-
-    std::uint64_t num_nodes = nodes.size();
-    file.write(reinterpret_cast<const char*>(&num_nodes), sizeof(num_nodes));
-
-    // Write each node
-    for (const auto& node : nodes) {
-        file.write(reinterpret_cast<const char*>(&node.id), sizeof(node.id));
-
-        std::uint32_t name_len = static_cast<std::uint32_t>(node.name.size());
-        file.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
-        file.write(node.name.data(), name_len);
-
-        std::uint32_t cat_len =
-            static_cast<std::uint32_t>(node.category.size());
-        file.write(reinterpret_cast<const char*>(&cat_len), sizeof(cat_len));
-        file.write(node.category.data(), cat_len);
-
-        file.write(reinterpret_cast<const char*>(&node.start_time_us),
-                   sizeof(node.start_time_us));
-        file.write(reinterpret_cast<const char*>(&node.duration_us),
-                   sizeof(node.duration_us));
-        file.write(reinterpret_cast<const char*>(&node.level),
-                   sizeof(node.level));
-        file.write(reinterpret_cast<const char*>(&node.parent_id),
-                   sizeof(node.parent_id));
-
-        std::uint64_t num_children = node.num_children;
-        file.write(reinterpret_cast<const char*>(&num_children),
-                   sizeof(num_children));
-    }
-
-    file.close();
-    DFTRACER_UTILS_LOG_INFO("Call tree saved to: %s", output_file.c_str());
-    DFTRACER_UTILS_LOG_INFO("  Nodes written: %zu", nodes.size());
-
-    return true;
-}
-
-bool CallTree::save_to_json(const std::string& filename) const {
-    if (!impl_->is_generated) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "%s", "Call tree not generated. Call generate() first.");
-        return false;
-    }
-
-    // Determine output file - use .pfw extension for compatibility with
-    // DFTracer tools
-    std::string output_file = filename;
-    if (output_file.empty()) {
-        // Replace .calltree extension with .pfw if present, otherwise append
-        std::string base = impl_->output_path;
-        if (base.size() >= 9 && base.substr(base.size() - 9) == ".calltree") {
-            base = base.substr(0, base.size() - 9);
-        }
-        output_file = base + ".pfw";
-    }
-
-    std::ofstream file(output_file);
-    if (!file.is_open()) {
-        DFTRACER_UTILS_LOG_ERROR("Cannot open file for writing: %s",
-                                 output_file.c_str());
-        return false;
-    }
-
-    DFTRACER_UTILS_LOG_INFO(
-        "%s", "Serializing call tree to JSON (Chrome Tracing format)...");
-
-    // Create JSON serializer
-    internal::JsonSerializer serializer;
-
-    // Buffer for serialization (16KB should be enough for most events)
-    const size_t BUFFER_SIZE = 16384;
-    char buffer[BUFFER_SIZE];
-
-    // Get hostname for identification
-    char hostname[256];
-    gethostname(hostname, sizeof(hostname));
-    std::string hostname_hash = std::string(hostname);
-
-    // Write opening bracket
-    size_t written = serializer.initialize(buffer, hostname_hash);
-    file.write(buffer, written);
-
-    // Write metadata events for file header
-    std::time_t now = std::time(nullptr);
-    char timestamp[256];
-    std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S",
-                  std::localtime(&now));
-
-    written = serializer.serialize_metadata(buffer, "timestamp", timestamp, "M",
-                                            0, 0, true);
-    file.write(buffer, written - 1);  // Don't write the newline yet
-    file.write(",\n", 2);             // Write comma separator
-
-    written = serializer.serialize_metadata(buffer, "format", "call_tree", "M",
-                                            0, 0, true);
-    file.write(buffer, written - 1);
-    file.write(",\n", 2);
-
-    // Get all process keys
-    auto keys = impl_->graph.keys();
-
-    // Track event index (similar to DFTracer)
-    int event_index = 0;
-    size_t total_events = 0;
-
-    // Iterate over all processes/threads
-    for (const auto& key : keys) {
-        auto* process_graph = impl_->graph.get(key);
-        if (!process_graph) continue;
-
-        // Traverse and serialize nodes in depth-first order
-        for (std::uint64_t root_id : process_graph->root_calls) {
-            std::vector<std::uint64_t> stack;
-            stack.push_back(root_id);
-
-            while (!stack.empty()) {
-                std::uint64_t node_id = stack.back();
-                stack.pop_back();
-
-                auto it = process_graph->calls.find(node_id);
-                if (it == process_graph->calls.end()) continue;
-
-                const auto& node = it->second;
-
-                // Serialize this node
-                written = serializer.serialize_node(buffer, event_index++,
-                                                    *node, key.pid, key.tid);
-
-                // Write to file with comma separator (except last event)
-                file.write(buffer, written - 1);  // Don't write newline
-
-                // Add children to stack in reverse order for depth-first
-                const auto& children = node->get_children();
-                for (auto child_it = children.rbegin();
-                     child_it != children.rend(); ++child_it) {
-                    stack.push_back(*child_it);
-                }
-
-                // Write comma separator for next event
-                file.write(",\n", 2);
-                total_events++;
-            }
-        }
-    }
-
-    // Write closing bracket (overwrites the last comma)
-    file.seekp(-2, std::ios::cur);  // Back up over ",\n"
-    file.write("\n", 1);            // Just write newline
-
-    written = serializer.finalize(buffer, true);
-    file.write(buffer, written);
-
-    file.close();
-
-    DFTRACER_UTILS_LOG_INFO("Call tree saved to JSON: %s", output_file.c_str());
-    DFTRACER_UTILS_LOG_INFO("  Total events: %zu", total_events);
-    DFTRACER_UTILS_LOG_INFO("  Unique processes: %zu", keys.size());
-    DFTRACER_UTILS_LOG_INFO(
-        "%s", "  Format: Chrome Tracing (compatible with Perfetto)");
-
-    return true;
-}
-
-bool CallTree::load_from_file(const std::string& filename) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file.is_open()) {
-        DFTRACER_UTILS_LOG_ERROR("Cannot open file for reading: %s",
-                                 filename.c_str());
-        return false;
-    }
-
-    // Read and verify header
-    char magic[8];
-    file.read(magic, 8);
-
-    if (std::memcmp(magic, "CALLTREE", 8) != 0) {
-        DFTRACER_UTILS_LOG_ERROR("%s", "Invalid file format");
-        return false;
-    }
-
-    std::uint32_t version;
-    file.read(reinterpret_cast<char*>(&version), sizeof(version));
-
-    if (version != 1) {
-        DFTRACER_UTILS_LOG_ERROR("Unsupported version: %u", version);
-        return false;
-    }
-
-    std::uint64_t num_nodes;
-    file.read(reinterpret_cast<char*>(&num_nodes), sizeof(num_nodes));
-
-    DFTRACER_UTILS_LOG_INFO("Loading %lu nodes from %s",
-                            (unsigned long)num_nodes, filename.c_str());
-
-    // Note: This is a simplified load that just verifies the file
-    // Full reconstruction would require rebuilding the CallTree structure
-
-    file.close();
-    DFTRACER_UTILS_LOG_INFO("%s", "Call tree file validated successfully");
-
-    return true;
 }
 
 CallTreeStats CallTree::get_statistics() const {
@@ -687,6 +391,11 @@ void CallTree::print_statistics() const {
 
 bool CallTree::is_generated() const { return impl_->is_generated; }
 
+internal::CallTree& CallTree::internal_tree() { return impl_->graph; }
+const internal::CallTree& CallTree::internal_tree() const {
+    return impl_->graph;
+}
+
 size_t CallTree::get_num_trace_files() const {
     return impl_->trace_files.size();
 }
@@ -696,7 +405,6 @@ void CallTree::clear() {
     impl_->graph.initialize();
     impl_->trace_files.clear();
     impl_->trace_directory.clear();
-    impl_->output_path.clear();
     impl_->is_generated = false;
 }
 
@@ -758,18 +466,8 @@ std::vector<CallTreeNodeInfo> CallTree::get_root_nodes(
             const auto& node = it->second;
 
             CallTreeNodeInfo info;
-            info.id = node->get_id();
-            info.name = node->get_name();
-            info.category = node->get_category();
-            info.start_time_us = node->get_start_time();
-            info.duration_us = node->get_duration();
-            info.level = node->get_level();
-            info.parent_id = node->get_parent_id();
-            info.num_children = node->get_children().size();
-            info.children_ids = node->get_children();
-            info.args = node->get_args();
-
-            root_nodes.push_back(info);
+            internal::fill_node_info(*node, info);
+            root_nodes.push_back(std::move(info));
         }
     }
 
@@ -798,17 +496,7 @@ CallTreeNodeInfo CallTree::get_node_by_id(std::uint64_t id) const {
             const auto& node = it->second;
 
             CallTreeNodeInfo info;
-            info.id = node->get_id();
-            info.name = node->get_name();
-            info.category = node->get_category();
-            info.start_time_us = node->get_start_time();
-            info.duration_us = node->get_duration();
-            info.level = node->get_level();
-            info.parent_id = node->get_parent_id();
-            info.num_children = node->get_children().size();
-            info.children_ids = node->get_children();
-            info.args = node->get_args();
-
+            internal::fill_node_info(*node, info);
             return info;
         }
     }

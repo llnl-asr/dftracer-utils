@@ -62,8 +62,9 @@ struct CallTreeStats {
 
 // Forward declarations
 namespace internal {
+class CallTree;
 class CallTreeImpl;
-}
+}  // namespace internal
 
 /**
  * @brief Simple, clean API for working with call trees from DFTracer traces.
@@ -114,64 +115,10 @@ class CallTree {
      */
     bool generate();
 
-    /**
-     * Print the call tree in depth-first order to stdout
-     * @param max_depth Maximum depth to print (0 = unlimited)
-     */
+    /// Print depth-first tree to stdout. max_depth=0 means unlimited.
     void print_depth_first(int max_depth = 0) const;
 
-    /**
-     * Print the call tree to a file in depth-first order
-     * @param filename Output file path
-     * @param max_depth Maximum depth to print (0 = unlimited)
-     * @return true if successful, false otherwise
-     */
-    bool print_depth_first_to_file(const std::string& filename,
-                                   int max_depth = 0) const;
-
-    /**
-     * Get list of nodes in depth-first traversal order
-     * Returns simple node info structures (no complex internals)
-     * @return Vector of node information structures
-     */
     std::vector<CallTreeNodeInfo> get_nodes_depth_first() const;
-
-    /**
-     * Get the path where serialized tree would be saved
-     * @return Default output path based on input directory
-     */
-    std::string get_output_path() const;
-
-    /**
-     * Set custom output path for serialization
-     * @param path Custom output file path
-     */
-    void set_output_path(const std::string& path);
-
-    /**
-     * Serialize and save call tree to file in binary format
-     * @param filename Output file path (optional, uses get_output_path() if
-     * empty)
-     * @return true if successful, false otherwise
-     */
-    bool save_to_file(const std::string& filename = "") const;
-
-    /**
-     * Serialize and save call tree to file in JSON format (Chrome
-     * Tracing/Perfetto compatible) Follows DFTracer serialization format for
-     * compatibility with existing analysis tools
-     * @param filename Output file path (optional, uses get_output_path() with
-     * .pfw extension if empty)
-     * @return true if successful, false otherwise
-     */
-    bool save_to_json(const std::string& filename = "") const;
-
-    /**
-     * Load call tree from previously saved file
-     * @param filename Input file path
-     * @return true if successful, false otherwise
-     */
-    bool load_from_file(const std::string& filename);
 
     /**
      * Get aggregate statistics about the call tree
@@ -235,6 +182,12 @@ class CallTree {
      * @return Node information (empty if not found)
      */
     CallTreeNodeInfo get_node_by_id(std::uint64_t id) const;
+
+    /// Direct access to the underlying internal::CallTree. Use with the
+    /// save_binary / save_arrow coroutines in mpi/serializable.h. Returns a
+    /// reference; callers must keep the CallTree alive while it's in use.
+    internal::CallTree& internal_tree();
+    const internal::CallTree& internal_tree() const;
 
    private:
     std::unique_ptr<internal::CallTreeImpl> impl_;

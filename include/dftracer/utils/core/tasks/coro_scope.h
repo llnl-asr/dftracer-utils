@@ -10,6 +10,9 @@
 #include <dftracer/utils/core/coro/spawn_future.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/executor.h>
+#include <dftracer/utils/core/utilities/tags/needs_context.h>
+#include <dftracer/utils/core/utilities/utility.h>
+#include <dftracer/utils/core/utilities/utility_traits.h>
 
 #include <atomic>
 #include <cstddef>
@@ -246,6 +249,32 @@ class CoroScope {
         return coro::SpawnFuture<R>(std::move(state));
     }
 
+    template <typename UtilityT, typename InputT,
+              typename DecayedUtility = std::remove_reference_t<UtilityT>,
+              typename R = typename DecayedUtility::Output,
+              std::enable_if_t<
+                  utilities::detail::has_process_v<DecayedUtility, InputT, R>,
+                  int> = 0>
+    coro::SpawnFuture<R> spawn(UtilityT& utility, InputT input) {
+        return spawn([utility_ptr = &utility, input = std::move(input)](
+                         CoroScope& child_scope) mutable -> coro::CoroTask<R> {
+            if constexpr (utilities::has_tag_v<utilities::tags::NeedsContext,
+                                               DecayedUtility>) {
+                utility_ptr->set_context(child_scope);
+                try {
+                    R result = co_await utility_ptr->process(input);
+                    utility_ptr->clear_context();
+                    co_return result;
+                } catch (...) {
+                    utility_ptr->clear_context();
+                    throw;
+                }
+            } else {
+                co_return co_await utility_ptr->process(input);
+            }
+        });
+    }
+
     // ====================================================================
     // Channel Operations
     // ====================================================================
@@ -395,9 +424,9 @@ class CoroScope {
     void spawn_consumers(std::shared_ptr<coro::Channel<T>> channel,
                          std::size_t count, Func&& consumer_func) {
         for (std::size_t i = 0; i < count; i++) {
-            spawn([channel, func = consumer_func](
+            spawn([ch = channel->consumer(), func = consumer_func](
                       CoroScope& scope) -> coro::CoroTask<void> {
-                while (auto item = co_await channel->receive()) {
+                while (auto item = co_await ch.receive()) {
                     co_await func(scope, std::move(*item));
                 }
                 co_return;
@@ -530,14 +559,15 @@ class CoroScope {
 // Creates a child CoroScope, runs the lambda, and auto-joins.
 // ========================================================================
 
-template <typename Func>
-    requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&>
-inline coro::CoroTask<void> run_coro_scope(Executor* executor,
-                                           Func scope_func) {
+template <typename Func, typename... Args>
+    requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&,
+                                   Args...>
+inline coro::CoroTask<void> run_coro_scope(Executor* executor, Func scope_func,
+                                           Args... args) {
     CoroScope scope(executor);
     std::exception_ptr error;
     try {
-        co_await scope_func(scope);
+        co_await scope_func(scope, std::move(args)...);
     } catch (...) {
         error = std::current_exception();
     }

@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 
@@ -33,19 +34,19 @@ TEST_SUITE("ManifestQueries") {
         std::string index_path = test_dir + "/test.pfw.gz.idx";
 
         IndexDatabase idx_db(index_path);
-        idx_db.init_base_schema();
-        idx_db.init_manifest_schema();
-        int fid =
-            idx_db.get_or_create_file_info(get_logical_path("test.pfw.gz"), 0);
+        int fid;
+        {
+            auto writer = idx_db.begin_write();
+            writer->init_schema();
+            fid = writer->get_or_create_file_info(
+                get_logical_path("test.pfw.gz"), 0);
 
-        idx_db.begin_transaction();
-
-        idx_db.insert_event_range(fid, 0, "POSIX", "read", {0, 2, 5});
-        idx_db.insert_event_range(fid, 0, "POSIX", "write", {1});
-        idx_db.insert_event_range(fid, 0, "APP", "compute", {3, 4});
-        idx_db.insert_event_range(fid, 1, "POSIX", "read", {0, 1});
-
-        idx_db.commit_transaction();
+            writer->insert_event_range(fid, 0, "POSIX", "read", {0, 2, 5});
+            writer->insert_event_range(fid, 0, "POSIX", "write", {1});
+            writer->insert_event_range(fid, 0, "APP", "compute", {3, 4});
+            writer->insert_event_range(fid, 1, "POSIX", "read", {0, 1});
+            writer->commit();
+        }
 
         auto all = idx_db.query_event_ranges(fid);
         CHECK(all.size() == 4);
@@ -71,18 +72,18 @@ TEST_SUITE("ManifestQueries") {
         std::string index_path = test_dir + "/test.pfw.gz.idx";
 
         IndexDatabase idx_db(index_path);
-        idx_db.init_base_schema();
-        idx_db.init_manifest_schema();
-        int fid =
-            idx_db.get_or_create_file_info(get_logical_path("test.pfw.gz"), 0);
+        int fid;
+        {
+            auto writer = idx_db.begin_write();
+            writer->init_schema();
+            fid = writer->get_or_create_file_info(
+                get_logical_path("test.pfw.gz"), 0);
 
-        idx_db.begin_transaction();
-
-        idx_db.insert_metadata_lines(fid, 0, "HH", {0, 3});
-        idx_db.insert_metadata_lines(fid, 0, "FH", {1});
-        idx_db.insert_metadata_lines(fid, 1, "HH", {0});
-
-        idx_db.commit_transaction();
+            writer->insert_metadata_lines(fid, 0, "HH", {0, 3});
+            writer->insert_metadata_lines(fid, 0, "FH", {1});
+            writer->insert_metadata_lines(fid, 1, "HH", {0});
+            writer->commit();
+        }
 
         auto all = idx_db.query_metadata_lines(fid);
         CHECK(all.size() == 3);
@@ -104,23 +105,33 @@ TEST_SUITE("ManifestQueries") {
         std::string index_path = test_dir + "/test.pfw.gz.idx";
 
         IndexDatabase idx_db(index_path);
-        idx_db.init_base_schema();
-        idx_db.init_manifest_schema();
-        int fid =
-            idx_db.get_or_create_file_info(get_logical_path("test.pfw.gz"), 0);
+        int fid;
+        {
+            auto writer = idx_db.begin_write();
+            writer->init_schema();
+            fid = writer->get_or_create_file_info(
+                get_logical_path("test.pfw.gz"), 0);
 
-        idx_db.begin_transaction();
-        idx_db.insert_event_range(fid, 0, "POSIX", "read", {0, 1});
-        idx_db.insert_metadata_lines(fid, 0, "HH", {2});
-        idx_db.commit_transaction();
+            writer->insert_event_range(fid, 0, "POSIX", "read", {0, 1});
+            writer->insert_metadata_lines(fid, 0, "HH", {2});
+            writer->commit();
+        }
 
         CHECK(idx_db.query_event_ranges(fid).size() == 1);
         CHECK(idx_db.query_metadata_lines(fid).size() == 1);
 
-        idx_db.delete_event_ranges(fid);
+        {
+            auto writer = idx_db.begin_write();
+            writer->delete_event_ranges(fid);
+            writer->commit();
+        }
         CHECK(idx_db.query_event_ranges(fid).empty());
 
-        idx_db.delete_metadata_lines(fid);
+        {
+            auto writer = idx_db.begin_write();
+            writer->delete_metadata_lines(fid);
+            writer->commit();
+        }
         CHECK(idx_db.query_metadata_lines(fid).empty());
 
         fs::remove_all(test_dir);

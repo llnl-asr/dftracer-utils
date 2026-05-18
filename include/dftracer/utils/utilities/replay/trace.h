@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -34,11 +35,15 @@ using ViewFields = std::unordered_map<std::string, std::string>;
  * Contains all information needed for replay operations
  */
 struct Trace {
-    // Category and function identification
-    std::string cat;        // Category (e.g., "posix", "stdio", "h5py")
-    std::string io_cat;     // I/O category (read, write, metadata)
-    std::string acc_pat;    // Access pattern
-    std::string func_name;  // Function name (e.g., "read", "write", "open")
+    // Category and function identification.
+    // Short-lived enum-like strings (cat/func_name) and per-event hashes
+    // (fhash/hhash) are non-owning views into a process-wide StringIntern
+    // pool; the pool keeps them alive for the program lifetime so the
+    // views remain valid past the parser that produced them.
+    std::string_view cat;        // Category (e.g., "posix", "stdio", "h5py")
+    std::string io_cat;          // I/O category (read, write, metadata)
+    std::string acc_pat;         // Access pattern
+    std::string_view func_name;  // Function name (e.g., "read", "write")
 
     // Timing information
     double duration;           // Duration in microseconds
@@ -53,8 +58,8 @@ struct Trace {
     std::uint64_t tid;  // Thread ID
 
     // File identification
-    std::string fhash;       // File hash
-    std::string hhash;       // Host hash
+    std::string_view fhash;  // File hash (interned)
+    std::string_view hhash;  // Host hash (interned)
     std::uint64_t image_id;  // Image ID
 
     // Trace type

@@ -4,19 +4,63 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/index_visitor.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
+#include <dftracer/utils/utilities/indexer/internal/common/gzip_member_scanner.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace dftracer::utils::utilities::indexer::internal::gzip {
+
+struct GzipBuildArtifacts {
+    std::uint64_t checkpoint_size = 0;
+    std::uint64_t total_lines = 0;
+    std::uint64_t total_uc_size = 0;
+    std::vector<IndexerCheckpoint> checkpoints;
+};
+
+/// Optional slice of a multi-member gzip file. When set, the indexer
+/// processes only members `[member_begin, member_end)` of the file
+/// (byte range `[members[member_begin].c_offset, members[member_end-1]
+/// .c_offset + members[member_end-1].c_size)`). Used for cross-rank
+/// splitting of large files; uc_offsets/line numbers in emitted
+/// checkpoints are slice-local and `checkpoint_idx` is offset by
+/// `checkpoint_idx_base` so multiple ranks writing the same file_id
+/// produce disjoint keys.
+struct GzipMemberSlice {
+    const std::vector<internal::GzipMember> *members = nullptr;
+    std::size_t member_begin = 0;
+    std::size_t member_end = 0;  // exclusive
+    std::uint64_t checkpoint_idx_base = 0;
+};
+
+/// Build gzip index artifacts (checkpoints, dispatched visitor events).
+///
+/// When `scope` is non-null and the input is multi-member gzip (the
+/// dftracer runtime format), the inflate pass is parallelised across the
+/// scope's executor. On single-member files or when `scope` is null,
+/// falls back to the serial inflate loop with identical semantics.
+///
+/// When `slice` is non-null, only the specified member range is
+/// processed. The caller is responsible for ensuring `slice->members`
+/// outlives this coroutine.
+coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
+    const std::string &gz_path, std::uint64_t ckpt_size,
+    const Indexer::VisitorList &visitors, CoroScope *scope = nullptr,
+    const GzipMemberSlice *slice = nullptr);
+
+void persist_gzip_index_artifacts(IndexDatabaseWriterContext &db, int file_id,
+                                  const GzipBuildArtifacts &artifacts);
 
 class GzipIndexer : public Indexer {
    public:

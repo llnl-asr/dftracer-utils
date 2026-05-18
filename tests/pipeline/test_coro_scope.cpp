@@ -123,7 +123,7 @@ TEST_CASE("CoroScope - Producer-consumer with channel (shared_ptr)") {
             auto channel = coro::make_channel<int>(16);
 
             co_await ctx.coro_scope(
-                [&sum, channel](CoroScope& scope) -> coro::CoroTask<void> {
+                [&sum, &channel](CoroScope& scope) -> coro::CoroTask<void> {
                     scope.spawn_producer(
                         channel, [](CoroScope&) -> coro::Generator<int> {
                             for (int i = 1; i <= 10; ++i) {
@@ -164,8 +164,8 @@ TEST_CASE("CoroScope - Transform pipeline") {
             auto output = coro::make_channel<int>(16);
 
             co_await ctx.coro_scope(
-                [&sum, input,
-                 output](CoroScope& scope) -> coro::CoroTask<void> {
+                [&sum, &input,
+                 &output](CoroScope& scope) -> coro::CoroTask<void> {
                     // Producer: 1..5
                     scope.spawn_producer(
                         input, [](CoroScope&) -> coro::Generator<int> {
@@ -242,12 +242,12 @@ TEST_CASE("CoroScope - spawn_producers (N producers, shared_ptr)") {
             auto channel = coro::make_channel<int>(32);
 
             co_await ctx.coro_scope(
-                [&sum, channel](CoroScope& scope) -> coro::CoroTask<void> {
+                [&sum, &channel](CoroScope& scope) -> coro::CoroTask<void> {
                     // 3 producers, each sends its index
                     scope.spawn_producers(
                         channel, 3,
-                        [channel](CoroScope&,
-                                  std::size_t idx) -> coro::CoroTask<void> {
+                        [&channel](CoroScope&,
+                                   std::size_t idx) -> coro::CoroTask<void> {
                             int val = static_cast<int>(idx + 1);
                             co_await channel->send(val);
                             co_return;

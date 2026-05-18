@@ -607,12 +607,12 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
 
     ~DfTracerFileSystem() override { fallback_pool_.stop(); }
 
-    static const char* kClassName() { return "DfTracerFileSystem"; }
+    static const char* class_name() { return "DfTracerFileSystem"; }
 
-    const char* Name() const override { return kClassName(); }
+    const char* Name() const override { return class_name(); }
 
     bool IsInstanceOf(const std::string& name) const override {
-        return name == kClassName() ||
+        return name == class_name() ||
                LocalFileSystemWrapper::IsInstanceOf(name);
     }
 

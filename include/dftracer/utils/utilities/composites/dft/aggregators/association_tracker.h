@@ -1,19 +1,17 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_ASSOCIATION_TRACKER_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_ASSOCIATION_TRACKER_H
 
-#include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
+#include <dftracer/utils/utilities/composites/dft/args_map.h>
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
-
-// Import JsonValue from common json namespace
-using dftracer::utils::utilities::common::json::JsonValue;
 
 struct BoundaryInterval {
     std::string name;
@@ -34,7 +32,9 @@ class AssociationTracker {
    public:
     AssociationTracker() = default;
 
-    void extract_from_event(const JsonValue& json, const JsonValue& args,
+    void extract_from_event(std::string_view name, std::uint64_t pid,
+                            std::uint64_t ts, std::uint64_t dur,
+                            const ArgsMap& args,
                             const AggregationConfig& config);
     void finalize();
 
@@ -51,6 +51,9 @@ class AssociationTracker {
 
     std::unordered_set<std::uint64_t> get_root_pids() const;
     void merge(const AssociationTracker& other);
+
+    std::string serialize() const;
+    static AssociationTracker deserialize(std::string_view data);
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

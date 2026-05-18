@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <doctest/doctest.h>
+#include <simdjson.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
-#include <yyjson.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -264,72 +264,75 @@ TEST_SUITE("DFTracerComparator") {
         REQUIRE(!content.empty());
 
         // Parse JSON
-        yyjson_doc* doc = yyjson_read(content.c_str(), content.size(), 0);
-        REQUIRE(doc != nullptr);
-        yyjson_val* root = yyjson_doc_get_root(doc);
-        REQUIRE(root != nullptr);
-        REQUIRE(yyjson_is_obj(root));
+        simdjson::dom::parser parser;
+        auto result = parser.parse(content);
+        REQUIRE(!result.error());
+        auto root = result.value_unsafe();
+        REQUIRE(root.is_object());
 
         // Top-level fields
-        CHECK(yyjson_is_str(yyjson_obj_get(root, "baseline")));
-        CHECK(yyjson_is_str(yyjson_obj_get(root, "variant")));
-        CHECK(yyjson_is_obj(yyjson_obj_get(root, "baseline_meta")));
-        CHECK(yyjson_is_obj(yyjson_obj_get(root, "variant_meta")));
-        CHECK(yyjson_is_num(yyjson_obj_get(root, "execution_time_ms")));
+        CHECK(root["baseline"].is_string());
+        CHECK(root["variant"].is_string());
+        CHECK(root["baseline_meta"].is_object());
+        CHECK(root["variant_meta"].is_object());
+        CHECK(root["execution_time_ms"].is_number());
 
         // Nodes array
-        yyjson_val* nodes = yyjson_obj_get(root, "nodes");
-        REQUIRE(yyjson_is_arr(nodes));
-        REQUIRE(yyjson_arr_size(nodes) > 0);
+        auto nodes = root["nodes"];
+        REQUIRE(!nodes.error());
+        REQUIRE(nodes.is_array());
+        auto nodes_arr = nodes.get_array().value_unsafe();
+        REQUIRE(nodes_arr.size() > 0);
 
         // First node structure
-        yyjson_val* node0 = yyjson_arr_get_first(nodes);
-        REQUIRE(yyjson_is_obj(node0));
-        CHECK(yyjson_is_str(yyjson_obj_get(node0, "name")));
-        CHECK(yyjson_is_str(yyjson_obj_get(node0, "query")));
+        auto node0 = nodes_arr.at(0);
+        REQUIRE(node0.is_object());
+        CHECK(node0["name"].is_string());
+        CHECK(node0["query"].is_string());
 
         // Summary
-        yyjson_val* summary = yyjson_obj_get(node0, "summary");
-        REQUIRE(yyjson_is_obj(summary));
-        yyjson_val* sum_metrics = yyjson_obj_get(summary, "metrics");
-        REQUIRE(yyjson_is_arr(sum_metrics));
-        REQUIRE(yyjson_arr_size(sum_metrics) > 0);
+        auto summary = node0["summary"];
+        REQUIRE(!summary.error());
+        REQUIRE(summary.is_object());
+        auto sum_metrics = summary["metrics"];
+        REQUIRE(!sum_metrics.error());
+        REQUIRE(sum_metrics.is_array());
+        auto sum_metrics_arr = sum_metrics.get_array().value_unsafe();
+        REQUIRE(sum_metrics_arr.size() > 0);
 
         // First metric structure
-        yyjson_val* metric0 = yyjson_arr_get_first(sum_metrics);
-        REQUIRE(yyjson_is_obj(metric0));
-        CHECK(yyjson_is_str(yyjson_obj_get(metric0, "name")));
-        CHECK(yyjson_is_num(yyjson_obj_get(metric0, "baseline")));
-        CHECK(yyjson_is_num(yyjson_obj_get(metric0, "variant")));
-        CHECK(yyjson_is_num(yyjson_obj_get(metric0, "delta")));
-        CHECK(yyjson_is_num(yyjson_obj_get(metric0, "pct_change")));
-        CHECK(yyjson_is_num(yyjson_obj_get(metric0, "cohens_d")));
-        CHECK(yyjson_is_str(yyjson_obj_get(metric0, "significance")));
-        CHECK(yyjson_is_bool(yyjson_obj_get(metric0, "is_regression")));
+        auto metric0 = sum_metrics_arr.at(0);
+        REQUIRE(metric0.is_object());
+        CHECK(metric0["name"].is_string());
+        CHECK(metric0["baseline"].is_number());
+        CHECK(metric0["variant"].is_number());
+        CHECK(metric0["delta"].is_number());
+        CHECK(metric0["pct_change"].is_number());
+        CHECK(metric0["cohens_d"].is_number());
+        CHECK(metric0["significance"].is_string());
+        CHECK(metric0["is_regression"].is_bool());
 
         // Groups array exists
-        yyjson_val* groups = yyjson_obj_get(node0, "groups");
-        CHECK(yyjson_is_arr(groups));
+        CHECK(node0["groups"].is_array());
 
         // Children array exists
-        yyjson_val* children = yyjson_obj_get(node0, "children");
-        CHECK(yyjson_is_arr(children));
+        CHECK(node0["children"].is_array());
 
         // Metadata objects
-        yyjson_val* base_meta = yyjson_obj_get(root, "baseline_meta");
-        REQUIRE(yyjson_is_obj(base_meta));
-        CHECK(yyjson_is_int(yyjson_obj_get(base_meta, "files")));
-        CHECK(yyjson_is_int(yyjson_obj_get(base_meta, "processes")));
-        CHECK(yyjson_is_int(yyjson_obj_get(base_meta, "threads")));
-        CHECK(yyjson_is_num(yyjson_obj_get(base_meta, "total_bytes")));
-        CHECK(yyjson_is_num(yyjson_obj_get(base_meta, "total_io_time_us")));
-        CHECK(yyjson_is_num(yyjson_obj_get(base_meta, "makespan_us")));
+        auto base_meta = root["baseline_meta"];
+        REQUIRE(!base_meta.error());
+        REQUIRE(base_meta.is_object());
+        CHECK(base_meta["files"].is_number());
+        CHECK(base_meta["processes"].is_number());
+        CHECK(base_meta["threads"].is_number());
+        CHECK(base_meta["total_bytes"].is_number());
+        CHECK(base_meta["total_io_time_us"].is_number());
+        CHECK(base_meta["makespan_us"].is_number());
 
-        yyjson_val* var_meta = yyjson_obj_get(root, "variant_meta");
-        REQUIRE(yyjson_is_obj(var_meta));
-        CHECK(yyjson_is_int(yyjson_obj_get(var_meta, "files")));
-
-        yyjson_doc_free(doc);
+        auto var_meta = root["variant_meta"];
+        REQUIRE(!var_meta.error());
+        REQUIRE(var_meta.is_object());
+        CHECK(var_meta["files"].is_number());
     }
 
     TEST_CASE("json output - same file deltas are zero") {
@@ -355,24 +358,21 @@ TEST_SUITE("DFTracerComparator") {
         auto content = read_file(output);
         REQUIRE(!content.empty());
 
-        yyjson_doc* doc = yyjson_read(content.c_str(), content.size(), 0);
-        REQUIRE(doc != nullptr);
-        yyjson_val* root = yyjson_doc_get_root(doc);
-        yyjson_val* nodes = yyjson_obj_get(root, "nodes");
-        yyjson_val* node0 = yyjson_arr_get_first(nodes);
-        yyjson_val* summary = yyjson_obj_get(node0, "summary");
-        yyjson_val* metrics = yyjson_obj_get(summary, "metrics");
+        simdjson::dom::parser parser;
+        auto result = parser.parse(content);
+        REQUIRE(!result.error());
+        auto root = result.value_unsafe();
+        auto nodes_arr = root["nodes"].get_array().value_unsafe();
+        auto node0 = nodes_arr.at(0);
+        auto metrics_arr =
+            node0["summary"]["metrics"].get_array().value_unsafe();
 
         // All deltas should be ~0 when comparing same file
-        std::size_t idx, max;
-        yyjson_val* m;
-        yyjson_arr_foreach(metrics, idx, max, m) {
-            double baseline = yyjson_get_real(yyjson_obj_get(m, "baseline"));
-            double variant = yyjson_get_real(yyjson_obj_get(m, "variant"));
+        for (auto m : metrics_arr) {
+            double baseline = m["baseline"].get_double().value();
+            double variant = m["variant"].get_double().value();
             CHECK(baseline == doctest::Approx(variant).epsilon(0.01));
         }
-
-        yyjson_doc_free(doc);
     }
 
     TEST_CASE("custom time interval") {

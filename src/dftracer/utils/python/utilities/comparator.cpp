@@ -18,6 +18,7 @@
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_result.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_utility.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/tree_table_formatter.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -29,8 +30,6 @@
 #include <cstdio>
 #include <ctime>
 #include <string>
-#include <thread>
-#include <unordered_set>
 #include <vector>
 
 using dftracer::utils::Runtime;
@@ -40,6 +39,7 @@ using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft::aggregators;
 using namespace dftracer::utils::utilities::composites::dft::comparator;
 
+#include <dftracer/utils/core/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 using dftracer::utils::python::arrow_result_to_table;
 using dftracer::utils::utilities::common::arrow::ArrowExportResult;
@@ -108,17 +108,27 @@ struct ComparatorArgs {
     double time_interval_ms = 5000.0;
     double threshold = 0.0;
     std::size_t executor_threads = 0;
-    std::string index_dir;
+    std::string baseline_index_dir;
+    std::string variant_index_dir;
     bool force_rebuild = false;
     std::string config_path;
 };
 
 static int parse_comparator_args(PyObject *args, PyObject *kwds,
                                  ComparatorArgs &out) {
-    static const char *kwlist[] = {
-        "baseline",  "variant",          "query",     "group_by",
-        "format",    "time_interval_ms", "threshold", "executor_threads",
-        "index_dir", "force_rebuild",    "config",    NULL};
+    static const char *kwlist[] = {"baseline",
+                                   "variant",
+                                   "query",
+                                   "group_by",
+                                   "format",
+                                   "time_interval_ms",
+                                   "threshold",
+                                   "executor_threads",
+                                   "baseline_index_dir",
+                                   "variant_index_dir",
+                                   "force_rebuild",
+                                   "config",
+                                   NULL};
 
     const char *baseline = NULL;
     const char *variant = NULL;
@@ -128,14 +138,16 @@ static int parse_comparator_args(PyObject *args, PyObject *kwds,
     double time_interval_ms = 5000.0;
     double threshold = 0.0;
     Py_ssize_t executor_threads = 0;
-    const char *index_dir = "";
+    const char *baseline_index_dir = "";
+    const char *variant_index_dir = "";
     int force_rebuild = 0;
     const char *config = "";
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "ss|sssddnsps", (char **)kwlist, &baseline, &variant,
+            args, kwds, "ss|sssddnssps", (char **)kwlist, &baseline, &variant,
             &query, &group_by, &format, &time_interval_ms, &threshold,
-            &executor_threads, &index_dir, &force_rebuild, &config))
+            &executor_threads, &baseline_index_dir, &variant_index_dir,
+            &force_rebuild, &config))
         return -1;
 
     out.baseline = baseline;
@@ -146,7 +158,8 @@ static int parse_comparator_args(PyObject *args, PyObject *kwds,
     out.time_interval_ms = time_interval_ms;
     out.threshold = threshold;
     out.executor_threads = static_cast<std::size_t>(executor_threads);
-    out.index_dir = index_dir;
+    out.baseline_index_dir = baseline_index_dir;
+    out.variant_index_dir = variant_index_dir;
     out.force_rebuild = force_rebuild != 0;
     out.config_path = config;
 
@@ -163,7 +176,7 @@ void flatten_nodes(const ComparisonNode &node,
     }
 }
 
-CoroTask<EventAggregatorUtilityOutput> run_aggregation(
+CoroTask<EventAggregatorOutput> run_aggregation(
     std::vector<std::string> input_files, AggregationConfig agg_config,
     std::optional<common::query::Query> query, std::string index_dir,
     std::size_t checkpoint_size, bool force_rebuild,
@@ -177,7 +190,7 @@ CoroTask<EventAggregatorUtilityOutput> run_aggregation(
                                .with_watchdog(false);
     Pipeline pipeline(pipeline_config);
 
-    EventAggregatorUtility merger;
+    EventAggregator merger;
     std::atomic<int> global_chunk_idx{0};
 
     auto streaming_task = make_task(
@@ -274,7 +287,7 @@ CoroTask<EventAggregatorUtilityOutput> run_aggregation(
         },
         "StreamingAggregate");
 
-    EventAggregatorUtilityOutput result;
+    EventAggregatorOutput result;
     auto post_task = make_task(
         [&](CoroScope & /*ctx*/) -> CoroTask<bool> {
             result = merger.finalize();
@@ -320,8 +333,10 @@ static int run_comparison_pipeline(ComparatorObject *self,
         config.no_color = true;
         if (args_copy.executor_threads > 0)
             config.executor_threads = args_copy.executor_threads;
-        if (!args_copy.index_dir.empty())
-            config.index_dir = args_copy.index_dir;
+        if (!args_copy.baseline_index_dir.empty())
+            config.baseline_index_dir = args_copy.baseline_index_dir;
+        if (!args_copy.variant_index_dir.empty())
+            config.variant_index_dir = args_copy.variant_index_dir;
         if (args_copy.force_rebuild)
             config.force_rebuild = args_copy.force_rebuild;
         if (args_copy.threshold > 0.0)
@@ -339,45 +354,87 @@ static int run_comparison_pipeline(ComparatorObject *self,
                 indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
         }
 
-        // Create temp index dir if needed
-        std::string temp_index_dir;
-        if (config.index_dir.empty()) {
-            auto temp_path = fs::temp_directory_path();
-            temp_path /=
-                "dftracer_cmp_py_" + std::to_string(std::time(nullptr)) + "_" +
-                std::to_string(static_cast<int>(
-                    std::hash<std::thread::id>{}(std::this_thread::get_id())));
-            temp_index_dir = temp_path.string();
-            fs::create_directories(temp_index_dir);
-            config.index_dir = temp_index_dir;
-        }
-
-        // Enumerate files
-        auto enumerate_files =
-            [](std::string path) -> CoroTask<std::vector<std::string>> {
-            std::vector<std::string> files;
-            if (fs::is_regular_file(path)) {
-                files.push_back(path);
-                co_return files;
-            }
-            filesystem::PatternDirectoryScannerUtility scanner;
-            filesystem::PatternDirectoryScannerUtilityInput scan_input{
-                path, {".pfw", ".pfw.gz"}, false};
-            auto entries = co_await scanner.process(scan_input);
-            files.reserve(entries.size());
-            for (const auto &e : entries) {
-                files.push_back(e.path.string());
-            }
-            co_return files;
-        };
+        using composites::dft::indexing::IndexResolverUtility;
+        using composites::dft::indexing::ResolverInput;
+        using indexer::IndexBatchBuilderUtility;
+        using indexer::IndexBuildBatchConfig;
 
         Runtime *rt = get_runtime(self);
 
         auto *error_msg_ptr = &error_msg;
-        auto task = [config, output_ptr, enumerate_files,
-                     error_msg_ptr]() -> CoroTask<void> {
-            auto baseline_files = co_await enumerate_files(config.baseline);
-            auto variant_files = co_await enumerate_files(config.variant);
+        auto task = [config, output_ptr, error_msg_ptr,
+                     rt]() -> CoroTask<void> {
+            auto resolve_and_build =
+                [&config](
+                    CoroScope &scope, const std::string &path,
+                    const std::string &index_dir,
+                    std::vector<std::string> &out_files) -> CoroTask<void> {
+                IndexResolverUtility resolver;
+                ResolverInput resolve_input;
+                resolve_input.index_dir = index_dir;
+                resolve_input.require_checkpoints = !config.force_rebuild;
+                if (fs::is_regular_file(path)) {
+                    resolve_input.files = {path};
+                } else {
+                    resolve_input.directory = path;
+                }
+
+                auto result = co_await resolver.process(resolve_input);
+                out_files = std::move(result.all_files);
+
+                if (out_files.empty() || result.needs_checkpoint.empty()) {
+                    co_return;
+                }
+
+                auto batch_cfg = std::make_shared<IndexBuildBatchConfig>();
+                batch_cfg->file_paths.reserve(result.needs_checkpoint.size());
+                for (const auto &item : result.needs_checkpoint) {
+                    batch_cfg->file_paths.push_back(item.file_path);
+                }
+                batch_cfg->index_dir = index_dir;
+                batch_cfg->checkpoint_size = config.checkpoint_size;
+                batch_cfg->parallelism = config.executor_threads;
+                batch_cfg->force_rebuild = config.force_rebuild;
+                batch_cfg->use_batch_write = true;
+                batch_cfg->rebuild_root_summaries = true;
+
+                co_await IndexBatchBuilderUtility::process(
+                    &scope, std::move(batch_cfg));
+            };
+
+            std::vector<std::string> baseline_files;
+            std::vector<std::string> variant_files;
+
+            bool shared_index =
+                composites::dft::internal::determine_index_path(
+                    config.baseline, config.baseline_index_dir) ==
+                composites::dft::internal::determine_index_path(
+                    config.variant, config.variant_index_dir);
+
+            co_await run_coro_scope(
+                rt->executor(), [&](CoroScope &scope) -> CoroTask<void> {
+                    if (shared_index) {
+                        co_await resolve_and_build(scope, config.baseline,
+                                                   config.baseline_index_dir,
+                                                   baseline_files);
+                        if (config.baseline == config.variant) {
+                            variant_files = baseline_files;
+                        } else {
+                            co_await resolve_and_build(scope, config.variant,
+                                                       config.variant_index_dir,
+                                                       variant_files);
+                        }
+                    } else {
+                        scope.spawn([&](CoroScope &s) -> CoroTask<void> {
+                            co_await resolve_and_build(
+                                s, config.baseline, config.baseline_index_dir,
+                                baseline_files);
+                        });
+                        co_await resolve_and_build(scope, config.variant,
+                                                   config.variant_index_dir,
+                                                   variant_files);
+                    }
+                });
 
             if (baseline_files.empty()) {
                 *error_msg_ptr =
@@ -388,42 +445,6 @@ static int run_comparison_pipeline(ComparatorObject *self,
                 *error_msg_ptr =
                     "No trace files found in variant: " + config.variant;
                 co_return;
-            }
-
-            // Build indexes upfront
-            {
-                if (config.force_rebuild && !baseline_files.empty()) {
-                    const std::string shared_index_path =
-                        composites::dft::internal::determine_index_path(
-                            baseline_files.front(), config.index_dir);
-                    if (fs::exists(shared_index_path)) {
-                        fs::remove_all(shared_index_path);
-                    }
-                }
-                std::unordered_set<std::string> seen;
-                std::vector<std::string> all_files;
-                for (const auto &f : baseline_files) {
-                    if (seen.insert(f).second) all_files.push_back(f);
-                }
-                for (const auto &f : variant_files) {
-                    if (seen.insert(f).second) all_files.push_back(f);
-                }
-                std::vector<indexer::IndexBuildConfig> idx_configs;
-                idx_configs.reserve(all_files.size());
-                for (const auto &file_path : all_files) {
-                    idx_configs.push_back(
-                        indexer::IndexBuildConfig::for_file(file_path)
-                            .with_checkpoint_size(config.checkpoint_size)
-                            .with_force_rebuild(false)
-                            .with_index_dir(config.index_dir));
-                }
-                std::vector<CoroTask<indexer::IndexBuildResult>> idx_tasks;
-                idx_tasks.reserve(idx_configs.size());
-                for (const auto &cfg : idx_configs) {
-                    idx_tasks.push_back(
-                        indexer::IndexBuilderUtility{}.process(cfg));
-                }
-                co_await coro::when_all(std::move(idx_tasks));
             }
 
             output_ptr->baseline_path = config.baseline;
@@ -466,13 +487,13 @@ static int run_comparison_pipeline(ComparatorObject *self,
 
                     auto [base_result, var_result] = co_await coro::when_all(
                         run_aggregation(
-                            baseline_files, agg_cfg, query, config.index_dir,
-                            config.checkpoint_size, config.force_rebuild,
-                            config.executor_threads),
+                            baseline_files, agg_cfg, query,
+                            config.baseline_index_dir, config.checkpoint_size,
+                            config.force_rebuild, config.executor_threads),
                         run_aggregation(
-                            variant_files, agg_cfg, query, config.index_dir,
-                            config.checkpoint_size, config.force_rebuild,
-                            config.executor_threads));
+                            variant_files, agg_cfg, query,
+                            config.variant_index_dir, config.checkpoint_size,
+                            config.force_rebuild, config.executor_threads));
 
                     if (pairs.empty()) {
                         output_ptr->baseline_meta = extract_metadata(
@@ -514,11 +535,6 @@ static int run_comparison_pipeline(ComparatorObject *self,
         };
 
         rt->submit(task(), "comparator").get();
-
-        // Clean up temp index dir
-        if (!temp_index_dir.empty() && fs::exists(temp_index_dir)) {
-            fs::remove_all(temp_index_dir);
-        }
     } catch (const std::exception &e) {
         error_msg = e.what();
     }

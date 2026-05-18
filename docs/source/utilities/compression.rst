@@ -4,6 +4,21 @@ Compression
 Streaming zlib compression and decompression utilities supporting GZIP, ZLIB, and DEFLATE formats.
 All compression operates in streaming mode using zero-copy ``ByteView`` chunks.
 
+.. note::
+
+   The default gzip level used by the writer pipeline (``dftracer_aggregator``,
+   ``dftracer_organize``, parallel writers) is ``1`` (fastest); previous
+   releases defaulted to ``Z_DEFAULT_COMPRESSION`` (6). Override per-call with
+   the ``compression_level`` field on ``ManualStreamingCompressorUtility``.
+
+.. note::
+
+   The build defaults to zlib-ng (compat ABI) when the ``DFTRACER_USE_ZLIB_NG``
+   CMake option is ``ON`` (the default), falling back to ``madler/zlib`` if
+   zlib-ng cannot be added. The compressor sources are unchanged: the same
+   ``deflate``/``inflate`` symbols are linked against whichever backend was
+   selected at configure time.
+
 .. code-block:: cpp
 
    #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
@@ -58,6 +73,18 @@ Yields compressed chunks as ``ByteView`` references into an internal buffer.
    std::size_t bytes_in = compressor.total_bytes_in();
    std::size_t bytes_out = compressor.total_bytes_out();
    double ratio = compressor.compression_ratio();
+
+Buffered Compression
+--------------------
+
+Writer pipelines (parallel writer, perfetto trace writer, organize group
+writers) buffer compressed payloads and flush at a configurable
+``flush_threshold``. The threshold is computed by
+``compute_writer_sizing()`` from the detected filesystem layout
+(``LayoutInfo``): on Lustre/GPFS the threshold is sized to the PFS stripe
+so each compressed flush fits one stripe; on local FS it is ``max(default,
+stripe_size)``. Buffer capacity is always ``flush_threshold +
+buffer_headroom``.
 
 StreamingDecompressorUtility
 ----------------------------

@@ -16,14 +16,27 @@ struct FileEntry {
 
     FileEntry() = default;
 
-    explicit FileEntry(const fs::path& p)
+    explicit FileEntry(const fs::path& p, bool populate_size = true)
         : path(p), size(0), is_directory(false), is_regular_file(false) {
         if (fs::exists(p)) {
             is_directory = fs::is_directory(p);
             is_regular_file = fs::is_regular_file(p);
-            if (is_regular_file) {
+            if (populate_size && is_regular_file) {
                 size = fs::file_size(p);
             }
+        }
+    }
+
+    explicit FileEntry(const fs::directory_entry& entry,
+                       bool populate_size = true)
+        : path(entry.path()),
+          size(0),
+          is_directory(false),
+          is_regular_file(false) {
+        is_directory = entry.is_directory();
+        is_regular_file = entry.is_regular_file();
+        if (populate_size && is_regular_file) {
+            size = static_cast<std::size_t>(entry.file_size());
         }
     }
 };

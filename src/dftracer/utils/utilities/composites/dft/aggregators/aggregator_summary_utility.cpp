@@ -1,9 +1,9 @@
+#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregator_summary_utility.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <string>
-#include <unordered_map>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
@@ -21,9 +21,15 @@ coro::CoroTask<void> AggregatorSummaryUtility::process(
     std::printf("Total events aggregated: %llu\n",
                 static_cast<unsigned long long>(total_events));
 
-    std::unordered_map<std::string, std::uint64_t> category_counts;
+    StringViewMap<std::uint64_t> category_counts;
     for (const auto& [key, metrics] : aggregations) {
-        category_counts[std::string(key.cat())] += metrics.count;
+        auto cat = key.cat();
+        auto it = category_counts.find(cat);
+        if (it == category_counts.end()) {
+            category_counts.emplace(std::string(cat), metrics.count);
+        } else {
+            it->second += metrics.count;
+        }
     }
 
     std::printf("\nEvents by category:\n");

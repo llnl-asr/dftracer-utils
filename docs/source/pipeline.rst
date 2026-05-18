@@ -1016,6 +1016,91 @@ The project has migrated from the old ``TaskContext``/``TaskScope`` API to the n
 - ``PipelineConfig`` configures the executor (threads, timeouts, watchdog)
 - ``Pipeline::execute()`` blocks until all work completes
 
+Pipelined Replay
+----------------
+
+``dftracer_replay`` was refactored onto the same coroutine + channel model
+documented above. The replay engine now expresses parsing, decoding, and
+execution as three stages connected by bounded channels, eliminating the
+old synchronous pre-load step. Three end-to-end improvements landed
+together:
+
+- ``JsonParser`` is shared between the parse and execute stages; the
+  trace JSON is decoded incrementally instead of being slurped into a
+  ``std::vector<Event>`` before execution starts.
+- Buffer reuse and zero-copy string handling are wired through the I/O
+  read path, removing per-line allocations in the hot loop.
+- Stages communicate via ``Channel<Event>`` instances with backpressure,
+  so a slow execute stage no longer forces the parse stage to materialize
+  the entire trace.
+
+The replay binary is otherwise unchanged from a CLI perspective; see the
+``dftracer_replay`` section in :doc:`cli` for flag documentation.
+
+Memory Budget Control for Streaming Iterators
+---------------------------------------------
+
+The ``MemoryBudget`` helpers in
+``dftracer/utils/core/common/memory_budget.h`` give utilities a single
+place to size streaming channels and per-file batch counts based on
+available system memory:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/core/common/memory_budget.h>
+
+   using namespace dftracer::utils;
+
+   // 50% of available RAM by default; clamped to >= 64 MiB
+   const std::size_t budget = compute_memory_budget();
+
+   // Or honor a user override (in bytes); 0 falls back to auto-detect
+   const std::size_t budget_user =
+       compute_memory_budget(/*user_override_bytes=*/4ULL << 30);
+
+   // Per-file expansion factor + sample probing yields a per-file peak
+   const std::size_t per_file =
+       estimate_per_file_bytes(file_sizes_in_bytes);
+
+   // Derive channel capacity and per-flush batch size
+   const std::size_t cap =
+       compute_channel_capacity(budget, estimated_batch_bytes, num_workers);
+   const std::size_t batch =
+       compute_file_batch_size(budget, per_file, /*min_files=*/4);
+
+The Python ``TraceReader`` exposes the same control as a ``memory_budget``
+keyword on its streaming iterators (``iter_lines``, ``iter_lines_json``,
+``iter_raw``, ``iter_arrow``). Passing ``0`` keeps the auto-detect default;
+passing a positive integer caps the in-flight bytes across the underlying
+``Channel<T>`` instances.
+
+``flush_every_files`` for Batched Index Writes
+----------------------------------------------
+
+``dftracer_organize`` exposes the underlying batched-index control via
+``--memory-budget-mb``: the binary derives a ``flush_every_files`` value
+from the budget and feeds it to ``IndexBuildBatchConfig``. Each batch of
+``flush_every_files`` files is fully indexed and flushed before the next
+batch begins, capping peak memory regardless of trace count.
+
+When constructing an ``IndexBuildBatchConfig`` directly from C++:
+
+.. code-block:: cpp
+
+   auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+   batch_config->file_paths        = files;
+   batch_config->index_dir         = index_dir;
+   batch_config->checkpoint_size   = checkpoint_size;
+   batch_config->parallelism       = executor_threads;
+   batch_config->flush_every_files = compute_file_batch_size(
+       compute_memory_budget(),
+       estimate_per_file_bytes(file_sizes),
+       /*min_files=*/4);
+
+A ``flush_every_files`` of ``0`` (the default) disables sub-batching and
+processes every file in one shot, which is fastest for small inputs but
+not memory-safe at scale.
+
 API Reference
 -------------
 

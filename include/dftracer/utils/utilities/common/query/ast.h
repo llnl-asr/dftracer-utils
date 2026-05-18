@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_QUERY_AST_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_QUERY_AST_H
 
+#include <dftracer/utils/core/common/transparent_string_hash.h>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -91,6 +93,9 @@ const char* compare_op_str(CompareOp op);
 
 /// Serialize an AST back to query DSL string.
 std::string to_string(const QueryNode& node);
+
+/// Collect all field names referenced in a query AST.
+dftracer::utils::StringViewSet collect_fields(const QueryNode& node);
 
 }  // namespace dftracer::utils::utilities::common::query
 

@@ -1,9 +1,9 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
-
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <nanoarrow/nanoarrow.h>
 
@@ -135,41 +135,41 @@ PyTypeObject ArrowBatchCapsuleType = {
 
 #endif                                     // DFTRACER_UTILS_ENABLE_ARROW
 
+static void cancel_and_wait_batch_state(MemoryViewBatchIteratorState *bs) {
+    bs->cancelled.store(true, std::memory_order_release);
+    if (bs->channel) bs->channel->close();
+    if (bs->task_future.valid()) bs->task_future.wait();
+}
+
+static void cancel_and_wait_json_dict_state(JsonDictIteratorState *js) {
+    js->cancelled.store(true, std::memory_order_release);
+    if (js->channel) js->channel->close();
+    if (js->task_future.valid()) js->task_future.wait();
+}
+
 static void TraceReaderIterator_dealloc(TraceReaderIteratorObject *self) {
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (self->arrow_state) {
-        auto task_future = self->arrow_state->task_future;
         self->arrow_state->cancelled.store(true, std::memory_order_release);
-        self->arrow_state->cv_producer.notify_all();
-        self->arrow_state->cv_consumer.notify_all();  // wake blocked __next__
-        Py_BEGIN_ALLOW_THREADS {
-            std::unique_lock<std::mutex> lock(self->arrow_state->mtx);
-            self->arrow_state->cv_consumer.wait(lock, [self] {
-                return self->arrow_state->done.load(std::memory_order_acquire);
-            });
-        }
-        if (task_future.valid()) {
-            task_future.wait();
+        if (self->arrow_state->channel) self->arrow_state->channel->close();
+        Py_BEGIN_ALLOW_THREADS if (self->arrow_state->task_future.valid()) {
+            self->arrow_state->task_future.wait();
         }
         Py_END_ALLOW_THREADS self->arrow_state.reset();
     }
 #endif
-    if (self->state) {
-        auto task_future = self->state->task_future;
-        self->state->cancelled.store(true, std::memory_order_release);
-        self->state->cv_producer.notify_all();
-        self->state->cv_consumer.notify_all();  // wake blocked __next__
-        Py_BEGIN_ALLOW_THREADS {
-            std::unique_lock<std::mutex> lock(self->state->mtx);
-            self->state->cv_consumer.wait(lock, [self] {
-                return self->state->done.load(std::memory_order_acquire);
-            });
-        }
-        if (task_future.valid()) {
-            task_future.wait();
-        }
-        Py_END_ALLOW_THREADS self->state.reset();
+    if (self->json_dict_state) {
+        Py_BEGIN_ALLOW_THREADS cancel_and_wait_json_dict_state(
+            self->json_dict_state.get());
+        Py_END_ALLOW_THREADS self->json_dict_state.reset();
     }
+    if (self->batch_state) {
+        Py_BEGIN_ALLOW_THREADS cancel_and_wait_batch_state(
+            self->batch_state.get());
+        Py_END_ALLOW_THREADS self->batch_state.reset();
+    }
+    Py_XDECREF(self->current_batch);
+    self->current_batch = NULL;
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
@@ -179,31 +179,68 @@ static PyObject *TraceReaderIterator_iter(TraceReaderIteratorObject *self) {
 }
 
 static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
+    if (self->mode == IteratorMode::JSON_DICT) {
+        while (true) {
+            if (self->json_dict_current_batch) {
+                auto &events = self->json_dict_current_batch->events;
+                Py_ssize_t n = static_cast<Py_ssize_t>(events.size());
+                if (self->json_dict_index < n) {
+                    JsonDictValueObject *obj =
+                        (JsonDictValueObject *)JsonDictValueType.tp_alloc(
+                            &JsonDictValueType, 0);
+                    if (!obj) return NULL;
+                    new (&obj->batch) std::shared_ptr<JsonDictBatch>(
+                        self->json_dict_current_batch);
+                    obj->event_index =
+                        static_cast<std::size_t>(self->json_dict_index);
+                    obj->is_args = false;
+                    self->json_dict_index++;
+                    return (PyObject *)obj;
+                }
+                self->json_dict_current_batch.reset();
+                self->json_dict_index = 0;
+            }
+
+            auto *js = self->json_dict_state.get();
+            std::optional<JsonDictBatch> batch;
+            Py_BEGIN_ALLOW_THREADS batch = js->channel->blocking_receive();
+            Py_END_ALLOW_THREADS
+
+                if (!batch.has_value()) {
+                std::lock_guard<std::mutex> lock(js->error_mtx);
+                if (js->error) {
+                    try {
+                        std::rethrow_exception(js->error);
+                    } catch (const std::exception &e) {
+                        PyErr_SetString(PyExc_RuntimeError, e.what());
+                        return NULL;
+                    } catch (...) {
+                        PyErr_SetString(PyExc_RuntimeError,
+                                        "Unknown error in json dict iterator");
+                        return NULL;
+                    }
+                }
+                return NULL;
+            }
+
+            auto dequeued_bytes = dftracer::utils::python::byte_size(*batch);
+            js->bytes_in_queue.fetch_sub(dequeued_bytes,
+                                         std::memory_order_acq_rel);
+            self->json_dict_current_batch =
+                std::make_shared<JsonDictBatch>(std::move(*batch));
+            self->json_dict_index = 0;
+        }
+    }
+
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (self->mode == IteratorMode::ARROW) {
         auto *astate = self->arrow_state.get();
-        ArrowIteratorState::BatchItem batch;
-        bool cancelled = false;
-        {
-            Py_BEGIN_ALLOW_THREADS std::unique_lock<std::mutex> lock(
-                astate->mtx);
-            astate->cv_consumer.wait(lock, [astate] {
-                return !astate->queue.empty() ||
-                       astate->cancelled.load(std::memory_order_acquire) ||
-                       astate->done.load(std::memory_order_acquire);
-            });
-            cancelled = astate->cancelled.load(std::memory_order_acquire) &&
-                        astate->queue.empty();
-            if (!cancelled) {
-                batch = std::move(astate->queue.front());
-                astate->queue.pop();
-            }
-            Py_END_ALLOW_THREADS
-        }
-        if (cancelled) return NULL;  // StopIteration
-        astate->cv_producer.notify_one();
+        std::optional<ArrowExportResult> batch;
+        Py_BEGIN_ALLOW_THREADS batch = astate->channel->blocking_receive();
+        Py_END_ALLOW_THREADS
 
-        if (!batch.has_value()) {
+            if (!batch.has_value()) {
+            std::lock_guard<std::mutex> lock(astate->error_mtx);
             if (astate->error) {
                 try {
                     std::rethrow_exception(astate->error);
@@ -216,8 +253,12 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
                     return NULL;
                 }
             }
-            return NULL;  // StopIteration
+            return NULL;
         }
+
+        auto dequeued_bytes = dftracer::utils::python::byte_size(*batch);
+        astate->bytes_in_queue.fetch_sub(dequeued_bytes,
+                                         std::memory_order_acq_rel);
 
         ArrowBatchCapsuleObject *obj =
             (ArrowBatchCapsuleObject *)ArrowBatchCapsuleType.tp_alloc(
@@ -228,72 +269,54 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
     }
 #endif
 
-    auto *state = self->state.get();
-
-    // Loop to skip non-JSON lines without recursion (avoids stack overflow
-    // on files with many delimiter lines like "[" and "]").
+    using namespace dftracer::utils::python;
     while (true) {
-        std::optional<std::string> item;
-        bool cancelled = false;
-
-        {
-            Py_BEGIN_ALLOW_THREADS std::unique_lock<std::mutex> lock(
-                state->mtx);
-            state->cv_consumer.wait(lock, [state] {
-                return !state->queue.empty() ||
-                       state->cancelled.load(std::memory_order_acquire) ||
-                       state->done.load(std::memory_order_acquire);
-            });
-            cancelled = state->cancelled.load(std::memory_order_acquire) &&
-                        state->queue.empty();
-            if (!cancelled) {
-                item = std::move(state->queue.front());
-                state->queue.pop();
+        if (self->current_batch) {
+            auto *batch_obj = (MemoryViewBatchObject *)self->current_batch;
+            Py_ssize_t n =
+                static_cast<Py_ssize_t>(batch_obj->data->num_entries());
+            if (self->batch_index < n) {
+                PyObject *mv =
+                    MemoryViewBatch_item(batch_obj, self->batch_index);
+                self->batch_index++;
+                return mv;
             }
-            Py_END_ALLOW_THREADS
+            Py_DECREF(self->current_batch);
+            self->current_batch = NULL;
+            self->batch_index = 0;
         }
-        if (cancelled) return NULL;  // StopIteration
-        state->cv_producer.notify_one();
 
-        if (!item.has_value()) {
-            if (state->error) {
+        auto *bs = self->batch_state.get();
+        std::optional<MemoryViewBatchData> batch_data;
+        Py_BEGIN_ALLOW_THREADS batch_data = bs->channel->blocking_receive();
+        Py_END_ALLOW_THREADS
+
+            if (!batch_data.has_value()) {
+            std::lock_guard<std::mutex> lock(bs->error_mtx);
+            if (bs->error) {
                 try {
-                    std::rethrow_exception(state->error);
+                    std::rethrow_exception(bs->error);
                 } catch (const std::exception &e) {
                     PyErr_SetString(PyExc_RuntimeError, e.what());
                     return NULL;
                 } catch (...) {
                     PyErr_SetString(PyExc_RuntimeError,
-                                    "Unknown error in TraceReaderIterator");
+                                    "Unknown error in batch iterator");
                     return NULL;
                 }
             }
-            return NULL;  // StopIteration
+            return NULL;
         }
 
-        switch (self->mode) {
-            case IteratorMode::LINES:
-                return PyUnicode_FromStringAndSize(
-                    item->data(), static_cast<Py_ssize_t>(item->size()));
-            case IteratorMode::JSON: {
-                const char *trimmed;
-                std::size_t trimmed_length;
-                if (!dftracer::utils::json_trim_and_validate(
-                        item->data(), item->size(), trimmed, trimmed_length)) {
-                    continue;  // skip non-JSON delimiter lines
-                }
-                PyObject *json_obj = JSON_from_data(trimmed, trimmed_length);
-                if (!json_obj) {
-                    PyErr_Clear();
-                    continue;  // skip unparseable lines
-                }
-                return json_obj;
-            }
-            case IteratorMode::RAW:
-            default:
-                return PyBytes_FromStringAndSize(
-                    item->data(), static_cast<Py_ssize_t>(item->size()));
-        }
+        auto dequeued_bytes = dftracer::utils::python::byte_size(*batch_data);
+        bs->bytes_in_queue.fetch_sub(dequeued_bytes, std::memory_order_acq_rel);
+
+        auto *obj = (MemoryViewBatchObject *)MemoryViewBatchType.tp_alloc(
+            &MemoryViewBatchType, 0);
+        if (!obj) return NULL;
+        obj->data = new MemoryViewBatchData(std::move(*batch_data));
+        self->current_batch = (PyObject *)obj;
+        self->batch_index = 0;
     }
 }
 
@@ -317,24 +340,24 @@ PyTypeObject TraceReaderIteratorType = {
     0,                                       /* tp_setattro */
     0,                                       /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT,                      /* tp_flags */
-    "Lazy iterator over TraceReader lines or raw chunks", /* tp_doc */
-    0,                                                    /* tp_traverse */
-    0,                                                    /* tp_clear */
-    0,                                                    /* tp_richcompare */
-    0,                                      /* tp_weaklistoffset */
-    (getiterfunc)TraceReaderIterator_iter,  /* tp_iter */
-    (iternextfunc)TraceReaderIterator_next, /* tp_iternext */
-    0,                                      /* tp_methods */
-    0,                                      /* tp_members */
-    0,                                      /* tp_getset */
-    0,                                      /* tp_base */
-    0,                                      /* tp_dict */
-    0,                                      /* tp_descr_get */
-    0,                                      /* tp_descr_set */
-    0,                                      /* tp_dictoffset */
-    0,                                      /* tp_init */
-    0,                                      /* tp_alloc */
-    0,                                      /* tp_new */
+    "Lazy iterator over TraceReader lines or raw chunks",
+    0,                                       /* tp_traverse */
+    0,                                       /* tp_clear */
+    0,                                       /* tp_richcompare */
+    0,                                       /* tp_weaklistoffset */
+    (getiterfunc)TraceReaderIterator_iter,   /* tp_iter */
+    (iternextfunc)TraceReaderIterator_next,  /* tp_iternext */
+    0,                                       /* tp_methods */
+    0,                                       /* tp_members */
+    0,                                       /* tp_getset */
+    0,                                       /* tp_base */
+    0,                                       /* tp_dict */
+    0,                                       /* tp_descr_get */
+    0,                                       /* tp_descr_set */
+    0,                                       /* tp_dictoffset */
+    0,                                       /* tp_init */
+    0,                                       /* tp_alloc */
+    0,                                       /* tp_new */
 };
 
 int init_trace_reader_iterator(PyObject *m) {

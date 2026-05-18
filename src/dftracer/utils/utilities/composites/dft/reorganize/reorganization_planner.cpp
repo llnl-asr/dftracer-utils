@@ -1,8 +1,11 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
@@ -10,7 +13,7 @@
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <algorithm>
 #include <cctype>
@@ -23,10 +26,12 @@ namespace dftracer::utils::utilities::composites::dft::reorganize {
 namespace {
 
 using common::query::Query;
-using dftracer::utils::utilities::indexer::IndexBuildConfig;
-using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using fileio::lines::sources::async_streaming_gz_lines;
+using indexing::IndexResolverUtility;
+using indexing::ResolverInput;
 
 }  // namespace
 
@@ -49,6 +54,12 @@ std::vector<PredicateGroup> parse_group_specs(
 
 coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
     const ReorganizationPlannerInput& input) {
+    if (!has_context()) {
+        throw std::runtime_error(
+            "ReorganizationPlannerUtility requires CoroScope context");
+    }
+    CoroScope& scope = context();
+
     ExtractionPlan plan;
     plan.groups = input.groups;
 
@@ -67,8 +78,6 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         }
     }
 
-    // Ensure "remainder" group exists if not already
-    // specified
     bool has_remainder = false;
     for (const auto& g : input.groups) {
         if (g.query.empty()) {
@@ -90,41 +99,94 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         }
     }
 
-    // Process each source file
-    for (std::size_t fi = 0; fi < input.source_files.size(); ++fi) {
-        const auto& file_path = input.source_files[fi];
+    if (input.source_files.empty()) {
+        co_return plan;
+    }
 
-        // Build the shared `.dftindex` store if needed.
-        IndexBuilderUtility idx_builder;
-        auto idx_input = IndexBuildConfig::for_file(file_path).with_index_dir(
-            input.index_dir);
+    // Use IndexResolverUtility to scan files and check capabilities
+    IndexResolverUtility resolver;
+    ResolverInput resolver_input;
+    resolver_input.files = input.source_files;
+    resolver_input.index_dir = input.index_dir;
+    resolver_input.require_checkpoints = true;
+    resolver_input.require_manifest = true;
+    auto scan_result = co_await scope.spawn(resolver, resolver_input);
+
+    DFTRACER_UTILS_LOG_INFO(
+        "ReorganizationPlanner: %zu files, %zu cached, %zu need checkpoint, "
+        "%zu need manifest",
+        scan_result.all_files.size(), scan_result.cached.size(),
+        scan_result.needs_checkpoint.size(), scan_result.needs_manifest.size());
+
+    // Build indices in parallel for files needing work
+    std::vector<std::string> files_needing_index;
+    for (const auto& item : scan_result.needs_checkpoint) {
+        files_needing_index.push_back(item.file_path);
+    }
+    for (const auto& item : scan_result.needs_manifest) {
+        files_needing_index.push_back(item.file_path);
+    }
+
+    if (!files_needing_index.empty()) {
+        auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+        batch_config->file_paths = std::move(files_needing_index);
+        batch_config->index_dir = input.index_dir;
         if (input.checkpoint_size > 0) {
-            idx_input.with_checkpoint_size(input.checkpoint_size);
+            batch_config->checkpoint_size = input.checkpoint_size;
         }
-        auto idx_result = co_await idx_builder.process(idx_input);
-        if (!idx_result.success) {
-            throw std::runtime_error("Failed to build index for: " + file_path);
-        }
+        batch_config->build_manifest = true;
+        batch_config->use_batch_write = true;
 
-        // Collect metadata
-        MetadataCollectorUtility metadata_collector;
+        auto batch_result =
+            co_await IndexBatchBuilderUtility::process(&scope, batch_config);
+
+        for (const auto& result : batch_result.results) {
+            if (!result.success) {
+                throw std::runtime_error(
+                    "Failed to build index for: " + result.file_path + ": " +
+                    result.error_message);
+            }
+        }
+    }
+
+    // Collect metadata in parallel using when_all
+    // Store inputs in vector to ensure lifetime across co_await
+    std::vector<MetadataCollectorUtilityInput> meta_inputs;
+    meta_inputs.reserve(input.source_files.size());
+    for (const auto& file_path : input.source_files) {
+        auto index_path =
+            internal::determine_index_path(file_path, input.index_dir);
         auto meta_input =
             MetadataCollectorUtilityInput::from_file(file_path).with_index(
-                idx_result.index_path);
+                index_path);
         if (input.checkpoint_size > 0) {
             meta_input.with_checkpoint_size(input.checkpoint_size);
         }
-        auto meta = co_await metadata_collector.process(meta_input);
+        meta_inputs.push_back(std::move(meta_input));
+    }
+
+    std::vector<coro::CoroTask<MetadataCollectorUtilityOutput>> metadata_tasks;
+    metadata_tasks.reserve(meta_inputs.size());
+    for (const auto& meta_input : meta_inputs) {
+        MetadataCollectorUtility collector;
+        metadata_tasks.push_back(collector.process(meta_input));
+    }
+
+    auto metadata_results = co_await coro::when_all(std::move(metadata_tasks));
+
+    // Build source file info from metadata results (same order as input)
+    plan.source_files.reserve(input.source_files.size());
+    for (std::size_t fi = 0; fi < input.source_files.size(); ++fi) {
+        const auto& file_path = input.source_files[fi];
+        const auto& meta = metadata_results[fi];
+
         if (!meta.success) {
             throw std::runtime_error("Failed to collect metadata for: " +
                                      file_path);
         }
 
-        // Determine the root-local `.dftindex` store path.
         std::string index_path =
             internal::determine_index_path(file_path, input.index_dir);
-
-        // Effective checkpoint count: treat 0 as 1
         std::size_t eff_ckpts =
             meta.num_checkpoints > 0 ? meta.num_checkpoints : 1;
 
@@ -135,12 +197,16 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         sfi.uncompressed_size = meta.uncompressed_size;
         sfi.checkpoint_size = meta.checkpoint_size;
         plan.source_files.push_back(std::move(sfi));
+    }
 
-        // Open the shared index store and try manifest-based planning. Fall
-        // back to whole-file streaming when manifest tables are absent (file
-        // was below index_threshold).
+    // Plan extraction tasks for each file
+    for (std::size_t fi = 0; fi < input.source_files.size(); ++fi) {
+        const auto& file_path = input.source_files[fi];
+        const auto& meta = metadata_results[fi];
+        const auto& sfi = plan.source_files[fi];
+
         IndexDatabase idx_db(
-            index_path,
+            sfi.index_path,
             dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
         int file_info_id = idx_db.get_file_info_id(
             indexer::internal::get_logical_path(file_path));
@@ -150,6 +216,7 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         }
 
         const bool has_manifest = idx_db.has_manifest_data(file_info_id);
+        const std::size_t eff_ckpts = sfi.num_checkpoints;
 
         if (has_manifest) {
             // Manifest-based planning: per-checkpoint extraction tasks.
@@ -216,22 +283,11 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         } else {
             // Whole-file fallback: stream line-by-line, route each
             // event to a group, emit one task per group covering
-            // the entire file.  Only enabled for files at or below
-            // the default index threshold to avoid pathological
-            // memory usage on large traces with corrupt/partial
-            // indexes.
-            auto file_size = fs::file_size(file_path);
-            if (file_size > constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD) {
-                throw std::runtime_error(
-                    "Manifest tables missing for large file (>" +
-                    std::to_string(
-                        constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD) +
-                    " bytes): " + file_path +
-                    ". Re-index with index_threshold=0.");
-            }
-
+            // the entire file.
             std::map<std::string, std::vector<std::uint32_t>> group_lines;
             std::vector<std::uint32_t> meta_line_numbers;
+
+            simdjson::dom::parser parser;
 
             auto gen = async_streaming_gz_lines(file_path);
             while (auto line_opt = co_await gen.next()) {
@@ -252,42 +308,33 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
                     continue;
                 }
 
-                yyjson_doc* doc =
-                    yyjson_read(begin, static_cast<size_t>(end - begin),
-                                YYJSON_READ_NOFLAG);
-                if (!doc) continue;
+                auto result =
+                    parser.parse(begin, static_cast<size_t>(end - begin));
+                if (result.error()) continue;
 
-                yyjson_val* root = yyjson_doc_get_root(doc);
-                if (!root || !yyjson_is_obj(root)) {
-                    yyjson_doc_free(doc);
-                    continue;
-                }
+                auto root = result.value_unsafe();
+                if (!root.is_object()) continue;
 
                 auto line_num = static_cast<std::uint32_t>(line.line_number);
-                yyjson_val* ph_val = yyjson_obj_get(root, "ph");
+                auto ph_result = root["ph"].get_string();
                 const bool is_metadata =
-                    ph_val && yyjson_is_str(ph_val) &&
-                    std::string_view(yyjson_get_str(ph_val),
-                                     yyjson_get_len(ph_val)) == "M";
+                    !ph_result.error() && ph_result.value_unsafe() == "M";
 
                 if (is_metadata) {
                     meta_line_numbers.push_back(line_num);
-                    yyjson_doc_free(doc);
                     continue;
                 }
 
                 std::string cat_str;
-                if (yyjson_val* cat_val = yyjson_obj_get(root, "cat");
-                    cat_val && yyjson_is_str(cat_val)) {
-                    cat_str.assign(yyjson_get_str(cat_val),
-                                   yyjson_get_len(cat_val));
+                auto cat_result = root["cat"].get_string();
+                if (!cat_result.error()) {
+                    cat_str = std::string(cat_result.value_unsafe());
                 }
 
                 std::string name_str;
-                if (yyjson_val* name_val = yyjson_obj_get(root, "name");
-                    name_val && yyjson_is_str(name_val)) {
-                    name_str.assign(yyjson_get_str(name_val),
-                                    yyjson_get_len(name_val));
+                auto name_result = root["name"].get_string();
+                if (!name_result.error()) {
+                    name_str = std::string(name_result.value_unsafe());
                 }
 
                 bool matched = false;
@@ -306,8 +353,6 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
                     group_lines[remainder_name].push_back(line_num);
                 }
                 plan.total_events++;
-
-                yyjson_doc_free(doc);
             }
 
             for (auto& [gname, lines] : group_lines) {

@@ -138,13 +138,16 @@ StatisticsQueryUtility
 ~~~~~~~~~~~~~~~~~~~~~~
 
 Query pre-computed statistics from an indexed trace file.
-When bloom/chunk statistics are not available (e.g. file was below
-``index_threshold``), the utility falls back to streaming the file
-sequentially and computing statistics on-the-fly.
+When bloom/chunk statistics are not available, the utility falls back to
+streaming the file sequentially and computing statistics on-the-fly.
 
 .. autoclass:: dftracer.utils.dftracer_utils_ext.StatisticsQueryUtility(runtime: Runtime | None = None)
    :members: process
    :undoc-members:
+
+``process(file_path, query_type="summary", top_n=10, index_dir="")`` returns
+a dict; ``query_type`` accepts ``"summary"``, ``"top_n_names"``, and other
+pre-computed statistics views.
 
 .. code-block:: python
 
@@ -160,10 +163,9 @@ StatisticsAggregatorUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Aggregate statistics from a trace file. Uses pre-computed chunk
-statistics from the ``.idx`` sidecar when available. When chunk
-statistics are absent (e.g. file was below ``index_threshold``),
-falls back to streaming the ``.pfw.gz`` line-by-line and computing
-statistics on-the-fly.
+statistics from the ``.dftindex`` store when available. When chunk
+statistics are absent, falls back to streaming the ``.pfw.gz``
+line-by-line and computing statistics on-the-fly.
 
 .. autoclass:: dftracer.utils.dftracer_utils_ext.StatisticsAggregatorUtility(runtime: Runtime | None = None)
    :members: process
@@ -197,10 +199,9 @@ ReorganizationPlannerUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Plan semantic reorganization of trace files. When manifest data is
-available in the ``.idx`` sidecar, produces per-checkpoint extraction
-tasks. When manifest tables are absent (e.g. file was below
-``index_threshold``), falls back to streaming the file line-by-line
-and emitting one whole-file extraction task per query group.
+available in the ``.dftindex`` store, produces per-checkpoint extraction
+tasks. When manifest tables are absent, falls back to streaming the file
+line-by-line and emitting one whole-file extraction task per query group.
 
 .. autoclass:: dftracer.utils.dftracer_utils_ext.ReorganizationPlannerUtility(runtime: Runtime | None = None)
    :members: process

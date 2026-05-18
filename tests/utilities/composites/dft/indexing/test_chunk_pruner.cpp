@@ -4,6 +4,7 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 
@@ -20,89 +21,84 @@ using dftracer::utils::utilities::indexer::internal::get_logical_path;
 static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {
     IndexDatabase idx_db(index_path);
-    idx_db.init_base_schema();
-    idx_db.init_bloom_schema();
+    auto writer = idx_db.begin_write();
+    writer->init_schema();
 
     int fid =
-        idx_db.get_or_create_file_info(get_logical_path(file_path), 12345);
+        writer->get_or_create_file_info(get_logical_path(file_path), 12345);
 
-    idx_db.begin_transaction();
-
-    // Chunk 0: POSIX reads, dur 100-200
     {
         ChunkDimensionStats cat_ds;
         cat_ds.dimension = "cat";
         cat_ds.value_type = "string";
         cat_ds.observe("POSIX");
         cat_ds.observe("POSIX");
-        idx_db.insert_chunk_dimension_stats(fid, 0, cat_ds);
+        writer->insert_chunk_dimension_stats(fid, 0, cat_ds);
 
         ChunkDimensionStats name_ds;
         name_ds.dimension = "name";
         name_ds.value_type = "string";
         name_ds.observe("read");
         name_ds.observe("read");
-        idx_db.insert_chunk_dimension_stats(fid, 0, name_ds);
+        writer->insert_chunk_dimension_stats(fid, 0, name_ds);
 
         ChunkDimensionStats dur_ds;
         dur_ds.dimension = "dur";
         dur_ds.value_type = "uint";
         dur_ds.observe("100");
         dur_ds.observe("200");
-        idx_db.insert_chunk_dimension_stats(fid, 0, dur_ds);
+        writer->insert_chunk_dimension_stats(fid, 0, dur_ds);
 
-        idx_db.insert_index_dimension(fid, "cat");
-        idx_db.insert_index_dimension(fid, "name");
-        idx_db.insert_index_dimension(fid, "dur");
+        writer->insert_index_dimension(fid, "cat");
+        writer->insert_index_dimension(fid, "name");
+        writer->insert_index_dimension(fid, "dur");
     }
 
-    // Chunk 1: STDIO writes, dur 500-600
     {
         ChunkDimensionStats cat_ds;
         cat_ds.dimension = "cat";
         cat_ds.value_type = "string";
         cat_ds.observe("STDIO");
-        idx_db.insert_chunk_dimension_stats(fid, 1, cat_ds);
+        writer->insert_chunk_dimension_stats(fid, 1, cat_ds);
 
         ChunkDimensionStats name_ds;
         name_ds.dimension = "name";
         name_ds.value_type = "string";
         name_ds.observe("write");
-        idx_db.insert_chunk_dimension_stats(fid, 1, name_ds);
+        writer->insert_chunk_dimension_stats(fid, 1, name_ds);
 
         ChunkDimensionStats dur_ds;
         dur_ds.dimension = "dur";
         dur_ds.value_type = "uint";
         dur_ds.observe("500");
         dur_ds.observe("600");
-        idx_db.insert_chunk_dimension_stats(fid, 1, dur_ds);
+        writer->insert_chunk_dimension_stats(fid, 1, dur_ds);
     }
 
-    // Chunk 2: POSIX + MPI mixed, dur 50-1000
     {
         ChunkDimensionStats cat_ds;
         cat_ds.dimension = "cat";
         cat_ds.value_type = "string";
         cat_ds.observe("POSIX");
         cat_ds.observe("MPI");
-        idx_db.insert_chunk_dimension_stats(fid, 2, cat_ds);
+        writer->insert_chunk_dimension_stats(fid, 2, cat_ds);
 
         ChunkDimensionStats name_ds;
         name_ds.dimension = "name";
         name_ds.value_type = "string";
         name_ds.observe("read");
         name_ds.observe("send");
-        idx_db.insert_chunk_dimension_stats(fid, 2, name_ds);
+        writer->insert_chunk_dimension_stats(fid, 2, name_ds);
 
         ChunkDimensionStats dur_ds;
         dur_ds.dimension = "dur";
         dur_ds.value_type = "uint";
         dur_ds.observe("50");
         dur_ds.observe("1000");
-        idx_db.insert_chunk_dimension_stats(fid, 2, dur_ds);
+        writer->insert_chunk_dimension_stats(fid, 2, dur_ds);
     }
 
-    idx_db.commit_transaction();
+    writer->commit();
 }
 
 static ChunkPrunerOutput run_pruner(const std::string& index_path,

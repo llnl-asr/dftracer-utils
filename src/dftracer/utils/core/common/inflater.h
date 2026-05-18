@@ -22,8 +22,13 @@ class Inflater {
         constants::indexer::INFLATE_BUFFER_SIZE;
 
     z_stream stream;
-    alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char out_buffer[BUFFER_SIZE];
-    alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char in_buffer[BUFFER_SIZE];
+    alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char out_buffer_[BUFFER_SIZE];
+    alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char in_buffer_[BUFFER_SIZE];
+
+    unsigned char* out_buffer() { return out_buffer_; }
+    const unsigned char* out_buffer() const { return out_buffer_; }
+    unsigned char* in_buffer() { return in_buffer_; }
+    const unsigned char* in_buffer() const { return in_buffer_; }
 
    protected:
     int window_bits_;
@@ -31,8 +36,8 @@ class Inflater {
    public:
     Inflater() : window_bits_(constants::indexer::ZLIB_GZIP_WINDOW_BITS) {
         std::memset(&stream, 0, sizeof(stream));
-        std::memset(out_buffer, 0, sizeof(out_buffer));
-        std::memset(in_buffer, 0, sizeof(in_buffer));
+        std::memset(out_buffer_, 0, BUFFER_SIZE);
+        std::memset(in_buffer_, 0, BUFFER_SIZE);
     }
 
     virtual ~Inflater() { inflateEnd(&stream); }
@@ -88,11 +93,10 @@ class Inflater {
     }
 
     coro::CoroTask<bool> read_input(int fd, off_t& offset) {
-        ssize_t n =
-            co_await io::pread(fd, in_buffer, sizeof(in_buffer), offset);
+        ssize_t n = co_await io::pread(fd, in_buffer(), BUFFER_SIZE, offset);
         if (n > 0) {
             offset += n;
-            stream.next_in = in_buffer;
+            stream.next_in = in_buffer();
             stream.avail_in = static_cast<uInt>(n);
             co_return true;
         } else if (n < 0) {
@@ -104,13 +108,14 @@ class Inflater {
     }
 
     std::size_t get_output(unsigned char* buf, std::size_t len) {
-        std::size_t available = sizeof(out_buffer) - stream.avail_out;
+        std::size_t available = BUFFER_SIZE - stream.avail_out;
         std::size_t to_copy = std::min(len, available);
-        std::memcpy(buf, out_buffer, to_copy);
+        std::memcpy(buf, out_buffer(), to_copy);
 
         // Shift remaining data
         if (to_copy < available) {
-            std::memmove(out_buffer, out_buffer + to_copy, available - to_copy);
+            std::memmove(out_buffer(), out_buffer() + to_copy,
+                         available - to_copy);
         }
 
         return to_copy;
@@ -129,8 +134,8 @@ class Inflater {
             return NEED_INPUT;
         }
 
-        stream.next_out = out_buffer;
-        stream.avail_out = sizeof(out_buffer);
+        stream.next_out = out_buffer();
+        stream.avail_out = BUFFER_SIZE;
 
         int ret = inflate(&stream, flush_mode);
 
@@ -150,7 +155,7 @@ class Inflater {
     }
 
     bool needs_input() const { return stream.avail_in == 0; }
-    bool has_output() const { return stream.avail_out < sizeof(out_buffer); }
+    bool has_output() const { return stream.avail_out < BUFFER_SIZE; }
     int get_data_type() const { return stream.data_type; }
     std::size_t get_avail_in() const { return stream.avail_in; }
     std::size_t get_avail_out() const { return stream.avail_out; }

@@ -4,7 +4,6 @@
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
-#include <dftracer/utils/core/rocksdb/async.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/server/trace_index.h>
@@ -46,7 +45,6 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
     std::vector<std::size_t> needs_build;
     std::vector<std::size_t> large_files;
-    std::size_t small_count = 0;
 
     for (const auto& entry : entries) {
         FileInfo info;
@@ -56,36 +54,19 @@ coro::CoroTask<void> TraceIndex::initialize() {
         std::error_code ec;
         auto fsize = fs::file_size(info.path, ec);
         info.compressed_size = (!ec && fsize > 0) ? fsize : 0;
-        info.is_small = info.compressed_size > 0 &&
-                        info.compressed_size < INDEX_SIZE_THRESHOLD;
 
         std::size_t idx = files_.size();
         path_to_index_[info.path] = idx;
 
-        if (info.is_small) {
-            info.has_bloom_data = false;
-            info.has_checkpoint_index = false;
-            info.size_mb =
-                static_cast<double>(info.compressed_size) / (1024.0 * 1024.0);
-            small_count++;
+        info.has_bloom_data = fs::exists(info.index_path);
+        info.has_checkpoint_index = fs::exists(info.index_path);
+        if (!info.has_bloom_data) {
+            needs_build.push_back(idx);
         } else {
-            info.has_bloom_data = fs::exists(info.index_path);
-            info.has_checkpoint_index = fs::exists(info.index_path);
-            if (!info.has_bloom_data) {
-                needs_build.push_back(idx);
-            } else {
-                large_files.push_back(idx);
-            }
+            large_files.push_back(idx);
         }
 
         files_.push_back(std::move(info));
-    }
-
-    if (small_count > 0) {
-        DFTRACER_UTILS_LOG_INFO(
-            "TraceIndex: %zu small file(s) (< %zu bytes) will be "
-            "streamed directly (no .dftindex database)",
-            small_count, INDEX_SIZE_THRESHOLD);
     }
 
     if (!needs_build.empty() || !large_files.empty()) {
@@ -122,7 +103,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                         coro::make_channel<std::size_t>(max_concurrent * 2);
 
                     const auto* index_dir_ptr = &index_dir;
-                    co_await ctx.scope([file_chan, files_ptr, needs_build_ptr,
+                    co_await ctx.scope([&file_chan, files_ptr, needs_build_ptr,
                                         index_dir_ptr,
                                         max_concurrent](CoroScope& scope)
                                            -> coro::CoroTask<void> {
@@ -137,41 +118,38 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             });
 
                         for (std::size_t w = 0; w < max_concurrent; ++w) {
-                            scope.spawn(
-                                [file_chan, files_ptr, index_dir_ptr](
-                                    CoroScope&) -> coro::CoroTask<void> {
-                                    while (auto fi_opt =
-                                               co_await file_chan->receive()) {
-                                        std::size_t fi = *fi_opt;
-                                        auto* info = &(*files_ptr)[fi];
+                            scope.spawn([ch = file_chan->consumer(), files_ptr,
+                                         index_dir_ptr](CoroScope&)
+                                            -> coro::CoroTask<void> {
+                                while (auto fi_opt = co_await ch.receive()) {
+                                    std::size_t fi = *fi_opt;
+                                    auto* info = &(*files_ptr)[fi];
 
-                                        indexer::IndexBuilderUtility builder;
-                                        auto config =
-                                            indexer::IndexBuildConfig::for_file(
-                                                info->path)
-                                                .with_index_dir(*index_dir_ptr)
-                                                .with_bloom(true)
-                                                .with_index_threshold(0);
-                                        auto result =
-                                            co_await builder.process(config);
+                                    indexer::IndexBuilderUtility builder;
+                                    auto config =
+                                        indexer::IndexBuildConfig::for_file(
+                                            info->path)
+                                            .with_index_dir(*index_dir_ptr);
+                                    auto result =
+                                        co_await builder.process(config);
 
-                                        if (result.success) {
-                                            info->index_path =
-                                                internal::determine_index_path(
-                                                    info->path, *index_dir_ptr);
-                                            info->has_bloom_data = true;
-                                            info->has_checkpoint_index =
-                                                fs::exists(info->index_path);
-                                        } else {
-                                            DFTRACER_UTILS_LOG_WARN(
-                                                "TraceIndex: failed to "
-                                                "index %s: %s",
-                                                info->path.c_str(),
-                                                result.error_message.c_str());
-                                        }
+                                    if (result.success) {
+                                        info->index_path =
+                                            internal::determine_index_path(
+                                                info->path, *index_dir_ptr);
+                                        info->has_bloom_data = true;
+                                        info->has_checkpoint_index =
+                                            fs::exists(info->index_path);
+                                    } else {
+                                        DFTRACER_UTILS_LOG_WARN(
+                                            "TraceIndex: failed to "
+                                            "index %s: %s",
+                                            info->path.c_str(),
+                                            result.error_message.c_str());
                                     }
-                                    co_return;
-                                });
+                                }
+                                co_return;
+                            });
                         }
                         co_return;
                     });
@@ -187,7 +165,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     auto meta_chan =
                         coro::make_channel<std::size_t>(max_concurrent * 2);
 
-                    co_await ctx.scope([meta_chan, files_ptr, large_files_ptr,
+                    co_await ctx.scope([&meta_chan, files_ptr, large_files_ptr,
                                         max_concurrent](CoroScope& scope)
                                            -> coro::CoroTask<void> {
                         scope.spawn(
@@ -201,45 +179,31 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             });
 
                         for (std::size_t w = 0; w < max_concurrent; ++w) {
-                            scope.spawn([meta_chan, files_ptr](CoroScope&)
+                            scope.spawn([ch = meta_chan->consumer(),
+                                         files_ptr](CoroScope&)
                                             -> coro::CoroTask<void> {
-                                while (auto fi_opt =
-                                           co_await meta_chan->receive()) {
+                                while (auto fi_opt = co_await ch.receive()) {
                                     std::size_t fi = *fi_opt;
                                     auto* info = &(*files_ptr)[fi];
 
                                     if (info->has_bloom_data) {
                                         try {
-                                            const std::string path = info->path;
-                                            const std::string index_path =
-                                                info->index_path;
-                                            const auto* path_ptr = &path;
-                                            const auto* index_path_ptr =
-                                                &index_path;
-                                            auto bounds = co_await rocksdb::run(
-                                                [path_ptr, index_path_ptr] {
-                                                    indexer::IndexDatabase
-                                                        idx_db(*index_path_ptr);
-                                                    auto logical =
-                                                        indexer::internal::
-                                                            get_logical_path(
-                                                                *path_ptr);
-                                                    int fid =
-                                                        idx_db.get_file_info_id(
-                                                            logical);
-                                                    if (fid < 0) {
-                                                        return indexer::
-                                                            IndexDatabase::
-                                                                TimeBounds{};
-                                                    }
-                                                    return idx_db
-                                                        .query_time_bounds(fid);
-                                                });
-                                            if (bounds.valid) {
-                                                info->min_timestamp_us =
-                                                    bounds.min_timestamp_us;
-                                                info->max_timestamp_us =
-                                                    bounds.max_timestamp_us;
+                                            indexer::IndexDatabase idx_db(
+                                                info->index_path);
+                                            auto logical = indexer::internal::
+                                                get_logical_path(info->path);
+                                            int fid = idx_db.get_file_info_id(
+                                                logical);
+                                            if (fid >= 0) {
+                                                auto bounds =
+                                                    idx_db.query_time_bounds(
+                                                        fid);
+                                                if (bounds.valid) {
+                                                    info->min_timestamp_us =
+                                                        bounds.min_timestamp_us;
+                                                    info->max_timestamp_us =
+                                                        bounds.max_timestamp_us;
+                                                }
                                             }
                                         } catch (const std::exception& e) {
                                             DFTRACER_UTILS_LOG_WARN(

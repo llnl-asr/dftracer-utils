@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/rocksdb/filesystem.h>
 #include <rocksdb/slice.h>
+#include <rocksdb/table.h>
 
 #include <algorithm>
 #include <atomic>
@@ -25,7 +26,11 @@ const ::rocksdb::ReadOptions& read_options() {
 }
 
 const ::rocksdb::WriteOptions& write_options() {
-    static const ::rocksdb::WriteOptions options;
+    static const auto options = [] {
+        ::rocksdb::WriteOptions wo;
+        wo.disableWAL = true;
+        return wo;
+    }();
     return options;
 }
 
@@ -79,10 +84,8 @@ RocksDatabase& RocksDatabase::operator=(RocksDatabase&& other) noexcept {
     return *this;
 }
 
-std::vector<std::string> RocksDatabase::default_column_families() {
-    return {"default",    "checkpoints", "metadata",   "chunk_bloom",
-            "file_bloom", "chunk_stats", "dimensions", "chunk_dim_stats",
-            "manifest",   "provenance",  "archives",   "tar_files"};
+const decltype(cf::ALL)& RocksDatabase::default_column_families() {
+    return cf::ALL;
 }
 
 ::rocksdb::Options RocksDatabase::default_options() {
@@ -92,13 +95,40 @@ std::vector<std::string> RocksDatabase::default_column_families() {
     options.allow_concurrent_memtable_write = true;
     options.enable_pipelined_write = true;
     options.max_open_files = Env::rocksdb_max_open_files();
+    options.max_background_jobs = 8;
+    options.max_subcompactions = 8;
+    options.write_buffer_size = 256 * 1024 * 1024;
+    options.max_write_buffer_number = 4;
     return options;
 }
 
 ::rocksdb::ColumnFamilyOptions RocksDatabase::default_column_family_options() {
     ::rocksdb::ColumnFamilyOptions options;
+
+    ::rocksdb::BlockBasedTableOptions bbt;
+    bbt.block_size = 32 * 1024;
+    bbt.format_version = 5;
+    bbt.index_block_restart_interval = 16;
+    options.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
+
+#ifdef DFTRACER_UTILS_ENABLE_ZSTD
+    options.compression = ::rocksdb::kZSTD;
+    options.compression_opts.level = 9;
+    options.compression_opts.max_dict_bytes = 262144;
+    options.compression_opts.zstd_max_train_bytes = 1048576;
+    options.compression_opts.enabled = true;
+    options.bottommost_compression = ::rocksdb::kZSTD;
+    options.bottommost_compression_opts.level = 9;
+    options.bottommost_compression_opts.max_dict_bytes = 262144;
+    options.bottommost_compression_opts.zstd_max_train_bytes = 1048576;
+    options.bottommost_compression_opts.enabled = true;
+#elif defined(DFTRACER_UTILS_ENABLE_LZ4)
     options.compression = ::rocksdb::kLZ4Compression;
     options.bottommost_compression = ::rocksdb::kZlibCompression;
+#else
+    options.compression = ::rocksdb::kZlibCompression;
+    options.bottommost_compression = ::rocksdb::kZlibCompression;
+#endif
     return options;
 }
 
@@ -131,14 +161,17 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
                 "Failed to list RocksDB column families at '" + db_path_ +
                 "': " + list_status.ToString());
         }
-        column_family_names = default_column_families();
+        column_family_names.reserve(default_column_families().size());
+        for (auto name : default_column_families()) {
+            column_family_names.emplace_back(name);
+        }
     } else {
         if (open_mode_ == OpenMode::ReadWrite) {
             for (const auto& name : default_column_families()) {
                 if (std::find(column_family_names.begin(),
                               column_family_names.end(),
                               name) == column_family_names.end()) {
-                    column_family_names.push_back(name);
+                    column_family_names.emplace_back(name);
                 }
             }
         }
@@ -147,16 +180,22 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     std::vector<::rocksdb::ColumnFamilyDescriptor> descriptors;
     descriptors.reserve(column_family_names.size());
     for (const auto& name : column_family_names) {
-        descriptors.emplace_back(name, cf_options);
+        auto opts = cf_options;
+        if (cf_options_override_) {
+            cf_options_override_(name, opts);
+        }
+        descriptors.emplace_back(name, opts);
     }
 
     std::vector<::rocksdb::ColumnFamilyHandle*> handles;
-    auto status =
-        open_mode_ == OpenMode::ReadOnly
-            ? ::rocksdb::DB::OpenForReadOnly(db_options, db_path_, descriptors,
-                                             &handles, &db_, false)
-            : ::rocksdb::DB::Open(db_options, db_path_, descriptors, &handles,
-                                  &db_);
+    ::rocksdb::Status status;
+    if (open_mode_ == OpenMode::ReadOnly) {
+        status = ::rocksdb::DB::OpenForReadOnly(
+            db_options, db_path_, descriptors, &handles, &db_, false);
+    } else {
+        status = ::rocksdb::DB::Open(db_options, db_path_, descriptors,
+                                     &handles, &db_);
+    }
     if (!status.ok()) {
         cleanup_failed_open(db_, handles);
         throw std::runtime_error("Failed to open RocksDB at '" + db_path_ +
@@ -215,7 +254,7 @@ const std::string& RocksDatabase::path() const noexcept { return db_path_; }
 
 ::rocksdb::ColumnFamilyHandle* RocksDatabase::column_family_handle(
     std::string_view column_family) const {
-    const auto name = column_family.empty() ? std::string("default")
+    const auto name = column_family.empty() ? std::string(cf::DEFAULT)
                                             : std::string(column_family);
     const auto it = column_families_.find(name);
     if (it == column_families_.end() || it->second == nullptr) {
@@ -238,10 +277,40 @@ const std::string& RocksDatabase::path() const noexcept { return db_path_; }
                     ::rocksdb::Slice(key.data(), key.size()), value);
 }
 
+::rocksdb::Status RocksDatabase::merge(std::string_view key,
+                                       std::string_view value,
+                                       std::string_view column_family) {
+    return db_->Merge(write_options(), column_family_handle(column_family),
+                      ::rocksdb::Slice(key.data(), key.size()),
+                      ::rocksdb::Slice(value.data(), value.size()));
+}
+
+void RocksDatabase::set_cf_options_override(CfOptionsOverride override) {
+    cf_options_override_ = std::move(override);
+}
+
+::rocksdb::Status RocksDatabase::merge(Batch& batch,
+                                       std::string_view column_family,
+                                       std::string_view key,
+                                       std::string_view value) {
+    return batch.Merge(column_family_handle(column_family),
+                       ::rocksdb::Slice(key.data(), key.size()),
+                       ::rocksdb::Slice(value.data(), value.size()));
+}
+
 ::rocksdb::Status RocksDatabase::del(std::string_view key,
                                      std::string_view column_family) {
     return db_->Delete(write_options(), column_family_handle(column_family),
                        ::rocksdb::Slice(key.data(), key.size()));
+}
+
+::rocksdb::Status RocksDatabase::delete_range(std::string_view begin_key,
+                                              std::string_view end_key,
+                                              std::string_view column_family) {
+    return db_->DeleteRange(
+        write_options(), column_family_handle(column_family),
+        ::rocksdb::Slice(begin_key.data(), begin_key.size()),
+        ::rocksdb::Slice(end_key.data(), end_key.size()));
 }
 
 ::rocksdb::Status RocksDatabase::put(Batch& batch,
@@ -270,6 +339,29 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
     std::string_view column_family) const {
     return std::unique_ptr<::rocksdb::Iterator>(
         db_->NewIterator(read_options(), column_family_handle(column_family)));
+}
+
+::rocksdb::Status RocksDatabase::compact(std::string_view column_family) {
+    ::rocksdb::CompactRangeOptions opts;
+    opts.max_subcompactions = 8;
+    return db_->CompactRange(opts, column_family_handle(column_family), nullptr,
+                             nullptr);
+}
+
+::rocksdb::Status RocksDatabase::ingest_external_files(
+    std::string_view column_family,
+    const std::vector<std::string>& external_files, bool ingest_behind) {
+    if (external_files.empty()) {
+        return ::rocksdb::Status::OK();
+    }
+    ::rocksdb::IngestExternalFileOptions opts;
+    opts.move_files = false;
+    opts.snapshot_consistency = true;
+    opts.allow_global_seqno = true;
+    opts.allow_blocking_flush = true;
+    opts.ingest_behind = ingest_behind;
+    return db_->IngestExternalFile(column_family_handle(column_family),
+                                   external_files, opts);
 }
 
 }  // namespace dftracer::utils::rocksdb

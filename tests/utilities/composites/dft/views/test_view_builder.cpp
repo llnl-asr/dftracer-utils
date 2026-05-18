@@ -4,6 +4,7 @@
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 
@@ -26,13 +27,11 @@ using dftracer::utils::utilities::indexer::internal::get_logical_path;
 static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {
     IndexDatabase idx_db(index_path);
-    idx_db.init_base_schema();
-    idx_db.init_bloom_schema();
+    auto writer = idx_db.begin_write();
+    writer->init_schema();
 
     int fid =
-        idx_db.get_or_create_file_info(get_logical_path(file_path), 40000);
-
-    idx_db.begin_transaction();
+        writer->get_or_create_file_info(get_logical_path(file_path), 40000);
 
     struct ChunkDims {
         std::vector<std::string> names;
@@ -46,7 +45,6 @@ static void populate_test_idx(const std::string& index_path,
         {{"forward"}, {"compute", "ai_framework"}},
     };
 
-    // File-level blooms (union of all chunks)
     BloomFilter file_name_bloom(100, 0.01);
     BloomFilter file_cat_bloom(100, 0.01);
 
@@ -57,7 +55,7 @@ static void populate_test_idx(const std::string& index_path,
             file_name_bloom.add(n);
         }
         auto name_blob = name_bloom.serialize();
-        idx_db.insert_chunk_bloom_filter(
+        writer->insert_chunk_bloom_filter(
             fid, static_cast<std::uint64_t>(ckpt), "name", name_blob.data(),
             static_cast<int>(name_blob.size()), name_bloom.num_entries());
 
@@ -67,26 +65,24 @@ static void populate_test_idx(const std::string& index_path,
             file_cat_bloom.add(c);
         }
         auto cat_blob = cat_bloom.serialize();
-        idx_db.insert_chunk_bloom_filter(
+        writer->insert_chunk_bloom_filter(
             fid, static_cast<std::uint64_t>(ckpt), "cat", cat_blob.data(),
             static_cast<int>(cat_blob.size()), cat_bloom.num_entries());
     }
 
-    // File-level bloom filters
     auto name_blob = file_name_bloom.serialize();
-    idx_db.insert_file_bloom_filter(fid, "name", name_blob.data(),
-                                    static_cast<int>(name_blob.size()),
-                                    file_name_bloom.num_entries());
+    writer->insert_file_bloom_filter(fid, "name", name_blob.data(),
+                                     static_cast<int>(name_blob.size()),
+                                     file_name_bloom.num_entries());
 
     auto cat_blob = file_cat_bloom.serialize();
-    idx_db.insert_file_bloom_filter(fid, "cat", cat_blob.data(),
-                                    static_cast<int>(cat_blob.size()),
-                                    file_cat_bloom.num_entries());
+    writer->insert_file_bloom_filter(fid, "cat", cat_blob.data(),
+                                     static_cast<int>(cat_blob.size()),
+                                     file_cat_bloom.num_entries());
 
-    idx_db.insert_index_dimension(fid, "name");
-    idx_db.insert_index_dimension(fid, "cat");
-
-    idx_db.commit_transaction();
+    writer->insert_index_dimension(fid, "name");
+    writer->insert_index_dimension(fid, "cat");
+    writer->commit();
 }
 
 TEST_SUITE("ViewBuilderUtility") {
@@ -301,27 +297,27 @@ TEST_SUITE("ViewBuilderUtility") {
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
 
-        // Create idx with fhash dimension
         IndexDatabase idx_db(index_path);
-        idx_db.init_base_schema();
-        idx_db.init_bloom_schema();
-        int fid =
-            idx_db.get_or_create_file_info(get_logical_path(file_path), 10000);
-        idx_db.begin_transaction();
+        {
+            auto writer = idx_db.begin_write();
+            writer->init_schema();
+            int fid = writer->get_or_create_file_info(
+                get_logical_path(file_path), 10000);
 
-        BloomFilter fhash_bloom(100, 0.01);
-        fhash_bloom.add("hash123");
-        auto blob = fhash_bloom.serialize();
+            BloomFilter fhash_bloom(100, 0.01);
+            fhash_bloom.add("hash123");
+            auto blob = fhash_bloom.serialize();
 
-        idx_db.insert_file_bloom_filter(fid, "fhash", blob.data(),
-                                        static_cast<int>(blob.size()),
-                                        fhash_bloom.num_entries());
-        idx_db.insert_chunk_bloom_filter(fid, 0, "fhash", blob.data(),
-                                         static_cast<int>(blob.size()),
-                                         fhash_bloom.num_entries());
-        idx_db.insert_index_dimension(fid, "fhash");
-        idx_db.insert_hash_resolution(fid, "fhash", "hash123", "/data/file.h5");
-        idx_db.commit_transaction();
+            writer->insert_file_bloom_filter(fid, "fhash", blob.data(),
+                                             static_cast<int>(blob.size()),
+                                             fhash_bloom.num_entries());
+            writer->insert_chunk_bloom_filter(fid, 0, "fhash", blob.data(),
+                                              static_cast<int>(blob.size()),
+                                              fhash_bloom.num_entries());
+            writer->insert_index_dimension(fid, "fhash");
+            writer->insert_hash_table_entry(0, "hash123", "/data/file.h5");
+            writer->commit();
+        }
 
         // Use "file" alias which should resolve to "fhash"
         ViewDefinition view;

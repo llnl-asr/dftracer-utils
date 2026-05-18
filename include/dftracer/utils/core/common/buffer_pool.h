@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_CORE_COMMON_BUFFER_POOL_H
 #define DFTRACER_UTILS_CORE_COMMON_BUFFER_POOL_H
 
+#include <concurrentqueue.h>
+
 #include <cstddef>
 #include <memory>
-#include <mutex>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils {
 
@@ -24,10 +24,6 @@ struct NoOpReset {
 /**
  * @brief Thread-safe typed buffer pool. Zero allocations after warmup.
  *
- * Buffers are never dropped. Released buffers are always kept for reuse.
- * The init factory is only called when the pool is empty (during warmup
- * or under unexpected load).
- *
  * @tparam T Buffer type. Must support move semantics.
  */
 template <typename T>
@@ -38,27 +34,19 @@ class BufferPool {
     virtual void release(T buf) = 0;
 };
 
-/**
- * @brief Concrete buffer pool with typed Init and Reset callables.
- *
- * Init and Reset are stored by value to avoid std::function overhead.
- */
 template <typename T, typename Init, typename Reset = DefaultReset>
 class BufferPoolImpl : public BufferPool<T> {
    public:
     BufferPoolImpl(std::size_t capacity, Init init, Reset reset = Reset{})
-        : init_(std::move(init)), reset_(std::move(reset)) {
-        pool_.reserve(capacity);
+        : queue_(capacity), init_(std::move(init)), reset_(std::move(reset)) {
         for (std::size_t i = 0; i < capacity; ++i) {
-            pool_.push_back(init_());
+            queue_.enqueue(init_());
         }
     }
 
     T acquire() override {
-        std::lock_guard<std::mutex> lock(mu_);
-        if (!pool_.empty()) {
-            T item = std::move(pool_.back());
-            pool_.pop_back();
+        T item;
+        if (queue_.try_dequeue(item)) {
             return item;
         }
         return init_();
@@ -66,13 +54,11 @@ class BufferPoolImpl : public BufferPool<T> {
 
     void release(T buf) override {
         reset_(buf);
-        std::lock_guard<std::mutex> lock(mu_);
-        pool_.push_back(std::move(buf));
+        queue_.enqueue(std::move(buf));
     }
 
    private:
-    std::mutex mu_;
-    std::vector<T> pool_;
+    moodycamel::ConcurrentQueue<T> queue_;
     Init init_;
     Reset reset_;
 };

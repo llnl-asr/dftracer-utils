@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_COMPARATOR_COMPARISON_CONFIG_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_COMPARATOR_COMPARISON_CONFIG_H
 
+#include <simdjson.h>
+
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -87,8 +89,10 @@ struct ComparisonConfig {
     std::size_t executor_threads = 0;
     /// Checkpoint size for index building (0 = default).
     std::size_t checkpoint_size = 0;
-    /// Directory for `.dftindex` stores.
-    std::string index_dir;
+    /// Directory for baseline `.dftindex` store (empty = co-located).
+    std::string baseline_index_dir;
+    /// Directory for variant `.dftindex` store (empty = co-located).
+    std::string variant_index_dir;
     /// Force rebuild of existing indexes.
     bool force_rebuild = false;
 
@@ -109,7 +113,7 @@ struct ComparisonConfig {
     void resolve();
 
    private:
-    static bool parse_node(void* yyjson_val_ptr, ComparisonNode& node,
+    static bool parse_node(simdjson::dom::element val, ComparisonNode& node,
                            std::string& error);
     void resolve_node(ComparisonNode& node, const std::string& parent_query,
                       const std::vector<std::string>& parent_metrics,

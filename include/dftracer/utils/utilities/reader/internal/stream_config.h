@@ -106,6 +106,12 @@ class StreamConfig {
           end_(end),
           buffer_size_(buffer_size) {}
 
+    bool extend_to_line_boundary() const { return extend_to_line_boundary_; }
+    StreamConfig& extend_to_line_boundary(bool v) {
+        extend_to_line_boundary_ = v;
+        return *this;
+    }
+
     static constexpr std::size_t DEFAULT_BUFFER_SIZE = 4 * 1024 * 1024;  // 4MB
     // ========================================================================
     // Fluent API - Basic Setters
@@ -226,6 +232,8 @@ class StreamConfig {
      * Larger buffers improve I/O performance but use more memory.
      */
     std::size_t buffer_size_ = 4 * 1024 * 1024;  // 4MB default
+
+    bool extend_to_line_boundary_ = false;
 };
 
 }  // namespace dftracer::utils::utilities::reader::internal

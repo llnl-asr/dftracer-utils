@@ -30,11 +30,12 @@ static PyObject *Runtime_new(PyTypeObject *type, PyObject *args,
 }
 
 static int Runtime_init(RuntimeObject *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"threads", NULL};
+    static const char *kwlist[] = {"threads", "io_threads", NULL};
     Py_ssize_t threads = 0;
+    Py_ssize_t io_threads = 0;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|n", (char **)kwlist,
-                                     &threads)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nn", (char **)kwlist,
+                                     &threads, &io_threads)) {
         return -1;
     }
 
@@ -42,10 +43,17 @@ static int Runtime_init(RuntimeObject *self, PyObject *args, PyObject *kwds) {
         PyErr_SetString(PyExc_ValueError, "threads must be >= 0");
         return -1;
     }
+    if (io_threads < 0) {
+        PyErr_SetString(PyExc_ValueError, "io_threads must be >= 0");
+        return -1;
+    }
 
     try {
-        self->runtime = std::make_shared<dftracer::utils::Runtime>(
-            static_cast<std::size_t>(threads));
+        dftracer::utils::ExecutorConfig config;
+        config.num_threads = static_cast<std::size_t>(threads);
+        config.io_pool_size = static_cast<std::size_t>(io_threads);
+        self->runtime =
+            std::make_shared<dftracer::utils::Runtime>(config, true);
     } catch (const std::exception &e) {
         PyErr_SetString(PyExc_RuntimeError, e.what());
         return -1;
@@ -393,9 +401,19 @@ static PyMethodDef Runtime_methods[] = {
      "Exit context manager (calls shutdown)."},
     {NULL}};
 
+static PyObject *Runtime_get_io_threads(RuntimeObject *self, void *closure) {
+    if (!self->runtime) {
+        PyErr_SetString(PyExc_RuntimeError, "Runtime not initialized");
+        return NULL;
+    }
+    return PyLong_FromSize_t(self->runtime->io_threads());
+}
+
 static PyGetSetDef Runtime_getsetters[] = {
     {"threads", (getter)Runtime_get_threads, NULL, "Number of worker threads",
      NULL},
+    {"io_threads", (getter)Runtime_get_io_threads, NULL,
+     "Number of I/O threads", NULL},
     {NULL}};
 
 PyTypeObject RuntimeType = {
@@ -418,13 +436,15 @@ PyTypeObject RuntimeType = {
     0,                                        /* tp_setattro */
     0,                                        /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
-    "Runtime(threads: int = 0)\n"
+    "Runtime(threads: int = 0, io_threads: int = 0)\n"
     "--\n"
     "\n"
     "Coroutine runtime backed by a thread pool.\n"
     "\n"
     "Args:\n"
     "    threads (int): Number of worker threads. 0 (default) uses\n"
+    "        the hardware concurrency.\n"
+    "    io_threads (int): Number of I/O threads. 0 (default) uses\n"
     "        the hardware concurrency.\n", /* tp_doc */
     0,                                     /* tp_traverse */
     0,                                     /* tp_clear */

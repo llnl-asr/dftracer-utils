@@ -502,10 +502,44 @@ Complete example of gathering statistics from a DFTracer trace file:
     std::cout << "Duration p99: " << stats.merged.duration_sketch.quantile(0.99)
               << " us" << std::endl;
 
+DFT Event Pipeline
+------------------
+
+DftEventDispatcher
+~~~~~~~~~~~~~~~~~~
+
+Adapter that turns a list of ``DftEventVisitor`` instances into a single
+``IndexVisitor`` consumable by ``IndexBuilderUtility``. Owns a per-instance
+``JsonParser`` and parses each decompressed line once before fanning out to
+the configured visitors (``BloomVisitor``, ``ManifestVisitor``,
+``AggregationVisitor``, ...). Supports a ``force_serial`` mode for
+deterministic-order replays.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/composites/dft/dft_event_dispatcher.h>
+
+    std::vector<std::unique_ptr<DftEventVisitor>> visitors;
+    visitors.push_back(std::make_unique<BloomVisitor>(...));
+    visitors.push_back(std::make_unique<ManifestVisitor>(...));
+    DftEventDispatcher dispatcher(std::move(visitors));
+
+AggregationVisitor
+~~~~~~~~~~~~~~~~~~
+
+Emits per-chunk aggregation + system-metric merge operands into the
+distributed aggregation column families. Pairs with
+``AggregationMergeOperator`` / ``SystemMetricsMergeOperator`` for
+distributed reduction; lives in
+``composites/dft/aggregators/aggregation_visitor.h``.
+
 Reorganization Pipeline
 -----------------------
 
-Parallel event routing for reorganizing traces by query-based groups.
+Parallel event routing for reorganizing traces by query-based groups. The
+``organize`` flow is a streaming pipeline that fans events through visitor
+groups, batches output, and periodically flushes group writers
+(``GroupWriterTask``) to bound peak memory.
 
 ChunkWriter
 ~~~~~~~~~~~
@@ -561,6 +595,15 @@ ProvenanceTracker
 Tracks source-to-output mapping during reorganization. Records which source
 file and line produced each output event, enabling reconstruction of original
 traces from reorganized files via ``dftracer_reconstruct``.
+
+ReconstructorUtility
+~~~~~~~~~~~~~~~~~~~~
+
+Streaming reconstruction pipeline that inverts the organize pipeline:
+plans a reconstruction over a ``.pidx`` provenance store, fans out per-source
+read tasks through coroutines and channels, and merges results in
+original-order back into the requested output. Defined in
+``composites/dft/reorganize/reconstructor_utility.h``.
 
 Comparison
 ----------

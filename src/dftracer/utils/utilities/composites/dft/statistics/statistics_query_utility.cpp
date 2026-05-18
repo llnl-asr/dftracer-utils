@@ -1,24 +1,29 @@
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_query_utility.h>
-#include <yyjson.h>
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 
 namespace dftracer::utils::utilities::composites::dft::statistics {
 
 namespace {
-std::vector<std::pair<std::string, std::uint64_t>> sorted_desc(
-    const std::unordered_map<std::string, std::uint64_t>& m) {
+template <typename Map>
+std::vector<std::pair<std::string, std::uint64_t>> sorted_desc(const Map& m) {
     std::vector<std::pair<std::string, std::uint64_t>> v(m.begin(), m.end());
     std::sort(v.begin(), v.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
     return v;
 }
 
-std::vector<std::pair<std::string, std::uint64_t>> top_n(
-    const std::unordered_map<std::string, std::uint64_t>& m, std::uint64_t n) {
+template <typename Map>
+std::vector<std::pair<std::string, std::uint64_t>> top_n(const Map& m,
+                                                         std::uint64_t n) {
     auto v = sorted_desc(m);
+    if (n == 0) {
+        return v;
+    }
     if (v.size() > n) {
         v.resize(static_cast<std::size_t>(n));
     }
@@ -129,48 +134,44 @@ coro::CoroTask<StatisticsQueryOutput> StatisticsQueryUtility::process(
 }
 
 std::string StatisticsQueryOutput::to_json() const {
-    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_val* root = yyjson_mut_obj(doc);
-    yyjson_mut_doc_set_root(doc, root);
+    std::ostringstream ss;
+    ss << std::setprecision(17);
+    ss << '{';
 
-    yyjson_mut_obj_add_str(doc, root, "query_type", query_type_name.c_str());
-    yyjson_mut_obj_add_uint(doc, root, "total_events", total_events);
+    ss << "\"query_type\":\"" << query_type_name << '"';
+    ss << ",\"total_events\":" << total_events;
 
     if (!results.empty()) {
-        yyjson_mut_val* arr = yyjson_mut_arr(doc);
+        ss << ",\"results\":[";
+        bool first = true;
         for (const auto& [name, count] : results) {
-            yyjson_mut_val* item = yyjson_mut_obj(doc);
-            yyjson_mut_obj_add_str(doc, item, "name", name.c_str());
-            yyjson_mut_obj_add_uint(doc, item, "count", count);
-            yyjson_mut_arr_append(arr, item);
+            if (!first) ss << ',';
+            first = false;
+            ss << "{\"name\":\"" << name << "\",\"count\":" << count << '}';
         }
-        yyjson_mut_obj_add_val(doc, root, "results", arr);
+        ss << ']';
     }
 
     if (min_timestamp_us > 0 || max_timestamp_us > 0) {
-        yyjson_mut_val* tr = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_uint(doc, tr, "min_timestamp_us", min_timestamp_us);
-        yyjson_mut_obj_add_uint(doc, tr, "max_timestamp_us", max_timestamp_us);
-        yyjson_mut_obj_add_real(doc, tr, "time_span_seconds",
-                                time_span_seconds);
-        yyjson_mut_obj_add_val(doc, root, "time_range", tr);
+        ss << ",\"time_range\":{";
+        ss << "\"min_timestamp_us\":" << min_timestamp_us;
+        ss << ",\"max_timestamp_us\":" << max_timestamp_us;
+        ss << ",\"time_span_seconds\":" << time_span_seconds;
+        ss << '}';
     }
 
     if (duration_count > 0) {
-        yyjson_mut_val* dur = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_uint(doc, dur, "count", duration_count);
-        yyjson_mut_obj_add_real(doc, dur, "mean_us", duration_mean_us);
-        yyjson_mut_obj_add_real(doc, dur, "stddev_us", duration_stddev_us);
-        yyjson_mut_obj_add_uint(doc, dur, "min_us", duration_min_us);
-        yyjson_mut_obj_add_uint(doc, dur, "max_us", duration_max_us);
-        yyjson_mut_obj_add_val(doc, root, "duration", dur);
+        ss << ",\"duration\":{";
+        ss << "\"count\":" << duration_count;
+        ss << ",\"mean_us\":" << duration_mean_us;
+        ss << ",\"stddev_us\":" << duration_stddev_us;
+        ss << ",\"min_us\":" << duration_min_us;
+        ss << ",\"max_us\":" << duration_max_us;
+        ss << '}';
     }
 
-    char* json_str = yyjson_mut_write(doc, YYJSON_WRITE_PRETTY, nullptr);
-    std::string result(json_str ? json_str : "{}");
-    if (json_str) free(json_str);
-    yyjson_mut_doc_free(doc);
-    return result;
+    ss << '}';
+    return ss.str();
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::statistics

@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/indexer_checkpoint.h>
 #include <dftracer/utils/python/runtime.h>
@@ -9,8 +10,9 @@
 #include <structmember.h>
 
 #include <cstring>
+#include <memory>
 
-static void Indexer_dealloc(IndexerObject *self) {
+static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
     if (self->handle) {
         // The Python wrapper owns only the native indexer handle. The
         // underlying RocksDB instance remains manager-owned and may continue to
@@ -24,7 +26,7 @@ static void Indexer_dealloc(IndexerObject *self) {
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-static void Indexer_release_handle(IndexerObject *self) {
+static void CheckpointIndexer_release_handle(CheckpointIndexerObject *self) {
     if (self->handle) {
         // Releasing the handle drops this wrapper's native indexer state only.
         // Shared RocksDB lifetime is managed separately by RocksDBManager.
@@ -33,10 +35,10 @@ static void Indexer_release_handle(IndexerObject *self) {
     }
 }
 
-static PyObject *Indexer_new(PyTypeObject *type, PyObject *args,
-                             PyObject *kwds) {
-    IndexerObject *self;
-    self = (IndexerObject *)type->tp_alloc(type, 0);
+static PyObject *CheckpointIndexer_new(PyTypeObject *type, PyObject *args,
+                                       PyObject *kwds) {
+    CheckpointIndexerObject *self;
+    self = (CheckpointIndexerObject *)type->tp_alloc(type, 0);
     if (self != NULL) {
         self->handle = NULL;
         self->gz_path = NULL;
@@ -44,18 +46,16 @@ static PyObject *Indexer_new(PyTypeObject *type, PyObject *args,
         self->checkpoint_size = 0;
         self->build_bloom = 0;
         self->build_manifest = 0;
-        self->index_threshold =
-            dftracer::utils::constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
         self->runtime_obj = NULL;
     }
     return (PyObject *)self;
 }
 
-static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
+static int CheckpointIndexer_init(CheckpointIndexerObject *self, PyObject *args,
+                                  PyObject *kwds) {
     static const char *kwlist[] = {
-        "gz_path",         "index_path",  "checkpoint_size",
-        "force_rebuild",   "build_bloom", "build_manifest",
-        "index_threshold", "runtime",     NULL};
+        "gz_path",     "index_path",     "checkpoint_size", "force_rebuild",
+        "build_bloom", "build_manifest", "runtime",         NULL};
     const char *gz_path;
     const char *index_path = NULL;
     std::uint64_t checkpoint_size =
@@ -63,14 +63,12 @@ static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     int force_rebuild = 0;
     int build_bloom = 0;
     int build_manifest = 0;
-    std::uint64_t index_threshold =
-        dftracer::utils::constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
     PyObject *runtime_arg = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "s|snpppnO", (char **)kwlist, &gz_path, &index_path,
-            &checkpoint_size, &force_rebuild, &build_bloom, &build_manifest,
-            &index_threshold, &runtime_arg)) {
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|snpppO", (char **)kwlist,
+                                     &gz_path, &index_path, &checkpoint_size,
+                                     &force_rebuild, &build_bloom,
+                                     &build_manifest, &runtime_arg)) {
         return -1;
     }
 
@@ -112,7 +110,6 @@ static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     self->checkpoint_size = checkpoint_size;
     self->build_bloom = build_bloom;
     self->build_manifest = build_manifest;
-    self->index_threshold = index_threshold;
 
     const char *index_path_str = PyUnicode_AsUTF8(self->index_path);
     if (!index_path_str) {
@@ -129,72 +126,97 @@ static int Indexer_init(IndexerObject *self, PyObject *args, PyObject *kwds) {
     return 0;
 }
 
-static dftracer::utils::Runtime *get_indexer_runtime(IndexerObject *self) {
+static dftracer::utils::Runtime *get_indexer_runtime(
+    CheckpointIndexerObject *self) {
     if (self->runtime_obj) {
         return ((RuntimeObject *)self->runtime_obj)->runtime.get();
     }
     return get_default_runtime();
 }
 
-static PyObject *Indexer_build(IndexerObject *self,
-                               PyObject *Py_UNUSED(ignored)) {
+static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
+                                         PyObject *Py_UNUSED(ignored)) {
     if (!self->handle) {
         PyErr_SetString(PyExc_RuntimeError, "Indexer not initialized");
         return NULL;
     }
 
-    using namespace dftracer::utils;
-    using namespace dftracer::utils::utilities::indexer;
+    // Use IndexBatchBuilderUtility when bloom or manifest is requested.
+    // Otherwise, use the simpler dft_indexer_build which only creates
+    // checkpoints.
+    if (self->build_bloom || self->build_manifest) {
+        using namespace dftracer::utils;
+        using namespace dftracer::utils::utilities::indexer;
 
-    const char *gz = PyUnicode_AsUTF8(self->gz_path);
-    const char *idx = PyUnicode_AsUTF8(self->index_path);
-    if (!gz || !idx) {
-        return NULL;
-    }
+        const char *gz = PyUnicode_AsUTF8(self->gz_path);
+        const char *idx = PyUnicode_AsUTF8(self->index_path);
+        if (!gz || !idx) {
+            return NULL;
+        }
 
-    auto config = IndexBuildConfig::for_file(gz)
-                      .with_checkpoint_size(
-                          static_cast<std::size_t>(self->checkpoint_size))
-                      .with_bloom(self->build_bloom != 0)
-                      .with_manifest(self->build_manifest != 0)
-                      .with_index_threshold(
-                          static_cast<std::size_t>(self->index_threshold));
+        auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+        batch_config->file_paths.emplace_back(gz);
+        batch_config->checkpoint_size =
+            static_cast<std::size_t>(self->checkpoint_size);
+        batch_config->build_manifest = self->build_manifest != 0;
+        batch_config->parallelism = 1;
+        batch_config->use_batch_write = true;
+        batch_config->rebuild_root_summaries = true;
 
-    std::string idx_str(idx);
-    auto pos = idx_str.find_last_of('/');
-    if (pos != std::string::npos) {
-        config.with_index_dir(idx_str.substr(0, pos));
-    }
+        std::string idx_str(idx);
+        auto pos = idx_str.find_last_of('/');
+        if (pos != std::string::npos) {
+            batch_config->index_dir = idx_str.substr(0, pos);
+        }
 
-    Runtime *rt = get_indexer_runtime(self);
-    IndexBuildResult build_result;
+        Runtime *rt = get_indexer_runtime(self);
+        IndexBuildBatchResult batch_result;
 
-    try {
-        auto build_coro =
-            [](IndexBuildConfig cfg) -> coro::CoroTask<IndexBuildResult> {
-            IndexBuilderUtility builder;
-            co_return co_await builder.process(cfg);
-        };
+        try {
+            Py_BEGIN_ALLOW_THREADS rt
+                ->submit(
+                    run_coro_scope(
+                        rt->executor(),
+                        [](CoroScope &scope,
+                           std::shared_ptr<IndexBuildBatchConfig> cfg,
+                           IndexBuildBatchResult *out) -> coro::CoroTask<void> {
+                            *out = co_await IndexBatchBuilderUtility::process(
+                                &scope, std::move(cfg));
+                        },
+                        batch_config, &batch_result),
+                    "indexer-build")
+                .get();
+            Py_END_ALLOW_THREADS
+        } catch (const std::exception &e) {
+            PyErr_SetString(PyExc_RuntimeError, e.what());
+            return NULL;
+        }
 
-        Py_BEGIN_ALLOW_THREADS auto handle =
-            rt->submit(build_coro(config), "indexer-build");
-        build_result = handle.get();
+        if (batch_result.failed > 0 && !batch_result.results.empty()) {
+            const auto &result = batch_result.results[0];
+            if (!result.success) {
+                PyErr_SetString(PyExc_RuntimeError,
+                                result.error_message.c_str());
+                return NULL;
+            }
+        }
+    } else {
+        // Simple checkpoint-only build
+        int result;
+        Py_BEGIN_ALLOW_THREADS result = dft_indexer_build(self->handle);
         Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return NULL;
-    }
 
-    if (!build_result.success) {
-        PyErr_SetString(PyExc_RuntimeError, build_result.error_message.c_str());
-        return NULL;
+            if (result < 0) {
+            PyErr_SetString(PyExc_RuntimeError, "Failed to build index");
+            return NULL;
+        }
     }
 
     Py_RETURN_NONE;
 }
 
-static PyObject *Indexer_need_rebuild(IndexerObject *self,
-                                      PyObject *Py_UNUSED(ignored)) {
+static PyObject *CheckpointIndexer_need_rebuild(CheckpointIndexerObject *self,
+                                                PyObject *Py_UNUSED(ignored)) {
     if (!self->handle) {
         PyErr_SetString(PyExc_RuntimeError, "Indexer not initialized");
         return NULL;
@@ -204,8 +226,8 @@ static PyObject *Indexer_need_rebuild(IndexerObject *self,
     return PyBool_FromLong(result);
 }
 
-static PyObject *Indexer_exists(IndexerObject *self,
-                                PyObject *Py_UNUSED(ignored)) {
+static PyObject *CheckpointIndexer_exists(CheckpointIndexerObject *self,
+                                          PyObject *Py_UNUSED(ignored)) {
     if (!self->handle) {
         PyErr_SetString(PyExc_RuntimeError, "Indexer not initialized");
         return NULL;
@@ -215,8 +237,8 @@ static PyObject *Indexer_exists(IndexerObject *self,
     return PyBool_FromLong(result);
 }
 
-static PyObject *Indexer_get_max_bytes(IndexerObject *self,
-                                       PyObject *Py_UNUSED(ignored)) {
+static PyObject *CheckpointIndexer_get_max_bytes(CheckpointIndexerObject *self,
+                                                 PyObject *Py_UNUSED(ignored)) {
     if (!self->handle) {
         PyErr_SetString(PyExc_RuntimeError, "Indexer not initialized");
         return NULL;
@@ -226,8 +248,8 @@ static PyObject *Indexer_get_max_bytes(IndexerObject *self,
     return PyLong_FromUnsignedLongLong(result);
 }
 
-static PyObject *Indexer_get_num_lines(IndexerObject *self,
-                                       PyObject *Py_UNUSED(ignored)) {
+static PyObject *CheckpointIndexer_get_num_lines(CheckpointIndexerObject *self,
+                                                 PyObject *Py_UNUSED(ignored)) {
     if (!self->handle) {
         PyErr_SetString(PyExc_RuntimeError, "Indexer not initialized");
         return NULL;
@@ -237,7 +259,8 @@ static PyObject *Indexer_get_num_lines(IndexerObject *self,
     return PyLong_FromUnsignedLongLong(result);
 }
 
-static PyObject *Indexer_find_checkpoint(IndexerObject *self, PyObject *args) {
+static PyObject *CheckpointIndexer_find_checkpoint(
+    CheckpointIndexerObject *self, PyObject *args) {
     if (!self->handle) {
         PyErr_SetString(PyExc_RuntimeError, "Indexer not initialized");
         return NULL;
@@ -268,8 +291,8 @@ static PyObject *Indexer_find_checkpoint(IndexerObject *self, PyObject *args) {
     return (PyObject *)cp_obj;
 }
 
-static PyObject *Indexer_get_checkpoints(IndexerObject *self,
-                                         PyObject *Py_UNUSED(ignored)) {
+static PyObject *CheckpointIndexer_get_checkpoints(
+    CheckpointIndexerObject *self, PyObject *Py_UNUSED(ignored)) {
     if (!self->handle) {
         PyErr_SetString(PyExc_RuntimeError, "Indexer not initialized");
         return NULL;
@@ -309,7 +332,8 @@ static PyObject *Indexer_get_checkpoints(IndexerObject *self,
     return list;
 }
 
-static PyObject *Indexer_has_bloom(IndexerObject *self, void *closure) {
+static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
+                                             void *closure) {
     const char *idx = PyUnicode_AsUTF8(self->index_path);
     const char *gz = PyUnicode_AsUTF8(self->gz_path);
     if (!idx || !gz) {
@@ -330,7 +354,8 @@ static PyObject *Indexer_has_bloom(IndexerObject *self, void *closure) {
     Py_RETURN_FALSE;
 }
 
-static PyObject *Indexer_has_manifest(IndexerObject *self, void *closure) {
+static PyObject *CheckpointIndexer_has_manifest(CheckpointIndexerObject *self,
+                                                void *closure) {
     const char *idx = PyUnicode_AsUTF8(self->index_path);
     const char *gz = PyUnicode_AsUTF8(self->gz_path);
     if (!idx || !gz) {
@@ -351,66 +376,71 @@ static PyObject *Indexer_has_manifest(IndexerObject *self, void *closure) {
     Py_RETURN_FALSE;
 }
 
-static PyObject *Indexer_gz_path(IndexerObject *self, void *closure) {
+static PyObject *CheckpointIndexer_gz_path(CheckpointIndexerObject *self,
+                                           void *closure) {
     Py_INCREF(self->gz_path);
     return self->gz_path;
 }
 
-static PyObject *Indexer_index_path(IndexerObject *self, void *closure) {
+static PyObject *CheckpointIndexer_index_path(CheckpointIndexerObject *self,
+                                              void *closure) {
     Py_INCREF(self->index_path);
     return self->index_path;
 }
 
-static PyObject *Indexer_checkpoint_size(IndexerObject *self, void *closure) {
+static PyObject *CheckpointIndexer_checkpoint_size(
+    CheckpointIndexerObject *self, void *closure) {
     return PyLong_FromUnsignedLongLong(self->checkpoint_size);
 }
 
-static PyObject *Indexer_enter(IndexerObject *self,
-                               PyObject *Py_UNUSED(ignored)) {
+static PyObject *CheckpointIndexer_enter(CheckpointIndexerObject *self,
+                                         PyObject *Py_UNUSED(ignored)) {
     Py_INCREF(self);
     return (PyObject *)self;
 }
 
-static PyObject *Indexer_close(IndexerObject *self,
-                               PyObject *Py_UNUSED(ignored)) {
-    Indexer_release_handle(self);
+static PyObject *CheckpointIndexer_close(CheckpointIndexerObject *self,
+                                         PyObject *Py_UNUSED(ignored)) {
+    CheckpointIndexer_release_handle(self);
     Py_RETURN_NONE;
 }
 
-static PyObject *Indexer_exit(IndexerObject *self, PyObject *args) {
-    Indexer_release_handle(self);
+static PyObject *CheckpointIndexer_exit(CheckpointIndexerObject *self,
+                                        PyObject *args) {
+    CheckpointIndexer_release_handle(self);
     Py_RETURN_NONE;
 }
 
-static PyMethodDef Indexer_methods[] = {
-    {"build", (PyCFunction)Indexer_build, METH_NOARGS,
+static PyMethodDef CheckpointIndexer_methods[] = {
+    {"build", (PyCFunction)CheckpointIndexer_build, METH_NOARGS,
      "build()\n"
      "--\n"
      "\n"
      "Build or rebuild the index.\n"},
-    {"need_rebuild", (PyCFunction)Indexer_need_rebuild, METH_NOARGS,
+    {"need_rebuild", (PyCFunction)CheckpointIndexer_need_rebuild, METH_NOARGS,
      "Check if a rebuild is needed."},
-    {"exists", (PyCFunction)Indexer_exists, METH_NOARGS,
+    {"exists", (PyCFunction)CheckpointIndexer_exists, METH_NOARGS,
      "Check if the .dftindex store exists."},
-    {"get_max_bytes", (PyCFunction)Indexer_get_max_bytes, METH_NOARGS,
+    {"get_max_bytes", (PyCFunction)CheckpointIndexer_get_max_bytes, METH_NOARGS,
      "Get the maximum uncompressed bytes in the indexed file."},
-    {"get_num_lines", (PyCFunction)Indexer_get_num_lines, METH_NOARGS,
+    {"get_num_lines", (PyCFunction)CheckpointIndexer_get_num_lines, METH_NOARGS,
      "Get the total number of lines in the indexed file."},
-    {"find_checkpoint", (PyCFunction)Indexer_find_checkpoint, METH_VARARGS,
+    {"find_checkpoint", (PyCFunction)CheckpointIndexer_find_checkpoint,
+     METH_VARARGS,
      "Find the best checkpoint for a given uncompressed offset.\n"
      "\n"
      "Args:\n"
      "    offset (int): Uncompressed byte offset.\n"},
-    {"get_checkpoints", (PyCFunction)Indexer_get_checkpoints, METH_NOARGS,
-     "Get all checkpoints for this file as a list."},
-    {"close", (PyCFunction)Indexer_close, METH_NOARGS,
+    {"get_checkpoints", (PyCFunction)CheckpointIndexer_get_checkpoints,
+     METH_NOARGS, "Get all checkpoints for this file as a list."},
+    {"close", (PyCFunction)CheckpointIndexer_close, METH_NOARGS,
      "Release this Python wrapper's native indexer handle.\n"
      "\n"
      "The shared RocksDB instance for the same .dftindex path remains managed\n"
      "by the native RocksDBManager cache."},
-    {"__enter__", (PyCFunction)Indexer_enter, METH_NOARGS,
+    {"__enter__", (PyCFunction)CheckpointIndexer_enter, METH_NOARGS,
      "Enter the runtime context for the with statement."},
-    {"__exit__", (PyCFunction)Indexer_exit, METH_VARARGS,
+    {"__exit__", (PyCFunction)CheckpointIndexer_exit, METH_VARARGS,
      "Release this Python wrapper on context exit.\n"
      "\n"
      "This does not force-close the shared RocksDB instance for the same\n"
@@ -418,48 +448,48 @@ static PyMethodDef Indexer_methods[] = {
     {NULL} /* Sentinel */
 };
 
-static PyGetSetDef Indexer_getsetters[] = {
-    {"gz_path", (getter)Indexer_gz_path, NULL, "Path to the gzip file", NULL},
-    {"index_path", (getter)Indexer_index_path, NULL,
+static PyGetSetDef CheckpointIndexer_getsetters[] = {
+    {"gz_path", (getter)CheckpointIndexer_gz_path, NULL,
+     "Path to the gzip file", NULL},
+    {"index_path", (getter)CheckpointIndexer_index_path, NULL,
      "Path to the .dftindex store", NULL},
-    {"checkpoint_size", (getter)Indexer_checkpoint_size, NULL,
+    {"checkpoint_size", (getter)CheckpointIndexer_checkpoint_size, NULL,
      "Checkpoint size in bytes", NULL},
-    {"has_bloom", (getter)Indexer_has_bloom, NULL,
+    {"has_bloom", (getter)CheckpointIndexer_has_bloom, NULL,
      "Whether bloom data exists in index", NULL},
-    {"has_manifest", (getter)Indexer_has_manifest, NULL,
+    {"has_manifest", (getter)CheckpointIndexer_has_manifest, NULL,
      "Whether manifest data exists in index", NULL},
     {NULL} /* Sentinel */
 };
 
-PyTypeObject IndexerType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "indexer.Indexer", /* tp_name */
-    sizeof(IndexerObject),                            /* tp_basicsize */
-    0,                                                /* tp_itemsize */
-    (destructor)Indexer_dealloc,                      /* tp_dealloc */
-    0,                                                /* tp_vectorcall_offset */
-    0,                                                /* tp_getattr */
-    0,                                                /* tp_setattr */
-    0,                                                /* tp_as_async */
-    0,                                                /* tp_repr */
-    0,                                                /* tp_as_number */
-    0,                                                /* tp_as_sequence */
-    0,                                                /* tp_as_mapping */
-    0,                                                /* tp_hash */
-    0,                                                /* tp_call */
-    0,                                                /* tp_str */
-    0,                                                /* tp_getattro */
-    0,                                                /* tp_setattro */
-    0,                                                /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,         /* tp_flags */
-    "Indexer(gz_path: str, index_path: str | None = None,\n"
-    "       checkpoint_size: int = 1048576,\n"
-    "       force_rebuild: bool = False, build_bloom: bool = False,\n"
-    "       build_manifest: bool = False,\n"
-    "       index_threshold: int = 1048576,\n"
-    "       runtime: Runtime | None = None)\n"
+PyTypeObject CheckpointIndexerType = {
+    PyVarObject_HEAD_INIT(
+        NULL, 0) "dftracer_utils_ext.CheckpointIndexer", /* tp_name */
+    sizeof(CheckpointIndexerObject),                     /* tp_basicsize */
+    0,                                                   /* tp_itemsize */
+    (destructor)CheckpointIndexer_dealloc,               /* tp_dealloc */
+    0,                                        /* tp_vectorcall_offset */
+    0,                                        /* tp_getattr */
+    0,                                        /* tp_setattr */
+    0,                                        /* tp_as_async */
+    0,                                        /* tp_repr */
+    0,                                        /* tp_as_number */
+    0,                                        /* tp_as_sequence */
+    0,                                        /* tp_as_mapping */
+    0,                                        /* tp_hash */
+    0,                                        /* tp_call */
+    0,                                        /* tp_str */
+    0,                                        /* tp_getattro */
+    0,                                        /* tp_setattro */
+    0,                                        /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
+    "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=1048576, "
+    "force_rebuild=False, build_bloom=False, build_manifest=False, "
+    "runtime=None)\n"
     "--\n"
     "\n"
-    "Indexer for creating and managing gzip trace index stores.\n"
+    "Checkpoint indexer for single-file checkpoint-level operations on a "
+    "gzip trace.\n"
     "\n"
     "Args:\n"
     "    gz_path (str): Path to the gzip trace file.\n"
@@ -470,38 +500,37 @@ PyTypeObject IndexerType = {
     "    force_rebuild (bool): If True, rebuild the index even if it\n"
     "        exists.\n"
     "    build_bloom (bool): If True, build bloom filter data in the\n"
-    "        store.\n"
+    "        index.\n"
     "    build_manifest (bool): If True, build manifest data in the\n"
     "        store.\n"
-    "    index_threshold (int): Skip indexing for files smaller than\n"
-    "        this (default 1 MB).\n"
     "    runtime (Runtime or None): Runtime instance for thread pool\n"
     "        control. If None, uses the default global Runtime.\n", /* tp_doc */
-    0,                      /* tp_traverse */
-    0,                      /* tp_clear */
-    0,                      /* tp_richcompare */
-    0,                      /* tp_weaklistoffset */
-    0,                      /* tp_iter */
-    0,                      /* tp_iternext */
-    Indexer_methods,        /* tp_methods */
-    0,                      /* tp_members */
-    Indexer_getsetters,     /* tp_getset */
-    0,                      /* tp_base */
-    0,                      /* tp_dict */
-    0,                      /* tp_descr_get */
-    0,                      /* tp_descr_set */
-    0,                      /* tp_dictoffset */
-    (initproc)Indexer_init, /* tp_init */
-    0,                      /* tp_alloc */
-    Indexer_new,            /* tp_new */
+    0,                                /* tp_traverse */
+    0,                                /* tp_clear */
+    0,                                /* tp_richcompare */
+    0,                                /* tp_weaklistoffset */
+    0,                                /* tp_iter */
+    0,                                /* tp_iternext */
+    CheckpointIndexer_methods,        /* tp_methods */
+    0,                                /* tp_members */
+    CheckpointIndexer_getsetters,     /* tp_getset */
+    0,                                /* tp_base */
+    0,                                /* tp_dict */
+    0,                                /* tp_descr_get */
+    0,                                /* tp_descr_set */
+    0,                                /* tp_dictoffset */
+    (initproc)CheckpointIndexer_init, /* tp_init */
+    0,                                /* tp_alloc */
+    CheckpointIndexer_new,            /* tp_new */
 };
 
-int init_indexer(PyObject *m) {
-    if (PyType_Ready(&IndexerType) < 0) return -1;
+int init_checkpoint_indexer(PyObject *m) {
+    if (PyType_Ready(&CheckpointIndexerType) < 0) return -1;
 
-    Py_INCREF(&IndexerType);
-    if (PyModule_AddObject(m, "Indexer", (PyObject *)&IndexerType) < 0) {
-        Py_DECREF(&IndexerType);
+    Py_INCREF(&CheckpointIndexerType);
+    if (PyModule_AddObject(m, "CheckpointIndexer",
+                           (PyObject *)&CheckpointIndexerType) < 0) {
+        Py_DECREF(&CheckpointIndexerType);
         Py_DECREF(m);
         return -1;
     }

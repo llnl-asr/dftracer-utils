@@ -1,36 +1,104 @@
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
-#include <dftracer/utils/utilities/indexer/internal/helpers.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <unistd.h>
 
-#include <argparse/argparse.hpp>
+#include <atomic>
 #include <chrono>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "common_cli.h"
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities::indexer::internal;
+using namespace dftracer::utils::utilities::composites::dft::indexing;
+using dftracer::utils::utilities::fileio::lines::sources::
+    async_streaming_gz_lines;
+using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
 
-static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program);
+class EventCountArgParse : public cli::ArgParse {
+   public:
+    cli::DirectoryArgs directory;
+    cli::PipelineArgs pipeline;
+    cli::IndexingArgs indexing;
+
+    explicit EventCountArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        indexing.index_dir_help =
+            "Directory to store index files (default: system temp directory)";
+        schema(directory, pipeline, indexing);
+    }
+};
+
+static int run_event_count(const EventCountArgParse* cli);
+
+struct EventCountBatchResult {
+    std::size_t total_events = 0;
+    std::size_t files_processed = 0;
+    bool is_approximate = false;
+};
+
+static EventCountBatchResult process_index_group_event_counts_sync(
+    std::string index_path, std::vector<ResolvedFile> entries) {
+    std::vector<int> file_ids;
+    file_ids.reserve(entries.size());
+    for (const auto& entry : entries) {
+        file_ids.push_back(entry.file_id);
+    }
+
+    EventCountBatchResult batch_result;
+
+    utilities::indexer::IndexDatabase db(
+        index_path,
+        dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+
+    auto metadata_rows = db.query_file_metadata_batch(file_ids);
+    auto merged_stats = db.query_merged_statistics_batch(file_ids);
+
+    for (const auto file_id : file_ids) {
+        auto merged_it = merged_stats.find(file_id);
+        if (merged_it != merged_stats.end() &&
+            merged_it->second.num_chunks > 0) {
+            batch_result.total_events +=
+                static_cast<std::size_t>(merged_it->second.stats.total_events);
+            batch_result.files_processed++;
+            continue;
+        }
+
+        auto metadata_it = metadata_rows.find(file_id);
+        if (metadata_it != metadata_rows.end()) {
+            batch_result.total_events +=
+                static_cast<std::size_t>(metadata_it->second.num_lines);
+            batch_result.files_processed++;
+            batch_result.is_approximate = true;
+        }
+    }
+
+    return batch_result;
+}
+
+static coro::CoroTask<EventCountBatchResult> process_index_group_event_counts(
+    std::shared_ptr<std::string> index_path,
+    std::shared_ptr<std::vector<ResolvedFile>> entries) {
+    co_return process_index_group_event_counts_sync(std::move(*index_path),
+                                                    std::move(*entries));
+}
 
 int main(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
-
-    auto default_checkpoint_size_str =
-        std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE) + " B (" +
-        std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE / (1024 * 1024)) +
-        " MB)";
 
     argparse::ArgumentParser program("dftracer_event_count",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -38,81 +106,33 @@ int main(int argc, char** argv) {
         "Count valid events in DFTracer .pfw or .pfw.gz files using composable "
         "utilities and pipeline processing");
 
-    program.add_argument("-d", "--directory")
-        .help("Directory containing .pfw or .pfw.gz files")
-        .default_value<std::string>(".");
+    EventCountArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
 
-    program.add_argument("-f", "--force").help("Force index recreation").flag();
-
-    program.add_argument("-c", "--checkpoint-size")
-        .help("Checkpoint size for indexing in bytes (default: " +
-              default_checkpoint_size_str + ")")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(Indexer::DEFAULT_CHECKPOINT_SIZE));
-
-    program.add_argument("--executor-threads")
-        .help(
-            "Number of executor threads for parallel processing (default: "
-            "number of CPU cores)")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
-
-    program.add_argument("--index-dir")
-        .help("Directory to store index files (default: system temp directory)")
-        .default_value<std::string>("");
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error occurred: %s", err.what());
-        std::cerr << program;
-        return 1;
-    }
-
-    return run_event_count(program).get();
+    return run_event_count(&cli);
 }
 
-static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
-    // Parse arguments
-    std::string log_dir = program.get<std::string>("--directory");
-    bool force_rebuild = program.get<bool>("--force");
-    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
-    std::string index_dir = program.get<std::string>("--index-dir");
+static int run_event_count(const EventCountArgParse* cli) {
+    const auto log_dir = fs::absolute(cli->directory.value).string();
+    const auto index_dir = cli->indexing.index_dir;
+    const auto checkpoint_size = cli->indexing.checkpoint_size;
+    const auto force_rebuild = cli->indexing.force;
+    const auto executor_threads = cli->pipeline.executor_threads;
 
-    // If no index dir specified, indices are stored next to trace files
-    // (default IndexBuilderUtility behavior). This allows reuse of
-    // indices built by dftracer_index.
+    IndexResolverUtility resolver;
+    ResolverInput resolve_input;
+    resolve_input.directory = log_dir;
+    resolve_input.index_dir = index_dir;
+    resolve_input.require_checkpoints = !force_rebuild;
 
-    log_dir = fs::absolute(log_dir).string();
+    auto resolve_result = resolver.process(resolve_input).get();
 
-    // Discover input files
-    utilities::filesystem::PatternDirectoryScannerUtility scanner;
-    utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
-        log_dir, {".pfw", ".pfw.gz"}};
-    auto matched_entries = scanner.process(scan_input).get();
-
-    std::vector<std::string> input_files;
-    input_files.reserve(matched_entries.size());
-    for (const auto& entry : matched_entries) {
-        input_files.push_back(entry.path.string());
-    }
-
-    if (input_files.empty()) {
+    if (resolve_result.all_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
                                  log_dir.c_str());
-        co_return 1;
+        return 1;
     }
-
-    auto pipeline_config = PipelineConfig()
-                               .with_name("DFTracer Event Count")
-                               .with_compute_threads(executor_threads)
-                               .with_watchdog(false);
-
-    Pipeline pipeline(pipeline_config);
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -120,87 +140,115 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
     std::atomic<std::size_t> files_processed{0};
     std::atomic<bool> is_approximate{false};
 
+    std::vector<FileWorkItem> direct_scan_items;
+    std::vector<ResolvedFile> indexed_entries =
+        std::move(resolve_result.cached);
+    std::string index_path = resolve_result.index_path;
+
+    std::vector<FileWorkItem> needs_checkpoint =
+        std::move(resolve_result.needs_checkpoint);
+
+    auto pipeline_config =
+        cli::build_pipeline_config("DFTracer Event Count", cli->pipeline);
+    Pipeline pipeline(pipeline_config);
+
+    auto build_task = make_task(
+        [&needs_checkpoint, index_dir, checkpoint_size, executor_threads,
+         force_rebuild](CoroScope& scope) -> coro::CoroTask<void> {
+            if (needs_checkpoint.empty()) {
+                co_return;
+            }
+            auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+            batch_config->file_paths.reserve(needs_checkpoint.size());
+            for (const auto& item : needs_checkpoint) {
+                batch_config->file_paths.push_back(item.file_path);
+            }
+            batch_config->index_dir = index_dir;
+            batch_config->checkpoint_size = checkpoint_size;
+            batch_config->parallelism = executor_threads;
+            batch_config->force_rebuild = force_rebuild;
+            batch_config->use_batch_write = true;
+            batch_config->rebuild_root_summaries = true;
+            co_await IndexBatchBuilderUtility::process(&scope,
+                                                       std::move(batch_config));
+        },
+        "BatchIndex");
+
     auto count_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                auto* files_ptr = &input_files;
-                auto* total_events_ptr = &total_events;
-                auto* files_processed_ptr = &files_processed;
-                auto* is_approximate_ptr = &is_approximate;
-                auto file_chan =
-                    coro::make_channel<std::size_t>(executor_threads * 2);
+        [&needs_checkpoint, &indexed_entries, &direct_scan_items, &total_events,
+         &files_processed, &is_approximate, index_dir, index_path,
+         executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
+            if (!needs_checkpoint.empty()) {
+                IndexResolverUtility re_resolver;
+                ResolverInput refresh_input;
+                std::vector<std::string> newly_indexed;
+                newly_indexed.reserve(needs_checkpoint.size());
+                for (const auto& item : needs_checkpoint) {
+                    newly_indexed.push_back(item.file_path);
+                }
+                refresh_input.files = std::move(newly_indexed);
+                refresh_input.index_dir = index_dir;
+                refresh_input.require_checkpoints = true;
 
-                // Producer
-                scope.spawn([ch = file_chan->producer(),
-                             num_files = input_files.size()](
-                                CoroScope&) mutable -> coro::CoroTask<void> {
-                    auto guard = ch.guard();
-                    for (std::size_t i = 0; i < num_files; ++i) {
-                        if (!co_await ch.send(i)) co_return;
+                auto refresh_result =
+                    co_await re_resolver.process(refresh_input);
+                for (auto& entry : refresh_result.cached) {
+                    indexed_entries.push_back(std::move(entry));
+                }
+                for (auto& item : refresh_result.needs_checkpoint) {
+                    direct_scan_items.push_back(std::move(item));
+                }
+            }
+
+            if (!indexed_entries.empty()) {
+                auto idx_path_ptr = std::make_shared<std::string>(index_path);
+                auto entries_ptr = std::make_shared<std::vector<ResolvedFile>>(
+                    std::move(indexed_entries));
+                try {
+                    auto batch_result =
+                        co_await process_index_group_event_counts(
+                            std::move(idx_path_ptr), std::move(entries_ptr));
+                    total_events.fetch_add(batch_result.total_events,
+                                           std::memory_order_relaxed);
+                    files_processed.fetch_add(batch_result.files_processed,
+                                              std::memory_order_relaxed);
+                    if (batch_result.is_approximate) {
+                        is_approximate.store(true, std::memory_order_relaxed);
                     }
-                    co_return;
-                });
+                } catch (...) {
+                    is_approximate.store(true, std::memory_order_relaxed);
+                }
+            }
 
-                // Workers: build index if needed, then read count from DB
-                for (std::size_t w = 0; w < executor_threads; ++w) {
-                    scope.spawn([file_chan, files_ptr, checkpoint_size,
-                                 force_rebuild, &index_dir, total_events_ptr,
-                                 files_processed_ptr, is_approximate_ptr](
-                                    CoroScope&) -> coro::CoroTask<void> {
-                        while (auto fi_opt = co_await file_chan->receive()) {
-                            const auto& fp = (*files_ptr)[*fi_opt];
+            if (!direct_scan_items.empty()) {
+                is_approximate.store(true, std::memory_order_relaxed);
+                co_await ctx.scope([&](CoroScope& scope)
+                                       -> coro::CoroTask<void> {
+                    auto file_chan =
+                        coro::make_channel<FileWorkItem>(executor_threads * 2);
 
-                            // Build index if needed
-                            utilities::indexer::IndexBuilderUtility builder;
-                            auto config =
-                                utilities::indexer::IndexBuildConfig::for_file(
-                                    fp)
-                                    .with_checkpoint_size(checkpoint_size)
-                                    .with_force_rebuild(force_rebuild)
-                                    .with_index_dir(index_dir);
-                            co_await builder.process(config);
-
-                            // Read event count from index
-                            std::string index_path =
-                                fp + constants::indexer::EXTENSION;
-                            if (!index_dir.empty()) {
-                                auto fname = fs::path(fp).filename();
-                                index_path =
-                                    (fs::path(index_dir) / fname).string() +
-                                    constants::indexer::EXTENSION;
-                            }
-
-                            if (fs::exists(index_path)) {
-                                try {
-                                    utilities::indexer::IndexDatabase db(
-                                        index_path);
-                                    int fid = db.find_file(fp);
-                                    if (fid >= 0) {
-                                        if (!db.has_bloom_data(fid)) {
-                                            is_approximate_ptr->store(
-                                                true,
-                                                std::memory_order_relaxed);
-                                        }
-                                        total_events_ptr->fetch_add(
-                                            db.get_total_events(fid),
-                                            std::memory_order_relaxed);
-                                        files_processed_ptr->fetch_add(
-                                            1, std::memory_order_relaxed);
-                                        continue;
-                                    }
-                                } catch (...) {
+                    scope.spawn(
+                        [ch = file_chan->producer(),
+                         items_ptr = &direct_scan_items](
+                            CoroScope&) mutable -> coro::CoroTask<void> {
+                            auto guard = ch.guard();
+                            for (const auto& item : *items_ptr) {
+                                if (!co_await ch.send(item)) {
+                                    co_return;
                                 }
                             }
+                            co_return;
+                        });
 
-                            // Fallback for small/unindexed files:
-                            // stream decompress and count lines (approximate)
-                            is_approximate_ptr->store(
-                                true, std::memory_order_relaxed);
-                            {
-                                using utilities::fileio::lines::sources::
-                                    async_streaming_gz_lines;
+                    for (std::size_t w = 0; w < executor_threads; ++w) {
+                        scope.spawn([ch = file_chan->consumer(),
+                                     total_events_ptr = &total_events,
+                                     files_processed_ptr = &files_processed](
+                                        CoroScope&) -> coro::CoroTask<void> {
+                            while (auto item_opt = co_await ch.receive()) {
                                 std::size_t count = 0;
-                                auto gen = async_streaming_gz_lines(fp);
+                                auto gen = async_streaming_gz_lines(
+                                    item_opt->file_path);
                                 while (co_await gen.next()) {
                                     ++count;
                                 }
@@ -209,17 +257,18 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
                                 files_processed_ptr->fetch_add(
                                     1, std::memory_order_relaxed);
                             }
-                        }
-                        co_return;
-                    });
-                }
-                co_return;
-            });
+                            co_return;
+                        });
+                    }
+                    co_return;
+                });
+            }
             co_return;
         },
-        "EventCount");
+        "Count");
 
-    pipeline.set_source(count_task);
+    count_task->depends_on(build_task);
+    pipeline.set_source(build_task);
     pipeline.set_destination(count_task);
     pipeline.execute();
 
@@ -235,5 +284,5 @@ static coro::CoroTask<int> run_event_count(argparse::ArgumentParser& program) {
     DFTRACER_UTILS_LOG_DEBUG("Completed in %.2f ms", duration.count());
     DFTRACER_UTILS_LOG_DEBUG("Files processed: %zu", files_processed.load());
 
-    co_return 0;
+    return 0;
 }

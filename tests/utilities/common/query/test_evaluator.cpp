@@ -2,10 +2,9 @@
 #include <dftracer/utils/utilities/common/query/evaluator.h>
 #include <dftracer/utils/utilities/common/query/parser.h>
 #include <doctest/doctest.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
-#include <memory>
-#include <string>
+#include <cstring>
 
 using namespace dftracer::utils::utilities::common::query;
 using dftracer::utils::utilities::common::json::JsonValue;
@@ -13,19 +12,25 @@ using dftracer::utils::utilities::common::json::JsonValue;
 namespace {
 
 struct JsonDoc {
-    yyjson_doc* doc;
-    JsonDoc(const char* json) : doc(yyjson_read(json, std::strlen(json), 0)) {}
-    ~JsonDoc() {
-        if (doc) yyjson_doc_free(doc);
+    simdjson::dom::parser parser;
+    simdjson::dom::element elem;
+    bool valid = false;
+
+    JsonDoc(const char* json) {
+        auto result = parser.parse(json, std::strlen(json));
+        if (!result.error()) {
+            elem = result.value_unsafe();
+            valid = true;
+        }
     }
-    JsonValue root() { return JsonValue(yyjson_doc_get_root(doc)); }
+    JsonValue root() { return valid ? JsonValue(elem) : JsonValue(); }
 };
 
 bool eval(const char* query_str, const char* json_str) {
     auto ast = parse(query_str);
     REQUIRE(ast.has_value());
     JsonDoc doc(json_str);
-    REQUIRE(doc.doc != nullptr);
+    REQUIRE(doc.valid);
     return evaluate(**ast, doc.root());
 }
 

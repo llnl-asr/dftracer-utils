@@ -1,8 +1,8 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/rocksdb/async.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/common/gzip_inflater.h>
 #include <dftracer/utils/utilities/indexer/internal/error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
@@ -18,7 +18,7 @@
 namespace dftracer::utils::utilities::indexer::internal::tar {
 
 using dftracer::utils::utilities::indexer::IndexDatabase;
-namespace rocks = dftracer::utils::rocksdb;
+using dftracer::utils::utilities::indexer::IndexDatabaseWriterContext;
 
 namespace {
 
@@ -37,8 +37,8 @@ std::string normalize_idx_path(const std::string& path) {
 }
 
 dftracer::utils::coro::CoroTask<bool> build_tar_index(
-    IndexDatabase& db, int file_id, const std::string& tar_gz_path,
-    std::uint64_t ckpt_size) {
+    IndexDatabaseWriterContext& writer, int file_id,
+    const std::string& tar_gz_path, std::uint64_t ckpt_size) {
     int fd = ::open(tar_gz_path.c_str(), O_RDONLY);
     if (fd < 0) {
         co_return false;
@@ -73,8 +73,8 @@ dftracer::utils::coro::CoroTask<bool> build_tar_index(
             break;
         }
 
-        accumulated_data.insert(accumulated_data.end(), inflater.out_buffer,
-                                inflater.out_buffer + result.bytes_read);
+        accumulated_data.insert(accumulated_data.end(), inflater.out_buffer(),
+                                inflater.out_buffer() + result.bytes_read);
         current_uc_offset += result.bytes_read;
         total_lines += result.lines_found;
     }
@@ -87,38 +87,29 @@ dftracer::utils::coro::CoroTask<bool> build_tar_index(
 
     total_uc_size = current_uc_offset;
 
-    auto* db_ptr = &db;
-    auto* tar_entries_ptr = &tar_entries;
     const std::string archive_name = fs::path(tar_gz_path).filename().string();
-    const auto* archive_name_ptr = &archive_name;
-    co_await rocks::run([db_ptr, file_id, ckpt_size, total_lines, total_uc_size,
-                         tar_entries_ptr, archive_name_ptr] {
-        internal::TransactionScope txn(*db_ptr);
-        std::uint64_t regular_files = 0;
-        for (const auto& entry : *tar_entries_ptr) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-
-            ++regular_files;
-            db_ptr->insert_tar_file(
-                file_id, IndexDatabase::TarFileRecord{
-                             .file_name = entry.name,
-                             .file_size = entry.size,
-                             .file_mtime = entry.mtime,
-                             .typeflag = entry.typeflag,
-                             .data_offset = entry.data_offset,
-                             .uncompressed_offset = entry.uncompressed_offset,
-                         });
+    std::uint64_t regular_files = 0;
+    for (const auto& entry : tar_entries) {
+        if (!entry.is_regular_file()) {
+            continue;
         }
 
-        db_ptr->insert_file_metadata(file_id, ckpt_size, total_lines,
-                                     total_uc_size);
-        db_ptr->insert_tar_archive_metadata(file_id, *archive_name_ptr,
-                                            ckpt_size, total_lines,
-                                            total_uc_size, regular_files);
-        txn.commit();
-    });
+        ++regular_files;
+        writer.insert_tar_file(
+            file_id, IndexDatabaseWriterContext::TarFileRecord{
+                         .file_name = entry.name,
+                         .file_size = entry.size,
+                         .file_mtime = entry.mtime,
+                         .typeflag = entry.typeflag,
+                         .data_offset = entry.data_offset,
+                         .uncompressed_offset = entry.uncompressed_offset,
+                     });
+    }
+
+    writer.insert_file_metadata(file_id, ckpt_size, total_lines, total_uc_size);
+    writer.insert_tar_archive_metadata(file_id, archive_name, ckpt_size,
+                                       total_lines, total_uc_size,
+                                       regular_files);
 
     ::close(fd);
     co_return true;
@@ -198,17 +189,17 @@ dftracer::utils::coro::CoroTask<void> TarIndexer::build_async() const {
     }
 
     IndexDatabase db(index_path);
+    auto writer = db.begin_write();
     const auto hash = calculate_file_hash(tar_gz_path);
     const std::string logical = tar_gz_path_logical_path;
-    const auto* logical_ptr = &logical;
-    const int file_id = co_await rocks::run([db_ptr = &db, logical_ptr, hash] {
-        return db_ptr->get_or_create_file_info(*logical_ptr, hash);
-    });
+    const int file_id = writer->get_or_create_file_info(logical, hash);
 
-    if (!(co_await build_tar_index(db, file_id, tar_gz_path, ckpt_size))) {
+    if (!(co_await build_tar_index(*writer, file_id, tar_gz_path, ckpt_size))) {
         throw IndexerError(IndexerError::Type::BUILD_ERROR,
                            "Failed to build TAR index for " + tar_gz_path);
     }
+
+    writer->commit();
 
     struct CacheSnapshot {
         std::uint64_t checkpoint_size = 0;
@@ -220,22 +211,18 @@ dftracer::utils::coro::CoroTask<void> TarIndexer::build_async() const {
     };
     const std::string fallback_archive_name =
         fs::path(tar_gz_path).filename().string();
-    const auto* fallback_archive_name_ptr = &fallback_archive_name;
-    auto snapshot =
-        co_await rocks::run([db_ptr = &db, file_id, fallback_archive_name_ptr] {
-            CacheSnapshot cache;
-            cache.checkpoint_size = db_ptr->get_checkpoint_size(file_id);
-            cache.num_lines = db_ptr->get_num_lines(file_id);
-            cache.max_bytes = db_ptr->get_max_bytes(file_id);
-            if (auto metadata = db_ptr->query_tar_archive_metadata(file_id)) {
-                cache.num_files = metadata->total_files;
-                cache.archive_name = metadata->archive_name;
-            } else {
-                cache.archive_name = *fallback_archive_name_ptr;
-            }
-            cache.checkpoints = db_ptr->query_checkpoints(file_id);
-            return cache;
-        });
+
+    CacheSnapshot snapshot;
+    snapshot.checkpoint_size = db.get_checkpoint_size(file_id);
+    snapshot.num_lines = db.get_num_lines(file_id);
+    snapshot.max_bytes = db.get_max_bytes(file_id);
+    if (auto metadata = db.query_tar_archive_metadata(file_id)) {
+        snapshot.num_files = metadata->total_files;
+        snapshot.archive_name = metadata->archive_name;
+    } else {
+        snapshot.archive_name = fallback_archive_name;
+    }
+    snapshot.checkpoints = db.query_checkpoints(file_id);
 
     std::lock_guard<std::mutex> lock(cache_mutex);
     cached_is_valid = true;
@@ -508,7 +495,7 @@ bool TarIndexer::find_file(const std::string& file_name,
     IndexDatabase db(
         index_path,
         dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-    IndexDatabase::TarFileRecord record;
+    TarFileRecord record;
     if (!db.find_tar_file(archive_id, file_name, record)) {
         return false;
     }

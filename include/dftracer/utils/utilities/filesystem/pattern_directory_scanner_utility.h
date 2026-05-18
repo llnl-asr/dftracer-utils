@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILESYSTEM_PATTERN_DIRECTORY_SCANNER_H
 
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/utilities/tags/needs_context.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
@@ -18,14 +19,18 @@ namespace dftracer::utils::utilities::filesystem {
 struct PatternDirectoryScannerUtilityInput {
     std::string path;
     bool recursive = false;
+    bool populate_size = true;
     std::vector<std::string> patterns;  // e.g., {".pfw", ".pfw.gz", "*.txt"}
 
     PatternDirectoryScannerUtilityInput() = default;
 
     PatternDirectoryScannerUtilityInput(std::string p,
                                         std::vector<std::string> pats,
-                                        bool rec = false)
-        : path(std::move(p)), recursive(rec), patterns(std::move(pats)) {}
+                                        bool rec = false, bool with_size = true)
+        : path(std::move(p)),
+          recursive(rec),
+          populate_size(with_size),
+          patterns(std::move(pats)) {}
 
     static PatternDirectoryScannerUtilityInput from_path(std::string p) {
         PatternDirectoryScannerUtilityInput input;
@@ -41,6 +46,11 @@ struct PatternDirectoryScannerUtilityInput {
 
     PatternDirectoryScannerUtilityInput& with_recursive(bool rec) {
         recursive = rec;
+        return *this;
+    }
+
+    PatternDirectoryScannerUtilityInput& with_populate_size(bool with_size) {
+        populate_size = with_size;
         return *this;
     }
 };
@@ -63,9 +73,9 @@ struct PatternDirectoryScannerUtilityInput {
  * @endcode
  */
 class PatternDirectoryScannerUtility
-    : public utilities::Utility<PatternDirectoryScannerUtilityInput,
-                                std::vector<FileEntry>,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<
+          PatternDirectoryScannerUtilityInput, std::vector<FileEntry>,
+          utilities::tags::Parallelizable, utilities::tags::NeedsContext> {
    private:
     DirectoryScannerUtility base_scanner_;
 
@@ -81,9 +91,15 @@ class PatternDirectoryScannerUtility
     coro::CoroTask<std::vector<FileEntry>> process(
         const PatternDirectoryScannerUtilityInput& input) override {
         // Step 1: Use base DirectoryScanner
-        DirectoryScannerUtilityInput dir_input{input.path, input.recursive};
-        std::vector<FileEntry> all_entries =
-            co_await base_scanner_.process(dir_input);
+        DirectoryScannerUtilityInput dir_input{input.path, input.recursive,
+                                               input.populate_size};
+        std::vector<FileEntry> all_entries;
+        if (this->has_context()) {
+            all_entries =
+                co_await this->context().spawn(base_scanner_, dir_input);
+        } else {
+            all_entries = co_await base_scanner_.process(dir_input);
+        }
 
         // Step 2: Filter by patterns
         std::vector<FileEntry> matched_entries;

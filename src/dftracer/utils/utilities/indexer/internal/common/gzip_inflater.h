@@ -72,18 +72,43 @@ class GzipInflater : public Inflater {
      * Read and analyze data for indexing purposes.
      * Uses Z_BLOCK to detect deflate boundaries and counts lines.
      */
-    coro::CoroTask<bool> read(int fd, off_t& offset,
-                              GzipInflaterResult& result) {
+    coro::CoroTask<bool> read(int fd, off_t& offset, GzipInflaterResult& result,
+                              std::size_t max_input_bytes = 0) {
+        co_return co_await read_into(fd, offset, out_buffer(), BUFFER_SIZE,
+                                     result, max_input_bytes);
+    }
+
+    /**
+     * Like read() but writes uncompressed output directly into the
+     * caller-provided buffer. Enables zero-copy hand-off to downstream
+     * consumers that own their own memory (e.g. parallel-inflate worker
+     * pools that cycle buffers through a channel without memcpy).
+     *
+     * The caller must keep `out_buf` alive for the duration of this call
+     * and not read it until the coroutine resumes with a successful
+     * result.
+     */
+    coro::CoroTask<bool> read_into(int fd, off_t& offset,
+                                   unsigned char* out_buf, std::size_t out_cap,
+                                   GzipInflaterResult& result,
+                                   std::size_t max_input_bytes = 0) {
         result = {0, 0, false, 0};
 
-        stream.next_out = out_buffer;
-        stream.avail_out = sizeof(out_buffer);
+        stream.next_out = out_buf;
+        stream.avail_out = static_cast<uInt>(out_cap);
 
         while (stream.avail_out > 0) {
             // Read input if needed
             if (stream.avail_in == 0) {
+                std::size_t to_read = BUFFER_SIZE;
+                if (max_input_bytes != 0) {
+                    if (total_input_bytes_ >= max_input_bytes) break;
+                    const std::size_t remaining =
+                        max_input_bytes - total_input_bytes_;
+                    if (remaining < to_read) to_read = remaining;
+                }
                 ssize_t n = co_await ::dftracer::utils::io::pread(
-                    fd, in_buffer, sizeof(in_buffer), offset);
+                    fd, in_buffer(), to_read, offset);
                 if (n == 0) {
                     break;  // EOF
                 }
@@ -94,7 +119,7 @@ class GzipInflater : public Inflater {
                     co_return false;  // Return error
                 }
                 offset += n;
-                stream.next_in = in_buffer;
+                stream.next_in = in_buffer();
                 stream.avail_in = static_cast<uInt>(n);
                 total_input_bytes_ += static_cast<std::size_t>(n);
             }
@@ -108,17 +133,15 @@ class GzipInflater : public Inflater {
                         stream.msg ? stream.msg : "no message");
                     break;
                 }
-                // NOTE: inflateReset clears the zlib
-                // sliding window (state->whave = 0). If we continued filling
-                // the output buffer, the next deflate-block boundary would
-                // pass the "avail_out < sizeof" check (using pre-reset
-                // output) while inflateGetDictionary returns an empty window.
-                // Breaking here lets the caller consume the output produced
-                // so far, and the NEXT read() call starts with fresh output
-                // accounting so block-boundary checks only reflect post-reset
-                // output where the window is valid.
+                // If the member produced no output (e.g. an FEXTRA-only
+                // padding member emitted by the padded-striped writer),
+                // keep inflating so the caller never sees a spurious 0-byte
+                // read (which it would treat as EOF). Otherwise break so
+                // the caller can consume the output and we re-enter with
+                // fresh window-accounting post-reset.
                 result.at_block_boundary = false;
-                break;
+                if (stream.avail_out < out_cap) break;
+                continue;
             }
             if (ret != Z_OK) {
                 DFTRACER_UTILS_LOG_DEBUG(
@@ -135,14 +158,14 @@ class GzipInflater : public Inflater {
             // before any data is decompressed.
             if ((stream.data_type & 0xc0) == 0x80) {
                 result.at_block_boundary = true;
-                if (stream.avail_out < sizeof(out_buffer)) {
+                if (stream.avail_out < out_cap) {
                     break;
                 }
             }
         }
 
-        result.bytes_read = sizeof(out_buffer) - stream.avail_out;
-        result.lines_found = count_lines(out_buffer, result.bytes_read);
+        result.bytes_read = out_cap - stream.avail_out;
+        result.lines_found = count_lines(out_buf, result.bytes_read);
         result.input_bytes_consumed = total_input_bytes_ - stream.avail_in;
 
         co_return true;

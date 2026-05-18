@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <doctest/doctest.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <cstring>
 
@@ -11,12 +11,18 @@ using dftracer::utils::utilities::common::json::JsonValue;
 namespace {
 
 struct JsonDoc {
-    yyjson_doc* doc;
-    JsonDoc(const char* json) : doc(yyjson_read(json, std::strlen(json), 0)) {}
-    ~JsonDoc() {
-        if (doc) yyjson_doc_free(doc);
+    simdjson::dom::parser parser;
+    simdjson::dom::element elem;
+    bool valid = false;
+
+    JsonDoc(const char* json) {
+        auto result = parser.parse(json, std::strlen(json));
+        if (!result.error()) {
+            elem = result.value_unsafe();
+            valid = true;
+        }
     }
-    JsonValue root() { return JsonValue(yyjson_doc_get_root(doc)); }
+    JsonValue root() { return valid ? JsonValue(elem) : JsonValue(); }
 };
 
 }  // namespace
@@ -84,4 +90,63 @@ TEST_CASE("Query with NOT IN") {
 
     JsonDoc no_match(R"({"cat":"STDIO"})");
     CHECK_FALSE(q->evaluate(no_match.root()));
+}
+
+TEST_CASE("Query::fields - simple equality") {
+    auto q = Query::from_string(R"(cat == "POSIX")");
+    REQUIRE(q.has_value());
+    auto& f = q->fields();
+    CHECK(f.size() == 1);
+    CHECK(f.count("cat") == 1);
+}
+
+TEST_CASE("Query::fields - compound OR") {
+    auto q = Query::from_string(R"(pid == 1 or tid == 2)");
+    REQUIRE(q.has_value());
+    auto& f = q->fields();
+    CHECK(f.size() == 2);
+    CHECK(f.count("pid") == 1);
+    CHECK(f.count("tid") == 1);
+}
+
+TEST_CASE("Query::fields - compound AND") {
+    auto q = Query::from_string(R"(cat == "POSIX" and dur > 100)");
+    REQUIRE(q.has_value());
+    auto& f = q->fields();
+    CHECK(f.size() == 2);
+    CHECK(f.count("cat") == 1);
+    CHECK(f.count("dur") == 1);
+}
+
+TEST_CASE("Query::fields - NOT query") {
+    auto q = Query::from_string(R"(not cat == "STDIO")");
+    REQUIRE(q.has_value());
+    auto& f = q->fields();
+    CHECK(f.size() == 1);
+    CHECK(f.count("cat") == 1);
+}
+
+TEST_CASE("Query::fields - IN query") {
+    auto q = Query::from_string(R"(cat in ["POSIX", "STDIO"])");
+    REQUIRE(q.has_value());
+    auto& f = q->fields();
+    CHECK(f.size() == 1);
+    CHECK(f.count("cat") == 1);
+}
+
+TEST_CASE("Query::references") {
+    auto q = Query::from_string(R"(pid == 1 and dur > 50)");
+    REQUIRE(q.has_value());
+    CHECK(q->references("pid"));
+    CHECK(q->references("dur"));
+    CHECK_FALSE(q->references("cat"));
+    CHECK_FALSE(q->references("tid"));
+}
+
+TEST_CASE("Query::fields - no duplicates for repeated field") {
+    auto q = Query::from_string(R"(pid == 1 or pid == 2)");
+    REQUIRE(q.has_value());
+    auto& f = q->fields();
+    CHECK(f.size() == 1);
+    CHECK(f.count("pid") == 1);
 }

@@ -1,60 +1,330 @@
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/platform_compat.h>
-#include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregators.h>
-#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
-#include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
-#include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
+
+#include "common_cli.h"
+#include "dftracer/utils/core/utils/timer.h"
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 #include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
 #endif
-#include <unistd.h>
-
-#include <argparse/argparse.hpp>
-#include <atomic>
-#include <chrono>
 #include <sstream>
-#include <thread>
+#include <unordered_set>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft::aggregators;
 
-static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
-    std::string log_dir = program.get<std::string>("--directory");
-    std::string output_file = program.get<std::string>("--output");
-    double time_interval_ms = program.get<double>("--time-interval");
+class AggregatorArgParse : public cli::ArgParse {
+   public:
+    cli::DirectoryArgs directory{
+        cli::DirMode::DEFAULT_DOT,
+        "Input directory containing .pfw or .pfw.gz files"};
+    cli::PipelineArgs pipeline;
+    cli::IndexingArgs indexing;
+    cli::QueryArgs query_args{
+        "Query DSL filter (e.g., 'cat == \"POSIX\" and dur > 1000')"};
+
+    std::string output;
+    double time_interval = 5000.0;
+    std::string group_keys;
+    std::string metric_fields;
+    bool compress = false;
+    int compression_level = 1;
+    std::string boundary_events;
+    bool no_track_parents = false;
+    std::size_t chunk_size = 4;
+    std::size_t read_batch_size = 4;
+    std::string event_format = "counter";
+    bool compute_percentiles = false;
+    std::string percentiles = "0.25,0.5,0.75,0.90";
+    double relative_accuracy = 0.01;
+    std::string format = "json";
+    bool no_default_args = false;
+
+    explicit AggregatorArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        indexing.index_dir_help =
+            "Directory to store index files (default: system temp directory)";
+        indexing.force_help = "Force index recreation";
+        schema(directory, pipeline, indexing, query_args);
+    }
+
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("-o", "--output")
+            .help("Output file path for aggregated counters")
+            .default_value<std::string>("aggregated_output.json");
+
+        parser()
+            .add_argument("-t", "--time-interval")
+            .help("Time interval in milliseconds for bucketing (default: 5000)")
+            .scan<'g', double>()
+            .default_value(5000.0);
+
+        parser()
+            .add_argument("-g", "--group-keys")
+            .help(
+                "Comma-separated extra group keys from args (e.g., "
+                "epoch,step,level)")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("-m", "--metric-fields")
+            .help(
+                "Comma-separated custom metric fields from args (e.g., "
+                "iter_count,num_events)")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--compress")
+            .help("Compress output using gzip")
+            .default_value(false)
+            .implicit_value(true);
+
+        parser()
+            .add_argument("--compression-level")
+            .help("Gzip compression level (0-9, default: 1)")
+            .scan<'d', int>()
+            .default_value(1);
+
+        parser()
+            .add_argument("--boundary-events")
+            .help(
+                "Boundary event configuration: "
+                "event_name:value_field:output_name "
+                "(e.g., \"epoch.block:iter_count:epoch\")")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--no-track-process-parents")
+            .help(
+                "Disable tracking of process parent relationships from "
+                "fork/spawn")
+            .default_value(false)
+            .implicit_value(true);
+
+        parser()
+            .add_argument("--chunk-size")
+            .help(
+                "Target chunk size in MB for parallel processing (default: 4)")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(4));
+
+        parser()
+            .add_argument("--read-batch-size")
+            .help(
+                "Batch read size in MB for stream processing (default: 4, "
+                "higher = "
+                "faster but more memory)")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(4));
+
+        parser()
+            .add_argument("--event-format")
+            .help(
+                "Perfetto event format: 'counter' (ph=C, point-in-time, "
+                "default), "
+                "'async' (ph=b/e, async tracks with overlaps), "
+                "'regular' (ph=X, duration events with original TID)")
+            .default_value<std::string>("counter");
+
+        parser()
+            .add_argument("--compute-percentiles")
+            .help(
+                "Enable percentile/quantile computation using DDSketch (opt-in "
+                "due "
+                "to memory overhead)")
+            .default_value(false)
+            .implicit_value(true);
+
+        parser()
+            .add_argument("--percentiles")
+            .help(
+                "Comma-separated percentiles to compute (e.g., "
+                "\"0.25,0.5,0.75,0.90\" for P25, P50, P75, P90)")
+            .default_value<std::string>("0.25,0.5,0.75,0.90");
+
+        parser()
+            .add_argument("--relative-accuracy")
+            .help(
+                "Relative accuracy for DDSketch percentile estimation "
+                "(default: 0.01 = 1%)")
+            .scan<'g', double>()
+            .default_value(0.01);
+
+        parser()
+            .add_argument("--format")
+            .help(
+                "Output format: 'json' (Perfetto JSON, default) or "
+                "'arrow' (Arrow IPC file, .arrows extension)")
+            .default_value<std::string>("json");
+
+        parser()
+            .add_argument("--no-default-args")
+            .help(
+                "Disable automatic aggregation of numeric event args "
+                "(offset, whence, flags, etc.)")
+            .default_value(false)
+            .implicit_value(true);
+    }
+
+    void post_parse() override {
+        output = parser().get<std::string>("--output");
+        time_interval = parser().get<double>("--time-interval");
+        group_keys = parser().get<std::string>("--group-keys");
+        metric_fields = parser().get<std::string>("--metric-fields");
+        compress = parser().get<bool>("--compress");
+        compression_level = parser().get<int>("--compression-level");
+        boundary_events = parser().get<std::string>("--boundary-events");
+        no_track_parents = parser().get<bool>("--no-track-process-parents");
+        chunk_size = parser().get<std::size_t>("--chunk-size");
+        read_batch_size = parser().get<std::size_t>("--read-batch-size");
+        event_format = parser().get<std::string>("--event-format");
+        compute_percentiles = parser().get<bool>("--compute-percentiles");
+        percentiles = parser().get<std::string>("--percentiles");
+        relative_accuracy = parser().get<double>("--relative-accuracy");
+        format = parser().get<std::string>("--format");
+        no_default_args = parser().get<bool>("--no-default-args");
+    }
+};
+
+// Write global config and per-file tracking entries.
+static void write_aggregation_tracking(
+    dftracer::utils::rocksdb::RocksDatabase* db,
+    const AggregationConfig& config,
+    const std::vector<std::string>& processed_files,
+    const std::string& index_path) {
+    namespace rcf = dftracer::utils::rocksdb::cf;
+
+    // Open index database to get file_ids
+    indexer::IndexDatabase idx_db(
+        index_path,
+        dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+
+    auto batch = db->begin_batch();
+
+    // Write global config once
+    AggGlobalConfig global_cfg;
+    global_cfg.time_interval_us = config.time_interval_us;
+    global_cfg.config_hash = 0;
+    db->put(batch, rcf::AGGREGATION, std::string_view(AGG_GLOBAL_CONFIG_KEY, 2),
+            serialize_agg_global_config(global_cfg));
+
+    // Per-file: empty value (presence = aggregated)
+    for (const auto& file_path : processed_files) {
+        int file_id = idx_db.find_file(file_path);
+        if (file_id >= 0) {
+            auto key = make_agg_file_key(file_id);
+            db->put(batch, rcf::AGGREGATION, key, "");
+        }
+    }
+
+    db->commit_batch(batch);
+}
+
+static coro::CoroTask<indexer::IndexBuildBatchResult> batch_index_and_aggregate(
+    CoroScope* scope, std::vector<std::string> file_paths,
+    std::string index_dir, std::size_t checkpoint_size, bool force_rebuild,
+    std::size_t parallelism, AggregationConfig agg_config,
+    std::shared_ptr<dftracer::utils::rocksdb::RocksDatabase> agg_db,
+    std::uint32_t config_hash) {
+    auto batch_config = std::make_shared<indexer::IndexBuildBatchConfig>();
+    batch_config->file_paths = std::move(file_paths);
+    batch_config->index_dir = std::move(index_dir);
+    batch_config->checkpoint_size = checkpoint_size;
+    batch_config->parallelism = parallelism;
+    batch_config->force_rebuild = force_rebuild;
+    batch_config->use_batch_write = true;
+
+    auto agg_config_ptr =
+        std::make_shared<AggregationConfig>(std::move(agg_config));
+    batch_config->dft_visitor_factory =
+        [agg_db, config_hash, agg_config_ptr](const std::string& file_path)
+        -> std::vector<std::unique_ptr<composites::dft::DftEventVisitor>> {
+        std::vector<std::unique_ptr<composites::dft::DftEventVisitor>> visitors;
+        visitors.push_back(std::make_unique<AggregationVisitor>(
+            agg_db, config_hash, *agg_config_ptr, file_path));
+        return visitors;
+    };
+
+    co_return co_await indexer::IndexBatchBuilderUtility::process(
+        scope, std::move(batch_config));
+}
+
+static PerfettoTraceWriterInput build_streaming_input(
+    EventAggregator* merger_ptr, const AggregationConfig* agg_config,
+    const std::string* output_file, bool compress_output, int compression_level,
+    PerfettoEventFormat event_format) {
+    auto global_tracker = merger_ptr->build_global_tracker();
+
+    PerfettoTraceWriterInput input;
+    input.output_path = *output_file;
+    input.aggregator = merger_ptr;
+    input.tracker = global_tracker.get();
+    input.agg_config = agg_config;
+    input.owned_tracker = std::move(global_tracker);
+    input.root_pids = input.tracker->get_root_pids();
+    input.compute_statistics = agg_config->compute_statistics;
+    input.compute_percentiles = agg_config->compute_percentiles;
+    input.percentiles = agg_config->percentiles;
+    input.compress = compress_output;
+    input.compression_level = compression_level;
+    input.format = event_format;
+
+    const auto& intervals = input.tracker->get_all_intervals();
+    if (!intervals.empty()) {
+        std::uint64_t global_min = UINT64_MAX;
+        std::uint64_t global_max = 0;
+        for (const auto& interval : intervals) {
+            global_min = std::min(global_min, interval.start_ts);
+            global_max = std::max(global_max, interval.end_ts);
+            auto& range = input.boundary_ranges[interval.name][interval.value];
+            if (range.ts == 0 && range.te == 0) {
+                range.ts = interval.start_ts;
+                range.te = interval.end_ts;
+            } else {
+                range.ts = std::min(range.ts, interval.start_ts);
+                range.te = std::max(range.te, interval.end_ts);
+            }
+        }
+        if (global_max > global_min) {
+            input.trace_duration = global_max - global_min;
+        }
+    }
+
+    return input;
+}
+
+static coro::CoroTask<int> run_aggregator(const AggregatorArgParse* cli) {
+    auto log_dir = cli->directory.value;
+    auto output_file = cli->output;
+    auto time_interval_ms = cli->time_interval;
     std::uint64_t time_interval_us =
         static_cast<std::uint64_t>(time_interval_ms * 1000.0);
-    std::string group_keys_str = program.get<std::string>("--group-keys");
-    std::string metric_fields_str = program.get<std::string>("--metric-fields");
-    std::string query_str = program.get<std::string>("--query");
-    bool force_rebuild = program.get<bool>("--force");
-    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
-    std::string index_dir = program.get<std::string>("--index-dir");
-    bool compress_output = program.get<bool>("--compress");
-    int compression_level = program.get<int>("--compression-level");
-    std::string boundary_events_str =
-        program.get<std::string>("--boundary-events");
-    bool no_track_parents = program.get<bool>("--no-track-process-parents");
-    std::size_t chunk_size_mb = program.get<std::size_t>("--chunk-size");
-    std::size_t batch_size_mb = program.get<std::size_t>("--read-batch-size");
-    std::string event_format_str = program.get<std::string>("--event-format");
-    bool compute_percentiles = program.get<bool>("--compute-percentiles");
-    std::string percentiles_str = program.get<std::string>("--percentiles");
-    double relative_accuracy = program.get<double>("--relative-accuracy");
-    std::string output_format = program.get<std::string>("--format");
+    const auto& group_keys_str = cli->group_keys;
+    const auto& metric_fields_str = cli->metric_fields;
+    const auto& query_str = cli->query_args.query;
+    auto force_rebuild = cli->indexing.force;
+    auto checkpoint_size = cli->indexing.checkpoint_size;
+    auto executor_threads = cli->pipeline.executor_threads;
+    auto index_dir = cli->indexing.index_dir;
+    auto compress_output = cli->compress;
+    auto compression_level = cli->compression_level;
+    const auto& boundary_events_str = cli->boundary_events;
+    auto no_track_parents = cli->no_track_parents;
+    const auto& event_format_str = cli->event_format;
+    auto compute_percentiles = cli->compute_percentiles;
+    const auto& percentiles_str = cli->percentiles;
+    auto relative_accuracy = cli->relative_accuracy;
+    const auto& output_format = cli->format;
 
     if (!AggregationConfig::is_valid_format(output_format)) {
         DFTRACER_UTILS_LOG_ERROR(
@@ -131,31 +401,6 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
         }
     }
 
-    std::string temp_index_dir;
-    if (index_dir.empty()) {
-        try {
-            auto temp_path = fs::temp_directory_path();
-            temp_path /= "dftracer_idx_" + std::to_string(std::time(nullptr)) +
-                         "_" + std::to_string(getpid());
-            temp_index_dir = temp_path.string();
-            fs::create_directories(temp_index_dir);
-            index_dir = temp_index_dir;
-            DFTRACER_UTILS_LOG_INFO("Created temporary index directory: %s",
-                                    index_dir.c_str());
-        } catch (const fs::filesystem_error& e) {
-            temp_index_dir = "/tmp/dftracer_idx_" +
-                             std::to_string(std::time(nullptr)) + "_" +
-                             std::to_string(getpid());
-            fs::create_directories(temp_index_dir);
-            index_dir = temp_index_dir;
-            DFTRACER_UTILS_LOG_WARN(
-                "Failed to get system temp directory, using /tmp: %s",
-                e.what());
-            DFTRACER_UTILS_LOG_INFO("Created temporary index directory: %s",
-                                    index_dir.c_str());
-        }
-    }
-
     log_dir = fs::absolute(log_dir).string();
     output_file = fs::absolute(output_file).string();
 
@@ -220,31 +465,35 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
     agg_config.percentiles = percentiles;
     agg_config.boundary_events = boundary_events;
     agg_config.track_process_parents = !no_track_parents;
+    agg_config.track_default_args = !cli->no_default_args;
 
-    using common::query::Query;
-    std::optional<Query> query;
     if (!query_str.empty()) {
-        auto result = Query::from_string(query_str);
-        if (!result) {
-            DFTRACER_UTILS_LOG_ERROR("Invalid --query: %s",
-                                     result.error().format().c_str());
-            co_return 1;
-        }
-        query = std::move(*result);
+        DFTRACER_UTILS_LOG_WARN(
+            "--query is not yet supported in fused mode, ignoring");
     }
 
-    // Discover input files
-    filesystem::PatternDirectoryScannerUtility scanner;
-    filesystem::PatternDirectoryScannerUtilityInput scan_input{
-        log_dir, {".pfw", ".pfw.gz"}, false};
-    auto matched_entries = co_await scanner.process(scan_input);
+    // Use hash=0 for simplicity (no config-based filtering)
+    constexpr std::uint32_t config_hash = 0;
 
-    std::vector<std::string> input_files;
-    input_files.reserve(matched_entries.size());
-    for (const auto& entry : matched_entries) {
-        input_files.push_back(entry.path.string());
+    Timer stages_storage("dftracer_aggregator");
+    Timer* stages = cli->pipeline.time_profiling ? &stages_storage : nullptr;
+    Timer overall(true);
+
+    namespace idx = composites::dft::indexing;
+
+    auto scan_result = std::make_unique<idx::ResolverResult>();
+    {
+        ScopedTimer _t(stages, "scan_and_resolve");
+        idx::IndexResolverUtility resolver;
+        idx::ResolverInput input;
+        input.directory = log_dir;
+        input.index_dir = index_dir;
+        input.require_aggregation = !force_rebuild;
+        input.aggregation_config = agg_config;
+        *scan_result = co_await resolver.process(input);
     }
 
+    auto& input_files = scan_result->all_files;
     if (input_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
                                  log_dir.c_str());
@@ -253,311 +502,224 @@ static coro::CoroTask<int> run_aggregator(argparse::ArgumentParser& program) {
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
 
-    auto pipeline_config = PipelineConfig()
-                               .with_name("DFTracer Aggregator")
-                               .with_compute_threads(executor_threads)
-                               .with_watchdog(false);
+    auto& shared_index_path = scan_result->index_path;
+
+    auto pipeline_config =
+        cli::build_pipeline_config("DFTracer Aggregator", cli->pipeline);
 
     Pipeline pipeline(pipeline_config);
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    if (force_rebuild && fs::exists(shared_index_path)) {
+        DFTRACER_UTILS_LOG_INFO("Clearing shared index store: %s",
+                                shared_index_path.c_str());
+        fs::remove_all(shared_index_path);
+    }
 
-    EventAggregatorUtility merger;
-    std::atomic<int> global_chunk_idx{0};
+    std::shared_ptr<dftracer::utils::rocksdb::RocksDatabase> agg_db;
+    std::unique_ptr<EventAggregator> merger;
+    {
+        ScopedTimer _t(stages, "open_rocksdb");
+        agg_db = EventAggregator::open_with_merge_operator(shared_index_path);
+        merger = std::make_unique<EventAggregator>(agg_db, config_hash);
+    }
 
-    if (force_rebuild && !input_files.empty()) {
-        const std::string shared_index_path =
-            composites::dft::internal::determine_index_path(input_files.front(),
-                                                            index_dir);
-        if (fs::exists(shared_index_path)) {
-            DFTRACER_UTILS_LOG_INFO("Clearing shared index store: %s",
-                                    shared_index_path.c_str());
-            fs::remove_all(shared_index_path);
+    // Files to process: needs_checkpoint (index + aggregate) +
+    // needs_aggregation
+    const std::size_t num_needing_index = scan_result->needs_checkpoint.size();
+    const std::size_t num_needing_agg_only =
+        force_rebuild ? scan_result->cached.size()
+                      : scan_result->needs_aggregation.size();
+    const std::size_t num_cached =
+        force_rebuild ? 0 : scan_result->total_cached();
+
+    std::vector<std::string> files_to_process;
+    files_to_process.reserve(num_needing_index + num_needing_agg_only);
+    for (auto& item : scan_result->needs_checkpoint) {
+        files_to_process.push_back(std::move(item.file_path));
+    }
+    if (force_rebuild) {
+        for (auto& item : scan_result->cached) {
+            files_to_process.push_back(std::move(item.file_path));
+        }
+    } else {
+        for (auto& item : scan_result->needs_aggregation) {
+            files_to_process.push_back(std::move(item.file_path));
         }
     }
 
-    // Streaming aggregation: file producers -> chunk workers -> merger
-    auto streaming_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            auto chunk_chan = coro::make_channel<ChunkAggregatorInput>(0);
-            auto result_chan = coro::make_channel<ChunkAggregationOutput>(2);
+    DFTRACER_UTILS_LOG_INFO(
+        "Files to process: %zu (%zu need indexing, %zu need aggregation only, "
+        "%zu cached)",
+        files_to_process.size(), num_needing_index, num_needing_agg_only,
+        num_cached);
 
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-                // File producers: one per input file
-                for (const auto& file_path : input_files) {
-                    auto* global_chunk_idx_ptr = &global_chunk_idx;
-                    scope.spawn([file_path, ch = chunk_chan->producer(),
-                                 index_dir, checkpoint_size, force_rebuild,
-                                 agg_config, query, chunk_size_mb,
-                                 batch_size_mb, global_chunk_idx_ptr](
-                                    CoroScope& /*fctx*/) mutable
-                                    -> coro::CoroTask<void> {
-                        [[maybe_unused]] auto producer_guard = ch.guard();
-                        // Build index
-                        std::string index_path =
-                            composites::dft::internal::determine_index_path(
-                                file_path, index_dir);
-                        auto idx_input =
-                            indexer::IndexBuildConfig::for_file(file_path)
-                                .with_checkpoint_size(checkpoint_size)
-                                .with_force_rebuild(false)
-                                .with_index_dir(index_dir);
-                        co_await indexer::IndexBuilderUtility{}.process(
-                            idx_input);
+    bool write_success = false;
+    std::size_t total_keys = 0;
+    std::atomic<std::size_t> perfetto_keys_written{0};
 
-                        // Collect metadata
-                        auto meta_input =
-                            composites::dft::MetadataCollectorUtilityInput::
-                                from_file(file_path)
-                                    .with_checkpoint_size(checkpoint_size)
-                                    .with_force_rebuild(false)
-                                    .with_index(index_path);
-                        auto metadata =
-                            co_await composites::dft::MetadataCollectorUtility{}
-                                .process(meta_input);
+    auto main_task = make_task(
+        [&](CoroScope& scope) -> coro::CoroTask<void> {
+            if (!files_to_process.empty()) {
+                {
+                    ScopedTimer _t(stages, "index_and_aggregate");
+                    auto batch_result = co_await batch_index_and_aggregate(
+                        &scope, files_to_process, index_dir, checkpoint_size,
+                        force_rebuild, executor_threads, agg_config, agg_db,
+                        config_hash);
 
-                        if (!metadata.success) {
-                            DFTRACER_UTILS_LOG_WARN("Skipping file: %s",
-                                                    file_path.c_str());
-                            co_return;
-                        }
-
-                        // Create chunks for this file
-                        FileChunkMapperUtility file_mapper;
-                        auto mapper_input =
-                            FileChunkMapperInput::from_metadata(metadata)
-                                .with_config(agg_config)
-                                .with_checkpoint_size(checkpoint_size)
-                                .with_target_chunk_size(chunk_size_mb)
-                                .with_batch_size(batch_size_mb * 1024 * 1024);
-                        mapper_input.query = query;
-                        auto file_chunks =
-                            co_await file_mapper.process(mapper_input);
-
-                        int start_idx = global_chunk_idx_ptr->fetch_add(
-                            static_cast<int>(file_chunks.size()));
-                        for (int i = 0;
-                             i < static_cast<int>(file_chunks.size()); ++i) {
-                            file_chunks[i].chunk_index = start_idx + i;
-                        }
-
-                        for (auto& chunk : file_chunks) {
-                            if (!co_await ch.send(std::move(chunk))) {
-                                co_return;
-                            }
-                        }
-
-                        co_return;
-                    });
-                }
-
-                // Chunk workers: parallel aggregation
-                for (std::size_t w = 0; w < executor_threads; ++w) {
-                    (void)w;
-                    scope.spawn(
-                        [chunk_chan, rp = result_chan->producer(), result_chan](
-                            CoroScope& wctx) mutable -> coro::CoroTask<void> {
-                            [[maybe_unused]] auto producer_guard = rp.guard();
-                            while (auto input =
-                                       co_await wctx.receive(chunk_chan)) {
-                                ChunkAggregatorUtility agg;
-                                auto output = co_await agg.process(*input);
-                                if (!co_await result_chan->send(
-                                        std::move(output))) {
-                                    co_return;
+                    {
+                        ScopedTimer _vd(stages, "visitor_drain");
+                        for (auto& file_visitors :
+                             batch_result.extra_visitors) {
+                            for (auto& visitor : file_visitors) {
+                                auto* agg_visitor =
+                                    dynamic_cast<AggregationVisitor*>(
+                                        visitor.get());
+                                if (agg_visitor) {
+                                    for (const auto& k :
+                                         agg_visitor->observed_extra_keys())
+                                        merger->add_observed_extra_key(k);
+                                    for (const auto& m :
+                                         agg_visitor->observed_custom_metrics())
+                                        merger->add_observed_custom_metric(m);
+                                    auto output = agg_visitor->take_output();
+                                    merger->merge_chunk(std::move(output));
                                 }
                             }
-                            co_return;
-                        });
+                            file_visitors.clear();
+                        }
+                    }
                 }
 
-                // Streaming merger: incremental merge
-                auto* merger_ptr = &merger;
-                scope.spawn([result_chan, merger_ptr](
-                                CoroScope& mctx) -> coro::CoroTask<void> {
-                    while (auto output = co_await mctx.receive(result_chan)) {
-                        merger_ptr->merge_chunk(std::move(*output));
-                    }
-                    co_return;
-                });
-
-                co_return;
-            });
-
-            co_return;
-        },
-        "StreamingAggregate");
-
-    // Post-processing: finalize, resolve associations, write output
-    bool write_success = false;
-    EventAggregatorUtilityOutput agg_results;
-
-    auto post_task = make_task(
-        [&](CoroScope& /*ctx*/) -> coro::CoroTask<bool> {
-            agg_results = merger.finalize();
-
-            // Resolve associations
-            AssociationResolverInput resolver_input;
-            resolver_input.trackers = std::move(agg_results.trackers);
-            resolver_input.aggregations = std::move(agg_results);
-            resolver_input.config = agg_config;
-
-            AssociationResolverUtility resolver;
-            auto resolver_output =
-                co_await resolver.process(std::move(resolver_input));
-            agg_results = std::move(resolver_output.aggregations);
-
-            if (agg_results.aggregations.empty()) {
-                DFTRACER_UTILS_LOG_WARN("No aggregations to write!");
-                co_return false;
+                // Write tracking entries for processed files
+                {
+                    ScopedTimer _wt(stages, "write_tracking");
+                    write_aggregation_tracking(agg_db.get(), agg_config,
+                                               files_to_process,
+                                               shared_index_path);
+                }
             }
 
-            bool success = false;
+            ScopedTimer _pp(stages, "post_processing");
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
             if (output_format == AggregationConfig::FORMAT_ARROW) {
                 using namespace utilities::common::arrow;
 
-                DFTRACER_UTILS_LOG_INFO(
-                    "Writing %zu aggregation keys to %s (Arrow IPC)...",
-                    agg_results.aggregations.size(), output_file.c_str());
+                std::unique_ptr<AssociationTracker> global_tracker;
+                {
+                    ScopedTimer _bt(stages, "build_global_tracker");
+                    global_tracker = merger->build_global_tracker();
+                }
+                (void)global_tracker;
+
+                EventAggregator::ObservedColumns obs;
+                {
+                    ScopedTimer _oc(stages, "observed_columns");
+                    obs = merger->observed_columns();
+                }
+                auto& global_extra_key_ids = obs.extra_key_ids;
+                auto& global_custom_metric_names = obs.custom_metric_names;
 
                 IpcWriter ipc;
-                if (ipc.open(output_file) != 0) {
+                if (co_await ipc.open(output_file) != 0) {
                     DFTRACER_UTILS_LOG_ERROR(
                         "Failed to open Arrow IPC file: %s",
                         output_file.c_str());
-                    co_return false;
-                }
+                } else {
+                    ScopedTimer _aw(stages, "arrow_scan_write");
+                    constexpr std::size_t BATCH_ROWS = 10000;
+                    AggregationBatch batch;
+                    batch.entries.reserve(BATCH_ROWS);
+                    batch.global_extra_key_ids = &global_extra_key_ids;
+                    batch.global_custom_metric_names =
+                        &global_custom_metric_names;
 
-                constexpr std::size_t BATCH_ROWS = 10000;
-                AggregationBatch batch;
-                batch.entries.reserve(BATCH_ROWS);
+                    std::vector<ArrowExportResult> pending_batches;
+                    merger->scan([&](AggMapType, const AggregationKey& key,
+                                     AggregationMetrics& metrics) {
+                        total_keys++;
+                        batch.entries.emplace_back(key, std::move(metrics));
+                        if (batch.entries.size() >= BATCH_ROWS) {
+                            pending_batches.push_back(batch.to_arrow());
+                            batch.entries.clear();
+                        }
+                        return true;
+                    });
+                    if (!batch.entries.empty()) {
+                        pending_batches.push_back(batch.to_arrow());
+                    }
 
-                bool arrow_write_failed = false;
-                for (auto& [key, metrics] : agg_results.aggregations) {
-                    batch.entries.emplace_back(key, metrics);
-                    if (batch.entries.size() >= BATCH_ROWS) {
-                        auto arrow_batch = batch.to_arrow();
-                        if (ipc.write_batch(arrow_batch) != 0) {
-                            DFTRACER_UTILS_LOG_ERROR(
-                                "Arrow IPC write_batch failed");
-                            arrow_write_failed = true;
+                    write_success = true;
+                    for (auto& ab : pending_batches) {
+                        if (co_await ipc.write_batch(ab) != 0) {
+                            write_success = false;
                             break;
                         }
-                        batch.entries.clear();
+                    }
+                    if (write_success) {
+                        write_success = (co_await ipc.close() == 0);
+                    } else {
+                        co_await ipc.close();
                     }
                 }
-                if (arrow_write_failed) {
-                    ipc.close();
-                    co_return false;
-                }
-                if (!batch.entries.empty()) {
-                    auto arrow_batch = batch.to_arrow();
-                    if (ipc.write_batch(arrow_batch) != 0) {
-                        DFTRACER_UTILS_LOG_ERROR(
-                            "Arrow IPC write_batch (final) failed");
-                        ipc.close();
-                        co_return false;
-                    }
-                }
-
-                success = (ipc.close() == 0);
             } else
 #endif
             {
-                // JSON / Perfetto output path
-                DFTRACER_UTILS_LOG_INFO(
-                    "Writing %zu aggregation keys to %s%s...",
-                    agg_results.aggregations.size(), output_file.c_str(),
-                    compress_output ? " (compressed)" : "");
-
-                PerfettoTraceWriterUtility writer;
-                PerfettoTraceWriterInput writer_input{
-                    output_file,
-                    std::move(resolver_output),
-                    agg_config.compute_statistics,
-                    agg_config.compute_percentiles,
-                    agg_config.percentiles,
-                    compress_output,
-                    compression_level,
-                    event_format};
-                success = co_await writer.process(writer_input);
-            }
-
-            if (success) {
-                DFTRACER_UTILS_LOG_INFO("Output written successfully to: %s",
-                                        output_file.c_str());
-                if (fs::exists(output_file)) {
-                    auto file_size = fs::file_size(output_file);
-                    DFTRACER_UTILS_LOG_INFO("File exists, size: %zu bytes",
-                                            file_size);
-                } else {
-                    DFTRACER_UTILS_LOG_ERROR(
-                        "File does not exist after write!");
-                    success = false;
+                PerfettoTraceWriterInput streaming_input;
+                {
+                    ScopedTimer _si(stages, "build_streaming_input");
+                    streaming_input = build_streaming_input(
+                        merger.get(), &agg_config, &output_file,
+                        compress_output, compression_level, event_format);
+                    streaming_input.keys_written = &perfetto_keys_written;
+                    streaming_input.merge_on_sharded = true;
                 }
-            } else {
-                DFTRACER_UTILS_LOG_ERROR("Failed to write output file");
+                {
+                    ScopedTimer _pw(stages, "perfetto_write");
+                    PerfettoTraceWriterUtility writer;
+                    write_success = co_await scope.spawn(
+                        writer, std::move(streaming_input));
+                }
+                total_keys = perfetto_keys_written.load();
             }
-
-            write_success = success;
-            co_return success;
         },
-        "PostProcess");
+        "AggregatorMain");
 
-    post_task->depends_on(streaming_task);
-    pipeline.set_source(streaming_task);
-    pipeline.set_destination(post_task);
-    pipeline.execute();
+    pipeline.set_source(main_task);
+    {
+        ScopedTimer _t(stages, "pipeline_execute");
+        pipeline.execute();
+    }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> duration = end_time - start_time;
+    {
+        ScopedTimer _t(stages, "close_rocksdb");
+        merger.reset();
+        agg_db.reset();
+    }
+
+    overall.stop();
+    double duration_ms = static_cast<double>(overall.elapsed()) / 1e6;
 
     std::printf("\n");
     std::printf("==========================================\n");
     std::printf("Aggregation Results\n");
     std::printf("==========================================\n");
-    std::printf("  Execution time: %.2f seconds\n", duration.count() / 1000.0);
-    std::printf("  Files processed: %zu\n", agg_results.total_files_processed);
-    std::printf("  Bytes processed: %.2f MB\n",
-                static_cast<double>(agg_results.total_bytes_processed) /
-                    (1024.0 * 1024.0));
-    std::printf("  Events processed: %zu\n",
-                agg_results.total_events_processed);
-    std::printf("  Unique aggregation keys: %zu\n",
-                agg_results.aggregations.size());
-    std::printf("  Throughput: %.2f MB/s, %.2f events/s\n",
-                (static_cast<double>(agg_results.total_bytes_processed) /
-                 (1024.0 * 1024.0)) /
-                    (duration.count() / 1000.0),
-                static_cast<double>(agg_results.total_events_processed) /
-                    (duration.count() / 1000.0));
+    std::printf("  Execution time: %.2f seconds\n", duration_ms / 1000.0);
+    std::printf("  Files: %zu total, %zu processed, %zu cached\n",
+                input_files.size(), files_to_process.size(), num_cached);
+    std::printf("  Unique aggregation keys: %zu\n", total_keys);
     std::printf("  Output file: %s\n", output_file.c_str());
     std::printf("  Write status: %s\n", write_success ? "SUCCESS" : "FAILED");
     std::printf("==========================================\n");
 
-    AggregatorSummaryUtility summary_writer;
-    summary_writer.process(agg_results);
+    if (stages) stages->print_stages();
 
-    if (!temp_index_dir.empty() && fs::exists(temp_index_dir)) {
-        DFTRACER_UTILS_LOG_INFO("Cleaning up temporary index directory: %s",
-                                temp_index_dir.c_str());
-        fs::remove_all(temp_index_dir);
-    }
-
-    co_return agg_results.success&& write_success ? 0 : 1;
+    co_return write_success ? 0 : 1;
 }
 
 int main(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
-
-    auto default_checkpoint_size_str =
-        std::to_string(indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE) +
-        " B (" +
-        std::to_string(indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE /
-                       (1024 * 1024)) +
-        " MB)";
 
     argparse::ArgumentParser program("dftracer_aggregator",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -565,130 +727,9 @@ int main(int argc, char** argv) {
         "Aggregate DFTracer events into time-series counters using streaming "
         "coroutine pipeline with minimal memory footprint");
 
-    program.add_argument("-d", "--directory")
-        .help("Input directory containing .pfw or .pfw.gz files")
-        .default_value<std::string>(".");
+    AggregatorArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
 
-    program.add_argument("-o", "--output")
-        .help("Output file path for aggregated counters")
-        .default_value<std::string>("aggregated_output.json");
-
-    program.add_argument("-t", "--time-interval")
-        .help("Time interval in milliseconds for bucketing (default: 5000)")
-        .scan<'g', double>()
-        .default_value(5000.0);
-
-    program.add_argument("-g", "--group-keys")
-        .help(
-            "Comma-separated extra group keys from args (e.g., "
-            "epoch,step,level)")
-        .default_value<std::string>("");
-
-    program.add_argument("-m", "--metric-fields")
-        .help(
-            "Comma-separated custom metric fields from args (e.g., "
-            "iter_count,num_events)")
-        .default_value<std::string>("");
-
-    program.add_argument("--query")
-        .help("Query DSL filter (e.g., 'cat == \"POSIX\" and dur > 1000')")
-        .default_value<std::string>("");
-
-    program.add_argument("-f", "--force").help("Force index recreation").flag();
-
-    program.add_argument("--checkpoint-size")
-        .help("Checkpoint size for indexing in bytes (default: " +
-              default_checkpoint_size_str + ")")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(
-            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
-
-    program.add_argument("--executor-threads")
-        .help(
-            "Number of executor threads for parallel processing (default: "
-            "number of CPU cores)")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
-
-    program.add_argument("--index-dir")
-        .help("Directory to store index files (default: system temp directory)")
-        .default_value<std::string>("");
-
-    program.add_argument("--compress")
-        .help("Compress output using gzip")
-        .default_value(false)
-        .implicit_value(true);
-
-    program.add_argument("--compression-level")
-        .help("Gzip compression level (0-9, default: 6)")
-        .scan<'d', int>()
-        .default_value(6);
-
-    program.add_argument("--boundary-events")
-        .help(
-            "Boundary event configuration: event_name:value_field:output_name "
-            "(e.g., \"epoch.block:iter_count:epoch\")")
-        .default_value<std::string>("");
-
-    program.add_argument("--no-track-process-parents")
-        .help(
-            "Disable tracking of process parent relationships from fork/spawn")
-        .default_value(false)
-        .implicit_value(true);
-
-    program.add_argument("--chunk-size")
-        .help("Target chunk size in MB for parallel processing (default: 4)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(4));
-
-    program.add_argument("--read-batch-size")
-        .help(
-            "Batch read size in MB for stream processing (default: 4, higher = "
-            "faster but more memory)")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(4));
-
-    program.add_argument("--event-format")
-        .help(
-            "Perfetto event format: 'counter' (ph=C, point-in-time, default), "
-            "'async' (ph=b/e, async tracks with overlaps), "
-            "'regular' (ph=X, duration events with original TID)")
-        .default_value<std::string>("counter");
-
-    program.add_argument("--compute-percentiles")
-        .help(
-            "Enable percentile/quantile computation using DDSketch (opt-in due "
-            "to memory overhead)")
-        .default_value(false)
-        .implicit_value(true);
-
-    program.add_argument("--percentiles")
-        .help(
-            "Comma-separated percentiles to compute (e.g., "
-            "\"0.25,0.5,0.75,0.90\" for P25, P50, P75, P90)")
-        .default_value<std::string>("0.25,0.5,0.75,0.90");
-
-    program.add_argument("--relative-accuracy")
-        .help(
-            "Relative accuracy for DDSketch percentile estimation "
-            "(default: 0.01 = 1%)")
-        .scan<'g', double>()
-        .default_value(0.01);
-
-    program.add_argument("--format")
-        .help(
-            "Output format: 'json' (Perfetto JSON, default) or "
-            "'arrow' (Arrow IPC file, .arrows extension)")
-        .default_value<std::string>("json");
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error occurred: %s", err.what());
-        std::fprintf(stderr, "%s\n", program.help().str().c_str());
-        return 1;
-    }
-
-    return run_aggregator(program).get();
+    return run_aggregator(&cli).get();
 }

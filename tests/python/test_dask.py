@@ -18,6 +18,7 @@ except ImportError:
     DASK_AVAILABLE = False
 
 import dftracer.utils as dft_utils
+from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
 from .common import Environment
 
@@ -44,7 +45,7 @@ class TestDaskIntegration:
             def create_and_build_indexer(gz_file):
                 """Helper function to create and build an indexer"""
                 try:
-                    with dft_utils.Indexer(gz_file, checkpoint_size=256 * 1024) as indexer:
+                    with NativeIndexer(gz_file, checkpoint_size=256 * 1024) as indexer:
                         if indexer.need_rebuild():
                             indexer.build()
                         return {
@@ -107,7 +108,7 @@ class TestDaskIntegration:
                     return {"type": reader_type, "error": str(e), "success": False}
 
             # Get file info from a temporary indexer
-            with dft_utils.Indexer(gz_file, checkpoint_size=512 * 1024) as temp_indexer:
+            with NativeIndexer(gz_file, checkpoint_size=512 * 1024) as temp_indexer:
                 max_bytes = temp_indexer.get_max_bytes()
             chunk_size = max_bytes // 4
 
@@ -184,7 +185,7 @@ class TestDaskIntegration:
                     return []
 
             # Get file info and create chunks
-            with dft_utils.Indexer(gz_file, checkpoint_size=512 * 1024) as temp_indexer:
+            with NativeIndexer(gz_file, checkpoint_size=512 * 1024) as temp_indexer:
                 max_bytes = temp_indexer.get_max_bytes()
             chunk_size = max_bytes // 4
 
@@ -229,7 +230,7 @@ class TestDaskIntegration:
             gz_file = env.create_test_gzip_file(bytes_per_line=512)
             env.build_index(gz_file, checkpoint_size_bytes=256 * 1024)
 
-            with dft_utils.Indexer(gz_file, checkpoint_size=256 * 1024) as temp_indexer:
+            with NativeIndexer(gz_file, checkpoint_size=256 * 1024) as temp_indexer:
                 max_bytes = temp_indexer.get_max_bytes()
 
             # Test various batch sizes including boundary-critical ones
@@ -366,7 +367,7 @@ class TestDaskIntegration:
             gz_file = env.create_test_gzip_file(bytes_per_line=512)
             env.build_index(gz_file, checkpoint_size_bytes=256 * 1024)
 
-            with dft_utils.Indexer(gz_file, checkpoint_size=256 * 1024) as temp_indexer:
+            with NativeIndexer(gz_file, checkpoint_size=256 * 1024) as temp_indexer:
                 max_bytes = temp_indexer.get_max_bytes()
 
             def process_batch(batch_info):
@@ -444,6 +445,83 @@ class TestDaskIntegration:
             assert actual_count == env.lines, f"Expected {env.lines} env.lines, got {actual_count}"
 
             print("Boundary edge case test passed: Complete data recovery, no duplicates")
+
+
+@pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
+class TestDirectoryIndexerWithDask:
+    """Tests for the directory-level Indexer API with Dask."""
+
+    def test_directory_indexer_indexes_all_files(self):
+        """Test that directory-level Indexer indexes all files in a directory."""
+        with Environment(lines=100) as env:
+            # Create multiple test files in the same directory
+            gz_files = []
+            for i in range(3):
+                gz_file = env.create_test_gzip_file(f"test_{i}.pfw.gz", bytes_per_line=256)
+                gz_files.append(gz_file)
+
+            # Use directory-level Indexer
+            indexer = dft_utils.Indexer(env.temp_dir)
+
+            # Check status before build
+            before = indexer.resolve()
+            assert before.total_files == 3
+            assert len(before.needs_work) == 3
+            assert len(before.ready) == 0
+
+            # Build indexes
+            indexer.build()
+
+            # Check status after build
+            after = indexer.resolve()
+            assert after.total_files == 3
+            assert len(after.ready) == 3
+            assert len(after.needs_work) == 0
+
+    def test_directory_indexer_with_dask_parallel_reading(self):
+        """Test directory-level Indexer followed by parallel reading with Dask."""
+        with Environment(lines=500) as env:
+            # Create test files
+            gz_files = []
+            for i in range(3):
+                gz_file = env.create_test_gzip_file(f"test_{i}.pfw.gz", bytes_per_line=512)
+                gz_files.append(gz_file)
+
+            # Use directory-level Indexer to build all indexes at once
+            indexer = dft_utils.Indexer(env.temp_dir)
+            indexer.ensure_indexed()
+
+            # Verify all files are indexed
+            status = indexer.resolve()
+            assert len(status.ready) == 3
+
+            # Now use Dask for parallel reading
+            def read_file_lines(gz_file):
+                with dft_utils.TraceReader(gz_file) as reader:
+                    return len(reader.read_lines())
+
+            delayed_tasks = [dask.delayed(read_file_lines)(f) for f in gz_files]
+            results = dask.compute(*delayed_tasks)
+
+            # Each file should have 500 events + 2 JSON wrapper lines ([ and ])
+            for line_count in results:
+                assert line_count == 502
+
+    def test_directory_indexer_ensure_indexed_idempotent(self):
+        """Test that ensure_indexed is idempotent - calling multiple times is safe."""
+        with Environment(lines=50) as env:
+            env.create_test_gzip_file()
+
+            indexer = dft_utils.Indexer(env.temp_dir)
+
+            # First call builds the index
+            status1 = indexer.ensure_indexed()
+            assert len(status1.ready) == 1
+
+            # Second call should find everything already indexed
+            status2 = indexer.ensure_indexed()
+            assert len(status2.ready) == 1
+            assert len(status2.needs_work) == 0
 
 
 if __name__ == "__main__":

@@ -5,10 +5,6 @@
 #include <cstdint>
 #include <string>
 
-// Forward declaration for direct JSON serialization
-struct yyjson_mut_doc;
-struct yyjson_mut_val;
-
 namespace dftracer::utils::utilities::common::statistics {
 
 /**
@@ -35,9 +31,6 @@ class Log2Histogram {
                               const std::string& indent = "      ") const;
     std::string to_json() const;
     static Log2Histogram from_json(const std::string& json);
-
-    /// Serialize directly to yyjson mutable array (avoids string roundtrip)
-    yyjson_mut_val* to_yyjson(yyjson_mut_doc* doc) const;
 
     std::uint64_t total_count() const { return total_count_; }
     const std::array<std::uint64_t, NUM_BINS>& bins() const { return bins_; }

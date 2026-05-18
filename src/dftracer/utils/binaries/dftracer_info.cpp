@@ -1,156 +1,226 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utils/string.h>
+#include <dftracer/utils/core/utils/timer.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
-#include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
+#include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
-#include <argparse/argparse.hpp>
-#include <atomic>
-#include <chrono>
 #include <iomanip>
-#include <iostream>
+#include <memory>
 #include <mutex>
-#include <unordered_set>
+
+#include "common_cli.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::composites::dft;
-using dftracer::utils::utilities::indexer::IndexBuildConfig;
-using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using namespace dftracer::utils::utilities::composites::dft::indexing;
+using dftracer::utils::utilities::indexer::FileRegistryEntry;
+using dftracer::utils::utilities::indexer::has_capability;
+using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
 using dftracer::utils::utilities::indexer::IndexDatabase;
-using dftracer::utils::utilities::indexer::internal::Indexer;
+using dftracer::utils::utilities::indexer::IndexFileEntryCapability;
 using dftracer::utils::utilities::indexer::internal::IndexerFactory;
+
+class InfoArgParse : public cli::ArgParse {
+   public:
+    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
+    cli::FilesArgs files_args{"Compressed files to inspect (GZIP, TAR.GZ)"};
+    cli::PipelineArgs pipeline;
+    cli::IndexingArgs indexing;
+
+    std::string query_type = "summary";
+    bool verbose = false;
+    bool force_rebuild = false;
+
+    explicit InfoArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        indexing.with_force = false;
+        indexing.index_dir_help =
+            "Directory to store index files (default: system temp directory)";
+        schema(directory, files_args, pipeline, indexing);
+    }
+
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("--query")
+            .help(
+                "Query type: summary (aggregate all files, default) or "
+                "detailed (per-file output)")
+            .default_value<std::string>("summary");
+
+        parser()
+            .add_argument("-v", "--verbose")
+            .help("Show detailed information including index details")
+            .flag();
+
+        parser()
+            .add_argument("-f", "--force-rebuild")
+            .help("Force rebuild index files")
+            .flag();
+    }
+
+    void post_parse() override {
+        query_type = parser().get<std::string>("--query");
+        verbose = parser().get<bool>("--verbose");
+        force_rebuild = parser().get<bool>("--force-rebuild");
+    }
+};
 
 static std::string format_size(std::uint64_t bytes) {
     const char* units[] = {"B", "KB", "MB", "GB", "TB"};
     int unit_index = 0;
     double size = static_cast<double>(bytes);
-
     while (size >= 1024.0 && unit_index < 4) {
         size /= 1024.0;
         unit_index++;
     }
-
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(2) << size << " "
         << units[unit_index];
     return oss.str();
 }
 
-/// Fast path: read metadata from the `.dftindex` database.
-/// Returns success=false if index doesn't exist, letting the caller
-/// fall back to direct_scan_info for small/unindexed files.
-static MetadataCollectorUtilityOutput index_based_info(
-    const std::string& file_path) {
-    using utilities::indexer::IndexDatabase;
+using FileRegistry = std::unordered_map<std::string, FileRegistryEntry>;
 
-    MetadataCollectorUtilityOutput meta;
-    meta.file_path = file_path;
+struct RootInfoSummary {
+    std::size_t file_count = 0;
+    std::uint64_t total_events = 0;
+    std::uint64_t total_lines = 0;
+    std::uint64_t total_uncompressed = 0;
+};
 
-    try {
-        std::string index_path = file_path + constants::indexer::EXTENSION;
-        if (!fs::exists(index_path)) {
-            meta.success = false;
-            return meta;
-        }
+static coro::CoroTask<std::shared_ptr<RootInfoSummary>> load_root_info_summary(
+    std::string index_path) {
+    auto result = std::make_shared<RootInfoSummary>();
 
+    std::optional<dftracer::utils::utilities::indexer::RootStatisticsResult>
+        root;
+    {
+        IndexDatabase db(
+            index_path,
+            dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+        root = db.query_root_scalar_stats();
+    }
+
+    if (!root) {
+        DFTRACER_UTILS_LOG_INFO(
+            "Root scalar stats missing for %s; rebuilding from file "
+            "registry",
+            index_path.c_str());
         IndexDatabase db(index_path);
-        int fid = db.find_file(file_path);
-        if (fid < 0) {
-            meta.success = false;
-            return meta;
-        }
+        auto writer = db.begin_write();
+        writer->rebuild_root_summaries();
+        writer->commit();
+        root = db.query_root_scalar_stats();
+    }
 
-        meta.format = IndexerFactory::detect_format(file_path);
-        meta.compressed_size = fs::file_size(file_path);
-        meta.num_lines = db.get_num_lines(fid);
-        meta.uncompressed_size = db.get_max_bytes(fid);
-        meta.valid_events = db.get_total_events(fid);
+    if (root) {
+        result->file_count = root->num_files;
+        result->total_events = root->stats.total_events;
+        result->total_lines = root->total_lines;
+        result->total_uncompressed = root->total_uncompressed_bytes;
+    }
+    co_return result;
+}
+
+static coro::CoroTask<std::shared_ptr<FileRegistry>> load_file_registry(
+    std::string index_path) {
+    IndexDatabase db(
+        index_path,
+        dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+    co_return std::make_shared<FileRegistry>(db.query_all_file_registry());
+}
+
+static std::vector<MetadataCollectorUtilityOutput>
+process_index_group_info_sync(std::string index_path,
+                              std::vector<ResolvedFile> entries) {
+    std::vector<int> file_ids;
+    file_ids.reserve(entries.size());
+    for (const auto& entry : entries) {
+        file_ids.push_back(entry.file_id);
+    }
+
+    IndexDatabase db(
+        index_path,
+        dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+    auto metadata_rows = db.query_file_metadata_batch(file_ids);
+    auto merged_stats = db.query_merged_statistics_batch(file_ids);
+
+    std::vector<MetadataCollectorUtilityOutput> results;
+    results.reserve(entries.size());
+
+    for (const auto& entry : entries) {
+        MetadataCollectorUtilityOutput meta;
+        meta.file_path = entry.file_path;
         meta.index_path = index_path;
         meta.has_index = true;
         meta.index_valid = true;
+
+        auto metadata_it = metadata_rows.find(entry.file_id);
+        if (metadata_it == metadata_rows.end()) {
+            meta.success = false;
+            meta.error_message = "No file metadata found in shared index";
+            results.push_back(std::move(meta));
+            continue;
+        }
+
+        meta.format = IndexerFactory::detect_format(entry.file_path);
+        meta.compressed_size = 0;
+        meta.checkpoint_size = metadata_it->second.checkpoint_size;
+        meta.num_lines = metadata_it->second.num_lines;
+        meta.uncompressed_size = metadata_it->second.max_bytes;
         meta.size_mb =
-            static_cast<double>(meta.compressed_size) / (1024.0 * 1024.0);
+            static_cast<double>(meta.uncompressed_size) / (1024.0 * 1024.0);
         meta.start_line = 1;
         meta.end_line = meta.num_lines;
+
+        if (meta.checkpoint_size > 0 && meta.uncompressed_size > 0) {
+            meta.num_checkpoints =
+                (meta.uncompressed_size + meta.checkpoint_size - 1) /
+                meta.checkpoint_size;
+        }
+
+        auto stats_it = merged_stats.find(entry.file_id);
+        if (stats_it != merged_stats.end()) {
+            meta.valid_events = stats_it->second.stats.total_events;
+            if (stats_it->second.num_chunks > 0) {
+                meta.num_checkpoints = stats_it->second.num_chunks;
+            }
+        } else {
+            meta.valid_events = meta.num_lines;
+        }
+
         meta.size_per_line =
             (meta.valid_events > 0)
                 ? meta.size_mb / static_cast<double>(meta.valid_events)
-                : 0;
+                : 0.0;
         meta.success = true;
-    } catch (...) {
-        meta.success = false;
+        results.push_back(std::move(meta));
     }
 
-    return meta;
+    return results;
 }
 
-/// One streaming decompress pass, count lines with JSON validation,
-/// without creating a `.dftindex` store.
-static coro::CoroTask<MetadataCollectorUtilityOutput> direct_scan_info(
-    std::string file_path) {
-    using dftracer::utils::utilities::fileio::lines::sources::
-        async_streaming_gz_lines;
-
-    MetadataCollectorUtilityOutput meta;
-    meta.file_path = file_path;
-    meta.has_index = false;
-    meta.index_valid = false;
-
-    try {
-        meta.format = dftracer::utils::utilities::indexer::internal::
-            IndexerFactory::detect_format(file_path);
-        meta.compressed_size = fs::file_size(file_path);
-
-        std::size_t total_lines = 0;
-        std::size_t valid_events = 0;
-        std::uint64_t total_bytes = 0;
-
-        auto gen = async_streaming_gz_lines(file_path);
-        while (auto line_opt = co_await gen.next()) {
-            total_lines++;
-            const auto& line = *line_opt;
-            total_bytes += line.content.length();
-            const char* trimmed;
-            std::size_t trimmed_length;
-            if (json_trim_and_validate(line.content.data(),
-                                       line.content.length(), trimmed,
-                                       trimmed_length) &&
-                trimmed_length > 8) {
-                valid_events++;
-            }
-        }
-
-        meta.num_lines = total_lines;
-        meta.valid_events = valid_events;
-        meta.uncompressed_size = total_bytes;
-        meta.size_mb =
-            static_cast<double>(meta.compressed_size) / (1024.0 * 1024.0);
-        meta.start_line = 1;
-        meta.end_line = total_lines;
-        meta.size_per_line =
-            (valid_events > 0)
-                ? meta.size_mb / static_cast<double>(valid_events)
-                : 0;
-        meta.success = true;
-    } catch (const std::exception& e) {
-        meta.error_message = e.what();
-        meta.success = false;
-    }
-
-    co_return meta;
+static coro::CoroTask<std::vector<MetadataCollectorUtilityOutput>>
+process_index_group_info(std::shared_ptr<std::string> index_path,
+                         std::shared_ptr<std::vector<ResolvedFile>> entries) {
+    co_return process_index_group_info_sync(std::move(*index_path),
+                                            std::move(*entries));
 }
 
 static void print_file_info(const MetadataCollectorUtilityOutput& info,
@@ -165,16 +235,16 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         return;
     }
 
-    // Basic Information
     std::printf("Basic Information:\n");
     std::printf("  Format: %s\n", get_format_name(info.format));
     std::printf("  Status: %s\n", "OK");
 
-    // File Size Information
     std::printf("\nFile Size:\n");
-    std::printf("  Compressed:   %12s (%llu bytes)\n",
-                format_size(info.compressed_size).c_str(),
-                (unsigned long long)info.compressed_size);
+    if (info.compressed_size > 0) {
+        std::printf("  Compressed:   %12s (%llu bytes)\n",
+                    format_size(info.compressed_size).c_str(),
+                    (unsigned long long)info.compressed_size);
+    }
     std::printf("  Uncompressed: %12s (%llu bytes)\n",
                 format_size(info.uncompressed_size).c_str(),
                 (unsigned long long)info.uncompressed_size);
@@ -184,78 +254,21 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         double ratio =
             100.0 * (1.0 - static_cast<double>(info.compressed_size) /
                                static_cast<double>(info.uncompressed_size));
-        double compression_factor =
-            static_cast<double>(info.uncompressed_size) /
-            static_cast<double>(info.compressed_size);
-        std::printf(
-            "  Savings:      %12s (%.2f%% reduction)\n",
-            format_size(info.uncompressed_size - info.compressed_size).c_str(),
-            ratio);
-        std::printf("  Ratio:        %.2fx compression\n", compression_factor);
+        std::printf("  Savings:      %.2f%% reduction\n", ratio);
     }
 
-    // Content Information
     std::printf("\nContent:\n");
     std::printf("  Total Lines: %llu\n", (unsigned long long)info.num_lines);
     std::printf("  Valid Events: %zu\n", info.valid_events);
 
-    if (info.num_lines > 0) {
-        std::printf("  Avg Bytes/Line: %.2f bytes\n",
-                    static_cast<double>(info.uncompressed_size) /
-                        static_cast<double>(info.num_lines));
-    }
-
-    if (info.valid_events > 0) {
-        std::printf("  Avg Bytes/Event: %.2f bytes\n",
-                    static_cast<double>(info.uncompressed_size) /
-                        static_cast<double>(info.valid_events));
-    }
-
-    // Index Information (always show if index-capable format)
-    if (info.format == ArchiveFormat::GZIP ||
-        info.format == ArchiveFormat::TAR_GZ) {
+    if (info.has_index && info.index_valid) {
         std::printf("\nIndex Information:\n");
-        std::printf("  Index Store: %s\n", info.index_path.empty()
-                                               ? "(auto-generated)"
-                                               : info.index_path.c_str());
-        std::printf("  Index Status: %s\n",
-                    info.has_index ? (info.index_valid ? "Valid" : "Invalid")
-                                   : "Not Created");
-
-        if (info.has_index && info.index_valid) {
-            std::printf("  Checkpoint Size: %s (%llu bytes)\n",
-                        format_size(info.checkpoint_size).c_str(),
-                        (unsigned long long)info.checkpoint_size);
-            std::printf("  Number of Checkpoints: %zu\n", info.num_checkpoints);
-
-            if (info.num_checkpoints > 0) {
-                std::uint64_t avg_chunk =
-                    info.uncompressed_size / info.num_checkpoints;
-                std::uint64_t lines_per_checkpoint =
-                    info.num_lines / info.num_checkpoints;
-                std::printf("  Avg Chunk Size: %s (%llu bytes)\n",
-                            format_size(avg_chunk).c_str(),
-                            (unsigned long long)avg_chunk);
-                std::printf("  Avg Lines/Checkpoint: %llu\n",
-                            (unsigned long long)lines_per_checkpoint);
-
-                // Calculate index overhead
-                if (fs::exists(info.index_path)) {
-                    std::uint64_t index_size = fs::file_size(info.index_path);
-                    double index_overhead =
-                        100.0 * static_cast<double>(index_size) /
-                        static_cast<double>(info.compressed_size);
-                    std::printf("  Index File Size: %s (%llu bytes)\n",
-                                format_size(index_size).c_str(),
-                                (unsigned long long)index_size);
-                    std::printf("  Index Overhead: %.2f%% of compressed size\n",
-                                index_overhead);
-                }
-            }
-        }
+        std::printf("  Index Store: %s\n", info.index_path.c_str());
+        std::printf("  Checkpoint Size: %s\n",
+                    format_size(info.checkpoint_size).c_str());
+        std::printf("  Checkpoints: %zu\n", info.num_checkpoints);
     }
 
-    // Detailed Statistics (verbose mode)
     if (verbose) {
         std::printf("\nDetailed Statistics:\n");
         std::printf("  Start Line: %zu\n", info.start_line);
@@ -263,283 +276,279 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         std::printf("  Size (MB): %.6f\n", info.size_mb);
         std::printf("  MB per Event: %.8f\n", info.size_per_line);
 
-        // Performance estimates
         if (info.num_checkpoints > 0 && info.num_lines > 0) {
-            std::uint64_t lines_per_checkpoint =
-                info.num_lines / info.num_checkpoints;
+            auto lines_per_ckpt = info.num_lines / info.num_checkpoints;
             std::printf("\nRandom Access Performance:\n");
             std::printf("  Worst-case lines to scan: %llu (1 checkpoint)\n",
-                        (unsigned long long)lines_per_checkpoint);
-            std::printf(
-                "  Best-case lines to scan: 1 (exact checkpoint hit)\n");
+                        (unsigned long long)lines_per_ckpt);
             std::printf("  Avg lines to scan: %llu (0.5 checkpoint)\n",
-                        (unsigned long long)(lines_per_checkpoint / 2));
-        }
-
-        // Memory estimates
-        if (info.checkpoint_size > 0) {
-            std::printf("\nMemory Estimates:\n");
-            std::printf("  Memory for 1 checkpoint: ~%s\n",
-                        format_size(info.checkpoint_size).c_str());
-            if (info.num_checkpoints > 0) {
-                std::uint64_t total_memory_for_all =
-                    info.checkpoint_size * info.num_checkpoints;
-                std::printf("  Memory for all checkpoints: ~%s\n",
-                            format_size(total_memory_for_all).c_str());
-            }
+                        (unsigned long long)(lines_per_ckpt / 2));
         }
     }
 
     std::printf("\n");
 }
 
-int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+static coro::CoroTask<void> auto_index_and_resolve(
+    CoroScope& ctx, std::vector<FileWorkItem>& files_needing_index,
+    const std::string& index_dir, std::size_t checkpoint_size,
+    std::size_t executor_threads,
+    std::unordered_map<std::string, std::vector<ResolvedFile>>&
+        indexed_groups) {
+    auto index_path = internal::determine_index_path(
+        files_needing_index.front().file_path, index_dir);
+    dftracer::utils::rocksdb::RocksDBManager::instance().reset(index_path);
 
-    auto default_checkpoint_size_str =
-        std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE) + " B (" +
-        std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE / (1024 * 1024)) +
-        " MB)";
+    const bool all_gzip =
+        std::all_of(files_needing_index.begin(), files_needing_index.end(),
+                    [](const FileWorkItem& item) {
+                        return item.file_path.ends_with(".gz");
+                    });
 
-    argparse::ArgumentParser program("dftracer_info",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Display metadata and index information for DFTracer compressed files "
-        "using composable utilities and pipeline processing");
-
-    program.add_argument("--files")
-        .help("Compressed files to inspect (GZIP, TAR.GZ)")
-        .nargs(argparse::nargs_pattern::any)
-        .default_value<std::vector<std::string>>({});
-
-    program.add_argument("-d", "--directory")
-        .help("Directory containing files to inspect")
-        .default_value<std::string>("");
-
-    program.add_argument("--query")
-        .help(
-            "Query type: summary (aggregate all files, default) or "
-            "detailed (per-file output)")
-        .default_value<std::string>("summary");
-
-    program.add_argument("-v", "--verbose")
-        .help("Show detailed information including index details")
-        .flag();
-
-    program.add_argument("-f", "--force-rebuild")
-        .help("Force rebuild index files")
-        .flag();
-
-    program.add_argument("-c", "--checkpoint-size")
-        .help("Checkpoint size for indexing in bytes (default: " +
-              default_checkpoint_size_str + ")")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(Indexer::DEFAULT_CHECKPOINT_SIZE));
-
-    program.add_argument("--index-dir")
-        .help("Directory to store index files (default: system temp directory)")
-        .default_value<std::string>("");
-
-    program.add_argument("--executor-threads")
-        .help(
-            "Number of executor threads for parallel processing (default: "
-            "number of CPU cores)")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
-
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error occurred: %s", err.what());
-        std::cerr << program;
-        return 1;
-    }
-
-    // Parse arguments
-    std::string directory = program.get<std::string>("--directory");
-    std::string query_type = program.get<std::string>("--query");
-    bool verbose = program.get<bool>("--verbose");
-    bool force_rebuild = program.get<bool>("--force-rebuild");
-    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
-    std::string index_dir = program.get<std::string>("--index-dir");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
-
-    bool summary_mode = (query_type != "detailed");
-
-    // Collect files to process
-    std::vector<std::string> files;
-    if (!directory.empty()) {
-        if (!fs::exists(directory)) {
-            DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
-                                     directory.c_str());
-            return 1;
+    {
+        auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+        batch_config->file_paths.reserve(files_needing_index.size());
+        for (const auto& item : files_needing_index) {
+            batch_config->file_paths.push_back(item.file_path);
         }
+        batch_config->index_dir = index_dir;
+        batch_config->checkpoint_size = checkpoint_size;
+        batch_config->parallelism = executor_threads;
+        batch_config->use_batch_write = all_gzip;
+        batch_config->rebuild_root_summaries = all_gzip;
 
-        for (const auto& entry : fs::directory_iterator(directory)) {
-            if (entry.is_regular_file()) {
-                std::string path = entry.path().string();
-                std::string ext = entry.path().extension().string();
-                if (ext == ".gz") {
-                    files.push_back(path);
-                }
+        auto batch_result = co_await IndexBatchBuilderUtility::process(
+            &ctx, std::move(batch_config));
+
+        for (const auto& result : batch_result.results) {
+            if (!result.success && !result.error_message.empty()) {
+                DFTRACER_UTILS_LOG_ERROR("Auto-indexing failed for %s: %s",
+                                         result.file_path.c_str(),
+                                         result.error_message.c_str());
             }
         }
-
-        if (files.empty()) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "No compressed files found in directory: %s",
-                directory.c_str());
-            return 1;
-        }
-    } else {
-        files = program.get<std::vector<std::string>>("--files");
-
-        if (files.empty()) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "%s", "No files or directory specified. Use --help for usage.");
-            std::cerr << program;
-            return 1;
-        }
     }
 
-    // Small files skip indexing to avoid creating `.dftindex` stores on
-    // metadata-sensitive filesystems (e.g. Lustre).
-    static constexpr std::size_t INDEX_SIZE_THRESHOLD =
-        constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
-    std::unordered_set<std::string> small_files;
-    for (const auto& file_path : files) {
-        std::error_code ec;
-        auto fsize = fs::file_size(file_path, ec);
-        if (!ec && fsize > 0 && fsize < INDEX_SIZE_THRESHOLD) {
-            small_files.insert(file_path);
-        }
+    std::vector<std::string> newly_indexed;
+    newly_indexed.reserve(files_needing_index.size());
+    for (const auto& item : files_needing_index) {
+        newly_indexed.push_back(item.file_path);
     }
 
-    auto start_time = std::chrono::high_resolution_clock::now();
+    IndexResolverUtility resolver;
+    ResolverInput refresh_input;
+    refresh_input.files = std::move(newly_indexed);
+    refresh_input.index_dir = index_dir;
+    refresh_input.require_checkpoints = true;
 
-    if (summary_mode) {
-        // Summary: accumulate totals in workers, print once at the end.
-        // No per-file storage, no sort, no per-file print.
-        std::atomic<std::uint64_t> total_compressed{0};
-        std::atomic<std::uint64_t> total_uncompressed{0};
-        std::atomic<std::uint64_t> total_lines{0};
-        std::atomic<std::uint64_t> total_valid_events{0};
-        std::atomic<std::size_t> successful{0};
-        std::atomic<std::size_t> failed{0};
+    auto refresh_result = co_await resolver.process(refresh_input);
 
-        {
-            auto pipeline_config = PipelineConfig()
-                                       .with_name("DFTracer File Info")
-                                       .with_compute_threads(executor_threads)
-                                       .with_watchdog(false);
+    if (!refresh_result.cached.empty()) {
+        indexed_groups[refresh_result.index_path] =
+            std::move(refresh_result.cached);
+    }
+}
 
-            Pipeline pipeline(pipeline_config);
+static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
+    const auto& directory = cli->directory.value;
+    const auto& query_type = cli->query_type;
+    const auto verbose = cli->verbose;
+    const auto force_rebuild = cli->force_rebuild;
+    const auto checkpoint_size = cli->indexing.checkpoint_size;
+    const auto& index_dir = cli->indexing.index_dir;
+    const auto executor_threads = cli->pipeline.executor_threads;
+    const bool summary_mode = (query_type != "detailed");
 
-            auto info_task = make_task(
-                [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                    co_await ctx.scope([&](CoroScope& scope)
-                                           -> coro::CoroTask<void> {
-                        auto* files_ptr = &files;
-                        auto* total_compressed_ptr = &total_compressed;
-                        auto* total_uncompressed_ptr = &total_uncompressed;
-                        auto* total_lines_ptr = &total_lines;
-                        auto* total_valid_events_ptr = &total_valid_events;
-                        auto* successful_ptr = &successful;
-                        auto* failed_ptr = &failed;
+    Timer stages_storage("dftracer_info");
+    Timer* stages = cli->pipeline.time_profiling ? &stages_storage : nullptr;
+    Timer overall(true);
 
-                        auto file_chan = coro::make_channel<std::size_t>(
-                            executor_threads * 2);
+    std::vector<std::string> files;
+    std::vector<FileWorkItem> files_needing_index;
+    std::unordered_map<std::string, std::vector<ResolvedFile>> indexed_groups;
 
-                        scope.spawn(
-                            [ch = file_chan->producer(), files_ptr](
-                                CoroScope&) mutable -> coro::CoroTask<void> {
-                                auto guard = ch.guard();
-                                for (std::size_t i = 0; i < files_ptr->size();
-                                     ++i) {
-                                    if (!co_await ch.send(i)) {
-                                        co_return;
-                                    }
-                                }
-                                co_return;
-                            });
+    {
+        ScopedTimer _t(stages, "collect_and_classify");
 
-                        for (std::size_t w = 0; w < executor_threads; ++w) {
-                            scope.spawn(
-                                [file_chan, files_ptr, total_compressed_ptr,
-                                 total_uncompressed_ptr, total_lines_ptr,
-                                 total_valid_events_ptr, successful_ptr,
-                                 failed_ptr](
-                                    CoroScope&) -> coro::CoroTask<void> {
-                                    while (auto fi_opt =
-                                               co_await file_chan->receive()) {
-                                        std::size_t fi = *fi_opt;
-                                        const auto& fp = (*files_ptr)[fi];
+        if (!directory.empty()) {
+            if (!fs::exists(directory)) {
+                DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
+                                         directory.c_str());
+                co_return 1;
+            }
 
-                                        // Phase 1: build index if
-                                        // needed (skips small files
-                                        // and already-indexed files)
-                                        IndexBuilderUtility builder;
-                                        auto build_config =
-                                            IndexBuildConfig::for_file(fp)
-                                                .with_force_rebuild(false);
-                                        co_await builder.process(build_config);
+            auto trusted_index_path =
+                internal::determine_index_path(directory, index_dir);
+            if (!force_rebuild && fs::exists(trusted_index_path)) {
+                if (summary_mode) {
+                    ScopedTimer _rt(stages, "root_summary_read");
+                    auto root_result =
+                        co_await load_root_info_summary(trusted_index_path);
 
-                                        // Phase 2: read from index,
-                                        // fall back to direct scan
-                                        // for small/unindexed files
-                                        auto info = index_based_info(fp);
-                                        if (!info.success) {
-                                            info =
-                                                co_await direct_scan_info(fp);
-                                        }
+                    if (stages) stages->print_stages();
 
-                                        if (info.success) {
-                                            total_compressed_ptr->fetch_add(
-                                                info.compressed_size,
-                                                std::memory_order_relaxed);
-                                            total_uncompressed_ptr->fetch_add(
-                                                info.uncompressed_size,
-                                                std::memory_order_relaxed);
-                                            total_lines_ptr->fetch_add(
-                                                info.num_lines,
-                                                std::memory_order_relaxed);
-                                            total_valid_events_ptr->fetch_add(
-                                                info.valid_events,
-                                                std::memory_order_relaxed);
-                                            successful_ptr->fetch_add(
-                                                1, std::memory_order_relaxed);
-                                        } else {
-                                            failed_ptr->fetch_add(
-                                                1, std::memory_order_relaxed);
-                                        }
-                                    }
-                                    co_return;
-                                });
+                    std::printf("==========================================\n");
+                    std::printf("DFTracer File Info Summary\n");
+                    std::printf("==========================================\n");
+                    std::printf("  Total Files:        %zu\n",
+                                root_result->file_count);
+                    std::printf("  Successful:         %zu\n",
+                                root_result->file_count);
+                    std::printf("  Failed:             0\n");
+                    std::printf("  Total Lines:        %llu\n",
+                                (unsigned long long)root_result->total_lines);
+                    std::printf("  Valid Events:       %llu\n",
+                                (unsigned long long)root_result->total_events);
+                    std::printf(
+                        "  Total Uncompressed: %s (%llu bytes)\n",
+                        format_size(root_result->total_uncompressed).c_str(),
+                        (unsigned long long)root_result->total_uncompressed);
+                    if (root_result->total_events > 0) {
+                        std::printf(
+                            "  Avg Bytes/Event:    %.2f bytes\n",
+                            static_cast<double>(
+                                root_result->total_uncompressed) /
+                                static_cast<double>(root_result->total_events));
+                    }
+                    std::printf("  Processing Time:    %.2f ms\n",
+                                static_cast<double>(overall.elapsed()) / 1e6);
+                    std::printf("==========================================\n");
+                    co_return 0;
+                }
+
+                {
+                    ScopedTimer _lr(stages, "load_registry");
+                    auto registry_ptr =
+                        co_await load_file_registry(trusted_index_path);
+
+                    files.reserve(registry_ptr->size());
+                    auto& group = indexed_groups[trusted_index_path];
+                    group.reserve(registry_ptr->size());
+                    std::size_t fi = 0;
+                    for (auto& [logical_path, reg] : *registry_ptr) {
+                        files.push_back(logical_path);
+                        if (has_capability(
+                                reg.capabilities,
+                                IndexFileEntryCapability::FILE_SUMMARY)) {
+                            group.push_back(ResolvedFile{fi, logical_path,
+                                                         reg.file_id,
+                                                         reg.capabilities});
                         }
-                        co_return;
-                    });
-                    co_return;
-                },
-                "CollectInfo");
-
-            pipeline.set_source(info_task);
-            pipeline.set_destination(info_task);
-            pipeline.execute();
+                        ++fi;
+                    }
+                }
+            } else {
+                ScopedTimer _ds(stages, "scan_and_resolve");
+                IndexResolverUtility resolver;
+                auto input = std::make_unique<ResolverInput>();
+                input->directory = directory;
+                input->index_dir = index_dir;
+                auto result = co_await resolver.process(*input);
+                files = std::move(result.all_files);
+                if (!result.cached.empty()) {
+                    indexed_groups[result.index_path] =
+                        std::move(result.cached);
+                }
+                files_needing_index = std::move(result.needs_checkpoint);
+            }
+        } else {
+            ScopedTimer _rs(stages, "resolve_index_state");
+            IndexResolverUtility resolver;
+            auto input = std::make_unique<ResolverInput>();
+            input->files = cli->files_args.value;
+            input->index_dir = index_dir;
+            auto result = co_await resolver.process(*input);
+            files = std::move(result.all_files);
+            if (!result.cached.empty()) {
+                indexed_groups[result.index_path] = std::move(result.cached);
+            }
+            files_needing_index = std::move(result.needs_checkpoint);
         }
+    }
 
-        auto end_time = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> duration =
-            end_time - start_time;
+    if (files.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("%s", "No files found. Use --help for usage.");
+        co_return 1;
+    }
 
-        auto tc = total_compressed.load();
-        auto tu = total_uncompressed.load();
-        auto tl = total_lines.load();
-        auto tv = total_valid_events.load();
-        auto ok = successful.load();
-        auto bad = failed.load();
+    std::vector<MetadataCollectorUtilityOutput> all_results;
+    std::mutex results_mutex;
+
+    if (!indexed_groups.empty()) {
+        ScopedTimer _t(stages, "index_batch_read");
+        co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+            auto* all_results_ptr = &all_results;
+            auto* mutex_ptr = &results_mutex;
+            for (auto& [ip, group] : indexed_groups) {
+                auto idx_path_ptr = std::make_shared<std::string>(ip);
+                auto entries_ptr = std::make_shared<std::vector<ResolvedFile>>(
+                    std::move(group));
+                scope.spawn(
+                    [idx_path_ptr, entries_ptr, all_results_ptr,
+                     mutex_ptr](CoroScope&) mutable -> coro::CoroTask<void> {
+                        auto infos = co_await process_index_group_info(
+                            std::move(idx_path_ptr), std::move(entries_ptr));
+                        std::lock_guard<std::mutex> lock(*mutex_ptr);
+                        for (auto& info : infos) {
+                            all_results_ptr->push_back(std::move(info));
+                        }
+                    });
+            }
+            co_return;
+        });
+    }
+
+    if (!files_needing_index.empty()) {
+        ScopedTimer _t(stages, "auto_index_and_build");
+        co_await auto_index_and_resolve(ctx, files_needing_index, index_dir,
+                                        checkpoint_size, executor_threads,
+                                        indexed_groups);
+
+        if (!indexed_groups.empty()) {
+            ScopedTimer _t2(stages, "newly_indexed_batch_read");
+            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+                auto* all_results_ptr = &all_results;
+                auto* mutex_ptr = &results_mutex;
+                for (auto& [ip, group] : indexed_groups) {
+                    auto idx_path_ptr = std::make_shared<std::string>(ip);
+                    auto entries_ptr =
+                        std::make_shared<std::vector<ResolvedFile>>(
+                            std::move(group));
+                    scope.spawn(
+                        [idx_path_ptr, entries_ptr, all_results_ptr, mutex_ptr](
+                            CoroScope&) mutable -> coro::CoroTask<void> {
+                            auto infos = co_await process_index_group_info(
+                                std::move(idx_path_ptr),
+                                std::move(entries_ptr));
+                            std::lock_guard<std::mutex> lock(*mutex_ptr);
+                            for (auto& info : infos) {
+                                all_results_ptr->push_back(std::move(info));
+                            }
+                        });
+                }
+                co_return;
+            });
+        }
+    }
+
+    if (stages) stages->print_stages();
+    if (summary_mode) {
+        std::uint64_t total_uncompressed = 0;
+        std::uint64_t total_lines = 0;
+        std::uint64_t total_events = 0;
+        std::size_t ok = 0;
+        std::size_t bad = 0;
+
+        for (const auto& r : all_results) {
+            if (r.success) {
+                total_uncompressed += r.uncompressed_size;
+                total_lines += r.num_lines;
+                total_events += r.valid_events;
+                ok++;
+            } else {
+                bad++;
+            }
+        }
 
         std::printf("==========================================\n");
         std::printf("DFTracer File Info Summary\n");
@@ -547,174 +556,85 @@ int main(int argc, char** argv) {
         std::printf("  Total Files:        %zu\n", files.size());
         std::printf("  Successful:         %zu\n", ok);
         std::printf("  Failed:             %zu\n", bad);
-        std::printf("  Total Lines:        %llu\n", (unsigned long long)tl);
-        std::printf("  Valid Events:       %llu\n", (unsigned long long)tv);
-        std::printf("  Total Compressed:   %s (%llu bytes)\n",
-                    format_size(tc).c_str(), (unsigned long long)tc);
+        std::printf("  Total Lines:        %llu\n",
+                    (unsigned long long)total_lines);
+        std::printf("  Valid Events:       %llu\n",
+                    (unsigned long long)total_events);
         std::printf("  Total Uncompressed: %s (%llu bytes)\n",
-                    format_size(tu).c_str(), (unsigned long long)tu);
+                    format_size(total_uncompressed).c_str(),
+                    (unsigned long long)total_uncompressed);
 
-        if (tc > 0 && tu > 0 && tc != tu) {
-            double ratio = 100.0 * (1.0 - static_cast<double>(tc) /
-                                              static_cast<double>(tu));
-            std::printf("  Compression:        %.2f%%\n", ratio);
-        }
-
-        if (tv > 0) {
+        if (total_events > 0) {
             std::printf("  Avg Bytes/Event:    %.2f bytes\n",
-                        static_cast<double>(tu) / static_cast<double>(tv));
+                        static_cast<double>(total_uncompressed) /
+                            static_cast<double>(total_events));
         }
 
-        std::printf("  Processing Time:    %.2f seconds\n",
-                    duration.count() / 1000.0);
+        std::printf("  Processing Time:    %.2f ms\n",
+                    static_cast<double>(overall.elapsed()) / 1e6);
         std::printf("==========================================\n");
 
-        return (bad == 0) ? 0 : 1;
+        co_return (bad == 0) ? 0 : 1;
     }
 
-    // Detailed mode: per-file output (original behavior)
-    struct IndexedResult {
-        std::size_t index;
-        MetadataCollectorUtilityOutput info;
-    };
-
-    std::vector<IndexedResult> results;
-    std::mutex results_mutex;
-
-    {
-        auto pipeline_config = PipelineConfig()
-                                   .with_name("DFTracer File Info")
-                                   .with_compute_threads(executor_threads)
-                                   .with_watchdog(false);
-
-        Pipeline pipeline(pipeline_config);
-
-        auto info_task = make_task(
-            [&](CoroScope& ctx) -> coro::CoroTask<void> {
-                co_await ctx.scope([&](CoroScope& scope)
-                                       -> coro::CoroTask<void> {
-                    auto* files_ptr = &files;
-                    auto* results_ptr = &results;
-                    auto* results_mutex_ptr = &results_mutex;
-
-                    auto small_set =
-                        std::make_shared<std::unordered_set<std::string>>(
-                            small_files);
-
-                    auto file_chan =
-                        coro::make_channel<std::size_t>(executor_threads * 2);
-
-                    scope.spawn(
-                        [ch = file_chan->producer(), files_ptr](
-                            CoroScope&) mutable -> coro::CoroTask<void> {
-                            auto guard = ch.guard();
-                            for (std::size_t i = 0; i < files_ptr->size();
-                                 ++i) {
-                                if (!co_await ch.send(i)) {
-                                    co_return;
-                                }
-                            }
-                            co_return;
-                        });
-
-                    for (std::size_t w = 0; w < executor_threads; ++w) {
-                        scope.spawn([file_chan, files_ptr, checkpoint_size,
-                                     force_rebuild, verbose, index_dir,
-                                     small_set, results_ptr, results_mutex_ptr](
-                                        CoroScope&) -> coro::CoroTask<void> {
-                            while (auto fi_opt =
-                                       co_await file_chan->receive()) {
-                                std::size_t fi = *fi_opt;
-                                const auto& file_path = (*files_ptr)[fi];
-                                bool is_small = small_set->count(file_path) > 0;
-
-                                MetadataCollectorUtilityOutput info;
-                                if (is_small) {
-                                    info = co_await direct_scan_info(file_path);
-                                } else {
-                                    auto input =
-                                        MetadataCollectorUtilityInput::
-                                            from_file(file_path)
-                                                .with_checkpoint_size(
-                                                    checkpoint_size)
-                                                .with_force_rebuild(
-                                                    force_rebuild)
-                                                .with_compute_hash(verbose);
-
-                                    if (!index_dir.empty()) {
-                                        input.with_index(
-                                            internal::determine_index_path(
-                                                file_path, index_dir));
-                                    }
-
-                                    MetadataCollectorUtility collector;
-                                    info = co_await collector.process(input);
-                                }
-
-                                std::lock_guard<std::mutex> lock(
-                                    *results_mutex_ptr);
-                                results_ptr->push_back({fi, std::move(info)});
-                            }
-                            co_return;
-                        });
-                    }
-                    co_return;
-                });
-                co_return;
-            },
-            "CollectInfo");
-
-        pipeline.set_source(info_task);
-        pipeline.set_destination(info_task);
-        pipeline.execute();
+    for (const auto& r : all_results) {
+        print_file_info(r, verbose);
     }
-
-    std::sort(results.begin(), results.end(),
-              [](const IndexedResult& a, const IndexedResult& b) {
-                  return a.index < b.index;
-              });
-
-    std::uint64_t total_compressed = 0;
-    std::uint64_t total_uncompressed = 0;
-    std::uint64_t total_lines = 0;
-    std::size_t successful = 0;
-
-    for (const auto& r : results) {
-        print_file_info(r.info, verbose);
-        if (r.info.success) {
-            successful++;
-            total_compressed += r.info.compressed_size;
-            total_uncompressed += r.info.uncompressed_size;
-            total_lines += r.info.num_lines;
-        }
-    }
-
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
     if (files.size() > 1) {
+        std::uint64_t total_uncompressed = 0;
+        std::uint64_t total_lines = 0;
+        std::size_t ok = 0;
+
+        for (const auto& r : all_results) {
+            if (r.success) {
+                ok++;
+                total_uncompressed += r.uncompressed_size;
+                total_lines += r.num_lines;
+            }
+        }
+
         std::printf("==========================================\n");
         std::printf("Summary\n");
         std::printf("==========================================\n");
         std::printf("Total Files: %zu\n", files.size());
-        std::printf("Successful: %zu\n", successful);
-        std::printf("Failed: %zu\n", files.size() - successful);
+        std::printf("Successful: %zu\n", ok);
+        std::printf("Failed: %zu\n", files.size() - ok);
         std::printf("Total Lines: %llu\n", (unsigned long long)total_lines);
-        std::printf("Total Compressed: %s\n",
-                    format_size(total_compressed).c_str());
         std::printf("Total Uncompressed: %s\n",
                     format_size(total_uncompressed).c_str());
-
-        if (total_uncompressed > 0) {
-            double ratio =
-                100.0 * (1.0 - static_cast<double>(total_compressed) /
-                                   static_cast<double>(total_uncompressed));
-            std::printf("Overall Compression: %.2f%%\n", ratio);
-        }
-
-        std::printf("Processing Time: %.2f seconds\n",
-                    duration.count() / 1000.0);
+        std::printf("Processing Time: %.2f ms\n",
+                    static_cast<double>(overall.elapsed()) / 1e6);
     }
 
-    return (successful == files.size()) ? 0 : 1;
+    co_return 0;
+}
+
+int main(int argc, char** argv) {
+    DFTRACER_UTILS_LOGGER_INIT();
+
+    argparse::ArgumentParser program("dftracer_info",
+                                     DFTRACER_UTILS_PACKAGE_VERSION);
+    program.add_description(
+        "Display metadata and index information for DFTracer compressed files "
+        "using composable utilities and pipeline processing");
+
+    InfoArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
+
+    auto pipeline_config =
+        cli::build_pipeline_config("DFTracer Info", cli.pipeline);
+    Pipeline pipeline(pipeline_config);
+
+    auto info_task = make_task(
+        [&cli](CoroScope& ctx) -> coro::CoroTask<int> {
+            co_return co_await run_info(ctx, &cli);
+        },
+        "InfoMain");
+
+    pipeline.set_source(info_task);
+    pipeline.set_destination(info_task);
+    pipeline.execute();
+    return info_task->get<int>();
 }

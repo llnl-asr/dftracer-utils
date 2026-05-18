@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <sstream>
 #include <string>
-#include <unordered_map>
 
 namespace dftracer::utils::call_tree {
 namespace internal {
@@ -88,9 +87,7 @@ class JsonSerializer {
      * @param stream Output string stream
      * @return True if metadata was present, false otherwise
      */
-    bool convert_args_to_json(
-        const std::unordered_map<std::string, std::string>& args,
-        std::stringstream& stream);
+    bool convert_args_to_json(const ArgsMap& args, std::stringstream& stream);
 
     std::string hostname_hash_;
 };

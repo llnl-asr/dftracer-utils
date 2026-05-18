@@ -5,12 +5,19 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
+
+enum class AggMapType : std::uint8_t {
+    EVENT = 0,
+    PROFILE = 1,
+    SYSTEM = 2,
+};
 
 class AssociationTracker;
 
@@ -33,9 +40,11 @@ struct ChunkAggregationOutput {
     std::string file_path;
     bool success = false;
     std::shared_ptr<AssociationTracker> local_tracker;
+    std::uint64_t min_time_bucket = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t max_time_bucket = 0;
 };
 
-struct EventAggregatorUtilityOutput {
+struct EventAggregatorOutput {
     AggregationMap aggregations;
     AggregationMap profile_aggregations;
     AggregationMap system_aggregations;

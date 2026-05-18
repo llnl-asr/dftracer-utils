@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/text/shared.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <cstdint>
 #include <cstring>
@@ -18,35 +18,45 @@
 namespace dftracer::utils::utilities::common::json {
 
 /**
- * Lightweight zero-cost wrapper around yyjson_val* with convenient accessors.
+ * Lightweight wrapper around simdjson::dom::element with convenient accessors.
  *
- * Provides pure lazy evaluation:
+ * Provides:
  * - Fluent chaining: json["args"]["hhash"]
  * - Template get<T>() with auto-casting
  * - Default values for missing/null fields
- * - Zero overhead - just pointer navigation
+ * - Zero overhead - just element navigation
  *
- * IMPORTANT: JsonValue is only valid while the yyjson_doc is alive.
+ * IMPORTANT: JsonValue is only valid while the simdjson::dom::document is
+ * alive.
  */
 class JsonValue {
    private:
-    yyjson_val* val_;
+    simdjson::dom::element elem_;
+    bool valid_ = false;
 
    public:
-    explicit JsonValue(yyjson_val* val = nullptr) : val_(val) {}
+    JsonValue() : valid_(false) {}
+    explicit JsonValue(simdjson::dom::element elem)
+        : elem_(elem), valid_(true) {}
 
-    bool is_null() const { return !val_ || yyjson_is_null(val_); }
-    bool is_bool() const { return val_ && yyjson_is_bool(val_); }
-    bool is_string() const { return val_ && yyjson_is_str(val_); }
-    bool is_uint() const { return val_ && yyjson_is_uint(val_); }
-    bool is_int() const { return val_ && yyjson_is_int(val_); }
-    bool is_number() const { return val_ && yyjson_is_num(val_); }
-    bool is_object() const { return val_ && yyjson_is_obj(val_); }
-    bool is_array() const { return val_ && yyjson_is_arr(val_); }
-    bool exists() const { return val_ != nullptr; }
+    bool is_null() const { return !valid_ || elem_.is_null(); }
+    bool is_bool() const { return valid_ && elem_.is_bool(); }
+    bool is_string() const { return valid_ && elem_.is_string(); }
+    bool is_uint() const { return valid_ && elem_.is_uint64(); }
+    bool is_int() const { return valid_ && elem_.is_int64(); }
+    bool is_number() const {
+        return valid_ &&
+               (elem_.is_int64() || elem_.is_uint64() || elem_.is_double());
+    }
+    bool is_object() const { return valid_ && elem_.is_object(); }
+    bool is_array() const { return valid_ && elem_.is_array(); }
+    bool exists() const { return valid_; }
 
     JsonValue operator[](const char* key) const {
-        return JsonValue(val_ ? yyjson_obj_get(val_, key) : nullptr);
+        if (!valid_ || !elem_.is_object()) return JsonValue();
+        auto result = elem_[key];
+        if (result.error()) return JsonValue();
+        return JsonValue(result.value_unsafe());
     }
 
     JsonValue operator[](const std::string& key) const {
@@ -54,8 +64,10 @@ class JsonValue {
     }
 
     JsonValue operator[](std::string_view key) const {
-        std::string key_str(key);
-        return (*this)[key_str.c_str()];
+        if (!valid_ || !elem_.is_object()) return JsonValue();
+        auto result = elem_[key];
+        if (result.error()) return JsonValue();
+        return JsonValue(result.value_unsafe());
     }
 
     JsonValue at(const char* path) const;
@@ -64,49 +76,43 @@ class JsonValue {
 
     template <typename T>
     T get(const T& default_val = T{}) const {
+        if (!valid_) return default_val;
+
         if constexpr (std::is_same_v<T, bool>) {
-            return val_ && yyjson_is_bool(val_) ? yyjson_get_bool(val_)
-                                                : default_val;
+            auto r = elem_.get_bool();
+            return r.error() ? default_val : r.value_unsafe();
         } else if constexpr (std::is_same_v<T, std::string>) {
-            return (val_ && yyjson_is_str(val_))
-                       ? std::string(yyjson_get_str(val_))
-                       : default_val;
+            auto r = elem_.get_string();
+            return r.error() ? default_val : std::string(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, std::string_view>) {
-            if (val_ && yyjson_is_str(val_)) {
-                const char* str = yyjson_get_str(val_);
-                std::size_t len = yyjson_get_len(val_);
-                return std::string_view(str, len);
-            }
-            return default_val;
+            auto r = elem_.get_string();
+            return r.error() ? default_val : r.value_unsafe();
         } else if constexpr (std::is_same_v<T, const char*>) {
-            return (val_ && yyjson_is_str(val_)) ? yyjson_get_str(val_)
-                                                 : default_val;
+            auto r = elem_.get_c_str();
+            return r.error() ? default_val : r.value_unsafe();
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
-            if (!val_) return default_val;
-            if (yyjson_is_uint(val_)) return yyjson_get_uint(val_);
-            if (yyjson_is_int(val_)) {
-                auto v = yyjson_get_int(val_);
-                return v >= 0 ? static_cast<std::uint64_t>(v) : default_val;
-            }
+            auto r = elem_.get_uint64();
+            if (!r.error()) return r.value_unsafe();
+            auto ri = elem_.get_int64();
+            if (!ri.error() && ri.value_unsafe() >= 0)
+                return static_cast<std::uint64_t>(ri.value_unsafe());
             return default_val;
         } else if constexpr (std::is_same_v<T, std::int64_t>) {
-            if (!val_) return default_val;
-            if (yyjson_is_int(val_)) return yyjson_get_int(val_);
-            if (yyjson_is_uint(val_)) {
-                auto v = yyjson_get_uint(val_);
-                return v <= static_cast<uint64_t>(
-                                std::numeric_limits<int64_t>::max())
-                           ? static_cast<std::int64_t>(v)
-                           : default_val;
-            }
+            auto r = elem_.get_int64();
+            if (!r.error()) return r.value_unsafe();
+            auto ru = elem_.get_uint64();
+            if (!ru.error() &&
+                ru.value_unsafe() <=
+                    static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+                return static_cast<std::int64_t>(ru.value_unsafe());
             return default_val;
         } else if constexpr (std::is_same_v<T, double>) {
-            if (!val_) return default_val;
-            if (yyjson_is_real(val_)) return yyjson_get_real(val_);
-            if (yyjson_is_int(val_))
-                return static_cast<double>(yyjson_get_int(val_));
-            if (yyjson_is_uint(val_))
-                return static_cast<double>(yyjson_get_uint(val_));
+            auto r = elem_.get_double();
+            if (!r.error()) return r.value_unsafe();
+            auto ri = elem_.get_int64();
+            if (!ri.error()) return static_cast<double>(ri.value_unsafe());
+            auto ru = elem_.get_uint64();
+            if (!ru.error()) return static_cast<double>(ru.value_unsafe());
             return default_val;
         } else if constexpr (std::is_same_v<T, float>) {
             return static_cast<float>(
@@ -126,56 +132,61 @@ class JsonValue {
 
     template <typename T>
     std::optional<T> get_optional() const {
-        if (!val_) return std::nullopt;
+        if (!valid_) return std::nullopt;
 
         if constexpr (std::is_same_v<T, std::string>) {
-            return yyjson_is_str(val_)
-                       ? std::optional(std::string(yyjson_get_str(val_)))
-                       : std::nullopt;
+            auto r = elem_.get_string();
+            return r.error() ? std::nullopt
+                             : std::optional(std::string(r.value_unsafe()));
         } else if constexpr (std::is_same_v<T, std::string_view>) {
-            if (yyjson_is_str(val_)) {
-                const char* str = yyjson_get_str(val_);
-                std::size_t len = yyjson_get_len(val_);
-                return std::optional(std::string_view(str, len));
-            }
-            return std::nullopt;
+            auto r = elem_.get_string();
+            return r.error() ? std::nullopt : std::optional(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, const char*>) {
-            return yyjson_is_str(val_) ? std::optional(yyjson_get_str(val_))
-                                       : std::nullopt;
+            auto r = elem_.get_c_str();
+            return r.error() ? std::nullopt : std::optional(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
-            if (yyjson_is_uint(val_)) return yyjson_get_uint(val_);
-            if (yyjson_is_int(val_)) {
-                auto v = yyjson_get_int(val_);
-                return v >= 0 ? std::optional(static_cast<std::uint64_t>(v))
-                              : std::nullopt;
-            }
+            auto r = elem_.get_uint64();
+            if (!r.error()) return r.value_unsafe();
+            auto ri = elem_.get_int64();
+            if (!ri.error() && ri.value_unsafe() >= 0)
+                return static_cast<std::uint64_t>(ri.value_unsafe());
             return std::nullopt;
         } else if constexpr (std::is_same_v<T, std::int64_t>) {
-            if (yyjson_is_int(val_)) return yyjson_get_int(val_);
-            return std::nullopt;
+            auto r = elem_.get_int64();
+            return r.error() ? std::nullopt : std::optional(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, double>) {
-            if (yyjson_is_real(val_)) return yyjson_get_real(val_);
-            if (yyjson_is_int(val_))
-                return static_cast<double>(yyjson_get_int(val_));
-            if (yyjson_is_uint(val_))
-                return static_cast<double>(yyjson_get_uint(val_));
+            auto r = elem_.get_double();
+            if (!r.error()) return r.value_unsafe();
+            auto ri = elem_.get_int64();
+            if (!ri.error()) return static_cast<double>(ri.value_unsafe());
+            auto ru = elem_.get_uint64();
+            if (!ru.error()) return static_cast<double>(ru.value_unsafe());
             return std::nullopt;
         } else if constexpr (std::is_same_v<T, bool>) {
-            return yyjson_is_bool(val_) ? std::optional(yyjson_get_bool(val_))
-                                        : std::nullopt;
+            auto r = elem_.get_bool();
+            return r.error() ? std::nullopt : std::optional(r.value_unsafe());
         } else {
             static_assert(!sizeof(T),
                           "Unsupported type for JsonValue::get_optional<T>()");
         }
     }
 
-    yyjson_val* raw() const { return val_; }
-    explicit operator yyjson_val*() const { return val_; }
+    template <typename Fn>
+    void for_each_member(Fn&& fn) const {
+        if (!valid_ || !elem_.is_object()) return;
+        auto obj = elem_.get_object();
+        if (obj.error()) return;
+        for (auto field : obj.value_unsafe()) {
+            fn(field.key, JsonValue(field.value));
+        }
+    }
+
+    simdjson::dom::element raw() const { return elem_; }
     explicit operator bool() const { return exists(); }
 };
 
-using JsonParserInput = yyjson_val*;
 using JsonParserOutput = JsonValue;
+using JsonParserInput = simdjson::dom::element;
 
 class JsonParserUtility
     : public utilities::Utility<JsonParserInput, JsonParserOutput> {
@@ -199,7 +210,8 @@ class StringJsonParserUtility
     : public utilities::Utility<StringJsonParserInput, JsonParserOutput> {
    private:
     utilities::text::Text content_;
-    std::shared_ptr<yyjson_doc> owned_doc_;
+    simdjson::dom::parser parser_;
+    simdjson::dom::document doc_;
 
    public:
     coro::CoroTask<JsonParserOutput> process(

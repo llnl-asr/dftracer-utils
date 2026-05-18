@@ -6,7 +6,7 @@
 #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_line_generator.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <algorithm>
 
@@ -19,6 +19,7 @@ class EventIdCollector : public reader::internal::LineProcessor {
    public:
     std::vector<EventId>& events;
     bool trim_commas;
+    simdjson::dom::parser parser;
 
     explicit EventIdCollector(std::vector<EventId>& event_list,
                               bool should_trim_commas = false)
@@ -29,7 +30,6 @@ class EventIdCollector : public reader::internal::LineProcessor {
         const char* trimmed;
         std::size_t trimmed_length;
 
-        // Use comma-trimming variant if requested (for JSON array format)
         bool valid = trim_commas ? json_trim_and_validate_with_comma(
                                        data, length, trimmed, trimmed_length)
                                  : json_trim_and_validate(data, length, trimmed,
@@ -39,36 +39,32 @@ class EventIdCollector : public reader::internal::LineProcessor {
             co_return true;
         }
 
-        yyjson_doc* doc = yyjson_read(trimmed, trimmed_length, 0);
-        if (!doc) co_return true;
+        auto result = parser.parse(trimmed, trimmed_length);
+        if (result.error()) co_return true;
 
-        yyjson_val* root = yyjson_doc_get_root(doc);
-        if (!yyjson_is_obj(root)) {
-            yyjson_doc_free(doc);
-            co_return true;
-        }
+        auto root = result.value_unsafe();
+        if (!root.is_object()) co_return true;
 
         EventId event;
-        yyjson_val* id_val = yyjson_obj_get(root, "id");
-        if (id_val && yyjson_is_int(id_val)) {
-            event.id = yyjson_get_int(id_val);
+        auto id_result = root["id"].get_int64();
+        if (!id_result.error()) {
+            event.id = id_result.value_unsafe();
         }
 
-        yyjson_val* pid_val = yyjson_obj_get(root, "pid");
-        if (pid_val && yyjson_is_int(pid_val)) {
-            event.pid = yyjson_get_int(pid_val);
+        auto pid_result = root["pid"].get_int64();
+        if (!pid_result.error()) {
+            event.pid = pid_result.value_unsafe();
         }
 
-        yyjson_val* tid_val = yyjson_obj_get(root, "tid");
-        if (tid_val && yyjson_is_int(tid_val)) {
-            event.tid = yyjson_get_int(tid_val);
+        auto tid_result = root["tid"].get_int64();
+        if (!tid_result.error()) {
+            event.tid = tid_result.value_unsafe();
         }
 
         if (event.is_valid()) {
             events.push_back(event);
         }
 
-        yyjson_doc_free(doc);
         co_return true;
     }
 };

@@ -1,8 +1,6 @@
 """Tests for StatisticsQueryUtility."""
 
-import sys
-
-import dftracer.utils as dft_utils
+from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 from dftracer.utils.dftracer_utils_ext import StatisticsQueryUtility
 
 from .common import Environment
@@ -10,7 +8,6 @@ from .common import Environment
 # Threshold large enough to guarantee bloom/manifest are skipped for any
 # test fixture, making WithoutIndex tests deterministic regardless of
 # fixture size.
-_SKIP_INDEX_THRESHOLD = sys.maxsize
 
 
 class TestStatisticsQueryUtility:
@@ -18,9 +15,7 @@ class TestStatisticsQueryUtility:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="summary")
             assert isinstance(result, dict)
@@ -31,9 +26,7 @@ class TestStatisticsQueryUtility:
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="categories")
             assert "results" in result
@@ -43,9 +36,7 @@ class TestStatisticsQueryUtility:
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="names")
             assert "results" in result
@@ -54,9 +45,7 @@ class TestStatisticsQueryUtility:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="top_n_names", top_n=5)
             assert "results" in result
@@ -66,9 +55,7 @@ class TestStatisticsQueryUtility:
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             result = StatisticsQueryUtility().process(gz_file, query_type="duration_stats")
             assert "duration_mean_us" in result
@@ -78,9 +65,7 @@ class TestStatisticsQueryUtility:
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
-                gz_file, index_path, build_bloom=True, index_threshold=0
-            ) as indexer:
+            with NativeIndexer(gz_file, index_path, build_bloom=True) as indexer:
                 indexer.build()
             util = StatisticsQueryUtility()
             result = util(gz_file, query_type="summary")
@@ -96,11 +81,10 @@ class TestStatisticsQueryWithoutIndex:
         with Environment(lines=20) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
+            with NativeIndexer(
                 gz_file,
                 index_path,
-                build_bloom=True,
-                index_threshold=_SKIP_INDEX_THRESHOLD,
+                build_bloom=False,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_bloom
@@ -113,11 +97,10 @@ class TestStatisticsQueryWithoutIndex:
         with Environment(lines=10) as env:
             gz_file = env.create_test_gzip_file()
             index_path = env.get_index_path(gz_file)
-            with dft_utils.Indexer(
+            with NativeIndexer(
                 gz_file,
                 index_path,
-                build_bloom=True,
-                index_threshold=_SKIP_INDEX_THRESHOLD,
+                build_bloom=False,
             ) as indexer:
                 indexer.build()
                 assert not indexer.has_bloom

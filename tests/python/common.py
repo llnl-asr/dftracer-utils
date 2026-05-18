@@ -11,7 +11,7 @@ import tempfile
 
 import pytest
 
-import dftracer.utils as dft_utils
+from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
 
 def determine_index_path(file_path: str, index_dir: str = "") -> str:
@@ -208,6 +208,106 @@ class Environment:
         self.test_files.append(file_path)
         return file_path
 
+    def create_varying_schema_file(self, filename="varying_schema.pfw.gz", num_events=500):
+        """Create events with varying schemas to test elastic Arrow schema.
+
+        Some events have extra fields (offset, whence, size) that others don't.
+        This tests that the Arrow writer handles schema evolution correctly.
+        """
+        file_path = os.path.join(self.temp_dir, filename)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        with gzip.open(file_path, "wt", encoding="utf-8") as f:
+            f.write("[\n")
+            for i in range(num_events):
+                name = ["read", "write", "open", "close", "stat"][i % 5]
+                cat = "POSIX"
+
+                event = {
+                    "name": name,
+                    "cat": cat,
+                    "pid": 1000 + i % 4,
+                    "tid": 2000 + i % 8,
+                    "ts": 1000000 + i * 1000,
+                    "dur": (i * 123) % 10000,
+                    "ph": "X",
+                    "args": {"ret": 1024 * i, "hhash": f"hash_{i}"},
+                }
+
+                if name == "read" or name == "write":
+                    event["args"]["offset"] = i * 4096
+                    event["args"]["size"] = 4096
+
+                if name == "open":
+                    event["args"]["flags"] = "O_RDONLY"
+                    event["args"]["mode"] = 0o644
+
+                if name == "stat":
+                    event["args"]["path"] = f"/tmp/file_{i}.txt"
+
+                if i % 7 == 0:
+                    event["args"]["extra_field"] = f"extra_{i}"
+
+                if i % 11 == 0:
+                    event["args"]["rare_field"] = i * 1000
+
+                import json
+
+                f.write(json.dumps(event, separators=(",", ":")) + "\n")
+            f.write("]\n")
+
+        self.test_files.append(file_path)
+        return file_path
+
+    def create_dft_trace_file_with_pid(self, filename, pid, num_events=None):
+        """Create a DFTracer trace with a specific PID, hash metadata, and proper aggregation fields."""
+        file_path = os.path.join(self.temp_dir, filename)
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        n = num_events if num_events is not None else self.lines
+        io_names = ["read", "write", "open", "close", "pread", "pwrite", "fread", "fwrite"]
+        cats = ["POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "POSIX", "STDIO", "STDIO"]
+        hhash = f"h{pid}"
+        fhash = f"f{pid}"
+        with gzip.open(file_path, "wt", encoding="utf-8") as f:
+            f.write(
+                f'{{"name":"HH","ph":"M","pid":{pid},"tid":1,"args":{{"name":"host{pid}","value":"{hhash}"}}}}\n'
+            )
+            f.write(
+                f'{{"name":"FH","ph":"M","pid":{pid},"tid":1,"args":{{"name":"/data/file{pid}.dat","value":"{fhash}"}}}}\n'
+            )
+            for i in range(n):
+                name = io_names[i % len(io_names)]
+                cat = cats[i % len(cats)]
+                f.write(
+                    f'{{"name":"{name}","cat":"{cat}","pid":{pid},"tid":{1 + i % 3},'
+                    f'"ts":{1000000 + i * 1000},"dur":{100 + i * 10},'
+                    f'"ph":"X","args":{{"ret":{1024 * (i + 1)},"hhash":"{hhash}","fhash":"{fhash}"}}}}\n'
+                )
+        self.test_files.append(file_path)
+        return file_path
+
+    def create_indexed_traces(self, pids=None, num_events=None):
+        """Create trace files and build full index with aggregation.
+
+        Returns the temp directory path (use as directory= for Indexer).
+        """
+        from dftracer.utils import AggregationConfig, Indexer
+
+        if pids is None:
+            pids = [1]
+        files = []
+        for pid in pids:
+            files.append(
+                self.create_dft_trace_file_with_pid(f"trace_p{pid}.pfw.gz", pid, num_events)
+            )
+        indexer = Indexer(
+            files=files,
+            require_aggregation=AggregationConfig(time_interval_ms=5000),
+            force_rebuild=True,
+        )
+        indexer.ensure_indexed()
+        return self.temp_dir
+
     def get_index_path(self, gz_file_path):
         """Get the `.dftindex` path for a gzip file."""
         return determine_index_path(gz_file_path, "")
@@ -220,7 +320,7 @@ class Environment:
         index_path = self.get_index_path(gz_file_path)
 
         try:
-            with dft_utils.Indexer(gz_file_path, index_path, checkpoint_size_bytes) as indexer:
+            with NativeIndexer(gz_file_path, index_path, checkpoint_size_bytes) as indexer:
                 if indexer.need_rebuild():
                     indexer.build()
 
@@ -236,7 +336,7 @@ class Environment:
             checkpoint_size_bytes = 32 * 1024 * 1024  # 32MB default
 
         try:
-            indexer = dft_utils.Indexer(gz_file_path, checkpoint_size=checkpoint_size_bytes)
+            indexer = NativeIndexer(gz_file_path, checkpoint_size=checkpoint_size_bytes)
             if indexer.need_rebuild():
                 indexer.build()
             return indexer

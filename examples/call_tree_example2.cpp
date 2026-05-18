@@ -4,10 +4,20 @@
  */
 
 #include <dftracer/utils/call_tree/call_tree.h>
+#include <dftracer/utils/call_tree/internal/call_tree.h>
+#include <dftracer/utils/call_tree/mpi/serializable.h>
+#include <dftracer/utils/core/pipeline/pipeline.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/tasks/task.h>
+
 #include <cstdio>
 #include <map>
 
 using namespace dftracer::utils::call_tree;
+using dftracer::utils::CoroScope;
+using dftracer::utils::Pipeline;
+using dftracer::utils::make_task;
+namespace coro = dftracer::utils::coro;
 
 int main(int argc, char* argv[]) {
     printf("=== CallTree API Example 2: Multi-Node Traces ===\n");
@@ -84,29 +94,29 @@ int main(int argc, char* argv[]) {
     }
     printf("\n");
     
-    // Save outputs
     printf("--- Saving Outputs ---\n");
-    
-    // Set custom output path
-    tree.set_output_path("nodes-4_calltree.bin");
-    
-    if (tree.save_to_file()) {
-        printf("Binary format saved: nodes-4_calltree.bin\n");
+    const std::string bin_path = "nodes-4_calltree.bin";
+    const std::string arrow_path = "nodes-4_calltree.arrow";
+    bool bin_ok = false, arrow_ok = false;
+    {
+        Pipeline pipeline;
+        auto save = make_task(
+            [&](CoroScope& scope) -> coro::CoroTask<void> {
+                bin_ok = co_await save_binary(&scope, tree.internal_tree(),
+                                              bin_path);
+                arrow_ok = co_await save_arrow(&scope, tree.internal_tree(),
+                                               arrow_path);
+            },
+            "save_call_tree");
+        pipeline.set_source(save);
+        pipeline.set_destination(save);
+        pipeline.execute();
     }
-    
-    // Save to JSON (Chrome Tracing format)
-    if (tree.save_to_json("nodes-4_calltree.pfw")) {
-        printf("JSON format saved: nodes-4_calltree.pfw (Chrome Tracing compatible)\n");
-    }
-    
-    if (tree.print_depth_first_to_file("nodes-4_calltree_full.txt", 0)) {
-        printf("Full tree saved: nodes-4_calltree_full.txt\n");
-    }
-    
-    if (tree.print_depth_first_to_file("nodes-4_calltree_summary.txt", 2)) {
-        printf("Summary (2 levels) saved: nodes-4_calltree_summary.txt\n");
-    }
-    
+    printf("Binary format: %s -> %s\n", bin_path.c_str(),
+           bin_ok ? "saved" : "failed");
+    printf("Arrow IPC:     %s -> %s\n", arrow_path.c_str(),
+           arrow_ok ? "saved" : "failed");
+
     printf("\n=== Example completed successfully ===\n");
     
     return 0;

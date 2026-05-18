@@ -13,14 +13,15 @@
 #include <dftracer/utils/utilities/common/json/json_doc_guard.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
+#include <dftracer/utils/utilities/composites/dft/statistics/shared_index_statistics_reader.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_query_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <yyjson.h>
 
 #include <atomic>
 #include <cstddef>
@@ -76,105 +77,6 @@ static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
 using dftracer::utils::utilities::common::json::JsonDocGuard;
 using dftracer::utils::utilities::common::query::Query;
 
-/// Direct-scan a small file without any `.dftindex` store.
-/// Streams via async_streaming_gz_lines(), parses JSON, applies
-/// predicate filters, collects matching events as raw JSON strings.
-static coro::CoroTask<void> direct_scan_events(
-    const TraceIndex::FileInfo* file_info, const Query* query,
-    bool include_metadata, std::vector<std::string>* collected_events,
-    std::uint64_t* total_scanned, std::uint64_t* total_matched, int limit) {
-    using dftracer::utils::utilities::fileio::lines::sources::
-        async_streaming_gz_lines;
-
-    try {
-        auto gen = async_streaming_gz_lines(file_info->path);
-
-        std::unordered_map<std::string, std::string> pending_metadata;
-        std::unordered_set<std::string> emitted_hashes;
-
-        while (auto line = co_await gen.next()) {
-            if (limit > 0 &&
-                collected_events->size() >= static_cast<std::size_t>(limit)) {
-                co_return;
-            }
-            if (line->content.empty()) continue;
-
-            JsonDocGuard guard{yyjson_read_opts(
-                const_cast<char*>(line->content.data()), line->content.size(),
-                YYJSON_READ_NOFLAG, nullptr, nullptr)};
-            if (!guard.doc) continue;
-
-            yyjson_val* root = yyjson_doc_get_root(guard.doc);
-            if (root && yyjson_is_obj(root)) {
-                JsonValue json(root);
-                // line->content is a string_view valid only for this
-                // iteration.  All storage into collected_events and
-                // pending_metadata must copy to owning std::string.
-                std::string_view ph = json["ph"].get<std::string_view>();
-
-                if (ph == "M" && include_metadata) {
-                    std::string name_str = json["name"].get<std::string>();
-
-                    if (HASH_METADATA_NAMES.count(name_str)) {
-                        auto args = json["args"];
-                        if (args.exists()) {
-                            auto val = args["value"];
-                            if (val.exists()) {
-                                std::string hash_val = val.get<std::string>();
-                                if (!emitted_hashes.count(hash_val)) {
-                                    pending_metadata[hash_val] =
-                                        std::string(line->content.data(),
-                                                    line->content.size());
-                                }
-                            }
-                        }
-                    } else {
-                        collected_events->emplace_back(line->content.data(),
-                                                       line->content.size());
-                        (*total_matched)++;
-                    }
-                } else if (ph != "M") {
-                    (*total_scanned)++;
-                    if (!query || query->evaluate(json)) {
-                        // Flush referenced hash metadata first
-                        if (include_metadata) {
-                            auto args = json["args"];
-                            if (args.exists()) {
-                                static const char* hash_fields[] = {
-                                    "hhash", "fhash", "shash"};
-                                for (const char* field : hash_fields) {
-                                    auto val = args[field];
-                                    if (!val.exists()) continue;
-                                    std::string hash_val =
-                                        val.get<std::string>();
-                                    if (emitted_hashes.count(hash_val))
-                                        continue;
-                                    auto it = pending_metadata.find(hash_val);
-                                    if (it != pending_metadata.end()) {
-                                        collected_events->push_back(
-                                            std::move(it->second));
-                                        (*total_matched)++;
-                                        emitted_hashes.insert(hash_val);
-                                        pending_metadata.erase(it);
-                                    }
-                                }
-                            }
-                        }
-                        collected_events->emplace_back(line->content.data(),
-                                                       line->content.size());
-                        (*total_matched)++;
-                    }
-                }
-            }
-        }
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("Direct scan failed for %s: %s",
-                                file_info->path.c_str(), e.what());
-    }
-
-    co_return;
-}
-
 // --- GET /api/v1/files ---
 static coro::CoroTask<HttpResponse> handle_files(const HttpRequest& /*req*/,
                                                  const QueryParams& /*params*/,
@@ -192,8 +94,6 @@ static coro::CoroTask<HttpResponse> handle_files(const HttpRequest& /*req*/,
         body += f.has_bloom_data ? "true" : "false";
         body += ",\"has_checkpoint_index\":";
         body += f.has_checkpoint_index ? "true" : "false";
-        body += ",\"is_small\":";
-        body += f.is_small ? "true" : "false";
         body += '}';
     }
     body += "],\"count\":";
@@ -225,21 +125,16 @@ static coro::CoroTask<HttpResponse> handle_file_info(const HttpRequest& /*req*/,
     body += info->has_bloom_data ? "true" : "false";
     body += ",\"has_checkpoint_index\":";
     body += info->has_checkpoint_index ? "true" : "false";
-    body += ",\"is_small\":";
-    body += info->is_small ? "true" : "false";
-
     body += ",\"size_mb\":";
     body += std::to_string(info->size_mb);
     body += ",\"compressed_size\":";
     body += std::to_string(info->compressed_size);
-    if (!info->is_small) {
-        body += ",\"num_lines\":";
-        body += std::to_string(info->num_lines);
-        body += ",\"num_checkpoints\":";
-        body += std::to_string(info->num_checkpoints);
-        body += ",\"uncompressed_size\":";
-        body += std::to_string(info->uncompressed_size);
-    }
+    body += ",\"num_lines\":";
+    body += std::to_string(info->num_lines);
+    body += ",\"num_checkpoints\":";
+    body += std::to_string(info->num_checkpoints);
+    body += ",\"uncompressed_size\":";
+    body += std::to_string(info->uncompressed_size);
 
     body += '}';
     co_return HttpResponse::ok(body);
@@ -356,10 +251,6 @@ static std::vector<const TraceIndex::FileInfo*> resolve_target_files(
         std::vector<const TraceIndex::FileInfo*> filtered;
         filtered.reserve(files.size());
         for (auto* fi : files) {
-            if (fi->is_small) {
-                filtered.push_back(fi);
-                continue;
-            }
             if (fi->min_timestamp_us == 0 && fi->max_timestamp_us == 0) {
                 filtered.push_back(fi);
                 continue;
@@ -379,32 +270,12 @@ using StreamChunk = HttpResponse::StreamChunk;
 
 static coro::AsyncGenerator<StreamChunk> stream_events(
     std::vector<const TraceIndex::FileInfo*> files, ViewDefinition ev_view,
-    std::optional<Query> query_opt, double ts_min, double ts_max,
+    std::optional<Query> /*query_opt*/, double ts_min, double ts_max,
     BloomFilterCache* bloom_cache, int limit) {
     int emitted = 0;
-    const Query* query_ptr = query_opt ? &*query_opt : nullptr;
 
     for (auto* file_info : files) {
         if (limit > 0 && emitted >= limit) break;
-
-        if (file_info->is_small) {
-            std::vector<std::string> events;
-            std::uint64_t scanned = 0;
-            std::uint64_t matched = 0;
-            co_await direct_scan_events(
-                file_info, query_ptr, ev_view.include_metadata, &events,
-                &scanned, &matched, limit > 0 ? limit - emitted : 0);
-            std::vector<std::string_view> views;
-            for (const auto& event : events) {
-                if (limit > 0 && emitted >= limit) break;
-                views.push_back(event);
-                emitted++;
-            }
-            if (!views.empty()) {
-                co_yield StreamChunk{views};
-            }
-            continue;
-        }
 
         if (file_info->uncompressed_size == 0 &&
             file_info->num_checkpoints == 0)
@@ -514,78 +385,54 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& req,
     }
 
     std::vector<TraceStatistics> all_stats;
-    std::size_t skipped_small = 0;
 
-    std::vector<const TraceIndex::FileInfo*> stat_files;
+    // Group files by index_path
+    std::unordered_map<std::string,
+                       std::vector<std::pair<std::size_t, std::string>>>
+        files_by_index;
+    std::size_t file_idx = 0;
     for (const auto& file_info : index.files()) {
-        if (file_info.is_small) {
-            skipped_small++;
-            continue;
-        }
         if (!file_info.has_bloom_data) continue;
-        stat_files.push_back(&file_info);
+        files_by_index[file_info.index_path].emplace_back(file_idx++,
+                                                          file_info.path);
     }
 
-    if (stat_files.size() <= 1) {
-        for (auto* file_info : stat_files) {
-            StatisticsAggregatorInput agg_input;
-            agg_input.file_path = file_info->path;
-            agg_input.index_path = file_info->index_path;
-            agg_input.index_dir = index.index_dir();
-
-            StatisticsAggregatorUtility aggregator;
-            auto stats = co_await aggregator.process(agg_input);
-            if (stats.success) {
-                all_stats.push_back(std::move(stats));
-            }
+    // Resolve each group and read statistics
+    for (auto& [idx_path, files] : files_by_index) {
+        std::vector<std::string> file_paths;
+        file_paths.reserve(files.size());
+        for (const auto& [_, path] : files) {
+            file_paths.push_back(path);
         }
-    } else {
-        std::size_t num_workers =
-            std::min(index.max_concurrent(), stat_files.size());
-        auto* executor = Executor::current();
 
-        auto file_chan = coro::make_channel<std::size_t>(num_workers * 2);
-        auto stats_mutex = std::make_shared<std::mutex>();
-        auto* all_stats_ptr = &all_stats;
-        auto* stat_files_ptr = &stat_files;
-        std::string index_dir = index.index_dir();
-        const auto* index_dir_ptr = &index_dir;
+        IndexResolverUtility resolver;
+        ResolverInput input;
+        input.files = std::move(file_paths);
+        input.require_checkpoints = false;
 
-        CoroScope scope(executor);
+        auto result = co_await resolver.process(input);
 
-        scope.spawn([ch = file_chan->producer(), stat_files_ptr](
-                        CoroScope&) mutable -> coro::CoroTask<void> {
-            auto guard = ch.guard();
-            for (std::size_t i = 0; i < stat_files_ptr->size(); ++i) {
-                if (!co_await ch.send(i)) co_return;
-            }
-            co_return;
-        });
+        if (result.cached.empty()) {
+            continue;
+        }
 
-        for (std::size_t w = 0; w < num_workers; ++w) {
-            scope.spawn([file_chan, stat_files_ptr, stats_mutex, all_stats_ptr,
-                         index_dir_ptr](CoroScope&) -> coro::CoroTask<void> {
-                while (auto fi_opt = co_await file_chan->receive()) {
-                    auto* file_info = (*stat_files_ptr)[*fi_opt];
-
-                    StatisticsAggregatorInput agg_input;
-                    agg_input.file_path = file_info->path;
-                    agg_input.index_path = file_info->index_path;
-                    agg_input.index_dir = *index_dir_ptr;
-
-                    StatisticsAggregatorUtility aggregator;
-                    auto stats = co_await aggregator.process(agg_input);
-
-                    if (stats.success) {
-                        std::lock_guard<std::mutex> lock(*stats_mutex);
-                        all_stats_ptr->push_back(std::move(stats));
-                    }
+        try {
+            SharedIndexStatisticsReader reader;
+            auto batch_rows = co_await reader.query(
+                result.index_path, std::move(result.cached),
+                StatisticsQueryType::SUMMARY);
+            auto callback = [&all_stats](std::size_t /*file_index*/,
+                                         TraceStatistics&& stats) {
+                if (stats.success) {
+                    all_stats.push_back(std::move(stats));
                 }
-                co_return;
-            });
+            };
+            SharedIndexStatisticsReader::process_batch_results(batch_rows,
+                                                               callback);
+        } catch (const std::exception& e) {
+            DFTRACER_UTILS_LOG_WARN("Server stats batch read failed for %s: %s",
+                                    idx_path.c_str(), e.what());
         }
-
-        co_await scope.join();
     }
 
     std::uint64_t total_events = 0;
@@ -600,8 +447,6 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& req,
     body += std::to_string(file_count);
     body += ",\"total_events\":";
     body += std::to_string(total_events);
-    body += ",\"skipped_small_files\":";
-    body += std::to_string(skipped_small);
     body += ",\"files\":[";
     for (std::size_t i = 0; i < all_stats.size(); ++i) {
         if (i > 0) body += ',';
@@ -650,8 +495,6 @@ static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
         body += f.has_bloom_data ? "true" : "false";
         body += ",\"has_checkpoint_index\":";
         body += f.has_checkpoint_index ? "true" : "false";
-        body += ",\"is_small\":";
-        body += f.is_small ? "true" : "false";
         if (f.min_timestamp_us > 0 || f.max_timestamp_us > 0) {
             body += ",\"min_timestamp_us\":";
             body += std::to_string(f.min_timestamp_us);

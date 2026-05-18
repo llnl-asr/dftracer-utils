@@ -12,7 +12,6 @@
 #include <any>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -25,10 +24,6 @@
 #include <unordered_set>
 #include <vector>
 
-namespace dftracer::utils::io {
-class IoThreadPool;
-}  // namespace dftracer::utils::io
-
 namespace dftracer::utils {
 
 class Task;
@@ -36,13 +31,12 @@ class CoroScope;
 class Scheduler;
 
 struct ExecutorConfig {
-    std::size_t num_threads = 0;  // 0 = hardware_concurrency
+    std::size_t num_threads = 0;   // 0 = hardware_concurrency
     std::chrono::seconds idle_timeout{5};
     std::chrono::seconds deadlock_timeout{10};
-    std::size_t io_pool_size = 4;
+    std::size_t io_pool_size = 0;  // 0 = hardware_concurrency
     io::IoBackendType io_backend_type = io::IoBackendType::AUTO;
     unsigned io_batch_threshold = 16;
-    std::size_t db_pool_size = 2;
 };
 
 /**
@@ -154,11 +148,6 @@ class Executor {
     // Aligned to avoid false sharing between adjacent workers.
     struct alignas(DFTRACER_OPTIMAL_ALIGNMENT) WorkerContext {
         std::size_t worker_id;
-        // queue_mutex + cv: used for worker sleep/wake protocol.
-        // Workers sleep on cv; wake_one_worker/wake_all_workers
-        // lock+unlock this mutex before notifying to prevent lost wakeups.
-        mutable std::mutex queue_mutex;
-        std::condition_variable cv;
 
         // Health monitoring for watchdog
         std::atomic<bool> is_idle{false};
@@ -168,7 +157,7 @@ class Executor {
         // Current task info (for debugging/watchdog)
         std::atomic<TaskIndex> current_task_id{-1};
         std::string current_task_name;
-        std::mutex task_name_mutex;  // Protects current_task_name
+        std::mutex task_name_mutex;
 
         // Worker thread
         std::thread thread;
@@ -197,8 +186,7 @@ class Executor {
     alignas(DFTRACER_OPTIMAL_ALIGNMENT)
         std::atomic<std::size_t> total_tasks_submitted_{0};
 
-    std::chrono::steady_clock::time_point last_activity_time_;
-    mutable std::mutex activity_mutex_;
+    std::atomic<std::int64_t> last_activity_ns_;
 
     // Shutdown coordination
     std::atomic<bool> shutdown_requested_{false};
@@ -229,14 +217,10 @@ class Executor {
     // I/O backend (owned by executor, created by factory)
     std::unique_ptr<io::IoBackend> io_backend_;
 
-    // Dedicated thread pool for blocking DB operations.
-    std::unique_ptr<io::IoThreadPool> db_pool_;
-
     // Configuration (stored from ExecutorConfig)
-    std::size_t io_pool_size_ = 4;
+    std::size_t io_pool_size_ = 0;
     io::IoBackendType io_backend_type_ = io::IoBackendType::AUTO;
     unsigned io_batch_threshold_ = 16;
-    std::size_t db_pool_size_ = 2;
 
    public:
     /**
@@ -294,6 +278,8 @@ class Executor {
      */
     std::size_t get_num_threads() const { return num_threads_; }
 
+    std::size_t get_io_pool_size() const { return io_pool_size_; }
+
     /**
      * Check if an I/O backend is available
      */
@@ -304,11 +290,6 @@ class Executor {
      */
     io::IoBackend& io_backend() { return *io_backend_; }
     const io::IoBackend& io_backend() const { return *io_backend_; }
-
-    /**
-     * Get the dedicated DB thread pool (nullptr if not started).
-     */
-    io::IoThreadPool* db_pool() noexcept;
 
     /**
      * Get the executor running on the current worker thread (nullptr

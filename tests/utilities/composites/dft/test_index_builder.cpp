@@ -52,8 +52,7 @@ TEST_SUITE("IndexBuilder") {
 
             auto input = IndexBuildConfig::for_file(gz_file)
                              .with_index_dir("")
-                             .with_checkpoint_size(10)
-                             .with_index_threshold(0);
+                             .with_checkpoint_size(10);
 
             auto output = run_builder(input);
 
@@ -68,9 +67,8 @@ TEST_SUITE("IndexBuilder") {
         SUBCASE("Use existing index without force rebuild") {
             std::string gz_file = env.create_dft_test_gzip_file(20);
 
-            auto input1 = IndexBuildConfig::for_file(gz_file)
-                              .with_index_dir("")
-                              .with_index_threshold(0);
+            auto input1 =
+                IndexBuildConfig::for_file(gz_file).with_index_dir("");
 
             auto output1 = run_builder(input1);
             CHECK(output1.success == true);
@@ -89,8 +87,7 @@ TEST_SUITE("IndexBuilder") {
 
         auto input = IndexBuildConfig::for_file(gz_file)
                          .with_index_dir("")
-                         .with_force_rebuild(true)
-                         .with_index_threshold(0);
+                         .with_force_rebuild(true);
 
         auto output1 = run_builder(input);
         CHECK(output1.success == true);

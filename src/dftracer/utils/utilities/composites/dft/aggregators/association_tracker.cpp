@@ -1,15 +1,15 @@
+#include <dftracer/utils/core/rocksdb/key_codec.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
 
 #include <algorithm>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
-void AssociationTracker::extract_from_event(const JsonValue& json,
-                                            const JsonValue& args,
+void AssociationTracker::extract_from_event(std::string_view name,
+                                            std::uint64_t pid, std::uint64_t ts,
+                                            std::uint64_t dur,
+                                            const ArgsMap& args,
                                             const AggregationConfig& config) {
-    std::string_view name = json["name"].get<std::string_view>();
-    std::uint64_t pid = json["pid"].get<std::uint64_t>();
-
     if (config.track_process_parents && pid > 0) {
         all_pids_.insert(pid);
     }
@@ -37,9 +37,6 @@ void AssociationTracker::extract_from_event(const JsonValue& json,
                 counter++;
                 final_value = std::to_string(counter);
             }
-
-            std::uint64_t ts = json["ts"].get<std::uint64_t>();
-            std::uint64_t dur = json["dur"].get<std::uint64_t>();
 
             BoundaryInterval interval;
             interval.name = boundary_config.output_name;
@@ -130,6 +127,118 @@ void AssociationTracker::merge(const AssociationTracker& other) {
                       return a.start_ts < b.start_ts;
                   });
     }
+}
+
+namespace {
+namespace rocks = dftracer::utils::rocksdb;
+
+void put_be64(std::string& out, std::uint64_t v) {
+    rocks::KeyCodec::append_be64(out, v);
+}
+void put_be32(std::string& out, std::uint32_t v) {
+    rocks::KeyCodec::append_be32(out, v);
+}
+void put_str(std::string& out, const std::string& s) {
+    put_be32(out, static_cast<std::uint32_t>(s.size()));
+    out.append(s);
+}
+std::uint64_t read_be64(const char*& p) {
+    auto v = rocks::KeyCodec::decode_be64(std::string_view(p, 8));
+    p += 8;
+    return v;
+}
+std::uint32_t read_be32(const char*& p) {
+    auto v = rocks::KeyCodec::decode_be32(std::string_view(p, 4));
+    p += 4;
+    return v;
+}
+std::string read_str(const char*& p) {
+    auto len = read_be32(p);
+    std::string s(p, len);
+    p += len;
+    return s;
+}
+}  // namespace
+
+std::string AssociationTracker::serialize() const {
+    std::string out;
+    out.reserve(4096);
+
+    put_be32(out, static_cast<std::uint32_t>(all_pids_.size()));
+    for (auto pid : all_pids_) put_be64(out, pid);
+
+    put_be32(out, static_cast<std::uint32_t>(process_parents_.size()));
+    for (const auto& [child, parent] : process_parents_) {
+        put_be64(out, child);
+        put_be64(out, parent);
+    }
+
+    put_be32(out, static_cast<std::uint32_t>(all_intervals_.size()));
+    for (const auto& iv : all_intervals_) {
+        put_str(out, iv.name);
+        put_str(out, iv.value);
+        put_be64(out, iv.start_ts);
+        put_be64(out, iv.end_ts);
+    }
+
+    put_be32(out, static_cast<std::uint32_t>(process_intervals_.size()));
+    for (const auto& [pid, intervals] : process_intervals_) {
+        put_be64(out, pid);
+        put_be32(out, static_cast<std::uint32_t>(intervals.size()));
+        for (const auto& iv : intervals) {
+            put_str(out, iv.name);
+            put_str(out, iv.value);
+            put_be64(out, iv.start_ts);
+            put_be64(out, iv.end_ts);
+        }
+    }
+
+    return out;
+}
+
+AssociationTracker AssociationTracker::deserialize(std::string_view data) {
+    AssociationTracker t;
+    const char* p = data.data();
+
+    auto num_pids = read_be32(p);
+    for (std::uint32_t i = 0; i < num_pids; ++i)
+        t.all_pids_.insert(read_be64(p));
+
+    auto num_parents = read_be32(p);
+    for (std::uint32_t i = 0; i < num_parents; ++i) {
+        auto child = read_be64(p);
+        auto parent = read_be64(p);
+        t.process_parents_[child] = parent;
+    }
+
+    auto num_intervals = read_be32(p);
+    t.all_intervals_.reserve(num_intervals);
+    for (std::uint32_t i = 0; i < num_intervals; ++i) {
+        BoundaryInterval iv;
+        iv.name = read_str(p);
+        iv.value = read_str(p);
+        iv.start_ts = read_be64(p);
+        iv.end_ts = read_be64(p);
+        t.all_intervals_.push_back(std::move(iv));
+    }
+
+    auto num_pid_intervals = read_be32(p);
+    for (std::uint32_t i = 0; i < num_pid_intervals; ++i) {
+        auto pid = read_be64(p);
+        auto count = read_be32(p);
+        auto& vec = t.process_intervals_[pid];
+        vec.reserve(count);
+        for (std::uint32_t j = 0; j < count; ++j) {
+            BoundaryInterval iv;
+            iv.name = read_str(p);
+            iv.value = read_str(p);
+            iv.start_ts = read_be64(p);
+            iv.end_ts = read_be64(p);
+            vec.push_back(std::move(iv));
+        }
+    }
+
+    return t;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

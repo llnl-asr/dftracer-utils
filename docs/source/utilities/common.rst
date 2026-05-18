@@ -7,26 +7,26 @@ statistics collection, and Arrow data interchange.
 JSON
 ----
 
-Lightweight zero-cost wrapper around `yyjson <https://github.com/ibireme/yyjson>`_ for lazy JSON evaluation.
+JSON parsing uses `simdjson <https://github.com/simdjson/simdjson>`_ exclusively (DOM and On-Demand APIs). ``JsonValue`` is a lightweight wrapper around ``simdjson::dom::element``; ``JsonParser`` exposes the On-Demand API for zero-copy lazy field access.
 
 .. code-block:: cpp
 
    #include <dftracer/utils/utilities/common/json/json.h>
-   #include <dftracer/utils/utilities/common/json/json_doc_guard.h>
+   #include <dftracer/utils/utilities/common/json/json_value.h>
+   #include <dftracer/utils/utilities/common/json/parser.h>
 
 JsonValue
 ~~~~~~~~~
 
-Non-owning view over parsed JSON data with fluent navigation and type-safe accessors.
+Wrapper over ``simdjson::dom::element`` with fluent navigation and type-safe accessors. Non-owning: only valid while the backing ``simdjson::dom::document`` is alive.
 
 **Parse and navigate:**
 
 .. code-block:: cpp
 
-   yyjson_doc* doc = yyjson_read(json_str.c_str(), json_str.size(), 0);
-   JsonDocGuard guard(doc);  // RAII cleanup
-
-   JsonValue root(yyjson_doc_get_root(doc));
+   simdjson::dom::parser parser;
+   simdjson::dom::element doc = parser.parse(json_str);
+   JsonValue root(doc);
 
    // Fluent navigation with defaults
    std::string name = root["metadata"]["name"].get<std::string>("unknown");
@@ -61,24 +61,43 @@ Non-owning view over parsed JSON data with fluent navigation and type-safe acces
    if (val.is_array())  { /* ... */ }
    if (val.exists())    { /* not null */ }
 
-.. warning::
-
-   ``JsonValue`` is a non-owning view. It is only valid while the ``yyjson_doc`` is alive. Use ``JsonDocGuard`` for RAII lifetime management.
-
 JsonDocGuard
 ~~~~~~~~~~~~
 
-RAII guard for ``yyjson_doc*`` to prevent leaks on exceptions or early coroutine returns.
+RAII helper that owns a ``simdjson::dom::parser``; ``parse(data, len)`` reuses
+the parser buffer and ``root()`` returns the parsed element. Use across
+short-lived parse sites; ``StringJsonParserUtility`` is preferred when the
+document must outlive a ``co_await`` boundary.
 
 .. code-block:: cpp
 
-   {
-       yyjson_doc* doc = yyjson_read(data, len, 0);
-       JsonDocGuard guard(doc);
-
-       JsonValue root(yyjson_doc_get_root(doc));
+   JsonDocGuard guard;
+   if (guard.parse(data, len)) {
+       JsonValue root(guard.root());
        // ... use root ...
-   }  // guard destructor frees doc
+   }
+
+JsonParser (On-Demand)
+~~~~~~~~~~~~~~~~~~~~~~
+
+On-Demand parser for zero-copy lazy field access. Reuses an internal padded
+buffer across rows; ``string_view`` results are valid until the next
+``parse()`` call. Used by the indexing visitors and ``TraceReader::read_json``.
+
+.. code-block:: cpp
+
+   JsonParser parser;
+
+   for (auto& line : input_lines) {
+       if (!parser.parse(line)) continue;
+       auto name = parser.get_string("name");
+       auto ts   = parser.get_int64("ts");
+
+       parser.for_each_field("args", [](std::string_view k,
+                                        simdjson::ondemand::value v) {
+           // process nested fields
+       });
+   }
 
 StringJsonParserUtility
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -99,6 +118,44 @@ Parses JSON strings with owned document lifetime. Safe for use across ``co_await
    auto json = co_await parser.process(input);
 
    parser.reset();  // Cleanup
+
+ArgsMap and ArgsValueProxy
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Owned key/value map used for trace event ``args``. Replaces ``JsonValue`` for
+event-args storage in the DFT composites: keys are interned with the global
+:cpp:class:`dftracer::utils::StringIntern` and values are a typed
+``std::variant`` (string, int64, uint64, double, bool). ``ArgsValueProxy``
+mirrors the ``JsonValue`` accessor surface (``get<T>``, ``get_optional<T>``,
+``is_string()`` ...) so event visitors can be written generically.
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/utilities/composites/dft/args_map.h>
+
+   using dftracer::utils::utilities::composites::dft::ArgsMap;
+
+   ArgsMap args;
+   args.insert("hhash", std::uint64_t{0x1234});
+   args.set_valid(true);
+
+   uint64_t h = args["hhash"].get<uint64_t>(0);
+   args.for_each_member([](std::string_view k, auto v) { /* ... */ });
+
+JsonDictValue (Python)
+~~~~~~~~~~~~~~~~~~~~~~
+
+Python-facing wrapper that exposes a parsed JSON object as a lazy
+``Mapping``. Used by the ``TraceReader`` Python binding to surface parsed
+events without materialising a ``dict`` per row. Defined in
+``src/dftracer/utils/python/json.h``.
+
+.. note::
+
+   :cpp:class:`dftracer::utils::StringIntern` was reimplemented as a
+   lock-free open-chained hash table with a fast-path id table
+   (``FAST_CAPACITY = 1<<20``). Lookups are fully lock-free; only the rare
+   first insert of a string takes the insertion mutex.
 
 Query
 -----
@@ -190,6 +247,7 @@ Percentile estimation and histogram utilities for trace analysis.
 
    #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
    #include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
+   #include <dftracer/utils/utilities/common/statistics/timestamp_histogram.h>
 
 DDSketch
 ~~~~~~~~
@@ -273,6 +331,24 @@ Fixed 65-bin logarithmic histogram covering the ``uint64_t`` range. Bin 0 holds 
 
    std::string json = a.to_json();
    Log2Histogram restored = Log2Histogram::from_json(json);
+
+TimestampHistogram
+~~~~~~~~~~~~~~~~~~
+
+Sparse fixed-width (100 ms) histogram over event timestamps. Used by the
+chunk pruner to compute time-range selectivity and to weight sub-bucket
+expansions for adaptive aggregation.
+
+.. code-block:: cpp
+
+   TimestampHistogram th;
+   for (auto ts_us : timestamps) th.add(ts_us);
+
+   std::uint64_t in_window = th.count_in_range(ts_lo, ts_hi);
+   double sel = th.selectivity(ts_lo, ts_hi);
+
+   auto bytes = th.serialize();
+   auto restored = TimestampHistogram::deserialize(bytes.data(), bytes.size());
 
 Arrow
 -----

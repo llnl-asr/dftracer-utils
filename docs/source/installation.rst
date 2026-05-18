@@ -81,6 +81,51 @@ To install to a custom location:
    make
    make install
 
+Build Options
+~~~~~~~~~~~~~
+
+The following CMake options control optional features and dependencies. All
+options default to ``ON`` unless noted otherwise:
+
+- ``DFTRACER_UTILS_TESTS`` (default ``OFF``) - Build the test suite.
+- ``DFTRACER_UTILS_COVERAGE`` (default ``OFF``) - Enable coverage reporting.
+- ``DFTRACER_UTILS_DEBUG`` (default ``OFF``) - Enable debug mode with verbose
+  logging.
+- ``DFTRACER_UTILS_BUILD_SHARED`` (default ``ON``) - Build the shared library.
+- ``DFTRACER_UTILS_BUILD_STATIC`` (default ``ON``) - Build the static library.
+- ``DFTRACER_UTILS_BUILD_BINARIES`` (default ``ON``) - Build command-line
+  binaries.
+- ``DFTRACER_UTILS_BUILD_PYTHON`` (default ``OFF``) - Build Python bindings.
+- ``DFTRACER_UTILS_ENABLE_PCH`` (default ``ON``) - Enable precompiled
+  headers.
+- ``DFTRACER_UTILS_ENABLE_ASAN`` / ``_UBSAN`` / ``_TSAN`` (default ``OFF``) -
+  Address / undefined-behavior / thread sanitizers.
+- ``DFTRACER_UTILS_ENABLE_MPI`` (default ``OFF``) - Enable MPI support;
+  required to build ``dftracer_aggregator_mpi`` and
+  ``dftracer_call_tree_mpi``.
+- ``DFTRACER_USE_ZLIB_NG`` (default ``ON``) - Use ``zlib-ng`` (compat ABI)
+  for faster compression and decompression. Falls back to ``madler/zlib``
+  if zlib-ng fetch or build fails.
+- ``DFTRACER_UTILS_ENABLE_ARROW`` (default ``ON``) - Enable the Arrow C Data
+  Interface via nanoarrow (required for Python Arrow output).
+- ``DFTRACER_UTILS_ENABLE_ARROW_IPC`` (default ``ON``) - Enable Arrow IPC
+  file read/write via nanoarrow. Required for ``dftracer_aggregator
+  --format arrow`` output and for the ``save_arrow`` / ``load_arrow`` call-
+  tree serialization paths.
+- ``DFTRACER_UTILS_ENABLE_ZSTD`` (default ``ON``) - Enable ZSTD compression
+  for RocksDB SST blocks.
+- ``DFTRACER_UTILS_ENABLE_LZ4`` (default ``OFF``) - Enable LZ4 compression
+  for RocksDB SST blocks.
+
+Example:
+
+.. code-block:: bash
+
+   cmake .. \
+       -DDFTRACER_UTILS_ENABLE_MPI=ON \
+       -DDFTRACER_UTILS_ENABLE_ARROW_IPC=ON \
+       -DDFTRACER_USE_ZLIB_NG=ON
+
 Verifying Installation
 ----------------------
 
@@ -97,23 +142,21 @@ To verify your Python installation:
 C++
 ~~~
 
-To verify your C++ installation, try compiling a simple example:
+To verify your C++ installation, try compiling a simple example that
+opens a trace through the public ``TraceReader`` API:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/indexer/indexer_factory.h>
+   #include <dftracer/utils/utilities/reader/trace_reader.h>
    #include <iostream>
 
    int main() {
-       // Create an indexer to verify installation
-       auto indexer = dftracer::utils::IndexerFactory::create(
-           "test.pfw.gz",
-           "test.pfw.gz.idx",
-           false  // Don't force rebuild
-       );
+       using dftracer::utils::utilities::reader::TraceReader;
 
+       TraceReader reader("test.pfw.gz");
        std::cout << "Library installed successfully!" << std::endl;
-       std::cout << "Archive format: " << indexer->get_format_name() << std::endl;
+       std::cout << "Has index: " << std::boolalpha
+                 << reader.has_index() << std::endl;
        return 0;
    }
 

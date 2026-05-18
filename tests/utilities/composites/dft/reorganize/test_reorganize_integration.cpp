@@ -36,6 +36,27 @@ using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::ProvenanceDatabase;
 namespace tags = dftracer::utils::utilities::tags;
 
+static ExtractionPlan run_planner(const ReorganizationPlannerInput& input) {
+    Runtime rt(4);
+    ExtractionPlan result;
+    auto* result_ptr = &result;
+
+    auto task = run_coro_scope(
+        rt.executor(),
+        [input, result_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            auto planner = std::make_shared<ReorganizationPlannerUtility>();
+            UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
+                            tags::NeedsContext>
+                exec(planner, BehaviorChain<ReorganizationPlannerInput,
+                                            ExtractionPlan>{});
+            *result_ptr = co_await exec.execute_with_context(scope, input);
+        });
+
+    rt.submit(std::move(task), "run_planner").wait();
+    rt.shutdown();
+    return result;
+}
+
 // Test trace layout:
 // Line 0: HH metadata
 // Line 1: FH metadata
@@ -100,8 +121,7 @@ static void build_idx_for_file(const std::string& trace_file,
                                             indexer::IndexBuildResult>{});
             auto config = IndexBuildConfig::for_file(trace_file)
                               .with_index_dir(index_dir)
-                              .with_manifest(true)
-                              .with_index_threshold(0);
+                              .with_manifest(true);
             *result_ptr = co_await exec.execute_with_context(scope, config);
         });
 
@@ -231,14 +251,13 @@ TEST_SUITE("ReorganizeIntegration") {
         build_idx_for_file(trace_file, input_dir);
 
         // Step 2: Plan extraction
-        ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput planner_input;
         planner_input.source_files = {trace_file};
         planner_input.groups = {{"io", R"(cat == "POSIX")"},
                                 {"compute", R"(cat == "APP")"}};
         planner_input.index_dir = input_dir;
 
-        auto plan = planner.process(planner_input).get();
+        auto plan = run_planner(planner_input);
         REQUIRE(plan.tasks.size() > 0);
 
         // Step 3: Execute extraction
@@ -318,13 +337,12 @@ TEST_SUITE("ReorganizeIntegration") {
         build_idx_for_file(trace_file, input_dir);
 
         // Plan for io group only
-        ReorganizationPlannerUtility planner;
         ReorganizationPlannerInput planner_input;
         planner_input.source_files = {trace_file};
         planner_input.groups = {{"io", R"(cat == "POSIX")"}};
         planner_input.index_dir = input_dir;
 
-        auto plan = planner.process(planner_input).get();
+        auto plan = run_planner(planner_input);
 
         // Extract io group
         std::string io_pfw = output_dir + "/io.pfw";
@@ -379,8 +397,7 @@ TEST_SUITE("ReorganizeIntegration") {
                                            indexer::IndexBuildResult>{});
                     auto config = IndexBuildConfig::for_file(io_gz)
                                       .with_index_dir(output_dir)
-                                      .with_manifest(true)
-                                      .with_index_threshold(0);
+                                      .with_manifest(true);
                     *idx_result_ptr =
                         co_await exec.execute_with_context(scope, config);
                 });
@@ -404,13 +421,11 @@ TEST_SUITE("ReorganizeIntegration") {
             int fid = pdb.get_or_create_file_info(io_gz, 0);
             REQUIRE(fid >= 0);
 
-            pdb.begin_transaction();
             pdb.insert_info(fid, "version", "1.0");
             pdb.insert_info(fid, "tool", "dftracer_organize");
             pdb.insert_group(fid, "io", R"(cat == "POSIX")");
             pdb.insert_source(fid, 0, trace_file, 1, "");
-            pdb.insert_segment(fid, 0, 0, 0, 5, 3);
-            pdb.commit_transaction();
+            pdb.insert_segment(fid, 0, 0, 0, 0, 5, 3);
         }
 
         // Verify provenance

@@ -3,6 +3,9 @@
 
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/coro/when_all.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/utilities/tags/needs_context.h>
 #include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
@@ -20,13 +23,16 @@ namespace dftracer::utils::utilities::filesystem {
 struct DirectoryScannerUtilityInput {
     fs::path path;
     bool recursive = false;  // Whether to scan subdirectories
+    bool populate_size = true;
 
-    explicit DirectoryScannerUtilityInput(fs::path p, bool rec = false)
-        : path(std::move(p)), recursive(rec) {}
+    explicit DirectoryScannerUtilityInput(fs::path p, bool rec = false,
+                                          bool with_size = true)
+        : path(std::move(p)), recursive(rec), populate_size(with_size) {}
 
     // Equality operator for caching/hashing
     bool operator==(const DirectoryScannerUtilityInput& other) const {
-        return path == other.path && recursive == other.recursive;
+        return path == other.path && recursive == other.recursive &&
+               populate_size == other.populate_size;
     }
 
     bool operator!=(const DirectoryScannerUtilityInput& other) const {
@@ -56,9 +62,9 @@ struct DirectoryScannerUtilityInput {
  * @endcode
  */
 class DirectoryScannerUtility
-    : public utilities::Utility<DirectoryScannerUtilityInput,
-                                std::vector<FileEntry>,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<
+          DirectoryScannerUtilityInput, std::vector<FileEntry>,
+          utilities::tags::Parallelizable, utilities::tags::NeedsContext> {
    public:
     DirectoryScannerUtility() = default;
     ~DirectoryScannerUtility() = default;
@@ -73,7 +79,7 @@ class DirectoryScannerUtility
      */
     coro::CoroTask<std::vector<FileEntry>> process(
         const DirectoryScannerUtilityInput& input) override {
-        std::vector<FileEntry> entries;
+        std::vector<fs::directory_entry> raw_entries;
 
         if (!fs::exists(input.path)) {
             throw fs::filesystem_error(
@@ -91,14 +97,38 @@ class DirectoryScannerUtility
             // Recursive directory iteration
             for (const auto& entry :
                  fs::recursive_directory_iterator(input.path)) {
-                entries.emplace_back(entry.path());
+                raw_entries.push_back(entry);
             }
         } else {
             // Non-recursive directory iteration
             for (const auto& entry : fs::directory_iterator(input.path)) {
-                entries.emplace_back(entry.path());
+                raw_entries.push_back(entry);
             }
         }
+
+        if (!this->has_context()) {
+            std::vector<FileEntry> entries;
+            entries.reserve(raw_entries.size());
+            for (const auto& entry : raw_entries) {
+                entries.emplace_back(entry, input.populate_size);
+            }
+            co_return entries;
+        }
+
+        CoroScope& ctx = this->context();
+        std::vector<coro::SpawnFuture<FileEntry>> tasks;
+        tasks.reserve(raw_entries.size());
+        for (auto& entry : raw_entries) {
+            auto entry_copy = std::move(entry);
+            tasks.push_back(
+                ctx.spawn([entry_copy = std::move(entry_copy),
+                           populate_size = input.populate_size](
+                              CoroScope&) mutable -> coro::CoroTask<FileEntry> {
+                    co_return FileEntry(entry_copy, populate_size);
+                }));
+        }
+        std::vector<FileEntry> entries =
+            co_await coro::when_all(std::move(tasks));
 
         co_return entries;
     }

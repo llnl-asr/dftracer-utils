@@ -11,6 +11,16 @@ C++20 coroutine primitives for asynchronous task execution. All classes are in t
 
 For usage examples and task scheduling, see :doc:`/pipeline` and :doc:`pipeline/tasks`.
 
+.. note::
+
+   GCC 12 may corrupt large coroutine frames at ``-O2`` and above, especially
+   when frames contain references, ``string_view``, or captured lambdas. The
+   project mitigates this by heap-allocating per-task state in a
+   ``shared_ptr`` (or ``unique_ptr``) and capturing only the smart pointer in
+   coroutine lambdas, instead of capturing complex state by value. New
+   coroutines should follow the same pattern; see ``coroutine-caveats.md`` at
+   the repo root for the full discussion.
+
 .. mermaid::
 
    graph TD

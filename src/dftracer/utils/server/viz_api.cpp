@@ -14,7 +14,7 @@
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <atomic>
 #include <cstddef>
@@ -44,38 +44,45 @@ static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
 /// the original string on parse failure.
 static std::string normalize_event_ts(const std::string& event_json,
                                       std::uint64_t offset) {
-    auto* doc = yyjson_read(event_json.c_str(), event_json.size(), 0);
-    if (!doc) return event_json;
+    thread_local simdjson::dom::parser tl_parser;
+    auto result = tl_parser.parse(event_json);
+    if (result.error()) return event_json;
 
-    auto* mdoc = yyjson_doc_mut_copy(doc, nullptr);
-    yyjson_doc_free(doc);
-    if (!mdoc) return event_json;
+    auto root = result.value_unsafe();
+    if (!root.is_object()) return event_json;
 
-    auto* root = yyjson_mut_doc_get_root(mdoc);
-    if (root) {
-        auto* ts_val = yyjson_mut_obj_get(root, "ts");
-        if (ts_val && yyjson_mut_is_uint(ts_val)) {
-            std::uint64_t old_ts = yyjson_mut_get_uint(ts_val);
-            std::uint64_t new_ts = old_ts >= offset ? old_ts - offset : 0;
-            yyjson_mut_set_uint(ts_val, new_ts);
-        } else if (ts_val && yyjson_mut_is_int(ts_val)) {
-            auto old_ts =
-                static_cast<std::uint64_t>(yyjson_mut_get_int(ts_val));
-            std::uint64_t new_ts = old_ts >= offset ? old_ts - offset : 0;
-            yyjson_mut_set_uint(ts_val, new_ts);
-        }
+    auto ts_result = root["ts"];
+    if (ts_result.error()) return event_json;
+
+    std::uint64_t old_ts = 0;
+    if (ts_result.is_uint64()) {
+        old_ts = ts_result.get_uint64().value_unsafe();
+    } else if (ts_result.is_int64()) {
+        auto val = ts_result.get_int64().value_unsafe();
+        old_ts = val >= 0 ? static_cast<std::uint64_t>(val) : 0;
+    } else {
+        return event_json;
     }
 
-    std::size_t len = 0;
-    char* json_str = yyjson_mut_write(mdoc, YYJSON_WRITE_NOFLAG, &len);
-    yyjson_mut_doc_free(mdoc);
+    std::uint64_t new_ts = old_ts >= offset ? old_ts - offset : 0;
 
-    if (json_str) {
-        std::string result(json_str, len);
-        free(json_str);
-        return result;
+    // simdjson DOM is read-only, so we need to rebuild the JSON with the new ts
+    // Find "ts": and replace the value
+    std::string modified = event_json;
+    auto pos = modified.find("\"ts\":");
+    if (pos == std::string::npos) return event_json;
+
+    pos += 5;  // Skip past "ts":
+    while (pos < modified.size() && std::isspace(modified[pos])) ++pos;
+
+    auto end_pos = pos;
+    while (end_pos < modified.size() &&
+           (std::isdigit(modified[end_pos]) || modified[end_pos] == '-')) {
+        ++end_pos;
     }
-    return event_json;
+
+    modified.replace(pos, end_pos - pos, std::to_string(new_ts));
+    return modified;
 }
 
 /// Compute the minimum event duration threshold for a given summary level.
@@ -88,10 +95,16 @@ static double duration_threshold(double begin, double end, unsigned level,
            (static_cast<double>(viewport_width) * static_cast<double>(level));
 }
 
-static std::string extract_json_value(yyjson_val* val) {
-    if (yyjson_is_str(val)) return yyjson_get_str(val);
-    if (yyjson_is_int(val)) return std::to_string(yyjson_get_int(val));
-    if (yyjson_is_uint(val)) return std::to_string(yyjson_get_uint(val));
+static std::string extract_json_value(simdjson::dom::element val) {
+    if (val.is_string()) {
+        return std::string(val.get_string().value_unsafe());
+    }
+    if (val.is_int64()) {
+        return std::to_string(val.get_int64().value_unsafe());
+    }
+    if (val.is_uint64()) {
+        return std::to_string(val.get_uint64().value_unsafe());
+    }
     return {};
 }
 
@@ -111,38 +124,41 @@ static void append_lane_clause(std::string& dsl, const char* field,
 static void apply_lanes(std::string& dsl, std::string_view lanes_str) {
     if (lanes_str.empty()) return;
 
-    std::string buf(lanes_str);
-    auto* doc = yyjson_read(buf.c_str(), buf.size(), 0);
-    if (!doc) return;
-    auto doc_guard = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
-        doc, yyjson_doc_free);
+    thread_local simdjson::dom::parser tl_parser;
+    auto result = tl_parser.parse(lanes_str.data(), lanes_str.size());
+    if (result.error()) return;
 
-    yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!root) return;
+    auto root = result.value_unsafe();
 
-    if (yyjson_is_arr(root)) {
-        yyjson_val* item;
-        yyjson_arr_iter iter;
-        yyjson_arr_iter_init(root, &iter);
-        while ((item = yyjson_arr_iter_next(&iter)) != nullptr) {
-            if (!yyjson_is_obj(item)) continue;
-            auto* field_val = yyjson_obj_get(item, "field");
-            if (!field_val) field_val = yyjson_obj_get(item, "fields");
-            auto* value_val = yyjson_obj_get(item, "value");
-            if (!field_val || !value_val) continue;
-            const char* field = yyjson_get_str(field_val);
-            if (!field) continue;
-            auto val = extract_json_value(value_val);
+    if (root.is_array()) {
+        auto arr = root.get_array().value_unsafe();
+        for (auto item : arr) {
+            if (!item.is_object()) continue;
+            auto obj = item.get_object().value_unsafe();
+
+            auto field_result = obj["field"];
+            if (field_result.error()) field_result = obj["fields"];
+            auto value_result = obj["value"];
+            if (field_result.error() || value_result.error()) continue;
+
+            if (!field_result.value_unsafe().is_string()) continue;
+            const char* field =
+                field_result.value_unsafe().get_c_str().value_unsafe();
+            auto val = extract_json_value(value_result.value_unsafe());
             if (!val.empty()) append_lane_clause(dsl, field, val);
         }
-    } else if (yyjson_is_obj(root)) {
-        auto* field_val = yyjson_obj_get(root, "field");
-        if (!field_val) field_val = yyjson_obj_get(root, "fields");
-        auto* value_val = yyjson_obj_get(root, "value");
-        if (field_val && value_val) {
-            const char* field = yyjson_get_str(field_val);
-            if (field) {
-                auto val = extract_json_value(value_val);
+    } else if (root.is_object()) {
+        auto obj = root.get_object().value_unsafe();
+
+        auto field_result = obj["field"];
+        if (field_result.error()) field_result = obj["fields"];
+        auto value_result = obj["value"];
+
+        if (!field_result.error() && !value_result.error()) {
+            if (field_result.value_unsafe().is_string()) {
+                const char* field =
+                    field_result.value_unsafe().get_c_str().value_unsafe();
+                auto val = extract_json_value(value_result.value_unsafe());
                 if (!val.empty()) append_lane_clause(dsl, field, val);
             }
         }
@@ -152,31 +168,33 @@ static void apply_lanes(std::string& dsl, std::string_view lanes_str) {
 static void apply_filters(std::string& dsl, std::string_view filters_str) {
     if (filters_str.empty()) return;
 
-    std::string buf(filters_str);
-    auto* doc = yyjson_read(buf.c_str(), buf.size(), 0);
-    if (!doc) return;
-    auto doc_guard = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
-        doc, yyjson_doc_free);
+    thread_local simdjson::dom::parser tl_parser;
+    auto result = tl_parser.parse(filters_str.data(), filters_str.size());
+    if (result.error()) return;
 
-    yyjson_val* root = yyjson_doc_get_root(doc);
-    if (!root || !yyjson_is_arr(root)) return;
+    auto root = result.value_unsafe();
+    if (!root.is_array()) return;
 
-    yyjson_val* item;
-    yyjson_arr_iter iter;
-    yyjson_arr_iter_init(root, &iter);
-    while ((item = yyjson_arr_iter_next(&iter)) != nullptr) {
-        if (!yyjson_is_obj(item)) continue;
+    auto arr = root.get_array().value_unsafe();
+    for (auto item : arr) {
+        if (!item.is_object()) continue;
+        auto obj = item.get_object().value_unsafe();
 
-        auto* field_val = yyjson_obj_get(item, "field");
-        auto* op_val = yyjson_obj_get(item, "op");
-        auto* value_val = yyjson_obj_get(item, "value");
-        if (!field_val || !op_val || !value_val) continue;
+        auto field_result = obj["field"];
+        auto op_result = obj["op"];
+        auto value_result = obj["value"];
+        if (field_result.error() || op_result.error() || value_result.error())
+            continue;
 
-        const char* field = yyjson_get_str(field_val);
-        const char* op = yyjson_get_str(op_val);
-        if (!field || !op) continue;
+        if (!field_result.value_unsafe().is_string() ||
+            !op_result.value_unsafe().is_string())
+            continue;
 
-        std::string val = extract_json_value(value_val);
+        const char* field =
+            field_result.value_unsafe().get_c_str().value_unsafe();
+        const char* op = op_result.value_unsafe().get_c_str().value_unsafe();
+
+        std::string val = extract_json_value(value_result.value_unsafe());
         if (val.empty()) continue;
 
         std::string op_str(op);
@@ -207,105 +225,6 @@ static void apply_filters(std::string& dsl, std::string_view filters_str) {
             dsl += field_str + " " + query_op + " \"" + val + "\"";
         }
     }
-}
-
-/// Direct-scan a small file without any `.dftindex` store.
-/// Streams via async_streaming_gz_lines(), parses JSON, applies
-/// predicate filters, collects matching events as raw JSON strings.
-static coro::CoroTask<void> direct_scan_events(
-    const TraceIndex::FileInfo* file_info, const Query* query,
-    bool include_metadata, std::vector<std::string>* collected_events,
-    std::uint64_t* total_scanned, std::uint64_t* total_matched, int limit) {
-    using dftracer::utils::utilities::fileio::lines::sources::
-        async_streaming_gz_lines;
-
-    try {
-        auto gen = async_streaming_gz_lines(file_info->path);
-
-        std::unordered_map<std::string, std::string> pending_metadata;
-        std::unordered_set<std::string> emitted_hashes;
-
-        while (auto line = co_await gen.next()) {
-            if (limit > 0 &&
-                collected_events->size() >= static_cast<std::size_t>(limit)) {
-                co_return;
-            }
-            if (line->content.empty()) continue;
-
-            JsonDocGuard guard{yyjson_read_opts(
-                const_cast<char*>(line->content.data()), line->content.size(),
-                YYJSON_READ_NOFLAG, nullptr, nullptr)};
-            if (!guard.doc) continue;
-
-            yyjson_val* root = yyjson_doc_get_root(guard.doc);
-            if (root && yyjson_is_obj(root)) {
-                JsonValue json(root);
-                // line->content is a string_view valid only for this
-                // iteration.  All storage into collected_events and
-                // pending_metadata must copy to owning std::string.
-                std::string_view ph = json["ph"].get<std::string_view>();
-
-                if (ph == "M" && include_metadata) {
-                    std::string name_str = json["name"].get<std::string>();
-
-                    if (HASH_METADATA_NAMES.count(name_str)) {
-                        auto args = json["args"];
-                        if (args.exists()) {
-                            auto val = args["value"];
-                            if (val.exists()) {
-                                std::string hash_val = val.get<std::string>();
-                                if (!emitted_hashes.count(hash_val)) {
-                                    pending_metadata[hash_val] =
-                                        std::string(line->content.data(),
-                                                    line->content.size());
-                                }
-                            }
-                        }
-                    } else {
-                        collected_events->emplace_back(line->content.data(),
-                                                       line->content.size());
-                        (*total_matched)++;
-                    }
-                } else if (ph != "M") {
-                    (*total_scanned)++;
-                    if (!query || query->evaluate(json)) {
-                        // Flush referenced hash metadata first
-                        if (include_metadata) {
-                            auto args = json["args"];
-                            if (args.exists()) {
-                                static const char* hash_fields[] = {
-                                    "hhash", "fhash", "shash"};
-                                for (const char* field : hash_fields) {
-                                    auto val = args[field];
-                                    if (!val.exists()) continue;
-                                    std::string hash_val =
-                                        val.get<std::string>();
-                                    if (emitted_hashes.count(hash_val))
-                                        continue;
-                                    auto it = pending_metadata.find(hash_val);
-                                    if (it != pending_metadata.end()) {
-                                        collected_events->push_back(
-                                            std::move(it->second));
-                                        (*total_matched)++;
-                                        emitted_hashes.insert(hash_val);
-                                        pending_metadata.erase(it);
-                                    }
-                                }
-                            }
-                        }
-                        collected_events->emplace_back(line->content.data(),
-                                                       line->content.size());
-                        (*total_matched)++;
-                    }
-                }
-            }
-        }
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("Direct scan failed for %s: %s",
-                                file_info->path.c_str(), e.what());
-    }
-
-    co_return;
 }
 
 // --- GET /api/v1/viz/events ---
@@ -401,10 +320,6 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
         std::vector<const TraceIndex::FileInfo*> filtered;
         filtered.reserve(target_files.size());
         for (auto* fi : target_files) {
-            if (fi->is_small) {
-                filtered.push_back(fi);
-                continue;
-            }
             if (fi->min_timestamp_us == 0 && fi->max_timestamp_us == 0) {
                 filtered.push_back(fi);
                 continue;
@@ -417,8 +332,6 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
         target_files = std::move(filtered);
     }
 
-    const Query* viz_query_ptr = view.query ? &*view.query : nullptr;
-
     std::vector<std::string> collected_events;
 
     bool truncated = false;
@@ -430,63 +343,50 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
                 truncated = true;
                 break;
             }
-            if (file_info->is_small) {
-                std::uint64_t scanned = 0;
-                std::uint64_t matched = 0;
-                co_await direct_scan_events(
-                    file_info, viz_query_ptr, view.include_metadata,
-                    &collected_events, &scanned, &matched, limit);
+            if (file_info->uncompressed_size == 0 &&
+                file_info->num_checkpoints == 0)
+                continue;
+
+            ViewBuilderInput builder_input;
+            builder_input.with_view(view)
+                .with_file_path(file_info->path)
+                .with_index_path(
+                    file_info->has_bloom_data ? file_info->index_path : "")
+                .with_uncompressed_size(file_info->uncompressed_size)
+                .with_num_checkpoints(file_info->num_checkpoints)
+                .with_bloom_cache(&index.bloom_cache())
+                .with_time_range(begin, end);
+
+            ViewBuilderUtility builder;
+            auto build_output = co_await builder.process(builder_input);
+            if (!build_output.success || !build_output.file_may_match) continue;
+
+            for (const auto& candidate : build_output.candidates) {
                 if (limit > 0 &&
-                    static_cast<int>(collected_events.size()) >= limit)
+                    static_cast<int>(collected_events.size()) >= limit) {
                     truncated = true;
-            } else {
-                if (file_info->uncompressed_size == 0 &&
-                    file_info->num_checkpoints == 0)
-                    continue;
+                    break;
+                }
+                ViewReaderInput reader_input;
+                reader_input.with_file_path(file_info->path)
+                    .with_index_path(file_info->index_path)
+                    .with_byte_range(candidate.start_byte, candidate.end_byte)
+                    .with_checkpoint_idx(candidate.checkpoint_idx)
+                    .with_view(view);
 
-                ViewBuilderInput builder_input;
-                builder_input.with_view(view)
-                    .with_file_path(file_info->path)
-                    .with_index_path(
-                        file_info->has_bloom_data ? file_info->index_path : "")
-                    .with_uncompressed_size(file_info->uncompressed_size)
-                    .with_num_checkpoints(file_info->num_checkpoints)
-                    .with_bloom_cache(&index.bloom_cache())
-                    .with_time_range(begin, end);
-
-                ViewBuilderUtility builder;
-                auto build_output = co_await builder.process(builder_input);
-                if (!build_output.success || !build_output.file_may_match)
-                    continue;
-
-                for (const auto& candidate : build_output.candidates) {
-                    if (limit > 0 &&
-                        static_cast<int>(collected_events.size()) >= limit) {
-                        truncated = true;
-                        break;
-                    }
-                    ViewReaderInput reader_input;
-                    reader_input.with_file_path(file_info->path)
-                        .with_index_path(file_info->index_path)
-                        .with_byte_range(candidate.start_byte,
-                                         candidate.end_byte)
-                        .with_checkpoint_idx(candidate.checkpoint_idx)
-                        .with_view(view);
-
-                    ViewReaderUtility reader;
-                    auto gen = reader.process(reader_input);
-                    while (auto batch = co_await gen.next()) {
-                        for (auto& event : batch->events) {
-                            if (limit > 0 &&
-                                static_cast<int>(collected_events.size()) >=
-                                    limit) {
-                                truncated = true;
-                                break;
-                            }
-                            collected_events.emplace_back(event);
+                ViewReaderUtility reader;
+                auto gen = reader.process(reader_input);
+                while (auto batch = co_await gen.next()) {
+                    for (auto& event : batch->events) {
+                        if (limit > 0 &&
+                            static_cast<int>(collected_events.size()) >=
+                                limit) {
+                            truncated = true;
+                            break;
                         }
-                        if (truncated) break;
+                        collected_events.emplace_back(event);
                     }
+                    if (truncated) break;
                 }
             }
         }
@@ -520,81 +420,56 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
         for (std::size_t w = 0; w < num_workers; ++w) {
             scope.spawn([file_chan, target_files_ptr, collected_mutex,
-                         collected_ptr, viz_query_ptr, view_ptr,
-                         bloom_cache_ptr, remaining, t_begin,
-                         t_end](CoroScope&) -> coro::CoroTask<void> {
+                         collected_ptr, view_ptr, bloom_cache_ptr, remaining,
+                         t_begin, t_end](CoroScope&) -> coro::CoroTask<void> {
                 while (auto fi_opt = co_await file_chan->receive()) {
                     if (remaining->load(std::memory_order_relaxed) <= 0)
                         co_return;
                     auto* file_info = (*target_files_ptr)[*fi_opt];
 
-                    if (file_info->is_small) {
-                        std::vector<std::string> local_events;
-                        std::uint64_t local_scanned = 0;
-                        std::uint64_t local_matched = 0;
-                        int local_limit =
-                            remaining->load(std::memory_order_relaxed);
-                        if (local_limit <= 0) co_return;
-                        co_await direct_scan_events(
-                            file_info, viz_query_ptr,
-                            view_ptr->include_metadata, &local_events,
-                            &local_scanned, &local_matched, local_limit);
-                        if (!local_events.empty()) {
-                            std::lock_guard<std::mutex> lock(*collected_mutex);
-                            for (auto& ev : local_events) {
-                                collected_ptr->push_back(std::move(ev));
-                            }
-                            remaining->fetch_sub(
-                                static_cast<int>(local_events.size()));
-                        }
-                    } else {
-                        if (file_info->uncompressed_size == 0 &&
-                            file_info->num_checkpoints == 0)
-                            continue;
+                    if (file_info->uncompressed_size == 0 &&
+                        file_info->num_checkpoints == 0)
+                        continue;
 
-                        ViewBuilderInput builder_input;
-                        builder_input.with_view(*view_ptr)
-                            .with_file_path(file_info->path)
-                            .with_index_path(file_info->has_bloom_data
-                                                 ? file_info->index_path
-                                                 : "")
-                            .with_uncompressed_size(
-                                file_info->uncompressed_size)
-                            .with_num_checkpoints(file_info->num_checkpoints)
-                            .with_bloom_cache(bloom_cache_ptr)
-                            .with_time_range(t_begin, t_end);
+                    ViewBuilderInput builder_input;
+                    builder_input.with_view(*view_ptr)
+                        .with_file_path(file_info->path)
+                        .with_index_path(file_info->has_bloom_data
+                                             ? file_info->index_path
+                                             : "")
+                        .with_uncompressed_size(file_info->uncompressed_size)
+                        .with_num_checkpoints(file_info->num_checkpoints)
+                        .with_bloom_cache(bloom_cache_ptr)
+                        .with_time_range(t_begin, t_end);
 
-                        ViewBuilderUtility builder;
-                        auto build_output =
-                            co_await builder.process(builder_input);
-                        if (!build_output.success ||
-                            !build_output.file_may_match)
-                            continue;
+                    ViewBuilderUtility builder;
+                    auto build_output = co_await builder.process(builder_input);
+                    if (!build_output.success || !build_output.file_may_match)
+                        continue;
 
-                        for (const auto& candidate : build_output.candidates) {
-                            if (remaining->load(std::memory_order_relaxed) <= 0)
-                                break;
+                    for (const auto& candidate : build_output.candidates) {
+                        if (remaining->load(std::memory_order_relaxed) <= 0)
+                            break;
 
-                            ViewReaderInput reader_input;
-                            reader_input.with_file_path(file_info->path)
-                                .with_index_path(file_info->index_path)
-                                .with_byte_range(candidate.start_byte,
-                                                 candidate.end_byte)
-                                .with_checkpoint_idx(candidate.checkpoint_idx)
-                                .with_view(*view_ptr);
+                        ViewReaderInput reader_input;
+                        reader_input.with_file_path(file_info->path)
+                            .with_index_path(file_info->index_path)
+                            .with_byte_range(candidate.start_byte,
+                                             candidate.end_byte)
+                            .with_checkpoint_idx(candidate.checkpoint_idx)
+                            .with_view(*view_ptr);
 
-                            ViewReaderUtility reader;
-                            auto gen = reader.process(reader_input);
-                            while (auto batch = co_await gen.next()) {
-                                if (!batch->events.empty()) {
-                                    std::lock_guard<std::mutex> lock(
-                                        *collected_mutex);
-                                    for (auto& event : batch->events) {
-                                        collected_ptr->emplace_back(event);
-                                    }
-                                    remaining->fetch_sub(
-                                        static_cast<int>(batch->events.size()));
+                        ViewReaderUtility reader;
+                        auto gen = reader.process(reader_input);
+                        while (auto batch = co_await gen.next()) {
+                            if (!batch->events.empty()) {
+                                std::lock_guard<std::mutex> lock(
+                                    *collected_mutex);
+                                for (auto& event : batch->events) {
+                                    collected_ptr->emplace_back(event);
                                 }
+                                remaining->fetch_sub(
+                                    static_cast<int>(batch->events.size()));
                             }
                         }
                     }

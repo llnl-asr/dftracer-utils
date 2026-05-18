@@ -12,7 +12,6 @@
 #include <cstring>
 #include <memory>
 
-namespace fs = std::filesystem;
 using dftracer::utils::rocksdb::KeyBuilder;
 using dftracer::utils::rocksdb::KeyCodec;
 using dftracer::utils::rocksdb::RocksDatabase;
@@ -80,18 +79,23 @@ TEST_SUITE("RocksDBStorage") {
         auto path = (root / ".dftindex").string();
         auto& manager = RocksDBManager::instance();
 
-        auto first =
-            manager.get_or_open(path, RocksDatabase::OpenMode::ReadWrite);
-        REQUIRE(first != nullptr);
-        auto* first_raw = first.get();
-
-        manager.reset(path);
-        first.reset();
+        std::weak_ptr<RocksDatabase> first_weak;
+        {
+            auto first =
+                manager.get_or_open(path, RocksDatabase::OpenMode::ReadWrite);
+            REQUIRE(first != nullptr);
+            first_weak = first;
+            manager.reset(path);
+        }
+        // After reset() + the only strong owner going out of scope, the old
+        // instance must have been destroyed (RocksDB holds a per-process file
+        // lock, so a stale cached instance would prevent reopening below).
+        CHECK(first_weak.expired());
 
         auto second =
             manager.get_or_open(path, RocksDatabase::OpenMode::ReadWrite);
         REQUIRE(second != nullptr);
-        CHECK(second.get() != first_raw);
+        CHECK(second->is_open());
     }
 
     TEST_CASE("manager shutdown clears cached instances") {
@@ -102,18 +106,20 @@ TEST_SUITE("RocksDBStorage") {
         auto path = (root / ".dftindex").string();
         auto& manager = RocksDBManager::instance();
 
-        auto first =
-            manager.get_or_open(path, RocksDatabase::OpenMode::ReadWrite);
-        REQUIRE(first != nullptr);
-        auto* first_raw = first.get();
-
-        manager.shutdown();
-        first.reset();
+        std::weak_ptr<RocksDatabase> first_weak;
+        {
+            auto first =
+                manager.get_or_open(path, RocksDatabase::OpenMode::ReadWrite);
+            REQUIRE(first != nullptr);
+            first_weak = first;
+            manager.shutdown();
+        }
+        CHECK(first_weak.expired());
 
         auto second =
             manager.get_or_open(path, RocksDatabase::OpenMode::ReadWrite);
         REQUIRE(second != nullptr);
-        CHECK(second.get() != first_raw);
+        CHECK(second->is_open());
     }
 
     TEST_CASE("manager rejects read-only upgrade while handle is alive") {

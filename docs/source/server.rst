@@ -410,6 +410,17 @@ The server uses coroutine-based concurrency to handle multiple simultaneous requ
 
 Event filtering streams through bloom indexes and partial reads, minimizing memory usage. Both ``/api/v1/events`` and ``/api/v1/events/stream`` use chunked transfer encoding with iovec scatter-gather I/O, streaming NDJSON results without buffering the full response in memory.
 
+**Client Receive Timeouts:**
+
+The streaming endpoints (``/api/v1/events``, ``/api/v1/events/stream``,
+``/api/v1/viz/events``) use HTTP/1.1 chunked transfer encoding and can hold
+a connection open while the server is still scanning chunks before any
+bytes are emitted. Clients should set a receive timeout of at least
+**15 seconds** (the timeout used by the bundled integration tests, raised
+from 2 s in earlier builds) to accommodate the worst-case index-warmup
+path; the server itself does not impose a global request timeout
+(``with_global_timeout(0)``).
+
 **Query Optimization:**
 
 - Use narrow time ranges in ``/api/v1/viz/events`` queries

@@ -4,6 +4,11 @@
 #include <dftracer/utils/call_tree/internal/node.h>
 #include <dftracer/utils/call_tree/internal/process_call_tree.h>
 #include <dftracer/utils/call_tree/internal/process_key.h>
+#include <dftracer/utils/call_tree/mpi/serializable.h>
+#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/pipeline/pipeline.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/tasks/task.h>
 #include <doctest/doctest.h>
 
 #include <memory>
@@ -91,17 +96,18 @@ TEST_CASE("CallTreeFactory - Create nodes") {
     }
 
     SUBCASE("Create node with arguments") {
-        std::unordered_map<std::string, std::string> args;
-        args["arg1"] = "value1";
-        args["arg2"] = "value2";
+        dftracer::utils::call_tree::internal::ArgsMap args;
+        args.set_valid(true);
+        args.insert("arg1", std::string("value1"));
+        args.insert("arg2", std::string("value2"));
 
         auto node = factory.create_node(2, "test_func", "category", 2000, 1000,
-                                        1, args);
+                                        1, std::move(args));
 
         CHECK(node != nullptr);
-        CHECK(node->get_args().size() == 2);
-        CHECK(node->get_args().at("arg1") == "value1");
-        CHECK(node->get_args().at("arg2") == "value2");
+        CHECK(node->get_args().raw().size() == 2);
+        CHECK(node->get_args()["arg1"].get<std::string>() == "value1");
+        CHECK(node->get_args()["arg2"].get<std::string>() == "value2");
     }
 
     SUBCASE("Multiple nodes with unique IDs") {
@@ -246,3 +252,154 @@ TEST_CASE("CallTree - Integration test with nodes") {
 
     tree.cleanup();
 }
+
+// ============================================================================
+// Save / Load round-trips
+// ============================================================================
+
+namespace {
+
+using dftracer::utils::CoroScope;
+using dftracer::utils::make_task;
+using dftracer::utils::Pipeline;
+namespace coro = dftracer::utils::coro;
+using dftracer::utils::call_tree::load_arrow;
+using dftracer::utils::call_tree::load_binary;
+using dftracer::utils::call_tree::save_arrow;
+using dftracer::utils::call_tree::save_binary;
+
+std::unique_ptr<CallTree> make_fixture() {
+    auto tree = std::make_unique<CallTree>();
+    tree->initialize();
+
+    auto add_proc = [&](std::uint32_t pid, std::uint32_t tid,
+                        std::uint32_t pkid) {
+        ProcessKey key(pid, tid, pkid);
+        dftracer::utils::utilities::composites::dft::ArgsMap a1;
+        a1.set_valid(true);
+        a1.insert("level", static_cast<std::uint64_t>(0));
+        a1.insert("tid", static_cast<std::uint64_t>(tid));
+        a1.insert("fhash", std::string("abc123"));
+        auto root = tree->get_factory().create_node(1, "main", "function", 0,
+                                                    1000, 0, std::move(a1));
+        dftracer::utils::utilities::composites::dft::ArgsMap a2;
+        a2.set_valid(true);
+        a2.insert("level", static_cast<std::uint64_t>(1));
+        a2.insert("tid", static_cast<std::uint64_t>(tid));
+        auto child = tree->get_factory().create_node(
+            2, "child", "function", 100, 500, 1, std::move(a2));
+        child->set_parent_id(1);
+        root->add_child(2);
+        tree->add_call(key, root);
+        tree->add_call(key, child);
+        auto* pgraph = tree->get(key);
+        pgraph->root_calls.push_back(1);
+        pgraph->call_sequence = {1, 2};
+    };
+    add_proc(100, 200, 0);
+    add_proc(101, 201, 0);
+    return tree;
+}
+
+template <typename SaveFn, typename LoadFn>
+std::unique_ptr<CallTree> roundtrip(const CallTree& src,
+                                    const std::string& path, SaveFn save_fn,
+                                    LoadFn load_fn, bool* save_ok_out,
+                                    bool* load_ok_out) {
+    struct Ctx {
+        const CallTree* src;
+        std::string path;
+        std::unique_ptr<CallTree> loaded;
+        bool save_ok = false;
+        bool load_ok = false;
+    };
+    Ctx ctx{&src, path, nullptr, false, false};
+
+    Pipeline pipeline;
+    auto run = make_task(
+        [&ctx, save_fn, load_fn](CoroScope& scope) -> coro::CoroTask<void> {
+            ctx.save_ok = co_await save_fn(&scope, *ctx.src, ctx.path);
+            if (ctx.save_ok) {
+                ctx.loaded = co_await load_fn(&scope, ctx.path);
+                ctx.load_ok = (ctx.loaded != nullptr);
+            }
+        },
+        "save_load");
+    pipeline.set_source(run);
+    pipeline.set_destination(run);
+    pipeline.execute();
+    *save_ok_out = ctx.save_ok;
+    *load_ok_out = ctx.load_ok;
+    return std::move(ctx.loaded);
+}
+
+void check_structure_matches(const CallTree& src, const CallTree& loaded) {
+    auto src_keys = const_cast<CallTree&>(src).keys();
+    auto loaded_keys = const_cast<CallTree&>(loaded).keys();
+    CHECK(src_keys.size() == loaded_keys.size());
+
+    for (const auto& key : src_keys) {
+        auto* sg = const_cast<CallTree&>(src).get(key);
+        auto* lg = const_cast<CallTree&>(loaded).get(key);
+        REQUIRE(sg != nullptr);
+        REQUIRE(lg != nullptr);
+        CHECK(sg->calls.size() == lg->calls.size());
+        CHECK(sg->root_calls.size() == lg->root_calls.size());
+        CHECK(sg->call_sequence.size() == lg->call_sequence.size());
+        for (const auto& [id, sn] : sg->calls) {
+            auto it = lg->calls.find(id);
+            REQUIRE(it != lg->calls.end());
+            const auto& ln = it->second;
+            CHECK(sn->get_name() == ln->get_name());
+            CHECK(sn->get_category() == ln->get_category());
+            CHECK(sn->get_start_time() == ln->get_start_time());
+            CHECK(sn->get_duration() == ln->get_duration());
+            CHECK(sn->get_level() == ln->get_level());
+            CHECK(sn->get_parent_id() == ln->get_parent_id());
+            CHECK(sn->get_children().size() == ln->get_children().size());
+            CHECK(sn->get_args().raw().size() == ln->get_args().raw().size());
+        }
+    }
+}
+
+}  // namespace
+
+TEST_CASE("CallTree - custom binary save/load round-trip") {
+    auto tmp = fs::temp_directory_path() /
+               ("ct_binary_test_" + std::to_string(::getpid()));
+    fs::remove_all(tmp);
+    fs::create_directories(tmp);
+    auto path = (tmp / "tree.bin").string();
+
+    auto src = make_fixture();
+    bool save_ok = false, load_ok = false;
+    auto loaded =
+        roundtrip(*src, path, save_binary, load_binary, &save_ok, &load_ok);
+    REQUIRE(save_ok);
+    REQUIRE(load_ok);
+    REQUIRE(loaded != nullptr);
+    check_structure_matches(*src, *loaded);
+
+    fs::remove_all(tmp);
+}
+
+#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+TEST_CASE("CallTree - arrow IPC save/load round-trip") {
+    auto tmp = fs::temp_directory_path() /
+               ("ct_arrow_test_" + std::to_string(::getpid()));
+    fs::remove_all(tmp);
+    fs::create_directories(tmp);
+    auto path = (tmp / "tree.arrow").string();
+
+    auto src = make_fixture();
+    bool save_ok = false, load_ok = false;
+    auto loaded =
+        roundtrip(*src, path, save_arrow, load_arrow, &save_ok, &load_ok);
+    REQUIRE(save_ok);
+    REQUIRE(load_ok);
+    REQUIRE(loaded != nullptr);
+    check_structure_matches(*src, *loaded);
+
+    fs::remove_all(tmp);
+}
+#endif

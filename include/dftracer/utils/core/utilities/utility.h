@@ -5,10 +5,12 @@
 #include <dftracer/utils/core/common/type_name.h>
 #include <dftracer/utils/core/coro/task.h>
 
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 namespace dftracer::utils {
 class CoroScope;
@@ -105,6 +107,8 @@ class UtilityBase {
     static constexpr std::string_view get_name() { return sig_; }
 
    protected:
+    bool has_context() const noexcept { return ctx_ != nullptr; }
+
     /**
      * @brief Access CoroScope (only valid when NeedsContext tag is present).
      */
@@ -124,6 +128,8 @@ class UtilityBase {
 
     void set_context(CoroScope& ctx) { ctx_ = &ctx; }
     void clear_context() { ctx_ = nullptr; }
+
+    friend class ::dftracer::utils::CoroScope;
 };
 
 /**
@@ -157,6 +163,30 @@ class Utility : public UtilityBase<I, Tags...> {
     friend class behaviors::UtilityExecutor<I, O, Tags...>;
 
     virtual coro::CoroTask<O> process(const I& input) = 0;
+
+    // Rvalue overload picked automatically for braced-init / std::move /
+    // other prvalue call expressions. Moves the input into wrapper storage
+    // so the inner virtual receives a stable reference that outlives every
+    // internal suspension point. Lvalue call sites still bind to
+    // process(const I&) directly, so hot loops that reuse a named local
+    // pay zero overhead.
+    coro::CoroTask<O> process(I&& input) {
+#if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ < 14)
+        // GCC 12/13 miscalculate frame offsets for non-trivial locals in
+        // coroutine frames (coroutine-caveats.md §3). Heap-allocate so only
+        // a trivial unique_ptr slot lives in the wrapper frame, isolating
+        // the input object from frame-layout corruption. Drop this branch
+        // once the GCC 12/13 baseline is retired.
+        auto owned = std::make_unique<I>(std::move(input));
+        co_return co_await this->process(static_cast<const I&>(*owned));
+#else
+        // GCC 14+, Clang 14+, MSVC: frame-local is safe per the language
+        // rules, the local lives in the wrapper coroutine frame and the
+        // inner co_await holds a reference to it across suspension.
+        I local(std::move(input));
+        co_return co_await this->process(static_cast<const I&>(local));
+#endif
+    }
 };
 
 }  // namespace dftracer::utils::utilities

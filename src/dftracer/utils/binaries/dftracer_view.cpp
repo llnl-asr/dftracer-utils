@@ -1,10 +1,7 @@
 #include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/common/query/query.h>
@@ -18,24 +15,121 @@
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 
-#include <argparse/argparse.hpp>
 #include <atomic>
 #include <cstdio>
 #include <exception>
 #include <fstream>
-#include <iostream>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
+
+#include "common_cli.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::views;
 using namespace dftracer::utils::utilities::filesystem;
-using dftracer::utils::utilities::indexer::IndexBuildConfig;
-using dftracer::utils::utilities::indexer::IndexBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
+using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
+
+class ViewArgParse : public cli::ArgParse {
+   public:
+    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
+    cli::FilesArgs files_args;
+    cli::PipelineArgs pipeline;
+    cli::IndexingArgs indexing;
+    cli::QueryArgs query_args;
+
+    std::string preset;
+    std::string recipe;
+    std::string save_recipe;
+    std::string time_range;
+    double min_duration = 0.0;
+    double max_duration = 0.0;
+    std::string output;
+    bool stream = false;
+    bool no_metadata = false;
+    bool no_auto_index = false;
+
+    explicit ViewArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
+        indexing.with_force = false;
+        indexing.index_dir_help =
+            "Directory where .dftindex stores are created";
+        schema(directory, files_args, pipeline, indexing, query_args);
+    }
+
+   protected:
+    void register_args() override {
+        parser()
+            .add_argument("--preset")
+            .help("Predefined view: io, compute, dlio")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--recipe")
+            .help("Custom view JSON file path")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--save-recipe")
+            .help("Save the constructed view to a JSON file")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--time-range")
+            .help(
+                "Timestamp filter as min,max in microseconds (e.g., "
+                "1000000,2000000)")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--min-duration")
+            .help("Minimum event duration in microseconds")
+            .scan<'g', double>()
+            .default_value(static_cast<double>(0.0));
+
+        parser()
+            .add_argument("--max-duration")
+            .help("Maximum event duration in microseconds")
+            .scan<'g', double>()
+            .default_value(static_cast<double>(0.0));
+
+        parser()
+            .add_argument("-o", "--output")
+            .help("Output file path (default: stdout)")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--stream")
+            .help("Stream matching events to stdout as NDJSON")
+            .flag();
+
+        parser()
+            .add_argument("--no-metadata")
+            .help("Exclude metadata events (ph=M) from output")
+            .flag();
+
+        parser()
+            .add_argument("--no-auto-index")
+            .help(
+                "Disable automatic index building for files missing .dftindex")
+            .flag();
+    }
+
+    void post_parse() override {
+        preset = parser().get<std::string>("--preset");
+        recipe = parser().get<std::string>("--recipe");
+        save_recipe = parser().get<std::string>("--save-recipe");
+        time_range = parser().get<std::string>("--time-range");
+        min_duration = parser().get<double>("--min-duration");
+        max_duration = parser().get<double>("--max-duration");
+        output = parser().get<std::string>("--output");
+        stream = parser().get<bool>("--stream");
+        no_metadata = parser().get<bool>("--no-metadata");
+        no_auto_index = parser().get<bool>("--no-auto-index");
+    }
+};
 
 struct ViewContext {
     std::string index_dir;
@@ -53,24 +147,32 @@ struct ViewContext {
     std::atomic<std::size_t>* failed_count;
 };
 
-static coro::CoroTask<void> index_single_file(const std::string& file_path,
-                                              const ViewContext& vctx,
-                                              CoroScope&) {
-    IndexBuilderUtility builder;
-    auto config = IndexBuildConfig::for_file(file_path)
-                      .with_index_dir(vctx.index_dir)
-                      .with_checkpoint_size(vctx.checkpoint_size)
-                      .with_bloom(true)
-                      .with_index_threshold(0);
-    auto result = co_await builder.process(config);
+static coro::CoroTask<void> batch_index_files(
+    const std::vector<std::string>& files_needing_index,
+    const ViewContext& vctx, CoroScope& ctx) {
+    auto batch_config = std::make_shared<IndexBuildBatchConfig>();
+    batch_config->file_paths = files_needing_index;
+    batch_config->index_dir = vctx.index_dir;
+    batch_config->checkpoint_size = vctx.checkpoint_size;
+    batch_config->parallelism =
+        std::max<std::size_t>(1, files_needing_index.size());
+    batch_config->use_batch_write = true;
+    batch_config->rebuild_root_summaries = true;
 
-    if (result.success) {
-        (*vctx.indexed_count)++;
-    } else {
-        (*vctx.failed_count)++;
-        DFTRACER_UTILS_LOG_ERROR("Auto-indexing failed for %s: %s",
-                                 file_path.c_str(),
-                                 result.error_message.c_str());
+    auto batch_result = co_await IndexBatchBuilderUtility::process(
+        &ctx, std::move(batch_config));
+
+    for (const auto& result : batch_result.results) {
+        if (result.success) {
+            (*vctx.indexed_count)++;
+        } else {
+            (*vctx.failed_count)++;
+            if (!result.error_message.empty()) {
+                DFTRACER_UTILS_LOG_ERROR("Auto-indexing failed for %s: %s",
+                                         result.file_path.c_str(),
+                                         result.error_message.c_str());
+            }
+        }
     }
 }
 
@@ -104,7 +206,6 @@ static coro::CoroTask<void> read_single_chunk(
                 }
             }
         } else {
-            // Non-stream: must copy since string_view won't outlive chunk
             std::lock_guard<std::mutex> lock(*vctx.output_mutex);
             for (const auto& event : batch->events) {
                 vctx.all_events->emplace_back(event);
@@ -120,7 +221,6 @@ static coro::CoroTask<void> process_single_file(const std::string& file_path,
     std::string index_path =
         internal::determine_index_path(file_path, vctx.index_dir);
 
-    // Collect metadata
     auto meta_input = MetadataCollectorUtilityInput::from_file(file_path)
                           .with_checkpoint_size(vctx.checkpoint_size)
                           .with_force_rebuild(false)
@@ -134,7 +234,6 @@ static coro::CoroTask<void> process_single_file(const std::string& file_path,
         co_return;
     }
 
-    // Run ViewBuilderUtility to get candidate chunks
     ViewBuilderInput builder_input;
     builder_input.with_view(vctx.view)
         .with_file_path(file_path)
@@ -157,7 +256,6 @@ static coro::CoroTask<void> process_single_file(const std::string& file_path,
         co_return;
     }
 
-    // Process each candidate chunk
     auto& candidates = build_output.candidates;
     co_await fctx.scope([&file_path, &index_path, &vctx, &candidates](
                             CoroScope& chunk_scope) -> coro::CoroTask<void> {
@@ -172,23 +270,21 @@ static coro::CoroTask<void> process_single_file(const std::string& file_path,
     });
 }
 
-static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
-    std::string directory = program.get<std::string>("--directory");
-    std::string index_dir = program.get<std::string>("--index-dir");
-    std::string preset = program.get<std::string>("--preset");
-    std::string recipe_path = program.get<std::string>("--recipe");
-    std::string save_recipe = program.get<std::string>("--save-recipe");
-    std::string output_path = program.get<std::string>("--output");
-    std::string time_range_str = program.get<std::string>("--time-range");
-    double min_duration = program.get<double>("--min-duration");
-    double max_duration = program.get<double>("--max-duration");
-    bool stream_mode = program.get<bool>("--stream");
-    bool no_metadata = program.get<bool>("--no-metadata");
-    bool no_auto_index = program.get<bool>("--no-auto-index");
-    std::size_t checkpoint_size = program.get<std::size_t>("--checkpoint-size");
-    std::size_t executor_threads =
-        program.get<std::size_t>("--executor-threads");
-    auto query_str = program.get<std::string>("--query");
+static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
+    const auto& directory = cli->directory.value;
+    const auto& index_dir = cli->indexing.index_dir;
+    const auto& preset = cli->preset;
+    const auto& recipe_path = cli->recipe;
+    const auto& save_recipe = cli->save_recipe;
+    const auto& output_path = cli->output;
+    const auto& time_range_str = cli->time_range;
+    const auto min_duration = cli->min_duration;
+    const auto max_duration = cli->max_duration;
+    const auto stream_mode = cli->stream;
+    const auto no_metadata = cli->no_metadata;
+    const auto no_auto_index = cli->no_auto_index;
+    const auto checkpoint_size = cli->indexing.checkpoint_size;
+    const auto& query_str = cli->query_args.query;
 
     ViewDefinition view;
 
@@ -285,7 +381,6 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
     if (!view.query) {
         DFTRACER_UTILS_LOG_ERROR(
             "%s", "No view specified. Use --preset, --recipe, or --query.");
-        std::cerr << program;
         co_return 1;
     }
 
@@ -319,12 +414,11 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
             co_return 1;
         }
     } else {
-        files = program.get<std::vector<std::string>>("--files");
+        files = cli->files_args.value;
 
         if (files.empty()) {
             DFTRACER_UTILS_LOG_ERROR(
                 "%s", "No files or directory specified. Use --help for usage.");
-            std::cerr << program;
             co_return 1;
         }
     }
@@ -388,10 +482,8 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
                      &indexed_count,
                      &failed_count};
 
-    auto pipeline_config = PipelineConfig()
-                               .with_name("DFTracer View")
-                               .with_compute_threads(executor_threads)
-                               .with_watchdog(false);
+    auto pipeline_config =
+        cli::build_pipeline_config("DFTracer View", cli->pipeline);
 
     Pipeline pipeline(pipeline_config);
 
@@ -402,19 +494,7 @@ static coro::CoroTask<int> run_view(argparse::ArgumentParser& program) {
         [files_needing_index_ptr, files_ptr,
          &vctx](CoroScope& ctx) -> coro::CoroTask<void> {
             if (!files_needing_index_ptr->empty()) {
-                co_await ctx.scope([files_needing_index_ptr,
-                                    &vctx](CoroScope& scope)
-                                       -> coro::CoroTask<void> {
-                    for (std::size_t i = 0; i < files_needing_index_ptr->size();
-                         ++i) {
-                        const auto file_path = (*files_needing_index_ptr)[i];
-                        scope.spawn([file_path, &vctx](CoroScope& fctx)
-                                        -> coro::CoroTask<void> {
-                            co_await index_single_file(file_path, vctx, fctx);
-                        });
-                    }
-                    co_return;
-                });
+                co_await batch_index_files(*files_needing_index_ptr, vctx, ctx);
 
                 std::printf("Auto-indexing complete: %zu indexed, %zu failed\n",
                             vctx.indexed_count->load(),
@@ -481,97 +561,12 @@ int main(int argc, char** argv) {
         "indices for efficient chunk-skipping. Supports predefined views "
         "(io, compute, dlio), custom recipes, and inline queries.");
 
-    // Input files
-    program.add_argument("--files")
-        .help("Trace files to process (.pfw, .pfw.gz)")
-        .nargs(argparse::nargs_pattern::any)
-        .default_value<std::vector<std::string>>({});
-
-    program.add_argument("-d", "--directory")
-        .help("Directory containing trace files")
-        .default_value<std::string>("");
-
-    // View specification
-    program.add_argument("--preset")
-        .help("Predefined view: io, compute, dlio")
-        .default_value<std::string>("");
-
-    program.add_argument("--recipe")
-        .help("Custom view JSON file path")
-        .default_value<std::string>("");
-
-    program.add_argument("--save-recipe")
-        .help("Save the constructed view to a JSON file")
-        .default_value<std::string>("");
-
-    program.add_argument("--query")
-        .help("Query DSL filter (e.g., 'cat == \"POSIX\" and dur > 1000')")
-        .default_value<std::string>("");
-
-    // Event-level filters
-    program.add_argument("--time-range")
-        .help(
-            "Timestamp filter as min,max in microseconds (e.g., "
-            "1000000,2000000)")
-        .default_value<std::string>("");
-
-    program.add_argument("--min-duration")
-        .help("Minimum event duration in microseconds")
-        .scan<'g', double>()
-        .default_value(static_cast<double>(0.0));
-
-    program.add_argument("--max-duration")
-        .help("Maximum event duration in microseconds")
-        .scan<'g', double>()
-        .default_value(static_cast<double>(0.0));
-
-    // Output
-    program.add_argument("-o", "--output")
-        .help("Output file path (default: stdout)")
-        .default_value<std::string>("");
-
-    program.add_argument("--stream")
-        .help("Stream matching events to stdout as NDJSON")
-        .flag();
-
-    program.add_argument("--no-metadata")
-        .help("Exclude metadata events (ph=M) from output")
-        .flag();
-
-    // Indexing options
-    program.add_argument("--index-dir")
-        .help("Directory where .dftindex stores are created")
-        .default_value<std::string>("");
-
-    program.add_argument("--no-auto-index")
-        .help("Disable automatic index building for files missing .dftindex")
-        .flag();
-
-    program.add_argument("--checkpoint-size")
-        .help("Checkpoint size for auto-indexing in bytes (default: " +
-              std::to_string(
-                  indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE) +
-              ")")
-        .scan<'d', std::size_t>()
-        .default_value(static_cast<std::size_t>(
-            indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE));
-
-    program.add_argument("--executor-threads")
-        .help("Number of worker threads")
-        .scan<'d', std::size_t>()
-        .default_value(
-            static_cast<std::size_t>(dftracer_utils_hardware_concurrency()));
+    ViewArgParse cli(program);
+    cli.setup();
+    if (!cli.parse(argc, argv)) return 1;
 
     try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception& err) {
-        DFTRACER_UTILS_LOG_ERROR("Error: %s", err.what());
-        std::cerr << program;
-        return 1;
-    }
-
-    try {
-        return run_view(program).get();
+        return run_view(&cli).get();
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Fatal: %s", e.what());
         return 1;

@@ -19,20 +19,11 @@ namespace dftracer::utils::server {
 /// paths and check index availability.
 class TraceIndex {
    public:
-    // Files below this compressed size are streamed directly without
-    // building a `.dftindex` database. At 8 MB compressed
-    // (~160 MB uncompressed with typical 20x JSON compression), a file
-    // has only a handful of 32 MB checkpoints -- the indexing overhead
-    // exceeds the benefit of bloom-filter skip.
-    static constexpr std::size_t INDEX_SIZE_THRESHOLD =
-        constants::indexer::DEFAULT_INDEX_SIZE_THRESHOLD;
-
     struct FileInfo {
         std::string path;
         std::string index_path;
         bool has_bloom_data = false;
         bool has_checkpoint_index = false;
-        bool is_small = false;
         std::uint64_t min_timestamp_us = 0;
         std::uint64_t max_timestamp_us = 0;
         std::uint64_t compressed_size = 0;

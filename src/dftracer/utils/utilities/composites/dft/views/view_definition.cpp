@@ -1,7 +1,8 @@
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <cstdlib>
+#include <sstream>
 #include <string>
 
 namespace dftracer::utils::utilities::composites::dft::views {
@@ -34,55 +35,99 @@ ViewDefinition& ViewDefinition::with_include_metadata(bool v) {
     return *this;
 }
 
-std::string ViewDefinition::to_json() const {
-    yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_val* root = yyjson_mut_obj(doc);
-    yyjson_mut_doc_set_root(doc, root);
+namespace {
 
-    yyjson_mut_obj_add_str(doc, root, "name", name.c_str());
-    yyjson_mut_obj_add_str(doc, root, "description", description.c_str());
-
-    if (query) {
-        yyjson_mut_obj_add_str(doc, root, "query", query->source().c_str());
+std::string escape_json_string(const std::string& s) {
+    std::string result;
+    result.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '"':
+                result += "\\\"";
+                break;
+            case '\\':
+                result += "\\\\";
+                break;
+            case '\b':
+                result += "\\b";
+                break;
+            case '\f':
+                result += "\\f";
+                break;
+            case '\n':
+                result += "\\n";
+                break;
+            case '\r':
+                result += "\\r";
+                break;
+            case '\t':
+                result += "\\t";
+                break;
+            default:
+                result += c;
+                break;
+        }
     }
-
-    yyjson_mut_obj_add_bool(doc, root, "include_metadata", include_metadata);
-
-    char* json_str = yyjson_mut_write(doc, YYJSON_WRITE_PRETTY, nullptr);
-    std::string result(json_str);
-    free(json_str);
-    yyjson_mut_doc_free(doc);
     return result;
 }
 
-ViewDefinition ViewDefinition::from_json(const std::string& json) {
-    yyjson_doc* doc =
-        yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-    yyjson_val* root = yyjson_doc_get_root(doc);
+}  // namespace
 
+std::string ViewDefinition::to_json() const {
+    std::ostringstream out;
+    out << "{\n";
+    out << "  \"name\": \"" << escape_json_string(name) << "\",\n";
+    out << "  \"description\": \"" << escape_json_string(description) << "\"";
+
+    if (query) {
+        out << ",\n  \"query\": \"" << escape_json_string(query->source())
+            << "\"";
+    }
+
+    out << ",\n  \"include_metadata\": "
+        << (include_metadata ? "true" : "false") << "\n";
+    out << "}";
+    return out.str();
+}
+
+ViewDefinition ViewDefinition::from_json(const std::string& json) {
     ViewDefinition view_def;
 
-    yyjson_val* name_val = yyjson_obj_get(root, "name");
-    if (name_val && yyjson_is_str(name_val)) {
-        view_def.name = yyjson_get_str(name_val);
+    simdjson::dom::parser parser;
+    auto result = parser.parse(json);
+    if (result.error()) {
+        return view_def;
     }
 
-    yyjson_val* desc_val = yyjson_obj_get(root, "description");
-    if (desc_val && yyjson_is_str(desc_val)) {
-        view_def.description = yyjson_get_str(desc_val);
+    auto root = result.value_unsafe();
+    if (!root.is_object()) {
+        return view_def;
     }
 
-    yyjson_val* query_val = yyjson_obj_get(root, "query");
-    if (query_val && yyjson_is_str(query_val)) {
-        view_def.with_query(yyjson_get_str(query_val));
+    auto name_result = root["name"];
+    if (!name_result.error() && name_result.value_unsafe().is_string()) {
+        view_def.name =
+            std::string(name_result.value_unsafe().get_string().value());
     }
 
-    yyjson_val* meta_val = yyjson_obj_get(root, "include_metadata");
-    if (meta_val && yyjson_is_bool(meta_val)) {
-        view_def.include_metadata = yyjson_get_bool(meta_val);
+    auto desc_result = root["description"];
+    if (!desc_result.error() && desc_result.value_unsafe().is_string()) {
+        view_def.description =
+            std::string(desc_result.value_unsafe().get_string().value());
     }
 
-    yyjson_doc_free(doc);
+    auto query_result = root["query"];
+    if (!query_result.error() && query_result.value_unsafe().is_string()) {
+        view_def.with_query(
+            std::string(query_result.value_unsafe().get_string().value()));
+    }
+
+    auto meta_result = root["include_metadata"];
+    if (!meta_result.error() && meta_result.value_unsafe().is_bool()) {
+        view_def.include_metadata =
+            meta_result.value_unsafe().get_bool().value();
+    }
+
     return view_def;
 }
 

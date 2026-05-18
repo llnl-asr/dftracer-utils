@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -11,11 +12,25 @@
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
 /**
- * @brief Bloom filter for approximate set membership testing.
+ * @brief Split block Bloom filter for approximate set membership testing.
  *
- * Uses Kirsch-Mitzenmacher optimization: k hash functions derived from
- * 2 base hash values (std::hash with different seeds). Supports
- * serialization to/from binary blobs for RocksDB storage.
+ * Implements the split block Bloom filter from the Apache Parquet spec:
+ * 256-bit blocks of 8 x uint32 words; each insert/query touches exactly
+ * one block (one cache line) and sets/tests one bit in each of the 8
+ * words via a fixed SALT array. Block selection uses Lemire's reduction
+ * on h1; in-block masks use h2 multiplied by SALT.
+ *
+ * References:
+ *  - Apple, J. "Split block Bloom filters." arXiv:2101.01719 (2021).
+ *  - Putze, F., Sanders, P., Singler, J. "Cache-, hash-, and space-
+ *    efficient bloom filters." ACM JEA 14, Article 4 (2009).
+ *  - Apache Parquet Bloom filter spec:
+ *    https://github.com/apache/parquet-format/blob/master/BloomFilter.md
+ *
+ * Differs from canonical Parquet:
+ *  - Underlying hash is FNV1a + SplitMix64 finisher (not xxhash64).
+ *  - Custom 12-byte LE header (num_hashes, num_entries, num_bits) instead
+ *    of Thrift; num_hashes is unused at insert/test (vestigial).
  *
  * Serialization format (self-describing):
  *   [4 bytes: num_hashes (uint32_t LE)]
@@ -58,6 +73,11 @@ class BloomFilter {
     std::size_t num_hashes_;
     std::size_t num_entries_;
     mutable hash::Fnv1aHasherUtility hasher_;
+
+    static constexpr std::size_t LAST_VALUE_CAP = 64;
+    std::array<char, LAST_VALUE_CAP> last_value_buf_{};
+    std::size_t last_value_size_ = 0;
+    bool last_value_valid_ = false;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

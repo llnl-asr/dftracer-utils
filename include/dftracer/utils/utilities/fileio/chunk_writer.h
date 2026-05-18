@@ -6,6 +6,7 @@
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -19,6 +20,11 @@ struct ChunkWriterConfig {
     bool compress = true;
     int compression_level = Z_DEFAULT_COMPRESSION;
     bool json_array_wrapper = true;
+
+    using ChunkRotationCallback = std::function<void(
+        std::size_t chunk_index, const std::string& chunk_path,
+        std::size_t event_count, std::size_t byte_count)>;
+    ChunkRotationCallback on_chunk_complete;
 
     ChunkWriterConfig& with_output_dir(std::string dir) {
         output_dir = std::move(dir);
@@ -42,6 +48,10 @@ struct ChunkWriterConfig {
     }
     ChunkWriterConfig& with_json_array_wrapper(bool enabled) {
         json_array_wrapper = enabled;
+        return *this;
+    }
+    ChunkWriterConfig& with_on_chunk_complete(ChunkRotationCallback callback) {
+        on_chunk_complete = std::move(callback);
         return *this;
     }
 };

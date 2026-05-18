@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator_utility.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator.h>
 #include <doctest/doctest.h>
 
 using namespace dftracer::utils::utilities::composites::dft::aggregators;
@@ -28,7 +28,7 @@ AggregationMetrics make_metrics(std::uint64_t count, std::uint64_t dur_total) {
 
 }  // namespace
 
-TEST_SUITE("EventAggregatorUtility") {
+TEST_SUITE("EventAggregator") {
     TEST_CASE("Merges event profile and system maps independently") {
         ChunkAggregationOutput first;
         first.success = true;
@@ -50,7 +50,7 @@ TEST_SUITE("EventAggregatorUtility") {
         second.profile_aggregations.emplace(make_key("PROFILE", "cpu"),
                                             make_metrics(1, 30));
 
-        EventAggregatorUtility utility;
+        EventAggregator utility;
         utility.merge_chunk(std::move(first));
         utility.merge_chunk(std::move(second));
         auto output = utility.finalize();

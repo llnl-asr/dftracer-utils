@@ -8,7 +8,7 @@ namespace dftracer::utils::server {
 namespace {
 
 // Minimal base64 encode/decode for cursor serialization.
-static constexpr char kBase64Chars[] =
+static constexpr char BASE64_CHARS[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 std::string base64_encode(const void* data, std::size_t len) {
@@ -19,10 +19,10 @@ std::string base64_encode(const void* data, std::size_t len) {
         unsigned val = static_cast<unsigned>(bytes[i]) << 16;
         if (i + 1 < len) val |= static_cast<unsigned>(bytes[i + 1]) << 8;
         if (i + 2 < len) val |= static_cast<unsigned>(bytes[i + 2]);
-        out.push_back(kBase64Chars[(val >> 18) & 0x3F]);
-        out.push_back(kBase64Chars[(val >> 12) & 0x3F]);
-        out.push_back((i + 1 < len) ? kBase64Chars[(val >> 6) & 0x3F] : '=');
-        out.push_back((i + 2 < len) ? kBase64Chars[val & 0x3F] : '=');
+        out.push_back(BASE64_CHARS[(val >> 18) & 0x3F]);
+        out.push_back(BASE64_CHARS[(val >> 12) & 0x3F]);
+        out.push_back((i + 1 < len) ? BASE64_CHARS[(val >> 6) & 0x3F] : '=');
+        out.push_back((i + 2 < len) ? BASE64_CHARS[val & 0x3F] : '=');
     }
     return out;
 }

@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/utilities/composites/dft/statistics/detailed_statistics.h>
 #include <doctest/doctest.h>
-#include <yyjson.h>
+#include <simdjson.h>
 
 #include <cmath>
 #include <string>
@@ -192,33 +192,36 @@ TEST_SUITE("DetailedStatistics") {
 
         std::string json = stats.to_json();
 
-        yyjson_doc* doc =
-            yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-        REQUIRE(doc != nullptr);
+        simdjson::dom::parser parser;
+        auto result = parser.parse(json);
+        REQUIRE(!result.error());
 
-        yyjson_val* root = yyjson_doc_get_root(doc);
-        REQUIRE(yyjson_is_obj(root));
+        auto root = result.value_unsafe();
+        REQUIRE(root.is_object());
 
-        CHECK(yyjson_get_uint(yyjson_obj_get(root, "events_scanned")) == 2);
-        CHECK(yyjson_get_uint(yyjson_obj_get(root, "chunks_scanned")) == 1);
-        CHECK(yyjson_get_uint(yyjson_obj_get(root, "chunks_skipped")) == 3);
+        CHECK(root["events_scanned"].get_uint64().value() == 2);
+        CHECK(root["chunks_scanned"].get_uint64().value() == 1);
+        CHECK(root["chunks_skipped"].get_uint64().value() == 3);
 
-        yyjson_val* dur = yyjson_obj_get(root, "duration");
-        REQUIRE(yyjson_is_obj(dur));
-        CHECK(yyjson_get_uint(yyjson_obj_get(dur, "count")) == 2);
+        auto dur = root["duration"];
+        REQUIRE(!dur.error());
+        REQUIRE(dur.is_object());
+        CHECK(dur["count"].get_uint64().value() == 2);
 
-        yyjson_val* gd = yyjson_obj_get(root, "grouped_duration");
-        REQUIRE(yyjson_is_obj(gd));
-        yyjson_val* gd_read = yyjson_obj_get(gd, "read");
-        REQUIRE(yyjson_is_obj(gd_read));
-        CHECK(yyjson_get_uint(yyjson_obj_get(gd_read, "count")) == 1);
+        auto gd = root["grouped_duration"];
+        REQUIRE(!gd.error());
+        REQUIRE(gd.is_object());
+        auto gd_read = gd["read"];
+        REQUIRE(!gd_read.error());
+        REQUIRE(gd_read.is_object());
+        CHECK(gd_read["count"].get_uint64().value() == 1);
 
-        yyjson_val* gio = yyjson_obj_get(root, "grouped_io");
-        REQUIRE(yyjson_is_obj(gio));
-        yyjson_val* gio_read = yyjson_obj_get(gio, "read");
-        REQUIRE(yyjson_is_obj(gio_read));
-
-        yyjson_doc_free(doc);
+        auto gio = root["grouped_io"];
+        REQUIRE(!gio.error());
+        REQUIRE(gio.is_object());
+        auto gio_read = gio["read"];
+        REQUIRE(!gio_read.error());
+        REQUIRE(gio_read.is_object());
     }
 
     TEST_CASE("to_json - no grouped when empty") {
@@ -227,15 +230,13 @@ TEST_SUITE("DetailedStatistics") {
 
         std::string json = stats.to_json();
 
-        yyjson_doc* doc =
-            yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-        REQUIRE(doc != nullptr);
+        simdjson::dom::parser parser;
+        auto result = parser.parse(json);
+        REQUIRE(!result.error());
 
-        yyjson_val* root = yyjson_doc_get_root(doc);
-        CHECK(yyjson_obj_get(root, "grouped_duration") == nullptr);
-        CHECK(yyjson_obj_get(root, "grouped_io") == nullptr);
-
-        yyjson_doc_free(doc);
+        auto root = result.value_unsafe();
+        CHECK(root["grouped_duration"].error());
+        CHECK(root["grouped_io"].error());
     }
 
     TEST_CASE("to_json - global duration always present") {
@@ -243,15 +244,14 @@ TEST_SUITE("DetailedStatistics") {
         // Even with no events, duration section should be present
         std::string json = stats.to_json();
 
-        yyjson_doc* doc =
-            yyjson_read(json.c_str(), json.size(), YYJSON_READ_NOFLAG);
-        REQUIRE(doc != nullptr);
+        simdjson::dom::parser parser;
+        auto result = parser.parse(json);
+        REQUIRE(!result.error());
 
-        yyjson_val* root = yyjson_doc_get_root(doc);
-        yyjson_val* dur = yyjson_obj_get(root, "duration");
-        REQUIRE(yyjson_is_obj(dur));
-        CHECK(yyjson_get_uint(yyjson_obj_get(dur, "count")) == 0);
-
-        yyjson_doc_free(doc);
+        auto root = result.value_unsafe();
+        auto dur = root["duration"];
+        REQUIRE(!dur.error());
+        REQUIRE(dur.is_object());
+        CHECK(dur["count"].get_uint64().value() == 0);
     }
 }

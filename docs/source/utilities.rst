@@ -17,6 +17,7 @@ dftracer-utils provides a collection of composable utilities for trace file proc
    utilities/indexer
    utilities/reader
    utilities/common
+   utilities/dlio
    call-tree
 
 Overview
@@ -43,8 +44,9 @@ Utilities follow a consistent pattern:
            Hash["Hash<br/>FNV1a, Std, MurmurHash3"]
            Indexer["Indexer<br/>Checkpoint, BloomFilter"]
            Reader["Reader<br/>Stream, LineProcessor"]
-           Common["Common<br/>JSON, DDSketch, Log2Histogram"]
+           Common["Common<br/>JSON, DDSketch, Statistic, Distributions, Mixture"]
            Composites["Composites<br/>DFTracer-specific pipelines"]
+           Dlio["DLIO<br/>BarrierSimulator, TraceLoader, Optimizer, YAML emit"]
        end
 
        Utility --> FileIO
@@ -55,6 +57,7 @@ Utilities follow a consistent pattern:
        Utility --> Reader
        Utility --> Common
        Utility --> Composites
+       Utility --> Dlio
 
 File I/O
 --------
@@ -71,13 +74,36 @@ See :doc:`/utilities/fileio` for detailed usage.
 Statistics
 ----------
 
-Enhanced statistics collection for trace analysis:
+Enhanced statistics collection and distribution fitting for trace analysis:
 
 - **DDSketch**: Deterministic, merge-order-independent percentile estimation with bounded relative error
 - **Log2Histogram**: Fixed 65-bin logarithmic histogram for duration and size distributions
+- **Statistic**: Min/max/mean/count accumulator that optionally delegates to an attached DDSketch for quantile queries
+- **Distributions**: MLE fitting + KS / BIC scoring for Normal, Lognormal, Gamma, Exponential, Weibull; sampler factory backed by ``<random>`` and `Boost.Math standalone <https://www.boost.org/doc/libs/release/libs/math/doc/html/math_toolkit/standalone.html>`_
+- **Mixture**: Univariate Gaussian Mixture EM (K=2, K=3) with log-sum-exp responsibilities and BIC-based selection across single + mixture models
 - **Chunk statistics**: Per-chunk event tracking with online variance calculation and per-name duration sketches
 
-These are used in indexing and aggregation pipelines to compute event distributions and percentiles efficiently.
+These are used in indexing and aggregation pipelines to compute event distributions and percentiles efficiently, and by the DLIO config generator to fit per-component timing distributions.
+
+DLIO Config Generation
+----------------------
+
+End-to-end pipeline that converts a directory of raw DFTracer logs into a DLIO
+training-loop YAML configuration:
+
+- **trace_loader**: pulls the ``AGGREGATION`` column family (re-attaches the
+  merge operator at open time) and synthesizes per-rank sample arrays from
+  per-(pid, time_bucket) entries.
+- **BarrierSimulator**: simulates one DLIO training run across the captured
+  ranks/steps, scoring an end-to-end duration, rank variance, and ``fetch.block``
+  CDF similarity against the empirical trace.
+- **optimizer**: sequential momentum loop refining the ``max_bound`` percentile
+  on the fitted sampler to minimize simulator E2E error.
+- **yaml_emit**: renders single distributions or Gaussian mixtures into the
+  DLIO ``train.computation_time`` / ``reader.preprocess_time`` schema.
+
+See :doc:`/utilities/dlio` for the API and ``dftracer_gen_dlio_config`` in
+:doc:`/cli` for the user-facing binary.
 
 Indexing
 --------

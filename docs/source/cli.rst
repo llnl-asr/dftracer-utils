@@ -13,7 +13,7 @@ Most tools wire in a common set of argument schemas defined in
 semantics across every binary that exposes the relevant schema and are not
 repeated in each tool's section.
 
-**Pipeline (``PipelineArgs``)**
+**Pipeline** (``PipelineArgs``)
 
 - ``--executor-threads <count>`` - Number of worker threads for parallel
   processing (default: number of CPU cores)
@@ -21,19 +21,19 @@ repeated in each tool's section.
   cores)
 - ``--time-profiling`` - Print stage timing breakdown to stderr
 
-**Indexing (``IndexingArgs``)**
+**Indexing** (``IndexingArgs``)
 
 - ``--index-dir <path>`` - Directory for ``.dftindex`` stores
 - ``--checkpoint-size <bytes>`` - Checkpoint size for gzip indexing in bytes
   (default: 33554432 B / 32 MB)
 - ``-f, --force`` - Force index recreation
 
-**Query (``QueryArgs``)**
+**Query** (``QueryArgs``)
 
 - ``--query <query>`` - Query DSL filter
   (e.g., ``'cat == "POSIX" and dur > 1000'``)
 
-**Watchdog (``WatchdogArgs``)**
+**Watchdog** (``WatchdogArgs``)
 
 - ``--disable-watchdog`` - Disable watchdog for hang detection
 - ``--watchdog-global-timeout <s>`` - Watchdog global timeout for pipeline
@@ -49,7 +49,7 @@ repeated in each tool's section.
 - ``--watchdog-deadlock-timeout <s>`` - Watchdog deadlock timeout in seconds
   (0 = use default, default: 600)
 
-**Inputs (``DirectoryArgs`` / ``FilesArgs``)**
+**Inputs** (``DirectoryArgs`` / ``FilesArgs``)
 
 - ``-d, --directory <path>`` - Directory containing trace files
 - ``--files <files...>`` - Trace files (``.pfw``, ``.pfw.gz``)
@@ -515,6 +515,91 @@ The Arrow output always includes the base columns ``batch_type``, ``cat``,
     # DuckDB
     import duckdb
     result = duckdb.sql("SELECT * FROM 'agg.arrows'")
+
+dftracer_gen_dlio_config
+------------------------
+
+**Description:** Generate a DLIO YAML configuration directly from a directory
+of raw DFTracer traces. The tool indexes the inputs, aggregates them into the
+internal ``AGGREGATION`` column family (DDSketch forced on), fits per-component
+distributions, refines ``max_bound`` against an internal barrier simulator, and
+emits a DLIO ``train.computation_time`` + ``reader.preprocess_time`` block. The
+user does not need to run ``dftracer_aggregator`` separately.
+
+Required input event names: ``cat=dataloader`` with ``name=fetch.block`` /
+``fetch.iter``, and ``cat=data`` with ``name=preprocess`` / ``item``. The tool
+exits non-zero with an explanatory message if no DLIO events are present.
+
+**Usage:**
+
+.. code-block:: bash
+
+    dftracer_gen_dlio_config [OPTIONS] -o <config.yaml>
+
+**Options:**
+
+- ``-d, --directory <path>`` - Input directory containing .pfw or .pfw.gz traces (default: .)
+- ``-o, --output <path>`` - Output path for the DLIO YAML config [required]
+- ``--max-bound-percentile <pct>`` - Initial max_bound percentile, 0-100 (default: 95)
+- ``--simulation-iterations <n>`` - Max simulator iterations for percentile refinement (default: 5)
+- ``--target-e2e-error <frac>`` - Target relative E2E error to declare convergence (default: 0.05)
+- ``--target-cdf-similarity <frac>`` - Target fetch_block CDF similarity (default: 0.90)
+- ``--patience <n>`` - Early-stop after this many iterations without improvement (default: 10)
+- ``--epsilon <step>`` - Base step size for percentile adjustment (default: 1.0)
+- ``--momentum <m>`` - Momentum factor in [0, 1) (default: 0.9)
+- ``--min-percentile <pct>`` - Floor on max_bound percentile during optimization (default: 50)
+- ``--num-workers <n>`` - DataLoader worker count for the simulator (default: 8)
+- ``--prefetch-factor <n>`` - DataLoader prefetch factor (default: 2)
+- ``--seed <n>`` - Base seed for simulator and sampler (default: 42)
+- ``--max-samples-per-entry <n>`` - Cap on synthesized samples per aggregation entry; 0 disables (default: 100)
+- ``-t, --time-interval <ms>`` - Aggregation time interval in ms (default: 5000)
+- ``--index-dir <path>`` - Directory for the shared index store (default: system temp dir)
+- ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
+- ``--executor-threads <count>`` - Number of executor threads for parallel processing
+- ``-f, --force`` - Force index recreation
+
+**Distribution pool:** Each component is fit as the lowest-BIC choice among
+{Normal, Lognormal, Gamma, Exponential, Weibull, Gaussian Mixture (K=2),
+Gaussian Mixture (K=3)}. Mixture candidates are only considered when the
+sample count is at least 20.
+
+**Example:**
+
+.. code-block:: bash
+
+    # Generate config from a directory of raw traces
+    dftracer_gen_dlio_config -d ./traces -o dlio_config.yaml
+
+    # Refine harder against the simulator with a tighter convergence target
+    dftracer_gen_dlio_config -d ./traces -o dlio_config.yaml \
+        --simulation-iterations 20 --target-e2e-error 0.02 --patience 5
+
+    # Reuse a shared index directory across runs to skip re-indexing
+    dftracer_gen_dlio_config -d ./traces -o dlio_config.yaml \
+        --index-dir /var/cache/dftracer/idx
+
+**Output schema:**
+
+.. code-block:: yaml
+
+    train:
+      computation_time:
+        type: <normal|lognormal|gamma|exponential|weibull|mixture>
+        # single distribution: per-family params (mean/stdev, mu/sigma,
+        # shape/scale, rate)
+        # mixture: n_components + components: [{weight, params: {type, ...}}]
+        max_bound: <seconds>
+    reader:
+      preprocess_time:
+        # same structure
+
+**Comparing against an external generator:** ``scripts/compare_dlio_yamls.py``
+diffs two DLIO YAMLs with a tolerance check on parameters and a two-sample
+Kolmogorov-Smirnov check on samples drawn from each fit. Run via ``uv run
+scripts/compare_dlio_yamls.py --python <a.yaml> --cpp <b.yaml>`` (the inline
+PEP-723 metadata installs ``pyyaml`` and ``numpy`` automatically). Same model
+family + small KS = the two YAMLs would produce indistinguishable DLIO sample
+streams.
 
 dftracer_organize
 -----------------

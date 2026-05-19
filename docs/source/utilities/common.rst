@@ -241,13 +241,19 @@ The query AST uses ``std::variant``-based nodes:
 Statistics
 ----------
 
-Percentile estimation and histogram utilities for trace analysis.
+Percentile estimation, histogram, accumulator, and distribution-fitting
+utilities for trace analysis.
 
 .. code-block:: cpp
 
    #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
    #include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
    #include <dftracer/utils/utilities/common/statistics/timestamp_histogram.h>
+   #include <dftracer/utils/utilities/common/statistics/statistic.h>
+   #include <dftracer/utils/utilities/common/statistics/distributions.h>
+   #include <dftracer/utils/utilities/common/statistics/mixture.h>
+   // Or use the umbrella header:
+   #include <dftracer/utils/utilities/common/statistics/statistics.h>
 
 DDSketch
 ~~~~~~~~
@@ -349,6 +355,99 @@ expansions for adaptive aggregation.
 
    auto bytes = th.serialize();
    auto restored = TimestampHistogram::deserialize(bytes.data(), bytes.size());
+
+Statistic
+~~~~~~~~~
+
+Lightweight min/max/mean/count accumulator with an optional DDSketch backing
+for quantile queries. When a sketch is attached, ``quantile()`` consults it;
+when no sketch is present, the fallback is a uniform interpolation between
+observed min and max.
+
+.. code-block:: cpp
+
+   Statistic stat;
+   for (double v : samples) stat.update(v);
+
+   double mean = stat.mean();
+   double approx_p50 = stat.quantile(0.5);  // uses linear-interp without a sketch
+
+   // Promote to DDSketch-backed quantiles by attaching a populated sketch.
+   auto sketch = std::make_shared<DDSketch>(0.01);
+   for (double v : samples) sketch->add(v);
+   stat.attach_sketch(std::move(sketch));
+   double real_p99 = stat.quantile(0.99);  // now consults the sketch
+
+Distributions
+~~~~~~~~~~~~~
+
+Maximum-likelihood fitting for five parametric families plus a Kolmogorov-
+Smirnov goodness-of-fit score and BIC. Backed by `Boost.Math standalone
+<https://www.boost.org/doc/libs/release/libs/math/doc/html/math_toolkit/standalone.html>`_
+for CDF/PDF/quantile evaluation; samplers use ``<random>``.
+
+Supported families: Normal, Lognormal, Gamma, Exponential, Weibull.
+
+.. code-block:: cpp
+
+   std::vector<double> data = ...;
+
+   // Fit one family directly.
+   FittedDistribution fit = fit_single_distribution(
+       DistributionKind::Lognormal, data);
+   if (fit.valid) {
+       printf("lognormal mu=%.4f sigma=%.4f KS=%.4f BIC=%.2f\n",
+              fit.params[0], fit.params[1], fit.ks_stat, fit.bic);
+   }
+
+   // Fit all five and pick the lowest-KS valid fit.
+   auto fits = fit_all_single_distributions(data);
+   if (auto best = best_fit_by_ks(fits)) {
+       printf("best family: %s\n",
+              std::string(distribution_name(best->kind)).c_str());
+   }
+
+   // Build a sampler from a fit (optionally bounded).
+   auto sampler = make_sampler(*best, /*min_bound=*/0.0,
+                                /*max_bound=*/0.5);
+   std::mt19937_64 rng(42);
+   double draw = sampler(rng);
+
+Mixture
+~~~~~~~
+
+Univariate Gaussian Mixture Model fitting via EM (K=2, K=3) with log-sum-exp
+responsibilities, quantile-spread initial means, and a variance floor to
+prevent component collapse. Plus a BIC-based selector across single
+distributions and mixtures.
+
+.. code-block:: cpp
+
+   // Fit a 2-component Gaussian mixture.
+   FittedMixture m = fit_gaussian_mixture(data, /*K=*/2);
+   if (m.valid && m.converged) {
+       for (size_t k = 0; k < m.weights.size(); ++k) {
+           printf("comp %zu weight=%.3f mean=%.6f stddev=%.6f\n",
+                  k, m.weights[k],
+                  m.components[k].mean, m.components[k].stddev);
+       }
+   }
+
+   // Pick the lowest-BIC model across {singles, GMM-2, GMM-3}.
+   auto singles = fit_all_single_distributions(data);
+   std::vector<FittedMixture> mixes{
+       fit_gaussian_mixture(data, 2),
+       fit_gaussian_mixture(data, 3),
+   };
+   auto selection = select_best_model(singles, mixes);
+
+   if (selection) {
+       // `BestModel` is a std::variant<FittedDistribution, FittedMixture>.
+       // pdf / cdf / make_sampler are overloaded and dispatch through it.
+       auto sampler = make_sampler(selection->model);
+       std::mt19937_64 rng(42);
+       double draw = sampler(rng);
+   }
 
 Arrow
 -----

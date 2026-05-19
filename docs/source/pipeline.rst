@@ -818,7 +818,7 @@ Control execution duration and cooperative cancellation using ``PipelineConfig``
         co_return;
     });
 
-**Timing out a race with ``when_any`` + timeout:** Use ``when_any`` with a timeout awaitable to race operations:
+**Timing out a race with** ``when_any`` **+ timeout:** Use ``when_any`` with a timeout awaitable to race operations:
 
 .. code-block:: cpp
 

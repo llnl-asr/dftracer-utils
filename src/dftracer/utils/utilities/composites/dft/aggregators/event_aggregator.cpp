@@ -208,6 +208,10 @@ std::size_t EventAggregator::scan_system_metrics_raw_fn(RawScanCallbackFn fn,
                 std::string_view(val_slice.data(), val_slice.size())))
             break;
     }
+    if (!it->status().ok()) {
+        DFTRACER_UTILS_LOG_ERROR("SYSTEM_METRICS scan iterator error: %s",
+                                 it->status().ToString().c_str());
+    }
     return count;
 }
 
@@ -453,10 +457,18 @@ void EventAggregator::persist_time_bounds() {
     if (!rocksdb_mode_ || !db_) return;
     auto min_tb = min_time_bucket_.load(std::memory_order_relaxed);
     auto max_tb = max_time_bucket_.load(std::memory_order_relaxed);
-    if (min_tb != UINT64_MAX && max_tb != 0 && min_tb <= max_tb) {
+    // min_tb == UINT64_MAX is the only "no events seen" sentinel; a real
+    // bucket range can legitimately be [0, 0] (relative time, first bucket).
+    if (min_tb != UINT64_MAX && min_tb <= max_tb) {
         std::string time_bounds_val = rocks::KeyCodec::encode_be64(min_tb);
         time_bounds_val += rocks::KeyCodec::encode_be64(max_tb);
-        db_->put(TIME_BOUNDS_DB_KEY, time_bounds_val, rcf::AGGREGATION);
+        auto status =
+            db_->put(TIME_BOUNDS_DB_KEY, time_bounds_val, rcf::AGGREGATION);
+        if (!status.ok()) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "Failed to persist aggregation time bounds: %s",
+                status.ToString().c_str());
+        }
     }
 }
 

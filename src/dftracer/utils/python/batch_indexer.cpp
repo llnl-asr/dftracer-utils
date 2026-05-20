@@ -31,6 +31,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using dftracer::utils::CoroScope;
@@ -1725,23 +1726,26 @@ std::vector<ArrowExportResult> scan_system_metrics_buffer(
     if (!agg) return results;
 
     std::vector<std::string> metric_names_ordered;
-    std::unordered_map<std::string, std::size_t> metric_name_index;
-    agg->scan_system_metrics_raw([&](std::string_view,
-                                     std::string_view val_bytes) -> bool {
-        auto m = deserialize_system_value(val_bytes);
-        if (m.metrics) {
-            for (const auto& [name, _] : *m.metrics) {
-                if (metric_name_index.find(name) == metric_name_index.end()) {
-                    metric_name_index.emplace(name,
-                                              metric_names_ordered.size());
-                    metric_names_ordered.push_back(name);
+    std::unordered_set<std::string> metric_name_seen;
+    agg->scan_system_metrics_raw(
+        [&](std::string_view, std::string_view val_bytes) -> bool {
+            auto m = deserialize_system_value(val_bytes);
+            if (m.metrics) {
+                for (const auto& [name, _] : *m.metrics) {
+                    if (metric_name_seen.insert(name).second) {
+                        metric_names_ordered.push_back(name);
+                    }
                 }
             }
-        }
-        return true;
-    });
+            return true;
+        });
 
     if (metric_names_ordered.empty()) return results;
+
+    // SystemAggregationMetrics::metrics is an unordered_map; sort the
+    // discovered column names so the emitted Arrow schema is deterministic
+    // across runs and builds.
+    std::sort(metric_names_ordered.begin(), metric_names_ordered.end());
 
     std::vector<ColumnSpec> schema;
     schema.reserve(6 + metric_names_ordered.size());

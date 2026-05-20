@@ -184,6 +184,9 @@ struct AggMetricsView {
     std::uint64_t size_total;
     std::uint64_t size_min;
     std::uint64_t size_max;
+    std::uint64_t offset_total;
+    std::uint64_t offset_min;
+    std::uint64_t offset_max;
     std::uint64_t ts;
     std::uint64_t te;
 };
@@ -202,6 +205,11 @@ struct AggMetricsFullView {
     std::uint64_t size_max;
     double size_mean;
     double size_m2;
+    std::uint64_t offset_total;
+    std::uint64_t offset_min;
+    std::uint64_t offset_max;
+    double offset_mean;
+    double offset_m2;
     std::uint64_t ts;
     std::uint64_t te;
 
@@ -210,6 +218,10 @@ struct AggMetricsFullView {
     }
     double size_stddev() const {
         return count > 1 ? std::sqrt(size_m2 / static_cast<double>(count))
+                         : 0.0;
+    }
+    double offset_stddev() const {
+        return count > 1 ? std::sqrt(offset_m2 / static_cast<double>(count))
                          : 0.0;
     }
 };
@@ -258,6 +270,7 @@ inline bool parse_agg_value_view(std::string_view data, AggMetricsView& out) {
     out.count = read_varint();
     read_metric_stats_partial(out.dur_total, out.dur_min, out.dur_max);
     read_metric_stats_partial(out.size_total, out.size_min, out.size_max);
+    read_metric_stats_partial(out.offset_total, out.offset_min, out.offset_max);
     out.ts = read_varint();
     out.te = read_varint();
 
@@ -323,6 +336,8 @@ inline bool parse_agg_value_full_view(std::string_view data,
                            out.dur_mean, out.dur_m2);
     read_metric_stats_full(out.size_total, out.size_min, out.size_max,
                            out.size_mean, out.size_m2);
+    read_metric_stats_full(out.offset_total, out.offset_min, out.offset_max,
+                           out.offset_mean, out.offset_m2);
     out.ts = read_varint();
     out.te = read_varint();
 

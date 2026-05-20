@@ -28,6 +28,9 @@ inline bool is_reserved_arg(std::string_view k) {
         case 'r':
             return k == "ret" || k == "ret_sum" || k == "ret_min" ||
                    k == "ret_max";
+        case 'o':
+            return k == "offset" || k == "offset_sum" || k == "offset_min" ||
+                   k == "offset_max";
     }
     return false;
 }
@@ -140,7 +143,12 @@ void AggregationVisitor::on_event(const EventRecord& record) {
 
     auto hhash = ev.args["hhash"].get<std::string_view>();
     auto fhash = ev.args["fhash"].get<std::string_view>();
-    auto time_bucket = compute_time_bucket(ev.ts, ev.dur, config_);
+    // Counter (ph="C") events report stats for the period ending at ev.ts, so
+    // a boundary-aligned timestamp belongs to the bucket it summarizes (the
+    // one before it). Plain events keep their own timestamp.
+    auto bucket_ts =
+        (map_type == AggMapType::PROFILE && ev.ts > 0) ? ev.ts - 1 : ev.ts;
+    auto time_bucket = compute_time_bucket(bucket_ts, ev.dur, config_);
 
     if (time_bucket < min_time_bucket_) min_time_bucket_ = time_bucket;
     if (time_bucket > max_time_bucket_) max_time_bucket_ = time_bucket;
@@ -221,6 +229,33 @@ void AggregationVisitor::on_event(const EventRecord& record) {
             entry.size.merge_from(tmp);
         }
 
+        // offset has no meaningful "sum"; a counter event may carry only
+        // offset_min/offset_max, so trigger on any of the offset args.
+        auto a_off_sum = ev.args["offset_sum"];
+        auto a_off_plain = ev.args["offset"];
+        auto a_off_min = ev.args["offset_min"];
+        auto a_off_max = ev.args["offset_max"];
+        if (a_off_sum.exists() || a_off_plain.exists() || a_off_min.exists() ||
+            a_off_max.exists()) {
+            MetricStats tmp(config_.sketch_accuracy);
+            tmp.count = ev_count;
+            tmp.total = a_off_sum.exists() ? a_off_sum.get<std::uint64_t>()
+                        : a_off_plain.exists()
+                            ? a_off_plain.get<std::uint64_t>()
+                            : 0;
+            tmp.min = a_off_min.exists()     ? a_off_min.get<std::uint64_t>()
+                      : a_off_plain.exists() ? a_off_plain.get<std::uint64_t>()
+                                             : tmp.total;
+            tmp.max = a_off_max.exists()     ? a_off_max.get<std::uint64_t>()
+                      : a_off_plain.exists() ? a_off_plain.get<std::uint64_t>()
+                                             : tmp.total;
+            if (tmp.count > 0) {
+                tmp.mean = static_cast<double>(tmp.total) /
+                           static_cast<double>(tmp.count);
+            }
+            entry.offset.merge_from(tmp);
+        }
+
         entry.update_timestamp(ev.ts, config_.time_interval_us);
     } else {
         entry.update_duration(ev.dur, compute_percentiles);
@@ -229,6 +264,10 @@ void AggregationVisitor::on_event(const EventRecord& record) {
         auto ret = ev.args["ret"];
         if (ret.exists() && internal::is_data_transfer_op(ev.cat, ev.name)) {
             entry.update_size(ret.get<std::uint64_t>(), compute_percentiles);
+        }
+        auto off = ev.args["offset"];
+        if (off.exists()) {
+            entry.update_offset(off.get<std::uint64_t>(), compute_percentiles);
         }
     }
 

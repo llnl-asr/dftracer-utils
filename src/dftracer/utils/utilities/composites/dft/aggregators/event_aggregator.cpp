@@ -449,6 +449,17 @@ void EventAggregator::update_time_bounds(std::uint64_t time_bucket) {
     }
 }
 
+void EventAggregator::persist_time_bounds() {
+    if (!rocksdb_mode_ || !db_) return;
+    auto min_tb = min_time_bucket_.load(std::memory_order_relaxed);
+    auto max_tb = max_time_bucket_.load(std::memory_order_relaxed);
+    if (min_tb != UINT64_MAX && max_tb != 0 && min_tb <= max_tb) {
+        std::string time_bounds_val = rocks::KeyCodec::encode_be64(min_tb);
+        time_bounds_val += rocks::KeyCodec::encode_be64(max_tb);
+        db_->put(TIME_BOUNDS_DB_KEY, time_bounds_val, rcf::AGGREGATION);
+    }
+}
+
 std::uint64_t EventAggregator::min_time_bucket() const {
     return min_time_bucket_.load(std::memory_order_relaxed);
 }

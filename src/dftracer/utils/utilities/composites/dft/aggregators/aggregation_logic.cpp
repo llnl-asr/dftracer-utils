@@ -11,9 +11,9 @@ void apply_preaggregated_metric(MetricStats& stats, std::uint64_t ev_count,
                                 const ArgsValueProxy& sum_val,
                                 const ArgsValueProxy& min_val,
                                 const ArgsValueProxy& max_val) {
-    if (!sum_val.exists()) return;
+    if (!sum_val.exists() && !min_val.exists() && !max_val.exists()) return;
 
-    const auto total = sum_val.get<std::uint64_t>();
+    const auto total = sum_val.exists() ? sum_val.get<std::uint64_t>() : 0;
     stats.count += ev_count;
     stats.total += total;
     if (min_val.exists()) {
@@ -118,6 +118,15 @@ void update_aggregation_entry(const DFTracerEvent& ev,
         apply_preaggregated_metric(metrics.size, ev_count, a_size_sum,
                                    a_size_min, a_size_max);
 
+        auto a_off_sum = ev.args["offset_sum"];
+        if (!a_off_sum.exists()) a_off_sum = ev.args["offset"];
+        auto a_off_min = ev.args["offset_min"];
+        if (!a_off_min.exists()) a_off_min = ev.args["offset"];
+        auto a_off_max = ev.args["offset_max"];
+        if (!a_off_max.exists()) a_off_max = ev.args["offset"];
+        apply_preaggregated_metric(metrics.offset, ev_count, a_off_sum,
+                                   a_off_min, a_off_max);
+
         metrics.update_timestamp(ev.ts, config.time_interval_us);
     } else {
         metrics.update_duration(ev.dur, config.compute_percentiles);
@@ -128,6 +137,11 @@ void update_aggregation_entry(const DFTracerEvent& ev,
             internal::is_data_transfer_op(key.cat(), key.name())) {
             std::uint64_t size = ret.get<std::uint64_t>();
             metrics.update_size(size, config.compute_percentiles);
+        }
+        auto off = ev.args["offset"];
+        if (off.exists()) {
+            metrics.update_offset(off.get<std::uint64_t>(),
+                                  config.compute_percentiles);
         }
     }
 
@@ -176,7 +190,8 @@ void update_aggregation_entry(const DFTracerEvent& ev,
             return k == "hhash" || k == "fhash" || k == "dft_cnt" ||
                    k == "dur" || k == "dur_sum" || k == "dur_min" ||
                    k == "dur_max" || k == "ret" || k == "ret_sum" ||
-                   k == "ret_min" || k == "ret_max";
+                   k == "ret_min" || k == "ret_max" || k == "offset" ||
+                   k == "offset_sum" || k == "offset_min" || k == "offset_max";
         };
 
         auto is_preagg_suffix = [](std::string_view k) {

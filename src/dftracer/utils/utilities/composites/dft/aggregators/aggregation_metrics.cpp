@@ -117,6 +117,11 @@ void AggregationMetrics::update_size(std::uint64_t sz,
     size.update(sz, compute_percentiles);
 }
 
+void AggregationMetrics::update_offset(std::uint64_t off,
+                                       bool compute_percentiles) {
+    offset.update(off, compute_percentiles);
+}
+
 void AggregationMetrics::update_timestamp(std::uint64_t event_ts,
                                           std::uint64_t dur) {
     if (event_ts < ts) ts = event_ts;
@@ -158,6 +163,7 @@ void AggregationMetrics::merge_from(const AggregationMetrics& other) {
 
     duration.merge_from(other.duration);
     size.merge_from(other.size);
+    offset.merge_from(other.offset);
 
     ts = std::min(ts, other.ts);
     te = std::max(te, other.te);

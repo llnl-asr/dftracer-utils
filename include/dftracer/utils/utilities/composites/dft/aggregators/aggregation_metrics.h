@@ -79,6 +79,7 @@ struct AggregationMetrics {
 
     MetricStats duration;
     MetricStats size;
+    MetricStats offset;
 
     std::uint64_t ts = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t te = 0;
@@ -94,12 +95,14 @@ struct AggregationMetrics {
     explicit AggregationMetrics(double relative_accuracy = 0.01)
         : duration(relative_accuracy),
           size(relative_accuracy),
+          offset(relative_accuracy),
           sketch_accuracy(relative_accuracy) {}
 
     AggregationMetrics(const AggregationMetrics& other)
         : count(other.count),
           duration(other.duration),
           size(other.size),
+          offset(other.offset),
           ts(other.ts),
           te(other.te),
           boundary_associations(
@@ -120,6 +123,7 @@ struct AggregationMetrics {
             count = other.count;
             duration = other.duration;
             size = other.size;
+            offset = other.offset;
             ts = other.ts;
             te = other.te;
             boundary_associations =
@@ -143,6 +147,7 @@ struct AggregationMetrics {
 
     void update_duration(std::uint64_t dur, bool compute_percentiles = false);
     void update_size(std::uint64_t sz, bool compute_percentiles = false);
+    void update_offset(std::uint64_t off, bool compute_percentiles = false);
     void update_timestamp(std::uint64_t event_ts, std::uint64_t dur);
     void update_timestamp_clamped(std::uint64_t event_ts, std::uint64_t dur,
                                   std::uint64_t bucket_start,

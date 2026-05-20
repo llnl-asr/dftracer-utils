@@ -103,6 +103,12 @@ class EventAggregator {
     };
     TimeBoundsResult query_time_bounds() const;
 
+    /// Persist the in-memory min/max time bucket to the AGGREGATION CF so a
+    /// later read-only reopen can recover the trace origin. finalize() does
+    /// this too; the SST build path needs it called explicitly after
+    /// merge_chunk().
+    void persist_time_bounds();
+
     bool is_rocksdb_mode() const { return rocksdb_mode_; }
     std::shared_ptr<rocksdb::RocksDatabase> db() const { return db_; }
     std::uint32_t config_hash() const { return config_hash_; }

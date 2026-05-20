@@ -132,6 +132,11 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
                 file_visitors.clear();
             }
 
+            // Persist accumulated min/max time bucket so a later read-only
+            // reopen recovers the trace origin (otherwise time_range is
+            // emitted as an absolute bucket index).
+            merger->persist_time_bounds();
+
             // Write global config and per-file markers
             if (!processed_files.empty()) {
                 namespace rcf = dftracer::utils::rocksdb::cf;

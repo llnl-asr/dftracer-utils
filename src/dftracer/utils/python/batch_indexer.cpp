@@ -1026,18 +1026,18 @@ class HashResolver {
         }
     }
 
+    // Unresolved hashes resolve to empty (not the hash itself): the
+    // dfanalyzer side treats empty file_name/host_name as missing (NA).
     std::string_view resolve_file(std::string_view hash) {
         if (hash.empty()) return hash;
-        auto interned = intern_.intern(hash);
-        auto it = file_map_.find(interned);
-        return it != file_map_.end() ? it->second : interned;
+        auto it = file_map_.find(intern_.intern(hash));
+        return it != file_map_.end() ? it->second : std::string_view{};
     }
 
     std::string_view resolve_host(std::string_view hash) {
         if (hash.empty()) return hash;
-        auto interned = intern_.intern(hash);
-        auto it = host_map_.find(interned);
-        return it != host_map_.end() ? it->second : interned;
+        auto it = host_map_.find(intern_.intern(hash));
+        return it != host_map_.end() ? it->second : std::string_view{};
     }
 
     std::string_view intern(std::string_view sv) { return intern_.intern(sv); }
@@ -1086,6 +1086,8 @@ static const std::vector<ColumnSpec> DFANALYZER_SCHEMA = {
     {"time_max", ColumnType::DOUBLE},
     {"size_min", ColumnType::INT64},
     {"size_max", ColumnType::INT64},
+    {"offset_min", ColumnType::INT64},
+    {"offset_max", ColumnType::INT64},
     {"time_range", ColumnType::INT64},
     {"time_start", ColumnType::INT64},
     {"time_end", ColumnType::INT64},
@@ -1354,16 +1356,39 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
             builder.append_null(ci++);
         }
 
+        // offset_min > offset_max only when no offset was ever recorded
+        // (MetricStats default min=UINT64_MAX, max=0); 0 is a valid offset.
+        if (mv.offset_min <= mv.offset_max) {
+            builder.append_int64(ci++,
+                                 static_cast<std::int64_t>(mv.offset_min));
+            builder.append_int64(ci++,
+                                 static_cast<std::int64_t>(mv.offset_max));
+        } else {
+            builder.append_null(ci++);
+            builder.append_null(ci++);
+        }
+
         auto time_range = bucket_width_us > 0
                               ? static_cast<std::int64_t>(
                                     (kv.time_bucket - input.ctx->time_origin) /
                                     bucket_width_us)
                               : 0;
         builder.append_int64(ci++, time_range);
-        builder.append_int64(
-            ci++, static_cast<std::int64_t>(mv.ts - input.ctx->time_origin));
-        builder.append_int64(
-            ci++, static_cast<std::int64_t>(mv.te - input.ctx->time_origin));
+        // Counter (profile) rows align to the bucket grid: time_start is the
+        // bucket start, time_end one bucket later. Plain events keep the
+        // precise min/max event timestamps.
+        if (kv.map_type == AggMapType::PROFILE) {
+            auto bucket_start = static_cast<std::int64_t>(
+                kv.time_bucket - input.ctx->time_origin);
+            builder.append_int64(ci++, bucket_start);
+            builder.append_int64(ci++, bucket_start + static_cast<std::int64_t>(
+                                                          bucket_width_us));
+        } else {
+            builder.append_int64(ci++, static_cast<std::int64_t>(
+                                           mv.ts - input.ctx->time_origin));
+            builder.append_int64(ci++, static_cast<std::int64_t>(
+                                           mv.te - input.ctx->time_origin));
+        }
         builder.end_row();
 
         count++;
@@ -1719,9 +1744,10 @@ std::vector<ArrowExportResult> scan_system_metrics_buffer(
     if (metric_names_ordered.empty()) return results;
 
     std::vector<ColumnSpec> schema;
-    schema.reserve(5 + metric_names_ordered.size());
+    schema.reserve(6 + metric_names_ordered.size());
     schema.push_back({"host_hash", ColumnType::DICT_STRING});
     schema.push_back({"name", ColumnType::DICT_STRING});
+    schema.push_back({"time_bucket", ColumnType::INT64});
     schema.push_back({"ts", ColumnType::INT64});
     schema.push_back({"te", ColumnType::INT64});
     schema.push_back({"count", ColumnType::INT64});
@@ -1753,6 +1779,8 @@ std::vector<ArrowExportResult> scan_system_metrics_buffer(
             std::size_t ci = 0;
             builder.append_dict_string(ci++, k.key.hhash);
             builder.append_dict_string(ci++, k.key.name);
+            builder.append_int64(ci++,
+                                 static_cast<std::int64_t>(k.key.time_bucket));
             builder.append_int64(ci++, static_cast<std::int64_t>(m.ts));
             builder.append_int64(ci++, static_cast<std::int64_t>(m.te));
             builder.append_int64(ci++, static_cast<std::int64_t>(m.count));

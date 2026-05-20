@@ -263,7 +263,7 @@ DeserializedAggKey deserialize_agg_key(std::string_view data) {
 void serialize_agg_value_into(std::string& out, const AggregationMetrics& m) {
     // Fast path: no sketches anywhere. Pre-size to a conservative upper
     // bound and write directly via pointer, then shrink.
-    bool has_sketch = m.duration.sketch || m.size.sketch;
+    bool has_sketch = m.duration.sketch || m.size.sketch || m.offset.sketch;
     if (!has_sketch && m.custom_metrics) {
         for (const auto& [_, ms] : *m.custom_metrics) {
             if (ms.sketch) {
@@ -283,7 +283,8 @@ void serialize_agg_value_into(std::string& out, const AggregationMetrics& m) {
         }
         const std::size_t max_total =
             10 /*count*/ + METRIC_STATS_MAX_BYTES_NO_SKETCH /*dur*/ +
-            METRIC_STATS_MAX_BYTES_NO_SKETCH /*size*/ + 10 + 10 +
+            METRIC_STATS_MAX_BYTES_NO_SKETCH /*size*/ +
+            METRIC_STATS_MAX_BYTES_NO_SKETCH /*offset*/ + 10 + 10 +
             10 /*ts/te/parent*/ + 10 /*num_custom*/ + custom_bytes;
         out.resize(max_total);
         char* begin = out.data();
@@ -291,6 +292,7 @@ void serialize_agg_value_into(std::string& out, const AggregationMetrics& m) {
         p = write_varint(p, m.count);
         p = write_metric_stats(p, m.duration);
         p = write_metric_stats(p, m.size);
+        p = write_metric_stats(p, m.offset);
         p = write_varint(p, m.ts);
         p = write_varint(p, m.te);
         p = write_varint(p, m.parent_pid);
@@ -313,6 +315,7 @@ void serialize_agg_value_into(std::string& out, const AggregationMetrics& m) {
     put_varint(out, m.count);
     serialize_metric_stats(out, m.duration);
     serialize_metric_stats(out, m.size);
+    serialize_metric_stats(out, m.offset);
     put_varint(out, m.ts);
     put_varint(out, m.te);
     put_varint(out, m.parent_pid);
@@ -342,6 +345,7 @@ AggregationMetrics deserialize_agg_value(std::string_view data) {
     m.count = r.varint();
     m.duration = deserialize_metric_stats(r, m.sketch_accuracy);
     m.size = deserialize_metric_stats(r, m.sketch_accuracy);
+    m.offset = deserialize_metric_stats(r, m.sketch_accuracy);
     m.ts = r.varint();
     m.te = r.varint();
     m.parent_pid = r.varint();

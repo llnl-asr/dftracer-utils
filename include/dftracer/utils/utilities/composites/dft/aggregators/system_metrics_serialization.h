@@ -9,17 +9,18 @@
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
-// System metrics key: [hhash:var][time_bucket:varint]
-// Simpler key than regular aggregation since system metrics are host-level
-
+// Per-event-name keying so cpu/memory/etc keep separate buckets and the
+// dfanalyzer side can pivot them into named columns (sys_cpu_idle_pct, ...).
 struct SystemMetricKey {
     std::string hhash;
+    std::string name;
     std::uint64_t time_bucket = 0;
 };
 
 void serialize_system_key_into(std::string& out, std::string_view hhash,
+                               std::string_view name,
                                std::uint64_t time_bucket);
-std::string serialize_system_key(std::string_view hhash,
+std::string serialize_system_key(std::string_view hhash, std::string_view name,
                                  std::uint64_t time_bucket);
 
 struct DeserializedSystemKey {

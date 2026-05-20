@@ -34,7 +34,7 @@ def _build_distributed(env, pids, num_events=100, rebuild_root=True):
         files=files,
         index_path=index_path,
         local_staging=staging,
-        lustre_staging=staging,
+        shared_staging=staging,
         client=None,
         aggregation_config=AGG_CFG,
         rebuild_root_summaries=rebuild_root,
@@ -108,9 +108,9 @@ class TestDistributedIndexUnified:
                 for p in [1, 2, 3, 4]
             ]
             local_staging = os.path.join(env.temp_dir, "local_stage")
-            lustre_staging = os.path.join(env.temp_dir, "lustre_stage")
+            shared_staging = os.path.join(env.temp_dir, "lustre_stage")
             os.makedirs(local_staging, exist_ok=True)
-            os.makedirs(lustre_staging, exist_ok=True)
+            os.makedirs(shared_staging, exist_ok=True)
             index_dir = os.path.join(env.temp_dir, "idx")
             os.makedirs(index_dir, exist_ok=True)
             index_path = os.path.join(index_dir, ".dftindex")
@@ -119,7 +119,7 @@ class TestDistributedIndexUnified:
                 files=files,
                 index_path=index_path,
                 local_staging=local_staging,
-                lustre_staging=lustre_staging,
+                shared_staging=shared_staging,
                 client=None,
                 aggregation_config=AGG_CFG,
             )
@@ -195,7 +195,7 @@ class TestDistributedWithDask:
                     files=files,
                     index_path=index_path,
                     local_staging=staging,
-                    lustre_staging=staging,
+                    shared_staging=staging,
                     client=client,
                     aggregation_config=AGG_CFG,
                 )

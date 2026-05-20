@@ -1690,6 +1690,98 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
     return output;
 }
 
+// Two-pass scan over SYSTEM_METRICS CF: pass 1 discovers metric column names
+// (dynamic per workload), pass 2 emits rows. Needed because RecordBatchBuilder
+// requires the schema up front.
+std::vector<ArrowExportResult> scan_system_metrics_buffer(
+    const EventAggregator* agg, const DfanalyzerContext* ctx,
+    Py_ssize_t batch_size) {
+    std::vector<ArrowExportResult> results;
+    if (!agg) return results;
+
+    std::vector<std::string> metric_names_ordered;
+    std::unordered_map<std::string, std::size_t> metric_name_index;
+    agg->scan_system_metrics_raw([&](std::string_view,
+                                     std::string_view val_bytes) -> bool {
+        auto m = deserialize_system_value(val_bytes);
+        if (m.metrics) {
+            for (const auto& [name, _] : *m.metrics) {
+                if (metric_name_index.find(name) == metric_name_index.end()) {
+                    metric_name_index.emplace(name,
+                                              metric_names_ordered.size());
+                    metric_names_ordered.push_back(name);
+                }
+            }
+        }
+        return true;
+    });
+
+    if (metric_names_ordered.empty()) return results;
+
+    std::vector<ColumnSpec> schema;
+    schema.reserve(5 + metric_names_ordered.size());
+    schema.push_back({"host_hash", ColumnType::DICT_STRING});
+    schema.push_back({"name", ColumnType::DICT_STRING});
+    schema.push_back({"ts", ColumnType::INT64});
+    schema.push_back({"te", ColumnType::INT64});
+    schema.push_back({"count", ColumnType::INT64});
+    for (const auto& mn : metric_names_ordered) {
+        schema.push_back({mn, ColumnType::DOUBLE});
+    }
+
+    RecordBatchBuilder builder;
+    builder.declare_schema(schema);
+    builder.reserve(static_cast<std::size_t>(batch_size));
+
+    auto flush = [&](std::size_t& row_count) {
+        if (row_count == 0) return;
+        auto arrow = builder.finish();
+        if (arrow.valid()) results.push_back(std::move(arrow));
+        builder.reset(true);
+        builder.reserve(static_cast<std::size_t>(batch_size));
+        row_count = 0;
+    };
+
+    std::size_t row_count = 0;
+    const std::size_t n_metric_cols = metric_names_ordered.size();
+
+    agg->scan_system_metrics_raw(
+        [&](std::string_view key_bytes, std::string_view val_bytes) -> bool {
+            auto k = deserialize_system_key(key_bytes);
+            auto m = deserialize_system_value(val_bytes);
+
+            std::size_t ci = 0;
+            builder.append_dict_string(ci++, k.key.hhash);
+            builder.append_dict_string(ci++, k.key.name);
+            builder.append_int64(ci++, static_cast<std::int64_t>(m.ts));
+            builder.append_int64(ci++, static_cast<std::int64_t>(m.te));
+            builder.append_int64(ci++, static_cast<std::int64_t>(m.count));
+
+            for (std::size_t i = 0; i < n_metric_cols; ++i) {
+                const auto& mn = metric_names_ordered[i];
+                bool present = false;
+                if (m.metrics) {
+                    auto it = m.metrics->find(mn);
+                    if (it != m.metrics->end()) {
+                        builder.append_double(ci++, it->second.mean);
+                        present = true;
+                    }
+                }
+                if (!present) builder.append_null(ci++);
+            }
+            builder.end_row();
+            row_count++;
+            if (static_cast<Py_ssize_t>(row_count) >= batch_size) {
+                flush(row_count);
+            }
+            return true;
+        });
+    flush(row_count);
+
+    (void)ctx;
+    return results;
+}
+
 }  // namespace
 
 static PyObject* Indexer_iter_aggregation(IndexerObject* self, PyObject* args,
@@ -2006,6 +2098,10 @@ static PyObject* Indexer_iter_arrow_dfanalyzer_all(IndexerObject* self,
                 for (auto& r : out.system)
                     system_results.push_back(std::move(r));
             }
+
+            auto sys_buf =
+                scan_system_metrics_buffer(handle->agg.get(), &ctx, batch_size);
+            for (auto& r : sys_buf) system_results.push_back(std::move(r));
         }
     } catch (const std::exception& e) {
         error_msg = e.what();

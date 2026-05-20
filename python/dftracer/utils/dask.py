@@ -733,7 +733,7 @@ def _build_sst_task(
     file_ids: List[int],
     file_slices: Optional[List[Any]],
     local_staging: str,
-    lustre_staging: str,
+    shared_staging: str,
     batch_id: str,
     index_dir: str,
     checkpoint_size: int,
@@ -782,9 +782,9 @@ def _build_sst_task(
     t_build = _time.monotonic()
 
     n_moved = 0
-    if lustre_staging and lustre_staging != local_staging:
+    if shared_staging and shared_staging != local_staging:
         # Keep per-sink subdir to avoid aggregation.sst collisions.
-        base = os.path.join(lustre_staging, batch_id)
+        base = os.path.join(shared_staging, batch_id)
         relocated: List[Dict[str, Optional[str]]] = []
         for i, d in enumerate(artifact_dicts):
             relocated.append(move_artifacts(d, os.path.join(base, f"sub_{i}")))
@@ -820,7 +820,7 @@ def distributed_index(
     files: Optional[List[str]] = None,
     index_path: str = "",
     local_staging: str = "",
-    lustre_staging: str = "",
+    shared_staging: str = "",
     client: Optional["Client"] = None,
     checkpoint_size: int = 32 * 1024 * 1024,
     bloom_dimensions: Optional[List[str]] = None,
@@ -841,7 +841,7 @@ def distributed_index(
          file_ids and writes DEFAULT-CF entries once).
       4. Submit one Dask task per non-empty worker that runs the existing
          indexer pipeline with an SST sink, writing SSTs to `local_staging`
-         and (if different) moving them to `lustre_staging`.
+         and (if different) moving them to `shared_staging`.
       5. Collect artifact dicts into an SstArtifactRegistry; coordinator
          calls bulk_ingest + rebuild_root_summaries.
 
@@ -849,9 +849,9 @@ def distributed_index(
         directory: Directory containing trace files.
         files: Explicit file list (alternative to directory).
         index_path: Target .dftindex path (coordinator-writable).
-        local_staging: Per-worker SST build dir. If equal to lustre_staging,
+        local_staging: Per-worker SST build dir. If equal to shared_staging,
             no post-build move.
-        lustre_staging: Shared FS dir the coordinator reads SSTs from during
+        shared_staging: Shared FS dir the coordinator reads SSTs from during
             ingest. Must be on the same filesystem as index_path for the
             cheapest ingest.
         client: Dask distributed Client. None -> run tasks inline.
@@ -872,8 +872,8 @@ def distributed_index(
         raise ValueError("index_path is required")
     if not local_staging:
         raise ValueError("local_staging is required")
-    if not lustre_staging:
-        lustre_staging = local_staging
+    if not shared_staging:
+        shared_staging = local_staging
 
     import logging as _logging
     import time as _time
@@ -987,7 +987,7 @@ def distributed_index(
     #    parallel lists. A file split across workers appears once per slice.
     index_dir = os.path.dirname(index_path.rstrip("/"))
     os.makedirs(local_staging, exist_ok=True)
-    os.makedirs(lustre_staging, exist_ok=True)
+    os.makedirs(shared_staging, exist_ok=True)
 
     worker_file_lists: List[List[str]] = []
     worker_file_ids: List[List[int]] = []
@@ -1038,7 +1038,7 @@ def distributed_index(
                     ids_w,
                     slices_w,
                     local_staging,
-                    lustre_staging,
+                    shared_staging,
                     f"worker_{w}",
                     index_dir,
                     checkpoint_size,
@@ -1068,7 +1068,7 @@ def distributed_index(
                     ids_w,
                     slices_w,
                     local_staging,
-                    lustre_staging,
+                    shared_staging,
                     f"worker_{w}",
                     index_dir,
                     checkpoint_size,

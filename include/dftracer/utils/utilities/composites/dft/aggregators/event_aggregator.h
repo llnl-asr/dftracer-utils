@@ -44,6 +44,20 @@ class EventAggregator {
                                         std::uint16_t shard_end,
                                         RawScanCallbackFn fn, void* ctx) const;
 
+    /// Sequential scan of the SYSTEM_METRICS CF (no shard prefix in keys).
+    std::size_t scan_system_metrics_raw_fn(RawScanCallbackFn fn,
+                                           void* ctx) const;
+
+    template <typename F>
+    std::size_t scan_system_metrics_raw(F&& callback) const {
+        auto adapter =
+            +[](void* ctx, std::string_view k, std::string_view v) -> bool {
+            return (*static_cast<std::decay_t<F>*>(ctx))(k, v);
+        };
+        return scan_system_metrics_raw_fn(adapter,
+                                          static_cast<void*>(&callback));
+    }
+
     /// Template wrapper: forwards any callable `(sv, sv) -> bool` into the
     /// raw scan with zero heap allocations. The adapter lambda is a captureless
     /// `+[]` so it decays to a plain function pointer.

@@ -56,25 +56,28 @@ FloatMetricStats deserialize_float_metric_stats(BinaryReader& r,
 }  // namespace
 
 void serialize_system_key_into(std::string& out, std::string_view hhash,
+                               std::string_view name,
                                std::uint64_t time_bucket) {
     out.clear();
-    out.reserve(2 + hhash.size() + 10);
+    out.reserve(4 + hhash.size() + name.size() + 10);
     put_str(out, hhash);
+    put_str(out, name);
     put_varint(out, time_bucket);
 }
 
-std::string serialize_system_key(std::string_view hhash,
+std::string serialize_system_key(std::string_view hhash, std::string_view name,
                                  std::uint64_t time_bucket) {
     std::string out;
-    serialize_system_key_into(out, hhash, time_bucket);
+    serialize_system_key_into(out, hhash, name, time_bucket);
     return out;
 }
 
 DeserializedSystemKey deserialize_system_key(std::string_view data) {
     BinaryReader r(data);
     auto hhash = r.str();
+    auto name = r.str();
     auto time_bucket = r.varint();
-    return {{std::string(hhash), time_bucket}};
+    return {{std::string(hhash), std::string(name), time_bucket}};
 }
 
 void serialize_system_value_into(std::string& out,

@@ -311,7 +311,7 @@ void AggregationVisitor::handle_system_event(const EventRecord& record) {
     if (time_bucket < min_time_bucket_) min_time_bucket_ = time_bucket;
     if (time_bucket > max_time_bucket_) max_time_bucket_ = time_bucket;
 
-    serialize_system_key_into(system_key_buf_, hhash, time_bucket);
+    serialize_system_key_into(system_key_buf_, hhash, ev.name, time_bucket);
 
     auto [it, inserted] =
         system_buffer_.try_emplace(system_key_buf_, config_.sketch_accuracy);

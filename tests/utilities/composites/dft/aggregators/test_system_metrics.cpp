@@ -235,12 +235,14 @@ TEST_SUITE("SystemAggregationMetrics") {
 TEST_SUITE("SystemMetricsSerialization") {
     TEST_CASE("key serialization round-trip") {
         std::string hhash = "host123";
+        std::string name = "cpu";
         std::uint64_t time_bucket = 42;
 
-        std::string serialized = serialize_system_key(hhash, time_bucket);
+        std::string serialized = serialize_system_key(hhash, name, time_bucket);
         auto deserialized = deserialize_system_key(serialized);
 
         CHECK(deserialized.key.hhash == hhash);
+        CHECK(deserialized.key.name == name);
         CHECK(deserialized.key.time_bucket == time_bucket);
     }
 

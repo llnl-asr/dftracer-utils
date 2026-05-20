@@ -194,6 +194,23 @@ std::size_t EventAggregator::scan_shard_range_raw_fn(std::uint16_t shard_begin,
     return count;
 }
 
+std::size_t EventAggregator::scan_system_metrics_raw_fn(RawScanCallbackFn fn,
+                                                        void* ctx) const {
+    if (!rocksdb_mode_ || !db_) return 0;
+
+    auto it = db_->new_iterator(rcf::SYSTEM_METRICS);
+    std::size_t count = 0;
+    for (it->SeekToFirst(); it->Valid(); it->Next()) {
+        auto key_slice = it->key();
+        auto val_slice = it->value();
+        count++;
+        if (!fn(ctx, std::string_view(key_slice.data(), key_slice.size()),
+                std::string_view(val_slice.data(), val_slice.size())))
+            break;
+    }
+    return count;
+}
+
 std::size_t EventAggregator::scan_shard_range(std::uint16_t shard_begin,
                                               std::uint16_t shard_end,
                                               ScanCallback callback) const {

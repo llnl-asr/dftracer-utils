@@ -894,12 +894,21 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     }
 
     void release_producer() {
-        std::size_t prev =
-            num_producers_.fetch_sub(1, std::memory_order_acq_rel);
-        if (prev == 1) {
-            if (!user_closed_.load(std::memory_order_acquire)) {
-                closed_.store(true, std::memory_order_release);
+        // Termination state must change under state_mutex_ or a blocking
+        // receiver can lose the wakeup.
+        bool was_last = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            std::size_t prev =
+                num_producers_.fetch_sub(1, std::memory_order_acq_rel);
+            if (prev == 1) {
+                was_last = true;
+                if (!user_closed_.load(std::memory_order_acquire)) {
+                    closed_.store(true, std::memory_order_release);
+                }
             }
+        }
+        if (was_last) {
             notify_all_waiters();
         }
     }
@@ -1036,8 +1045,13 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
      * No more items can be sent after this
      */
     void close() {
-        user_closed_.store(true, std::memory_order_release);
-        closed_.store(true, std::memory_order_release);
+        // Close flags must change under state_mutex_ or a blocking receiver
+        // can lose the wakeup.
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            user_closed_.store(true, std::memory_order_release);
+            closed_.store(true, std::memory_order_release);
+        }
         notify_all_waiters();
     }
 

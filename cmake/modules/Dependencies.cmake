@@ -39,7 +39,7 @@ find_package(
 
 function(need_cpplogger)
   # First try to find cpp-logger from the system or other projects
-  find_package(cpp-logger 0.0.6 QUIET)
+  find_package(cpp-logger 0.0.7 QUIET)
 
   if(cpp-logger_FOUND)
     message(STATUS "Found system cpp-logger")
@@ -70,7 +70,7 @@ function(need_cpplogger)
         GITHUB_REPOSITORY
         hariharan-devarajan/cpp-logger
         VERSION
-        0.0.6
+        0.0.7
         DOWNLOAD_ONLY
         YES)
     endif()
@@ -485,6 +485,61 @@ function(need_simdjson)
   endif()
 endfunction()
 
+function(link_simdjson TARGET_NAME LIBRARY_TYPE)
+  # Validate parameters
+  if(NOT TARGET_NAME)
+    message(FATAL_ERROR "link_simdjson: TARGET_NAME is required")
+  endif()
+
+  if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
+    message(
+      FATAL_ERROR "link_simdjson: LIBRARY_TYPE must be either STATIC or SHARED")
+  endif()
+
+  if(NOT TARGET ${TARGET_NAME})
+    message(FATAL_ERROR "link_simdjson: Target '${TARGET_NAME}' does not exist")
+  endif()
+
+  # Link appropriate simdjson variant
+  if(LIBRARY_TYPE STREQUAL "STATIC")
+    # For static libraries, prefer static simdjson if available
+    if(TARGET simdjson_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson_static)
+      message(STATUS "Linked ${TARGET_NAME} to simdjson_static")
+    elseif(TARGET simdjson_shared)
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
+      message(STATUS "Linked ${TARGET_NAME} to simdjson (shared)")
+    elseif(TARGET simdjson::simdjson)
+      # System / find_package() simdjson (e.g. Homebrew on macOS).
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
+      message(STATUS "Linked ${TARGET_NAME} to system simdjson::simdjson")
+    else()
+      message(
+        FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
+    endif()
+  else() # SHARED
+    # For shared libraries, prefer shared simdjson if available
+    if(TARGET simdjson_shared)
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
+      message(STATUS "Linked ${TARGET_NAME} to simdjson (shared)")
+    elseif(TARGET simdjson_static)
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson_static)
+      message(STATUS "Linked ${TARGET_NAME} to simdjson_static")
+    elseif(TARGET simdjson::simdjson)
+      # System / find_package() simdjson (e.g. Homebrew on macOS).
+      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
+      message(STATUS "Linked ${TARGET_NAME} to system simdjson::simdjson")
+    else()
+      message(
+        FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
+    endif()
+  endif()
+endfunction()
+
+# ==============================================================================
+# RocksDB
+# ==============================================================================
+
 # Function to find or build RocksDB
 function(need_rocksdb)
   find_package(RocksDB 10.10.1 QUIET CONFIG)
@@ -728,6 +783,7 @@ endfunction()
 # ==============================================================================
 # Compression Dependencies
 # ==============================================================================
+
 function(need_lz4)
   if(DEFINED CACHE{lz4_LIBRARIES} AND NOT EXISTS "${lz4_LIBRARIES}")
     unset(lz4_LIBRARIES CACHE)
@@ -1339,14 +1395,18 @@ function(need_zstd)
 
   if(zstd_FOUND)
     message(STATUS "Found system zstd")
-    if(NOT TARGET zstd::libzstd_shared AND NOT TARGET zstd::libzstd_static)
-      if(DEFINED zstd_LIBRARIES)
-        add_library(zstd::libzstd_shared UNKNOWN IMPORTED)
-        set_target_properties(
-          zstd::libzstd_shared
-          PROPERTIES IMPORTED_LOCATION "${zstd_LIBRARIES}"
-                     INTERFACE_INCLUDE_DIRECTORIES "${zstd_INCLUDE_DIRS}")
-      endif()
+    if(DEFINED zstd_LIBRARIES)
+      # Provide the same target names as the CPM branch: zstd::libzstd_shared
+      # for consumers (nanoarrow IPC) and zstd::zstd for RocksDB.
+      foreach(_zstd_t zstd::libzstd_shared zstd::zstd)
+        if(NOT TARGET ${_zstd_t})
+          add_library(${_zstd_t} UNKNOWN IMPORTED)
+          set_target_properties(
+            ${_zstd_t}
+            PROPERTIES IMPORTED_LOCATION "${zstd_LIBRARIES}"
+                       INTERFACE_INCLUDE_DIRECTORIES "${zstd_INCLUDE_DIRS}")
+        endif()
+      endforeach()
     endif()
     set(zstd_FOUND
         TRUE
@@ -1376,6 +1436,64 @@ function(need_zstd)
 
     if(zstd_ADDED)
       message(STATUS "Built zstd with CPM")
+
+      set(_zstd_real)
+      foreach(_zstd_t libzstd_shared libzstd_static)
+        if(TARGET ${_zstd_t})
+          set_target_properties(
+            ${_zstd_t}
+            PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+                       LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+                       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+          if(DEFINED zstd_SOURCE_DIR)
+            set_property(
+              TARGET ${_zstd_t} APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+              "$<BUILD_INTERFACE:${zstd_SOURCE_DIR}/lib>")
+          endif()
+          install(
+            TARGETS ${_zstd_t}
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+          # zstd's build tree exposes only libzstd_shared / libzstd_static;
+          # the zstd:: namespaced names exist only post-install. Other
+          # consumers (nanoarrow IPC) link the namespaced names, so alias them.
+          if(NOT TARGET zstd::${_zstd_t})
+            add_library(zstd::${_zstd_t} ALIAS ${_zstd_t})
+          endif()
+          if(NOT _zstd_real)
+            set(_zstd_real ${_zstd_t})
+          endif()
+        endif()
+      endforeach()
+
+      if(_zstd_real)
+        if(_zstd_real STREQUAL libzstd_shared)
+          set(_zstd_output
+              "${CMAKE_BINARY_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}zstd${CMAKE_SHARED_LIBRARY_SUFFIX}"
+          )
+        else()
+          set(_zstd_output
+              "${CMAKE_BINARY_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}zstd${CMAKE_STATIC_LIBRARY_SUFFIX}"
+          )
+        endif()
+
+        if(NOT TARGET zstd::zstd)
+          add_library(zstd::zstd ALIAS ${_zstd_real})
+        endif()
+
+        if(DEFINED zstd_SOURCE_DIR)
+          set(ZSTD_INCLUDE_DIRS
+              "${zstd_SOURCE_DIR}/lib"
+              CACHE PATH "zstd include directory (CPM)" FORCE)
+          install(FILES "${zstd_SOURCE_DIR}/lib/zstd.h"
+                  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+        endif()
+        set(ZSTD_LIBRARIES
+            "${_zstd_output}"
+            CACHE FILEPATH "zstd library (CPM)" FORCE)
+      endif()
+
       set(zstd_FOUND
           TRUE
           PARENT_SCOPE)
@@ -1385,87 +1503,6 @@ function(need_zstd)
       set(zstd_FOUND
           TRUE
           CACHE BOOL "zstd availability" FORCE)
-    endif()
-  endif()
-endfunction()
-
-# ==============================================================================
-# Hashing and Cryptography Dependencies
-# ==============================================================================
-
-function(link_simdjson TARGET_NAME LIBRARY_TYPE)
-  # Validate parameters
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_simdjson: TARGET_NAME is required")
-  endif()
-
-  if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
-    message(
-      FATAL_ERROR "link_simdjson: LIBRARY_TYPE must be either STATIC or SHARED")
-  endif()
-
-  if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_simdjson: Target '${TARGET_NAME}' does not exist")
-  endif()
-
-  # Link appropriate simdjson variant
-  if(LIBRARY_TYPE STREQUAL "STATIC")
-    # For static libraries, prefer static simdjson if available
-    if(TARGET simdjson_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson_static)
-      message(STATUS "Linked ${TARGET_NAME} to simdjson_static")
-    elseif(TARGET simdjson_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
-      message(STATUS "Linked ${TARGET_NAME} to simdjson (shared)")
-    elseif(TARGET simdjson::simdjson)
-      # System / find_package() simdjson (e.g. Homebrew on macOS).
-      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
-      message(STATUS "Linked ${TARGET_NAME} to system simdjson::simdjson")
-    else()
-      message(
-        FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
-    endif()
-  else() # SHARED
-    # For shared libraries, prefer shared simdjson if available
-    if(TARGET simdjson_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
-      message(STATUS "Linked ${TARGET_NAME} to simdjson (shared)")
-    elseif(TARGET simdjson_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson_static)
-      message(STATUS "Linked ${TARGET_NAME} to simdjson_static")
-    elseif(TARGET simdjson::simdjson)
-      # System / find_package() simdjson (e.g. Homebrew on macOS).
-      target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
-      message(STATUS "Linked ${TARGET_NAME} to system simdjson::simdjson")
-    else()
-      message(
-        FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
-    endif()
-  endif()
-endfunction()
-
-function(need_picosha2)
-  if(NOT PicoSHA2_ADDED)
-    cpmaddpackage(
-      NAME
-      PicoSHA2
-      GITHUB_REPOSITORY
-      okdshin/PicoSHA2
-      VERSION
-      1.0.1
-      GIT_TAG
-      "v1.0.1"
-      DOWNLOAD_ONLY
-      YES)
-
-    if(PicoSHA2_ADDED)
-      add_library(picosha2 INTERFACE)
-      target_include_directories(
-        picosha2 INTERFACE $<BUILD_INTERFACE:${PicoSHA2_SOURCE_DIR}>
-                           $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      install(FILES ${PicoSHA2_SOURCE_DIR}/picosha2.h
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-      message(STATUS "Added picosha2 header-only library")
     endif()
   endif()
 endfunction()

@@ -365,6 +365,15 @@ if(ZSTD_LIBRARY_BUNDLED)
             INTERFACE_INCLUDE_DIRECTORIES \"\${ZSTD_INCLUDE_DIR_BUNDLED}\"
         )
     endif()
+
+    # zstd::zstd is the target name RocksDB links against
+    if(ZSTD_INCLUDE_DIR_BUNDLED AND NOT TARGET zstd::zstd)
+        add_library(zstd::zstd UNKNOWN IMPORTED)
+        set_target_properties(zstd::zstd PROPERTIES
+            IMPORTED_LOCATION \"\${ZSTD_LIBRARY_BUNDLED}\"
+            INTERFACE_INCLUDE_DIRECTORIES \"\${ZSTD_INCLUDE_DIR_BUNDLED}\"
+        )
+    endif()
 else()
     find_dependency(zstd QUIET)
 endif()
@@ -398,9 +407,9 @@ if(ROCKSDB_LIBRARY_BUNDLED)
         NO_DEFAULT_PATH
     )
 
-    if(ROCKSDB_STATIC_LIBRARY_BUNDLED AND NOT TARGET RocksDB::rocksdb-shared)
-        add_library(RocksDB::rocksdb-shared UNKNOWN IMPORTED)
-        set_target_properties(RocksDB::rocksdb-shared PROPERTIES
+    if(ROCKSDB_STATIC_LIBRARY_BUNDLED AND NOT TARGET RocksDB::rocksdb_static)
+        add_library(RocksDB::rocksdb_static UNKNOWN IMPORTED)
+        set_target_properties(RocksDB::rocksdb_static PROPERTIES
             IMPORTED_LOCATION \"\${ROCKSDB_STATIC_LIBRARY_BUNDLED}\"
             INTERFACE_INCLUDE_DIRECTORIES \"\${ROCKSDB_INCLUDE_DIR_BUNDLED}\"
         )

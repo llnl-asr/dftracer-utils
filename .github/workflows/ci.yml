@@ -36,6 +36,10 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     env:
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 2G
 
     runs-on: ${{ matrix.os }}
     strategy:
@@ -55,8 +59,8 @@ jobs:
       - name: Cache ccache
         uses: actions/cache@v5
         with:
-          path: ~/.ccache
-          key: ccache-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('CMakeLists.txt', 'pyproject.toml', '.github/workflows/ci.yml') }}
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ runner.os }}-${{ matrix.python-version }}-${{ github.run_id }}
           restore-keys: |
             ccache-${{ runner.os }}-${{ matrix.python-version }}-
             ccache-${{ runner.os }}-

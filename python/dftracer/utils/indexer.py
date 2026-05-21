@@ -38,12 +38,15 @@ class IndexStatus:
         ready: Files that are fully indexed for requested tiers.
         needs_work: Files that need indexing.
         index_path: Path to the .dftindex store.
+        aggregation_interval_us: Time interval (us) of the cached aggregation
+            tier, or 0 if none.
     """
 
     total_files: int
     ready: List[str] = field(default_factory=list)
     needs_work: List[str] = field(default_factory=list)
     index_path: str = ""
+    aggregation_interval_us: int = 0
 
 
 class Indexer:
@@ -157,6 +160,7 @@ class Indexer:
             ready=result["ready"],
             needs_work=result["needs_work"],
             index_path=result.get("index_path", ""),
+            aggregation_interval_us=result.get("aggregation_interval_us", 0),
         )
 
     def build(self) -> None:
@@ -181,6 +185,7 @@ class Indexer:
             ready=result["ready"],
             needs_work=result["needs_work"],
             index_path=result.get("index_path", ""),
+            aggregation_interval_us=result.get("aggregation_interval_us", 0),
         )
 
     def get_checkpoint_indexer(self, file_path: str) -> _NativeCheckpointIndexer:

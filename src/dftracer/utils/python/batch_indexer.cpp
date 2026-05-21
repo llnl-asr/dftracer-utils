@@ -290,6 +290,11 @@ static PyObject* Indexer_resolve(IndexerObject* self,
                          PyLong_FromSize_t(result.all_files.size()));
     PyDict_SetItemString(dict, "index_path",
                          PyUnicode_FromString(result.index_path.c_str()));
+    PyDict_SetItemString(
+        dict, "aggregation_interval_us",
+        PyLong_FromUnsignedLongLong(result.stored_time_interval_us));
+    PyDict_SetItemString(dict, "needs_rebuild",
+                         PyBool_FromLong(result.needs_augmentation));
 
     // Ready files
     PyObject* ready_list = PyList_New(result.cached.size());
@@ -413,9 +418,13 @@ static PyObject* Indexer_ensure_indexed(IndexerObject* self,
     PyObject* status = Indexer_resolve(self, nullptr);
     if (!status) return nullptr;
 
-    // Check if needs_work is non-empty
+    // Build if files need work, or the aggregation tier must be rebuilt
+    // (stored time interval differs from the requested one).
     PyObject* needs_work = PyDict_GetItemString(status, "needs_work");
-    if (needs_work && PyList_Size(needs_work) > 0) {
+    PyObject* needs_rebuild = PyDict_GetItemString(status, "needs_rebuild");
+    bool work_pending = needs_work && PyList_Size(needs_work) > 0;
+    bool rebuild_pending = needs_rebuild && PyObject_IsTrue(needs_rebuild);
+    if (work_pending || rebuild_pending) {
         Py_DECREF(status);
 
         // Build

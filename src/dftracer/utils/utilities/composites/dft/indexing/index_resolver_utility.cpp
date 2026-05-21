@@ -307,6 +307,8 @@ coro::CoroTask<ResolverResult> IndexResolverUtility::process(
         // Merge augmentation info (all groups should have same global config)
         if (out.needs_augmentation) {
             result.needs_augmentation = true;
+        }
+        if (out.stored_time_interval_us != 0) {
             result.stored_time_interval_us = out.stored_time_interval_us;
         }
     }

@@ -56,7 +56,7 @@ TEST_SUITE("ChunkAggregatorUtility") {
 
         REQUIRE(output.aggregations.size() == 1);
         const auto& [event_key, event_metrics] = *output.aggregations.begin();
-        CHECK(event_key.cat() == "POSIX");
+        CHECK(event_key.cat() == "posix");
         CHECK(event_key.name() == "read");
         CHECK(event_metrics.count == 1);
         CHECK(event_metrics.duration.total == 50);
@@ -68,7 +68,7 @@ TEST_SUITE("ChunkAggregatorUtility") {
         REQUIRE(output.profile_aggregations.size() == 1);
         const auto& [profile_key, profile_metrics] =
             *output.profile_aggregations.begin();
-        CHECK(profile_key.cat() == "PROFILE");
+        CHECK(profile_key.cat() == "profile");
         CHECK(profile_key.name() == "cpu_usage");
         CHECK(profile_metrics.count == 4);
         CHECK(profile_metrics.duration.total == 80);

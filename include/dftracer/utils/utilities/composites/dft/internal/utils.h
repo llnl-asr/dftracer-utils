@@ -6,8 +6,13 @@
 
 namespace dftracer::utils::utilities::composites::dft::internal {
 
+// Lowercase `s`; returns a view over `s` when already lowercase (no copy),
+// else lowercases into `storage` (which must outlive the returned view).
+std::string_view to_lower_ascii(std::string_view s, std::string& storage);
+
+bool ascii_iequals(std::string_view a, std::string_view b);
+
 // True when the event's return value represents bytes transferred.
-// Checks both category (POSIX/STDIO) and function name.
 bool is_data_transfer_op(std::string_view cat, std::string_view name);
 
 /**

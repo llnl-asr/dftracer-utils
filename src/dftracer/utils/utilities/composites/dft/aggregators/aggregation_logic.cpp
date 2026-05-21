@@ -49,7 +49,9 @@ AggregationKey build_aggregation_key(const DFTracerEvent& ev,
     auto& intern = aggregation_intern();
 
     AggregationKey key;
-    key.cat_id = intern.get_or_insert(ev.cat);
+    std::string cat_storage;
+    key.cat_id =
+        intern.get_or_insert(internal::to_lower_ascii(ev.cat, cat_storage));
     key.name_id = intern.get_or_insert(ev.name);
     key.pid = ev.pid;
     key.tid = ev.tid;

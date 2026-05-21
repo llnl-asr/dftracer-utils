@@ -5,10 +5,11 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional, Union
 
 try:
-    from dask.distributed import Client, WorkerPlugin
+    from dask.distributed import Client, WorkerPlugin, get_client
 except ImportError:
     Client: Optional[Any] = None
     WorkerPlugin: Optional[Any] = None
+    get_client: Optional[Any] = None
 
 try:
     import dask
@@ -27,7 +28,7 @@ from dftracer.utils.indexer import AggregationConfig, Indexer
 
 if WorkerPlugin is not None:
 
-    class DFTracerUtilsDaskWorkerPlugin(WorkerPlugin):
+    class DFTracerUtilsDaskWorkerPlugin(WorkerPlugin):  # ty: ignore[unsupported-base]
         """Creates a persistent Runtime per Dask worker."""
 
         def __init__(self, threads=0, io_threads=0):
@@ -53,6 +54,105 @@ if WorkerPlugin is not None:
                 except Exception:
                     pass
                 del worker.dftracer_utils_runtime
+
+else:
+    DFTracerUtilsDaskWorkerPlugin = None
+
+
+_plugin_registered_schedulers: set = set()
+
+
+def resolve_local_staging(client) -> str:
+    """Derive node-local SST scratch from each Dask worker's own scratch.
+
+    Workers share the path *string* (e.g. ``/scratch/$USER``) but each resolves
+    it to its own node-local storage; falls back to ``/tmp`` when nothing is
+    reported.
+    """
+    workers = client.scheduler_info().get("workers", {}) or {}
+    if workers:
+        worker_local_dir = next(iter(workers.values())).get("local_directory") or "/tmp"
+    else:
+        worker_local_dir = "/tmp"
+    return os.path.join(worker_local_dir, "dftracer-sst-staging")
+
+
+def register_auto_thread_plugin() -> None:
+    """Register the DFTracer worker plugin on the active distributed client.
+
+    Sizes each worker's C++ Runtime threads as hardware_concurrency /
+    n_workers_on_node so the Runtime uses all cores without oversubscription.
+
+    Idempotent: re-registering the same plugin on the same scheduler triggers a
+    teardown+setup round-trip on every worker, which deadlocks if the previous
+    Runtime still has in-flight coroutines. Skips if already registered for the
+    scheduler address. A no-op when no distributed client is active.
+    """
+    if DFTracerUtilsDaskWorkerPlugin is None:
+        return
+    try:
+        import logging
+        import time
+        from collections import Counter
+
+        client = get_client()  # ty: ignore[call-non-callable]
+        sched_addr = getattr(client.scheduler, "address", None) or ""
+        if sched_addr in _plugin_registered_schedulers:
+            return
+
+        def _addr_to_host(addr: str) -> str:
+            return addr.split("://")[-1].rsplit(":", 1)[0]
+
+        nthreads = client.nthreads()
+        for _ in range(10):
+            nthreads_next = client.nthreads()
+            if len(nthreads_next) >= len(nthreads):
+                nthreads = nthreads_next
+            if len(nthreads) > 0:
+                break
+            time.sleep(0.5)
+        host_counts = Counter(_addr_to_host(a) for a in nthreads.keys())
+
+        logging.getLogger("dftracer.dask_plugin").info(
+            "coord register_plugin: host_counts=%s total_workers=%d worker_addr_sample=%s",
+            dict(host_counts),
+            sum(host_counts.values()),
+            list(nthreads.keys())[:8],
+        )
+
+        class _AutoThreadPlugin(DFTracerUtilsDaskWorkerPlugin):
+            def __init__(self, host_worker_counts):
+                super().__init__(threads=0)
+                self._host_worker_counts = host_worker_counts
+
+            def setup(self, worker):
+                total_cpus = (
+                    len(os.sched_getaffinity(0))
+                    if hasattr(os, "sched_getaffinity")
+                    else os.cpu_count() or 1
+                )
+                my_host = worker.address.split("://")[-1].rsplit(":", 1)[0]
+                n_local = self._host_worker_counts.get(my_host, 1)
+                self.threads = max(1, total_cpus // n_local)
+                logging.getLogger("distributed.worker").info(
+                    "DFTracer Runtime: host=%s cpus=%d workers_on_host=%d cpp_threads=%d dict_keys=%s",
+                    my_host,
+                    total_cpus,
+                    n_local,
+                    self.threads,
+                    list(self._host_worker_counts.keys()),
+                )
+                super().setup(worker)
+
+        client.register_plugin(_AutoThreadPlugin(dict(host_counts)))
+        _plugin_registered_schedulers.add(sched_addr)
+        logging.getLogger("dftracer.dask_plugin").info(
+            "Registered DFTracerUtilsDaskWorkerPlugin host_worker_counts=%s total_workers=%d",
+            dict(host_counts),
+            sum(host_counts.values()),
+        )
+    except (ValueError, ImportError):
+        pass
 
 
 def _write_arrow_task(

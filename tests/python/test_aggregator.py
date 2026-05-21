@@ -145,13 +145,13 @@ class TestAggregatorUtility:
             rows = self._rows_by_key(result)
             assert len(rows) == 3
 
-            event = rows[(0, "POSIX", "read")]
+            event = rows[(0, "posix", "read")]
             assert event["count"] == 1
             assert event["dur_total"] == 50
             assert event["size_total"] == 64
             assert event["bytes_total"] == 64
 
-            profile = rows[(1, "PROFILE", "cpu_usage")]
+            profile = rows[(1, "profile", "cpu_usage")]
             assert profile["count"] == 4
             assert profile["dur_total"] == 80
             assert profile["dur_min"] == 10
@@ -193,8 +193,8 @@ class TestAggregatorUtility:
 
             rows = self._rows_by_key(result)
             assert set(rows) == {
-                (0, "POSIX", "read"),
-                (1, "PROFILE", "cpu_usage"),
+                (0, "posix", "read"),
+                (1, "profile", "cpu_usage"),
                 (2, "sys", "mem_bw"),
             }
 
@@ -359,7 +359,7 @@ class TestAggregatorUtility:
                 env.temp_dir,
                 index_dir=env.temp_dir,
                 force_rebuild=True,
-                query='cat == "POSIX"',
+                query='cat == "posix"',
             )
 
             pa = pytest.importorskip("pyarrow")
@@ -368,7 +368,7 @@ class TestAggregatorUtility:
 
             # Should only have POSIX entries
             assert len(rows) == 2
-            assert all(row["cat"] == "POSIX" for row in rows)
+            assert all(row["cat"] == "posix" for row in rows)
 
     def test_iter_arrow_with_query_filter(self):
         """Query parameter filters streaming results."""
@@ -393,7 +393,7 @@ class TestAggregatorUtility:
                     env.temp_dir,
                     index_dir=env.temp_dir,
                     force_rebuild=True,
-                    query='cat == "APP"',
+                    query='cat == "app"',
                 )
             )
 
@@ -403,7 +403,7 @@ class TestAggregatorUtility:
 
             # Should only have APP entries
             assert len(rows) == 1
-            assert rows[0]["cat"] == "APP"
+            assert rows[0]["cat"] == "app"
 
     def test_write_arrow_creates_files(self):
         """write_arrow creates Arrow IPC files."""
@@ -455,8 +455,8 @@ class TestAggregatorUtility:
                 index_dir=env.temp_dir,
                 force_rebuild=True,
                 views=[
-                    {"name": "io", "query": 'cat == "POSIX"'},
-                    {"name": "compute", "query": 'cat == "APP"'},
+                    {"name": "io", "query": 'cat == "posix"'},
+                    {"name": "compute", "query": 'cat == "app"'},
                 ],
             )
 
@@ -477,7 +477,7 @@ class TestAggregatorUtility:
             assert len(io_files) > 0
             with ipc.open_file(str(io_files[0])) as f:
                 table = pa.Table.from_batches([f.get_batch(i) for i in range(f.num_record_batches)])
-                assert all(row["cat"] == "POSIX" for row in table.to_pylist())
+                assert all(row["cat"] == "posix" for row in table.to_pylist())
 
     def test_write_arrow_compression(self):
         """write_arrow respects compression setting."""

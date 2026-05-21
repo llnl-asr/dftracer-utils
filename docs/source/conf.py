@@ -1512,6 +1512,8 @@ except (ImportError, ModuleNotFoundError) as e:
         sys.path.insert(0, str(PYTHON_SOURCE_DIR))
         _install_rtd_extension_stub()
         autodoc_mock_imports = [
+            "numpy",
+            "pandas",
             "pyarrow",
             "dask",
             "dask.distributed",

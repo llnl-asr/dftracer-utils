@@ -167,7 +167,9 @@ void AggregationVisitor::on_event(const EventRecord& record) {
         if (!extra_keys_vec.empty()) extra_ptr = &extra_keys_vec;
     }
 
-    serialize_agg_key_into(key_buf_, config_hash_, map_type, ev.cat, ev.name,
+    std::string cat_storage;
+    std::string_view cat_lower = internal::to_lower_ascii(ev.cat, cat_storage);
+    serialize_agg_key_into(key_buf_, config_hash_, map_type, cat_lower, ev.name,
                            ev.pid, ev.tid, hhash, fhash, time_bucket,
                            extra_ptr);
 

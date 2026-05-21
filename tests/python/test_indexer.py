@@ -378,6 +378,35 @@ class TestDirectoryIndexer:
         assert len(status.needs_work) == 1
         assert status.index_path == "/tmp/index"
 
+    def test_resolve_reports_aggregation_interval(self):
+        """resolve() surfaces the time interval of the cached aggregation tier."""
+        with Environment() as env:
+            directory = env.create_indexed_traces(pids=[1])
+            with dft_utils.Indexer(
+                directory=directory,
+                require_aggregation=dft_utils.AggregationConfig(time_interval_ms=5000),
+            ) as indexer:
+                indexer.ensure_indexed()
+                assert indexer.resolve().aggregation_interval_us == 5_000_000
+
+    def test_ensure_indexed_rebuilds_on_interval_change(self):
+        """A new interval discards the stale aggregation tier and rebuilds it."""
+        pa = pytest.importorskip("pyarrow")
+        with Environment() as env:
+            directory = env.create_indexed_traces(pids=[1, 2])
+            with dft_utils.Indexer(
+                directory=directory,
+                require_aggregation=dft_utils.AggregationConfig(time_interval_ms=1000),
+            ) as indexer:
+                indexer.ensure_indexed()
+                status = indexer.resolve()
+                assert status.aggregation_interval_us == 1_000_000
+                rows = sum(
+                    pa.record_batch(b).num_rows
+                    for b in indexer.iter_arrow_dfanalyzer_all().get("events", [])
+                )
+                assert rows > 0
+
     def test_aggregation_config_dataclass(self):
         """Test AggregationConfig dataclass"""
         config = dft_utils.AggregationConfig(
@@ -716,7 +745,7 @@ class TestQueryFilter:
             directory = env.create_indexed_traces(pids=[1])
             with self._make_indexer(directory) as indexer:
                 indexer.ensure_indexed()
-                result = indexer.iter_arrow_dfanalyzer_all(query='cat == "POSIX"')
+                result = indexer.iter_arrow_dfanalyzer_all(query='cat == "posix"')
                 rows = sum(pa.record_batch(b).num_rows for b in result.get("events", []))
                 assert rows > 0
 

@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
@@ -5,12 +6,15 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 #include <cstring>
 #include <set>
+#include <stdexcept>
+#include <system_error>
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
@@ -45,6 +49,33 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
 
     if (result.all_files.empty()) {
         co_return result;
+    }
+
+    // A cached aggregation tier at a different interval can't be refined in
+    // place; discard every affected index root and rebuild.
+    if (result.needs_augmentation && !input.force_rebuild) {
+        std::set<std::string> index_roots;
+        for (const auto& file : result.all_files) {
+            index_roots.insert(
+                internal::determine_index_path(file, input.index_dir));
+        }
+        for (const auto& root : index_roots) {
+            DFTRACER_UTILS_LOG_INFO(
+                "Aggregation interval changed (index built at %llu us); "
+                "rebuilding %s",
+                static_cast<unsigned long long>(result.stored_time_interval_us),
+                root.c_str());
+            std::error_code ec;
+            fs::remove_all(root, ec);
+            if (ec) {
+                throw std::runtime_error("failed to remove stale index " +
+                                         root + ": " + ec.message());
+            }
+        }
+        result = co_await resolver.process(resolve_input);
+        if (result.all_files.empty()) {
+            co_return result;
+        }
     }
 
     // Collect files that need work (checkpoint or aggregation)

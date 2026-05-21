@@ -12,6 +12,7 @@ This section contains the Python API documentation for dftracer utilities.
    runtime
    reader
    indexer
+   dfanalyzer
 
 Module Overview
 ---------------
@@ -23,3 +24,4 @@ The dftracer utilities Python package provides the following main modules:
 - :doc:`runtime` - Coroutine runtime and Dask integration
 - :doc:`reader` - Lazy JSON object type
 - :doc:`indexer` - Indexing and searching capabilities
+- :doc:`dfanalyzer` - dfanalyzer bridge: index build, Arrow IPC, distributed HLM

@@ -96,10 +96,10 @@ Each module below has detailed class documentation in the API Reference:
      - :doc:`api/utilities/filesystem`
    * - File I/O
      - File reading, writing, chunk writing, async line generators
-     - :doc:`api/utilities/fileio`
+     - :doc:`api/utilities/fileio/index`
    * - Compression
      - Streaming zlib compression (GZIP, ZLIB, DEFLATE)
-     - :doc:`api/utilities/composites`
+     - :doc:`api/utilities/composites/index`
    * - Text
      - Line splitting, filtering, text processing
      - :doc:`api/utilities/text`

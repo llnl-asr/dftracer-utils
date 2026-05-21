@@ -90,14 +90,14 @@ TEST_SUITE("AggregatorUtility") {
         CHECK(system_batch->entries.size() == 1);
 
         const auto& event_entry = event_batch->entries.front();
-        CHECK(event_entry.key.cat() == "POSIX");
+        CHECK(event_entry.key.cat() == "posix");
         CHECK(event_entry.key.name() == "read");
         CHECK(event_entry.metrics.count == 1);
         CHECK(event_entry.metrics.duration.total == 50);
         CHECK(event_entry.metrics.size.total == 64);
 
         const auto& profile_entry = profile_batch->entries.front();
-        CHECK(profile_entry.key.cat() == "PROFILE");
+        CHECK(profile_entry.key.cat() == "profile");
         CHECK(profile_entry.key.name() == "cpu_usage");
         CHECK(profile_entry.metrics.count == 4);
         CHECK(profile_entry.metrics.duration.total == 80);

@@ -605,6 +605,7 @@ function(need_rocksdb)
         v10.10.1
         OPTIONS
         "ROCKSDB_BUILD_SHARED ${DFTRACER_UTILS_BUILD_SHARED}"
+        "PORTABLE 1"
         "WITH_TESTS OFF"
         "WITH_TOOLS OFF"
         "WITH_CORE_TOOLS ON"

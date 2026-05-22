@@ -40,11 +40,9 @@ void Watchdog::stop() {
         return;
     }
 
-    running_ = false;
-
-    // Wake up the watchdog thread immediately
     {
         std::lock_guard<std::mutex> lock(sleep_mutex_);
+        running_ = false;
         sleep_cv_.notify_one();
     }
 

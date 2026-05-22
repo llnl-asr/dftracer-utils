@@ -18,8 +18,11 @@ void IoThreadPool::start() {
 }
 
 void IoThreadPool::stop() {
-    if (!running_.load()) return;
-    running_ = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!running_.load()) return;
+        running_ = false;
+    }
     cv_.notify_all();
     for (auto& t : threads_) {
         if (t.joinable()) t.join();

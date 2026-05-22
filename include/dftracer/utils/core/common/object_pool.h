@@ -13,12 +13,12 @@ namespace dftracer::utils {
 
 class TreiberStack {
     static void store_next(void* block, void* next) noexcept {
-        std::atomic_ref<void*>(*reinterpret_cast<void**>(block))
-            .store(next, std::memory_order_release);
+        __atomic_store_n(reinterpret_cast<void**>(block), next,
+                         __ATOMIC_RELEASE);
     }
     static void* load_next(void* block) noexcept {
-        return std::atomic_ref<void*>(*reinterpret_cast<void**>(block))
-            .load(std::memory_order_acquire);
+        return __atomic_load_n(reinterpret_cast<void**>(block),
+                               __ATOMIC_ACQUIRE);
     }
 
     std::atomic<std::uint64_t> head_;

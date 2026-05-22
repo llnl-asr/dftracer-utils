@@ -60,10 +60,10 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-${{ matrix.os }}-${{ matrix.python-version }}-${{ github.run_id }}
+          key: ccache-v2-${{ matrix.os }}-${{ matrix.python-version }}-${{ github.run_id }}
           restore-keys: |
-            ccache-${{ matrix.os }}-${{ matrix.python-version }}-
-            ccache-${{ matrix.os }}-
+            ccache-v2-${{ matrix.os }}-${{ matrix.python-version }}-
+            ccache-v2-${{ matrix.os }}-
 
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'

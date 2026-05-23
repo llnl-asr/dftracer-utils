@@ -1385,12 +1385,18 @@ function(link_zlib TARGET_NAME LIBRARY_TYPE)
 endfunction()
 
 function(need_zstd)
-  find_package(zstd QUIET CONFIG)
-  if(NOT zstd_FOUND)
-    find_path(zstd_INCLUDE_DIRS NAMES zstd.h)
-    find_library(zstd_LIBRARIES NAMES zstd)
-    if(zstd_INCLUDE_DIRS AND zstd_LIBRARIES)
-      set(zstd_FOUND TRUE)
+  # Skip system zstd on Apple: brew's libzstd inherits the host's
+  # deployment target, breaking delocate-wheel when the wheel targets an
+  # older macOS. Always CPM-build so the bundled libzstd matches
+  # CMAKE_OSX_DEPLOYMENT_TARGET.
+  if(NOT APPLE)
+    find_package(zstd QUIET CONFIG)
+    if(NOT zstd_FOUND)
+      find_path(zstd_INCLUDE_DIRS NAMES zstd.h)
+      find_library(zstd_LIBRARIES NAMES zstd)
+      if(zstd_INCLUDE_DIRS AND zstd_LIBRARIES)
+        set(zstd_FOUND TRUE)
+      endif()
     endif()
   endif()
 
@@ -1417,6 +1423,13 @@ function(need_zstd)
         PARENT_SCOPE)
   else()
     if(NOT zstd_ADDED)
+      # On Apple, force-download even when CPM_USE_LOCAL_PACKAGES is ON, so
+      # we don't silently link brew's libzstd (pinned to the host's
+      # deployment target, which breaks delocate-wheel).
+      if(APPLE)
+        set(_dftracer_save_cpm_local ${CPM_USE_LOCAL_PACKAGES})
+        set(CPM_USE_LOCAL_PACKAGES OFF)
+      endif()
       cpmaddpackage(
         NAME
         zstd
@@ -1429,10 +1442,14 @@ function(need_zstd)
         SOURCE_SUBDIR
         build/cmake
         OPTIONS
+        "CMAKE_OSX_DEPLOYMENT_TARGET ${CMAKE_OSX_DEPLOYMENT_TARGET}"
         "ZSTD_BUILD_PROGRAMS OFF"
         "ZSTD_BUILD_TESTS OFF"
         "ZSTD_BUILD_SHARED ${DFTRACER_UTILS_BUILD_SHARED}"
         "ZSTD_BUILD_STATIC ON")
+      if(APPLE)
+        set(CPM_USE_LOCAL_PACKAGES ${_dftracer_save_cpm_local})
+      endif()
     endif()
 
     if(zstd_ADDED)

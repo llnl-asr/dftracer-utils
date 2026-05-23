@@ -3,9 +3,21 @@ cmake_minimum_required(VERSION 3.20)
 # Allow dependencies with older CMake minimum versions
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
+# Pin MACOSX_DEPLOYMENT_TARGET into the cache so every CPM subproject
+# (zstd in particular) inherits it. Without this zstd's build/cmake
+# subproject ignores the parent setting and links against the host
+# version, which fails delocate-wheel.
+if(APPLE
+   AND DEFINED ENV{MACOSX_DEPLOYMENT_TARGET}
+   AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET
+      "$ENV{MACOSX_DEPLOYMENT_TARGET}"
+      CACHE STRING "Minimum macOS version" FORCE)
+endif()
+
 set(DFTRACER_UTILS_VERSION_MAJOR 0)
 set(DFTRACER_UTILS_VERSION_MINOR 0)
-set(DFTRACER_UTILS_VERSION_PATCH 7)
+set(DFTRACER_UTILS_VERSION_PATCH 8)
 set(DFTRACER_UTILS_VERSION
     "${DFTRACER_UTILS_VERSION_MAJOR}.${DFTRACER_UTILS_VERSION_MINOR}.${DFTRACER_UTILS_VERSION_PATCH}"
 )

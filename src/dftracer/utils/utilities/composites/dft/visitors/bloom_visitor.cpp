@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/utilities/composites/dft/args_map.h>
 #include <dftracer/utils/utilities/composites/dft/event.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
@@ -73,8 +74,9 @@ bool dom_value_to_string(simdjson::dom::element val, std::string& out) {
         return true;
     }
     if (val.is_double()) {
-        auto [p, _] = std::to_chars(buf, buf + sizeof(buf),
-                                    val.get_double().value_unsafe());
+        char* p = dftracer::utils::to_chars_double(
+            buf, buf + sizeof(buf), val.get_double().value_unsafe());
+        if (!p) return false;
         out.assign(buf, p);
         return true;
     }

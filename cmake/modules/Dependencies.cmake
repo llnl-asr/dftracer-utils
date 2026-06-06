@@ -2,7 +2,7 @@
 # CPM Configuration
 # ==============================================================================
 
-set(CPM_USE_LOCAL_PACKAGES ON)
+set(CPM_USE_LOCAL_PACKAGES ${DFTRACER_UTILS_LOCAL_PACKAGES})
 set(CPM_SOURCE_CACHE "${CMAKE_SOURCE_DIR}/.cpmsource")
 
 # ==============================================================================
@@ -542,18 +542,20 @@ endfunction()
 
 # Function to find or build RocksDB
 function(need_rocksdb)
-  find_package(RocksDB 10.10.1 QUIET CONFIG)
-  if(NOT RocksDB_FOUND)
-    find_package(rocksdb 10.10.1 QUIET CONFIG)
-  endif()
-  if(NOT RocksDB_FOUND AND rocksdb_FOUND)
-    set(RocksDB_FOUND TRUE)
-  endif()
-  if(NOT RocksDB_FOUND)
-    find_package(RocksDB 10.10.1 QUIET)
+  if(DFTRACER_UTILS_LOCAL_PACKAGES)
+    find_package(RocksDB 10.10.1 QUIET CONFIG)
+    if(NOT RocksDB_FOUND)
+      find_package(rocksdb 10.10.1 QUIET CONFIG)
+    endif()
+    if(NOT RocksDB_FOUND AND rocksdb_FOUND)
+      set(RocksDB_FOUND TRUE)
+    endif()
+    if(NOT RocksDB_FOUND)
+      find_package(RocksDB 10.10.1 QUIET)
+    endif()
   endif()
 
-  if(RocksDB_FOUND)
+  if(DFTRACER_UTILS_LOCAL_PACKAGES AND RocksDB_FOUND)
     message(STATUS "Found system RocksDB")
 
     if(NOT TARGET RocksDB::rocksdb)
@@ -1385,11 +1387,7 @@ function(link_zlib TARGET_NAME LIBRARY_TYPE)
 endfunction()
 
 function(need_zstd)
-  # Skip system zstd on Apple: brew's libzstd inherits the host's
-  # deployment target, breaking delocate-wheel when the wheel targets an
-  # older macOS. Always CPM-build so the bundled libzstd matches
-  # CMAKE_OSX_DEPLOYMENT_TARGET.
-  if(NOT APPLE)
+  if(DFTRACER_UTILS_LOCAL_PACKAGES)
     find_package(zstd QUIET CONFIG)
     if(NOT zstd_FOUND)
       find_path(zstd_INCLUDE_DIRS NAMES zstd.h)
@@ -1400,7 +1398,7 @@ function(need_zstd)
     endif()
   endif()
 
-  if(zstd_FOUND)
+  if(DFTRACER_UTILS_LOCAL_PACKAGES AND zstd_FOUND)
     message(STATUS "Found system zstd")
     if(DEFINED zstd_LIBRARIES)
       # Provide the same target names as the CPM branch: zstd::libzstd_shared
@@ -1423,13 +1421,6 @@ function(need_zstd)
         PARENT_SCOPE)
   else()
     if(NOT zstd_ADDED)
-      # On Apple, force-download even when CPM_USE_LOCAL_PACKAGES is ON, so
-      # we don't silently link brew's libzstd (pinned to the host's
-      # deployment target, which breaks delocate-wheel).
-      if(APPLE)
-        set(_dftracer_save_cpm_local ${CPM_USE_LOCAL_PACKAGES})
-        set(CPM_USE_LOCAL_PACKAGES OFF)
-      endif()
       cpmaddpackage(
         NAME
         zstd
@@ -1447,9 +1438,6 @@ function(need_zstd)
         "ZSTD_BUILD_TESTS OFF"
         "ZSTD_BUILD_SHARED ${DFTRACER_UTILS_BUILD_SHARED}"
         "ZSTD_BUILD_STATIC ON")
-      if(APPLE)
-        set(CPM_USE_LOCAL_PACKAGES ${_dftracer_save_cpm_local})
-      endif()
     endif()
 
     if(zstd_ADDED)
@@ -1518,9 +1506,6 @@ function(need_zstd)
       set(zstd_CPM
           TRUE
           PARENT_SCOPE)
-      set(zstd_FOUND
-          TRUE
-          CACHE BOOL "zstd availability" FORCE)
     endif()
   endif()
 endfunction()

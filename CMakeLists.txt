@@ -3,10 +3,6 @@ cmake_minimum_required(VERSION 3.20)
 # Allow dependencies with older CMake minimum versions
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 
-# Pin MACOSX_DEPLOYMENT_TARGET into the cache so every CPM subproject
-# (zstd in particular) inherits it. Without this zstd's build/cmake
-# subproject ignores the parent setting and links against the host
-# version, which fails delocate-wheel.
 if(APPLE
    AND DEFINED ENV{MACOSX_DEPLOYMENT_TARGET}
    AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
@@ -82,6 +78,10 @@ option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow"
 option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)
 option(DFTRACER_UTILS_ENABLE_ZSTD "Enable ZSTD compression for RocksDB" ON)
 option(DFTRACER_UTILS_ENABLE_LZ4 "Enable LZ4 compression for RocksDB" OFF)
+option(
+  DFTRACER_UTILS_LOCAL_PACKAGES
+  "Prefer system-installed bundled dependencies (RocksDB, zstd, simdjson, ...) when available; set OFF to build them from source for portable wheels"
+  ON)
 
 if(DFTRACER_UTILS_TESTS)
   message(STATUS "Building tests")

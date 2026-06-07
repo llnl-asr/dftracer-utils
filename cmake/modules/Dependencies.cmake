@@ -405,15 +405,15 @@ function(need_simdjson)
       GITHUB_REPOSITORY
       simdjson/simdjson
       VERSION
-      4.6.1
+      4.6.4
       GIT_TAG
-      v4.6.1
+      v4.6.4
       DOWNLOAD_ONLY
       YES)
   endif()
 
   if(simdjson_ADDED AND NOT TARGET simdjson)
-    message(STATUS "Building simdjson library (v4.6.1)")
+    message(STATUS "Building simdjson library (v4.6.4)")
 
     # simdjson is a single-header + single-source library
     set(SIMDJSON_SOURCES

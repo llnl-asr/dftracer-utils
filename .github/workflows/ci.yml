@@ -126,3 +126,28 @@ jobs:
           parallel-finished: true
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+
+  wheel:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Wheel build (deps from source) on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Select newer Xcode (macOS)
+        if: runner.os == 'macOS'
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16.2"
+
+      - name: Build and test wheel
+        uses: pypa/cibuildwheel@v3.3.0
+        env:
+          CIBW_BUILD: cp312-*
+          CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_* *-manylinux_aarch64 *-manylinux_ppc64le *-manylinux_s390x"
+          CIBW_CONFIG_SETTINGS: "cmake.define.DFTRACER_UTILS_LOCAL_PACKAGES=OFF"

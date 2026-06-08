@@ -163,8 +163,112 @@ def make_empty_hlm(hlm_groupby, hlm_agg, bin_cols, int_index_cols, float_metric_
     return meta
 
 
+def _augment_posix_cat(table, rules):
+    """Encode file purpose/filesystem into ``cat`` before the HLM group-by.
+
+    ``rules`` is an ordered list of ``(file_path_substring, cat_suffix)``: a
+    POSIX/STDIO row whose ``file_name`` contains the substring gets the suffix
+    appended to ``cat`` (e.g. ``/data`` -> ``_reader`` => ``posix_reader``),
+    applied cumulatively in order. This mirrors the analyzer's
+    ``_fix_file_posix_category``; the caller supplies the (preset-specific)
+    rules so this helper stays generic.
+
+    The distributed HLM aggregates straight from the IPC table, bypassing the
+    trace-view path that applies this, so without it the ``reader_posix`` /
+    ``checkpoint_posix`` layer filters (``cat.str.contains("_reader")``) match
+    nothing and POSIX collapses into a single ``POSIX - All`` layer.
+    """
+    if not rules:
+        return table
+    names = table.column_names
+    if "cat" not in names or "file_name" not in names:
+        return table
+    cat = table.column("cat")
+    if not (pa.types.is_string(cat.type) or pa.types.is_large_string(cat.type)):
+        return table
+    if pa.types.is_large_string(cat.type):
+        cat = pc.cast(cat, pa.string())
+    fn = table.column("file_name")
+    if pa.types.is_large_string(fn.type):
+        fn = pc.cast(fn, pa.string())
+    # base condition is fixed on the original cat (matches the pandas version)
+    base = pc.and_(pc.match_substring_regex(cat, "posix|stdio"), pc.is_valid(fn))  # ty: ignore[unresolved-attribute]
+    fn = pc.if_else(pc.is_valid(fn), fn, pa.scalar("", pa.string()))  # ty: ignore[unresolved-attribute]
+    empty = pa.scalar("", pa.string())
+    for substr, suffix in rules:
+        mask = pc.and_(base, pc.match_substring(fn, substr))  # ty: ignore[unresolved-attribute]
+        joined = pc.binary_join_element_wise(cat, pa.scalar(suffix, pa.string()), empty)  # ty: ignore[unresolved-attribute]
+        cat = pc.if_else(mask, joined, cat)  # ty: ignore[unresolved-attribute]
+    return table.set_column(table.schema.get_field_index("cat"), "cat", cat)
+
+
+def _apply_hlm_filters(table, ignored_file_patterns, ignored_func_names, ignored_func_patterns):
+    """Drop rows the analyzer's ``postread_trace`` would filter out.
+
+    The distributed HLM reads raw IPC and bypasses ``postread_trace``, so
+    without this it counts ignored functions/files (e.g. ``Reader.next``,
+    ``DataLoader.__init__``) that the trace-view path excludes, inflating the
+    per-layer counts/times. ``ignored_func_names`` is an exact match;
+    ``ignored_func_patterns`` and ``ignored_file_patterns`` are regex
+    alternations (matched as substrings, like pandas ``str.contains``).
+    """
+    names = table.column_names
+    if ignored_file_patterns and "file_name" in names:
+        fn = table.column("file_name")
+        if pa.types.is_large_string(fn.type):
+            fn = pc.cast(fn, pa.string())
+        # Kleene OR so a null file_name (is_null=True) is kept even though the
+        # regex match on null is null — matches pandas `isna() | ~contains`.
+        not_ignored = pc.invert(pc.match_substring_regex(fn, "|".join(ignored_file_patterns)))  # ty: ignore[unresolved-attribute]
+        keep = pc.or_kleene(pc.is_null(fn), not_ignored)  # ty: ignore[unresolved-attribute]
+        table = table.filter(keep)
+    if "func_name" in names and (ignored_func_names or ignored_func_patterns):
+        func = table.column("func_name")
+        if pa.types.is_large_string(func.type):
+            func = pc.cast(func, pa.string())
+        drop = None
+        if ignored_func_names:
+            drop = pc.is_in(func, value_set=pa.array(list(ignored_func_names), pa.string()))  # ty: ignore[unresolved-attribute]
+        if ignored_func_patterns:
+            pat = pc.match_substring_regex(func, "|".join(ignored_func_patterns))  # ty: ignore[unresolved-attribute]
+            drop = pat if drop is None else pc.or_(drop, pat)  # ty: ignore[unresolved-attribute]
+        if drop is not None:
+            table = table.filter(pc.invert(pc.fill_null(drop, False)))  # ty: ignore[unresolved-attribute]
+    return table
+
+
+def _rebucket_time_range(table, time_origin, bucket_width_us):
+    """Re-bucket ``time_range`` relative to the trace's first event.
+
+    The C++ aggregation buckets on absolute time (``floor(ts / interval)``); the
+    legacy per-event path bucketed relative to the global minimum timestamp. The
+    unoverlapped-time/overlap metrics are summed per time bucket, so the boundary
+    alignment must match the legacy origin to reproduce its values (the shift is
+    tiny for short events but grows for events spanning multiple buckets).
+    """
+    if time_origin is None or not bucket_width_us:
+        return table
+    names = table.column_names
+    if "time_range" not in names or "time_start" not in names:
+        return table
+    ts = pc.cast(table.column("time_start"), pa.int64())
+    rel = pc.subtract(ts, pa.scalar(int(time_origin), pa.int64()))  # ty: ignore[unresolved-attribute]
+    # integer division == floor for rel >= 0 (origin is the global min ts)
+    tr = pc.divide(rel, pa.scalar(int(bucket_width_us), pa.int64()))  # ty: ignore[unresolved-attribute]
+    return table.set_column(
+        table.schema.get_field_index("time_range"), "time_range", pc.cast(tr, pa.int64())
+    )
+
+
 def worker_hlm_partial(
-    ipc_result, data_type, hlm_groupby, hlm_agg, bin_cols, int_index_cols, float_metric_cols
+    ipc_result,
+    data_type,
+    hlm_groupby,
+    hlm_agg,
+    bin_cols,
+    int_index_cols,
+    float_metric_cols,
+    postread_config=None,
 ):
     """Per-worker partial HLM from already-resident IPC bytes.
 
@@ -186,6 +290,23 @@ def worker_hlm_partial(
     for i, field in enumerate(table.schema):
         if pa.types.is_dictionary(field.type):
             table = table.set_column(i, field.name, table.column(i).cast(pa.string()))
+
+    # Apply the analyzer's postread_trace transformations that the distributed
+    # HLM would otherwise skip: drop ignored functions/files, then encode file
+    # purpose/filesystem into `cat` for the POSIX sub-layer filters.
+    if postread_config:
+        table = _apply_hlm_filters(
+            table,
+            postread_config.get("ignored_file_patterns"),
+            postread_config.get("ignored_func_names"),
+            postread_config.get("ignored_func_patterns"),
+        )
+        table = _augment_posix_cat(table, postread_config.get("posix_cat_rules"))
+        table = _rebucket_time_range(
+            table, postread_config.get("time_origin"), postread_config.get("bucket_width_us")
+        )
+        if table.num_rows == 0:
+            return empty()
 
     time_col = table.column("time")
     size_col = table.column("size")
@@ -553,6 +674,34 @@ def ensure_index(trace_path, trace_groups, time_interval_ms, client=None):
     )
 
 
+def _worker_min_time_start(ipc_result):
+    """Minimum events ``time_start`` in one worker's IPC result (or None)."""
+    b = ipc_result.get("events") if isinstance(ipc_result, dict) else None
+    if b is None:
+        return None
+    table = pa.ipc.open_stream(pa.BufferReader(b)).read_all()
+    if table.num_rows == 0 or "time_start" not in table.column_names:
+        return None
+    return pc.min(table.column("time_start")).as_py()  # ty: ignore[unresolved-attribute]
+
+
+def distributed_time_origin(event_futures, dask_client):
+    """Global minimum event ``time_start`` across all per-worker IPC futures.
+
+    The legacy path bucketed ``time_range`` relative to the first event, so the
+    distributed HLM uses this as the origin for ``_rebucket_time_range`` (the
+    C++ aggregation buckets on absolute time). Returns None when there are no
+    events or no client.
+    """
+    if not event_futures or dask_client is None:
+        return None
+    mins = dask_client.gather(
+        [dask_client.submit(_worker_min_time_start, f, pure=False) for f in event_futures]
+    )
+    mins = [m for m in mins if m is not None]
+    return min(mins) if mins else None
+
+
 def distributed_hlm(
     data_type,
     view_types,
@@ -564,6 +713,7 @@ def distributed_hlm(
     hlm_extra_cols,
     int_index_cols,
     float_metric_cols,
+    postread_config=None,
 ):
     """Distributed high-level-metrics aggregation over per-worker IPC bytes.
 
@@ -604,6 +754,7 @@ def distributed_hlm(
             list(bin_cols),
             int_index_cols,
             float_metric_cols,
+            postread_config,
             workers=[addr] if addr else None,
             pure=False,
         )

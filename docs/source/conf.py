@@ -1540,8 +1540,8 @@ try:
     release = version("dftracer-utils")
     version = ".".join(release.split(".")[:2])
 except Exception:
-    version = "0.1"
-    release = "0.1.0"
+    version = "0.0.10"
+    release = "0.0.10"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

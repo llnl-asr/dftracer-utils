@@ -1968,65 +1968,29 @@ function(add_stdfs_if_needed TARGET)
   endif()
 endfunction()
 
-# Probe for a lock-free 16-byte CAS (DWCAS) and, if an extra ISA flag unlocks
-# it, add that flag globally so ObjectPool gets its fast ABA-safe path. This is
-# an optimization, not a requirement: object_pool.h self-selects a packed
-# single-word fallback when DWCAS is unavailable, so a miss only costs the
-# 48-bit-VA fallback, never a build failure.
+# Report which ObjectPool atomics path object_pool.h auto-selects under the
+# active -march (DWCAS if the 16-byte CAS is lock-free, else the packed 64-bit
+# CAS). We add no ISA flags on purpose: forcing -mcx16/+lse would raise the
+# binary's CPU floor and could SIGILL on older hardware. Both paths are
+# lock-free and correct everywhere; the fast path turns on automatically when
+# the toolchain already targets a capable baseline (Apple Silicon, -march=native).
 macro(check_dwcas)
-  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
-    set(_dftracer_dwcas_flag "-mcx16")
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(_dftracer_dwcas_flag "-march=armv8-a+lse")
-  else()
-    set(_dftracer_dwcas_flag "")
-  endif()
-
-  # Probe once and cache the results: try_compile spawns a compiler and would
-  # otherwise re-run on every reconfigure. The apply logic below (messages,
-  # add_compile_options) still runs each configure since those aren't cached.
-
-  # 1. Already lock-free with no extra flag? (Apple Silicon, or a toolchain
-  #    whose default -march already includes the CAS.)
-  if(NOT DEFINED DFTRACER_UTILS_HAS_DWCAS_DEFAULT)
+  if(NOT DEFINED DFTRACER_UTILS_HAS_DWCAS)
     try_compile(
-      _dftracer_dwcas_default "${CMAKE_BINARY_DIR}/temp"
+      _dftracer_has_dwcas "${CMAKE_BINARY_DIR}/temp"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp")
-    set(DFTRACER_UTILS_HAS_DWCAS_DEFAULT ${_dftracer_dwcas_default}
-        CACHE INTERNAL "ObjectPool: lock-free 16-byte CAS without extra flags")
-  endif()
-
-  # 2. If not, does the per-arch ISA flag unlock it?
-  if(NOT DFTRACER_UTILS_HAS_DWCAS_DEFAULT
-     AND _dftracer_dwcas_flag
-     AND NOT DEFINED DFTRACER_UTILS_HAS_DWCAS_FLAG)
-    try_compile(
-      _dftracer_dwcas_flagged "${CMAKE_BINARY_DIR}/temp"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp"
-      COMPILE_DEFINITIONS ${_dftracer_dwcas_flag})
-    set(DFTRACER_UTILS_HAS_DWCAS_FLAG ${_dftracer_dwcas_flagged}
-        CACHE INTERNAL
-              "ObjectPool: lock-free 16-byte CAS with ${_dftracer_dwcas_flag}")
+    set(DFTRACER_UTILS_HAS_DWCAS ${_dftracer_has_dwcas}
+        CACHE INTERNAL "ObjectPool: 16-byte CAS is lock-free under active flags")
   endif()
 
   dftracer_utils_section("ObjectPool atomics")
-  if(DFTRACER_UTILS_HAS_DWCAS_DEFAULT)
-    dftracer_utils_ok("Lock-free 16-byte CAS available (no extra flags)")
-  elseif(_dftracer_dwcas_flag AND DFTRACER_UTILS_HAS_DWCAS_FLAG)
-    dftracer_utils_ok(
-      "Lock-free 16-byte CAS enabled with ${_dftracer_dwcas_flag}")
-    add_compile_options(${_dftracer_dwcas_flag})
-  elseif(_dftracer_dwcas_flag)
-    dftracer_utils_warn(
-      "No lock-free 16-byte CAS even with ${_dftracer_dwcas_flag}; "
-      "using packed 48-bit fallback")
+  if(DFTRACER_UTILS_HAS_DWCAS)
+    dftracer_utils_ok("DWCAS fast path (lock-free 16-byte CAS)")
   else()
-    dftracer_utils_warn(
-      "Unknown processor '${CMAKE_SYSTEM_PROCESSOR}'; using packed 48-bit "
-      "fallback if needed")
+    dftracer_utils_ok("Packed fallback (lock-free 64-bit CAS, portable)")
   endif()
 
-  # libatomic safety net: harmless if the inline CAS is used, required if not.
+  # libatomic safety net for targets that can't inline the atomic (e.g. 32-bit).
   find_library(DFTRACER_UTILS_LIBATOMIC atomic)
   if(DFTRACER_UTILS_LIBATOMIC)
     link_libraries(${DFTRACER_UTILS_LIBATOMIC})

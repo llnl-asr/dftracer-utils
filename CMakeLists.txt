@@ -173,6 +173,7 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 # Enable optimization
 
@@ -257,7 +258,12 @@ dftracer_utils_item("Async I/O      "
                     "io_uring=${DFTRACER_UTILS_HAVE_IO_URING} kqueue=${DFTRACER_UTILS_HAVE_KQUEUE}"
 )
 dftracer_utils_item("Lustre API     " "${DFTRACER_UTILS_HAVE_LUSTREAPI}")
-dftracer_utils_item("Lock-free CAS  " "${DFTRACER_UTILS_HAS_DWCAS_DEFAULT}")
+if(DFTRACER_UTILS_HAS_DWCAS)
+  set(_dftracer_atomics_path "DWCAS (lock-free 16-byte CAS)")
+else()
+  set(_dftracer_atomics_path "packed (lock-free 64-bit CAS, portable)")
+endif()
+dftracer_utils_item("Atomics path   " "${_dftracer_atomics_path}")
 
 add_subdirectory(src)
 

@@ -8,6 +8,10 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -40,13 +44,18 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
       CCACHE_MAXSIZE: 2G
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
+      CCACHE_NOHASHDIR: "true"
 
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-latest, macos-latest]
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        include:
+          - { os: ubuntu-22.04, python-version: "3.12" }
+          - { os: ubuntu-22.04-arm, python-version: "3.12" }
+          - { os: ubuntu-24.04, python-version: "3.12" }
+          - { os: macos-latest, python-version: "3.12" }
 
     steps:
       - uses: actions/checkout@v6
@@ -60,10 +69,17 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-v2-${{ matrix.os }}-${{ matrix.python-version }}-${{ github.run_id }}
+          key: ccache-v3-${{ matrix.os }}-${{ github.run_id }}
           restore-keys: |
-            ccache-v2-${{ matrix.os }}-${{ matrix.python-version }}-
-            ccache-v2-${{ matrix.os }}-
+            ccache-v3-${{ matrix.os }}-
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-v1-
 
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -82,6 +98,9 @@ jobs:
               brew install "$f"
             fi
           done
+
+      - name: ccache stats (reset)
+        run: ccache -z || true
 
       - name: Run coverage
         if: (matrix.os == 'ubuntu-22.04' || matrix.os == 'macos-latest') && matrix.python-version == '3.12'
@@ -102,6 +121,13 @@ jobs:
             make test-py
           fi
 
+      - name: Trust Coveralls Homebrew tap (macOS)
+        if: runner.os == 'macOS' && matrix.python-version == '3.12'
+        run: |
+          brew tap coverallsapp/coveralls || true
+          brew trust coverallsapp/coveralls \
+            || brew trust --formula coverallsapp/coveralls/coveralls || true
+
       - name: Upload coverage reports to Coveralls
         if: (matrix.os == 'ubuntu-22.04' || matrix.os == 'macos-latest') && matrix.python-version == '3.12'
         uses: coverallsapp/github-action@v2.3.6
@@ -113,6 +139,10 @@ jobs:
           parallel: true
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+
+      - name: ccache stats (show)
+        if: always()
+        run: ccache -s || echo "ccache not available"
 
   coverage-finish:
     needs: test
@@ -135,7 +165,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-14]
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-14]
     steps:
       - uses: actions/checkout@v6
 
@@ -145,9 +175,40 @@ jobs:
         with:
           xcode-version: "16.2"
 
+      - name: Cache ccache (wheel)
+        uses: actions/cache@v5
+        with:
+          path: .ccache
+          key: ccache-wheel-v1-${{ matrix.os }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-wheel-v1-${{ matrix.os }}-
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: .cpmsource
+          key: cpmsource-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-v1-
+
       - name: Build and test wheel
         uses: pypa/cibuildwheel@v3.3.0
         env:
-          CIBW_BUILD: cp312-*
-          CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_* *-manylinux_aarch64 *-manylinux_ppc64le *-manylinux_s390x"
+          CIBW_BUILD: cp38-* cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*
+          CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_* *-manylinux_ppc64le *-manylinux_s390x"
           CIBW_CONFIG_SETTINGS: "cmake.define.DFTRACER_UTILS_LOCAL_PACKAGES=OFF"
+          CIBW_BEFORE_ALL_LINUX: "yum install -y epel-release ccache || dnf install -y epel-release ccache || true"
+          CIBW_BEFORE_ALL_MACOS: "brew install ccache || true"
+          CIBW_BEFORE_BUILD: "ccache -s || echo 'WARNING: ccache unavailable - build is uncached'"
+          CIBW_ENVIRONMENT_LINUX: >-
+            CCACHE_DIR=/project/.ccache CCACHE_BASEDIR=/project
+            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=2G
+            CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
+          CIBW_ENVIRONMENT_MACOS: >-
+            CCACHE_DIR=$GITHUB_WORKSPACE/.ccache CCACHE_BASEDIR=$GITHUB_WORKSPACE
+            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=2G
+            CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
+
+      - name: Report ccache size
+        if: always()
+        run: du -sh .ccache 2>/dev/null || echo "no .ccache dir (uncached)"

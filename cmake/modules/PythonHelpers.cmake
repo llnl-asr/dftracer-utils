@@ -74,8 +74,7 @@ exec \"\$binary\" \"\$@\"
     DESTINATION ${CMAKE_INSTALL_VENV_BIN_DIR}
     RENAME ${target_name})
 
-  message(
-    STATUS
-      "Created Python wrapper for ${target_name} -> ${CMAKE_INSTALL_VENV_BIN_DIR}/${target_name}"
+  dftracer_utils_ok(
+    "Created Python wrapper for ${target_name} -> ${CMAKE_INSTALL_VENV_BIN_DIR}/${target_name}"
   )
 endfunction()

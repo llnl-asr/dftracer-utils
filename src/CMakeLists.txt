@@ -993,7 +993,7 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
     )
   endif()
 
-  message(STATUS "Building Python bindings")
+  dftracer_utils_ok("Building Python bindings")
 
   # Python C API binding sources
   python_add_library(

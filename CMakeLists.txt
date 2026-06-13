@@ -18,6 +18,10 @@ set(DFTRACER_UTILS_VERSION
     "${DFTRACER_UTILS_VERSION_MAJOR}.${DFTRACER_UTILS_VERSION_MINOR}.${DFTRACER_UTILS_VERSION_PATCH}"
 )
 
+# Pretty-print helpers (dftracer_utils_status/ok/warn/section/item). Included
+# early so even pre-project status output can use it.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Pretty.cmake)
+
 # Use Ninja as default generator if available and not already specified
 if(NOT DEFINED ENV{CMAKE_GENERATOR} AND NOT CMAKE_GENERATOR)
   find_program(NINJA_EXECUTABLE ninja)
@@ -25,7 +29,7 @@ if(NOT DEFINED ENV{CMAKE_GENERATOR} AND NOT CMAKE_GENERATOR)
     set(CMAKE_GENERATOR
         "Ninja"
         CACHE INTERNAL "Default generator" FORCE)
-    message(STATUS "Using Ninja generator")
+    dftracer_utils_ok("Using Ninja generator")
   endif()
 endif()
 
@@ -43,7 +47,7 @@ if(CCACHE_EXECUTABLE)
           CACHE STRING "Compiler launcher for ${lang}" FORCE)
     endif()
   endforeach()
-  message(STATUS "Using ccache: ${CCACHE_EXECUTABLE}")
+  dftracer_utils_ok("Using ccache: ${CCACHE_EXECUTABLE}")
 endif()
 
 set(DFTRACER_UTILS_PACKAGE ${PROJECT_NAME})
@@ -84,7 +88,7 @@ option(
   ON)
 
 if(DFTRACER_UTILS_TESTS)
-  message(STATUS "Building tests")
+  dftracer_utils_ok("Building tests")
   set(DFTRACER_UTILS_TESTS
       ON
       CACHE BOOL "" FORCE)
@@ -135,20 +139,21 @@ if(HAVE_LINUX_IO_URING_H)
 endif()
 if(HAVE_LINUX_IO_URING_H AND HAVE_IO_URING_SYSCALL)
   set(DFTRACER_UTILS_HAVE_IO_URING ON)
-  message(STATUS "io_uring support: enabled (kernel header found)")
+  dftracer_utils_ok("io_uring support: enabled (kernel header found)")
 else()
   set(DFTRACER_UTILS_HAVE_IO_URING OFF)
-  message(STATUS "io_uring support: disabled (kernel header or syscall not found)")
+  dftracer_utils_warn(
+    "io_uring support: disabled (kernel header or syscall not found)")
 endif()
 
 # kqueue: detect availability (macOS, FreeBSD, etc.)
 check_include_file("sys/event.h" HAVE_SYS_EVENT_H)
 if(HAVE_SYS_EVENT_H)
   set(DFTRACER_UTILS_HAVE_KQUEUE ON)
-  message(STATUS "kqueue support: enabled (sys/event.h found)")
+  dftracer_utils_ok("kqueue support: enabled (sys/event.h found)")
 else()
   set(DFTRACER_UTILS_HAVE_KQUEUE OFF)
-  message(STATUS "kqueue support: disabled (sys/event.h not found)")
+  dftracer_utils_warn("kqueue support: disabled (sys/event.h not found)")
 endif()
 
 # lustreapi: optional for stripe_count / stripe_size queries. When absent, the
@@ -157,10 +162,11 @@ check_include_file("lustre/lustreapi.h" HAVE_LUSTRE_LUSTREAPI_H)
 find_library(LUSTREAPI_LIBRARY NAMES lustreapi)
 if(HAVE_LUSTRE_LUSTREAPI_H AND LUSTREAPI_LIBRARY)
   set(DFTRACER_UTILS_HAVE_LUSTREAPI ON)
-  message(STATUS "lustreapi support: enabled (${LUSTREAPI_LIBRARY})")
+  dftracer_utils_ok("lustreapi support: enabled (${LUSTREAPI_LIBRARY})")
 else()
   set(DFTRACER_UTILS_HAVE_LUSTREAPI OFF)
-  message(STATUS "lustreapi support: disabled (header or library not found)")
+  dftracer_utils_warn(
+    "lustreapi support: disabled (header or library not found)")
 endif()
 
 # Set C++ standard
@@ -189,6 +195,10 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Rpath.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PythonHelpers.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Sanitizer.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PrecompiledHeader.cmake)
+
+# Enable the lock-free 16-byte CAS (DWCAS) fast path for ObjectPool when the
+# target supports it; otherwise the header transparently uses a packed fallback.
+check_dwcas()
 
 configure_sanitizers()
 print_sanitizer_status()
@@ -224,6 +234,31 @@ endif()
 set_coverage_compiler_flags(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
 
 check_std_filesystem()
+
+# Configuration summary
+dftracer_utils_section("dftracer-utils ${DFTRACER_UTILS_VERSION}")
+dftracer_utils_item("Build type     " "${CMAKE_BUILD_TYPE}")
+dftracer_utils_item("Compiler       "
+                    "${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+dftracer_utils_item("Target arch    " "${CMAKE_SYSTEM_PROCESSOR}")
+dftracer_utils_item("Libraries      "
+                    "shared=${DFTRACER_UTILS_BUILD_SHARED} static=${DFTRACER_UTILS_BUILD_STATIC}"
+)
+dftracer_utils_item("Binaries / PyExt"
+                    "${DFTRACER_UTILS_BUILD_BINARIES} / ${DFTRACER_UTILS_BUILD_PYTHON}"
+)
+dftracer_utils_item("Tests          " "${DFTRACER_UTILS_TESTS}")
+dftracer_utils_item("MPI            " "${DFTRACER_UTILS_ENABLE_MPI}")
+dftracer_utils_item("Compression    "
+                    "zstd=${DFTRACER_UTILS_ENABLE_ZSTD} lz4=${DFTRACER_UTILS_ENABLE_LZ4}"
+)
+dftracer_utils_item("Arrow          " "${DFTRACER_UTILS_ENABLE_ARROW}")
+dftracer_utils_item("Async I/O      "
+                    "io_uring=${DFTRACER_UTILS_HAVE_IO_URING} kqueue=${DFTRACER_UTILS_HAVE_KQUEUE}"
+)
+dftracer_utils_item("Lustre API     " "${DFTRACER_UTILS_HAVE_LUSTREAPI}")
+dftracer_utils_item("Lock-free CAS  " "${DFTRACER_UTILS_HAS_DWCAS_DEFAULT}")
+
 add_subdirectory(src)
 
 if(DFTRACER_UTILS_TESTS)

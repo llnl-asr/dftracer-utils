@@ -189,9 +189,8 @@ function(detect_common_headers)
   # Optional: Print detected headers for debugging
   if(FILTERED_HEADERS)
     list(LENGTH FILTERED_HEADERS HEADER_COUNT)
-    message(
-      STATUS
-        "Detected ${HEADER_COUNT} common headers for PCH (min count: ${ARG_MIN_COUNT})"
+    dftracer_utils_ok(
+      "Detected ${HEADER_COUNT} common headers for PCH (min count: ${ARG_MIN_COUNT})"
     )
   else()
     message(
@@ -288,12 +287,12 @@ function(use_precompiled_header TARGET)
                                   "${PCH_HEADERS}")
 
     list(LENGTH PCH_HEADERS HEADER_COUNT)
-    message(STATUS "Detected ${HEADER_COUNT} common headers for PCH")
+    dftracer_utils_ok("Detected ${HEADER_COUNT} common headers for PCH")
   endif()
 
   # Apply PCH to this target (each target gets its own PCH to avoid compile definition issues)
   target_precompile_headers(${TARGET} PRIVATE ${PCH_HEADERS})
-  message(STATUS "Target ${TARGET}: Applied PCH (${VARIANT_KEY})")
+  dftracer_utils_ok("Target ${TARGET}: Applied PCH (${VARIANT_KEY})")
 endfunction()
 
 # ##############################################################################

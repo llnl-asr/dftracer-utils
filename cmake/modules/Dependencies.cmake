@@ -15,9 +15,9 @@ find_package(Threads REQUIRED)
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support" OFF)
 if(DFTRACER_UTILS_ENABLE_MPI)
   find_package(MPI REQUIRED)
-  message(STATUS "MPI support enabled")
-  message(STATUS "  MPI_CXX_COMPILER: ${MPI_CXX_COMPILER}")
-  message(STATUS "  MPI_CXX_LIBRARIES: ${MPI_CXX_LIBRARIES}")
+  dftracer_utils_section("MPI support enabled")
+  dftracer_utils_item("MPI_CXX_COMPILER" "${MPI_CXX_COMPILER}")
+  dftracer_utils_item("MPI_CXX_LIBRARIES" "${MPI_CXX_LIBRARIES}")
 endif()
 
 set(DEPENDENCY_LIBRARY_DIRS "")
@@ -42,13 +42,13 @@ function(need_cpplogger)
   find_package(cpp-logger 0.0.7 QUIET)
 
   if(cpp-logger_FOUND)
-    message(STATUS "Found system cpp-logger")
+    dftracer_utils_ok("Found system cpp-logger")
 
     # The system package should provide cpp-logger::cpp-logger target If for
     # some reason it doesn't, try to create it from cpp-logger target
     if(NOT TARGET cpp-logger::cpp-logger AND TARGET cpp-logger)
-      message(
-        STATUS "Creating cpp-logger::cpp-logger alias for system cpp-logger")
+      dftracer_utils_ok(
+        "Creating cpp-logger::cpp-logger alias for system cpp-logger")
       add_library(cpp-logger::cpp-logger ALIAS cpp-logger)
     endif()
 
@@ -76,7 +76,7 @@ function(need_cpplogger)
     endif()
 
     if(cpplogger_ADDED)
-      message(STATUS "Built cpp-logger with CPM (manual target creation)")
+      dftracer_utils_ok("Built cpp-logger with CPM (manual target creation)")
 
       set(CPPLOGGER_TARGETS)
 
@@ -100,7 +100,7 @@ function(need_cpplogger)
         endif()
         add_library(cpp-logger::cpp-logger_static ALIAS cpp-logger_static)
         list(APPEND CPPLOGGER_TARGETS cpp-logger_static)
-        message(STATUS "Added cpp-logger static library")
+        dftracer_utils_ok("Added cpp-logger static library")
       endif()
 
       # Build shared library if requested
@@ -124,7 +124,7 @@ function(need_cpplogger)
         endif()
         add_library(cpp-logger::cpp-logger ALIAS cpp-logger_shared)
         list(APPEND CPPLOGGER_TARGETS cpp-logger_shared)
-        message(STATUS "Added cpp-logger shared library")
+        dftracer_utils_ok("Added cpp-logger shared library")
       elseif(DFTRACER_UTILS_BUILD_STATIC)
         # If only static is built, make it the default alias
         add_library(cpp-logger::cpp-logger ALIAS cpp-logger_static)
@@ -193,13 +193,13 @@ function(link_cpp_logger TARGET_NAME LIBRARY_TYPE)
     # For static libraries, prefer static cpp-logger if available
     if(TARGET cpp-logger_static)
       target_link_libraries(${TARGET_NAME} PUBLIC cpp-logger::cpp-logger_static)
-      message(STATUS "Linked ${TARGET_NAME} to cpp-logger_static")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to cpp-logger_static")
     elseif(TARGET cpp-logger_shared)
       target_link_libraries(${TARGET_NAME} PUBLIC cpp-logger::cpp-logger)
-      message(STATUS "Linked ${TARGET_NAME} to cpp-logger (shared)")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to cpp-logger (shared)")
     elseif(TARGET cpp-logger::cpp-logger)
       target_link_libraries(${TARGET_NAME} PUBLIC cpp-logger::cpp-logger)
-      message(STATUS "Linked ${TARGET_NAME} to system cpp-logger")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to system cpp-logger")
     else()
       message(
         FATAL_ERROR
@@ -209,13 +209,13 @@ function(link_cpp_logger TARGET_NAME LIBRARY_TYPE)
     # For shared libraries, prefer shared cpp-logger if available
     if(TARGET cpp-logger_shared)
       target_link_libraries(${TARGET_NAME} PUBLIC cpp-logger::cpp-logger)
-      message(STATUS "Linked ${TARGET_NAME} to cpp-logger (shared)")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to cpp-logger (shared)")
     elseif(TARGET cpp-logger_static)
       target_link_libraries(${TARGET_NAME} PUBLIC cpp-logger::cpp-logger_static)
-      message(STATUS "Linked ${TARGET_NAME} to cpp-logger_static")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to cpp-logger_static")
     elseif(TARGET cpp-logger::cpp-logger)
       target_link_libraries(${TARGET_NAME} PUBLIC cpp-logger::cpp-logger)
-      message(STATUS "Linked ${TARGET_NAME} to system cpp-logger")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to system cpp-logger")
     else()
       message(
         FATAL_ERROR
@@ -317,7 +317,7 @@ endfunction()
 function(need_tl_expected)
   # tl::expected is only needed when C++23 std::expected is unavailable
   if(CMAKE_CXX_STANDARD GREATER_EQUAL 23)
-    message(STATUS "C++23 detected: using std::expected (skipping tl::expected)")
+    dftracer_utils_warn("C++23 detected: using std::expected (skipping tl::expected)")
     return()
   endif()
 
@@ -360,7 +360,7 @@ function(need_tl_expected)
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tl_expected)
     endif()
 
-    message(STATUS "Added tl::expected header-only library via CPM")
+    dftracer_utils_ok("Added tl::expected header-only library via CPM")
   endif()
 endfunction()
 
@@ -381,10 +381,10 @@ function(link_tl_expected TARGET_NAME)
 
   if(TARGET tl::expected)
     target_link_libraries(${TARGET_NAME} PUBLIC tl::expected)
-    message(STATUS "Linked ${TARGET_NAME} to tl::expected")
+    dftracer_utils_ok("Linked ${TARGET_NAME} to tl::expected")
   elseif(TARGET tl_expected)
     target_link_libraries(${TARGET_NAME} PUBLIC tl_expected)
-    message(STATUS "Linked ${TARGET_NAME} to tl_expected")
+    dftracer_utils_ok("Linked ${TARGET_NAME} to tl_expected")
   else()
     message(
       FATAL_ERROR
@@ -413,7 +413,7 @@ function(need_simdjson)
   endif()
 
   if(simdjson_ADDED AND NOT TARGET simdjson)
-    message(STATUS "Building simdjson library (v4.6.4)")
+    dftracer_utils_ok("Building simdjson library (v4.6.4)")
 
     # simdjson is a single-header + single-source library
     set(SIMDJSON_SOURCES
@@ -439,7 +439,7 @@ function(need_simdjson)
           POSITION_INDEPENDENT_CODE ON)
       add_library(simdjson::simdjson_static ALIAS simdjson_static)
       list(APPEND SIMDJSON_TARGETS simdjson_static)
-      message(STATUS "Added simdjson static library")
+      dftracer_utils_ok("Added simdjson static library")
     endif()
 
     if(DFTRACER_UTILS_BUILD_SHARED)
@@ -459,7 +459,7 @@ function(need_simdjson)
           ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
       add_library(simdjson::simdjson ALIAS simdjson_shared)
       list(APPEND SIMDJSON_TARGETS simdjson_shared)
-      message(STATUS "Added simdjson shared library")
+      dftracer_utils_ok("Added simdjson shared library")
     elseif(DFTRACER_UTILS_BUILD_STATIC)
       add_library(simdjson::simdjson ALIAS simdjson_static)
     endif()
@@ -505,14 +505,14 @@ function(link_simdjson TARGET_NAME LIBRARY_TYPE)
     # For static libraries, prefer static simdjson if available
     if(TARGET simdjson_static)
       target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson_static)
-      message(STATUS "Linked ${TARGET_NAME} to simdjson_static")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to simdjson_static")
     elseif(TARGET simdjson_shared)
       target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
-      message(STATUS "Linked ${TARGET_NAME} to simdjson (shared)")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to simdjson (shared)")
     elseif(TARGET simdjson::simdjson)
       # System / find_package() simdjson (e.g. Homebrew on macOS).
       target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
-      message(STATUS "Linked ${TARGET_NAME} to system simdjson::simdjson")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to system simdjson::simdjson")
     else()
       message(
         FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
@@ -521,14 +521,14 @@ function(link_simdjson TARGET_NAME LIBRARY_TYPE)
     # For shared libraries, prefer shared simdjson if available
     if(TARGET simdjson_shared)
       target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
-      message(STATUS "Linked ${TARGET_NAME} to simdjson (shared)")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to simdjson (shared)")
     elseif(TARGET simdjson_static)
       target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson_static)
-      message(STATUS "Linked ${TARGET_NAME} to simdjson_static")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to simdjson_static")
     elseif(TARGET simdjson::simdjson)
       # System / find_package() simdjson (e.g. Homebrew on macOS).
       target_link_libraries(${TARGET_NAME} PUBLIC simdjson::simdjson)
-      message(STATUS "Linked ${TARGET_NAME} to system simdjson::simdjson")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to system simdjson::simdjson")
     else()
       message(
         FATAL_ERROR "link_simdjson: No simdjson found! Call need_simdjson() first.")
@@ -556,7 +556,7 @@ function(need_rocksdb)
   endif()
 
   if(DFTRACER_UTILS_LOCAL_PACKAGES AND RocksDB_FOUND)
-    message(STATUS "Found system RocksDB")
+    dftracer_utils_ok("Found system RocksDB")
 
     if(NOT TARGET RocksDB::rocksdb)
       if(TARGET rocksdb)
@@ -639,7 +639,7 @@ function(need_rocksdb)
     endif()
 
     if(rocksdb_ADDED OR TARGET rocksdb OR TARGET rocksdb-shared)
-      message(STATUS "Built RocksDB with CPM")
+      dftracer_utils_ok("Built RocksDB with CPM")
 
       set(ROCKSDB_LIBRARY_DIR "${CMAKE_BINARY_DIR}/lib")
 
@@ -753,32 +753,32 @@ function(link_rocksdb TARGET_NAME LIBRARY_TYPE)
   if(LIBRARY_TYPE STREQUAL "STATIC")
     if(TARGET RocksDB::rocksdb_static)
       target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb_static)
-      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb_static")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb_static")
     elseif(TARGET rocksdb)
       target_link_libraries(${TARGET_NAME} PUBLIC rocksdb)
-      message(STATUS "Linked ${TARGET_NAME} to rocksdb")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to rocksdb")
     elseif(TARGET RocksDB::rocksdb)
       target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb)
-      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb")
     else()
       message(FATAL_ERROR "Static RocksDB requested for ${TARGET_NAME}, but no static RocksDB target is available")
     endif()
   else()
     if(TARGET RocksDB::rocksdb_shared)
       target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb_shared)
-      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb_shared")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb_shared")
     elseif(TARGET rocksdb-shared)
       target_link_libraries(${TARGET_NAME} PUBLIC rocksdb-shared)
-      message(STATUS "Linked ${TARGET_NAME} to rocksdb-shared")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to rocksdb-shared")
     elseif(TARGET RocksDB::rocksdb)
       target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb)
-      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb")
     elseif(TARGET RocksDB::rocksdb_static)
       target_link_libraries(${TARGET_NAME} PUBLIC RocksDB::rocksdb_static)
-      message(STATUS "Linked ${TARGET_NAME} to RocksDB::rocksdb_static")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to RocksDB::rocksdb_static")
     elseif(TARGET rocksdb)
       target_link_libraries(${TARGET_NAME} PUBLIC rocksdb)
-      message(STATUS "Linked ${TARGET_NAME} to rocksdb")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to rocksdb")
     endif()
   endif()
 endfunction()
@@ -799,7 +799,7 @@ function(need_lz4)
   find_library(lz4_LIBRARIES NAMES lz4)
 
   if(lz4_INCLUDE_DIRS AND lz4_LIBRARIES AND EXISTS "${lz4_LIBRARIES}")
-    message(STATUS "Found system lz4: ${lz4_LIBRARIES}")
+    dftracer_utils_ok("Found system lz4: ${lz4_LIBRARIES}")
 
     if(NOT TARGET lz4::lz4)
       add_library(lz4::lz4 UNKNOWN IMPORTED)
@@ -846,7 +846,7 @@ function(need_lz4)
     endif()
 
     if(lz4_ADDED)
-      message(STATUS "Built lz4 with CPM")
+      dftracer_utils_ok("Built lz4 with CPM")
 
       set(LZ4_TARGETS)
       set(LZ4_SOURCES
@@ -997,6 +997,23 @@ function(_try_zlib_ng OUT_VAR)
     "SKIP_INSTALL_ALL ON")
 
   if(NOT zlib-ng_ADDED)
+    # CPM reports ADDED=NO when the package was already added by an earlier
+    # need_zlib() call (e.g. src/ adds it, then tests/ asks again). That is not
+    # a failure: the targets already exist globally. Re-expose the dirs and
+    # report success, but skip the one-time target/alias/install setup below
+    # (re-running it would error on duplicate ALIAS / EXPORT definitions).
+    if(TARGET zlib-ng OR TARGET zlib-ng-static)
+      set(ZLIB_SOURCE_DIR
+          ${zlib-ng_SOURCE_DIR}
+          PARENT_SCOPE)
+      set(ZLIB_BINARY_DIR
+          ${zlib-ng_BINARY_DIR}
+          PARENT_SCOPE)
+      set(${OUT_VAR}
+          TRUE
+          PARENT_SCOPE)
+      return()
+    endif()
     message(WARNING "zlib-ng CPM add failed; will fall back to madler/zlib")
     return()
   endif()
@@ -1016,7 +1033,7 @@ function(_try_zlib_ng OUT_VAR)
       add_library(dftracer_zlib_shared ALIAS zlib-ng)
       add_library(dftracer::zlib ALIAS zlib-ng)
       list(APPEND ZLIB_NG_TARGETS zlib-ng)
-      message(STATUS "Using zlib-ng (compat, shared) as dftracer_zlib")
+      dftracer_utils_ok("Using zlib-ng (compat, shared) as dftracer_zlib")
     endif()
   endif()
 
@@ -1032,7 +1049,7 @@ function(_try_zlib_ng OUT_VAR)
       add_library(dftracer::zlib ALIAS zlib-ng-static)
     endif()
     list(APPEND ZLIB_NG_TARGETS zlib-ng-static)
-    message(STATUS "Using zlib-ng (compat, static) as dftracer_zlib")
+    dftracer_utils_ok("Using zlib-ng (compat, static) as dftracer_zlib")
   endif()
 
   if(NOT ZLIB_NG_TARGETS)
@@ -1098,7 +1115,7 @@ function(need_zlib)
   find_package(ZLIB 1.2 QUIET)
 
   if(ZLIB_FOUND)
-    message(STATUS "Found system ZLIB: ${ZLIB_LIBRARIES}")
+    dftracer_utils_ok("Found system ZLIB: ${ZLIB_LIBRARIES}")
 
     # Set variables in parent scope so they persist outside the function
     set(ZLIB_FOUND
@@ -1134,7 +1151,7 @@ function(need_zlib)
       YES)
 
     if(ZLIB_ADDED)
-      message(STATUS "Built ZLIB with CPM")
+      dftracer_utils_ok("Built ZLIB with CPM")
       set(ZLIB_CPM
           TRUE
           PARENT_SCOPE)
@@ -1260,7 +1277,7 @@ function(need_zlib)
                      LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
                      ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
         add_library(dftracer::zlib ALIAS dftracer_zlib_shared)
-        message(STATUS "Added dftracer_zlib shared library")
+        dftracer_utils_ok("Added dftracer_zlib shared library")
       endif()
 
       if(DFTRACER_UTILS_BUILD_STATIC)
@@ -1270,7 +1287,7 @@ function(need_zlib)
                      LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
                      ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
         add_library(dftracer::zlibstatic ALIAS dftracer_zlib_static)
-        message(STATUS "Added dftracer_zlib static library")
+        dftracer_utils_ok("Added dftracer_zlib static library")
         # If only static is built, make it the default alias
         if(NOT DFTRACER_UTILS_BUILD_SHARED)
           add_library(dftracer::zlib ALIAS dftracer_zlib_static)
@@ -1363,25 +1380,25 @@ function(link_zlib TARGET_NAME LIBRARY_TYPE)
     # For static libraries, prefer static zlib if available
     if(TARGET dftracer_zlib_static)
       target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlibstatic)
-      message(STATUS "Linked ${TARGET_NAME} to dftracer zlibstatic")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlibstatic")
     elseif(TARGET dftracer_zlib_shared)
       target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlib)
-      message(STATUS "Linked ${TARGET_NAME} to dftracer zlib (shared)")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlib (shared)")
     elseif(ZLIB_FOUND)
       target_link_libraries(${TARGET_NAME} PUBLIC ZLIB::ZLIB)
-      message(STATUS "Linked ${TARGET_NAME} to system ZLIB::ZLIB")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to system ZLIB::ZLIB")
     endif()
   else() # SHARED
     # For shared libraries, prefer shared zlib if available
     if(TARGET dftracer_zlib_shared)
       target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlib)
-      message(STATUS "Linked ${TARGET_NAME} to dftracer zlib (shared)")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlib (shared)")
     elseif(TARGET dftracer_zlib_static)
       target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlibstatic)
-      message(STATUS "Linked ${TARGET_NAME} to dftracer zlibstatic")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlibstatic")
     elseif(ZLIB_FOUND)
       target_link_libraries(${TARGET_NAME} PUBLIC ZLIB::ZLIB)
-      message(STATUS "Linked ${TARGET_NAME} to system ZLIB::ZLIB")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to system ZLIB::ZLIB")
     endif()
   endif()
 endfunction()
@@ -1399,7 +1416,7 @@ function(need_zstd)
   endif()
 
   if(DFTRACER_UTILS_LOCAL_PACKAGES AND zstd_FOUND)
-    message(STATUS "Found system zstd")
+    dftracer_utils_ok("Found system zstd")
     if(DEFINED zstd_LIBRARIES)
       # Provide the same target names as the CPM branch: zstd::libzstd_shared
       # for consumers (nanoarrow IPC) and zstd::zstd for RocksDB.
@@ -1441,7 +1458,7 @@ function(need_zstd)
     endif()
 
     if(zstd_ADDED)
-      message(STATUS "Built zstd with CPM")
+      dftracer_utils_ok("Built zstd with CPM")
 
       set(_zstd_real)
       foreach(_zstd_t libzstd_shared libzstd_static)
@@ -1544,7 +1561,7 @@ function(need_readerwriterqueue)
         FILE readerwriterqueueTargets.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/readerwriterqueue)
 
-      message(STATUS "Added readerwriterqueue header-only library")
+      dftracer_utils_ok("Added readerwriterqueue header-only library")
     endif()
   endif()
 endfunction()
@@ -1579,7 +1596,7 @@ function(need_concurrentqueue)
         FILE concurrentqueueTargets.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/concurrentqueue)
 
-      message(STATUS "Added concurrentqueue header-only library")
+      dftracer_utils_ok("Added concurrentqueue header-only library")
     endif()
   endif()
 endfunction()
@@ -1629,7 +1646,7 @@ function(need_nanoarrow)
         ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/src/runtime/verifier.c)
       set(NANOARROW_FLATCC_INCLUDE
           ${nanoarrow_SOURCE_DIR}/thirdparty/flatcc/include)
-      message(STATUS "nanoarrow IPC support enabled (reader + writer)")
+      dftracer_utils_ok("nanoarrow IPC support enabled (reader + writer)")
     endif()
 
     # Generate nanoarrow_config.h from template
@@ -1673,7 +1690,7 @@ function(need_nanoarrow)
                    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
       add_library(nanoarrow::nanoarrow_static ALIAS nanoarrow_static)
       list(APPEND NANOARROW_TARGETS nanoarrow_static)
-      message(STATUS "Added nanoarrow static library")
+      dftracer_utils_ok("Added nanoarrow static library")
     endif()
 
     if(DFTRACER_UTILS_BUILD_SHARED)
@@ -1708,7 +1725,7 @@ function(need_nanoarrow)
                    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
       add_library(nanoarrow::nanoarrow ALIAS nanoarrow_shared)
       list(APPEND NANOARROW_TARGETS nanoarrow_shared)
-      message(STATUS "Added nanoarrow shared library")
+      dftracer_utils_ok("Added nanoarrow shared library")
     elseif(DFTRACER_UTILS_BUILD_STATIC)
       add_library(nanoarrow::nanoarrow ALIAS nanoarrow_static)
     endif()
@@ -1758,7 +1775,7 @@ function(need_nanoarrow)
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nanoarrow)
     endif()
 
-    message(STATUS "Added nanoarrow 0.8.0 via CPM")
+    dftracer_utils_ok("Added nanoarrow 0.8.0 via CPM")
   endif()
 endfunction()
 
@@ -1781,10 +1798,10 @@ function(link_nanoarrow TARGET_NAME LIBRARY_TYPE)
   if(LIBRARY_TYPE STREQUAL "STATIC")
     if(TARGET nanoarrow_static)
       target_link_libraries(${TARGET_NAME} PUBLIC nanoarrow::nanoarrow_static)
-      message(STATUS "Linked ${TARGET_NAME} to nanoarrow_static")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to nanoarrow_static")
     elseif(TARGET nanoarrow_shared)
       target_link_libraries(${TARGET_NAME} PUBLIC nanoarrow::nanoarrow)
-      message(STATUS "Linked ${TARGET_NAME} to nanoarrow (shared)")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to nanoarrow (shared)")
     else()
       message(
         FATAL_ERROR
@@ -1793,10 +1810,10 @@ function(link_nanoarrow TARGET_NAME LIBRARY_TYPE)
   else()
     if(TARGET nanoarrow_shared)
       target_link_libraries(${TARGET_NAME} PUBLIC nanoarrow::nanoarrow)
-      message(STATUS "Linked ${TARGET_NAME} to nanoarrow (shared)")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to nanoarrow (shared)")
     elseif(TARGET nanoarrow_static)
       target_link_libraries(${TARGET_NAME} PUBLIC nanoarrow::nanoarrow_static)
-      message(STATUS "Linked ${TARGET_NAME} to nanoarrow_static")
+      dftracer_utils_ok("Linked ${TARGET_NAME} to nanoarrow_static")
     else()
       message(
         FATAL_ERROR
@@ -1829,7 +1846,7 @@ function(need_boost_math)
     set(boost_math_SOURCE_DIR
         "${boost_math_SOURCE_DIR}"
         CACHE INTERNAL "Boost.Math source tree from CPM")
-    message(STATUS "Added Boost.Math (standalone) headers from ${boost_math_SOURCE_DIR}/include")
+    dftracer_utils_ok("Added Boost.Math (standalone) headers from ${boost_math_SOURCE_DIR}/include")
   endif()
 endfunction()
 
@@ -1851,7 +1868,7 @@ function(link_boost_math TARGET_NAME)
   target_include_directories(${TARGET_NAME} SYSTEM PRIVATE
                              ${boost_math_SOURCE_DIR}/include)
   target_compile_definitions(${TARGET_NAME} PRIVATE BOOST_MATH_STANDALONE)
-  message(STATUS "Linked ${TARGET_NAME} to Boost.Math (standalone)")
+  dftracer_utils_ok("Linked ${TARGET_NAME} to Boost.Math (standalone)")
 endfunction()
 
 # ==============================================================================
@@ -1892,7 +1909,7 @@ function(link_yaml_cpp TARGET_NAME)
       "link_yaml_cpp: yaml-cpp::yaml-cpp target missing; call need_yaml_cpp() first")
   endif()
   target_link_libraries(${TARGET_NAME} PRIVATE yaml-cpp::yaml-cpp)
-  message(STATUS "Linked ${TARGET_NAME} to yaml-cpp")
+  dftracer_utils_ok("Linked ${TARGET_NAME} to yaml-cpp")
 endfunction()
 
 # ==============================================================================
@@ -1925,17 +1942,22 @@ endfunction()
 # ==============================================================================
 
 macro(check_std_filesystem)
-  try_compile(
-    DFTRACER_UTILS_HAS_STD_FILESYSTEM "${CMAKE_BINARY_DIR}/temp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_filesystem.cpp"
-    CMAKE_FLAGS ${CMAKE_CXX_FLAGS}
-    LINK_LIBRARIES stdc++fs)
+  # Probe once and cache; try_compile otherwise re-runs a compiler every
+  # reconfigure. The status message below still prints each configure.
+  if(NOT DEFINED DFTRACER_UTILS_HAS_STD_FILESYSTEM)
+    try_compile(
+      _dftracer_has_std_filesystem "${CMAKE_BINARY_DIR}/temp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_filesystem.cpp"
+      CMAKE_FLAGS ${CMAKE_CXX_FLAGS}
+      LINK_LIBRARIES stdc++fs)
+    set(DFTRACER_UTILS_HAS_STD_FILESYSTEM ${_dftracer_has_std_filesystem}
+        CACHE INTERNAL "Compiler provides a usable std::filesystem")
+  endif()
   if(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
-    message(STATUS "Compiler has std::filesystem support")
+    dftracer_utils_ok("Compiler has std::filesystem support")
   else()
-    message(
-      STATUS
-        "Compiler does not have std::filesystem support. Use gulrak::filesystem"
+    dftracer_utils_warn(
+      "Compiler does not have std::filesystem support. Use gulrak::filesystem"
     )
   endif(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
 endmacro()
@@ -1945,3 +1967,68 @@ function(add_stdfs_if_needed TARGET)
     target_link_libraries(${TARGET} PRIVATE stdc++fs)
   endif()
 endfunction()
+
+# Probe for a lock-free 16-byte CAS (DWCAS) and, if an extra ISA flag unlocks
+# it, add that flag globally so ObjectPool gets its fast ABA-safe path. This is
+# an optimization, not a requirement: object_pool.h self-selects a packed
+# single-word fallback when DWCAS is unavailable, so a miss only costs the
+# 48-bit-VA fallback, never a build failure.
+macro(check_dwcas)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    set(_dftracer_dwcas_flag "-mcx16")
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(_dftracer_dwcas_flag "-march=armv8-a+lse")
+  else()
+    set(_dftracer_dwcas_flag "")
+  endif()
+
+  # Probe once and cache the results: try_compile spawns a compiler and would
+  # otherwise re-run on every reconfigure. The apply logic below (messages,
+  # add_compile_options) still runs each configure since those aren't cached.
+
+  # 1. Already lock-free with no extra flag? (Apple Silicon, or a toolchain
+  #    whose default -march already includes the CAS.)
+  if(NOT DEFINED DFTRACER_UTILS_HAS_DWCAS_DEFAULT)
+    try_compile(
+      _dftracer_dwcas_default "${CMAKE_BINARY_DIR}/temp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp")
+    set(DFTRACER_UTILS_HAS_DWCAS_DEFAULT ${_dftracer_dwcas_default}
+        CACHE INTERNAL "ObjectPool: lock-free 16-byte CAS without extra flags")
+  endif()
+
+  # 2. If not, does the per-arch ISA flag unlock it?
+  if(NOT DFTRACER_UTILS_HAS_DWCAS_DEFAULT
+     AND _dftracer_dwcas_flag
+     AND NOT DEFINED DFTRACER_UTILS_HAS_DWCAS_FLAG)
+    try_compile(
+      _dftracer_dwcas_flagged "${CMAKE_BINARY_DIR}/temp"
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp"
+      COMPILE_DEFINITIONS ${_dftracer_dwcas_flag})
+    set(DFTRACER_UTILS_HAS_DWCAS_FLAG ${_dftracer_dwcas_flagged}
+        CACHE INTERNAL
+              "ObjectPool: lock-free 16-byte CAS with ${_dftracer_dwcas_flag}")
+  endif()
+
+  dftracer_utils_section("ObjectPool atomics")
+  if(DFTRACER_UTILS_HAS_DWCAS_DEFAULT)
+    dftracer_utils_ok("Lock-free 16-byte CAS available (no extra flags)")
+  elseif(_dftracer_dwcas_flag AND DFTRACER_UTILS_HAS_DWCAS_FLAG)
+    dftracer_utils_ok(
+      "Lock-free 16-byte CAS enabled with ${_dftracer_dwcas_flag}")
+    add_compile_options(${_dftracer_dwcas_flag})
+  elseif(_dftracer_dwcas_flag)
+    dftracer_utils_warn(
+      "No lock-free 16-byte CAS even with ${_dftracer_dwcas_flag}; "
+      "using packed 48-bit fallback")
+  else()
+    dftracer_utils_warn(
+      "Unknown processor '${CMAKE_SYSTEM_PROCESSOR}'; using packed 48-bit "
+      "fallback if needed")
+  endif()
+
+  # libatomic safety net: harmless if the inline CAS is used, required if not.
+  find_library(DFTRACER_UTILS_LIBATOMIC atomic)
+  if(DFTRACER_UTILS_LIBATOMIC)
+    link_libraries(${DFTRACER_UTILS_LIBATOMIC})
+  endif()
+endmacro()

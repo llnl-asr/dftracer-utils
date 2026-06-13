@@ -142,14 +142,11 @@ endfunction()
 
 # Print sanitizer status
 function(print_sanitizer_status)
-  message(STATUS "")
-  message(STATUS "Sanitizer Configuration:")
-  message(
-    STATUS "  AddressSanitizer (ASan):         ${DFTRACER_UTILS_ENABLE_ASAN}")
-  message(
-    STATUS
-      "  UndefinedBehaviorSanitizer (UBSan): ${DFTRACER_UTILS_ENABLE_UBSAN}")
-  message(
-    STATUS "  ThreadSanitizer (TSan):          ${DFTRACER_UTILS_ENABLE_TSAN}")
-  message(STATUS "")
+  dftracer_utils_section("Sanitizer configuration")
+  dftracer_utils_item("AddressSanitizer  (ASan) "
+                      "${DFTRACER_UTILS_ENABLE_ASAN}")
+  dftracer_utils_item("UndefinedBehavior (UBSan)"
+                      "${DFTRACER_UTILS_ENABLE_UBSAN}")
+  dftracer_utils_item("ThreadSanitizer   (TSan) "
+                      "${DFTRACER_UTILS_ENABLE_TSAN}")
 endfunction()

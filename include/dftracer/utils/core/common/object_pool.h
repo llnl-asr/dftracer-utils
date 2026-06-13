@@ -8,10 +8,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <new>
+#include <type_traits>
 
 namespace dftracer::utils {
 
-class TreiberStack {
+namespace detail {
+
+struct TreiberBase {
     static void store_next(void* block, void* next) noexcept {
         __atomic_store_n(reinterpret_cast<void**>(block), next,
                          __ATOMIC_RELEASE);
@@ -20,13 +23,73 @@ class TreiberStack {
         return __atomic_load_n(reinterpret_cast<void**>(block),
                                __ATOMIC_ACQUIRE);
     }
+};
 
+struct alignas(16) TaggedHead {
+    void* ptr;
+    std::uint64_t tag;
+};
+
+// ABA-safe via a 16-byte compare-and-swap (CMPXCHG16B on x86-64 with -mcx16,
+// CASP/LSE on AArch64 with -march=armv8.1-a+). The pointer is stored verbatim,
+// so it works on any address layout. Used only when the 16-byte atomic is
+// lock-free; otherwise TreiberStackPacked is selected.
+class TreiberStackDwcas : TreiberBase {
+    std::atomic<TaggedHead> head_;
+
+   public:
+    TreiberStackDwcas() noexcept : head_{TaggedHead{nullptr, 0}} {}
+
+    void push(void* block) noexcept {
+        auto old_head = head_.load(std::memory_order_relaxed);
+        TaggedHead new_head;
+        do {
+            store_next(block, old_head.ptr);
+            new_head = TaggedHead{block, old_head.tag + 1};
+        } while (!head_.compare_exchange_weak(old_head, new_head,
+                                              std::memory_order_release,
+                                              std::memory_order_relaxed));
+    }
+
+    void* pop() noexcept {
+        auto old_head = head_.load(std::memory_order_acquire);
+        TaggedHead new_head;
+        do {
+            if (!old_head.ptr) return nullptr;
+            void* next = load_next(old_head.ptr);
+            new_head = TaggedHead{next, old_head.tag + 1};
+        } while (!head_.compare_exchange_weak(old_head, new_head,
+                                              std::memory_order_acquire,
+                                              std::memory_order_relaxed));
+        return old_head.ptr;
+    }
+};
+
+// Fallback without a lock-free 16-byte CAS: pack the pointer plus a 16-bit ABA
+// tag into one 64-bit atomic. The pointer is recovered by masking only (zero
+// extend); it must NOT be sign-extended from bit 47, since AArch64 user
+// pointers legitimately have bit 47 set (the kernel/user split is bit 55, not
+// 47) and sign-extending corrupts them. Assumes a 48-bit VA; no 52-bit/LVA.
+class TreiberStackPacked : TreiberBase {
     std::atomic<std::uint64_t> head_;
 
     static constexpr std::uint64_t PTR_MASK = 0x0000FFFFFFFFFFFFULL;
+    static constexpr int TAG_SHIFT = 48;
+
+    static std::uint64_t pack(void* ptr, std::uint64_t tag) noexcept {
+        auto raw = reinterpret_cast<std::uintptr_t>(ptr) & PTR_MASK;
+        return raw | (tag << TAG_SHIFT);
+    }
+    static void* unpack_ptr(std::uint64_t packed) noexcept {
+        return reinterpret_cast<void*>(
+            static_cast<std::uintptr_t>(packed & PTR_MASK));
+    }
+    static std::uint64_t unpack_tag(std::uint64_t packed) noexcept {
+        return packed >> TAG_SHIFT;
+    }
 
    public:
-    TreiberStack() noexcept : head_{pack(nullptr, 0)} {}
+    TreiberStackPacked() noexcept : head_{pack(nullptr, 0)} {}
 
     void push(void* block) noexcept {
         auto old_head = head_.load(std::memory_order_relaxed);
@@ -53,27 +116,14 @@ class TreiberStack {
                                               std::memory_order_relaxed));
         return block;
     }
-
-   private:
-    static constexpr int TAG_SHIFT = 48;
-
-    static std::uint64_t pack(void* ptr, std::uint64_t tag) noexcept {
-        auto raw = reinterpret_cast<std::uintptr_t>(ptr) & PTR_MASK;
-        return raw | (tag << TAG_SHIFT);
-    }
-
-    static void* unpack_ptr(std::uint64_t packed) noexcept {
-        auto raw = static_cast<std::uintptr_t>(packed & PTR_MASK);
-        if (raw & (1ULL << 47)) {
-            raw |= ~PTR_MASK;
-        }
-        return reinterpret_cast<void*>(raw);
-    }
-
-    static std::uint64_t unpack_tag(std::uint64_t packed) noexcept {
-        return packed >> TAG_SHIFT;
-    }
 };
+
+}  // namespace detail
+
+// DWCAS when the 16-byte atomic is lock-free, else the packed fallback.
+using TreiberStack =
+    std::conditional_t<std::atomic<detail::TaggedHead>::is_always_lock_free,
+                       detail::TreiberStackDwcas, detail::TreiberStackPacked>;
 
 class ObjectPool {
    public:

@@ -13,7 +13,10 @@ if ! command -v "$clang_format_exe" >/dev/null 2>&1; then
 fi
 
 clang_format_version_str=$($clang_format_exe --version)
-clang_format_version=$(echo "$clang_format_version_str" | grep -oP 'clang-format version \K\d+(\.\d+)+')
+# Portable version parse: `grep -P`/`\K` is GNU-only and fails on macOS/BSD
+# grep. `sed` works on both, and the [0-9][0-9.]* class also strips distro
+# suffixes like "14.0.0-1ubuntu1".
+clang_format_version=$(echo "$clang_format_version_str" | sed -n 's/.*clang-format version \([0-9][0-9.]*\).*/\1/p')
 
 if [ "$clang_format_version" != "$SUPPORTED_CLANG_FORMAT_VERSION" ]; then
     echo "WARNING: the .clang-format file in this repo is designed for version $SUPPORTED_CLANG_FORMAT_VERSION."

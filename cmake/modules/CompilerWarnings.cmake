@@ -148,10 +148,10 @@ function(target_set_warnings TARGET_NAME)
   endif()
 
   # Print message about warnings being enabled
-  message(STATUS "Enabled comprehensive warnings for target: ${TARGET_NAME}")
+  dftracer_utils_ok("Enabled comprehensive warnings for target: ${TARGET_NAME}")
   if(WARNINGS_WARNINGS_AS_ERRORS)
-    message(
-      STATUS "Warnings will be treated as errors for target: ${TARGET_NAME}")
+    dftracer_utils_ok(
+      "Warnings will be treated as errors for target: ${TARGET_NAME}")
   endif()
 endfunction()
 

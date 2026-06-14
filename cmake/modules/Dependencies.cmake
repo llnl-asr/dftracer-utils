@@ -1948,7 +1948,8 @@ macro(check_std_filesystem)
     try_compile(
       _dftracer_has_std_filesystem "${CMAKE_BINARY_DIR}/temp"
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_filesystem.cpp"
-      CMAKE_FLAGS ${CMAKE_CXX_FLAGS}
+      CXX_STANDARD ${CMAKE_CXX_STANDARD}
+      CXX_STANDARD_REQUIRED ON
       LINK_LIBRARIES stdc++fs)
     set(DFTRACER_UTILS_HAS_STD_FILESYSTEM ${_dftracer_has_std_filesystem}
         CACHE INTERNAL "Compiler provides a usable std::filesystem")
@@ -1990,9 +1991,13 @@ macro(check_dwcas)
     dftracer_utils_ok("Packed fallback (lock-free 64-bit CAS, portable)")
   endif()
 
-  # libatomic safety net for targets that can't inline the atomic (e.g. 32-bit).
+  # libatomic safety net for targets that can't inline the atomic (e.g. 32-bit;
+  # every 64-bit target we ship is inline lock-free and does not need it). Only
+  # apply the directory-scope link when dftracer-utils owns the build, never
+  # when it is consumed via add_subdirectory, so the link can't leak into a
+  # parent project's targets.
   find_library(DFTRACER_UTILS_LIBATOMIC atomic)
-  if(DFTRACER_UTILS_LIBATOMIC)
+  if(DFTRACER_UTILS_LIBATOMIC AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     link_libraries(${DFTRACER_UTILS_LIBATOMIC})
   endif()
 endmacro()

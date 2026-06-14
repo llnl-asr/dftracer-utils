@@ -60,7 +60,7 @@ class TreiberStackDwcas : TreiberBase {
             new_head = TaggedHead{next, old_head.tag + 1};
         } while (!head_.compare_exchange_weak(old_head, new_head,
                                               std::memory_order_acquire,
-                                              std::memory_order_relaxed));
+                                              std::memory_order_acquire));
         return old_head.ptr;
     }
 };
@@ -113,7 +113,7 @@ class TreiberStackPacked : TreiberBase {
             new_head = pack(next, unpack_tag(old_head) + 1);
         } while (!head_.compare_exchange_weak(old_head, new_head,
                                               std::memory_order_acquire,
-                                              std::memory_order_relaxed));
+                                              std::memory_order_acquire));
         return block;
     }
 };

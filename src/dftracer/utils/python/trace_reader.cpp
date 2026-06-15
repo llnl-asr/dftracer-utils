@@ -11,6 +11,7 @@
 #include <dftracer/utils/python/arrow_helpers.h>
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/json.h>
+#include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
@@ -3019,9 +3020,9 @@ static PyObject *TraceReader_write_arrow(TraceReaderObject *self,
         }
 
         PyDict_SetItemString(partition_dict, "files", files_list);
-        PyDict_SetItemString(partition_dict, "rows",
-                             PyLong_FromLongLong(partition_stats.total_rows));
-        PyDict_SetItemString(
+        dict_set_steal(partition_dict, "rows",
+                       PyLong_FromLongLong(partition_stats.total_rows));
+        dict_set_steal(
             partition_dict, "bytes",
             PyLong_FromLongLong(partition_stats.total_uncompressed_bytes));
         Py_DECREF(files_list);
@@ -3035,15 +3036,14 @@ static PyObject *TraceReader_write_arrow(TraceReaderObject *self,
     }
 
     PyDict_SetItemString(dict, "partitions", partitions_dict);
-    PyDict_SetItemString(dict, "total_rows",
-                         PyLong_FromLongLong(result.stats.total_rows));
-    PyDict_SetItemString(
-        dict, "total_bytes",
-        PyLong_FromLongLong(result.stats.total_uncompressed_bytes));
-    PyDict_SetItemString(dict, "chunks_scanned",
-                         PyLong_FromUnsignedLongLong(result.chunks_scanned));
-    PyDict_SetItemString(dict, "chunks_skipped",
-                         PyLong_FromUnsignedLongLong(result.chunks_skipped));
+    dict_set_steal(dict, "total_rows",
+                   PyLong_FromLongLong(result.stats.total_rows));
+    dict_set_steal(dict, "total_bytes",
+                   PyLong_FromLongLong(result.stats.total_uncompressed_bytes));
+    dict_set_steal(dict, "chunks_scanned",
+                   PyLong_FromUnsignedLongLong(result.chunks_scanned));
+    dict_set_steal(dict, "chunks_skipped",
+                   PyLong_FromUnsignedLongLong(result.chunks_skipped));
     Py_DECREF(partitions_dict);
 
     return dict;
@@ -3139,23 +3139,22 @@ static PyObject *TraceReader_get_view_chunks(TraceReaderObject *self,
             Py_DECREF(dict);
             return NULL;
         }
-        PyDict_SetItemString(chunk_dict, "checkpoint_idx",
-                             PyLong_FromUnsignedLongLong(chunk.checkpoint_idx));
-        PyDict_SetItemString(chunk_dict, "start_byte",
-                             PyLong_FromSize_t(chunk.start_byte));
-        PyDict_SetItemString(chunk_dict, "end_byte",
-                             PyLong_FromSize_t(chunk.end_byte));
+        dict_set_steal(chunk_dict, "checkpoint_idx",
+                       PyLong_FromUnsignedLongLong(chunk.checkpoint_idx));
+        dict_set_steal(chunk_dict, "start_byte",
+                       PyLong_FromSize_t(chunk.start_byte));
+        dict_set_steal(chunk_dict, "end_byte",
+                       PyLong_FromSize_t(chunk.end_byte));
         PyList_SetItem(chunks_list, i, chunk_dict);
     }
 
     PyDict_SetItemString(dict, "chunks", chunks_list);
-    PyDict_SetItemString(dict, "total_checkpoints",
-                         PyLong_FromUnsignedLongLong(result.total_checkpoints));
-    PyDict_SetItemString(
-        dict, "skipped_checkpoints",
-        PyLong_FromUnsignedLongLong(result.skipped_checkpoints));
-    PyDict_SetItemString(dict, "file_may_match",
-                         PyBool_FromLong(result.file_may_match ? 1 : 0));
+    dict_set_steal(dict, "total_checkpoints",
+                   PyLong_FromUnsignedLongLong(result.total_checkpoints));
+    dict_set_steal(dict, "skipped_checkpoints",
+                   PyLong_FromUnsignedLongLong(result.skipped_checkpoints));
+    dict_set_steal(dict, "file_may_match",
+                   PyBool_FromLong(result.file_may_match ? 1 : 0));
     Py_DECREF(chunks_list);
 
     return dict;
@@ -3265,16 +3264,16 @@ static PyObject *TraceReader_write_view_chunk(TraceReaderObject *self,
     PyObject *dict = PyDict_New();
     if (!dict) return NULL;
 
-    PyDict_SetItemString(dict, "output_file",
-                         PyUnicode_FromString(result.output_file.c_str()));
-    PyDict_SetItemString(dict, "events_matched",
-                         PyLong_FromUnsignedLongLong(result.events_matched));
-    PyDict_SetItemString(dict, "events_scanned",
-                         PyLong_FromUnsignedLongLong(result.events_scanned));
-    PyDict_SetItemString(dict, "rows_written",
-                         PyLong_FromLongLong(result.rows_written));
-    PyDict_SetItemString(dict, "bytes_written",
-                         PyLong_FromLongLong(result.bytes_written));
+    dict_set_steal(dict, "output_file",
+                   PyUnicode_FromString(result.output_file.c_str()));
+    dict_set_steal(dict, "events_matched",
+                   PyLong_FromUnsignedLongLong(result.events_matched));
+    dict_set_steal(dict, "events_scanned",
+                   PyLong_FromUnsignedLongLong(result.events_scanned));
+    dict_set_steal(dict, "rows_written",
+                   PyLong_FromLongLong(result.rows_written));
+    dict_set_steal(dict, "bytes_written",
+                   PyLong_FromLongLong(result.bytes_written));
 
     return dict;
 }
@@ -3423,25 +3422,24 @@ static PyObject *TraceReader_write_view_chunks(TraceReaderObject *self,
             Py_DECREF(dict);
             return NULL;
         }
-        PyDict_SetItemString(item, "output_file",
-                             PyUnicode_FromString(r.output_file.c_str()));
-        PyDict_SetItemString(item, "rows_written",
-                             PyLong_FromLongLong(r.rows_written));
-        PyDict_SetItemString(item, "events_matched",
-                             PyLong_FromUnsignedLongLong(r.events_matched));
+        dict_set_steal(item, "output_file",
+                       PyUnicode_FromString(r.output_file.c_str()));
+        dict_set_steal(item, "rows_written",
+                       PyLong_FromLongLong(r.rows_written));
+        dict_set_steal(item, "events_matched",
+                       PyLong_FromUnsignedLongLong(r.events_matched));
         if (!r.error.empty()) {
-            PyDict_SetItemString(item, "error",
-                                 PyUnicode_FromString(r.error.c_str()));
+            dict_set_steal(item, "error",
+                           PyUnicode_FromString(r.error.c_str()));
         }
         PyList_SetItem(results_list, static_cast<Py_ssize_t>(i), item);
     }
 
     PyDict_SetItemString(dict, "results", results_list);
     Py_DECREF(results_list);
-    PyDict_SetItemString(dict, "total_rows",
-                         PyLong_FromLongLong(result.total_rows));
-    PyDict_SetItemString(dict, "total_events_matched",
-                         PyLong_FromLongLong(result.total_events_matched));
+    dict_set_steal(dict, "total_rows", PyLong_FromLongLong(result.total_rows));
+    dict_set_steal(dict, "total_events_matched",
+                   PyLong_FromLongLong(result.total_events_matched));
 
     return dict;
 }

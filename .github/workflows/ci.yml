@@ -157,6 +157,142 @@ jobs:
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
+  valgrind-cpp:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Valgrind (C++ and MPI)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 2G
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
+      CCACHE_NOHASHDIR: "true"
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Cache ccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-valgrind-cpp-${{ github.run_id }}
+          restore-keys: |
+            ccache-valgrind-cpp-
+            ccache-valgrind-
+            ccache-v3-ubuntu-24.04-
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build ccache valgrind gdb \
+            zlib1g-dev libsqlite3-dev pkg-config libopenmpi-dev openmpi-bin
+
+      - name: ccache stats (reset)
+        run: ccache -z || true
+
+      # Native Valgrind (valgrind on PATH -> the Makefile targets skip Docker).
+      - name: C++ tests under Valgrind
+        run: make valgrind-cpp
+
+      - name: MPI tests under Valgrind
+        run: make valgrind-mpi
+
+      - name: ccache stats (show)
+        if: always()
+        run: ccache -s || true
+
+      - name: Upload Valgrind logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-cpp-logs
+          path: build/valgrind-logs/
+          if-no-files-found: ignore
+
+  valgrind-python:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: Valgrind (Python, full suite incl. dask)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 2G
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
+      CCACHE_NOHASHDIR: "true"
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6.1.0
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
+
+      - name: Cache ccache
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-valgrind-py-${{ github.run_id }}
+          restore-keys: |
+            ccache-valgrind-py-
+            ccache-valgrind-
+            ccache-v3-ubuntu-24.04-
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build ccache valgrind \
+            zlib1g-dev libsqlite3-dev pkg-config python3-dev
+
+      - name: ccache stats (reset)
+        run: ccache -z || true
+
+      - name: Python tests under Valgrind
+        run: make valgrind-py
+
+      - name: ccache stats (show)
+        if: always()
+        run: ccache -s || true
+
+      - name: Upload Valgrind logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-python-logs
+          path: build/valgrind-logs/
+          if-no-files-found: ignore
+
   wheel:
     needs: changes
     if: needs.changes.outputs.code == 'true'

@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
+#include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/reorganization_planner.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
@@ -167,10 +168,10 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
             Py_DECREF(py_groups);
             return NULL;
         }
-        PyDict_SetItemString(g, "name",
-                             PyUnicode_FromString(plan.groups[i].name.c_str()));
-        PyDict_SetItemString(
-            g, "query", PyUnicode_FromString(plan.groups[i].query.c_str()));
+        dict_set_steal(g, "name",
+                       PyUnicode_FromString(plan.groups[i].name.c_str()));
+        dict_set_steal(g, "query",
+                       PyUnicode_FromString(plan.groups[i].query.c_str()));
         PyList_SetItem(py_groups, static_cast<Py_ssize_t>(i), g);
     }
 
@@ -189,16 +190,16 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
             Py_DECREF(py_sources);
             return NULL;
         }
-        PyDict_SetItemString(entry, "file_path",
-                             PyUnicode_FromString(sf.file_path.c_str()));
-        PyDict_SetItemString(entry, "index_path",
-                             PyUnicode_FromString(sf.index_path.c_str()));
-        PyDict_SetItemString(entry, "num_checkpoints",
-                             PyLong_FromSize_t(sf.num_checkpoints));
-        PyDict_SetItemString(entry, "uncompressed_size",
-                             PyLong_FromUnsignedLongLong(sf.uncompressed_size));
-        PyDict_SetItemString(entry, "checkpoint_size",
-                             PyLong_FromUnsignedLongLong(sf.checkpoint_size));
+        dict_set_steal(entry, "file_path",
+                       PyUnicode_FromString(sf.file_path.c_str()));
+        dict_set_steal(entry, "index_path",
+                       PyUnicode_FromString(sf.index_path.c_str()));
+        dict_set_steal(entry, "num_checkpoints",
+                       PyLong_FromSize_t(sf.num_checkpoints));
+        dict_set_steal(entry, "uncompressed_size",
+                       PyLong_FromUnsignedLongLong(sf.uncompressed_size));
+        dict_set_steal(entry, "checkpoint_size",
+                       PyLong_FromUnsignedLongLong(sf.checkpoint_size));
         PyList_SetItem(py_sources, static_cast<Py_ssize_t>(i), entry);
     }
 
@@ -218,16 +219,16 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
             Py_DECREF(py_tasks);
             return NULL;
         }
-        PyDict_SetItemString(entry, "source_file_idx",
-                             PyLong_FromSize_t(t.source_file_idx));
-        PyDict_SetItemString(entry, "checkpoint_idx",
-                             PyLong_FromUnsignedLongLong(t.checkpoint_idx));
-        PyDict_SetItemString(entry, "target_group",
-                             PyUnicode_FromString(t.target_group.c_str()));
-        PyDict_SetItemString(entry, "start_byte",
-                             PyLong_FromUnsignedLongLong(t.start_byte));
-        PyDict_SetItemString(entry, "end_byte",
-                             PyLong_FromUnsignedLongLong(t.end_byte));
+        dict_set_steal(entry, "source_file_idx",
+                       PyLong_FromSize_t(t.source_file_idx));
+        dict_set_steal(entry, "checkpoint_idx",
+                       PyLong_FromUnsignedLongLong(t.checkpoint_idx));
+        dict_set_steal(entry, "target_group",
+                       PyUnicode_FromString(t.target_group.c_str()));
+        dict_set_steal(entry, "start_byte",
+                       PyLong_FromUnsignedLongLong(t.start_byte));
+        dict_set_steal(entry, "end_byte",
+                       PyLong_FromUnsignedLongLong(t.end_byte));
         PyList_SetItem(py_tasks, static_cast<Py_ssize_t>(i), entry);
     }
 
@@ -244,8 +245,8 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
     Py_DECREF(py_sources);
     PyDict_SetItemString(result, "tasks", py_tasks);
     Py_DECREF(py_tasks);
-    PyDict_SetItemString(result, "total_events",
-                         PyLong_FromSize_t(plan.total_events));
+    dict_set_steal(result, "total_events",
+                   PyLong_FromSize_t(plan.total_events));
     return result;
 }
 

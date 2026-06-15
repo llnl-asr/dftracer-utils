@@ -46,7 +46,7 @@ static CoroTask<std::vector<LineCopy>> collect_line_copies(
 }
 
 TEST_SUITE("AsyncIndexedFileBytesGenerator") {
-    TEST_CASE("Basic Byte Range Operations") {
+    TEST_CASE("Basic Byte Range Operations" * doctest::test_suite("vg")) {
         SUBCASE("Read entire file via byte range") {
             TestEnvironment env(10);
             std::string gz_path = env.create_test_gzip_file();
@@ -235,7 +235,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
 
     TEST_CASE("Large Files") {
         SUBCASE("Large file with specific byte range") {
-            TestEnvironment env(1000);
+            TestEnvironment env(valgrind_scale(1000, 3));
             std::string gz_path = env.create_test_gzip_file();
 
             auto indexer = IndexerFactory::create(gz_path, "", 4096, true);
@@ -293,7 +293,7 @@ TEST_SUITE("AsyncIndexedFileBytesGenerator") {
         }
     }
 
-    TEST_CASE("Generator Lifecycle") {
+    TEST_CASE("Generator Lifecycle" * doctest::test_suite("vg")) {
         SUBCASE("Generator done() after exhaustion") {
             TestEnvironment env(3);
             std::string gz_path = env.create_test_gzip_file();

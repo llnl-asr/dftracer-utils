@@ -60,8 +60,13 @@ std::unique_ptr<IoBackend> create_io_backend(Executor& executor,
     }
 #endif
 
-    // AUTO detection: io_uring > epoll/kqueue+threadpool > threadpool.
-#ifdef DFTRACER_UTILS_HAVE_IO_URING
+// Under Valgrind (<3.23.0, e.g. Ubuntu 24.04 ships 3.22.0), signals are not
+// delivered inside io_uring_enter
+// (https://bugs.kde.org/show_bug.cgi?id=428364), so Valgrind's scheduler cannot
+// preempt the completion thread, deadlocking executor startup. Fall back to
+// epoll, which handles signals correctly.
+#if defined(DFTRACER_UTILS_HAVE_IO_URING) && \
+    !defined(DFTRACER_UTILS_VALGRIND_MODE)
     {
         auto uring =
             std::make_unique<IoUringBackend>(executor, 256, batch_threshold);
@@ -72,9 +77,21 @@ std::unique_ptr<IoBackend> create_io_backend(Executor& executor,
         DFTRACER_UTILS_LOG_INFO("%s",
                                 "io_uring runtime probe failed, falling back");
     }
+#elif defined(DFTRACER_UTILS_HAVE_IO_URING)
+    DFTRACER_UTILS_LOG_INFO("%s",
+                            "I/O backend: skipping io_uring (Valgrind mode)");
 #endif
 
-#ifdef __linux__
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    // The epoll/kqueue completion thread only waits for shutdown today, so
+    // under Valgrind use the plain thread pool to avoid an extra instrumented
+    // thread and poll fd per executor.
+    DFTRACER_UTILS_LOG_INFO(
+        "I/O backend: using threadpool (Valgrind mode, %zu threads)",
+        pool_size);
+    return std::make_unique<ThreadPoolBackend>(executor, pool_size,
+                                               batch_threshold);
+#elif defined(__linux__)
     DFTRACER_UTILS_LOG_INFO("I/O backend: using epoll+threadpool (%zu threads)",
                             pool_size);
     return std::make_unique<EpollThreadPoolBackend>(executor, pool_size,

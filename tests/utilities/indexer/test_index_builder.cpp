@@ -39,8 +39,9 @@ void run_coro(Fn&& fn) {
 
 TEST_SUITE("IndexBuilder") {
     TEST_CASE("Build checkpoint-only index") {
-        TestEnvironment env(1000);
-        std::string gz_file = env.create_dft_test_gzip_file(1000);
+        TestEnvironment env(valgrind_scale(1000, 10));
+        std::string gz_file =
+            env.create_dft_test_gzip_file(valgrind_scale(1000, 10));
 
         auto config = IndexBuildConfig::for_file(gz_file).with_manifest(false);
 
@@ -100,8 +101,9 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Build with bloom") {
-        TestEnvironment env(1000);
-        std::string gz_file = env.create_dft_test_gzip_file(1000);
+        TestEnvironment env(valgrind_scale(1000, 10));
+        std::string gz_file =
+            env.create_dft_test_gzip_file(valgrind_scale(1000, 10));
 
         auto config = IndexBuildConfig::for_file(gz_file)
 
@@ -128,8 +130,9 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Build with manifest") {
-        TestEnvironment env(1000);
-        std::string gz_file = env.create_dft_test_gzip_file(1000);
+        TestEnvironment env(valgrind_scale(1000, 10));
+        std::string gz_file =
+            env.create_dft_test_gzip_file(valgrind_scale(1000, 10));
 
         auto config = IndexBuildConfig::for_file(gz_file)
 
@@ -156,8 +159,9 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Build with bloom and manifest") {
-        TestEnvironment env(1000);
-        std::string gz_file = env.create_dft_test_gzip_file(1000);
+        TestEnvironment env(valgrind_scale(1000, 10));
+        std::string gz_file =
+            env.create_dft_test_gzip_file(valgrind_scale(1000, 10));
 
         auto config = IndexBuildConfig::for_file(gz_file)
 
@@ -185,8 +189,9 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Skip if already indexed") {
-        TestEnvironment env(1000);
-        std::string gz_file = env.create_dft_test_gzip_file(1000);
+        TestEnvironment env(valgrind_scale(1000, 10));
+        std::string gz_file =
+            env.create_dft_test_gzip_file(valgrind_scale(1000, 10));
 
         auto config = IndexBuildConfig::for_file(gz_file)
 
@@ -219,8 +224,9 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Force rebuild") {
-        TestEnvironment env(1000);
-        std::string gz_file = env.create_dft_test_gzip_file(1000);
+        TestEnvironment env(valgrind_scale(1000, 10));
+        std::string gz_file =
+            env.create_dft_test_gzip_file(valgrind_scale(1000, 10));
 
         auto config_normal = IndexBuildConfig::for_file(gz_file)
 
@@ -259,8 +265,9 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Result has correct line count") {
-        TestEnvironment env(1000);
-        std::string gz_file = env.create_dft_test_gzip_file(1000);
+        const std::size_t n_idx_lines = valgrind_scale(1000, 10);
+        TestEnvironment env(n_idx_lines);
+        std::string gz_file = env.create_dft_test_gzip_file(n_idx_lines);
 
         auto config = IndexBuildConfig::for_file(gz_file).with_manifest(false);
 
@@ -276,12 +283,13 @@ TEST_SUITE("IndexBuilder") {
 
         REQUIRE(result.success);
         CHECK(result.total_lines > 0);
-        CHECK(result.total_lines >= 1000);
+        CHECK(result.total_lines >= static_cast<int>(n_idx_lines));
     }
 
     TEST_CASE("Incremental manifest add to existing index with bloom") {
-        TestEnvironment env(1000);
-        std::string gz_file = env.create_dft_test_gzip_file(1000);
+        TestEnvironment env(valgrind_scale(1000, 10));
+        std::string gz_file =
+            env.create_dft_test_gzip_file(valgrind_scale(1000, 10));
 
         // First build: checkpoint + bloom
         auto config1 = IndexBuildConfig::for_file(gz_file)
@@ -333,8 +341,9 @@ TEST_SUITE("IndexBuilder") {
     }
 
     TEST_CASE("Skip when all requested features already exist") {
-        TestEnvironment env(1000);
-        std::string gz_file = env.create_dft_test_gzip_file(1000);
+        TestEnvironment env(valgrind_scale(1000, 10));
+        std::string gz_file =
+            env.create_dft_test_gzip_file(valgrind_scale(1000, 10));
 
         // Build with bloom + manifest
         auto config1 = IndexBuildConfig::for_file(gz_file)

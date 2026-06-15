@@ -18,7 +18,8 @@ using namespace dftracer::utils::utilities::reader::internal;
 using namespace dft_utils_test;
 
 TEST_SUITE("IndexedFileBytesIterator") {
-    TEST_CASE("IndexedFileBytesIterator - Basic Byte Range Operations") {
+    TEST_CASE("IndexedFileBytesIterator - Basic Byte Range Operations" *
+              doctest::test_suite("vg")) {
         SUBCASE("Read entire file via byte range") {
             TestEnvironment env(10);
             std::string gz_path = env.create_test_gzip_file();
@@ -377,9 +378,10 @@ TEST_SUITE("IndexedFileBytesIterator") {
         }
     }
 
-    TEST_CASE("IndexedFileBytesIterator - Large Files") {
+    TEST_CASE("IndexedFileBytesIterator - Large Files" *
+              doctest::test_suite("vg")) {
         SUBCASE("Large file with specific byte range") {
-            TestEnvironment env(1000);
+            TestEnvironment env(valgrind_scale(1000, 3));
             std::string gz_path = env.create_test_gzip_file();
 
             auto indexer = IndexerFactory::create(gz_path, "", 4096, true);

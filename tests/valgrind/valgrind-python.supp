@@ -1,0 +1,135 @@
+# Valgrind suppressions for running CPython under Memcheck.
+#
+# The runner sets PYTHONMALLOC=malloc (so pymalloc's arena tricks don't fire),
+# but the interpreter, loader, and standard library still produce well-known
+# noise that is not a bug in the dftracer-utils native binding. This file
+# suppresses that interpreter-level noise so real findings in our C++ extension
+# stand out. Adapted from CPython's Misc/valgrind-python.supp.
+#
+# This file is paired with valgrind-cpp.supp; both are passed to valgrind.
+
+# --- pymalloc address_in_range (defensive; harmless with PYTHONMALLOC=malloc) -
+{
+   pymalloc-addr4
+   Memcheck:Addr4
+   fun:address_in_range
+}
+{
+   pymalloc-addr8
+   Memcheck:Addr8
+   fun:address_in_range
+}
+{
+   pymalloc-value4
+   Memcheck:Value4
+   fun:address_in_range
+}
+{
+   pymalloc-value8
+   Memcheck:Value8
+   fun:address_in_range
+}
+{
+   pymalloc-cond
+   Memcheck:Cond
+   fun:address_in_range
+}
+{
+   pymalloc-free-cond
+   Memcheck:Cond
+   fun:pymalloc_free
+}
+{
+   pymalloc-realloc-cond
+   Memcheck:Cond
+   fun:pymalloc_realloc
+}
+
+# --- Interpreter / loader one-time allocations kept alive until exit ---------
+{
+   python-dl-init-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:_dl_init
+}
+{
+   python-dlopen-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:_dl_open
+}
+{
+   python-pyimport-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible
+   ...
+   fun:_PyImport_*
+}
+{
+   python-runtime-init-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible
+   ...
+   fun:_PyRuntime*
+}
+
+# --- Interned strings / small-int caches the interpreter never frees ---------
+{
+   python-intern-leak
+   Memcheck:Leak
+   match-leak-kinds: definite,possible,reachable
+   ...
+   fun:PyUnicode_InternInPlace
+}
+{
+   python-dictkeys-leak
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible
+   ...
+   fun:new_keys_object*
+}
+
+# --- libc dlopen of extension modules (pyarrow, numpy, our .so) --------------
+{
+   python-dlopen-malloc
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   fun:dl_open_worker
+}
+
+# --- Interned dict-key strings -----------------------------------------------
+# PyDict_SetItemString / PyObject_SetAttrString intern the key via
+# PyUnicode_InternInPlace, so each unique key string lives in CPython's intern
+# table until Py_Finalize and is reported "definitely lost" at exit. This is
+# bounded (one per unique key, not per call) interpreter residue, not a leak in
+# our code: the block is allocated INSIDE these C-API calls, whereas a real
+# leak of a value/container is allocated by PyLong_From*/PyDict_New (different
+# stack) and is NOT matched here. Verified one-time via isolation tests
+# (get_progress 1x == 100x). See tests/valgrind/README.md.
+{
+   cpython-interned-dict-key
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   fun:malloc
+   ...
+   fun:PyDict_SetItemString
+}
+{
+   cpython-interned-attr-key
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   fun:malloc
+   ...
+   fun:PyObject_SetAttrString
+}
+{
+   cpython-intern-inplace
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible
+   ...
+   fun:PyUnicode_InternInPlace
+}

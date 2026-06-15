@@ -256,9 +256,10 @@ TEST_SUITE("AsyncPlainFileLineGenerator") {
         SUBCASE("Many lines") {
             fs::path test_file =
                 make_unique_test_path("test_async_plain_many.txt");
+            const int n = static_cast<int>(valgrind_scale(1000, 10));
             {
                 std::ofstream ofs(test_file);
-                for (int i = 1; i <= 1000; ++i) {
+                for (int i = 1; i <= n; ++i) {
                     ofs << "Line " << i << "\n";
                 }
             }
@@ -267,9 +268,9 @@ TEST_SUITE("AsyncPlainFileLineGenerator") {
             auto task = collect_lines(std::move(gen));
             auto lines = task.get();
 
-            REQUIRE(lines.size() == 1000);
+            REQUIRE(lines.size() == static_cast<std::size_t>(n));
             CHECK(lines[0] == "Line 1");
-            CHECK(lines[999] == "Line 1000");
+            CHECK(lines[n - 1] == "Line " + std::to_string(n));
 
             fs::remove(test_file);
         }

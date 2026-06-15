@@ -10,7 +10,7 @@ import pytest
 import dftracer.utils as dft_utils
 from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
-from .common import Environment
+from .common import Environment, valgrind_scale
 
 
 class TestCheckpointIndexer:
@@ -45,9 +45,10 @@ class TestCheckpointIndexer:
                 assert max_bytes > 0
                 assert num_lines > 0
 
+    @pytest.mark.valgrind
     def test_checkpoint_indexer_checkpoints(self):
         """Test checkpoint indexer checkpoint functionality"""
-        with Environment(lines=100000) as env:
+        with Environment(lines=valgrind_scale(100000, 100)) as env:
             gz_file = env.create_test_gzip_file()
             checkpoint_size = 256 * 1024  # 256KB
 
@@ -87,7 +88,7 @@ class TestCheckpointIndexer:
 
     def test_checkpoint_indexer_find_checkpoint(self):
         """Test checkpoint indexer single checkpoint search"""
-        with Environment(lines=2000) as env:
+        with Environment(lines=valgrind_scale(2000)) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=2048)
             checkpoint_size = 512 * 1024  # 512KB
 
@@ -160,6 +161,7 @@ class TestNativeIndexerDirect:
         with pytest.raises(RuntimeError):
             NativeIndexer("nonexistent_file.gz")
 
+    @pytest.mark.valgrind
     def test_native_indexer_build_bloom(self):
         """Test building with bloom=True"""
         with Environment() as env:
@@ -169,6 +171,7 @@ class TestNativeIndexerDirect:
                 indexer.build()
                 assert indexer.has_bloom
 
+    @pytest.mark.valgrind
     def test_native_indexer_build_manifest(self):
         """Test building with manifest=True"""
         with Environment() as env:
@@ -194,6 +197,7 @@ class TestCheckpointIndexerIntegration:
                 assert reader.get_max_bytes() > 0
                 assert reader.path == gz_file
 
+    @pytest.mark.valgrind
     def test_multiple_readers_same_index(self):
         """Test creating multiple readers from the same index"""
         with Environment() as env:
@@ -353,6 +357,7 @@ class TestDirectoryIndexer:
                 assert indexer.aggregation_config is not None
                 assert indexer.aggregation_config.time_interval_ms == 1000.0
 
+    @pytest.mark.valgrind
     def test_indexer_aggregation_true(self):
         """Test indexer with require_aggregation=True uses defaults"""
         with Environment() as env:
@@ -614,6 +619,7 @@ class TestIndexerDfanalyzerAPIs:
                 all_pids = indexer.query_all_file_pids()
                 assert isinstance(all_pids, dict)
 
+    @pytest.mark.valgrind
     def test_integration_hash_tables_and_pids(self):
         """Integration test: hash tables and PIDs work together"""
         with Environment() as env:
@@ -658,6 +664,7 @@ class TestQueryFilter:
                 rows = sum(pa.record_batch(b).num_rows for b in result.get("events", []))
                 assert rows > 0
 
+    @pytest.mark.valgrind
     def test_iter_arrow_dfanalyzer_all_pid_filter(self):
         pa = pytest.importorskip("pyarrow")
         with Environment() as env:

@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/reconstruction_planner.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.h>
@@ -142,17 +143,16 @@ static PyObject *ReconstructionPlanner_plan(ReconstructionPlannerObject *self,
                     Py_DECREF(py_files);
                     return NULL;
                 }
-                PyDict_SetItemString(
-                    sd, "reorg_file",
-                    PyUnicode_FromString(seg.reorg_file.c_str()));
-                PyDict_SetItemString(sd, "output_line_start",
-                                     PyLong_FromLong(seg.output_line_start));
-                PyDict_SetItemString(sd, "output_line_end",
-                                     PyLong_FromLong(seg.output_line_end));
-                PyDict_SetItemString(sd, "source_checkpoint",
-                                     PyLong_FromLong(seg.source_checkpoint));
-                PyDict_SetItemString(sd, "event_count",
-                                     PyLong_FromLong(seg.event_count));
+                dict_set_steal(sd, "reorg_file",
+                               PyUnicode_FromString(seg.reorg_file.c_str()));
+                dict_set_steal(sd, "output_line_start",
+                               PyLong_FromLong(seg.output_line_start));
+                dict_set_steal(sd, "output_line_end",
+                               PyLong_FromLong(seg.output_line_end));
+                dict_set_steal(sd, "source_checkpoint",
+                               PyLong_FromLong(seg.source_checkpoint));
+                dict_set_steal(sd, "event_count",
+                               PyLong_FromLong(seg.event_count));
                 PyList_SetItem(py_seg_list, static_cast<Py_ssize_t>(si), sd);
             }
             PyObject *py_cp_key = PyLong_FromLong(cp_idx);
@@ -167,12 +167,12 @@ static PyObject *ReconstructionPlanner_plan(ReconstructionPlannerObject *self,
             Py_DECREF(py_files);
             return NULL;
         }
-        PyDict_SetItemString(py_recon, "original_path",
-                             PyUnicode_FromString(recon.original_path.c_str()));
-        PyDict_SetItemString(py_recon, "num_checkpoints",
-                             PyLong_FromLong(recon.num_checkpoints));
-        PyDict_SetItemString(py_recon, "event_hash",
-                             PyUnicode_FromString(recon.event_hash.c_str()));
+        dict_set_steal(py_recon, "original_path",
+                       PyUnicode_FromString(recon.original_path.c_str()));
+        dict_set_steal(py_recon, "num_checkpoints",
+                       PyLong_FromLong(recon.num_checkpoints));
+        dict_set_steal(py_recon, "event_hash",
+                       PyUnicode_FromString(recon.event_hash.c_str()));
         PyDict_SetItemString(py_recon, "checkpoint_segments", py_segs);
         Py_DECREF(py_segs);
 
@@ -187,10 +187,10 @@ static PyObject *ReconstructionPlanner_plan(ReconstructionPlannerObject *self,
     }
     PyDict_SetItemString(result, "files", py_files);
     Py_DECREF(py_files);
-    PyDict_SetItemString(result, "total_segments",
-                         PyLong_FromSize_t(plan.total_segments));
-    PyDict_SetItemString(result, "total_events",
-                         PyLong_FromSize_t(plan.total_events));
+    dict_set_steal(result, "total_segments",
+                   PyLong_FromSize_t(plan.total_segments));
+    dict_set_steal(result, "total_events",
+                   PyLong_FromSize_t(plan.total_events));
     return result;
 }
 

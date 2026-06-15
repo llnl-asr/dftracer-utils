@@ -204,9 +204,13 @@ class Executor {
     // Counter for tracked-coro IDs (negative to avoid collision with DAG IDs).
     std::atomic<TaskIndex> next_coro_task_id_{-1000000};
 
-    // Global run queue (coroutine handles only).
-    // Primary submission path for all task execution.
-    moodycamel::ConcurrentQueue<std::coroutine_handle<>> run_queue_;
+    // Run queue entry. -1 means untracked.
+    struct RunQueueEntry {
+        std::coroutine_handle<> handle{};
+        TaskIndex task_id{-1};
+    };
+
+    moodycamel::ConcurrentQueue<RunQueueEntry> run_queue_;
     alignas(DFTRACER_OPTIMAL_ALIGNMENT) std::atomic<std::uint64_t> work_signal_{
         0};
 
@@ -344,8 +348,9 @@ class Executor {
      * lightweight work funnels through here.
      * Cost: ~20ns (lock-free queue push + atomic signal).
      * @param handle The coroutine handle to resume
+     * @param task_id Tracked-task id for registry progress, or -1 if untracked.
      */
-    void enqueue(std::coroutine_handle<> handle);
+    void enqueue(std::coroutine_handle<> handle, TaskIndex task_id = -1);
 
     /**
      * Enqueue a Coro with progress tracking in task_registry_.

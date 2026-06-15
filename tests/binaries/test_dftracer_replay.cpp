@@ -17,6 +17,14 @@
 
 namespace {
 
+bool under_valgrind() {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    return true;
+#else
+    return false;
+#endif
+}
+
 std::string find_replay_binary() {
     const char* env_path = std::getenv("DFTRACER_REPLAY_PATH");
     if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
@@ -449,7 +457,7 @@ TEST_SUITE("DFTracerReplay") {
 
         auto duration =
             std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        CHECK(duration.count() < 5000);
+        if (!under_valgrind()) CHECK(duration.count() < 5000);
 
         std::error_code ec;
         fs::remove_all(temp_dir, ec);
@@ -754,7 +762,7 @@ TEST_SUITE("DFTracerReplay") {
 
         auto duration =
             std::chrono::duration_cast<std::chrono::seconds>(end - start);
-        CHECK(duration.count() < 10);
+        if (!under_valgrind()) CHECK(duration.count() < 10);
 
         std::error_code ec;
         fs::remove_all(temp_dir, ec);

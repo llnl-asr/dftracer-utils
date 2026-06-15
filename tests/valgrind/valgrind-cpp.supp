@@ -1,0 +1,40 @@
+# Valgrind suppressions for the dftracer-utils C++ tests.
+#
+# Keep this list small and justified. To add an entry, reproduce the report
+# with `make valgrind-cpp` (the runner passes --gen-suppressions=all, so the
+# logs in build/valgrind-logs/cpp/*.log already contain paste-ready stanzas)
+# and only suppress noise that is provably outside our control (libc/loader,
+# zlib internals, etc.) -- never a real leak in our own code.
+
+# --- Dynamic loader / libc one-time allocations -----------------------------
+{
+   dl-init-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:_dl_init
+}
+{
+   dl-open-reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   ...
+   fun:_dl_catch_exception
+   fun:_dl_open
+}
+
+# --- zlib: inflate/deflate may read in word-sized chunks --------------------
+# zlib intentionally over-reads within allocated buffers in some builds; these
+# are well-known false positives, not bugs in our reader code.
+{
+   zlib-inflate-cond
+   Memcheck:Cond
+   ...
+   obj:*/libz.so*
+}
+{
+   zlib-inflate-value8
+   Memcheck:Value8
+   ...
+   obj:*/libz.so*
+}

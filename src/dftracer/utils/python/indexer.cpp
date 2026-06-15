@@ -325,6 +325,7 @@ static PyObject *CheckpointIndexer_get_checkpoints(
             return NULL;
         }
         cp_obj->checkpoint = checkpoints[i];
+        checkpoints[i].dict_compressed = NULL;
         PyList_SetItem(list, i, (PyObject *)cp_obj);
     }
 

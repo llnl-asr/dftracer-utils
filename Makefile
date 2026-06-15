@@ -1,4 +1,5 @@
-.PHONY: coverage coverage-clean coverage-view coverage-open test test-coverage test-py build clean format check-format cmake-format lint typecheck help
+.PHONY: coverage coverage-clean coverage-view coverage-open test test-coverage test-py build clean format check-format cmake-format lint typecheck help \
+        valgrind valgrind-cpp valgrind-py valgrind-mpi valgrind-build valgrind-shell valgrind-clean
 
 RUN_TY ?= 0
 
@@ -22,6 +23,13 @@ help:
 	@echo "  cmake-format    - Format CMake files"
 	@echo "  lint            - Run ruff linter on Python code"
 	@echo "  typecheck       - Run ty type checker on Python code"
+	@echo "  valgrind        - Run C++ and Python Valgrind tests (native if available, else Docker)"
+	@echo "  valgrind-cpp    - Run C++ tests under Valgrind"
+	@echo "  valgrind-py     - Run native-binding Python tests under Valgrind"
+	@echo "  valgrind-mpi    - Run MPI tests with each rank wrapped in Valgrind"
+	@echo "  valgrind-build  - Build the Valgrind Docker image (macOS only)"
+	@echo "  valgrind-shell  - Open a shell in the Valgrind Docker image"
+	@echo "  valgrind-clean  - Remove Valgrind build/venv/logs"
 	@echo "  clean           - Clean all build directories"
 	@echo "  help            - Show this help"
 	@echo ""
@@ -78,6 +86,33 @@ test-py:
 	fi
 	@rm -rf .venv_test_py
 	@echo "Python tests completed successfully!"
+
+# Valgrind tests
+VALGRIND_MAKE = $(MAKE) --no-print-directory -C tests/valgrind
+
+valgrind:
+	@$(VALGRIND_MAKE) all
+
+valgrind-cpp:
+	@$(VALGRIND_MAKE) cpp
+
+valgrind-py:
+	@$(VALGRIND_MAKE) py
+
+valgrind-mpi:
+	@$(VALGRIND_MAKE) mpi
+
+valgrind-debug-hang:
+	@$(VALGRIND_MAKE) debug-hang
+
+valgrind-build:
+	@$(VALGRIND_MAKE) build
+
+valgrind-shell:
+	@$(VALGRIND_MAKE) shell
+
+valgrind-clean:
+	@$(VALGRIND_MAKE) clean
 
 # Python linting
 lint:

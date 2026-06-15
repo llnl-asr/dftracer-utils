@@ -24,6 +24,14 @@
 
 namespace {
 
+int valgrind_timeout_scale() {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    return 20;
+#else
+    return 1;
+#endif
+}
+
 /// Create a DFTracer gzip file with .pfw.gz extension
 /// (the server scans for .pfw and .pfw.gz patterns).
 std::string create_pfw_gz(dft_utils_test::TestEnvironment& env, int num_events,
@@ -101,8 +109,8 @@ bool can_bind_local_tcp_socket() {
 
 /// Wait until port is listening or timeout expires.
 bool wait_for_port(int port, int timeout_s = 10) {
-    auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(timeout_s);
+    auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::seconds(timeout_s * valgrind_timeout_scale());
     while (std::chrono::steady_clock::now() < deadline) {
         if (port_is_listening(port)) return true;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -134,7 +142,7 @@ std::string http_request(int port, const std::string& request,
     }
 
     struct timeval tv{};
-    tv.tv_sec = recv_timeout_s;
+    tv.tv_sec = recv_timeout_s * valgrind_timeout_scale();
     tv.tv_usec = 0;
     ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
@@ -203,6 +211,23 @@ std::string extract_body(const std::string& response) {
     return raw;
 }
 
+/// Wait until the HTTP handler responds, not just the TCP port.
+bool wait_for_http(int port, int timeout_s = 30) {
+    auto deadline = std::chrono::steady_clock::now() +
+                    std::chrono::seconds(timeout_s * valgrind_timeout_scale());
+    while (std::chrono::steady_clock::now() < deadline) {
+        auto probe = http_request(port,
+                                  "GET /api/v1/files HTTP/1.1\r\n"
+                                  "Host: localhost\r\n"
+                                  "Connection: close\r\n"
+                                  "\r\n",
+                                  1);
+        if (!probe.empty()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return false;
+}
+
 /// Pick a random port in the ephemeral range.
 int pick_port() { return 10000 + (::getpid() % 50000); }
 
@@ -226,7 +251,7 @@ struct ServerProcess {
             ::_exit(127);
         }
 
-        return wait_for_port(port, 15);
+        return wait_for_port(port, 15) && wait_for_http(port, 30);
     }
 
     void stop() {

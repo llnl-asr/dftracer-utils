@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_TESTS_TESTING_UTILITIES_H
 
 #ifdef __cplusplus
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
 
 #include <atomic>
@@ -11,6 +12,21 @@
 #include <thread>
 #include <vector>
 extern "C" {
+#endif
+
+#ifdef __cplusplus
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+#define DFTRACER_UTILS_VALGRIND_SCALE(n, d) \
+    ((size_t)(n) / (size_t)(d) < 10 ? (size_t)10 : (size_t)(n) / (size_t)(d))
+#else
+#define DFTRACER_UTILS_VALGRIND_SCALE(n, d) ((size_t)(n))
+#endif
+#else
+#define DFTRACER_UTILS_VALGRIND_SCALE(n, d)                             \
+    (getenv("DFTRACER_UTILS_VALGRIND")                                  \
+         ? ((size_t)(n) / (size_t)(d) < 10 ? (size_t)10                 \
+                                           : (size_t)(n) / (size_t)(d)) \
+         : (size_t)(n))
 #endif
 
 // C API for testing utilities
@@ -119,6 +135,23 @@ char* test_make_unique_test_path(const char* name);
 namespace dft_utils_test {
 
 enum class Format { GZIP = 0, TAR_GZIP = 1 };
+
+inline std::size_t valgrind_scale(std::size_t n, std::size_t divisor = 10) {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    return std::max(std::size_t(10), n / divisor);
+#else
+    (void)divisor;
+    return n;
+#endif
+}
+
+inline int valgrind_threads(int n) {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    return std::min(n, 2);
+#else
+    return n;
+#endif
+}
 
 inline fs::path make_unique_test_path(const std::string& name) {
     static std::atomic<unsigned long long> counter{0};

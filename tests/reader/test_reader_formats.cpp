@@ -346,9 +346,9 @@ TEST_CASE_TEMPLATE("Line-based reading", FormatType, GZIPFormat,
 }
 
 // Format-specific tests
-TEST_CASE("TAR.GZ specific functionality") {
+TEST_CASE("TAR.GZ specific functionality" * doctest::test_suite("vg")) {
     SUBCASE("Multiple files in archive") {
-        TestEnvironment tar_env(300, Format::TAR_GZIP);
+        TestEnvironment tar_env(valgrind_scale(300, 10), Format::TAR_GZIP);
         REQUIRE(tar_env.is_valid());
 
         std::string tar_gz_file = tar_env.create_test_tar_gzip_file();
@@ -414,7 +414,8 @@ TEST_CASE("TAR.GZ specific functionality") {
     }
 
     SUBCASE("Directory structure handling") {
-        TestEnvironment tar_env(150, Format::TAR_GZIP);
+        const std::size_t n_tar = valgrind_scale(150, 5);
+        TestEnvironment tar_env(n_tar, Format::TAR_GZIP);
         REQUIRE(tar_env.is_valid());
 
         std::string tar_gz_file = tar_env.create_test_tar_gzip_file();
@@ -429,14 +430,14 @@ TEST_CASE("TAR.GZ specific functionality") {
         REQUIRE(indexer != nullptr);
 
         indexer->build();
-        CHECK(indexer->get_num_lines() >=
-              150);  // Should have at least 150 lines across all files
+        CHECK(indexer->get_num_lines() >= n_tar);
     }
 }
 
-TEST_CASE("GZIP specific functionality") {
+TEST_CASE("GZIP specific functionality" * doctest::test_suite("vg")) {
     SUBCASE("Single file structure") {
-        TestEnvironment gzip_env(200, Format::GZIP);
+        const std::size_t n_gz = valgrind_scale(200, 5);
+        TestEnvironment gzip_env(n_gz, Format::GZIP);
         REQUIRE(gzip_env.is_valid());
 
         std::string gz_file = gzip_env.create_test_gzip_file();
@@ -448,8 +449,7 @@ TEST_CASE("GZIP specific functionality") {
         REQUIRE(indexer != nullptr);
 
         indexer->build();
-        CHECK(indexer->get_num_lines() ==
-              200);  // Should have exactly 200 lines
+        CHECK(indexer->get_num_lines() == n_gz);
 
         auto reader = ReaderFactory::create(indexer);
         REQUIRE(reader != nullptr);

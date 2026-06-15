@@ -178,7 +178,11 @@ class DftEventDispatcher : public indexer::IndexVisitor {
 
     std::size_t preferred_slice_count(Executor* exec, std::size_t total) const {
         if (!exec) return 1;
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+        const std::size_t MIN_SLICE_BYTES = 2 * 1024;
+#else
         const std::size_t MIN_SLICE_BYTES = 256 * 1024;
+#endif
         std::size_t cap = exec->get_num_threads();
         if (cap < 2) return 1;
         if (cap > 8) cap = 8;

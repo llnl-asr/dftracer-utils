@@ -37,21 +37,24 @@ PyObject *MemoryViewBatch_item(MemoryViewBatchObject *self, Py_ssize_t i) {
         return NULL;
     }
 
-    Py_buffer buf;
-    std::memset(&buf, 0, sizeof(buf));
-    buf.buf = self->data->buffer.data() + self->data->offsets[i];
-    buf.obj = (PyObject *)self;
-    Py_INCREF(self);
-    buf.len = self->data->lengths[i];
-    buf.itemsize = 1;
-    buf.readonly = 1;
-    buf.ndim = 1;
-    buf.format = const_cast<char *>("B");
-    buf.shape = &buf.len;
-    buf.strides = &buf.itemsize;
-    buf.suboffsets = NULL;
-    buf.internal = NULL;
-    return PyMemoryView_FromBuffer(&buf);
+    PyObject *full = PyMemoryView_FromObject((PyObject *)self);
+    if (!full) return NULL;
+
+    Py_ssize_t start = static_cast<Py_ssize_t>(self->data->offsets[i]);
+    Py_ssize_t stop = start + static_cast<Py_ssize_t>(self->data->lengths[i]);
+    PyObject *lo = PyLong_FromSsize_t(start);
+    PyObject *hi = PyLong_FromSsize_t(stop);
+    PyObject *slice = (lo && hi) ? PySlice_New(lo, hi, NULL) : NULL;
+    Py_XDECREF(lo);
+    Py_XDECREF(hi);
+    if (!slice) {
+        Py_DECREF(full);
+        return NULL;
+    }
+    PyObject *entry = PyObject_GetItem(full, slice);  // sub-view, shares buffer
+    Py_DECREF(slice);
+    Py_DECREF(full);
+    return entry;
 }
 
 static PyBufferProcs MemoryViewBatch_as_buffer = {

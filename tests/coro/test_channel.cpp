@@ -72,7 +72,7 @@ TEST_CASE("Channel - Basic construction") {
     CHECK(channel.is_closed() == false);
 }
 
-TEST_CASE("Channel - Send and receive") {
+TEST_CASE("Channel - Send and receive" * doctest::test_suite("vg")) {
     Channel<int> channel(10);
 
     // Send items
@@ -235,7 +235,8 @@ TEST_CASE("Channel - receive waits before first producer registration") {
     CHECK(received_value.load(std::memory_order_acquire) == 123);
 }
 
-TEST_CASE("Channel - Multiple producers, single consumer") {
+TEST_CASE("Channel - Multiple producers, single consumer" *
+          doctest::test_suite("vg")) {
     Channel<int> channel(100);
 
     constexpr int NUM_PRODUCERS = 4;
@@ -272,7 +273,8 @@ TEST_CASE("Channel - Multiple producers, single consumer") {
     CHECK(total_produced.load() == total_consumed.load());
 }
 
-TEST_CASE("Channel - Single producer, multiple consumers") {
+TEST_CASE("Channel - Single producer, multiple consumers" *
+          doctest::test_suite("vg")) {
     Channel<int> channel(100);
 
     constexpr int NUM_CONSUMERS = 4;
@@ -625,7 +627,7 @@ TEST_CASE("Channel - Rapid open/close cycles") {
     }
 }
 
-TEST_CASE("Channel - close wakes blocked receive") {
+TEST_CASE("Channel - close wakes blocked receive" * doctest::test_suite("vg")) {
     Channel<int> channel(10);
 
     std::atomic<bool> receiver_entered{false};

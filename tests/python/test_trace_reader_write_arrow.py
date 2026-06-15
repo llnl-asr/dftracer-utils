@@ -9,12 +9,13 @@ import pytest
 
 import dftracer.utils as dft_utils
 
-from .common import Environment
+from .common import Environment, valgrind_scale
 
 
 class TestTraceReaderWriteArrow:
     """Test TraceReader.write_arrow functionality."""
 
+    @pytest.mark.valgrind
     def test_write_arrow_basic(self):
         """Basic write_arrow produces readable Arrow IPC files."""
         with Environment(lines=50) as env:
@@ -183,8 +184,8 @@ class TestElasticArrowSchema:
 
     def test_varying_schema_single_file(self):
         """Events with different fields produce consistent Arrow schema."""
-        with Environment(lines=500) as env:
-            gz_file = env.create_varying_schema_file()
+        with Environment(lines=valgrind_scale(500, 10)) as env:
+            gz_file = env.create_varying_schema_file(num_events=valgrind_scale(500, 10))
             env.build_index(gz_file, checkpoint_size_bytes=4 * 1024)
             reader = dft_utils.TraceReader(gz_file, checkpoint_size=4 * 1024)
 
@@ -207,10 +208,11 @@ class TestElasticArrowSchema:
                             f"Schema mismatch between file 0 and file {i}"
                         )
 
+    @pytest.mark.valgrind
     def test_varying_schema_column_order_stable(self):
         """Column order remains consistent across batches."""
-        with Environment(lines=1000) as env:
-            gz_file = env.create_varying_schema_file(num_events=1000)
+        with Environment(lines=valgrind_scale(1000, 4)) as env:
+            gz_file = env.create_varying_schema_file(num_events=valgrind_scale(1000, 4))
             env.build_index(gz_file, checkpoint_size_bytes=2 * 1024)
             reader = dft_utils.TraceReader(gz_file, checkpoint_size=2 * 1024)
 
@@ -234,8 +236,8 @@ class TestElasticArrowSchema:
 
     def test_varying_schema_null_backfill(self):
         """Fields not present in all events are backfilled with nulls."""
-        with Environment(lines=500) as env:
-            gz_file = env.create_varying_schema_file()
+        with Environment(lines=valgrind_scale(500, 10)) as env:
+            gz_file = env.create_varying_schema_file(num_events=valgrind_scale(500, 10))
             env.build_index(gz_file, checkpoint_size_bytes=4 * 1024)
             reader = dft_utils.TraceReader(gz_file, checkpoint_size=4 * 1024)
 
@@ -254,8 +256,8 @@ class TestElasticArrowSchema:
 
     def test_varying_schema_pyarrow_concat(self):
         """Multiple IPC files can be concatenated with pyarrow."""
-        with Environment(lines=1000) as env:
-            gz_file = env.create_varying_schema_file(num_events=1000)
+        with Environment(lines=valgrind_scale(1000, 4)) as env:
+            gz_file = env.create_varying_schema_file(num_events=valgrind_scale(1000, 4))
             env.build_index(gz_file, checkpoint_size_bytes=2 * 1024)
             reader = dft_utils.TraceReader(gz_file, checkpoint_size=2 * 1024)
 
@@ -376,9 +378,10 @@ class TestTraceReaderViewChunks:
                     table = reader_ipc.read_all()
                     assert table.num_rows == result["rows_written"]
 
+    @pytest.mark.valgrind
     def test_write_view_chunks_parallel(self):
         """Test write_view_chunks processes multiple chunks in parallel."""
-        with Environment(lines=5000) as env:
+        with Environment(lines=valgrind_scale(5000, 100)) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=512)
             env.build_index(gz_file, checkpoint_size_bytes=4 * 1024)
             reader = dft_utils.TraceReader(gz_file, checkpoint_size=4 * 1024)
@@ -467,7 +470,7 @@ class TestDistributedWriteArrow:
         from dftracer.utils.arrow import read_arrow
         from dftracer.utils.dask import distributed_write_arrow
 
-        with Environment(lines=5000) as env:
+        with Environment(lines=valgrind_scale(5000, 100)) as env:
             gz_file = env.create_test_gzip_file(bytes_per_line=512)
             env.build_index(gz_file, checkpoint_size_bytes=4 * 1024)
 

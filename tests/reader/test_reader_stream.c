@@ -29,7 +29,8 @@
 static int test_bytes_stream_byte_range(void) {
     printf("\n=== Test: BYTES stream with BYTE_RANGE ===\n");
 
-    test_environment_handle_t env = test_environment_create_with_lines(1000);
+    test_environment_handle_t env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(1000, 10));
     CHECK_NOT_NULL(env, "test_environment");
 
     char* gz_file = test_environment_create_test_gzip_file(env);
@@ -93,7 +94,8 @@ static int test_bytes_stream_byte_range(void) {
 static int test_bytes_stream_line_range(void) {
     printf("\n=== Test: BYTES stream with LINE_RANGE ===\n");
 
-    test_environment_handle_t env = test_environment_create_with_lines(1000);
+    test_environment_handle_t env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(1000, 10));
     CHECK_NOT_NULL(env, "test_environment");
 
     char* gz_file = test_environment_create_test_gzip_file(env);
@@ -165,7 +167,8 @@ static int test_bytes_stream_line_range(void) {
 static int test_line_bytes_stream(void) {
     printf("\n=== Test: LINE_BYTES stream ===\n");
 
-    test_environment_handle_t env = test_environment_create_with_lines(1000);
+    test_environment_handle_t env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(1000, 10));
     CHECK_NOT_NULL(env, "test_environment");
 
     char* gz_file = test_environment_create_test_gzip_file(env);
@@ -244,7 +247,8 @@ static int test_line_bytes_stream(void) {
 static int test_multi_lines_bytes_stream(void) {
     printf("\n=== Test: MULTI_LINES_BYTES stream ===\n");
 
-    test_environment_handle_t env = test_environment_create_with_lines(1000);
+    test_environment_handle_t env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(1000, 10));
     CHECK_NOT_NULL(env, "test_environment");
 
     char* gz_file = test_environment_create_test_gzip_file(env);
@@ -324,7 +328,8 @@ static int test_multi_lines_bytes_stream(void) {
 static int test_line_stream(void) {
     printf("\n=== Test: LINE stream ===\n");
 
-    test_environment_handle_t env = test_environment_create_with_lines(1000);
+    test_environment_handle_t env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(1000, 10));
     CHECK_NOT_NULL(env, "test_environment");
 
     char* gz_file = test_environment_create_test_gzip_file(env);
@@ -397,7 +402,8 @@ static int test_line_stream(void) {
 static int test_multi_lines_stream(void) {
     printf("\n=== Test: MULTI_LINES stream ===\n");
 
-    test_environment_handle_t env = test_environment_create_with_lines(1000);
+    test_environment_handle_t env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(1000, 10));
     CHECK_NOT_NULL(env, "test_environment");
 
     char* gz_file = test_environment_create_test_gzip_file(env);
@@ -477,7 +483,8 @@ static int test_multi_lines_stream(void) {
 static int test_stream_recreation(void) {
     printf("\n=== Test: Stream recreation workaround ===\n");
 
-    test_environment_handle_t env = test_environment_create_with_lines(1000);
+    test_environment_handle_t env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(1000, 10));
     CHECK_NOT_NULL(env, "test_environment");
 
     char* gz_file = test_environment_create_test_gzip_file(env);
@@ -674,14 +681,19 @@ int main(void) {
     printf("C Reader Streaming API Tests\n");
     printf("========================================\n");
 
+    const int vg = getenv("DFTRACER_UTILS_VALGRIND") != NULL;
+
     failures += test_bytes_stream_byte_range();
-    failures += test_bytes_stream_line_range();
-    failures += test_line_bytes_stream();
-    failures += test_multi_lines_bytes_stream();
-    failures += test_line_stream();
     failures += test_multi_lines_stream();
     failures += test_stream_recreation();
-    failures += test_edge_cases();
+
+    if (!vg) {
+        failures += test_bytes_stream_line_range();
+        failures += test_line_bytes_stream();
+        failures += test_multi_lines_bytes_stream();
+        failures += test_line_stream();
+        failures += test_edge_cases();
+    }
 
     printf("\n========================================\n");
     if (failures == 0) {

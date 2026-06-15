@@ -14,6 +14,13 @@ import pytest
 from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
 
+def valgrind_scale(n: int, divisor: int = 10) -> int:
+    """Return n/divisor when running under Valgrind, else n."""
+    if os.environ.get("DFTRACER_UTILS_VALGRIND"):
+        return max(10, n // divisor)
+    return n
+
+
 def determine_index_path(file_path: str, index_dir: str = "") -> str:
     if index_dir:
         return os.path.join(index_dir, ".dftindex")

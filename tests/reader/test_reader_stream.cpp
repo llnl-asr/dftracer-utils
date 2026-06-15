@@ -17,8 +17,9 @@ using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::reader::internal;
 using namespace dft_utils_test;
 
-TEST_CASE("C++ Reader Streaming API - BYTES stream") {
-    TestEnvironment env(1000);
+TEST_CASE("C++ Reader Streaming API - BYTES stream" *
+          doctest::test_suite("vg")) {
+    TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -157,7 +158,7 @@ TEST_CASE("C++ Reader Streaming API - BYTES stream") {
 }
 
 TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
-    TestEnvironment env(1000);
+    TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -233,8 +234,9 @@ TEST_CASE("C++ Reader Streaming API - LINE_BYTES stream") {
     }
 }
 
-TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream") {
-    TestEnvironment env(1000);
+TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream" *
+          doctest::test_suite("vg")) {
+    TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -321,7 +323,7 @@ TEST_CASE("C++ Reader Streaming API - MULTI_LINES_BYTES stream") {
 }
 
 TEST_CASE("C++ Reader Streaming API - LINE stream") {
-    TestEnvironment env(1000);
+    TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -401,8 +403,9 @@ TEST_CASE("C++ Reader Streaming API - LINE stream") {
     }
 }
 
-TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream") {
-    TestEnvironment env(1000);
+TEST_CASE("C++ Reader Streaming API - MULTI_LINES stream" *
+          doctest::test_suite("vg")) {
+    TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();

@@ -73,6 +73,12 @@ Executor::Executor(const ExecutorConfig& config)
     if (io_pool_size_ == 0) {
         io_pool_size_ = 2;
     }
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    // Per-Executor thread churn dominates runtime when Valgrind serializes and
+    // instruments every thread, so cap the pools.
+    if (num_threads_ > 2) num_threads_ = 2;
+    if (io_pool_size_ > 2) io_pool_size_ = 2;
+#endif
     DFTRACER_UTILS_LOG_DEBUG(
         "Executor created with %zu threads, idle_timeout=%lld s, "
         "deadlock_timeout=%lld s",
@@ -152,10 +158,10 @@ void Executor::shutdown() {
     // ConcurrentQueue has TLS producer tokens tied to worker threads.
     drain_destroy_queue();
     {
-        std::coroutine_handle<> orphan;
+        RunQueueEntry orphan;
         while (run_queue_.try_dequeue(orphan)) {
-            if (orphan) {
-                orphan.destroy();
+            if (orphan.handle) {
+                orphan.handle.destroy();
             }
         }
     }
@@ -187,7 +193,7 @@ void Executor::worker_thread(WorkerContext* context) {
     coro::reset_timeslice();
 
     while (running_) {
-        std::coroutine_handle<> pending_resume;
+        RunQueueEntry pending_entry;
 
         // Snapshot the work signal BEFORE checking any queues.
         // This ensures that any signal increment (from enqueue +
@@ -202,14 +208,14 @@ void Executor::worker_thread(WorkerContext* context) {
 
         // Run queue: coroutine handles from enqueue() and
         // schedule_coroutine_resumption().
-        if (run_queue_.try_dequeue(pending_resume)) {
+        if (run_queue_.try_dequeue(pending_entry)) {
             coro::reset_timeslice();
             context->is_idle.store(false, std::memory_order_relaxed);
+            std::coroutine_handle<> pending_resume = pending_entry.handle;
             if (pending_resume && !pending_resume.done()) {
-                auto typed =
-                    std::coroutine_handle<coro::CoroPromise>::from_address(
-                        pending_resume.address());
-                TaskIndex tid = typed.promise().task_id;
+                // Id comes from the entry, not the promise: foreign promise
+                // types have no task_id field.
+                TaskIndex tid = pending_entry.task_id;
                 if (tid >= 0) {
                     std::unique_lock<std::shared_mutex> lock(registry_mutex_);
                     auto it = task_registry_.find(tid);
@@ -320,13 +326,13 @@ void schedule_destroy_helper(Executor* executor,
     }
 }
 
-void Executor::enqueue(std::coroutine_handle<> handle) {
+void Executor::enqueue(std::coroutine_handle<> handle, TaskIndex task_id) {
     if (!handle || handle.done()) {
         return;  // Invalid or already completed
     }
 
     DFTRACER_TSAN_RELEASE(handle.address());
-    run_queue_.enqueue(handle);
+    run_queue_.enqueue(RunQueueEntry{handle, task_id});
     signal_global_work();
 }
 
@@ -801,7 +807,7 @@ TaskIndex Executor::enqueue_tracked(
     }
 
     auto handle = coro.release();
-    enqueue(handle);
+    enqueue(handle, id);
     return id;
 }
 

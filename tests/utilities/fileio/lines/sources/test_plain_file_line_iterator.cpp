@@ -250,9 +250,10 @@ TEST_CASE("PlainFileLineIterator - Special Cases") {
     }
 
     SUBCASE("Many lines") {
+        const int n = static_cast<int>(valgrind_scale(1000, 10));
         {
             std::ofstream ofs(test_file);
-            for (int i = 1; i <= 1000; ++i) {
+            for (int i = 1; i <= n; ++i) {
                 ofs << "Line " << i << "\n";
             }
         }
@@ -265,7 +266,7 @@ TEST_CASE("PlainFileLineIterator - Special Cases") {
             count++;
         }
 
-        CHECK(count == 1000);
+        CHECK(count == n);
 
         fs::remove(test_file);
     }

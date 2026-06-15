@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#
+# Launcher shim used by the MPI Valgrind tests.
+#
+# The dftracer-utils MPI test drivers invoke the launcher named by the
+# MPIEXEC_EXECUTABLE environment variable as:
+#
+#     $MPIEXEC_EXECUTABLE -np <N> <binary> <binary-args...>
+#
+# Pointing MPIEXEC_EXECUTABLE at this script makes each MPI *rank* run under
+# Valgrind (the correct way to memcheck an MPI program is `mpiexec -np N
+# valgrind ./prog`, not `valgrind mpiexec`). Memory errors in the MPI binary
+# therefore make a rank exit non-zero (--error-exitcode=1), which fails mpiexec
+# and the enclosing test.
+set -euo pipefail
+
+REAL_MPIEXEC="${VALGRIND_REAL_MPIEXEC:-mpiexec}"
+SUPP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+VALGRIND_OPTS=(
+    --tool=memcheck
+    --error-exitcode=1
+    --leak-check=full
+    --show-leak-kinds=definite
+    --errors-for-leak-kinds=definite
+    --num-callers=30
+    --suppressions="$SUPP_DIR/valgrind-mpi.supp"
+    --suppressions="$SUPP_DIR/valgrind-cpp.supp"
+    ${VALGRIND_EXTRA_OPTS:-}
+)
+
+# Rebuild the launcher arg list, inserting `valgrind <opts>` immediately before
+# the program (the first existing executable file argument). This is robust to
+# the exact ordering/spelling of the launcher flags.
+out=()
+inserted=0
+for arg in "$@"; do
+    if [[ $inserted -eq 0 && -f "$arg" && -x "$arg" ]]; then
+        out+=(valgrind "${VALGRIND_OPTS[@]}" "$arg")
+        inserted=1
+    else
+        out+=("$arg")
+    fi
+done
+
+if [[ $inserted -eq 0 ]]; then
+    echo "mpiexec-valgrind: could not locate program in args: $*" >&2
+    exit 2
+fi
+
+# --allow-run-as-root: the container runs as root.
+# --oversubscribe: tests may request more ranks than detected slots.
+exec "$REAL_MPIEXEC" --allow-run-as-root --oversubscribe "${out[@]}"

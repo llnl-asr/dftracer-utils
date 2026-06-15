@@ -76,9 +76,15 @@
 // std::thread::hardware_concurrency() may return 0 on some platforms.
 // Use this wrapper to guarantee at least 1 thread.
 #include <cstddef>
+#include <cstdlib>
 #include <thread>
 
 inline std::size_t dftracer_utils_hardware_concurrency() {
+    if (const char *env = std::getenv("DFTRACER_UTILS_HW_CONCURRENCY")) {
+        char *end = nullptr;
+        unsigned long v = std::strtoul(env, &end, 10);
+        if (end != env && v > 0) return static_cast<std::size_t>(v);
+    }
     auto n = std::thread::hardware_concurrency();
     return n == 0 ? 1u : static_cast<std::size_t>(n);
 }
@@ -97,8 +103,8 @@ inline std::size_t dftracer_utils_hardware_concurrency() {
 #if __has_include(<sanitizer/tsan_interface.h>)
 #include <sanitizer/tsan_interface.h>
 #else
-extern "C" void __tsan_acquire(void*);
-extern "C" void __tsan_release(void*);
+extern "C" void __tsan_acquire(void *);
+extern "C" void __tsan_release(void *);
 #endif
 #define DFTRACER_TSAN_ACQUIRE(addr) __tsan_acquire(addr)
 #define DFTRACER_TSAN_RELEASE(addr) __tsan_release(addr)

@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/runtime.h>
 #include <doctest/doctest.h>
 
@@ -94,7 +95,7 @@ TEST_CASE("Runtime - threads returns configured count") {
 
 TEST_CASE("Runtime - default threads uses hardware_concurrency") {
     Runtime rt;
-    CHECK(rt.threads() == std::thread::hardware_concurrency());
+    CHECK(rt.threads() == dftracer_utils_hardware_concurrency());
 }
 
 TEST_CASE("Runtime - is_responsive after submit") {

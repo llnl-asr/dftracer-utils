@@ -75,11 +75,11 @@ static std::string create_variable_line_test_file(
 
 TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
     SUBCASE("Complete file read - single chunk") {
-        TestEnvironment env(1000);
+        TestEnvironment env(valgrind_scale(1000, 10));
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 1000);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), valgrind_scale(1000, 10));
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -126,11 +126,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
     }
 
     SUBCASE("Adjacent chunks no overlap") {
-        TestEnvironment env(10000);
+        TestEnvironment env(valgrind_scale(10000, 100));
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 10000, 100, 300);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), valgrind_scale(10000, 100), 100, 300);
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -204,11 +204,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
     }
 
     SUBCASE("Adjacent chunks concatenation equals full read") {
-        TestEnvironment env(5000);
+        TestEnvironment env(valgrind_scale(5000, 50));
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 5000, 80, 250);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), valgrind_scale(5000, 50), 80, 250);
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -305,11 +305,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
     }
 
     SUBCASE("Multiple small chunks - no gaps or overlaps") {
-        TestEnvironment env(3000);
+        TestEnvironment env(valgrind_scale(3000, 30));
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 3000);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), valgrind_scale(3000, 30));
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -384,13 +384,14 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Sequential Read Tests") {
     }
 }
 
-TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests") {
+TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests" *
+          doctest::test_suite("vg")) {
     SUBCASE("Parallel read with 4 threads") {
-        TestEnvironment env(10000);
+        TestEnvironment env(valgrind_scale(10000, 100));
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 10000, 100, 400);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), valgrind_scale(10000, 100), 100, 400);
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -408,7 +409,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests") {
             max_bytes = reader->get_max_bytes();
         }
 
-        const int num_threads = 4;
+        const int num_threads = valgrind_threads(4);
         std::size_t chunk_size = max_bytes / num_threads;
 
         std::vector<std::string> chunks(num_threads);
@@ -498,11 +499,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests") {
     }
 
     SUBCASE("Parallel read with 16 threads - stress test") {
-        TestEnvironment env(20000);
+        TestEnvironment env(valgrind_scale(20000, 200));
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 20000, 80, 350);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), valgrind_scale(20000, 200), 80, 350);
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -520,7 +521,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests") {
             max_bytes = reader->get_max_bytes();
         }
 
-        const int num_threads = 16;
+        const int num_threads = valgrind_threads(16);
         std::size_t chunk_size = max_bytes / num_threads;
 
         std::vector<std::string> chunks(num_threads);
@@ -603,13 +604,14 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Parallel/Threaded Tests") {
     }
 }
 
-TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests") {
+TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests" *
+          doctest::test_suite("vg")) {
     SUBCASE("4MB boundary (4194304 bytes) - the original issue") {
-        TestEnvironment env(10000);
+        TestEnvironment env(valgrind_scale(10000, 100));
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 10000, 100, 300);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), valgrind_scale(10000, 100), 450, 550);
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -624,7 +626,8 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests") {
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->get_max_bytes();
-        std::size_t boundary = 4194304;  // 4MB
+        // 4MB at full scale; mid-file when scaled down under Valgrind
+        std::size_t boundary = (max_bytes > 4194304) ? 4194304 : max_bytes / 2;
 
         // Only test if file is large enough
         if (max_bytes > boundary) {
@@ -694,11 +697,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests") {
     }
 
     SUBCASE("Prime number boundary") {
-        TestEnvironment env(5000);
+        TestEnvironment env(valgrind_scale(5000, 50));
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 5000, 80, 250);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), valgrind_scale(5000, 50), 230, 350);
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -713,7 +716,8 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests") {
         REQUIRE(reader != nullptr);
 
         std::size_t max_bytes = reader->get_max_bytes();
-        std::size_t boundary = 1299709;  // Prime number
+        // Prime offset; large prime at full scale, smaller when scaled down
+        std::size_t boundary = (max_bytes > 1299709) ? 1299709 : 10007;
 
         if (max_bytes > boundary) {
             std::vector<char> buffer(256 * 1024);
@@ -785,11 +789,11 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Specific Boundary Tests") {
 
 TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
     SUBCASE("Test with 2, 4, 8, 16 workers") {
-        TestEnvironment env(15000);
+        TestEnvironment env(valgrind_scale(15000, 150));
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 15000, 90, 280);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), valgrind_scale(15000, 150), 90, 280);
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -831,7 +835,8 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
         std::sort(reference_lines.begin(), reference_lines.end());
 
         // Test with different worker counts
-        for (int num_workers : {2, 4, 8, 16}) {
+        for (int raw_workers : {2, 4, 8, 16}) {
+            int num_workers = valgrind_threads(raw_workers);
             std::size_t chunk_size = max_bytes / num_workers;
 
             std::vector<std::string> chunks(num_workers);
@@ -898,11 +903,12 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Variable Worker Counts") {
 
 TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
     SUBCASE("Test with different buffer sizes") {
-        TestEnvironment env(3000);
+        const std::size_t n_buf_lines = valgrind_scale(3000, 30);
+        TestEnvironment env(n_buf_lines);
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 3000, 100, 300);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), n_buf_lines, 100, 300);
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -945,7 +951,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
         }
         std::sort(reference_lines.begin(), reference_lines.end());
 
-        CHECK(reference_lines.size() == 3000);
+        CHECK(reference_lines.size() == n_buf_lines);
 
         // Test with various buffer sizes
         std::vector<std::size_t> buffer_sizes = {
@@ -994,11 +1000,12 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
     }
 
     SUBCASE("Test chunked reads with different buffer sizes") {
-        TestEnvironment env(2000);
+        const std::size_t n_chunk_lines = valgrind_scale(2000, 20);
+        TestEnvironment env(n_chunk_lines);
         REQUIRE(env.is_valid());
 
-        std::string gz_file =
-            create_variable_line_test_file(env.get_dir(), 2000, 80, 200);
+        std::string gz_file = create_variable_line_test_file(
+            env.get_dir(), n_chunk_lines, 80, 200);
         REQUIRE(!gz_file.empty());
 
         std::string idx_file = env.get_index_path(gz_file);
@@ -1100,7 +1107,7 @@ TEST_CASE("MULTI_LINES_BYTES Stream - Buffer Size Tests") {
                     if (!line.empty()) full_lines.push_back(line);
                 }
 
-                CHECK(full_lines.size() == 2000);
+                CHECK(full_lines.size() == n_chunk_lines);
             }
         }
     }

@@ -7,6 +7,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/indexer.h>
+#include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
@@ -286,15 +287,14 @@ static PyObject* Indexer_resolve(IndexerObject* self,
     PyObject* dict = PyDict_New();
     if (!dict) return nullptr;
 
-    PyDict_SetItemString(dict, "total_files",
-                         PyLong_FromSize_t(result.all_files.size()));
-    PyDict_SetItemString(dict, "index_path",
-                         PyUnicode_FromString(result.index_path.c_str()));
-    PyDict_SetItemString(
-        dict, "aggregation_interval_us",
-        PyLong_FromUnsignedLongLong(result.stored_time_interval_us));
-    PyDict_SetItemString(dict, "needs_rebuild",
-                         PyBool_FromLong(result.needs_augmentation));
+    dict_set_steal(dict, "total_files",
+                   PyLong_FromSize_t(result.all_files.size()));
+    dict_set_steal(dict, "index_path",
+                   PyUnicode_FromString(result.index_path.c_str()));
+    dict_set_steal(dict, "aggregation_interval_us",
+                   PyLong_FromUnsignedLongLong(result.stored_time_interval_us));
+    dict_set_steal(dict, "needs_rebuild",
+                   PyBool_FromLong(result.needs_augmentation));
 
     // Ready files
     PyObject* ready_list = PyList_New(result.cached.size());

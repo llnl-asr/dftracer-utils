@@ -22,7 +22,7 @@ using namespace dftracer::utils::utilities::reader::internal;
 using namespace dft_utils_test;
 
 TEST_CASE("C++ Indexer - Basic functionality") {
-    TestEnvironment env(1000);
+    TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -249,7 +249,7 @@ TEST_CASE("C++ API - Edge cases") {
 }
 
 TEST_CASE("C++ API - Integration test") {
-    TestEnvironment env(1000);
+    TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -307,8 +307,8 @@ TEST_CASE("C++ API - Integration test") {
     }
 }
 
-TEST_CASE("C++ API - Memory safety stress test") {
-    TestEnvironment env(100000);
+TEST_CASE("C++ API - Memory safety stress test" * doctest::test_suite("vg")) {
+    TestEnvironment env(valgrind_scale(100000, 100));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -331,7 +331,8 @@ TEST_CASE("C++ API - Memory safety stress test") {
         std::size_t total_bytes = 0;
         std::size_t bytes_read;
         std::size_t offset = 0;
-        std::size_t end = 4 * 1024 * 1024;
+        std::size_t end =
+            std::min<std::size_t>(4 * 1024 * 1024, reader->get_max_bytes());
 
         while (offset < end && (bytes_read = reader->read(
                                     offset, end, buffer, sizeof(buffer))) > 0) {
@@ -459,7 +460,8 @@ TEST_CASE("C++ API - Advanced indexer functionality") {
     }
 }
 
-TEST_CASE("C++ API - Advanced reader functionality") {
+TEST_CASE("C++ API - Advanced reader functionality" *
+          doctest::test_suite("vg")) {
     TestEnvironment env;
     REQUIRE(env.is_valid());
 
@@ -628,7 +630,7 @@ TEST_CASE("C++ API - Advanced reader functionality") {
 }
 
 TEST_CASE("C++ API - JSON boundary detection") {
-    TestEnvironment env(1000);  // More lines for better boundary testing
+    TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -759,7 +761,7 @@ TEST_CASE("C++ API - JSON boundary detection") {
 
 TEST_CASE("C++ API - Regression and stress tests") {
     SUBCASE("Large file handling") {
-        TestEnvironment env(10000);  // Large test file
+        TestEnvironment env(valgrind_scale(10000, 5));
         REQUIRE(env.is_valid());
 
         std::string gz_file = env.create_test_gzip_file();
@@ -834,7 +836,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
         REQUIRE(f.is_open());
 
         f << "[\n";  // JSON array start
-        for (std::size_t i = 1; i <= 1000; ++i) {
+        for (std::size_t i = 1; i <= valgrind_scale(1000, 10); ++i) {
             f << "{\"name\":\"name_" << i << "\",\"cat\":\"cat_" << i
               << "\",\"dur\":" << (i * 10 % 1000) << "}\n";
         }
@@ -1222,8 +1224,9 @@ TEST_CASE("C++ Reader - Raw reading functionality") {
     }
 }
 
-TEST_CASE("C++ Reader - Line reading functionality") {
-    TestEnvironment env(10000);
+TEST_CASE("C++ Reader - Line reading functionality" *
+          doctest::test_suite("vg")) {
+    TestEnvironment env(valgrind_scale(10000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -1430,7 +1433,7 @@ TEST_CASE("C++ Reader - Line reading functionality") {
 }
 
 TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
-    TestEnvironment env(1000);
+    TestEnvironment env(valgrind_scale(1000, 10));
     REQUIRE(env.is_valid());
 
     std::string gz_file = env.create_test_gzip_file();
@@ -1593,7 +1596,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
 
     SUBCASE("Large file handling") {
         // Create larger test environment
-        TestEnvironment large_env(5000);  // More lines
+        TestEnvironment large_env(valgrind_scale(5000, 10));
         std::string large_gz = large_env.create_test_gzip_file();
         std::string large_idx = large_env.get_index_path(large_gz);
 

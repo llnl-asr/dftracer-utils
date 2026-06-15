@@ -6,23 +6,23 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [
-    { name = "Ray Andrew Sinurat", email = "raydreww@gmail.com" },
-    { name = "Hariharan Devarajan (Hari)", email = "hariharandev1@llnl.gov" }
+  { name = "Ray Andrew Sinurat", email = "raydreww@gmail.com" },
+  { name = "Hariharan Devarajan (Hari)", email = "hariharandev1@llnl.gov" },
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
-    "Programming Language :: C++",
-    "Topic :: Software Development :: Libraries :: Python Modules",
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: C++",
+  "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
 [project.optional-dependencies]
@@ -31,7 +31,7 @@ dev = [
   "ruff",
   "pyarrow>=14.0",
   "dask[bag,dataframe,distributed]>=2024.1.0; python_version >= '3.9'",
-  "dask_jobqueue~=0.8.0; python_version >= '3.9'"
+  "dask_jobqueue~=0.8.0; python_version >= '3.9'",
 ]
 
 [build-system]
@@ -105,7 +105,7 @@ cmake.args = [
 build-verbosity = 1
 before-test = [
   "pip install tomli",
-  "python -c 'import tomli, subprocess, sys; subprocess.check_call([sys.executable, \"-m\", \"pip\", \"install\"] + tomli.load(open(\"pyproject.toml\", \"rb\"))[\"project\"][\"optional-dependencies\"][\"dev\"])'"
+  "python -c 'import tomli, subprocess, sys; subprocess.check_call([sys.executable, \"-m\", \"pip\", \"install\"] + tomli.load(open(\"pyproject.toml\", \"rb\"))[\"project\"][\"optional-dependencies\"][\"dev\"])'",
 ]
 test-command = "pytest {project}/tests"
 test-requires = "pytest"
@@ -125,6 +125,19 @@ src = ["python", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = ["E501"]
+
+[[tool.ty.overrides]]
+include = [
+  "python/dftracer/utils/arrow.py",
+  "python/dftracer/utils/dask.py",
+  "python/dftracer/utils/dfanalyzer.py",
+  "python/dftracer/utils/trace_reader.py",
+]
+
+[tool.ty.overrides.rules]
+unresolved-import = "ignore"
+unresolved-attribute = "ignore"
+unused-ignore-comment = "ignore"
 
 [tool.setuptools_scm]
 local_scheme = "no-local-version"

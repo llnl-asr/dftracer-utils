@@ -467,8 +467,13 @@ ArrowExportResult RecordBatchBuilder::finish() {
                     }
                 }
 
-                // Build dictionary array (STRING)
-                // Allocate dictionary array
+                if (child->dictionary != nullptr) {
+                    if (child->dictionary->release != nullptr) {
+                        ArrowArrayRelease(child->dictionary);
+                    }
+                    ArrowFree(child->dictionary);
+                    child->dictionary = nullptr;
+                }
                 child->dictionary =
                     static_cast<ArrowArray*>(ArrowMalloc(sizeof(ArrowArray)));
                 if (!child->dictionary) {

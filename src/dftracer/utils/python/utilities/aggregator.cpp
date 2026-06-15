@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/python/arrow_helpers.h>
+#include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/utilities/aggregator.h>
@@ -737,9 +738,9 @@ static PyObject *Aggregator_write_arrow(AggregatorObject *self, PyObject *args,
         }
 
         PyDict_SetItemString(view_dict, "files", files_list);
-        PyDict_SetItemString(view_dict, "rows",
-                             PyLong_FromLongLong(view_stats.total_rows));
-        PyDict_SetItemString(
+        dict_set_steal(view_dict, "rows",
+                       PyLong_FromLongLong(view_stats.total_rows));
+        dict_set_steal(
             view_dict, "bytes",
             PyLong_FromLongLong(view_stats.total_uncompressed_bytes));
         Py_DECREF(files_list);
@@ -751,10 +752,9 @@ static PyObject *Aggregator_write_arrow(AggregatorObject *self, PyObject *args,
     }
 
     PyDict_SetItemString(dict, "views", views_dict);
-    PyDict_SetItemString(dict, "total_rows",
-                         PyLong_FromLongLong(result.total_rows));
-    PyDict_SetItemString(dict, "total_bytes",
-                         PyLong_FromLongLong(result.total_bytes));
+    dict_set_steal(dict, "total_rows", PyLong_FromLongLong(result.total_rows));
+    dict_set_steal(dict, "total_bytes",
+                   PyLong_FromLongLong(result.total_bytes));
     Py_DECREF(views_dict);
 
     return dict;

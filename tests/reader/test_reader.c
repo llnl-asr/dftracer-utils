@@ -403,8 +403,8 @@ void test_memory_management(void) {
 
 void test_json_boundary_detection(void) {
     // Create larger test environment for better boundary testing
-    test_environment_handle_t large_env =
-        test_environment_create_with_lines(1000);
+    test_environment_handle_t large_env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(1000, 10));
     TEST_ASSERT_NOT_NULL(large_env);
     TEST_ASSERT_TRUE(test_environment_is_valid(large_env));
 
@@ -491,8 +491,8 @@ void test_regression_for_truncated_json_output(void) {
     // This test specifically catches the original bug where output was like:
     // {"name":"name_%  instead of complete JSON lines
 
-    test_environment_handle_t large_env =
-        test_environment_create_with_lines(2000);
+    test_environment_handle_t large_env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(2000, 10));
     TEST_ASSERT_NOT_NULL(large_env);
 
     // Create test data with specific pattern that might trigger the bug
@@ -509,7 +509,8 @@ void test_regression_for_truncated_json_output(void) {
     TEST_ASSERT_NOT_NULL(f);
 
     fprintf(f, "[\n");  // JSON array start
-    for (size_t i = 1; i <= 1000; ++i) {
+    size_t n_regression_lines = DFTRACER_UTILS_VALGRIND_SCALE(1000, 10);
+    for (size_t i = 1; i <= n_regression_lines; ++i) {
         fprintf(f, "{\"name\":\"name_%zu\",\"cat\":\"cat_%zu\",\"dur\":%zu}\n",
                 i, i, (i * 10 % 1000));
     }
@@ -1080,8 +1081,8 @@ void test_reader_full_file_comparison_raw_vs_json_boundary(void) {
 
 void test_reader_line_reading_basic(void) {
     // Create larger test environment for better line reading support
-    test_environment_handle_t large_env =
-        test_environment_create_with_lines(10000);
+    test_environment_handle_t large_env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(10000, 10));
     TEST_ASSERT_NOT_NULL(large_env);
     TEST_ASSERT_TRUE(test_environment_is_valid(large_env));
 
@@ -1159,8 +1160,8 @@ void test_reader_line_reading_basic(void) {
 
 void test_reader_line_reading_accuracy(void) {
     // Create larger test environment
-    test_environment_handle_t large_env =
-        test_environment_create_with_lines(10000);
+    test_environment_handle_t large_env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(10000, 10));
     TEST_ASSERT_NOT_NULL(large_env);
 
     char* gz_file = test_environment_create_test_gzip_file(large_env);
@@ -1242,8 +1243,8 @@ void test_reader_line_reading_accuracy(void) {
 
 void test_reader_line_reading_range(void) {
     // Create larger test environment
-    test_environment_handle_t large_env =
-        test_environment_create_with_lines(10000);
+    test_environment_handle_t large_env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(10000, 10));
     TEST_ASSERT_NOT_NULL(large_env);
 
     char* gz_file = test_environment_create_test_gzip_file(large_env);
@@ -1369,8 +1370,8 @@ void test_reader_line_reading_error_handling(void) {
 
 void test_reader_line_reading_buffer_too_small(void) {
     // Create larger test environment
-    test_environment_handle_t large_env =
-        test_environment_create_with_lines(1000);
+    test_environment_handle_t large_env = test_environment_create_with_lines(
+        DFTRACER_UTILS_VALGRIND_SCALE(1000, 10));
     TEST_ASSERT_NOT_NULL(large_env);
 
     char* gz_file = test_environment_create_test_gzip_file(large_env);
@@ -1442,42 +1443,47 @@ int main(void) {
         return 1;
     }
 
-    // Indexer tests
+    const int vg = getenv("DFTRACER_UTILS_VALGRIND") != NULL;
+
     RUN_TEST(test_indexer_creation_and_destruction);
-    RUN_TEST(test_indexer_invalid_parameters);
     RUN_TEST(test_gzip_index_building);
-    RUN_TEST(test_indexer_rebuild_detection);
-    RUN_TEST(test_indexer_force_rebuild);
-
-    // Reader tests
     RUN_TEST(test_reader_creation_and_destruction);
-    RUN_TEST(test_reader_invalid_parameters);
     RUN_TEST(test_data_range_reading);
-    RUN_TEST(test_read_with_null_parameters);
-    RUN_TEST(test_edge_cases);
-    RUN_TEST(test_get_maximum_bytes);
-    RUN_TEST(test_get_max_bytes_null_parameters);
     RUN_TEST(test_memory_management);
-
-    // Advanced tests
-    RUN_TEST(test_json_boundary_detection);
-    RUN_TEST(test_regression_for_truncated_json_output);
-
-    // Raw reader tests
     RUN_TEST(test_reader_raw_basic_functionality);
-    RUN_TEST(test_reader_raw_vs_regular_comparison);
-    RUN_TEST(test_reader_raw_edge_cases);
-    RUN_TEST(test_reader_raw_small_buffer);
-    RUN_TEST(test_reader_raw_multiple_ranges);
-    RUN_TEST(test_reader_raw_null_parameters);
-    RUN_TEST(test_reader_full_file_comparison_raw_vs_json_boundary);
-
-    // Line reading tests (C API)
     RUN_TEST(test_reader_line_reading_basic);
-    RUN_TEST(test_reader_line_reading_accuracy);
-    RUN_TEST(test_reader_line_reading_range);
-    RUN_TEST(test_reader_line_reading_error_handling);
-    RUN_TEST(test_reader_line_reading_buffer_too_small);
+
+    if (!vg) {
+        // Indexer tests
+        RUN_TEST(test_indexer_invalid_parameters);
+        RUN_TEST(test_indexer_rebuild_detection);
+        RUN_TEST(test_indexer_force_rebuild);
+
+        // Reader tests
+        RUN_TEST(test_reader_invalid_parameters);
+        RUN_TEST(test_read_with_null_parameters);
+        RUN_TEST(test_edge_cases);
+        RUN_TEST(test_get_maximum_bytes);
+        RUN_TEST(test_get_max_bytes_null_parameters);
+
+        // Advanced tests
+        RUN_TEST(test_json_boundary_detection);
+        RUN_TEST(test_regression_for_truncated_json_output);
+
+        // Raw reader tests
+        RUN_TEST(test_reader_raw_vs_regular_comparison);
+        RUN_TEST(test_reader_raw_edge_cases);
+        RUN_TEST(test_reader_raw_small_buffer);
+        RUN_TEST(test_reader_raw_multiple_ranges);
+        RUN_TEST(test_reader_raw_null_parameters);
+        RUN_TEST(test_reader_full_file_comparison_raw_vs_json_boundary);
+
+        // Line reading tests (C API)
+        RUN_TEST(test_reader_line_reading_accuracy);
+        RUN_TEST(test_reader_line_reading_range);
+        RUN_TEST(test_reader_line_reading_error_handling);
+        RUN_TEST(test_reader_line_reading_buffer_too_small);
+    }
 
     // Clean up global test environment
     if (g_env) {

@@ -11,6 +11,12 @@ PyObject *IndexerCheckpoint_new(PyTypeObject *type, PyObject *args,
     return (PyObject *)self;
 }
 
+static void IndexerCheckpoint_dealloc(IndexerCheckpointObject *self) {
+    free(self->checkpoint.dict_compressed);
+    self->checkpoint.dict_compressed = NULL;
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
 #if PY_VERSION_HEX >= 0x030C0000  // >= 3.12
 
 static PyMemberDef IndexerCheckpoint_members[] = {
@@ -67,42 +73,42 @@ static PyMemberDef IndexerCheckpoint_members[] = {
 
 PyTypeObject IndexerCheckpointType = {
     PyVarObject_HEAD_INIT(NULL, 0) "indexer.IndexerCheckpoint", /* tp_name */
-    sizeof(IndexerCheckpointObject), /* tp_basicsize */
-    0,                               /* tp_itemsize */
-    0,                               /* tp_dealloc */
-    0,                               /* tp_vectorcall_offset */
-    0,                               /* tp_getattr */
-    0,                               /* tp_setattr */
-    0,                               /* tp_as_async */
-    0,                               /* tp_repr */
-    0,                               /* tp_as_number */
-    0,                               /* tp_as_sequence */
-    0,                               /* tp_as_mapping */
-    0,                               /* tp_hash */
-    0,                               /* tp_call */
-    0,                               /* tp_str */
-    0,                               /* tp_getattro */
-    0,                               /* tp_setattro */
-    0,                               /* tp_as_buffer */
-    Py_TPFLAGS_DEFAULT,              /* tp_flags */
-    "IndexerCheckpoint objects",     /* tp_doc */
-    0,                               /* tp_traverse */
-    0,                               /* tp_clear */
-    0,                               /* tp_richcompare */
-    0,                               /* tp_weaklistoffset */
-    0,                               /* tp_iter */
-    0,                               /* tp_iternext */
-    0,                               /* tp_methods */
-    IndexerCheckpoint_members,       /* tp_members */
-    0,                               /* tp_getset */
-    0,                               /* tp_base */
-    0,                               /* tp_dict */
-    0,                               /* tp_descr_get */
-    0,                               /* tp_descr_set */
-    0,                               /* tp_dictoffset */
-    0,                               /* tp_init */
-    0,                               /* tp_alloc */
-    IndexerCheckpoint_new,           /* tp_new */
+    sizeof(IndexerCheckpointObject),       /* tp_basicsize */
+    0,                                     /* tp_itemsize */
+    (destructor)IndexerCheckpoint_dealloc, /* tp_dealloc */
+    0,                                     /* tp_vectorcall_offset */
+    0,                                     /* tp_getattr */
+    0,                                     /* tp_setattr */
+    0,                                     /* tp_as_async */
+    0,                                     /* tp_repr */
+    0,                                     /* tp_as_number */
+    0,                                     /* tp_as_sequence */
+    0,                                     /* tp_as_mapping */
+    0,                                     /* tp_hash */
+    0,                                     /* tp_call */
+    0,                                     /* tp_str */
+    0,                                     /* tp_getattro */
+    0,                                     /* tp_setattro */
+    0,                                     /* tp_as_buffer */
+    Py_TPFLAGS_DEFAULT,                    /* tp_flags */
+    "IndexerCheckpoint objects",           /* tp_doc */
+    0,                                     /* tp_traverse */
+    0,                                     /* tp_clear */
+    0,                                     /* tp_richcompare */
+    0,                                     /* tp_weaklistoffset */
+    0,                                     /* tp_iter */
+    0,                                     /* tp_iternext */
+    0,                                     /* tp_methods */
+    IndexerCheckpoint_members,             /* tp_members */
+    0,                                     /* tp_getset */
+    0,                                     /* tp_base */
+    0,                                     /* tp_dict */
+    0,                                     /* tp_descr_get */
+    0,                                     /* tp_descr_set */
+    0,                                     /* tp_dictoffset */
+    0,                                     /* tp_init */
+    0,                                     /* tp_alloc */
+    IndexerCheckpoint_new,                 /* tp_new */
 };
 
 int init_indexer_checkpoint(PyObject *m) {

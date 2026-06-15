@@ -17,7 +17,8 @@ using namespace dftracer::utils::utilities::reader::internal;
 using namespace dft_utils_test;
 
 TEST_SUITE("IndexedFileLineIterator") {
-    TEST_CASE("IndexedFileLineIterator - Basic Operations with Line Range") {
+    TEST_CASE("IndexedFileLineIterator - Basic Operations with Line Range" *
+              doctest::test_suite("vg")) {
         SUBCASE("Read entire indexed file") {
             // Create a test environment with 10 lines
             TestEnvironment env(10);
@@ -389,9 +390,10 @@ TEST_SUITE("IndexedFileLineIterator") {
         }
     }
 
-    TEST_CASE("IndexedFileLineIterator - Large Files") {
+    TEST_CASE("IndexedFileLineIterator - Large Files" *
+              doctest::test_suite("vg")) {
         SUBCASE("Large line range") {
-            TestEnvironment env(1000);
+            TestEnvironment env(valgrind_scale(1000, 4));
             std::string gz_path = env.create_test_gzip_file();
 
             auto indexer = IndexerFactory::create(gz_path, "", 4096, true);

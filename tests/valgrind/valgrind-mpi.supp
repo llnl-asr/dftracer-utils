@@ -1,0 +1,108 @@
+# Valgrind suppressions for the OpenMPI runtime.
+#
+# MPI implementations legitimately leave allocations reachable for the life of
+# the process and read uninitialised bytes inside their transport/PMIx layers;
+# none of that is a bug in dftracer-utils. These suppressions silence that
+# runtime noise so real findings in the MPI binaries stand out. Paired with
+# valgrind-cpp.supp.
+#
+# Ubuntu's OpenMPI also ships /usr/share/openmpi/openmpi-valgrind.supp; add it
+# via VALGRIND_EXTRA_OPTS="--suppressions=/usr/share/openmpi/openmpi-valgrind.supp"
+# if you still see launcher noise.
+
+{
+   openmpi-libmpi-leak
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible,definite,indirect
+   ...
+   obj:*/libmpi.so*
+}
+{
+   openmpi-libopen-pal-leak
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible,definite,indirect
+   ...
+   obj:*/libopen-pal.so*
+}
+{
+   openmpi-libopen-rte-leak
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible,definite,indirect
+   ...
+   obj:*/libopen-rte.so*
+}
+{
+   openmpi-pmix-leak
+   Memcheck:Leak
+   match-leak-kinds: reachable,possible,definite,indirect
+   ...
+   obj:*/libpmix.so*
+}
+{
+   openmpi-init-cond
+   Memcheck:Cond
+   ...
+   fun:PMPI_Init*
+}
+{
+   openmpi-init-value8
+   Memcheck:Value8
+   ...
+   fun:PMPI_Init*
+}
+{
+   openmpi-libmpi-cond
+   Memcheck:Cond
+   ...
+   obj:*/libmpi.so*
+}
+{
+   openmpi-libopen-pal-cond
+   Memcheck:Cond
+   ...
+   obj:*/libopen-pal.so*
+}
+{
+   openmpi-libmpi-addr
+   Memcheck:Addr8
+   ...
+   obj:*/libmpi.so*
+}
+
+# OpenMPI/PMIx run their progress engine on a libevent thread; allocations made
+# there (often via dlopened mca components shown as ??? frames) are not freed at
+# teardown. Anchor on event_base_loop / libevent, which dftracer never uses.
+{
+   openmpi-pmix-event-thread-leak
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible,reachable
+   ...
+   fun:event_base_loop
+   ...
+   fun:start_thread
+}
+{
+   openmpi-libevent-leak
+   Memcheck:Leak
+   match-leak-kinds: definite,indirect,possible,reachable
+   ...
+   obj:*/libevent*
+   ...
+}
+
+# PMIx packs messages into buffers that include uninitialised padding and sends
+# them with writev; Memcheck flags the uninitialised bytes. Not our data.
+{
+   openmpi-pmix-writev-uninit
+   Memcheck:Param
+   writev(vector[1])
+   ...
+   fun:pmix_ptl_base_send_handler
+}
+{
+   openmpi-pmix-write-uninit
+   Memcheck:Param
+   write(buf)
+   ...
+   obj:*/libpmix.so*
+}

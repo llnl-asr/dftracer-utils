@@ -40,6 +40,7 @@ class ComparatorArgParse : public cli::ArgParse {
     cli::QueryArgs query_args{"Query filter (default: all events)"};
 
     std::string config_path;
+    std::string preset;
     std::string baseline;
     std::string variant;
     std::string baseline_index_dir;
@@ -49,6 +50,7 @@ class ComparatorArgParse : public cli::ArgParse {
     double time_interval = 5000.0;
     double threshold = 0.0;
     bool no_color = false;
+    bool compact = false;
 
     explicit ComparatorArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         indexing.with_index_dir = false;
@@ -61,6 +63,11 @@ class ComparatorArgParse : public cli::ArgParse {
         parser()
             .add_argument("--config")
             .help("JSON config file for hierarchical comparison")
+            .default_value<std::string>("");
+
+        parser()
+            .add_argument("--preset")
+            .help("Built-in comparison preset (supported: dlio)")
             .default_value<std::string>("");
 
         parser()
@@ -110,10 +117,17 @@ class ComparatorArgParse : public cli::ArgParse {
             .add_argument("--no-color")
             .help("Disable ANSI color output")
             .flag();
+
+        parser()
+            .add_argument("--compact")
+            .help(
+                "Collapse nodes with only negligible changes to a single line")
+            .flag();
     }
 
     void post_parse() override {
         config_path = parser().get<std::string>("--config");
+        preset = parser().get<std::string>("--preset");
         baseline = parser().get<std::string>("--baseline");
         variant = parser().get<std::string>("--variant");
         baseline_index_dir = parser().get<std::string>("--baseline-index-dir");
@@ -123,6 +137,7 @@ class ComparatorArgParse : public cli::ArgParse {
         time_interval = parser().get<double>("--time-interval");
         threshold = parser().get<double>("--threshold");
         no_color = parser().get<bool>("--no-color");
+        compact = parser().get<bool>("--compact");
     }
 };
 
@@ -286,6 +301,7 @@ static coro::CoroTask<void> run_all_aggregations(
 
 static int run_comparator(const ComparatorArgParse* cli) {
     const auto& config_path = cli->config_path;
+    const auto& preset = cli->preset;
     const auto& baseline_path = cli->baseline;
     const auto& variant_path = cli->variant;
     const auto& query_str = cli->query_args.query;
@@ -306,17 +322,42 @@ static int run_comparator(const ComparatorArgParse* cli) {
             return 1;
         }
         config = std::move(*parsed);
+    } else if (!preset.empty()) {
+        if (baseline_path.empty() || variant_path.empty()) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "--preset requires both --baseline and --variant");
+            return 1;
+        }
+        auto parsed =
+            ComparisonConfig::from_preset(preset, baseline_path, variant_path);
+        if (!parsed) {
+            DFTRACER_UTILS_LOG_ERROR("Unknown preset: %s. Supported: dlio",
+                                     preset.c_str());
+            return 1;
+        }
+        config = std::move(*parsed);
+        // AND the user query into every top-level node so --query narrows
+        // the preset without replacing its structure.
+        if (!query_str.empty()) {
+            for (auto& n : config.nodes) {
+                n.query = n.query.empty()
+                              ? query_str
+                              : "(" + n.query + ") AND (" + query_str + ")";
+            }
+        }
     } else if (!baseline_path.empty() && !variant_path.empty()) {
         config = ComparisonConfig::from_cli(baseline_path, variant_path,
                                             query_str, group_by_str);
     } else {
         DFTRACER_UTILS_LOG_ERROR(
-            "Must specify --config or both --baseline and --variant");
+            "Must specify --config, --preset, or both --baseline and "
+            "--variant");
         return 1;
     }
 
     if (!format.empty()) config.format = format;
     config.no_color = no_color;
+    if (cli->compact) config.compact = true;
     if (cli->pipeline.executor_threads > 0)
         config.executor_threads = cli->pipeline.executor_threads;
     if (checkpoint_size > 0) config.checkpoint_size = checkpoint_size;
@@ -545,8 +586,10 @@ static int run_comparator(const ComparatorArgParse* cli) {
                 co_return;
             }
 
-            output.baseline_file_count = baseline_files.size();
-            output.variant_file_count = variant_files.size();
+            output.baseline_file_count =
+                baseline_results[0][0].total_files_processed;
+            output.variant_file_count =
+                variant_results[0][0].total_files_processed;
 
             auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -556,13 +599,18 @@ static int run_comparator(const ComparatorArgParse* cli) {
                 pairs.reserve(plan.specs.size());
 
                 for (std::size_t vi = 0; vi < plan.specs.size(); ++vi) {
-                    if (pairs.empty()) {
+                    // Compute metadata once from the first node/visitor so
+                    // process_count, thread_count, and makespan reflect the
+                    // full trace rather than whichever node happens to be last.
+                    if (ni == 0 && vi == 0) {
+                        auto b_files =
+                            baseline_results[0][0].total_files_processed;
+                        auto v_files =
+                            variant_results[0][0].total_files_processed;
                         output.baseline_meta = extract_metadata(
-                            baseline_results[ni][vi].aggregations,
-                            baseline_files.size());
+                            baseline_results[ni][vi].aggregations, b_files);
                         output.variant_meta = extract_metadata(
-                            variant_results[ni][vi].aggregations,
-                            variant_files.size());
+                            variant_results[ni][vi].aggregations, v_files);
                     }
 
                     ComparisonVisitorPair pair;
@@ -575,8 +623,10 @@ static int run_comparator(const ComparatorArgParse* cli) {
                 ComparisonUtilityInput cmp_input;
                 cmp_input.visitors = std::move(pairs);
                 cmp_input.root_node = plan.root;
-                cmp_input.baseline_file_count = baseline_files.size();
-                cmp_input.variant_file_count = variant_files.size();
+                cmp_input.baseline_file_count =
+                    baseline_results[ni][0].total_files_processed;
+                cmp_input.variant_file_count =
+                    variant_results[ni][0].total_files_processed;
 
                 ComparisonUtility cmp;
                 auto cmp_output = co_await cmp.process(cmp_input);
@@ -603,6 +653,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
                 FormatterOptions fmt_opts;
                 fmt_opts.use_color = is_tty && !config.no_color;
                 fmt_opts.use_unicode = is_tty;
+                fmt_opts.compact = config.compact;
                 TreeTableFormatter formatter(fmt_opts);
                 formatter.render(stdout, output);
             }

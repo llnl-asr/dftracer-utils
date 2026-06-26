@@ -87,6 +87,7 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/comparator/test_comparison_result.cpp
     composites/dft/comparator/test_comparison_config.cpp
     composites/dft/comparator/test_is_data_transfer_op.cpp
+    composites/dft/comparator/test_tree_table_formatter.cpp
 
     # Indexer
     indexer/test_rocksdb_storage.cpp

@@ -849,17 +849,20 @@ dftracer_comparator
 
 **Options:**
 
-- ``--baseline <path>`` - Baseline trace file or directory [required unless --config]
-- ``--variant <path>`` - Variant trace file or directory [required unless --config]
-- ``--config <path>`` - JSON config file for hierarchical comparison (replaces --baseline/--variant)
-- ``--query <query>`` - Query DSL filter (default: ``'cat == "POSIX" OR cat == "STDIO"'``)
+- ``--baseline <path>`` - Baseline trace file or directory [required unless ``--config``]
+- ``--variant <path>`` - Variant trace file or directory [required unless ``--config``]
+- ``--config <path>`` - JSON config file for hierarchical comparison (replaces ``--baseline``/``--variant``)
+- ``--preset <name>`` - Built-in comparison preset (see **Presets** below). Requires ``--baseline`` and ``--variant``
+- ``--query <query>`` - Query DSL filter. With ``--preset``, ANDed into every top-level node query to narrow results without replacing the preset structure (default: ``'cat == "POSIX" OR cat == "STDIO"'`` for plain mode)
 - ``--group-by <keys>`` - Comma-separated group keys (default: cat,name)
 - ``--format <fmt>`` - Output format: ``table`` (default) or ``json``
 - ``-t, --time-interval <ms>`` - Time interval in milliseconds for bucketing (default: 5000)
 - ``--threshold <pct>`` - Hide changes below this percentage (default: 0.0)
 - ``--no-color`` - Disable ANSI color output
+- ``--compact`` - Collapse nodes where all metrics are negligible to a single ``(no change)`` line; useful for large presets where most categories are unchanged
 - ``--executor-threads <count>`` - Number of parallel threads (default: auto)
-- ``--index-dir <path>`` - Directory for index sidecar files (default: system temp)
+- ``--baseline-index-dir <path>`` - Index directory for baseline (default: co-located with data)
+- ``--variant-index-dir <path>`` - Index directory for variant (default: co-located with data)
 - ``--force`` - Force index rebuild
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 
@@ -880,15 +883,57 @@ dftracer_comparator
     dftracer_comparator --baseline a.pfw.gz --variant b.pfw.gz \
         --query 'cat == "POSIX" AND name == "write"'
 
+    # DLIO preset - full hierarchical coverage of all DLIO annotation categories
+    dftracer_comparator --preset dlio --baseline ./run_v1 --variant ./run_v2
+
+    # DLIO preset narrowed to a single host, with compact output
+    dftracer_comparator --preset dlio --baseline ./run_v1 --variant ./run_v2 \
+        --query 'hhash == "abc123"' --compact
+
     # Hierarchical comparison via JSON config
     dftracer_comparator --config compare.json
 
+**Output format:**
+
+The table output starts with a one-line summary preamble:
+
+.. code-block:: text
+
+    8 nodes  2 regressions  1 improvement  4 no data
+
+followed by the comparison tree. Each node renders its metrics under a ``SUMMARY``
+sub-node. Nodes with no matching events show ``(no data)`` inline. With
+``--compact``, nodes where every metric is negligible show ``(no change)`` inline
+instead of expanding.
+
+After the tree, a **Top regressions** footer lists up to 5 nodes with the largest
+percentage regressions (significance >= ``MEDIUM``). The footer is suppressed when
+there are no regressions.
+
 **Output columns:**
 
-- **Baseline / Variant** - Metric values for each side
-- **Delta** - Absolute difference (variant - baseline)
-- **Pct** - Percentage change
-- **Sig** - Cohen's d significance: ``NEGLIGIBLE``, ``SMALL``, ``MEDIUM``, ``LARGE``
+- **baseline / variant** - Metric values for each side (with ±stdev when multiple time windows)
+- **delta** - Absolute difference (variant - baseline)
+- **change** - Percentage change
+- **sig** - Cohen's d significance marker: ``~`` negligible, ``*`` small, ``**`` medium, ``***`` large
+
+**Presets:**
+
+Presets provide a ready-made hierarchical comparison config covering all annotation
+categories for a given workload type. Pass ``--preset <name>`` with ``--baseline``
+and ``--variant``.
+
+``dlio``
+    Full coverage of DLIO benchmark annotation categories. Produces 8 top-level nodes:
+
+    - **Pipeline** - Epoch-level timing (Epoch, Train, Evaluate, Test)
+    - **Data Ingestion** - Data loading paths (Item Loading, Batch Fetch, Reader, DataLoader, Generator)
+    - **Checkpointing** - Save and restore paths (Save, Load)
+    - **Compute** - AI framework and device operations (Forward/Backward, Framework, Device Transfer)
+    - **Storage** - Object store I/O (Read, Write)
+    - **POSIX/STDIO I/O** - Low-level syscalls intercepted by dftracer (Read, Write, Metadata, Sync)
+    - **Communication** - Distributed collectives
+    - **Benchmark** - DLIO orchestration overhead (Lifecycle, Checkpoint I/O, Config)
 
 **JSON config format:**
 

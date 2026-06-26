@@ -139,3 +139,80 @@ TEST_SUITE("ComparisonConfig") {
         CHECK(d.time_interval_ms == doctest::Approx(5000.0).epsilon(1e-9));
     }
 }
+
+TEST_SUITE("ComparisonConfigPreset") {
+    TEST_CASE("from_preset - unknown preset returns nullopt") {
+        auto cfg = ComparisonConfig::from_preset("unknown", "base/", "var/");
+        CHECK(!cfg.has_value());
+    }
+
+    TEST_CASE("from_preset - dlio has 8 top-level nodes") {
+        auto cfg = ComparisonConfig::from_preset("dlio", "base/", "var/");
+        REQUIRE(cfg.has_value());
+        CHECK(cfg->baseline == "base/");
+        CHECK(cfg->variant == "var/");
+        CHECK(cfg->nodes.size() == 8);
+    }
+
+    TEST_CASE("from_preset - dlio node names") {
+        auto cfg = ComparisonConfig::from_preset("dlio", "b", "v");
+        REQUIRE(cfg.has_value());
+        const auto& nodes = cfg->nodes;
+        REQUIRE(nodes.size() == 8);
+        CHECK(nodes[0].name == "Pipeline");
+        CHECK(nodes[1].name == "Data Ingestion");
+        CHECK(nodes[2].name == "Checkpointing");
+        CHECK(nodes[3].name == "Compute");
+        CHECK(nodes[4].name == "Storage");
+        CHECK(nodes[5].name == "POSIX/STDIO I/O");
+        CHECK(nodes[6].name == "Communication");
+        CHECK(nodes[7].name == "Benchmark");
+    }
+
+    TEST_CASE("from_preset - dlio every node has a non-empty query") {
+        auto cfg = ComparisonConfig::from_preset("dlio", "b", "v");
+        REQUIRE(cfg.has_value());
+        for (const auto& n : cfg->nodes) {
+            CHECK_FALSE(n.query.empty());
+        }
+    }
+
+    TEST_CASE("from_preset - dlio Pipeline has 4 children") {
+        auto cfg = ComparisonConfig::from_preset("dlio", "b", "v");
+        REQUIRE(cfg.has_value());
+        const auto& pipeline = cfg->nodes[0];
+        REQUIRE(pipeline.children.size() == 4);
+        CHECK(pipeline.children[0].name == "Epoch");
+        CHECK(pipeline.children[1].name == "Train");
+        CHECK(pipeline.children[2].name == "Evaluate");
+        CHECK(pipeline.children[3].name == "Test");
+    }
+
+    TEST_CASE("from_preset - dlio POSIX/STDIO I/O has 4 children") {
+        auto cfg = ComparisonConfig::from_preset("dlio", "b", "v");
+        REQUIRE(cfg.has_value());
+        const auto& posix = cfg->nodes[5];
+        REQUIRE(posix.children.size() == 4);
+        CHECK(posix.children[0].name == "Read");
+        CHECK(posix.children[1].name == "Write");
+        CHECK(posix.children[2].name == "Metadata");
+        CHECK(posix.children[3].name == "Sync");
+    }
+
+    TEST_CASE(
+        "from_preset - dlio POSIX/STDIO I/O children have non-empty queries") {
+        auto cfg = ComparisonConfig::from_preset("dlio", "b", "v");
+        REQUIRE(cfg.has_value());
+        for (const auto& child : cfg->nodes[5].children) {
+            CHECK_FALSE(child.query.empty());
+        }
+    }
+
+    TEST_CASE("from_preset - dlio POSIX/STDIO query covers both cats") {
+        auto cfg = ComparisonConfig::from_preset("dlio", "b", "v");
+        REQUIRE(cfg.has_value());
+        const auto& q = cfg->nodes[5].query;
+        CHECK(q.find("POSIX") != std::string::npos);
+        CHECK(q.find("STDIO") != std::string::npos);
+    }
+}

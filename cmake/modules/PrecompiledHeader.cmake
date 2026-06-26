@@ -292,6 +292,12 @@ function(use_precompiled_header TARGET)
 
   # Apply PCH to this target (each target gets its own PCH to avoid compile definition issues)
   target_precompile_headers(${TARGET} PRIVATE ${PCH_HEADERS})
+
+  # Clang should ignore pch timestamp
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(${TARGET} PRIVATE -Xclang -fno-pch-timestamp)
+  endif()
+
   dftracer_utils_ok("Target ${TARGET}: Applied PCH (${VARIANT_KEY})")
 endfunction()
 

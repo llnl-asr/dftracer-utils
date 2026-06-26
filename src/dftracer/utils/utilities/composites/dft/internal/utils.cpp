@@ -4,9 +4,6 @@
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 #include <cctype>
-#include <functional>
-#include <sstream>
-#include <unordered_set>
 
 namespace dftracer::utils::utilities::composites::dft::internal {
 
@@ -56,14 +53,12 @@ bool is_data_transfer_op(std::string_view cat, std::string_view name) {
     if (!ascii_iequals(cat, "posix") && !ascii_iequals(cat, "stdio")) {
         return false;
     }
-    static const std::unordered_set<std::string_view> OPS = {
-        "read",     "write",    "pread",           "pwrite",  "pread64",
-        "pwrite64", "readv",    "writev",          "preadv",  "pwritev",
-        "preadv2",  "pwritev2", "fread",           "fwrite",  "recv",
-        "send",     "recvfrom", "sendto",          "recvmsg", "sendmsg",
-        "splice",   "sendfile", "copy_file_range",
-    };
-    return OPS.count(name) > 0;
+    auto eq = [](std::string_view a, std::string_view b) { return a == b; };
+    for (auto op : posix_ops::READ)
+        if (eq(op, name)) return true;
+    for (auto op : posix_ops::WRITE)
+        if (eq(op, name)) return true;
+    return false;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::internal

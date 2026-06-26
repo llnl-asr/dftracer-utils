@@ -14,6 +14,11 @@ struct FormatterOptions {
     bool use_color = true;
     /// Use Unicode box-drawing characters for tree branches.
     bool use_unicode = true;
+    /// Collapse nodes where all metrics are negligible to a single "(no
+    /// change)" line.
+    bool compact = false;
+    /// Show top N regressions footer after the tree (0 = disabled).
+    int top_regressions = 5;
 };
 
 /// Dynamically computed column widths for aligned table output.

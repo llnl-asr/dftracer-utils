@@ -1,10 +1,74 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INTERNAL_UTILS_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INTERNAL_UTILS_H
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
 namespace dftracer::utils::utilities::composites::dft::internal {
+
+// Canonical POSIX/STDIO operation name groups.
+// Used by is_data_transfer_op() and by query builders (name_in_query).
+namespace posix_ops {
+
+// File descriptor data-transfer ops; excludes socket/network ops.
+constexpr std::string_view FILE_READ[] = {
+    "read", "pread", "pread64", "readv", "preadv", "preadv2", "fread",
+};
+constexpr std::string_view FILE_WRITE[] = {
+    "write", "pwrite", "pwrite64", "writev", "pwritev", "pwritev2", "fwrite",
+};
+
+// Full data-transfer ops including socket/network ops.
+constexpr std::string_view READ[] = {
+    "read",    "pread", "pread64", "readv",    "preadv",
+    "preadv2", "fread", "recv",    "recvfrom", "recvmsg",
+};
+constexpr std::string_view WRITE[] = {
+    "write",           "pwrite", "pwrite64", "writev",  "pwritev", "pwritev2",
+    "fwrite",          "send",   "sendto",   "sendmsg", "splice",  "sendfile",
+    "copy_file_range",
+};
+constexpr std::string_view METADATA[] = {
+    "__fxstat",  "__fxstat64", "__lxstat", "__lxstat64", "__xstat",
+    "__xstat64", "access",     "close",    "closedir",   "fclose",
+    "fcntl",     "fopen",      "fopen64",  "fseek",      "fseeko",
+    "fseeko64",  "fstat",      "fstat64",  "fstatat",    "fstatat64",
+    "ftell",     "ftello",     "ftello64", "ftruncate",  "ftruncate64",
+    "link",      "lseek",      "lseek64",  "mkdir",      "open",
+    "open64",    "opendir",    "readdir",  "readdir64",  "readlink",
+    "remove",    "rename",     "rmdir",    "seek",       "stat",
+    "stat64",    "unlink",
+};
+constexpr std::string_view SYNC[] = {
+    "fsync",
+    "fdatasync",
+    "msync",
+    "sync",
+};
+constexpr std::string_view PCTL[] = {
+    "exec", "exit", "fork", "kill", "pipe", "wait",
+};
+constexpr std::string_view IPC[] = {
+    "msgctl", "msgget", "msgrcv", "msgsnd", "semctl", "semget",
+    "semop",  "shmat",  "shmctl", "shmdt",  "shmget",
+};
+
+// Build a DSL query fragment: name in ["op1", "op2", ...]
+template <std::size_t N>
+inline std::string name_in_query(const std::string_view (&ops)[N]) {
+    std::string q = "name in [";
+    for (std::size_t i = 0; i < N; ++i) {
+        if (i > 0) q += ", ";
+        q += '"';
+        q.append(ops[i]);
+        q += '"';
+    }
+    q += ']';
+    return q;
+}
+
+}  // namespace posix_ops
 
 // Lowercase `s`; returns a view over `s` when already lowercase (no copy),
 // else lowercases into `storage` (which must outlive the returned view).

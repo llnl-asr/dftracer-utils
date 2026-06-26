@@ -141,6 +141,129 @@ bool all_group_zero(const std::vector<const MetricComparison*>& group) {
     return true;
 }
 
+// True when any metric has a non-zero value on either side.
+bool metrics_have_data(const std::vector<MetricComparison>& metrics) {
+    for (const auto& mc : metrics) {
+        if (mc.baseline_value != 0.0 || mc.variant_value != 0.0) return true;
+    }
+    return false;
+}
+
+// True when a node has any renderable content (recursively).
+bool node_has_data(const NodeResult& node) {
+    if (metrics_have_data(node.summary.metrics)) return true;
+    if (!node.groups.empty()) return true;
+    for (const auto& child : node.children) {
+        if (node_has_data(child)) return true;
+    }
+    return false;
+}
+
+// True when every non-zero metric in the list has negligible significance.
+bool metrics_all_negligible(const std::vector<MetricComparison>& metrics) {
+    for (const auto& mc : metrics) {
+        if ((mc.baseline_value != 0.0 || mc.variant_value != 0.0) &&
+            mc.significance > Significance::NEGLIGIBLE) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// True when a node has data but no metric anywhere in its subtree is
+// significant. Returns false for no-data nodes (those are handled separately).
+bool node_all_negligible(const NodeResult& node) {
+    if (!node_has_data(node)) return false;
+    if (!metrics_all_negligible(node.summary.metrics)) return false;
+    for (const auto& g : node.groups) {
+        if (!metrics_all_negligible(g.metrics)) return false;
+    }
+    for (const auto& child : node.children) {
+        if (!node_all_negligible(child)) return false;
+    }
+    return true;
+}
+
+// Per-tree stats used for the summary preamble.
+struct NodeStats {
+    int total = 0;
+    int no_data = 0;
+    int regression = 0;   // subtrees with at least one MEDIUM+ regression
+    int improvement = 0;  // subtrees with at least one MEDIUM+ improvement
+};
+
+static std::pair<bool, bool> gather_node_stats_impl(const NodeResult& node,
+                                                    NodeStats& stats) {
+    stats.total++;
+
+    bool has_reg = false, has_imp = false;
+    auto scan = [&](const std::vector<MetricComparison>& metrics) {
+        for (const auto& mc : metrics) {
+            if (mc.significance >= Significance::MEDIUM) {
+                if (mc.is_regression)
+                    has_reg = true;
+                else
+                    has_imp = true;
+            }
+        }
+    };
+    scan(node.summary.metrics);
+    for (const auto& g : node.groups) scan(g.metrics);
+
+    for (const auto& child : node.children) {
+        auto [cr, ci] = gather_node_stats_impl(child, stats);
+        has_reg |= cr;
+        has_imp |= ci;
+    }
+
+    if (!node_has_data(node)) {
+        stats.no_data++;
+    } else {
+        if (has_reg) stats.regression++;
+        if (has_imp) stats.improvement++;
+    }
+    return {has_reg, has_imp};
+}
+
+static void gather_node_stats(const NodeResult& node, NodeStats& stats) {
+    gather_node_stats_impl(node, stats);
+}
+
+struct RegressionEntry {
+    std::string path;
+    std::string metric;
+    double pct_change = 0.0;
+    double baseline = 0.0;
+    double variant = 0.0;
+    Significance sig = Significance::NEGLIGIBLE;
+};
+
+static void collect_regressions(const NodeResult& node,
+                                const std::string& prefix,
+                                std::vector<RegressionEntry>& out) {
+    std::string here = prefix.empty() ? node.name : prefix + " > " + node.name;
+
+    auto push_regressions = [&](const std::vector<MetricComparison>& metrics,
+                                const std::string& path) {
+        for (const auto& mc : metrics) {
+            if (mc.significance >= Significance::MEDIUM && mc.is_regression &&
+                (mc.baseline_value != 0.0 || mc.variant_value != 0.0)) {
+                out.push_back({path, mc.metric_name, mc.pct_change,
+                               mc.baseline_value, mc.variant_value,
+                               mc.significance});
+            }
+        }
+    };
+
+    push_regressions(node.summary.metrics, here);
+    for (const auto& g : node.groups) {
+        push_regressions(g.metrics, here + " [" + g.label + "]");
+    }
+    for (const auto& child : node.children) {
+        collect_regressions(child, here, out);
+    }
+}
+
 std::string fmt_bandwidth(double bps) {
     char buf[32];
     constexpr double KB = 1024.0;
@@ -457,6 +580,9 @@ void TreeTableFormatter::measure_node(const NodeResult& node,
                                       const std::string& prefix, bool is_last,
                                       bool is_top_level,
                                       ColumnWidths& cw) const {
+    if (!node_has_data(node)) return;
+    if (options_.compact && node_all_negligible(node)) return;
+
     // Continuation prefix inside this node.
     std::string cont;
     if (is_top_level) {
@@ -468,29 +594,27 @@ void TreeTableFormatter::measure_node(const NodeResult& node,
     const int BRANCH_W = 4;
     const int cont_dw = display_width(cont);
 
-    // SUMMARY sub-node header: cont + branch(4) + "SUMMARY"(7)
-    {
+    bool has_summary_data = metrics_have_data(node.summary.metrics);
+    bool has_groups = !node.groups.empty();
+    bool has_children = !node.children.empty();
+
+    // SUMMARY sub-node - only measure when it has data.
+    if (has_summary_data) {
         int w = cont_dw + BRANCH_W +
                 static_cast<int>(std::string("SUMMARY").size());
         if (w > cw.left) cw.left = w;
+        bool summary_last = !has_groups && !has_children;
+        std::string summary_cont =
+            cont + (summary_last ? branch_none() : branch_cont());
+        measure_metrics_tree(node.summary.metrics, summary_cont, cw);
     }
-
-    // Metrics under SUMMARY.
-    bool has_groups = !node.groups.empty();
-    bool has_children = !node.children.empty();
-    bool summary_last = !has_groups && !has_children;
-    std::string summary_cont =
-        cont + (summary_last ? branch_none() : branch_cont());
-    measure_metrics_tree(node.summary.metrics, summary_cont, cw);
 
     // Per-operation groups.
     for (std::size_t i = 0; i < node.groups.size(); ++i) {
         bool g_last = (i + 1 == node.groups.size()) && !has_children;
-        // Group header width.
         int w =
             cont_dw + BRANCH_W + static_cast<int>(node.groups[i].label.size());
         if (w > cw.left) cw.left = w;
-
         std::string g_cont = cont + (g_last ? branch_none() : branch_cont());
         measure_metrics_tree(node.groups[i].metrics, g_cont, cw);
     }
@@ -509,21 +633,54 @@ void TreeTableFormatter::render_node(std::FILE* out, const NodeResult& node,
     const char* branch = is_last ? branch_last() : branch_mid();
     std::string cont;
 
+    bool has_data = node_has_data(node);
+
+    bool negligible = has_data && options_.compact && node_all_negligible(node);
+
+    // Determine the inline annotation to append to the node name.
+    const char* annotation = "";
+    const char* ann_open = "";
+    const char* ann_close = "";
+    if (!has_data) {
+        annotation = "(no data)";
+        ann_open = color_dim();
+        ann_close = color_reset();
+    } else if (negligible) {
+        annotation = "(no change)";
+        ann_open = color_dim();
+        ann_close = color_reset();
+    }
+
     if (is_top_level) {
-        std::fprintf(out, "%s%s%s%s\n", branch, color_bold(), node.name.c_str(),
-                     color_reset());
+        if (*annotation) {
+            std::fprintf(out, "%s%s%s%s %s%s%s\n", branch, color_bold(),
+                         node.name.c_str(), color_reset(), ann_open, annotation,
+                         ann_close);
+        } else {
+            std::fprintf(out, "%s%s%s%s\n", branch, color_bold(),
+                         node.name.c_str(), color_reset());
+        }
         cont = std::string(is_last ? branch_none() : branch_cont());
     } else {
-        std::fprintf(out, "%s%s%s%s%s\n", prefix.c_str(), branch, color_bold(),
-                     node.name.c_str(), color_reset());
+        if (*annotation) {
+            std::fprintf(out, "%s%s%s%s%s %s%s%s\n", prefix.c_str(), branch,
+                         color_bold(), node.name.c_str(), color_reset(),
+                         ann_open, annotation, ann_close);
+        } else {
+            std::fprintf(out, "%s%s%s%s%s\n", prefix.c_str(), branch,
+                         color_bold(), node.name.c_str(), color_reset());
+        }
         cont = prefix + (is_last ? branch_none() : branch_cont());
     }
 
+    if (!has_data || negligible) return;
+
+    bool has_summary_data = metrics_have_data(node.summary.metrics);
     bool has_groups = !node.groups.empty();
     bool has_children = !node.children.empty();
 
-    // SUMMARY sub-node.
-    {
+    // SUMMARY sub-node - only render when it has data.
+    if (has_summary_data) {
         bool summary_last = !has_groups && !has_children;
         const char* sbr = summary_last ? branch_last() : branch_mid();
         std::fprintf(out, "%s%s%sSUMMARY%s\n", cont.c_str(), sbr, color_bold(),
@@ -562,6 +719,31 @@ void TreeTableFormatter::render(std::FILE* out,
     std::fprintf(out, "  variant:  %s\n", output.variant_path.c_str());
     std::fprintf(out, "\n");
 
+    // Summary preamble: one line with node-level counts.
+    {
+        NodeStats stats;
+        for (const auto& n : output.nodes) {
+            gather_node_stats(n, stats);
+        }
+        std::fprintf(out, "  %s%d node%s%s", color_bold(), stats.total,
+                     stats.total == 1 ? "" : "s", color_reset());
+        if (stats.regression > 0) {
+            std::fprintf(out, "  %s%d regression%s%s", color_red(),
+                         stats.regression, stats.regression == 1 ? "" : "s",
+                         color_reset());
+        }
+        if (stats.improvement > 0) {
+            std::fprintf(out, "  %s%d improvement%s%s", color_green(),
+                         stats.improvement, stats.improvement == 1 ? "" : "s",
+                         color_reset());
+        }
+        if (stats.no_data > 0) {
+            std::fprintf(out, "  %s%d no data%s", color_dim(), stats.no_data,
+                         color_reset());
+        }
+        std::fprintf(out, "\n\n");
+    }
+
     // Pre-pass: compute all column widths.
     ColumnWidths cw;
     for (std::size_t i = 0; i < output.nodes.size(); ++i) {
@@ -599,6 +781,32 @@ void TreeTableFormatter::render(std::FILE* out,
         if (i > 0) std::fprintf(out, "\n");
         bool is_last = (i + 1 == output.nodes.size());
         render_node(out, output.nodes[i], "", is_last, true, cw);
+    }
+
+    // Top regressions footer.
+    if (options_.top_regressions > 0) {
+        std::vector<RegressionEntry> regs;
+        for (const auto& n : output.nodes) {
+            collect_regressions(n, "", regs);
+        }
+        std::sort(regs.begin(), regs.end(),
+                  [](const RegressionEntry& a, const RegressionEntry& b) {
+                      return a.pct_change > b.pct_change;
+                  });
+        if (!regs.empty()) {
+            int show = std::min(options_.top_regressions,
+                                static_cast<int>(regs.size()));
+            std::fprintf(out, "\n%sTop %d regression%s:%s\n", color_bold(),
+                         show, show == 1 ? "" : "s", color_reset());
+            for (int i = 0; i < show; ++i) {
+                const auto& r = regs[static_cast<std::size_t>(i)];
+                const char* sig = r.sig == Significance::LARGE ? "***" : "**";
+                std::fprintf(out, "  %s%s%s  %s  %s%+.1f%%%s  %s\n",
+                             color_red(), r.path.c_str(), color_reset(),
+                             r.metric.c_str(), color_red(), r.pct_change,
+                             color_reset(), sig);
+            }
+        }
     }
 
     std::fprintf(out, "\n");

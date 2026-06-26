@@ -2,13 +2,13 @@
 #include <dftracer/utils/utilities/common/json/json.h>
 #include <dftracer/utils/utilities/composites/dft/args_map.h>
 #include <dftracer/utils/utilities/composites/dft/event.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/chunk_detail_scanner_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <simdjson.h>
 
-#include <array>
 #include <charconv>
 #include <cstring>
 #include <string>
@@ -22,13 +22,13 @@ namespace dftracer::utils::utilities::composites::dft::statistics {
 
 inline constexpr std::string_view GLOBAL_GROUP_KEY = "__global__";
 
-static constexpr auto IO_EVENT_NAMES =
-    std::to_array<std::string_view>({"read", "write", "pread", "pwrite",
-                                     "pread64", "pwrite64", "readv", "writev"});
-
 static bool is_io_event(std::string_view name) {
-    return std::find(IO_EVENT_NAMES.begin(), IO_EVENT_NAMES.end(), name) !=
-           IO_EVENT_NAMES.end();
+    using namespace dftracer::utils::utilities::composites::dft::internal;
+    for (auto op : posix_ops::FILE_READ)
+        if (op == name) return true;
+    for (auto op : posix_ops::FILE_WRITE)
+        if (op == name) return true;
+    return false;
 }
 
 static void build_group_key(std::string& key,

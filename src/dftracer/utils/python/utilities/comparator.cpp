@@ -449,10 +449,12 @@ static int run_comparison_pipeline(ComparatorObject *self,
 
             output_ptr->baseline_path = config.baseline;
             output_ptr->variant_path = config.variant;
-            output_ptr->baseline_file_count = baseline_files.size();
-            output_ptr->variant_file_count = variant_files.size();
 
             auto start_time = std::chrono::high_resolution_clock::now();
+
+            std::size_t b_files_actual = 0;
+            std::size_t v_files_actual = 0;
+            bool metadata_set = false;
 
             for (auto &node : config.nodes) {
                 std::vector<const ComparisonNode *> visitors;
@@ -495,11 +497,16 @@ static int run_comparison_pipeline(ComparatorObject *self,
                             config.variant_index_dir, config.checkpoint_size,
                             config.force_rebuild, config.executor_threads));
 
-                    if (pairs.empty()) {
+                    if (!metadata_set) {
+                        b_files_actual = base_result.total_files_processed;
+                        v_files_actual = var_result.total_files_processed;
+                        output_ptr->baseline_file_count = b_files_actual;
+                        output_ptr->variant_file_count = v_files_actual;
                         output_ptr->baseline_meta = extract_metadata(
-                            base_result.aggregations, baseline_files.size());
+                            base_result.aggregations, b_files_actual);
                         output_ptr->variant_meta = extract_metadata(
-                            var_result.aggregations, variant_files.size());
+                            var_result.aggregations, v_files_actual);
+                        metadata_set = true;
                     }
 
                     ComparisonVisitorPair pair;
@@ -512,8 +519,8 @@ static int run_comparison_pipeline(ComparatorObject *self,
                 ComparisonUtilityInput cmp_input;
                 cmp_input.visitors = std::move(pairs);
                 cmp_input.root_node = node;
-                cmp_input.baseline_file_count = baseline_files.size();
-                cmp_input.variant_file_count = variant_files.size();
+                cmp_input.baseline_file_count = b_files_actual;
+                cmp_input.variant_file_count = v_files_actual;
 
                 ComparisonUtility cmp;
                 auto cmp_output = co_await cmp.process(cmp_input);

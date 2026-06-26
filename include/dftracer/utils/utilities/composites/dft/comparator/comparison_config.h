@@ -85,6 +85,8 @@ struct ComparisonConfig {
     std::string format = "table";
     /// Disable ANSI color in table output.
     bool no_color = false;
+    /// Collapse nodes with only negligible changes to a single line.
+    bool compact = false;
     /// Number of parallel threads (0 = auto-detect).
     std::size_t executor_threads = 0;
     /// Checkpoint size for index building (0 = default).
@@ -107,6 +109,12 @@ struct ComparisonConfig {
                                      const std::string& variant,
                                      const std::string& query,
                                      const std::string& group_by_str);
+
+    /// Build a preset comparison config. Returns nullopt for unknown presets.
+    /// Supported presets: "dlio".
+    static std::optional<ComparisonConfig> from_preset(
+        const std::string& preset, const std::string& baseline,
+        const std::string& variant);
 
     /// Resolve inheritance: compose queries and propagate defaults
     /// down the node tree. Must be called before using the config.

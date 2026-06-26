@@ -613,41 +613,19 @@ enum IOCat : int8_t {
 };
 
 static int8_t get_io_cat(std::string_view func) {
-    // READ
-    if (func == "fread" || func == "pread" || func == "preadv" ||
-        func == "read" || func == "readv")
-        return IO_READ;
-    // WRITE
-    if (func == "fwrite" || func == "pwrite" || func == "pwritev" ||
-        func == "write" || func == "writev")
-        return IO_WRITE;
-    // SYNC
-    if (func == "fsync" || func == "fdatasync" || func == "msync" ||
-        func == "sync")
-        return IO_SYNC;
-    // PCTL
-    if (func == "exec" || func == "exit" || func == "fork" || func == "kill" ||
-        func == "pipe" || func == "wait")
-        return IO_PCTL;
-    // IPC
-    if (func == "msgctl" || func == "msgget" || func == "msgrcv" ||
-        func == "msgsnd" || func == "semctl" || func == "semget" ||
-        func == "semop" || func == "shmat" || func == "shmctl" ||
-        func == "shmdt" || func == "shmget")
-        return IO_IPC;
-    // METADATA
-    if (func == "__fxstat" || func == "__fxstat64" || func == "__lxstat" ||
-        func == "__lxstat64" || func == "__xstat" || func == "__xstat64" ||
-        func == "access" || func == "close" || func == "closedir" ||
-        func == "fclose" || func == "fcntl" || func == "fopen" ||
-        func == "fopen64" || func == "fseek" || func == "fstat" ||
-        func == "fstatat" || func == "ftell" || func == "ftruncate" ||
-        func == "link" || func == "lseek" || func == "lseek64" ||
-        func == "mkdir" || func == "open" || func == "open64" ||
-        func == "opendir" || func == "readdir" || func == "readlink" ||
-        func == "remove" || func == "rename" || func == "rmdir" ||
-        func == "seek" || func == "stat" || func == "unlink")
-        return IO_METADATA;
+    using namespace dftracer::utils::utilities::composites::dft::internal;
+    for (auto op : posix_ops::READ)
+        if (op == func) return IO_READ;
+    for (auto op : posix_ops::WRITE)
+        if (op == func) return IO_WRITE;
+    for (auto op : posix_ops::SYNC)
+        if (op == func) return IO_SYNC;
+    for (auto op : posix_ops::PCTL)
+        if (op == func) return IO_PCTL;
+    for (auto op : posix_ops::IPC)
+        if (op == func) return IO_IPC;
+    for (auto op : posix_ops::METADATA)
+        if (op == func) return IO_METADATA;
     return IO_OTHER;
 }
 

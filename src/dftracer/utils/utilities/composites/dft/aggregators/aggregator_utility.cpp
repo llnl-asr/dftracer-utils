@@ -10,6 +10,7 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_resolver_utility.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 
@@ -244,40 +245,15 @@ enum class IOCategory : std::int8_t {
 };
 
 IOCategory get_io_category(std::string_view func_name) {
-    // Read functions
-    if (func_name == "read" || func_name == "pread" || func_name == "readv" ||
-        func_name == "preadv" || func_name == "fread") {
-        return IOCategory::READ;
-    }
-    // Write functions
-    if (func_name == "write" || func_name == "pwrite" ||
-        func_name == "writev" || func_name == "pwritev" ||
-        func_name == "fwrite") {
-        return IOCategory::WRITE;
-    }
-    // Sync functions
-    if (func_name == "fsync" || func_name == "fdatasync" ||
-        func_name == "msync" || func_name == "sync") {
-        return IOCategory::SYNC;
-    }
-    // Metadata functions
-    if (func_name == "open" || func_name == "open64" || func_name == "close" ||
-        func_name == "fopen" || func_name == "fopen64" ||
-        func_name == "fclose" || func_name == "stat" || func_name == "fstat" ||
-        func_name == "lstat" || func_name == "fstatat" ||
-        func_name == "__xstat" || func_name == "__xstat64" ||
-        func_name == "__lxstat" || func_name == "__lxstat64" ||
-        func_name == "__fxstat" || func_name == "__fxstat64" ||
-        func_name == "access" || func_name == "lseek" ||
-        func_name == "lseek64" || func_name == "fseek" ||
-        func_name == "ftell" || func_name == "seek" || func_name == "fcntl" ||
-        func_name == "ftruncate" || func_name == "mkdir" ||
-        func_name == "rmdir" || func_name == "unlink" ||
-        func_name == "remove" || func_name == "rename" || func_name == "link" ||
-        func_name == "readlink" || func_name == "opendir" ||
-        func_name == "closedir" || func_name == "readdir") {
-        return IOCategory::METADATA;
-    }
+    using namespace dftracer::utils::utilities::composites::dft::internal;
+    for (auto op : posix_ops::READ)
+        if (op == func_name) return IOCategory::READ;
+    for (auto op : posix_ops::WRITE)
+        if (op == func_name) return IOCategory::WRITE;
+    for (auto op : posix_ops::SYNC)
+        if (op == func_name) return IOCategory::SYNC;
+    for (auto op : posix_ops::METADATA)
+        if (op == func_name) return IOCategory::METADATA;
     return IOCategory::OTHER;
 }
 

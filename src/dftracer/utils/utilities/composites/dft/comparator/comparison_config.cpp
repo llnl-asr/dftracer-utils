@@ -1,4 +1,5 @@
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_config.h>
+#include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <simdjson.h>
 
 #include <fstream>
@@ -261,6 +262,113 @@ void ComparisonConfig::resolve() {
         resolve_node(node, "", defaults.metrics, defaults.percentiles,
                      defaults.threshold_pct, defaults.sort_by);
     }
+}
+
+// static
+std::optional<ComparisonConfig> ComparisonConfig::from_preset(
+    const std::string& preset, const std::string& baseline,
+    const std::string& variant) {
+    namespace ops =
+        dftracer::utils::utilities::composites::dft::internal::posix_ops;
+
+    if (preset != "dlio") return std::nullopt;
+
+    ComparisonConfig cfg;
+    cfg.baseline = baseline;
+    cfg.variant = variant;
+
+    auto node = [](std::string name, std::string query,
+                   std::vector<ComparisonNode> children = {}) {
+        ComparisonNode n;
+        n.name = std::move(name);
+        n.query = std::move(query);
+        n.group_by = {"cat", "name"};
+        n.children = std::move(children);
+        return n;
+    };
+
+    // Node 1: Pipeline - top-level epoch/train/evaluate timing
+    cfg.nodes.push_back(node("Pipeline", R"(cat == "pipeline")",
+                             {
+                                 node("Epoch", R"(name == "epoch")"),
+                                 node("Train", R"(name == "train")"),
+                                 node("Evaluate", R"(name == "evaluate")"),
+                                 node("Test", R"(name == "test")"),
+                             }));
+
+    // Node 2: Data Ingestion - all data loading paths including DLIO readers
+    cfg.nodes.push_back(node(
+        "Data Ingestion",
+        R"(cat in ["data", "dataloader", "data_loader", "reader", "generator"])",
+        {
+            node("Item Loading",
+                 R"(cat == "data" AND name in ["item", "preprocess"])"),
+            node("Batch Fetch", R"(cat == "dataloader" AND name == "fetch")"),
+            node("Reader", R"(cat == "reader")"),
+            node("DataLoader", R"(cat == "data_loader")"),
+            node("Generator", R"(cat == "generator")"),
+        }));
+
+    // Node 3: Checkpointing - save and restore (dft_ai + DLIO module)
+    cfg.nodes.push_back(
+        node("Checkpointing", R"(cat == "checkpoint")",
+             {
+                 node("Save", R"(name in ["save_checkpoint", "capture",
+                                     "checkpoint", "save_state"])"),
+                 node("Load", R"(name in ["load_checkpoint", "restart",
+                                     "get_tensor", "get_tensor_core"])"),
+             }));
+
+    // Node 4: Compute - AI framework ops and device transfers
+    cfg.nodes.push_back(
+        node("Compute", R"(cat in ["compute", "ai_framework", "device"])",
+             {
+                 node("Forward/Backward",
+                      R"(cat == "compute" AND name in ["forward", "backward",
+                                                   "step"])"),
+                 node("Framework", R"(cat == "ai_framework")"),
+                 node("Device Transfer", R"(cat == "device")"),
+             }));
+
+    // Node 5: Storage - object store I/O
+    cfg.nodes.push_back(
+        node("Storage", R"(cat == "storage")",
+             {
+                 node("Read",
+                      R"(name in ["get_data", "get_node", "list_objects",
+                              "walk_node", "isfile"])"),
+                 node("Write",
+                      R"(name in ["put_data", "create_node", "delete_node",
+                              "create_namespace"])"),
+             }));
+
+    // Node 6: POSIX/STDIO I/O - low-level syscalls intercepted by dftracer
+    cfg.nodes.push_back(
+        node("POSIX/STDIO I/O", R"(cat in ["POSIX", "STDIO"])",
+             {
+                 node("Read", ops::name_in_query(ops::READ)),
+                 node("Write", ops::name_in_query(ops::WRITE)),
+                 node("Metadata", ops::name_in_query(ops::METADATA)),
+                 node("Sync", ops::name_in_query(ops::SYNC)),
+             }));
+
+    // Node 7: Communication - distributed collectives
+    cfg.nodes.push_back(node("Communication", R"(cat == "comm")"));
+
+    // Node 8: Benchmark - DLIO orchestration and configuration overhead
+    cfg.nodes.push_back(
+        node("Benchmark", R"(cat in ["dlio_benchmark", "config"])",
+             {
+                 node("Lifecycle",
+                      R"(cat == "dlio_benchmark" AND name in ["initialize",
+                                                          "finalize"])"),
+                 node("Checkpoint I/O",
+                      R"(cat == "dlio_benchmark" AND name in ["_checkpoint",
+                    "_checkpoint_read", "_checkpoint_write"])"),
+                 node("Config", R"(cat == "config")"),
+             }));
+
+    return cfg;
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::comparator

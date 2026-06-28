@@ -4,7 +4,6 @@
 #include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/core/utils/timer.h>
 #include <dftracer/utils/utilities/common/json/json.h>
@@ -1060,14 +1059,11 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
         auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
         PatternDirectoryScannerUtilityInput scan_input{
             directory, {".pfw", ".pfw.gz"}, false, false};
-        utilities::behaviors::BehaviorChain<PatternDirectoryScannerUtilityInput,
-                                            std::vector<filesystem::FileEntry>>
-            chain;
         utilities::behaviors::UtilityExecutor<
             PatternDirectoryScannerUtilityInput,
             std::vector<filesystem::FileEntry>, utilities::tags::Parallelizable,
             utilities::tags::NeedsContext>
-            executor(scanner, std::move(chain));
+            executor(scanner);
         auto matched = co_await executor.execute_with_context(ctx, scan_input);
 
         std::vector<std::string> files;

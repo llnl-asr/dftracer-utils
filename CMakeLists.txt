@@ -93,15 +93,8 @@ if(DFTRACER_UTILS_TESTS)
   set(DFTRACER_UTILS_TESTS
       ON
       CACHE BOOL "" FORCE)
-  if(NOT DFTRACER_UTILS_ENABLE_TSAN)
-    set(DFTRACER_UTILS_COVERAGE
-        ON
-        CACHE BOOL "" FORCE)
-  else()
-    set(DFTRACER_UTILS_COVERAGE
-        OFF
-        CACHE BOOL "" FORCE)
-  endif()
+  # Coverage is opt-in (DFTRACER_UTILS_COVERAGE / the `coverage` preset);
+  # building tests does not imply instrumentation.
   # set(DFTRACER_UTILS_DEBUG
   #     ON
   #     CACHE BOOL "" FORCE)

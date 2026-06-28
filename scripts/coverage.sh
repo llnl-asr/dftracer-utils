@@ -8,7 +8,7 @@ set -euo pipefail
 # Configuration
 # ============================================================================
 
-BUILD_DIR="build_coverage"
+BUILD_DIR="build/build-coverage"  # matches the `coverage` preset binaryDir
 COVERAGE_DIR="coverage"
 MIN_COVERAGE=80
 
@@ -110,45 +110,24 @@ clean_previous() {
 # ============================================================================
 
 build_with_coverage() {
-	local build_info
+	# The `coverage` preset uses the Ninja generator (inherited from `dev`),
+	# so Ninja must be available.
+	local generator build_tool
 	IFS='|' read -r generator build_tool <<<"$(detect_build_system)"
-
-	log_info "Building project with coverage enabled using $build_tool..."
-
-	mkdir -p "$BUILD_DIR"
-
-	# Prepare CMake arguments
-	local cmake_args=(
-		"-DCMAKE_BUILD_TYPE=Debug"
-		"-DDFTRACER_UTILS_TESTS=ON"
-		"-DDFTRACER_UTILS_COVERAGE=ON"
-		"-DDFTRACER_UTILS_BUILD_PYTHON=ON"
-		"-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
-		"-G$generator"
-	)
-
-	# Use environment compilers if available (for Nix)
-	if [ -n "${CC:-}" ]; then
-		cmake_args+=("-DCMAKE_C_COMPILER=$CC")
-	fi
-	if [ -n "${CXX:-}" ]; then
-		cmake_args+=("-DCMAKE_CXX_COMPILER=$CXX")
+	if [[ "$build_tool" != "ninja" ]]; then
+		log_error "The coverage preset requires Ninja. Please install ninja."
+		exit 1
 	fi
 
-	# Configure
-	cmake -S . -B "$BUILD_DIR" "${cmake_args[@]}"
+	log_info "Building project with coverage enabled (preset: coverage)..."
 
-	# Build
-	local num_jobs
-	num_jobs=$(get_num_jobs)
+	# Configure + build via the `coverage` preset, the single source of truth
+	# for coverage instrumentation. CC/CXX from the environment are still
+	# honored by CMake (e.g. for Nix).
+	cmake --preset coverage
+	cmake --build --preset coverage -j "$(get_num_jobs)"
 
-	if [[ "$build_tool" == "ninja" ]]; then
-		ninja -C "$BUILD_DIR" -j "$num_jobs"
-	else
-		make -C "$BUILD_DIR" -j "$num_jobs"
-	fi
-
-	log_success "Build completed with $build_tool"
+	log_success "Build completed"
 }
 
 # ============================================================================

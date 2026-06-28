@@ -49,7 +49,8 @@ consteval auto make_utility_signature() {
 /**
  * @brief Shared machinery for all utility variants.
  *
- * Holds tags and context pointer.
+ * Holds the context pointer; tags are compile-time markers (queried via
+ * has_tag<>()), not stored per instance.
  * Type signature is generated at compile time and stored as a static constexpr
  * string_view.
  *
@@ -59,7 +60,6 @@ consteval auto make_utility_signature() {
 template <typename I, typename... Tags>
 class UtilityBase {
    private:
-    std::tuple<Tags...> tags_;
     CoroScope* ctx_ = nullptr;
 
     static constexpr auto sig_ = make_input_signature<I>();
@@ -69,12 +69,6 @@ class UtilityBase {
     using TagsTuple = std::tuple<Tags...>;
 
     UtilityBase() = default;
-
-    template <typename Dummy = void,
-              typename = std::enable_if_t<(sizeof...(Tags) > 0) &&
-                                          std::is_void_v<Dummy>>>
-    explicit UtilityBase(Tags... tags)
-        : tags_(std::make_tuple(std::move(tags)...)) {}
 
     virtual ~UtilityBase() = default;
 
@@ -86,21 +80,6 @@ class UtilityBase {
     template <typename Tag>
     static constexpr bool has_tag() {
         return (std::is_same_v<Tag, Tags> || ...);
-    }
-
-    template <typename Tag>
-    const Tag& get_tag() const {
-        return std::get<Tag>(tags_);
-    }
-
-    template <typename Tag>
-    Tag& get_tag() {
-        return std::get<Tag>(tags_);
-    }
-
-    template <typename Tag>
-    void set_tag(Tag tag) {
-        std::get<Tag>(tags_) = std::move(tag);
     }
 
     static constexpr std::string_view get_type_signature() { return sig_; }

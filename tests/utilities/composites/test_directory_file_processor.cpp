@@ -1,7 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/directory_file_processor_utility.h>
 #include <doctest/doctest.h>
@@ -62,9 +61,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 UtilityExecutor<DirectoryProcessInput,
                                 BatchFileProcessOutput<FileInfo>,
                                 tags::NeedsContext>
-                    exec(util,
-                         BehaviorChain<DirectoryProcessInput,
-                                       BatchFileProcessOutput<FileInfo>>{});
+                    exec(util);
                 *out_ptr = co_await exec.execute_with_context(scope, input);
             });
 
@@ -121,9 +118,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 UtilityExecutor<DirectoryProcessInput,
                                 BatchFileProcessOutput<std::string>,
                                 tags::NeedsContext>
-                    exec(util,
-                         BehaviorChain<DirectoryProcessInput,
-                                       BatchFileProcessOutput<std::string>>{});
+                    exec(util);
                 *out_ptr = co_await exec.execute_with_context(scope, input);
             });
 
@@ -173,9 +168,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 UtilityExecutor<DirectoryProcessInput,
                                 BatchFileProcessOutput<std::string>,
                                 tags::NeedsContext>
-                    exec(util,
-                         BehaviorChain<DirectoryProcessInput,
-                                       BatchFileProcessOutput<std::string>>{});
+                    exec(util);
                 *out_ptr = co_await exec.execute_with_context(scope, input);
             });
 
@@ -218,8 +211,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                         processor);
                 UtilityExecutor<DirectoryProcessInput,
                                 BatchFileProcessOutput<int>, tags::NeedsContext>
-                    exec(util, BehaviorChain<DirectoryProcessInput,
-                                             BatchFileProcessOutput<int>>{});
+                    exec(util);
                 *out_ptr = co_await exec.execute_with_context(scope, input);
             });
 
@@ -258,9 +250,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 UtilityExecutor<DirectoryProcessInput,
                                 BatchFileProcessOutput<std::string>,
                                 tags::NeedsContext>
-                    exec(util,
-                         BehaviorChain<DirectoryProcessInput,
-                                       BatchFileProcessOutput<std::string>>{});
+                    exec(util);
                 *out_ptr = co_await exec.execute_with_context(scope, input);
             });
 
@@ -300,9 +290,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 UtilityExecutor<DirectoryProcessInput,
                                 BatchFileProcessOutput<std::string>,
                                 tags::NeedsContext>
-                    exec(util,
-                         BehaviorChain<DirectoryProcessInput,
-                                       BatchFileProcessOutput<std::string>>{});
+                    exec(util);
                 *out_ptr = co_await exec.execute_with_context(scope, input);
             });
 

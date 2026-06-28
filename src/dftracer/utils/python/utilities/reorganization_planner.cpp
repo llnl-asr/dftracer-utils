@@ -1,6 +1,5 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
@@ -14,7 +13,6 @@
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::utilities::behaviors::BehaviorChain;
 using dftracer::utils::utilities::behaviors::UtilityExecutor;
 namespace tags = dftracer::utils::utilities::tags;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
@@ -112,8 +110,7 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
                         std::make_shared<ReorganizationPlannerUtility>();
                     UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
                                     tags::NeedsContext>
-                        exec(planner, BehaviorChain<ReorganizationPlannerInput,
-                                                    ExtractionPlan>{});
+                        exec(planner);
                     *plan_p =
                         co_await exec.execute_with_context(scope, input_copy);
                 });

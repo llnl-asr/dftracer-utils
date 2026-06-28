@@ -2,7 +2,6 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
@@ -32,8 +31,7 @@ static IndexBuildResult run_builder(const IndexBuildConfig& config) {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
+                exec(builder);
             *result_ptr = co_await exec.execute_with_context(scope, config);
         });
 

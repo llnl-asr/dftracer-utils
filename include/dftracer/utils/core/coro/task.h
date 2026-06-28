@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/coro/yield.h>
+#include <dftracer/utils/core/utilities/monitor.h>
 
 #include <atomic>
 #include <coroutine>
@@ -186,6 +187,14 @@ class CoroTask {
             coro_handle_.promise().set_root_promise(awaiting_root);
         }
 
+        // Deep mode: capture this co_await'd child (reached by symmetric
+        // transfer, so it never passes through the executor queue) and make it
+        // the current coroutine so its own awaits nest under it.
+        if (utilities::monitor_deep_enabled()) {
+            utilities::monitor_resume_begin(utilities::monitor_enqueue(
+                coro_handle_.address(), utilities::CoroKind::Sync));
+        }
+
         if (coro_handle_.done()) {
             return awaiting_coro;
         }
@@ -194,6 +203,9 @@ class CoroTask {
     }
 
     T await_resume() {
+        if (utilities::monitor_deep_enabled()) {
+            utilities::monitor_sync_complete(coro_handle_.address());
+        }
         if (coro_handle_.promise().exception_) {
             rethrow_and_clear(coro_handle_.promise().exception_);
         }
@@ -525,6 +537,14 @@ class CoroTask<void> {
             coro_handle_.promise().set_root_promise(awaiting_root);
         }
 
+        // Deep mode: capture this co_await'd child (reached by symmetric
+        // transfer, so it never passes through the executor queue) and make it
+        // the current coroutine so its own awaits nest under it.
+        if (utilities::monitor_deep_enabled()) {
+            utilities::monitor_resume_begin(utilities::monitor_enqueue(
+                coro_handle_.address(), utilities::CoroKind::Sync));
+        }
+
         if (coro_handle_.done()) {
             return awaiting_coro;
         }
@@ -533,6 +553,9 @@ class CoroTask<void> {
     }
 
     void await_resume() {
+        if (utilities::monitor_deep_enabled()) {
+            utilities::monitor_sync_complete(coro_handle_.address());
+        }
         if (coro_handle_.promise().exception_) {
             rethrow_and_clear(coro_handle_.promise().exception_);
         }

@@ -3,7 +3,6 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
@@ -31,7 +30,6 @@ using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites;
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
-using dftracer::utils::utilities::behaviors::BehaviorChain;
 using dftracer::utils::utilities::behaviors::UtilityExecutor;
 using dftracer::utils::utilities::indexer::determine_provenance_index_path;
 using dftracer::utils::utilities::indexer::IndexBuildConfig;
@@ -50,8 +48,7 @@ static ExtractionPlan run_planner(const ReorganizationPlannerInput& input) {
             auto planner = std::make_shared<ReorganizationPlannerUtility>();
             UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
                             tags::NeedsContext>
-                exec(planner, BehaviorChain<ReorganizationPlannerInput,
-                                            ExtractionPlan>{});
+                exec(planner);
             *result_ptr = co_await exec.execute_with_context(scope, input);
         });
 
@@ -120,8 +117,7 @@ static void build_idx(const std::string& trace_file,
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<indexer::IndexBuildConfig,
                             indexer::IndexBuildResult, tags::NeedsContext>
-                exec(builder, BehaviorChain<indexer::IndexBuildConfig,
-                                            indexer::IndexBuildResult>{});
+                exec(builder);
             auto config = IndexBuildConfig::for_file(trace_file)
                               .with_index_dir(index_dir)
                               .with_manifest(true);

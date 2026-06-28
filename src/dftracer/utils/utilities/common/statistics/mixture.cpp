@@ -14,11 +14,11 @@ namespace bm = boost::math;
 
 namespace {
 
-constexpr double kInvSqrt2Pi = 0.3989422804014327;  // 1 / sqrt(2*pi)
+constexpr double INV_SQRT_2PI = 0.3989422804014327;  // 1 / sqrt(2*pi)
 
 inline double normal_pdf(double x, double mean, double stddev) {
     const double z = (x - mean) / stddev;
-    return (kInvSqrt2Pi / stddev) * std::exp(-0.5 * z * z);
+    return (INV_SQRT_2PI / stddev) * std::exp(-0.5 * z * z);
 }
 
 // log(sum_k exp(log_x[k])) computed with the standard log-sum-exp trick to

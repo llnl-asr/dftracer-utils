@@ -30,85 +30,9 @@ std::string create_pfw_gz(dft_utils_test::TestEnvironment& env, int num_events,
     return pfw_path;
 }
 
-// Prefer env-provided path (set by CMake), fall back to the common build
-// output locations.
-std::string find_binary(const char* env_name,
-                        const std::vector<std::string>& candidates) {
-    const char* env_path = std::getenv(env_name);
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
-}
-
-std::string find_serial_binary() {
-    return find_binary("DFTRACER_AGGREGATOR_PATH",
-                       {
-                           "./dftracer_aggregator",
-                           "../dftracer_aggregator",
-                           "../../dftracer_aggregator",
-                           "../bin/dftracer_aggregator",
-                           "../../bin/dftracer_aggregator",
-                       });
-}
-
-std::string find_mpi_binary() {
-    return find_binary("DFTRACER_AGGREGATOR_MPI_PATH",
-                       {
-                           "./dftracer_aggregator_mpi",
-                           "../dftracer_aggregator_mpi",
-                           "../../dftracer_aggregator_mpi",
-                           "../bin/dftracer_aggregator_mpi",
-                           "../../bin/dftracer_aggregator_mpi",
-                       });
-}
-
-// Locate an MPI launcher on $PATH. We prefer mpiexec to line up with the
-// CMake `MPIEXEC_EXECUTABLE` default; fall back to mpirun.
-std::string find_mpi_launcher() {
-    const char* env_path = std::getenv("MPIEXEC_EXECUTABLE");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-    for (const auto& name : {"mpiexec", "mpirun"}) {
-        std::string cmd = std::string("command -v ") + name + " 2>/dev/null";
-        FILE* p = ::popen(cmd.c_str(), "r");
-        if (!p) continue;
-        char buf[4096];
-        std::string out;
-        while (std::fgets(buf, sizeof(buf), p)) out += buf;
-        ::pclose(p);
-        while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
-            out.pop_back();
-        if (!out.empty() && ::access(out.c_str(), X_OK) == 0) return out;
-    }
-    return "";
-}
-
-int run_process(const std::string& binary,
-                const std::vector<std::string>& args) {
-    pid_t pid = ::fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        std::vector<const char*> argv;
-        argv.push_back(binary.c_str());
-        for (const auto& arg : args) argv.push_back(arg.c_str());
-        argv.push_back(nullptr);
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return -1;
-}
-
-int run_mpi(const std::string& launcher, int np, const std::string& binary,
-            const std::vector<std::string>& binary_args) {
-    std::vector<std::string> args = {"--allow-run-as-root", "-n",
-                                     std::to_string(np), binary};
-    for (const auto& a : binary_args) args.push_back(a);
-    return run_process(launcher, args);
-}
+// MPI launcher/runner helpers are shared via testing_utilities.h.
+using dft_utils_test::run_mpi;
+using dft_utils_test::run_process;
 
 // Read a gzip-compressed file fully into memory (as a string).
 std::string read_gz_to_string(const std::string& path) {
@@ -166,34 +90,11 @@ std::string read_output_sorted(const std::string& path) {
     return sort_lines(ss.str());
 }
 
-struct Env {
-    std::string serial_bin;
-    std::string mpi_bin;
-    std::string launcher;
-    bool ready = false;
-    std::string skip_reason;
-
-    Env() {
-        serial_bin = find_serial_binary();
-        mpi_bin = find_mpi_binary();
-        launcher = find_mpi_launcher();
-        if (serial_bin.empty()) {
-            skip_reason = "dftracer_aggregator binary not found";
-            return;
-        }
-        if (mpi_bin.empty()) {
-            skip_reason =
-                "dftracer_aggregator_mpi binary not found (set "
-                "DFTRACER_AGGREGATOR_MPI_PATH or build with "
-                "DFTRACER_UTILS_ENABLE_MPI=ON)";
-            return;
-        }
-        if (launcher.empty()) {
-            skip_reason = "no mpiexec/mpirun on PATH";
-            return;
-        }
-        ready = true;
-    }
+struct Env : dft_utils_test::MpiTestEnv {
+    Env()
+        : MpiTestEnv("dftracer_aggregator", "DFTRACER_AGGREGATOR_PATH",
+                     "dftracer_aggregator_mpi",
+                     "DFTRACER_AGGREGATOR_MPI_PATH") {}
 };
 
 // Byte-copy helper -- input files must be byte-identical between the

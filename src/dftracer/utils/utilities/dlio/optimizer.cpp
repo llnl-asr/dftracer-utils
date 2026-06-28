@@ -37,7 +37,7 @@ OptimizerResult optimize_max_bound_percentile(
     double best_e2e_error = std::numeric_limits<double>::infinity();
     int iterations_without_improvement = 0;
 
-    constexpr double kImprovementThreshold = 0.001;  // 0.1% relative
+    constexpr double IMPROVEMENT_THRESHOLD = 0.001;  // 0.1% relative
 
     for (int iter = 0; iter < options.max_iterations; ++iter) {
         const double max_bound = percentile(sample_times, current_percentile);
@@ -49,7 +49,7 @@ OptimizerResult optimize_max_bound_percentile(
         // Track best result by E2E error (improvement must beat threshold).
         const bool first = (iter == 0);
         const bool better =
-            result.e2e_error < best_e2e_error * (1.0 - kImprovementThreshold);
+            result.e2e_error < best_e2e_error * (1.0 - IMPROVEMENT_THRESHOLD);
         if (first || better) {
             out.best = result;
             out.best_percentile = current_percentile;

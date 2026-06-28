@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/core/utilities/monitor.h>
 
 #include <chrono>
 #include <coroutine>
@@ -192,6 +193,12 @@ void Executor::worker_thread(WorkerContext* context) {
     tls_current_executor = this;
     coro::reset_timeslice();
 
+    // Fixed for the process lifetime; read once to keep the resume loop cheap.
+    const bool monitor = utilities::monitoring_enabled();
+    if (monitor) {
+        utilities::monitor_set_worker(static_cast<int>(context->worker_id));
+    }
+
     while (running_) {
         RunQueueEntry pending_entry;
 
@@ -230,7 +237,14 @@ void Executor::worker_thread(WorkerContext* context) {
                     }
                 }
                 DFTRACER_TSAN_ACQUIRE(pending_resume.address());
+                if (monitor) {
+                    utilities::monitor_resume_begin(pending_entry.monitor_id);
+                }
                 pending_resume.resume();
+                if (monitor) {
+                    utilities::monitor_resume_end(pending_resume.address(),
+                                                  pending_resume.done());
+                }
             }
             // Destroy coroutine frames that FinalAwaiter deferred to this
             // thread.  Safe: resume() has fully returned, so the frame
@@ -331,8 +345,16 @@ void Executor::enqueue(std::coroutine_handle<> handle, TaskIndex task_id) {
         return;  // Invalid or already completed
     }
 
+    long long monitor_id = -1;
+    if (utilities::monitoring_enabled()) {
+        // task_id >= 0 marks a tracked submitted task; otherwise it is spawn
+        // fan-out (or a re-enqueue of an already-seen coroutine).
+        monitor_id = utilities::monitor_enqueue(
+            handle.address(), task_id >= 0 ? utilities::CoroKind::Task
+                                           : utilities::CoroKind::Spawn);
+    }
     DFTRACER_TSAN_RELEASE(handle.address());
-    run_queue_.enqueue(RunQueueEntry{handle, task_id});
+    run_queue_.enqueue(RunQueueEntry{handle, task_id, monitor_id});
     signal_global_work();
 }
 

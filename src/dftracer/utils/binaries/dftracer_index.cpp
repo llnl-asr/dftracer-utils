@@ -15,7 +15,6 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
-#include <sstream>
 
 #include "common_cli.h"
 
@@ -118,20 +117,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     const auto build_manifest = cli->manifest;
     const auto rebuild_summaries = cli->rebuild_summaries;
 
-    auto split_string = [](const std::string& str) {
-        std::vector<std::string> result;
-        if (str.empty()) return result;
-        std::stringstream ss(str);
-        std::string item;
-        while (std::getline(ss, item, ',')) {
-            if (!item.empty()) {
-                result.push_back(item);
-            }
-        }
-        return result;
-    };
-
-    std::vector<std::string> user_dimensions = split_string(dimensions_str);
+    std::vector<std::string> user_dimensions = cli::split_csv(dimensions_str);
 
     std::vector<std::string> extra_dimensions(
         dftracer::utils::utilities::indexer::DEFAULT_EXTRA_DIMENSIONS.begin(),

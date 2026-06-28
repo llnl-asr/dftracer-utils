@@ -189,21 +189,6 @@ class AggregatorArgParse : public cli::ArgParse {
     }
 };
 
-namespace {
-
-std::vector<std::string> split_csv(const std::string& str) {
-    std::vector<std::string> out;
-    if (str.empty()) return out;
-    std::stringstream ss(str);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-        if (!item.empty()) out.push_back(item);
-    }
-    return out;
-}
-
-}  // namespace
-
 int main(int argc, char** argv) {
     DFTRACER_UTILS_LOGGER_INIT();
 
@@ -234,16 +219,9 @@ int main(int argc, char** argv) {
     // Output filename: append extension if missing.
     std::string output_file = cli.output;
     if (cli.format == AggregationConfig::FORMAT_ARROW) {
-        constexpr std::string_view ext = ".arrows";
-        if (output_file.size() < ext.size() ||
-            output_file.substr(output_file.size() - ext.size()) != ext) {
-            output_file += ext;
-        }
+        output_file = cli::ensure_suffix(output_file, ".arrows");
     } else if (cli.compress) {
-        if (output_file.size() < 3 ||
-            output_file.substr(output_file.size() - 3) != ".gz") {
-            output_file += ".gz";
-        }
+        output_file = cli::ensure_suffix(output_file, ".gz");
     }
 
     // Parse boundary events.
@@ -269,7 +247,7 @@ int main(int argc, char** argv) {
     // Parse percentiles.
     std::vector<double> percentiles;
     if (cli.compute_percentiles) {
-        for (const auto& p_str : split_csv(cli.percentiles)) {
+        for (const auto& p_str : cli::split_csv(cli.percentiles)) {
             try {
                 double p = std::stod(p_str);
                 if (p < 0.0 || p > 1.0) {
@@ -300,8 +278,8 @@ int main(int argc, char** argv) {
     AggregationConfig agg_config;
     agg_config.time_interval_us =
         static_cast<std::uint64_t>(cli.time_interval * 1000.0);
-    agg_config.extra_group_keys = split_csv(cli.group_keys);
-    agg_config.custom_metric_fields = split_csv(cli.metric_fields);
+    agg_config.extra_group_keys = cli::split_csv(cli.group_keys);
+    agg_config.custom_metric_fields = cli::split_csv(cli.metric_fields);
     agg_config.compute_statistics = true;
     agg_config.compute_percentiles = cli.compute_percentiles;
     agg_config.sketch_accuracy = cli.relative_accuracy;

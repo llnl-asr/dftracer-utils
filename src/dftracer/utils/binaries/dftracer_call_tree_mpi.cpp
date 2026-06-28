@@ -18,6 +18,7 @@
 #include <string>
 
 #include "common_cli.h"
+#include "common_cli_mpi.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::call_tree;
@@ -94,23 +95,7 @@ int run(int argc, char** argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     // Scale per-rank threads down when multiple ranks share a node.
-    MPI_Comm node_comm = MPI_COMM_NULL;
-    MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank,
-                        MPI_INFO_NULL, &node_comm);
-    int ppn = 1;
-    if (node_comm != MPI_COMM_NULL) {
-        MPI_Comm_size(node_comm, &ppn);
-        MPI_Comm_free(&node_comm);
-    }
-    if (ppn > 1) {
-        const auto hw = dftracer_utils_hardware_concurrency();
-        const auto scaled = std::max<std::size_t>(
-            1, static_cast<std::size_t>(hw) / static_cast<std::size_t>(ppn));
-        if (cli.pipeline.executor_threads == static_cast<std::size_t>(hw))
-            cli.pipeline.executor_threads = scaled;
-        if (cli.pipeline.io_threads == static_cast<std::size_t>(hw))
-            cli.pipeline.io_threads = scaled;
-    }
+    cli::scale_threads_for_ppn(cli.pipeline, rank);
 
     RunCtx ctx;
     ctx.cli = &cli;
@@ -192,17 +177,4 @@ int run(int argc, char** argv) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    int provided = 0;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
-    if (provided < MPI_THREAD_FUNNELED) {
-        std::fprintf(stderr,
-                     "MPI does not support MPI_THREAD_FUNNELED (got %d), "
-                     "aborting\n",
-                     provided);
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
-    const int rc = run(argc, argv);
-    MPI_Finalize();
-    return rc;
-}
+int main(int argc, char** argv) { return cli::mpi_main(argc, argv, run); }

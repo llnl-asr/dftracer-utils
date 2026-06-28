@@ -90,13 +90,6 @@ class CallTreeArgParse : public cli::ArgParse {
     }
 };
 
-bool is_trace_file(const std::string& path) {
-    return (path.size() >= 4 &&
-            path.compare(path.size() - 4, 4, ".pfw") == 0) ||
-           (path.size() >= 7 &&
-            path.compare(path.size() - 7, 7, ".pfw.gz") == 0);
-}
-
 struct RunCtx {
     const CallTreeArgParse* cli = nullptr;
 
@@ -123,13 +116,13 @@ coro::CoroTask<void> task_scan(RunCtx* ctx) {
             if (ctx->cli->recursive) {
                 for (const auto& e : fs::recursive_directory_iterator(in, ec)) {
                     if (e.is_regular_file(ec) &&
-                        is_trace_file(e.path().string()))
+                        cli::is_trace_file(e.path().string()))
                         ctx->trace_files.push_back(e.path().string());
                 }
             } else {
                 for (const auto& e : fs::directory_iterator(in, ec)) {
                     if (e.is_regular_file(ec) &&
-                        is_trace_file(e.path().string()))
+                        cli::is_trace_file(e.path().string()))
                         ctx->trace_files.push_back(e.path().string());
                 }
             }

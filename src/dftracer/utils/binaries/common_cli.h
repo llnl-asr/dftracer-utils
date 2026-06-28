@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -322,6 +323,36 @@ inline PipelineConfig build_pipeline_config(const std::string& name,
     pipeline.apply(config);
     watchdog.apply(config);
     return config;
+}
+
+// A DFTracer trace file: .pfw or .pfw.gz.
+inline bool is_trace_file(const std::string& path) {
+    return (path.size() >= 4 &&
+            path.compare(path.size() - 4, 4, ".pfw") == 0) ||
+           (path.size() >= 7 &&
+            path.compare(path.size() - 7, 7, ".pfw.gz") == 0);
+}
+
+// Split a comma-separated list, dropping empty fields.
+inline std::vector<std::string> split_csv(const std::string& str) {
+    std::vector<std::string> out;
+    if (str.empty()) return out;
+    std::stringstream ss(str);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        if (!item.empty()) out.push_back(item);
+    }
+    return out;
+}
+
+// Append suffix unless path already ends with it.
+inline std::string ensure_suffix(const std::string& path,
+                                 const std::string& suffix) {
+    if (path.size() >= suffix.size() &&
+        path.compare(path.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        return path;
+    }
+    return path + suffix;
 }
 
 }  // namespace dftracer::utils::cli

@@ -30,7 +30,6 @@
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -251,24 +250,12 @@ class ReplayArgParse : public cli::ArgParse {
     }
 };
 
-bool is_trace_file(const std::string& path) {
-    return (path.size() >= 4 &&
-            path.compare(path.size() - 4, 4, ".pfw") == 0) ||
-           (path.size() >= 7 &&
-            path.compare(path.size() - 7, 7, ".pfw.gz") == 0);
-}
-
 std::unordered_set<std::uint32_t> parse_csv_uint32(const std::string& csv) {
     std::unordered_set<std::uint32_t> out;
-    if (csv.empty()) return out;
-    std::istringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (!token.empty()) {
-            try {
-                out.insert(static_cast<std::uint32_t>(std::stoul(token)));
-            } catch (...) {
-            }
+    for (const auto& token : cli::split_csv(csv)) {
+        try {
+            out.insert(static_cast<std::uint32_t>(std::stoul(token)));
+        } catch (...) {
         }
     }
     return out;
@@ -276,12 +263,7 @@ std::unordered_set<std::uint32_t> parse_csv_uint32(const std::string& csv) {
 
 std::unordered_set<std::string> parse_csv_string(const std::string& csv) {
     std::unordered_set<std::string> out;
-    if (csv.empty()) return out;
-    std::istringstream ss(csv);
-    std::string token;
-    while (std::getline(ss, token, ',')) {
-        if (!token.empty()) out.insert(token);
-    }
+    for (const auto& token : cli::split_csv(csv)) out.insert(token);
     return out;
 }
 
@@ -310,14 +292,14 @@ coro::CoroTask<void> task_scan(RunCtx* ctx) {
             if (ctx->cli->recursive) {
                 for (const auto& e : fs::recursive_directory_iterator(in, ec)) {
                     if (e.is_regular_file(ec) &&
-                        is_trace_file(e.path().string())) {
+                        cli::is_trace_file(e.path().string())) {
                         ctx->trace_files.push_back(e.path().string());
                     }
                 }
             } else {
                 for (const auto& e : fs::directory_iterator(in, ec)) {
                     if (e.is_regular_file(ec) &&
-                        is_trace_file(e.path().string())) {
+                        cli::is_trace_file(e.path().string())) {
                         ctx->trace_files.push_back(e.path().string());
                     }
                 }

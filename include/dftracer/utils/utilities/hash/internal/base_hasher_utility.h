@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_HASH_INTERNAL_BASE_HASHER_H
 #define DFTRACER_UTILS_UTILITIES_HASH_INTERNAL_BASE_HASHER_H
 
+#include <dftracer/utils/core/common/hash_combine.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/hash/types.h>
 
@@ -92,7 +93,7 @@ class BaseHasherUtility : public utilities::Utility<std::string, Hash> {
      * @param value The hash value to combine
      */
     static void hash_combine(std::size_t& seed, std::size_t value) {
-        seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        dftracer::utils::hash_combine(seed, value);
     }
 
     /**

@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/format_detector.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <zlib.h>
@@ -64,8 +65,8 @@ bool FormatDetector::has_gzip_magic(FILE* file) {
         return false;
     }
 
-    // GZIP magic: 0x1f 0x8b
-    return magic[0] == 0x1f && magic[1] == 0x8b;
+    return magic[0] == constants::indexer::GZIP_MAGIC_BYTE_0 &&
+           magic[1] == constants::indexer::GZIP_MAGIC_BYTE_1;
 }
 
 bool FormatDetector::has_tar_header_after_gzip(FILE* file) {
@@ -78,7 +79,8 @@ bool FormatDetector::has_tar_header_after_gzip(FILE* file) {
     z_stream stream;
     memset(&stream, 0, sizeof(stream));
 
-    if (inflateInit2(&stream, 31) != Z_OK) {  // 31 = 15 + 16 for GZIP format
+    if (inflateInit2(&stream, constants::indexer::ZLIB_GZIP_WINDOW_BITS) !=
+        Z_OK) {
         return false;
     }
 

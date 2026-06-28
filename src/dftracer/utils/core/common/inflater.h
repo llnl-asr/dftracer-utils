@@ -83,12 +83,12 @@ class Inflater {
                                                                   // to GZIP
         }
 
-        if (first_byte == 0x1f) {
-            co_return constants::indexer::ZLIB_GZIP_WINDOW_BITS;  // GZIP
+        if (first_byte == constants::indexer::GZIP_MAGIC_BYTE_0) {
+            co_return constants::indexer::ZLIB_GZIP_WINDOW_BITS;    // GZIP
         } else if ((first_byte & 0xf) == 8) {
-            co_return 15;                                         // ZLIB
+            co_return constants::indexer::ZLIB_FORMAT_WINDOW_BITS;  // ZLIB
         } else {
-            co_return -15;                                        // RAW deflate
+            co_return constants::indexer::ZLIB_RAW_WINDOW_BITS;  // RAW deflate
         }
     }
 

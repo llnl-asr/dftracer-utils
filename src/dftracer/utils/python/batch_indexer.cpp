@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/hash_combine.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/coro/when_all.h>
@@ -1167,7 +1168,8 @@ struct CoarseKey {
 struct CoarseKeyHash {
     std::size_t operator()(const CoarseKey& k) const {
         auto combine = [](std::size_t h, std::size_t v) {
-            return h ^ (v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+            dftracer::utils::hash_combine(h, v);
+            return h;
         };
         std::size_t h = std::hash<std::string_view>{}(k.cat);
         h = combine(h, std::hash<std::string_view>{}(k.func_name));

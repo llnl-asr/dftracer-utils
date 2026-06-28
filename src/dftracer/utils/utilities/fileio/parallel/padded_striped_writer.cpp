@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/io/io.h>
@@ -39,8 +40,8 @@ void append_padding_member(std::vector<std::uint8_t>& out, std::uint16_t xlen) {
     out.resize(start + PAD_MEMBER_FIXED_OVERHEAD + xlen);
     std::uint8_t* p = out.data() + start;
 
-    p[0] = 0x1f;
-    p[1] = 0x8b;
+    p[0] = constants::indexer::GZIP_MAGIC_BYTE_0;
+    p[1] = constants::indexer::GZIP_MAGIC_BYTE_1;
     p[2] = 0x08;                    // CM = deflate
     p[3] = 0x04;                    // FLG = FEXTRA
     p[4] = p[5] = p[6] = p[7] = 0;  // MTIME

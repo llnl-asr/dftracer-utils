@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/hash_combine.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_result.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 
@@ -142,10 +143,8 @@ struct WindowKey {
 struct WindowKeyHash {
     std::size_t operator()(const WindowKey& k) const {
         std::size_t h = std::hash<std::string_view>{}(k.cat);
-        h ^= std::hash<std::string_view>{}(k.name) + 0x9e3779b9 + (h << 6) +
-             (h >> 2);
-        h ^= std::hash<std::uint64_t>{}(k.time_bucket) + 0x9e3779b9 + (h << 6) +
-             (h >> 2);
+        hash_combine_value(h, k.name);
+        hash_combine_value(h, k.time_bucket);
         return h;
     }
 };

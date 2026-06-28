@@ -80,7 +80,7 @@ AggregationVisitor::AggregationVisitor(
     if (config_.track_process_parents || !config_.boundary_events.empty()) {
         tracker_ = std::make_shared<AssociationTracker>();
     }
-    local_buffer_.reserve(65536);
+    local_buffer_.reserve(FLUSH_THRESHOLD);
     key_buf_.reserve(128);
     val_buf_.reserve(256);
 }
@@ -98,7 +98,7 @@ AggregationVisitor::AggregationVisitor(std::string staging_dir,
     if (config_.track_process_parents || !config_.boundary_events.empty()) {
         tracker_ = std::make_shared<AssociationTracker>();
     }
-    local_buffer_.reserve(65536);
+    local_buffer_.reserve(FLUSH_THRESHOLD);
     key_buf_.reserve(128);
     val_buf_.reserve(256);
     // First SST writer; rotated after each flush in seal_local_buffer.

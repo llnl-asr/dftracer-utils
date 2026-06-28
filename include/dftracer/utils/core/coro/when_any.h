@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 
+#include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
@@ -267,9 +268,7 @@ class WhenAnyAwaitable {
             }
         }
         if (state_->exception) {
-            auto ex = std::move(state_->exception);
-            state_->exception = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception);
         }
         return std::move(state_->result);
     }
@@ -752,9 +751,7 @@ class WhenAnyTupleAwaitable {
             state_->awaitables_);
 
         if (state_->exception) {
-            auto ex = std::move(state_->exception);
-            state_->exception = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception);
         }
         return std::move(state_->result);
     }

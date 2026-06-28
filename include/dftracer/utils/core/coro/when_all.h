@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ALL_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ALL_H
 
+#include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
 
@@ -175,9 +176,7 @@ class WhenAllVectorAwaitable {
 
     result_type await_resume() {
         if (state_->exception_) {
-            auto ex = std::move(state_->exception_);
-            state_->exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception_);
         }
         return std::move(state_->results_);
     }
@@ -361,9 +360,7 @@ class WhenAllVectorAwaitable<Awaitable> {
 
     void await_resume() {
         if (state_->exception_) {
-            auto ex = std::move(state_->exception_);
-            state_->exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception_);
         }
     }
 
@@ -527,9 +524,7 @@ class WhenAllTupleAwaitable {
 
     result_type await_resume() {
         if (state_->exception_) {
-            auto ex = std::move(state_->exception_);
-            state_->exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception_);
         }
         return build_result(std::index_sequence_for<Awaitables...>{});
     }

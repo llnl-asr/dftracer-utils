@@ -11,7 +11,6 @@
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
-#include <cstring>
 #include <set>
 #include <stdexcept>
 #include <system_error>
@@ -191,14 +190,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
                     int file_id =
                         idx_db.get_file_info_id(get_logical_path(file_path));
                     if (file_id >= 0) {
-                        char marker_key[6];
-                        marker_key[0] = '\xFF';
-                        marker_key[1] = '\xFF';
-                        auto fid_u32 = static_cast<std::uint32_t>(file_id);
-                        std::uint32_t fid_be = __builtin_bswap32(fid_u32);
-                        std::memcpy(&marker_key[2], &fid_be, 4);
                         agg_db->put(batch, rcf::AGGREGATION,
-                                    std::string_view(marker_key, 6),
+                                    aggregators::make_agg_file_key(file_id),
                                     std::string_view());
                     }
                 }

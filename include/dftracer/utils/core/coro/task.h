@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_TASK_H
 #define DFTRACER_UTILS_CORE_CORO_TASK_H
 
+#include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/coro/yield.h>
@@ -194,9 +195,7 @@ class CoroTask {
 
     T await_resume() {
         if (coro_handle_.promise().exception_) {
-            auto ex = std::move(coro_handle_.promise().exception_);
-            coro_handle_.promise().exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(coro_handle_.promise().exception_);
         }
         if constexpr (!std::is_void_v<T>) {
             return std::move(coro_handle_.promise().result_);
@@ -535,9 +534,7 @@ class CoroTask<void> {
 
     void await_resume() {
         if (coro_handle_.promise().exception_) {
-            auto ex = std::move(coro_handle_.promise().exception_);
-            coro_handle_.promise().exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(coro_handle_.promise().exception_);
         }
     }
 

@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/env.h>
 #include <dftracer/utils/core/rocksdb/database.h>
@@ -113,14 +114,19 @@ const decltype(cf::ALL)& RocksDatabase::default_column_families() {
 
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
     options.compression = ::rocksdb::kZSTD;
-    options.compression_opts.level = 9;
-    options.compression_opts.max_dict_bytes = 262144;
-    options.compression_opts.zstd_max_train_bytes = 1048576;
+    options.compression_opts.level = constants::rocksdb::ZSTD_COMPRESSION_LEVEL;
+    options.compression_opts.max_dict_bytes =
+        constants::rocksdb::ZSTD_MAX_DICT_BYTES;
+    options.compression_opts.zstd_max_train_bytes =
+        constants::rocksdb::ZSTD_MAX_TRAIN_BYTES;
     options.compression_opts.enabled = true;
     options.bottommost_compression = ::rocksdb::kZSTD;
-    options.bottommost_compression_opts.level = 9;
-    options.bottommost_compression_opts.max_dict_bytes = 262144;
-    options.bottommost_compression_opts.zstd_max_train_bytes = 1048576;
+    options.bottommost_compression_opts.level =
+        constants::rocksdb::ZSTD_COMPRESSION_LEVEL;
+    options.bottommost_compression_opts.max_dict_bytes =
+        constants::rocksdb::ZSTD_MAX_DICT_BYTES;
+    options.bottommost_compression_opts.zstd_max_train_bytes =
+        constants::rocksdb::ZSTD_MAX_TRAIN_BYTES;
     options.bottommost_compression_opts.enabled = true;
 #elif defined(DFTRACER_UTILS_ENABLE_LZ4)
     options.compression = ::rocksdb::kLZ4Compression;

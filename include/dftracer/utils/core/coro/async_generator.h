@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_ASYNC_GENERATOR_H
 #define DFTRACER_UTILS_CORE_CORO_ASYNC_GENERATOR_H
 
+#include <dftracer/utils/core/common/exception_helpers.h>
+
 #include <coroutine>
 #include <cstddef>
 #include <exception>
@@ -216,9 +218,7 @@ class AsyncGenerator {
                 return std::nullopt;
             }
             if (handle_.promise().exception_) {
-                auto ex = std::move(handle_.promise().exception_);
-                handle_.promise().exception_ = nullptr;
-                std::rethrow_exception(std::move(ex));
+                rethrow_and_clear(handle_.promise().exception_);
             }
             if (handle_.done()) {
                 return std::nullopt;
@@ -278,9 +278,7 @@ class AsyncGenerator {
 
     void rethrow_if_exception() {
         if (handle_ && handle_.promise().exception_) {
-            auto ex = std::move(handle_.promise().exception_);
-            handle_.promise().exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(handle_.promise().exception_);
         }
     }
 

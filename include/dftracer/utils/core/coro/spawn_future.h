@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_SPAWN_FUTURE_H
 #define DFTRACER_UTILS_CORE_CORO_SPAWN_FUTURE_H
 
+#include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/coro/resumption_helper.h>
 
 #include <atomic>
@@ -149,9 +150,7 @@ class SpawnFuture {
 
     T await_resume() {
         if (state_->exception) {
-            auto ex = std::move(state_->exception);
-            state_->exception = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception);
         }
         if constexpr (!std::is_void_v<T>) {
             return std::move(*state_->result);
@@ -212,9 +211,7 @@ class SpawnFuture<void> {
 
     void await_resume() {
         if (state_->exception) {
-            auto ex = std::move(state_->exception);
-            state_->exception = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception);
         }
     }
 

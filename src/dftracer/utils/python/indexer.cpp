@@ -484,7 +484,7 @@ PyTypeObject CheckpointIndexerType = {
     0,                                        /* tp_setattro */
     0,                                        /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
-    "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=1048576, "
+    "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=33554432, "
     "force_rebuild=False, build_bloom=False, build_manifest=False, "
     "runtime=None)\n"
     "--\n"

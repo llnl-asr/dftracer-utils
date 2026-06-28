@@ -6,35 +6,26 @@
 namespace dftracer::utils::utilities::compression::zlib {
 
 /**
- * @brief Compression format for streaming compression.
+ * @brief zlib window-bits format selector, shared by (de)compression.
  *
- * The windowBits parameter determines the format:
- * - DEFLATE_RAW: windowBits = -15 (raw deflate, no header/trailer)
- * - ZLIB: windowBits = 15 (zlib format with header/trailer)
- * - GZIP: windowBits = 15 + 16 (gzip format with header/trailer)
+ * The value is the zlib windowBits parameter:
+ * - DEFLATE_RAW: -15 (raw deflate, no header/trailer)
+ * - ZLIB: 15 (zlib format with header/trailer)
+ * - GZIP: 15 + 16 (gzip format with header/trailer)
+ * - AUTO: 15 + 32 (auto-detect gzip/zlib; decompression only)
  */
-enum class CompressionFormat : std::int32_t {
-    DEFLATE_RAW = -15,  // Raw deflate (no header/trailer)
-    ZLIB = 15,          // zlib format
-    GZIP = 15 + 16,     // gzip format (default)
-    AUTO = 15 + 32,     // Auto-detect gzip/zlib (default)
-};
-
-/**
- * @brief Decompression format for streaming decompression.
- *
- * The windowBits parameter determines the format:
- * - DEFLATE_RAW: windowBits = -15 (raw deflate, no header/trailer)
- * - ZLIB: windowBits = 15 (zlib format with header/trailer)
- * - GZIP: windowBits = 15 + 16 (gzip format with header/trailer)
- * - AUTO: windowBits = 15 + 32 (auto-detect gzip/zlib)
- */
-enum class DecompressionFormat : std::int32_t {
+enum class ZlibFormat : std::int32_t {
     DEFLATE_RAW = -15,  // Raw deflate (no header/trailer)
     ZLIB = 15,          // zlib format
     GZIP = 15 + 16,     // gzip format
-    AUTO = 15 + 32      // Auto-detect gzip/zlib (default)
+    AUTO = 15 + 32,     // Auto-detect gzip/zlib (decompression only)
 };
+
+// The compression and decompression paths use the same windowBits selector;
+// these aliases preserve the directional names at call sites. AUTO is only
+// meaningful for decompression.
+using CompressionFormat = ZlibFormat;
+using DecompressionFormat = ZlibFormat;
 }  // namespace dftracer::utils::utilities::compression::zlib
 
 #endif  // DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_SHARED_H

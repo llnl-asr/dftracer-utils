@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/task_handle.h>
 
 #include <any>
@@ -195,11 +196,6 @@ PyObject *create_typed_task_handle(std::shared_future<void> void_future,
 }
 
 int init_task_handle(PyObject *m) {
-    if (PyType_Ready(&TaskHandleType) < 0) return -1;
-    Py_INCREF(&TaskHandleType);
-    if (PyModule_AddObject(m, "TaskHandle", (PyObject *)&TaskHandleType) < 0) {
-        Py_DECREF(&TaskHandleType);
-        return -1;
-    }
+    if (register_type(m, &TaskHandleType, "TaskHandle") < 0) return -1;
     return 0;
 }

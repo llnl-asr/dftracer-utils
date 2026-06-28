@@ -1,5 +1,6 @@
 """Indexer utilities for building and managing trace indexes."""
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple, Union
 
@@ -47,6 +48,17 @@ class IndexStatus:
     needs_work: List[str] = field(default_factory=list)
     index_path: str = ""
     aggregation_interval_us: int = 0
+
+    @classmethod
+    def _from_dict(cls, result: dict) -> "IndexStatus":
+        """Build from the native resolve()/ensure_indexed() result dict."""
+        return cls(
+            total_files=result["total_files"],
+            ready=result["ready"],
+            needs_work=result["needs_work"],
+            index_path=result.get("index_path", ""),
+            aggregation_interval_us=result.get("aggregation_interval_us", 0),
+        )
 
 
 class Indexer:
@@ -155,13 +167,7 @@ class Indexer:
             IndexStatus with total_files, ready, and needs_work lists.
         """
         result = self._native.resolve()
-        return IndexStatus(
-            total_files=result["total_files"],
-            ready=result["ready"],
-            needs_work=result["needs_work"],
-            index_path=result.get("index_path", ""),
-            aggregation_interval_us=result.get("aggregation_interval_us", 0),
-        )
+        return IndexStatus._from_dict(result)
 
     def build(self) -> None:
         """Build all missing index tiers based on require_* flags.
@@ -180,13 +186,7 @@ class Indexer:
             IndexStatus after building.
         """
         result = self._native.ensure_indexed()
-        return IndexStatus(
-            total_files=result["total_files"],
-            ready=result["ready"],
-            needs_work=result["needs_work"],
-            index_path=result.get("index_path", ""),
-            aggregation_interval_us=result.get("aggregation_interval_us", 0),
-        )
+        return IndexStatus._from_dict(result)
 
     def get_checkpoint_indexer(self, file_path: str) -> _NativeCheckpointIndexer:
         """Get a checkpoint indexer for a specific file.
@@ -374,3 +374,20 @@ class Indexer:
             query,
             group_by,
         )
+
+
+def _open_readonly_indexer(files, index_path: str) -> "Indexer":
+    """Open an Indexer that only reads existing index tiers (never builds).
+
+    Derives index_dir from index_path's directory. Used by the distributed
+    read paths where the index is already built.
+    """
+    return Indexer(
+        files=files,
+        index_dir=os.path.dirname(index_path) if index_path else "",
+        require_checkpoint=False,
+        require_bloom=False,
+        require_manifest=False,
+        require_aggregation=False,
+        force_rebuild=False,
+    )

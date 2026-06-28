@@ -12,6 +12,7 @@
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
@@ -3762,15 +3763,7 @@ PyTypeObject TraceReaderType = {
 };
 
 int init_trace_reader(PyObject *m) {
-    if (PyType_Ready(&TraceReaderType) < 0) return -1;
-
-    Py_INCREF(&TraceReaderType);
-    if (PyModule_AddObject(m, "TraceReader", (PyObject *)&TraceReaderType) <
-        0) {
-        Py_DECREF(&TraceReaderType);
-        Py_DECREF(m);
-        return -1;
-    }
+    if (register_type(m, &TraceReaderType, "TraceReader") < 0) return -1;
 
     return 0;
 }

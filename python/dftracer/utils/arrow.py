@@ -47,6 +47,72 @@ except ImportError:
     pass
 
 
+def _require_pyarrow() -> None:
+    """Raise a clear, consistent error when pyarrow is unavailable."""
+    if not _HAS_PYARROW:
+        raise ImportError("pyarrow is required. Install with: pip install pyarrow")
+
+
+def batch_to_ipc(batch: Any) -> bytes:
+    """Serialize a single pyarrow RecordBatch to Arrow IPC stream bytes."""
+    _require_pyarrow()
+    sink = pa.BufferOutputStream()
+    writer = pa.ipc.new_stream(sink, batch.schema)
+    writer.write_batch(batch)
+    writer.close()
+    return sink.getvalue().to_pybytes()
+
+
+def ipc_to_table(ipc_bytes: bytes) -> Any:
+    """Deserialize Arrow IPC stream bytes into a pyarrow Table."""
+    _require_pyarrow()
+    return pa.ipc.open_stream(pa.BufferReader(ipc_bytes)).read_all()
+
+
+def decode_dictionary_columns(table: Any) -> Any:
+    """Cast dictionary-encoded columns to plain strings.
+
+    Workers may dictionary-encode independently, so unify before concatenation.
+    """
+    for i, field in enumerate(table.schema):
+        if pa.types.is_dictionary(field.type):
+            table = table.set_column(i, field.name, table.column(i).cast(pa.string()))
+    return table
+
+
+def empty_write_result(skipped_chunks: int = 0) -> Dict[str, Any]:
+    """A write_arrow result describing no written files."""
+    return {
+        "files": [],
+        "total_chunks": 0,
+        "skipped_chunks": skipped_chunks,
+        "total_rows": 0,
+        "total_events_matched": 0,
+    }
+
+
+def fold_write_results(
+    batch_results: Any, total_chunks: int, skipped_chunks: int
+) -> Dict[str, Any]:
+    """Combine per-batch write_view_chunks results into one summary."""
+    files: List[str] = []
+    total_rows = 0
+    total_events_matched = 0
+    for br in batch_results:
+        for r in br.get("results", []):
+            if r.get("rows_written", 0) > 0:
+                files.append(r["output_file"])
+        total_rows += br.get("total_rows", 0)
+        total_events_matched += br.get("total_events_matched", 0)
+    return {
+        "files": files,
+        "total_chunks": total_chunks,
+        "skipped_chunks": skipped_chunks,
+        "total_rows": total_rows,
+        "total_events_matched": total_events_matched,
+    }
+
+
 class ArrowBatch:
     """Wrapper around an Arrow RecordBatch from the C extension.
 
@@ -334,13 +400,7 @@ def write_arrow(
         chunks_result = reader.get_view_chunks(view=view)
 
         if not chunks_result["file_may_match"]:
-            return {
-                "files": [],
-                "total_chunks": 0,
-                "skipped_chunks": chunks_result["skipped_checkpoints"],
-                "total_rows": 0,
-                "total_events_matched": 0,
-            }
+            return empty_write_result(chunks_result["skipped_checkpoints"])
 
         chunks = chunks_result["chunks"]
         skipped_chunks = chunks_result["skipped_checkpoints"]
@@ -348,13 +408,7 @@ def write_arrow(
         skipped_chunks = 0
 
     if not chunks:
-        return {
-            "files": [],
-            "total_chunks": 0,
-            "skipped_chunks": skipped_chunks,
-            "total_rows": 0,
-            "total_events_matched": 0,
-        }
+        return empty_write_result(skipped_chunks)
 
     if parallel and len(chunks) > 1:
         runtime = get_default_runtime()
@@ -384,23 +438,7 @@ def write_arrow(
         )
         batch_results = [result]
 
-    files = []
-    total_rows = 0
-    total_events_matched = 0
-    for br in batch_results:
-        for r in br.get("results", []):
-            if r.get("rows_written", 0) > 0:
-                files.append(r["output_file"])
-        total_rows += br.get("total_rows", 0)
-        total_events_matched += br.get("total_events_matched", 0)
-
-    return {
-        "files": files,
-        "total_chunks": len(chunks),
-        "skipped_chunks": skipped_chunks,
-        "total_rows": total_rows,
-        "total_events_matched": total_events_matched,
-    }
+    return fold_write_results(batch_results, len(chunks), skipped_chunks)
 
 
 def read_arrow(

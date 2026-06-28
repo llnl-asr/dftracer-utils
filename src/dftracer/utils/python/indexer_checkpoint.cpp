@@ -1,4 +1,5 @@
 #include <dftracer/utils/python/indexer_checkpoint.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <structmember.h>
 
 PyObject *IndexerCheckpoint_new(PyTypeObject *type, PyObject *args,
@@ -112,15 +113,8 @@ PyTypeObject IndexerCheckpointType = {
 };
 
 int init_indexer_checkpoint(PyObject *m) {
-    if (PyType_Ready(&IndexerCheckpointType) < 0) return -1;
-
-    Py_INCREF(&IndexerCheckpointType);
-    if (PyModule_AddObject(m, "IndexerCheckpoint",
-                           (PyObject *)&IndexerCheckpointType) < 0) {
-        Py_DECREF(&IndexerCheckpointType);
-        Py_DECREF(m);
+    if (register_type(m, &IndexerCheckpointType, "IndexerCheckpoint") < 0)
         return -1;
-    }
 
     return 0;
 }

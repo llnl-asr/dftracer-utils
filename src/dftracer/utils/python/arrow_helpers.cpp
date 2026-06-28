@@ -49,28 +49,9 @@ PyObject *wrap_arrow_table(PyObject *batch_list) {
 }
 
 PyObject *wrap_arrow_stream_table(PyObject *stream_obj) {
-    if (!stream_obj) {
-        PyErr_SetString(PyExc_RuntimeError, "stream_obj is NULL");
-        return NULL;
-    }
-
-    PyObject *mod = PyImport_ImportModule("dftracer.utils.arrow");
-    if (!mod) {
-        Py_DECREF(stream_obj);
-        return NULL;
-    }
-
-    PyObject *cls = PyObject_GetAttrString(mod, "ArrowTable");
-    Py_DECREF(mod);
-    if (!cls) {
-        Py_DECREF(stream_obj);
-        return NULL;
-    }
-
-    PyObject *table = PyObject_CallFunctionObjArgs(cls, stream_obj, NULL);
-    Py_DECREF(cls);
-    Py_DECREF(stream_obj);
-    return table;
+    // dftracer.utils.arrow.ArrowTable accepts either a batch list or a stream
+    // object, so wrapping is identical for both.
+    return wrap_arrow_table(stream_obj);
 }
 
 PyObject *arrow_result_to_table(ArrowExportResult result) {

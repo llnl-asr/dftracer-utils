@@ -16,8 +16,9 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from .arrow import decode_dictionary_columns, ipc_to_table
 from .dask import distributed_index, register_auto_thread_plugin, resolve_local_staging
-from .indexer import AggregationConfig, Indexer
+from .indexer import AggregationConfig, _open_readonly_indexer
 
 try:
     from dask.distributed import get_client
@@ -49,12 +50,7 @@ _TRACE_SUFFIXES = (".pfw", ".pfw.gz")
 
 def ipc_to_pandas(ipc_bytes: bytes):
     """Decode Arrow IPC bytes to pandas, casting dictionary columns to string."""
-    reader = pa.ipc.open_stream(pa.BufferReader(ipc_bytes))
-    table = reader.read_all()
-    for i, field in enumerate(table.schema):
-        if pa.types.is_dictionary(field.type):
-            table = table.set_column(i, field.name, table.column(i).cast(pa.string()))
-    return table.to_pandas()
+    return decode_dictionary_columns(ipc_to_table(ipc_bytes)).to_pandas()
 
 
 def batches_to_ipc(batches_by_type: Dict[str, Any]) -> Dict[str, Optional[bytes]]:
@@ -76,15 +72,7 @@ def batches_to_ipc(batches_by_type: Dict[str, Any]) -> Dict[str, Optional[bytes]
 
 def scan_to_ipc(files, index_path, time_granularity, time_resolution, query):
     """Dask worker task: full-scan the aggregation CF for `files`, return IPC bytes."""
-    indexer = Indexer(
-        files=files,
-        index_dir=os.path.dirname(index_path) if index_path else "",
-        require_checkpoint=False,
-        require_bloom=False,
-        require_manifest=False,
-        require_aggregation=False,
-        force_rebuild=False,
-    )
+    indexer = _open_readonly_indexer(files, index_path)
     all_batches = indexer.iter_arrow_dfanalyzer_all(
         time_granularity=time_granularity,
         time_resolution=time_resolution,
@@ -282,14 +270,11 @@ def worker_hlm_partial(
     ipc_bytes = ipc_result[data_type] if isinstance(ipc_result, dict) else None
     if ipc_bytes is None:
         return empty()
-    reader = pa.ipc.open_stream(pa.BufferReader(ipc_bytes))
-    table = reader.read_all()
+    table = ipc_to_table(ipc_bytes)
     if table.num_rows == 0:
         return empty()
 
-    for i, field in enumerate(table.schema):
-        if pa.types.is_dictionary(field.type):
-            table = table.set_column(i, field.name, table.column(i).cast(pa.string()))
+    table = decode_dictionary_columns(table)
 
     # Apply the analyzer's postread_trace transformations that the distributed
     # HLM would otherwise skip: drop ignored functions/files, then encode file
@@ -679,7 +664,7 @@ def _worker_min_time_start(ipc_result):
     b = ipc_result.get("events") if isinstance(ipc_result, dict) else None
     if b is None:
         return None
-    table = pa.ipc.open_stream(pa.BufferReader(b)).read_all()
+    table = ipc_to_table(b)
     if table.num_rows == 0 or "time_start" not in table.column_names:
         return None
     return pc.min(table.column("time_start")).as_py()  # ty: ignore[unresolved-attribute]

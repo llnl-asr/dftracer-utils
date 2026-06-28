@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define PY_SSIZE_T_CLEAN
@@ -151,14 +152,9 @@ PyTypeObject ArrowStreamingIteratorType = {
 };
 
 int init_arrow_streaming_iterator(PyObject* m) {
-    if (PyType_Ready(&ArrowStreamingIteratorType) < 0) return -1;
-
-    Py_INCREF(&ArrowStreamingIteratorType);
-    if (PyModule_AddObject(m, "_ArrowStreamingIterator",
-                           (PyObject*)&ArrowStreamingIteratorType) < 0) {
-        Py_DECREF(&ArrowStreamingIteratorType);
+    if (register_type(m, &ArrowStreamingIteratorType,
+                      "_ArrowStreamingIterator") < 0)
         return -1;
-    }
 
     return 0;
 }

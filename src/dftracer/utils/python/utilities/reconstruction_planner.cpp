@@ -1,5 +1,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/reconstruction_planner.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.h>
@@ -11,54 +13,21 @@ using dftracer::utils::Runtime;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
 
 static Runtime *get_runtime(ReconstructionPlannerObject *self) {
-    if (self->runtime_obj)
-        return ((RuntimeObject *)self->runtime_obj)->runtime.get();
-    return get_default_runtime();
+    return resolve_runtime(self);
 }
 
 static void ReconstructionPlanner_dealloc(ReconstructionPlannerObject *self) {
-    Py_XDECREF(self->runtime_obj);
-    Py_TYPE(self)->tp_free((PyObject *)self);
+    runtime_backed_dealloc(self);
 }
 
 static PyObject *ReconstructionPlanner_new(PyTypeObject *type, PyObject *args,
                                            PyObject *kwds) {
-    ReconstructionPlannerObject *self;
-    self = (ReconstructionPlannerObject *)type->tp_alloc(type, 0);
-    if (self != NULL) {
-        self->runtime_obj = NULL;
-    }
-    return (PyObject *)self;
+    return runtime_backed_new<ReconstructionPlannerObject>(type, args, kwds);
 }
 
 static int ReconstructionPlanner_init(ReconstructionPlannerObject *self,
                                       PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"runtime", NULL};
-    PyObject *runtime_arg = NULL;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", (char **)kwlist,
-                                     &runtime_arg)) {
-        return -1;
-    }
-
-    if (runtime_arg && runtime_arg != Py_None) {
-        if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
-            Py_INCREF(runtime_arg);
-            self->runtime_obj = runtime_arg;
-        } else {
-            PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
-            if (native && PyObject_TypeCheck(native, &RuntimeType)) {
-                self->runtime_obj = native;
-            } else {
-                Py_XDECREF(native);
-                PyErr_SetString(PyExc_TypeError,
-                                "runtime must be a Runtime instance or None");
-                return -1;
-            }
-        }
-    }
-
-    return 0;
+    return runtime_backed_init(self, args, kwds);
 }
 
 static PyObject *ReconstructionPlanner_plan(ReconstructionPlannerObject *self,
@@ -95,22 +64,15 @@ static PyObject *ReconstructionPlanner_plan(ReconstructionPlannerObject *self,
     ReconstructionPlan plan;
     auto *plan_p = &plan;
     ReconstructionPlannerInput input_copy = input;
-    std::string error_msg;
 
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
-        auto task = [plan_p, input_copy]() -> CoroTask<void> {
-            ReconstructionPlannerUtility util;
-            *plan_p = co_await util.process(input_copy);
-        };
-        rt->submit(task(), "reconstruction-planner").get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking([&] {
+            Runtime *rt = get_runtime(self);
+            auto task = [plan_p, input_copy]() -> CoroTask<void> {
+                ReconstructionPlannerUtility util;
+                *plan_p = co_await util.process(input_copy);
+            };
+            rt->submit(task(), "reconstruction-planner").get();
+        })) {
         return NULL;
     }
 
@@ -272,15 +234,9 @@ PyTypeObject ReconstructionPlannerType = {
 };
 
 int init_reconstruction_planner(PyObject *m) {
-    if (PyType_Ready(&ReconstructionPlannerType) < 0) return -1;
-
-    Py_INCREF(&ReconstructionPlannerType);
-    if (PyModule_AddObject(m, "ReconstructionPlannerUtility",
-                           (PyObject *)&ReconstructionPlannerType) < 0) {
-        Py_DECREF(&ReconstructionPlannerType);
-        Py_DECREF(m);
+    if (register_type(m, &ReconstructionPlannerType,
+                      "ReconstructionPlannerUtility") < 0)
         return -1;
-    }
 
     return 0;
 }

@@ -1,4 +1,5 @@
 #include <dftracer/utils/python/index_database.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/sst_distribution.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
@@ -352,12 +353,6 @@ PyTypeObject IndexDatabaseType = {
 };
 
 int init_index_database(PyObject *m) {
-    if (PyType_Ready(&IndexDatabaseType) < 0) return -1;
-    Py_INCREF(&IndexDatabaseType);
-    if (PyModule_AddObject(m, "IndexDatabase", (PyObject *)&IndexDatabaseType) <
-        0) {
-        Py_DECREF(&IndexDatabaseType);
-        return -1;
-    }
+    if (register_type(m, &IndexDatabaseType, "IndexDatabase") < 0) return -1;
     return 0;
 }

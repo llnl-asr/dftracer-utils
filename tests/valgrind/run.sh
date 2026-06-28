@@ -24,6 +24,10 @@ cd "$REPO_ROOT"
 
 export DFTRACER_UTILS_VALGRIND=1
 export DFTRACER_UTILS_HW_CONCURRENCY="${DFTRACER_UTILS_HW_CONCURRENCY:-2}"
+# pyarrow runtime-dispatches to AVX-512 kernels on capable CPUs, whose EVEX
+# (0x62-prefixed) instructions Valgrind cannot decode and aborts with SIGILL.
+# Cap Arrow's SIMD level so it stays within what Valgrind emulates.
+export ARROW_USER_SIMD_LEVEL="${ARROW_USER_SIMD_LEVEL:-AVX2}"
 
 SUPP_DIR="$REPO_ROOT/tests/valgrind"
 BUILD_DIR="${VALGRIND_BUILD_DIR:-$REPO_ROOT/build/build-valgrind}"

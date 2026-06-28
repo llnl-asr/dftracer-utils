@@ -9,6 +9,7 @@
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
@@ -2677,13 +2678,7 @@ PyTypeObject IndexerType = {
 };
 
 int init_indexer(PyObject* m) {
-    if (PyType_Ready(&IndexerType) < 0) return -1;
-
-    Py_INCREF(&IndexerType);
-    if (PyModule_AddObject(m, "Indexer", (PyObject*)&IndexerType) < 0) {
-        Py_DECREF(&IndexerType);
-        return -1;
-    }
+    if (register_type(m, &IndexerType, "Indexer") < 0) return -1;
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     if (PyModule_AddFunctions(m, BatchIndexerModuleMethods) < 0) return -1;

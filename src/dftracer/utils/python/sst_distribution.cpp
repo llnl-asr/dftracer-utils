@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/sst_distribution.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
@@ -1170,13 +1171,8 @@ static PyMethodDef SstDistributionMethods[] = {
     {NULL, NULL, 0, NULL}};
 
 int init_sst_distribution(PyObject *m) {
-    if (PyType_Ready(&SstArtifactRegistryType) < 0) return -1;
-    Py_INCREF(&SstArtifactRegistryType);
-    if (PyModule_AddObject(m, "SstArtifactRegistry",
-                           (PyObject *)&SstArtifactRegistryType) < 0) {
-        Py_DECREF(&SstArtifactRegistryType);
+    if (register_type(m, &SstArtifactRegistryType, "SstArtifactRegistry") < 0)
         return -1;
-    }
     if (PyModule_AddFunctions(m, SstDistributionMethods) < 0) return -1;
     return 0;
 }

@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 
 #include <dftracer/utils/core/common/exception_helpers.h>
+#include <dftracer/utils/core/coro/completion_latch.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
@@ -90,9 +91,7 @@ struct WhenAnySharedState {
     // modification order on one atomic guarantees exactly one side sees the
     // other's bit, eliminating the store-buffer (SB) reordering hazard that
     // two independent atomics with seq_cst were guarding against.
-    static constexpr std::uint8_t BIT_SUSPENDED = 1;
-    static constexpr std::uint8_t BIT_COMPLETED = 2;
-    std::atomic<std::uint8_t> sync_state_{0};
+    CompletionLatch latch_;
 
     explicit WhenAnySharedState(std::vector<Awaitable> aws)
         : awaitables(std::move(aws)) {
@@ -124,34 +123,14 @@ struct WhenAnySharedState {
 
     // Called by the first wrapper to complete (winner of CAS)
     void on_first_complete() {
-        auto prev =
-            sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
-        if (prev & BIT_SUSPENDED) {
-            if (awaiting_coroutine && !awaiting_coroutine.done()) {
-                if (executor) {
-                    schedule_coroutine_resumption_helper(executor,
-                                                         awaiting_coroutine);
-                } else {
-                    awaiting_coroutine.resume();
-                }
-            }
-        }
+        if (latch_.on_completed())
+            resume_continuation(executor, awaiting_coroutine);
     }
 
     // Called by await_suspend after deciding to suspend but before returning
     void mark_suspended_and_check_completion() {
-        auto prev =
-            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
-        if (prev & BIT_COMPLETED) {
-            if (awaiting_coroutine && !awaiting_coroutine.done()) {
-                if (executor) {
-                    schedule_coroutine_resumption_helper(executor,
-                                                         awaiting_coroutine);
-                } else {
-                    awaiting_coroutine.resume();
-                }
-            }
-        }
+        if (latch_.on_suspended())
+            resume_continuation(executor, awaiting_coroutine);
     }
 };
 
@@ -493,9 +472,7 @@ struct WhenAnyTupleState {
     std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
     Executor* executor{nullptr};
 
-    static constexpr std::uint8_t BIT_SUSPENDED = 1;
-    static constexpr std::uint8_t BIT_COMPLETED = 2;
-    std::atomic<std::uint8_t> sync_state_{0};
+    CompletionLatch latch_;
 
     explicit WhenAnyTupleState(Awaitables&&... aws)
         : awaitables_(std::forward<Awaitables>(aws)...) {
@@ -533,33 +510,13 @@ struct WhenAnyTupleState {
     }
 
     void on_first_complete() {
-        auto prev =
-            sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
-        if (prev & BIT_SUSPENDED) {
-            if (awaiting_coroutine && !awaiting_coroutine.done()) {
-                if (executor) {
-                    schedule_coroutine_resumption_helper(executor,
-                                                         awaiting_coroutine);
-                } else {
-                    awaiting_coroutine.resume();
-                }
-            }
-        }
+        if (latch_.on_completed())
+            resume_continuation(executor, awaiting_coroutine);
     }
 
     void mark_suspended_and_check_completion() {
-        auto prev =
-            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
-        if (prev & BIT_COMPLETED) {
-            if (awaiting_coroutine && !awaiting_coroutine.done()) {
-                if (executor) {
-                    schedule_coroutine_resumption_helper(executor,
-                                                         awaiting_coroutine);
-                } else {
-                    awaiting_coroutine.resume();
-                }
-            }
-        }
+        if (latch_.on_suspended())
+            resume_continuation(executor, awaiting_coroutine);
     }
 };
 

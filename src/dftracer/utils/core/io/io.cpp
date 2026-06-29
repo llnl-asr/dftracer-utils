@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/io/io_backend.h>
+#include <dftracer/utils/core/io/io_sendfile.h>
 #include <dftracer/utils/core/io/ops.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <fcntl.h>
@@ -6,9 +7,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/uio.h>
-#ifdef __linux__
-#include <sys/sendfile.h>
-#endif
 #include <unistd.h>
 
 #include <cerrno>
@@ -196,37 +194,7 @@ IoAwaitable sendfile(int out_fd, int in_fd, off_t offset,
     if (exec && exec->has_io_backend()) {
         return exec->io_backend().submit_sendfile(out_fd, in_fd, offset, count);
     }
-#ifdef __linux__
-    off_t off = offset;
-    ssize_t result = ::sendfile(out_fd, in_fd, &off, count);
-#elif defined(__APPLE__)
-    off_t len = static_cast<off_t>(count);
-    int ret = ::sendfile(in_fd, out_fd, offset, &len, nullptr, 0);
-    ssize_t result = (ret == 0 || errno == EAGAIN) ? len : -1;
-#else
-    // Fallback: manual read+write loop
-    char tmp[8192];
-    ssize_t result = 0;
-    off_t off = offset;
-    std::size_t remaining = count;
-    while (remaining > 0) {
-        std::size_t chunk = remaining < sizeof(tmp) ? remaining : sizeof(tmp);
-        ssize_t r = ::pread(in_fd, tmp, chunk, off);
-        if (r <= 0) {
-            if (result == 0) result = r;
-            break;
-        }
-        ssize_t w = ::write(out_fd, tmp, static_cast<std::size_t>(r));
-        if (w < 0) {
-            if (result == 0) result = w;
-            break;
-        }
-        result += w;
-        off += w;
-        remaining -= static_cast<std::size_t>(w);
-        if (w < r) break;
-    }
-#endif
+    ssize_t result = platform_sendfile(out_fd, in_fd, offset, count);
     if (result < 0) result = -errno;
     return IoAwaitable::ready(result);
 }

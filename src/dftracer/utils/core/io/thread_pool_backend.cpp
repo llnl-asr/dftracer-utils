@@ -1,12 +1,10 @@
+#include <dftracer/utils/core/io/io_sendfile.h>
 #include <dftracer/utils/core/io/thread_pool_backend.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
-#ifdef __linux__
-#include <sys/sendfile.h>
-#endif
 #include <unistd.h>
 
 #include <cerrno>
@@ -277,42 +275,10 @@ void ThreadPoolBackend::execute_request(IoRequest* req) {
         case IoOp::LSEEK:
             result = ::lseek(req->fd, req->offset, req->whence);
             break;
-        case IoOp::SENDFILE: {
-#ifdef __linux__
-            off_t off = req->offset;
-            result = ::sendfile(req->dest_fd, req->fd, &off, req->len);
-#elif defined(__APPLE__)
-            off_t len = static_cast<off_t>(req->len);
-            int ret = ::sendfile(req->fd, req->dest_fd, req->offset, &len,
-                                 nullptr, 0);
-            result = (ret == 0 || errno == EAGAIN) ? len : -1;
-#else
-            char tmp[8192];
-            result = 0;
-            off_t off = req->offset;
-            std::size_t remaining = req->len;
-            while (remaining > 0) {
-                std::size_t chunk =
-                    remaining < sizeof(tmp) ? remaining : sizeof(tmp);
-                ssize_t r = ::pread(req->fd, tmp, chunk, off);
-                if (r <= 0) {
-                    if (result == 0) result = r;
-                    break;
-                }
-                ssize_t w =
-                    ::write(req->dest_fd, tmp, static_cast<std::size_t>(r));
-                if (w < 0) {
-                    if (result == 0) result = w;
-                    break;
-                }
-                result += w;
-                off += w;
-                remaining -= static_cast<std::size_t>(w);
-                if (w < r) break;
-            }
-#endif
+        case IoOp::SENDFILE:
+            result =
+                platform_sendfile(req->dest_fd, req->fd, req->offset, req->len);
             break;
-        }
     }
     if (result < 0) result = -errno;
 

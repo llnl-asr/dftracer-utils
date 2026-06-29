@@ -3,6 +3,8 @@
 
 #include <charconv>
 #include <cstddef>
+#include <cstdint>
+#include <system_error>
 
 #if defined(__APPLE__) && (!defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || \
                            __MAC_OS_X_VERSION_MIN_REQUIRED < 130300)
@@ -30,6 +32,15 @@ inline char* to_chars_double(char* first, char* last, double v) noexcept {
     auto [p, ec] = std::to_chars(first, last, v);
     return ec == std::errc{} ? p : nullptr;
 #endif
+}
+
+/// Format an unsigned 64-bit integer into [first, last). Returns past-the-end
+/// pointer on success, nullptr on overflow. The integer std::to_chars overload
+/// is available on every supported platform (only the floating-point one is
+/// availability-gated), so no fallback is needed.
+inline char* to_chars_u64(char* first, char* last, std::uint64_t v) noexcept {
+    auto [p, ec] = std::to_chars(first, last, v);
+    return ec == std::errc{} ? p : nullptr;
 }
 
 }  // namespace dftracer::utils

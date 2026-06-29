@@ -69,13 +69,7 @@ class EpollThreadPoolBackend : public IoBackend {
     int flush() override;
     std::string name() const override { return "epoll+threadpool"; }
 
-    /// Called by await_suspend via SubmitContext::submit.
-    static void submit_to_pool(SubmitContext* ctx, IoAwaitable* awaitable);
-
    private:
-    /// Execute blocking syscall and resume coroutine.
-    static void execute_request(IoRequest* req);
-
     /// Epoll loop run by the completion thread. Currently only watches
     /// the eventfd for shutdown; will be extended for socket I/O.
     void epoll_loop();

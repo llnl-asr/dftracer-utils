@@ -6,6 +6,7 @@
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/io/io_completion_thread.h>
+#include <dftracer/utils/core/io/io_op.h>
 #include <dftracer/utils/core/io/io_uring_wrapper.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
@@ -114,27 +115,7 @@ struct IoUringSubmitCtx : SubmitContext {
         ObjectPool::instance().deallocate(ptr, size);
     }
 
-    enum class Op {
-        READ,
-        WRITE,
-        PREAD,
-        PWRITE,
-        OPEN,
-        CLOSE,
-        FSYNC,
-        FTRUNCATE,
-        FSTAT,
-        ACCEPT,
-        RECV,
-        SEND,
-        READV,
-        WRITEV,
-        PREADV,
-        PWRITEV,
-        LSEEK,
-        SENDFILE
-    };
-    Op op = Op::READ;
+    IoOp op = IoOp::READ;
     int fd = -1;
     void* buf = nullptr;
     std::size_t len = 0;

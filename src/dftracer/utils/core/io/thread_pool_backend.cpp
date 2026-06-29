@@ -18,10 +18,11 @@ ThreadPoolBackend::ThreadPoolBackend(Executor& executor, std::size_t pool_size,
 void ThreadPoolBackend::start() { pool_.start(); }
 void ThreadPoolBackend::stop() { pool_.stop(); }
 
-static IoAwaitable make_request(IoOp op, int fd, void* buf, std::size_t len,
-                                off_t offset, const char* path, int flags,
-                                mode_t mode, Executor* executor,
-                                IoThreadPool* pool) {
+IoAwaitable ThreadPoolBackend::make_request(IoOp op, int fd, void* buf,
+                                            std::size_t len, off_t offset,
+                                            const char* path, int flags,
+                                            mode_t mode, Executor* executor,
+                                            IoThreadPool* pool) {
     auto* req = new IoRequest{};
     req->submit = &ThreadPoolBackend::submit_to_pool;
     req->op = op;

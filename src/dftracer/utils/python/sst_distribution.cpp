@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/python/py_type_helpers.h>
@@ -411,7 +412,8 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     const char *staging_dir;
     const char *batch_id;
     const char *index_dir = "";
-    Py_ssize_t checkpoint_size = 32 * 1024 * 1024;
+    Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
+        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     int build_manifest = 0;
     int force_rebuild = 0;
     PyObject *bloom_dims_obj = NULL;

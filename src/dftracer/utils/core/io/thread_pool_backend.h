@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/io/io_backend.h>
+#include <dftracer/utils/core/io/io_op.h>
 #include <dftracer/utils/core/io/io_thread_pool.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
@@ -15,28 +16,6 @@ class Executor;
 }
 
 namespace dftracer::utils::io {
-
-/// I/O operation types.
-enum class IoOp {
-    READ,
-    WRITE,
-    PREAD,
-    PWRITE,
-    OPEN,
-    CLOSE,
-    FSYNC,
-    FTRUNCATE,
-    FSTAT,
-    ACCEPT,
-    RECV,
-    SEND,
-    READV,
-    WRITEV,
-    PREADV,
-    PWRITEV,
-    LSEEK,
-    SENDFILE
-};
 
 /// Request descriptor that doubles as SubmitContext.
 /// Heap-allocated per I/O operation, freed after completion.
@@ -121,10 +100,19 @@ class ThreadPoolBackend : public IoBackend {
     /// Submits the IoRequest to the thread pool.
     static void submit_to_pool(SubmitContext* ctx, IoAwaitable* awaitable);
 
-   private:
-    /// Execute the blocking syscall and resume the coroutine.
+    /// Execute the blocking syscall and resume the coroutine. Public so the
+    /// epoll/kqueue backends can reuse it (the syscall dispatch is identical
+    /// and platform-aware via #ifdef).
     static void execute_request(IoRequest* req);
 
+    /// Allocate and initialize an IoRequest for the common scalar ops. The
+    /// epoll/kqueue backends reuse this and post-configure op-specific fields.
+    static IoAwaitable make_request(IoOp op, int fd, void* buf, std::size_t len,
+                                    off_t offset, const char* path, int flags,
+                                    mode_t mode, Executor* executor,
+                                    IoThreadPool* pool);
+
+   private:
     Executor& executor_;
     IoThreadPool pool_;
 };

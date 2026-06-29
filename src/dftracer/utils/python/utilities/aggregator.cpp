@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
@@ -133,7 +134,8 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
     PyObject *categories_obj = Py_None;
     PyObject *names_obj = Py_None;
     const char *index_dir = "";
-    Py_ssize_t checkpoint_size = 32 * 1024 * 1024;
+    Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
+        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     int force_rebuild = 0;
     Py_ssize_t parallelism = 0;
     Py_ssize_t event_batch_size = 10000;
@@ -497,7 +499,8 @@ static PyObject *Aggregator_write_arrow(AggregatorObject *self, PyObject *args,
     PyObject *categories_obj = Py_None;
     PyObject *names_obj = Py_None;
     const char *index_dir = "";
-    Py_ssize_t checkpoint_size = 32 * 1024 * 1024;
+    Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
+        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     int force_rebuild = 0;
     Py_ssize_t parallelism = 0;
     Py_ssize_t event_batch_size = 10000;

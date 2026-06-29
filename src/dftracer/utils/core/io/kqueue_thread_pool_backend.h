@@ -71,13 +71,7 @@ class KqueueThreadPoolBackend : public IoBackend {
     int flush() override;
     std::string name() const override { return "kqueue+threadpool"; }
 
-    /// Called by await_suspend via SubmitContext::submit.
-    static void submit_to_pool(SubmitContext* ctx, IoAwaitable* awaitable);
-
    private:
-    /// Execute blocking syscall and resume coroutine.
-    static void execute_request(IoRequest* req);
-
     /// Kqueue loop run by the completion thread. Currently only watches
     /// a user event for shutdown; will be extended for socket I/O.
     void kqueue_loop();

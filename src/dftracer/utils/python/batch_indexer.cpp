@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/hash_combine.h>
 #include <dftracer/utils/core/common/string_intern.h>
@@ -73,7 +74,8 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject* args,
         self->group_keys = nullptr;
         self->custom_metric_fields = nullptr;
         self->compute_percentiles = 0;
-        self->checkpoint_size = 32 * 1024 * 1024;
+        self->checkpoint_size =
+            dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
         self->parallelism = 0;
         self->force_rebuild = 0;
     }
@@ -109,7 +111,8 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     PyObject* group_keys_obj = Py_None;
     PyObject* custom_metrics_obj = Py_None;
     int compute_percentiles = 0;
-    Py_ssize_t checkpoint_size = 32 * 1024 * 1024;  // 32MB default
+    Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
+        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     Py_ssize_t parallelism = 0;
     int force_rebuild = 0;
     PyObject* runtime_arg = nullptr;

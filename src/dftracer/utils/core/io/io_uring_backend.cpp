@@ -304,7 +304,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
     // SQE slot that would be left uninitialised.  These ops do not
     // access ring state, so no submit_mutex_ is needed.
     switch (uring_ctx->op) {
-        case IoUringSubmitCtx::Op::FTRUNCATE: {
+        case IoOp::FTRUNCATE: {
             ssize_t sync_result = ::ftruncate(uring_ctx->fd, uring_ctx->offset);
             if (sync_result < 0) sync_result = -errno;
             if (awaitable != nullptr) {
@@ -318,7 +318,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             }
             return;
         }
-        case IoUringSubmitCtx::Op::FSTAT: {
+        case IoOp::FSTAT: {
             ssize_t sync_result = ::fstat(uring_ctx->fd, uring_ctx->stat_buf);
             if (sync_result < 0) sync_result = -errno;
             if (awaitable != nullptr) {
@@ -332,7 +332,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             }
             return;
         }
-        case IoUringSubmitCtx::Op::LSEEK: {
+        case IoOp::LSEEK: {
             ssize_t sync_result =
                 ::lseek(uring_ctx->fd, uring_ctx->offset, uring_ctx->whence);
             if (sync_result < 0) sync_result = -errno;
@@ -347,7 +347,7 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
             }
             return;
         }
-        case IoUringSubmitCtx::Op::SENDFILE: {
+        case IoOp::SENDFILE: {
             off_t off = uring_ctx->offset;
             ssize_t sync_result = ::sendfile(uring_ctx->dest_fd, uring_ctx->fd,
                                              &off, uring_ctx->len);
@@ -380,61 +380,61 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
         // SQ full -- fall back to synchronous execution
         ssize_t result = 0;
         switch (uring_ctx->op) {
-            case IoUringSubmitCtx::Op::READ:
+            case IoOp::READ:
                 result = ::read(uring_ctx->fd, uring_ctx->buf, uring_ctx->len);
                 break;
-            case IoUringSubmitCtx::Op::WRITE:
+            case IoOp::WRITE:
                 result = ::write(uring_ctx->fd, uring_ctx->buf, uring_ctx->len);
                 break;
-            case IoUringSubmitCtx::Op::PREAD:
+            case IoOp::PREAD:
                 result = ::pread(uring_ctx->fd, uring_ctx->buf, uring_ctx->len,
                                  uring_ctx->offset);
                 break;
-            case IoUringSubmitCtx::Op::PWRITE:
+            case IoOp::PWRITE:
                 result = ::pwrite(uring_ctx->fd, uring_ctx->buf, uring_ctx->len,
                                   uring_ctx->offset);
                 break;
-            case IoUringSubmitCtx::Op::OPEN:
+            case IoOp::OPEN:
                 result =
                     ::open(uring_ctx->path, uring_ctx->flags, uring_ctx->mode);
                 break;
-            case IoUringSubmitCtx::Op::CLOSE:
+            case IoOp::CLOSE:
                 result = ::close(uring_ctx->fd);
                 break;
-            case IoUringSubmitCtx::Op::FSYNC:
+            case IoOp::FSYNC:
                 result = ::fsync(uring_ctx->fd);
                 break;
-            case IoUringSubmitCtx::Op::FTRUNCATE:
-            case IoUringSubmitCtx::Op::FSTAT:
-            case IoUringSubmitCtx::Op::LSEEK:
-            case IoUringSubmitCtx::Op::SENDFILE:
+            case IoOp::FTRUNCATE:
+            case IoOp::FSTAT:
+            case IoOp::LSEEK:
+            case IoOp::SENDFILE:
                 // Handled by early sync path; unreachable.
                 __builtin_unreachable();
-            case IoUringSubmitCtx::Op::ACCEPT:
+            case IoOp::ACCEPT:
                 result = ::accept4(uring_ctx->fd, uring_ctx->addr,
                                    uring_ctx->addrlen, uring_ctx->accept_flags);
                 break;
-            case IoUringSubmitCtx::Op::RECV:
+            case IoOp::RECV:
                 result = ::recv(uring_ctx->fd, uring_ctx->buf, uring_ctx->len,
                                 uring_ctx->msg_flags);
                 break;
-            case IoUringSubmitCtx::Op::SEND:
+            case IoOp::SEND:
                 result = ::send(uring_ctx->fd, uring_ctx->buf, uring_ctx->len,
                                 uring_ctx->msg_flags);
                 break;
-            case IoUringSubmitCtx::Op::READV:
+            case IoOp::READV:
                 result =
                     ::readv(uring_ctx->fd, uring_ctx->iov, uring_ctx->iovcnt);
                 break;
-            case IoUringSubmitCtx::Op::WRITEV:
+            case IoOp::WRITEV:
                 result =
                     ::writev(uring_ctx->fd, uring_ctx->iov, uring_ctx->iovcnt);
                 break;
-            case IoUringSubmitCtx::Op::PREADV:
+            case IoOp::PREADV:
                 result = ::preadv(uring_ctx->fd, uring_ctx->iov,
                                   uring_ctx->iovcnt, uring_ctx->offset);
                 break;
-            case IoUringSubmitCtx::Op::PWRITEV:
+            case IoOp::PWRITEV:
                 result = ::pwritev(uring_ctx->fd, uring_ctx->iov,
                                    uring_ctx->iovcnt, uring_ctx->offset);
                 break;
@@ -454,74 +454,74 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
     }
 
     switch (uring_ctx->op) {
-        case IoUringSubmitCtx::Op::READ:
+        case IoOp::READ:
             // offset -1 = use current file position (sequential)
             uring::prep_read(sqe, uring_ctx->fd, uring_ctx->buf,
                              static_cast<unsigned>(uring_ctx->len), -1);
             break;
-        case IoUringSubmitCtx::Op::WRITE:
+        case IoOp::WRITE:
             uring::prep_write(sqe, uring_ctx->fd, uring_ctx->buf,
                               static_cast<unsigned>(uring_ctx->len), -1);
             break;
-        case IoUringSubmitCtx::Op::PREAD:
+        case IoOp::PREAD:
             uring::prep_read(sqe, uring_ctx->fd, uring_ctx->buf,
                              static_cast<unsigned>(uring_ctx->len),
                              uring_ctx->offset);
             break;
-        case IoUringSubmitCtx::Op::PWRITE:
+        case IoOp::PWRITE:
             uring::prep_write(sqe, uring_ctx->fd, uring_ctx->buf,
                               static_cast<unsigned>(uring_ctx->len),
                               uring_ctx->offset);
             break;
-        case IoUringSubmitCtx::Op::OPEN:
+        case IoOp::OPEN:
             uring::prep_openat(sqe, AT_FDCWD, uring_ctx->path, uring_ctx->flags,
                                uring_ctx->mode);
             break;
-        case IoUringSubmitCtx::Op::CLOSE:
+        case IoOp::CLOSE:
             uring::prep_close(sqe, uring_ctx->fd);
             break;
-        case IoUringSubmitCtx::Op::FSYNC:
+        case IoOp::FSYNC:
             uring::prep_fsync(sqe, uring_ctx->fd, 0);
             break;
-        case IoUringSubmitCtx::Op::FTRUNCATE:
-        case IoUringSubmitCtx::Op::FSTAT:
+        case IoOp::FTRUNCATE:
+        case IoOp::FSTAT:
             // Handled by early sync path above; unreachable.
             __builtin_unreachable();
-        case IoUringSubmitCtx::Op::ACCEPT:
+        case IoOp::ACCEPT:
             uring::prep_accept(sqe, uring_ctx->fd, uring_ctx->addr,
                                uring_ctx->addrlen, uring_ctx->accept_flags);
             break;
-        case IoUringSubmitCtx::Op::RECV:
+        case IoOp::RECV:
             uring::prep_recv(sqe, uring_ctx->fd, uring_ctx->buf,
                              static_cast<unsigned>(uring_ctx->len),
                              uring_ctx->msg_flags);
             break;
-        case IoUringSubmitCtx::Op::SEND:
+        case IoOp::SEND:
             uring::prep_send(sqe, uring_ctx->fd, uring_ctx->buf,
                              static_cast<unsigned>(uring_ctx->len),
                              uring_ctx->msg_flags);
             break;
-        case IoUringSubmitCtx::Op::READV:
+        case IoOp::READV:
             // offset -1 = use current file position (sequential)
             uring::prep_readv(sqe, uring_ctx->fd, uring_ctx->iov,
                               static_cast<unsigned>(uring_ctx->iovcnt), -1);
             break;
-        case IoUringSubmitCtx::Op::WRITEV:
+        case IoOp::WRITEV:
             uring::prep_writev(sqe, uring_ctx->fd, uring_ctx->iov,
                                static_cast<unsigned>(uring_ctx->iovcnt), -1);
             break;
-        case IoUringSubmitCtx::Op::PREADV:
+        case IoOp::PREADV:
             uring::prep_readv(sqe, uring_ctx->fd, uring_ctx->iov,
                               static_cast<unsigned>(uring_ctx->iovcnt),
                               uring_ctx->offset);
             break;
-        case IoUringSubmitCtx::Op::PWRITEV:
+        case IoOp::PWRITEV:
             uring::prep_writev(sqe, uring_ctx->fd, uring_ctx->iov,
                                static_cast<unsigned>(uring_ctx->iovcnt),
                                uring_ctx->offset);
             break;
-        case IoUringSubmitCtx::Op::LSEEK:
-        case IoUringSubmitCtx::Op::SENDFILE:
+        case IoOp::LSEEK:
+        case IoOp::SENDFILE:
             // Handled by early sync path above; unreachable.
             __builtin_unreachable();
     }
@@ -533,8 +533,8 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
     delete uring_ctx;
 }
 
-static IoAwaitable make_uring_request(IoUringSubmitCtx::Op op, int fd,
-                                      void* buf, std::size_t len, off_t offset,
+static IoAwaitable make_uring_request(IoOp op, int fd, void* buf,
+                                      std::size_t len, off_t offset,
                                       const char* path, int flags, mode_t mode,
                                       IoUringBackend* backend) {
     auto* ctx = new IoUringSubmitCtx{};
@@ -555,29 +555,27 @@ static IoAwaitable make_uring_request(IoUringSubmitCtx::Op op, int fd,
 }
 
 IoAwaitable IoUringBackend::submit_read(int fd, void* buf, std::size_t len) {
-    return make_uring_request(IoUringSubmitCtx::Op::READ, fd, buf, len, 0,
-                              nullptr, 0, 0, this);
+    return make_uring_request(IoOp::READ, fd, buf, len, 0, nullptr, 0, 0, this);
 }
 
 IoAwaitable IoUringBackend::submit_write(int fd, const void* buf,
                                          std::size_t len) {
-    return make_uring_request(IoUringSubmitCtx::Op::WRITE, fd,
-                              const_cast<void*>(buf), len, 0, nullptr, 0, 0,
-                              this);
+    return make_uring_request(IoOp::WRITE, fd, const_cast<void*>(buf), len, 0,
+                              nullptr, 0, 0, this);
 }
 
 IoAwaitable IoUringBackend::submit_pread(int fd, void* buf, std::size_t len,
                                          off_t offset) {
-    return make_uring_request(IoUringSubmitCtx::Op::PREAD, fd, buf, len, offset,
-                              nullptr, 0, 0, this);
+    return make_uring_request(IoOp::PREAD, fd, buf, len, offset, nullptr, 0, 0,
+                              this);
 }
 
 void IoUringBackend::submit_pread_callback(int fd, void* buf, std::size_t len,
                                            off_t offset,
                                            IoCompletionFn completion,
                                            void* context) {
-    auto awaitable = make_uring_request(IoUringSubmitCtx::Op::PREAD, fd, buf,
-                                        len, offset, nullptr, 0, 0, this);
+    auto awaitable = make_uring_request(IoOp::PREAD, fd, buf, len, offset,
+                                        nullptr, 0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(awaitable.submit_ctx_);
     uring_ctx->completion = completion;
     uring_ctx->completion_ctx = context;
@@ -586,35 +584,34 @@ void IoUringBackend::submit_pread_callback(int fd, void* buf, std::size_t len,
 
 IoAwaitable IoUringBackend::submit_pwrite(int fd, const void* buf,
                                           std::size_t len, off_t offset) {
-    return make_uring_request(IoUringSubmitCtx::Op::PWRITE, fd,
-                              const_cast<void*>(buf), len, offset, nullptr, 0,
-                              0, this);
+    return make_uring_request(IoOp::PWRITE, fd, const_cast<void*>(buf), len,
+                              offset, nullptr, 0, 0, this);
 }
 
 IoAwaitable IoUringBackend::submit_open(const char* path, int flags,
                                         mode_t mode) {
-    return make_uring_request(IoUringSubmitCtx::Op::OPEN, -1, nullptr, 0, 0,
-                              path, flags, mode, this);
+    return make_uring_request(IoOp::OPEN, -1, nullptr, 0, 0, path, flags, mode,
+                              this);
 }
 
 IoAwaitable IoUringBackend::submit_close(int fd) {
-    return make_uring_request(IoUringSubmitCtx::Op::CLOSE, fd, nullptr, 0, 0,
-                              nullptr, 0, 0, this);
+    return make_uring_request(IoOp::CLOSE, fd, nullptr, 0, 0, nullptr, 0, 0,
+                              this);
 }
 
 IoAwaitable IoUringBackend::submit_fsync(int fd) {
-    return make_uring_request(IoUringSubmitCtx::Op::FSYNC, fd, nullptr, 0, 0,
-                              nullptr, 0, 0, this);
+    return make_uring_request(IoOp::FSYNC, fd, nullptr, 0, 0, nullptr, 0, 0,
+                              this);
 }
 
 IoAwaitable IoUringBackend::submit_ftruncate(int fd, off_t length) {
-    return make_uring_request(IoUringSubmitCtx::Op::FTRUNCATE, fd, nullptr, 0,
-                              length, nullptr, 0, 0, this);
+    return make_uring_request(IoOp::FTRUNCATE, fd, nullptr, 0, length, nullptr,
+                              0, 0, this);
 }
 
 IoAwaitable IoUringBackend::submit_fstat(int fd, struct stat* buf) {
-    auto ctx = make_uring_request(IoUringSubmitCtx::Op::FSTAT, fd, nullptr, 0,
-                                  0, nullptr, 0, 0, this);
+    auto ctx =
+        make_uring_request(IoOp::FSTAT, fd, nullptr, 0, 0, nullptr, 0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->stat_buf = buf;
     return ctx;
@@ -622,8 +619,8 @@ IoAwaitable IoUringBackend::submit_fstat(int fd, struct stat* buf) {
 
 IoAwaitable IoUringBackend::submit_accept(int listen_fd, struct sockaddr* addr,
                                           socklen_t* addrlen) {
-    auto ctx = make_uring_request(IoUringSubmitCtx::Op::ACCEPT, listen_fd,
-                                  nullptr, 0, 0, nullptr, 0, 0, this);
+    auto ctx = make_uring_request(IoOp::ACCEPT, listen_fd, nullptr, 0, 0,
+                                  nullptr, 0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->addr = addr;
     uring_ctx->addrlen = addrlen;
@@ -633,8 +630,8 @@ IoAwaitable IoUringBackend::submit_accept(int listen_fd, struct sockaddr* addr,
 
 IoAwaitable IoUringBackend::submit_recv(int fd, void* buf, std::size_t len,
                                         int flags) {
-    auto ctx = make_uring_request(IoUringSubmitCtx::Op::RECV, fd, buf, len, 0,
-                                  nullptr, 0, 0, this);
+    auto ctx =
+        make_uring_request(IoOp::RECV, fd, buf, len, 0, nullptr, 0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->msg_flags = flags;
     return ctx;
@@ -642,9 +639,8 @@ IoAwaitable IoUringBackend::submit_recv(int fd, void* buf, std::size_t len,
 
 IoAwaitable IoUringBackend::submit_send(int fd, const void* buf,
                                         std::size_t len, int flags) {
-    auto ctx =
-        make_uring_request(IoUringSubmitCtx::Op::SEND, fd,
-                           const_cast<void*>(buf), len, 0, nullptr, 0, 0, this);
+    auto ctx = make_uring_request(IoOp::SEND, fd, const_cast<void*>(buf), len,
+                                  0, nullptr, 0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->msg_flags = flags;
     return ctx;
@@ -652,8 +648,8 @@ IoAwaitable IoUringBackend::submit_send(int fd, const void* buf,
 
 IoAwaitable IoUringBackend::submit_readv(int fd, const struct iovec* iov,
                                          int iovcnt) {
-    auto ctx = make_uring_request(IoUringSubmitCtx::Op::READV, fd, nullptr, 0,
-                                  0, nullptr, 0, 0, this);
+    auto ctx =
+        make_uring_request(IoOp::READV, fd, nullptr, 0, 0, nullptr, 0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->iov = iov;
     uring_ctx->iovcnt = iovcnt;
@@ -662,8 +658,8 @@ IoAwaitable IoUringBackend::submit_readv(int fd, const struct iovec* iov,
 
 IoAwaitable IoUringBackend::submit_writev(int fd, const struct iovec* iov,
                                           int iovcnt) {
-    auto ctx = make_uring_request(IoUringSubmitCtx::Op::WRITEV, fd, nullptr, 0,
-                                  0, nullptr, 0, 0, this);
+    auto ctx = make_uring_request(IoOp::WRITEV, fd, nullptr, 0, 0, nullptr, 0,
+                                  0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->iov = iov;
     uring_ctx->iovcnt = iovcnt;
@@ -672,8 +668,8 @@ IoAwaitable IoUringBackend::submit_writev(int fd, const struct iovec* iov,
 
 IoAwaitable IoUringBackend::submit_preadv(int fd, const struct iovec* iov,
                                           int iovcnt, off_t offset) {
-    auto ctx = make_uring_request(IoUringSubmitCtx::Op::PREADV, fd, nullptr, 0,
-                                  offset, nullptr, 0, 0, this);
+    auto ctx = make_uring_request(IoOp::PREADV, fd, nullptr, 0, offset, nullptr,
+                                  0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->iov = iov;
     uring_ctx->iovcnt = iovcnt;
@@ -682,8 +678,8 @@ IoAwaitable IoUringBackend::submit_preadv(int fd, const struct iovec* iov,
 
 IoAwaitable IoUringBackend::submit_pwritev(int fd, const struct iovec* iov,
                                            int iovcnt, off_t offset) {
-    auto ctx = make_uring_request(IoUringSubmitCtx::Op::PWRITEV, fd, nullptr, 0,
-                                  offset, nullptr, 0, 0, this);
+    auto ctx = make_uring_request(IoOp::PWRITEV, fd, nullptr, 0, offset,
+                                  nullptr, 0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->iov = iov;
     uring_ctx->iovcnt = iovcnt;
@@ -691,8 +687,8 @@ IoAwaitable IoUringBackend::submit_pwritev(int fd, const struct iovec* iov,
 }
 
 IoAwaitable IoUringBackend::submit_lseek(int fd, off_t offset, int whence) {
-    auto ctx = make_uring_request(IoUringSubmitCtx::Op::LSEEK, fd, nullptr, 0,
-                                  offset, nullptr, 0, 0, this);
+    auto ctx = make_uring_request(IoOp::LSEEK, fd, nullptr, 0, offset, nullptr,
+                                  0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->whence = whence;
     return ctx;
@@ -700,8 +696,8 @@ IoAwaitable IoUringBackend::submit_lseek(int fd, off_t offset, int whence) {
 
 IoAwaitable IoUringBackend::submit_sendfile(int out_fd, int in_fd, off_t offset,
                                             std::size_t count) {
-    auto ctx = make_uring_request(IoUringSubmitCtx::Op::SENDFILE, in_fd,
-                                  nullptr, count, offset, nullptr, 0, 0, this);
+    auto ctx = make_uring_request(IoOp::SENDFILE, in_fd, nullptr, count, offset,
+                                  nullptr, 0, 0, this);
     auto* uring_ctx = static_cast<IoUringSubmitCtx*>(ctx.submit_ctx_);
     uring_ctx->dest_fd = out_fd;
     return ctx;

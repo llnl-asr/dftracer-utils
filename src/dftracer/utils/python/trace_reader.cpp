@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/coro/channel.h>
@@ -2271,7 +2272,8 @@ static PyObject *TraceReader_new(PyTypeObject *type, PyObject *args,
     if (self) {
         self->file_path = NULL;
         self->index_dir = NULL;
-        self->checkpoint_size = 32 * 1024 * 1024;
+        self->checkpoint_size =
+            dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
         self->auto_build_index = 0;
         self->has_index = 0;
         self->runtime_obj = NULL;
@@ -2287,7 +2289,8 @@ static int TraceReader_init(TraceReaderObject *self, PyObject *args,
 
     const char *file_path;
     const char *index_dir = "";
-    std::size_t checkpoint_size = 32 * 1024 * 1024;
+    std::size_t checkpoint_size =
+        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     int auto_build_index = 0;
     PyObject *runtime_arg = NULL;
 

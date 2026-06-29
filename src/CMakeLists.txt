@@ -370,6 +370,13 @@ foreach(variant shared static)
     link_zlib(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_unordered_dense(dftracer_utils_core_${variant})
 
+    # The coroutine monitor (monitor.cpp) calls dladdr() for symbolization.
+    # On older glibc (e.g. manylinux aarch64) dladdr lives in libdl, so the
+    # core library must link it explicitly; CMAKE_DL_LIBS is empty where the
+    # symbol is already in libc (newer glibc) or libSystem (macOS).
+    target_link_libraries(dftracer_utils_core_${variant}
+                          PUBLIC ${CMAKE_DL_LIBS})
+
     # Add stdfs if needed
     add_stdfs_if_needed(dftracer_utils_core_${variant})
 

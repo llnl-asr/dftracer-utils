@@ -6,7 +6,6 @@
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
@@ -62,9 +61,9 @@ struct DirectoryScannerUtilityInput {
  * @endcode
  */
 class DirectoryScannerUtility
-    : public utilities::Utility<
-          DirectoryScannerUtilityInput, std::vector<FileEntry>,
-          utilities::tags::Parallelizable, utilities::tags::NeedsContext> {
+    : public utilities::Utility<DirectoryScannerUtilityInput,
+                                std::vector<FileEntry>,
+                                utilities::tags::NeedsContext> {
    public:
     DirectoryScannerUtility() = default;
     ~DirectoryScannerUtility() = default;

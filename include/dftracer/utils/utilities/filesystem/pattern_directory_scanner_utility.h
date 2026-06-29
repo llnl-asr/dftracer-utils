@@ -3,7 +3,6 @@
 
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 
@@ -73,9 +72,9 @@ struct PatternDirectoryScannerUtilityInput {
  * @endcode
  */
 class PatternDirectoryScannerUtility
-    : public utilities::Utility<
-          PatternDirectoryScannerUtilityInput, std::vector<FileEntry>,
-          utilities::tags::Parallelizable, utilities::tags::NeedsContext> {
+    : public utilities::Utility<PatternDirectoryScannerUtilityInput,
+                                std::vector<FileEntry>,
+                                utilities::tags::NeedsContext> {
    private:
     DirectoryScannerUtility base_scanner_;
 

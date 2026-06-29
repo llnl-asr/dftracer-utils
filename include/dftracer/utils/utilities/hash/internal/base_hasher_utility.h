@@ -19,7 +19,8 @@ namespace dftracer::utils::utilities::hash::internal {
  * Provides common interface for incremental hashing utilities.
  * Each concrete implementation wraps a specific hash algorithm.
  *
- * Note: NOT tagged with Parallelizable because it maintains mutable state.
+ * Note: maintains mutable state, so it is not safe to batch-process
+ * concurrently.
  */
 class BaseHasherUtility : public utilities::Utility<std::string, Hash> {
    protected:

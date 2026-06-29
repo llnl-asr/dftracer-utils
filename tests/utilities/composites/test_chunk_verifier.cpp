@@ -61,7 +61,7 @@ static ChunkVerificationUtilityOutput run_verifier(
                 ChunkVerificationUtilityInput<ChunkType, MetadataType>,
                 ChunkVerificationUtilityOutput, tags::NeedsContext>
                 exec(verifier);
-            *out_ptr = co_await exec.execute_with_context(scope, input);
+            *out_ptr = co_await exec.execute(scope, input);
         });
 
     rt.submit(std::move(task), "chunk-verify").wait();

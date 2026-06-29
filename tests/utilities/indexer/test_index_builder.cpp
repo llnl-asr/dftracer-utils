@@ -50,7 +50,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            result = co_await exec.execute_with_context(scope, config);
+            result = co_await exec.execute(scope, config);
         });
 
         CHECK(result.success);
@@ -113,7 +113,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            result = co_await exec.execute_with_context(scope, config);
+            result = co_await exec.execute(scope, config);
         });
 
         REQUIRE(result.success);
@@ -141,7 +141,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            result = co_await exec.execute_with_context(scope, config);
+            result = co_await exec.execute(scope, config);
         });
 
         REQUIRE(result.success);
@@ -169,7 +169,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            result = co_await exec.execute_with_context(scope, config);
+            result = co_await exec.execute(scope, config);
         });
 
         REQUIRE(result.success);
@@ -199,7 +199,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            first = co_await exec.execute_with_context(scope, config);
+            first = co_await exec.execute(scope, config);
         });
         REQUIRE(first.success);
         CHECK_FALSE(first.was_skipped);
@@ -210,7 +210,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            second = co_await exec.execute_with_context(scope, config);
+            second = co_await exec.execute(scope, config);
         });
         CHECK(second.success);
         CHECK(second.was_skipped);
@@ -227,14 +227,14 @@ TEST_SUITE("IndexBuilder") {
                                  .with_force_rebuild(false);
 
         IndexBuildResult first;
-        run_coro([&config_normal,
-                  &first](CoroScope& scope) -> coro::CoroTask<void> {
-            auto builder = std::make_shared<IndexBuilderUtility>();
-            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
-                            tags::NeedsContext>
-                exec(builder);
-            first = co_await exec.execute_with_context(scope, config_normal);
-        });
+        run_coro(
+            [&config_normal, &first](CoroScope& scope) -> coro::CoroTask<void> {
+                auto builder = std::make_shared<IndexBuilderUtility>();
+                UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                                tags::NeedsContext>
+                    exec(builder);
+                first = co_await exec.execute(scope, config_normal);
+            });
         REQUIRE(first.success);
 
         auto config_force = IndexBuildConfig::for_file(gz_file)
@@ -243,14 +243,14 @@ TEST_SUITE("IndexBuilder") {
                                 .with_force_rebuild(true);
 
         IndexBuildResult second;
-        run_coro([&config_force,
-                  &second](CoroScope& scope) -> coro::CoroTask<void> {
-            auto builder = std::make_shared<IndexBuilderUtility>();
-            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
-                            tags::NeedsContext>
-                exec(builder);
-            second = co_await exec.execute_with_context(scope, config_force);
-        });
+        run_coro(
+            [&config_force, &second](CoroScope& scope) -> coro::CoroTask<void> {
+                auto builder = std::make_shared<IndexBuilderUtility>();
+                UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                                tags::NeedsContext>
+                    exec(builder);
+                second = co_await exec.execute(scope, config_force);
+            });
         CHECK(second.success);
         CHECK_FALSE(second.was_skipped);
     }
@@ -268,7 +268,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            result = co_await exec.execute_with_context(scope, config);
+            result = co_await exec.execute(scope, config);
         });
 
         REQUIRE(result.success);
@@ -292,7 +292,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            r1 = co_await exec.execute_with_context(scope, config1);
+            r1 = co_await exec.execute(scope, config1);
         });
         REQUIRE(r1.success);
 
@@ -314,7 +314,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            r2 = co_await exec.execute_with_context(scope, config2);
+            r2 = co_await exec.execute(scope, config2);
         });
         REQUIRE(r2.success);
         CHECK_FALSE(r2.was_skipped);
@@ -344,7 +344,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            r1 = co_await exec.execute_with_context(scope, config1);
+            r1 = co_await exec.execute(scope, config1);
         });
         REQUIRE(r1.success);
         CHECK_FALSE(r1.was_skipped);
@@ -356,7 +356,7 @@ TEST_SUITE("IndexBuilder") {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            r2 = co_await exec.execute_with_context(scope, config1);
+            r2 = co_await exec.execute(scope, config1);
         });
         REQUIRE(r2.success);
         CHECK(r2.was_skipped);

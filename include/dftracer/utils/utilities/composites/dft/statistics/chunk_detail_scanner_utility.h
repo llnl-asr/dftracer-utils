@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_CHUNK_DETAIL_SCANNER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_CHUNK_DETAIL_SCANNER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/detailed_statistics.h>
 
@@ -31,8 +30,7 @@ struct ChunkDetailScanOutput {
 };
 
 class ChunkDetailScannerUtility
-    : public utilities::Utility<ChunkDetailScanInput, ChunkDetailScanOutput,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<ChunkDetailScanInput, ChunkDetailScanOutput> {
    public:
     ChunkDetailScannerUtility() = default;
 

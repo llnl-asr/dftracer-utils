@@ -4,7 +4,6 @@
 #include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
@@ -110,8 +109,6 @@ struct FileCompressionUtilityOutput {
  * 2. Compresses each chunk using StreamingCompressor
  * 3. Writes compressed data to .gz file using StreamingFileWriter
  *
- * Tagged with Parallelizable - safe for parallel batch processing.
- *
  * Usage:
  * @code
  * // Single file compression
@@ -135,8 +132,7 @@ struct FileCompressionUtilityOutput {
  */
 class FileCompressorUtility
     : public utilities::Utility<FileCompressionUtilityInput,
-                                FileCompressionUtilityOutput,
-                                utilities::tags::Parallelizable> {
+                                FileCompressionUtilityOutput> {
    public:
     FileCompressorUtility() = default;
     ~FileCompressorUtility() override = default;

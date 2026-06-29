@@ -136,8 +136,7 @@ struct ChunkExtractorUtilityOutput {
  */
 class ChunkExtractorUtility
     : public utilities::Utility<ChunkExtractorUtilityInput,
-                                ChunkExtractorUtilityOutput,
-                                utilities::tags::Parallelizable> {
+                                ChunkExtractorUtilityOutput> {
    public:
     coro::CoroTask<ChunkExtractorUtilityOutput> process(
         const ChunkExtractorUtilityInput& input) override;

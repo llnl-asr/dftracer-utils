@@ -37,7 +37,7 @@ static ExtractionPlan run_planner(const ReorganizationPlannerInput& input) {
             UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
                             tags::NeedsContext>
                 exec(planner);
-            *result_ptr = co_await exec.execute_with_context(scope, input);
+            *result_ptr = co_await exec.execute(scope, input);
         });
 
     rt.submit(std::move(task), "run_planner").wait();
@@ -95,7 +95,7 @@ static void build_idx(const std::string& trace_file,
             auto config = IndexBuildConfig::for_file(trace_file)
                               .with_index_dir(index_dir)
                               .with_manifest(true);
-            *result_ptr = co_await exec.execute_with_context(scope, config);
+            *result_ptr = co_await exec.execute(scope, config);
         });
 
     rt.submit(std::move(task), "build-idx").wait();

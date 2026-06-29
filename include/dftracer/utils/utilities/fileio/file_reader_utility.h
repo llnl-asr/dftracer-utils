@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_FILE_READER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_FILE_READER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <dftracer/utils/utilities/text/shared.h>
@@ -53,8 +52,7 @@ namespace dftracer::utils::utilities::fileio {
  * @endcode
  */
 class FileReaderUtility
-    : public utilities::Utility<filesystem::FileEntry, text::Text,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<filesystem::FileEntry, text::Text> {
    public:
     FileReaderUtility() = default;
     ~FileReaderUtility() = default;

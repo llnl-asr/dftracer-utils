@@ -56,7 +56,7 @@ class UtilityExecutor {
      * @return Output result
      * @throws Any exception propagated from the utility's process()
      */
-    coro::CoroTask<O> execute_with_context(CoroScope& ctx, const I& input) {
+    coro::CoroTask<O> execute(CoroScope& ctx, const I& input) {
         utility_->set_context(ctx);
         try {
             O result = co_await utility_->process(input);

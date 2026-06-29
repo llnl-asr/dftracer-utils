@@ -62,7 +62,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                                 BatchFileProcessOutput<FileInfo>,
                                 tags::NeedsContext>
                     exec(util);
-                *out_ptr = co_await exec.execute_with_context(scope, input);
+                *out_ptr = co_await exec.execute(scope, input);
             });
 
         rt.submit(std::move(task), "dir-process-txt").wait();
@@ -119,7 +119,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                                 BatchFileProcessOutput<std::string>,
                                 tags::NeedsContext>
                     exec(util);
-                *out_ptr = co_await exec.execute_with_context(scope, input);
+                *out_ptr = co_await exec.execute(scope, input);
             });
 
         rt.submit(std::move(task), "dir-process-multi").wait();
@@ -169,7 +169,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                                 BatchFileProcessOutput<std::string>,
                                 tags::NeedsContext>
                     exec(util);
-                *out_ptr = co_await exec.execute_with_context(scope, input);
+                *out_ptr = co_await exec.execute(scope, input);
             });
 
         rt.submit(std::move(task), "dir-process-recursive").wait();
@@ -212,7 +212,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                 UtilityExecutor<DirectoryProcessInput,
                                 BatchFileProcessOutput<int>, tags::NeedsContext>
                     exec(util);
-                *out_ptr = co_await exec.execute_with_context(scope, input);
+                *out_ptr = co_await exec.execute(scope, input);
             });
 
         rt.submit(std::move(task), "dir-process-empty").wait();
@@ -251,7 +251,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                                 BatchFileProcessOutput<std::string>,
                                 tags::NeedsContext>
                     exec(util);
-                *out_ptr = co_await exec.execute_with_context(scope, input);
+                *out_ptr = co_await exec.execute(scope, input);
             });
 
         rt.submit(std::move(task), "dir-process-nomatch").wait();
@@ -291,7 +291,7 @@ TEST_SUITE("DirectoryFileProcessor") {
                                 BatchFileProcessOutput<std::string>,
                                 tags::NeedsContext>
                     exec(util);
-                *out_ptr = co_await exec.execute_with_context(scope, input);
+                *out_ptr = co_await exec.execute(scope, input);
             });
 
         rt.submit(std::move(task), "dir-process-all").wait();

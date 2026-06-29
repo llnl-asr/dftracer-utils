@@ -4,7 +4,6 @@
 #include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
 #include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
@@ -167,8 +166,6 @@ struct FileDecompressionUtilityOutput {
  * 2. Decompresses each chunk using StreamingDecompressor
  * 3. Writes decompressed data to output file using StreamingFileWriter
  *
- * Tagged with Parallelizable - safe for parallel batch processing.
- *
  * Usage:
  * @code
  * // Single file decompression
@@ -191,8 +188,7 @@ struct FileDecompressionUtilityOutput {
  */
 class FileDecompressorUtility
     : public utilities::Utility<FileDecompressionUtilityInput,
-                                FileDecompressionUtilityOutput,
-                                utilities::tags::Parallelizable> {
+                                FileDecompressionUtilityOutput> {
    public:
     FileDecompressorUtility() = default;
     ~FileDecompressorUtility() override = default;

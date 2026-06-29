@@ -1061,10 +1061,9 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
             directory, {".pfw", ".pfw.gz"}, false, false};
         utilities::behaviors::UtilityExecutor<
             PatternDirectoryScannerUtilityInput,
-            std::vector<filesystem::FileEntry>, utilities::tags::Parallelizable,
-            utilities::tags::NeedsContext>
+            std::vector<filesystem::FileEntry>, utilities::tags::NeedsContext>
             executor(scanner);
-        auto matched = co_await executor.execute_with_context(ctx, scan_input);
+        auto matched = co_await executor.execute(ctx, scan_input);
 
         std::vector<std::string> files;
         files.reserve(matched.size());

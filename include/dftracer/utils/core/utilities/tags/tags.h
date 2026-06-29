@@ -9,6 +9,5 @@
  */
 
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 
 #endif  // DFTRACER_UTILS_CORE_UTILITIES_TAGS_TAGS_H

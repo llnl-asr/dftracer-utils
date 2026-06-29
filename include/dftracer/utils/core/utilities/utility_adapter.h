@@ -71,8 +71,7 @@ class UtilityAdapter {
                       detail::has_process_with_context_v<ConcreteType, I, O>) {
             return make_task(
                 [executor](CoroScope& ctx, I input) -> coro::CoroTask<O> {
-                    co_return co_await executor->execute_with_context(ctx,
-                                                                      input);
+                    co_return co_await executor->execute(ctx, input);
                 },
                 UtilityType::get_name());
         } else {

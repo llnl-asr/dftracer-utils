@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_READER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_READER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/fileio/types/types.h>
 
@@ -45,8 +44,7 @@ namespace dftracer::utils::utilities::fileio {
  * @endcode
  */
 class StreamingFileReaderUtility
-    : public utilities::Utility<StreamReadInput, ChunkRange,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<StreamReadInput, ChunkRange> {
    public:
     StreamingFileReaderUtility() = default;
     ~StreamingFileReaderUtility() = default;

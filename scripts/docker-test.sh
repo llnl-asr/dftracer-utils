@@ -94,6 +94,7 @@ docker build -t "$image" -f "$root/${dockerfile}" "$root"
 docker run --rm \
     -v "$root":/work -w /work \
     -e "DFTRACER_UTILS_MONITOR=${monitor}" \
+    -e "DFTRACER_UTILS_THREADS=${DFTRACER_UTILS_THREADS:-}" \
     "$image" bash -c "
         set -e
         scope='${scope}'

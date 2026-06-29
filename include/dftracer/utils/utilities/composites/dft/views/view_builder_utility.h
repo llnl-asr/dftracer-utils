@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_VIEWS_VIEW_BUILDER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_VIEWS_VIEW_BUILDER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
@@ -48,8 +47,7 @@ struct ViewBuilderOutput {
     bool success = false;
 };
 
-class ViewBuilderUtility : public Utility<ViewBuilderInput, ViewBuilderOutput,
-                                          tags::Parallelizable> {
+class ViewBuilderUtility : public Utility<ViewBuilderInput, ViewBuilderOutput> {
    public:
     coro::CoroTask<ViewBuilderOutput> process(
         const ViewBuilderInput& input) override;

@@ -64,7 +64,7 @@ static IndexBuildResult run_index_build(const IndexBuildConfig& config) {
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
                 exec(builder);
-            *result_ptr = co_await exec.execute_with_context(scope, config);
+            *result_ptr = co_await exec.execute(scope, config);
         });
 
     rt.submit(std::move(task), "index-build").wait();

@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_QUERY_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_QUERY_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/trace_statistics.h>
 
@@ -52,8 +51,7 @@ struct StatisticsQueryOutput {
 };
 
 class StatisticsQueryUtility
-    : public utilities::Utility<StatisticsQueryInput, StatisticsQueryOutput,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<StatisticsQueryInput, StatisticsQueryOutput> {
    public:
     StatisticsQueryUtility() = default;
 

@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_AGGREGATOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_AGGREGATOR_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/trace_statistics.h>
 
@@ -22,8 +21,7 @@ struct StatisticsAggregatorBatchInput {
 };
 
 class StatisticsAggregatorUtility
-    : public utilities::Utility<StatisticsAggregatorInput, TraceStatistics,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<StatisticsAggregatorInput, TraceStatistics> {
    public:
     StatisticsAggregatorUtility() = default;
 

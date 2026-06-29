@@ -111,8 +111,7 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
                     UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
                                     tags::NeedsContext>
                         exec(planner);
-                    *plan_p =
-                        co_await exec.execute_with_context(scope, input_copy);
+                    *plan_p = co_await exec.execute(scope, input_copy);
                 });
             rt->submit(std::move(task), "reorganization-planner").wait();
         })) {

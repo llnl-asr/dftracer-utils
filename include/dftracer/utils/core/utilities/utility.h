@@ -20,7 +20,6 @@ namespace dftracer::utils::utilities {
 
 namespace tags {
 struct NeedsContext;
-struct Parallelizable;
 }  // namespace tags
 
 namespace behaviors {

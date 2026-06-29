@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_CHUNK_PRUNER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_CHUNK_PRUNER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
@@ -62,8 +61,7 @@ struct ChunkPrunerBatchOutput {
 /// Three-tier chunk pruner: dictionary → min/max range → bloom filter.
 /// Walks the Query AST recursively (AND=intersect, OR=union, NOT=complement).
 class ChunkPrunerUtility
-    : public utilities::Utility<ChunkPrunerInput, ChunkPrunerOutput,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<ChunkPrunerInput, ChunkPrunerOutput> {
    public:
     ChunkPrunerUtility() = default;
 

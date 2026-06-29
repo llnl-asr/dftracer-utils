@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_CHUNK_AGGREGATOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_CHUNK_AGGREGATOR_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/common/query/query.h>
@@ -85,8 +84,7 @@ struct ChunkAggregatorInput {
 };
 
 class ChunkAggregatorUtility
-    : public utilities::Utility<ChunkAggregatorInput, ChunkAggregationOutput,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<ChunkAggregatorInput, ChunkAggregationOutput> {
    public:
     ChunkAggregatorUtility() = default;
 

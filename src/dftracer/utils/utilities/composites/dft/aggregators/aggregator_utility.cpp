@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_augmentation.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_drain.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
@@ -550,23 +551,8 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
             &scope, std::move(batch_config));
 
         // Drain visitors and merge results
-        std::vector<std::string> processed_files;
-        for (auto& file_visitors : batch_result.extra_visitors) {
-            for (auto& visitor : file_visitors) {
-                auto* agg_visitor =
-                    dynamic_cast<AggregationVisitor*>(visitor.get());
-                if (agg_visitor) {
-                    for (const auto& k : agg_visitor->observed_extra_keys())
-                        merger->add_observed_extra_key(k);
-                    for (const auto& m : agg_visitor->observed_custom_metrics())
-                        merger->add_observed_custom_metric(m);
-                    auto output = agg_visitor->take_output();
-                    processed_files.push_back(output.file_path);
-                    merger->merge_chunk(std::move(output));
-                }
-            }
-            file_visitors.clear();
-        }
+        std::vector<std::string> processed_files = merge_aggregation_visitors(
+            batch_result.extra_visitors, merger.get());
 
         // Write global config and per-file markers for cache detection
         if (!processed_files.empty()) {

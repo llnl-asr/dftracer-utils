@@ -1,54 +1,23 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_merge_operator.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
-
-#include <string_view>
+#include <dftracer/utils/utilities/composites/dft/aggregators/merge_operator_common.h>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
 bool AggregationMergeOperator::FullMergeV2(
     const MergeOperationInput& merge_in,
     MergeOperationOutput* merge_out) const {
-    AggregationMetrics result;
-
-    if (merge_in.existing_value) {
-        try {
-            result = deserialize_agg_value(
-                std::string_view(merge_in.existing_value->data(),
-                                 merge_in.existing_value->size()));
-        } catch (...) {
-            return false;
-        }
-    }
-
-    for (const auto& operand : merge_in.operand_list) {
-        try {
-            auto other = deserialize_agg_value(
-                std::string_view(operand.data(), operand.size()));
-            result.merge_from(other);
-        } catch (...) {
-            return false;
-        }
-    }
-
-    merge_out->new_value = serialize_agg_value(result);
-    return true;
+    return full_merge_metrics<AggregationMetrics>(
+        merge_in, merge_out, deserialize_agg_value, serialize_agg_value);
 }
 
 bool AggregationMergeOperator::PartialMerge(
     const ::rocksdb::Slice& /*key*/, const ::rocksdb::Slice& left_operand,
     const ::rocksdb::Slice& right_operand, std::string* new_value,
     ::rocksdb::Logger* /*logger*/) const {
-    try {
-        auto left = deserialize_agg_value(
-            std::string_view(left_operand.data(), left_operand.size()));
-        auto right = deserialize_agg_value(
-            std::string_view(right_operand.data(), right_operand.size()));
-        left.merge_from(right);
-        *new_value = serialize_agg_value(left);
-        return true;
-    } catch (...) {
-        return false;
-    }
+    return partial_merge_metrics<AggregationMetrics>(
+        left_operand, right_operand, new_value, deserialize_agg_value,
+        serialize_agg_value);
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

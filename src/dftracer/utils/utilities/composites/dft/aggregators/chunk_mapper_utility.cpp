@@ -5,6 +5,29 @@
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
+namespace {
+// Build a ChunkAggregatorInput for one chunk; all fields but the byte/line
+// range and chunk index come from the file mapper input.
+ChunkAggregatorInput make_chunk_input(const FileChunkMapperInput& input,
+                                      int chunk_index, std::size_t start_byte,
+                                      std::size_t end_byte,
+                                      std::size_t start_line,
+                                      std::size_t end_line) {
+    const auto& meta = input.metadata;
+    ChunkAggregatorInput chunk;
+    chunk.with_file_path(meta.file_path)
+        .with_index_path(meta.index_path)
+        .with_byte_range(start_byte, end_byte)
+        .with_line_range(start_line, end_line)
+        .with_chunk_index(chunk_index)
+        .with_config(input.config)
+        .with_checkpoint_size(input.checkpoint_size)
+        .with_batch_size(input.batch_size);
+    chunk.query = input.query;
+    return chunk;
+}
+}  // namespace
+
 coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
     const FileChunkMapperInput& input) {
     const auto& meta = input.metadata;
@@ -26,17 +49,8 @@ coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
             meta.file_path.c_str());
 
         FileChunkMapperOutput chunks;
-        ChunkAggregatorInput chunk;
-        chunk.with_file_path(meta.file_path)
-            .with_index_path(meta.index_path)
-            .with_byte_range(0, 0)
-            .with_line_range(0, 0)
-            .with_chunk_index(input.start_chunk_index)
-            .with_config(input.config)
-            .with_checkpoint_size(input.checkpoint_size)
-            .with_batch_size(input.batch_size);
-        chunk.query = input.query;
-        chunks.push_back(std::move(chunk));
+        chunks.push_back(
+            make_chunk_input(input, input.start_chunk_index, 0, 0, 0, 0));
         co_return chunks;
     }
 
@@ -63,18 +77,9 @@ coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
         if (start_line == 0) start_line = 1;
         if (end_line == 0) end_line = num_lines;
 
-        ChunkAggregatorInput chunk;
-        chunk.with_file_path(meta.file_path)
-            .with_index_path(meta.index_path)
-            .with_byte_range(start_byte, end_byte)
-            .with_line_range(start_line, end_line)
-            .with_chunk_index(input.start_chunk_index + static_cast<int>(i))
-            .with_config(input.config)
-            .with_checkpoint_size(input.checkpoint_size)
-            .with_batch_size(input.batch_size);
-        chunk.query = input.query;
-
-        chunks.push_back(std::move(chunk));
+        chunks.push_back(make_chunk_input(
+            input, input.start_chunk_index + static_cast<int>(i), start_byte,
+            end_byte, start_line, end_line));
     }
 
     co_return chunks;

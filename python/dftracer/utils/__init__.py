@@ -2,8 +2,18 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
 from .arrow import read_arrow, write_arrow  # noqa: F401
-from .dftracer_utils_ext import (
+from .dftracer_utils_ext import (  # noqa: F401
     CheckpointIndexer,  # noqa: F401
+    DFTUtilsAggregationError,
+    DFTUtilsError,
+    DFTUtilsIndexerError,
+    DFTUtilsIOError,
+    DFTUtilsNotFoundError,
+    DFTUtilsParseError,
+    DFTUtilsPipelineError,
+    DFTUtilsQueryError,
+    DFTUtilsReaderError,
+    DFTUtilsValueError,
     IndexerCheckpoint,  # noqa: F401
     JsonDictValue,  # noqa: F401
 )

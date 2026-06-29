@@ -2,8 +2,11 @@
 #define DFTRACER_UTILS_PYTHON_PY_RUNTIME_MIXIN_H
 
 #include <Python.h>
+#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/runtime.h>
 
+#include <stdexcept>
 #include <string>
 
 // Shared implementation for utility objects whose layout is exactly:
@@ -61,20 +64,33 @@ int runtime_backed_init(T *self, PyObject *args, PyObject *kwds) {
     return 0;
 }
 
-// Run a blocking C++ body with the GIL released, translating any C++ exception
-// into a Python RuntimeError. Returns true on success; on failure the Python
-// error is set and the caller should return its error sentinel (NULL or -1).
-// The body must not touch Python objects (the GIL is not held while it runs).
+// Run a blocking C++ body with the GIL released
 template <typename F>
 bool run_blocking(F &&body) {
+    bool failed = false;
     std::string error_msg;
-    Py_BEGIN_ALLOW_THREADS try { body(); } catch (const std::exception &e) {
+    PyObject *exc_type = nullptr;  // pointer read only; no Python API off-GIL
+    Py_BEGIN_ALLOW_THREADS try {
+        body();
+    } catch (const dftracer::utils::DFTUtilsException &e) {
+        failed = true;
+        error_msg = e.what();
+        exc_type = py_error_type_for(e.code());
+    } catch (const std::invalid_argument &e) {
+        failed = true;
+        error_msg = e.what();
+        exc_type = g_dft_value_error;
+    } catch (const std::exception &e) {
+        failed = true;
         error_msg = e.what();
     } catch (...) {
+        failed = true;
         error_msg = "unknown C++ exception";
     }
-    Py_END_ALLOW_THREADS if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    Py_END_ALLOW_THREADS if (failed) {
+        if (exc_type == nullptr) exc_type = g_dft_error;
+        PyErr_SetString(exc_type ? exc_type : PyExc_RuntimeError,
+                        error_msg.c_str());
         return false;
     }
     return true;

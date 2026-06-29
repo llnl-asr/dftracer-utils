@@ -7,6 +7,7 @@
 #include <dftracer/utils/python/indexer_checkpoint.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/memoryview_batch.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/sst_distribution.h>
 #include <dftracer/utils/python/task_handle.h>
@@ -44,6 +45,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     PyObject *m;
     m = PyModule_Create(&dftracer_utils_module);
     if (m == NULL) return NULL;
+    if (init_py_errors(m) < 0) return NULL;
     if (init_indexer_checkpoint(m) < 0) return NULL;
     if (init_checkpoint_indexer(m) < 0) return NULL;
     if (init_indexer(m) < 0) return NULL;

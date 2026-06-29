@@ -18,7 +18,7 @@ std::string QueryError::format() const {
 }
 
 QueryParseError::QueryParseError(QueryError err)
-    : std::runtime_error(err.format()), err_(std::move(err)) {}
+    : DFTUtilsException(ErrorCode::QUERY, err.format()), err_(std::move(err)) {}
 
 namespace {
 

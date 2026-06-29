@@ -1,12 +1,14 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_ERROR_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_ERROR_H
 
+#include <dftracer/utils/core/common/error.h>
+
 #include <stdexcept>
 #include <string>
 
 namespace dftracer::utils::utilities::reader::internal {
 
-class ReaderError : public std::runtime_error {
+class ReaderError : public DFTUtilsException {
    public:
     enum Type {
         DATABASE_ERROR,
@@ -19,7 +21,8 @@ class ReaderError : public std::runtime_error {
     };
 
     ReaderError(Type type, const std::string &message)
-        : std::runtime_error(format_message(type, message)), type_(type) {}
+        : DFTUtilsException(ErrorCode::READER, format_message(type, message)),
+          type_(type) {}
 
     inline Type get_type() const { return type_; }
 

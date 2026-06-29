@@ -11,13 +11,9 @@ namespace dftracer::utils::utilities::composites::dft::aggregators {
 
 class EventAggregator;
 
-// Drain the per-file extra visitors produced by the index batch builder into
-// `merger`: for each AggregationVisitor, propagate its observed
-// extra-key/custom-metric sets, take its chunk output, and merge it; then
-// clear each file's visitor list. Returns the processed file paths (callers
-// that don't need them can ignore the result). No-op returning an empty vector
-// when `merger` is null. The drain is synchronous (no I/O), so it is safe to
-// call from inside a coroutine without suspending.
+// Merge the per-file AggregationVisitors into `merger` and return the processed
+// file paths. No-op when `merger` is null. Synchronous, so safe to call from a
+// coroutine without suspending.
 std::vector<std::string> merge_aggregation_visitors(
     std::vector<std::vector<std::unique_ptr<DftEventVisitor>>>& extra_visitors,
     EventAggregator* merger);

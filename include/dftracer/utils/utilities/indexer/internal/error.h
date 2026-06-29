@@ -1,12 +1,14 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_ERROR_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_ERROR_H
 
+#include <dftracer/utils/core/common/error.h>
+
 #include <stdexcept>
 #include <string>
 
 namespace dftracer::utils::utilities::indexer::internal {
 
-class IndexerError : public std::runtime_error {
+class IndexerError : public DFTUtilsException {
    public:
     enum Type {
         DATABASE_ERROR,
@@ -18,7 +20,8 @@ class IndexerError : public std::runtime_error {
     };
 
     IndexerError(Type type, const std::string &message)
-        : std::runtime_error(format_message(type, message)), type_(type) {}
+        : DFTUtilsException(ErrorCode::INDEXER, format_message(type, message)),
+          type_(type) {}
 
     inline Type type() const { return type_; }
 

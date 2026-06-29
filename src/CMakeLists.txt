@@ -370,6 +370,7 @@ foreach(variant shared static)
     link_rocksdb(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_zlib(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_unordered_dense(dftracer_utils_core_${variant})
+    link_tl_expected(dftracer_utils_core_${variant})
 
     # The coroutine monitor (monitor.cpp) calls dladdr() for symbolization.
     # On older glibc (e.g. manylinux aarch64) dladdr lives in libdl, so the
@@ -1008,6 +1009,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
     MODULE
     WITH_SOABI
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/dftracer_utils_ext.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_errors.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_errors.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.cpp

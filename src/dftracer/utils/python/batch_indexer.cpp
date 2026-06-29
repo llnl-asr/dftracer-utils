@@ -1267,6 +1267,200 @@ struct DfanalyzerScanOutput {
     std::vector<ArrowExportResult> system;
 };
 
+// Immutable per-scan context shared by the row emitters.
+struct DfaEmitCtx {
+    const DfanalyzerContext* ctx;
+    std::uint64_t bucket_width_us;
+    Py_ssize_t batch_size;
+};
+
+// Finish the current batch into `results` and start a fresh one.
+static void flush_dfa_builder(RecordBatchBuilder& builder, std::size_t& count,
+                              std::vector<ArrowExportResult>& results,
+                              Py_ssize_t batch_size) {
+    if (count > 0) {
+        auto arrow = builder.finish();
+        if (arrow.valid()) {
+            results.push_back(std::move(arrow));
+        }
+        builder.reset(true);
+        builder.reserve(static_cast<std::size_t>(batch_size));
+        count = 0;
+    }
+}
+
+// Emit one full-granularity row from a single aggregated key/value.
+static void append_fine_row(RecordBatchBuilder& builder, std::size_t& count,
+                            std::vector<ArrowExportResult>& results,
+                            const AggKeyView& kv, const AggMetricsView& mv,
+                            std::string_view file_name,
+                            std::string_view host_name,
+                            std::string_view proc_name, IOCategory io_cat,
+                            const DfaEmitCtx& ec) {
+    std::size_t ci = 0;
+    builder.append_dict_string(ci++, kv.cat);
+    builder.append_dict_string(ci++, kv.name);
+    builder.append_int64(ci++, static_cast<std::int64_t>(kv.pid));
+    builder.append_int64(ci++, static_cast<std::int64_t>(kv.tid));
+    builder.append_dict_string(ci++, kv.fhash);
+    builder.append_dict_string(ci++, kv.hhash);
+    builder.append_dict_string(ci++, file_name);
+    builder.append_dict_string(ci++, host_name);
+    builder.append_dict_string(ci++, proc_name);
+    builder.append_int64(ci++, static_cast<std::int64_t>(io_cat));
+    builder.append_int64(ci++, 0);
+
+    builder.append_int64(ci++, static_cast<std::int64_t>(mv.count));
+    builder.append_double(
+        ci++, static_cast<double>(mv.dur_total) / ec.ctx->time_resolution);
+
+    if (mv.size_total > 0) {
+        builder.append_int64(ci++, static_cast<std::int64_t>(mv.size_total));
+    } else {
+        builder.append_null(ci++);
+    }
+
+    builder.append_double(ci++, mv.count > 0 ? static_cast<double>(mv.dur_min) /
+                                                   ec.ctx->time_resolution
+                                             : 0.0);
+    builder.append_double(ci++, mv.count > 0 ? static_cast<double>(mv.dur_max) /
+                                                   ec.ctx->time_resolution
+                                             : 0.0);
+
+    if (mv.size_total > 0 && mv.count > 0) {
+        builder.append_int64(ci++, static_cast<std::int64_t>(mv.size_min));
+        builder.append_int64(ci++, static_cast<std::int64_t>(mv.size_max));
+    } else {
+        builder.append_null(ci++);
+        builder.append_null(ci++);
+    }
+
+    // offset_min > offset_max only when no offset was ever recorded
+    // (MetricStats default min=UINT64_MAX, max=0); 0 is a valid offset.
+    if (mv.offset_min <= mv.offset_max) {
+        builder.append_int64(ci++, static_cast<std::int64_t>(mv.offset_min));
+        builder.append_int64(ci++, static_cast<std::int64_t>(mv.offset_max));
+    } else {
+        builder.append_null(ci++);
+        builder.append_null(ci++);
+    }
+
+    auto time_range =
+        ec.bucket_width_us > 0
+            ? static_cast<std::int64_t>((kv.time_bucket - ec.ctx->time_origin) /
+                                        ec.bucket_width_us)
+            : 0;
+    builder.append_int64(ci++, time_range);
+    // Counter (profile) rows align to the bucket grid: time_start is the
+    // bucket start, time_end one bucket later. Plain events keep the
+    // precise min/max event timestamps.
+    if (kv.map_type == AggMapType::PROFILE) {
+        auto bucket_start =
+            static_cast<std::int64_t>(kv.time_bucket - ec.ctx->time_origin);
+        builder.append_int64(ci++, bucket_start);
+        builder.append_int64(
+            ci++, bucket_start + static_cast<std::int64_t>(ec.bucket_width_us));
+    } else {
+        builder.append_int64(
+            ci++, static_cast<std::int64_t>(mv.ts - ec.ctx->time_origin));
+        builder.append_int64(
+            ci++, static_cast<std::int64_t>(mv.te - ec.ctx->time_origin));
+    }
+    builder.end_row();
+
+    count++;
+    if (static_cast<Py_ssize_t>(count) >= ec.batch_size) {
+        flush_dfa_builder(builder, count, results, ec.batch_size);
+    }
+}
+
+// Emit one coarse (grouped) row from an accumulated key/metrics pair.
+static void append_coarse_row(RecordBatchBuilder& builder, const CoarseKey& key,
+                              const CoarseMetrics& m,
+                              const GroupByConfig& cfg) {
+    std::size_t ci = 0;
+    for (std::size_t i = 0; i < cfg.order.size(); ++i) {
+        switch (cfg.order[i]) {
+            case GB_CAT:
+                builder.append_dict_string(ci++, key.cat);
+                break;
+            case GB_FUNC_NAME:
+                builder.append_dict_string(ci++, key.func_name);
+                break;
+            case GB_PID:
+                builder.append_int64(ci++, static_cast<std::int64_t>(key.pid));
+                break;
+            case GB_TID:
+                builder.append_int64(ci++, static_cast<std::int64_t>(key.tid));
+                break;
+            case GB_FILE_HASH:
+                builder.append_dict_string(ci++, key.file_hash);
+                break;
+            case GB_HOST_HASH:
+                builder.append_dict_string(ci++, key.host_hash);
+                break;
+            case GB_FILE_NAME:
+                builder.append_dict_string(ci++, key.file_name);
+                break;
+            case GB_HOST_NAME:
+                builder.append_dict_string(ci++, key.host_name);
+                break;
+            case GB_PROC_NAME:
+                builder.append_dict_string(ci++, key.proc_name);
+                break;
+            case GB_IO_CAT:
+                builder.append_int64(ci++, key.io_cat);
+                break;
+            case GB_ACC_PAT:
+                builder.append_int64(ci++, key.acc_pat);
+                break;
+            case GB_TIME_RANGE:
+                builder.append_int64(ci++, key.time_range);
+                break;
+        }
+    }
+    builder.append_int64(ci++, static_cast<std::int64_t>(m.count));
+    builder.append_double(ci++, m.time_sum);
+    if (m.has_size) {
+        builder.append_int64(ci++, static_cast<std::int64_t>(m.size_sum));
+    } else {
+        builder.append_null(ci++);
+    }
+    builder.append_double(ci++, m.time_sq_sum);
+    if (m.has_size) {
+        builder.append_double(ci++, m.size_sq_sum);
+    } else {
+        builder.append_null(ci++);
+    }
+    builder.append_double(ci++, m.count > 0 ? m.time_min_val : 0.0);
+    builder.append_double(ci++, m.count > 0 ? m.time_max_val : 0.0);
+    if (m.has_size) {
+        builder.append_int64(ci++, static_cast<std::int64_t>(m.size_min_val));
+        builder.append_int64(ci++, static_cast<std::int64_t>(m.size_max_val));
+    } else {
+        builder.append_null(ci++);
+        builder.append_null(ci++);
+    }
+    builder.append_double(ci++, m.count > 0 ? m.time_call_min_val : 0.0);
+    builder.append_double(ci++, m.count > 0 ? m.time_call_max_val : 0.0);
+    if (m.has_size) {
+        builder.append_int64(ci++,
+                             static_cast<std::int64_t>(m.size_call_min_val));
+        builder.append_int64(ci++,
+                             static_cast<std::int64_t>(m.size_call_max_val));
+    } else {
+        builder.append_null(ci++);
+        builder.append_null(ci++);
+    }
+    builder.append_int64(ci++, m.has_time_bounds
+                                   ? static_cast<std::int64_t>(m.time_start_val)
+                                   : 0);
+    builder.append_int64(ci++, m.has_time_bounds
+                                   ? static_cast<std::int64_t>(m.time_end_val)
+                                   : 0);
+    builder.end_row();
+}
+
 DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
     DfanalyzerScanOutput output;
 
@@ -1300,6 +1494,7 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
 
     auto bucket_width_us = static_cast<std::uint64_t>(
         input.ctx->time_granularity * input.ctx->time_resolution);
+    const DfaEmitCtx emit_ctx{input.ctx, bucket_width_us, input.batch_size};
     std::size_t event_count = 0, profile_count = 0, system_count = 0;
 
     HashResolver resolver(input.ctx->file_hashes, input.ctx->host_hashes);
@@ -1311,15 +1506,7 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
 
     auto flush_builder = [&](RecordBatchBuilder& builder, std::size_t& count,
                              std::vector<ArrowExportResult>& results) {
-        if (count > 0) {
-            auto arrow = builder.finish();
-            if (arrow.valid()) {
-                results.push_back(std::move(arrow));
-            }
-            builder.reset(true);
-            builder.reserve(static_cast<std::size_t>(input.batch_size));
-            count = 0;
-        }
+        flush_dfa_builder(builder, count, results, input.batch_size);
     };
 
     auto append_row = [&](RecordBatchBuilder& builder, std::size_t& count,
@@ -1328,86 +1515,8 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
                           std::string_view file_name,
                           std::string_view host_name,
                           std::string_view proc_name, IOCategory io_cat) {
-        std::size_t ci = 0;
-        builder.append_dict_string(ci++, kv.cat);
-        builder.append_dict_string(ci++, kv.name);
-        builder.append_int64(ci++, static_cast<std::int64_t>(kv.pid));
-        builder.append_int64(ci++, static_cast<std::int64_t>(kv.tid));
-        builder.append_dict_string(ci++, kv.fhash);
-        builder.append_dict_string(ci++, kv.hhash);
-        builder.append_dict_string(ci++, file_name);
-        builder.append_dict_string(ci++, host_name);
-        builder.append_dict_string(ci++, proc_name);
-        builder.append_int64(ci++, static_cast<std::int64_t>(io_cat));
-        builder.append_int64(ci++, 0);
-
-        builder.append_int64(ci++, static_cast<std::int64_t>(mv.count));
-        builder.append_double(ci++, static_cast<double>(mv.dur_total) /
-                                        input.ctx->time_resolution);
-
-        if (mv.size_total > 0) {
-            builder.append_int64(ci++,
-                                 static_cast<std::int64_t>(mv.size_total));
-        } else {
-            builder.append_null(ci++);
-        }
-
-        builder.append_double(ci++, mv.count > 0
-                                        ? static_cast<double>(mv.dur_min) /
-                                              input.ctx->time_resolution
-                                        : 0.0);
-        builder.append_double(ci++, mv.count > 0
-                                        ? static_cast<double>(mv.dur_max) /
-                                              input.ctx->time_resolution
-                                        : 0.0);
-
-        if (mv.size_total > 0 && mv.count > 0) {
-            builder.append_int64(ci++, static_cast<std::int64_t>(mv.size_min));
-            builder.append_int64(ci++, static_cast<std::int64_t>(mv.size_max));
-        } else {
-            builder.append_null(ci++);
-            builder.append_null(ci++);
-        }
-
-        // offset_min > offset_max only when no offset was ever recorded
-        // (MetricStats default min=UINT64_MAX, max=0); 0 is a valid offset.
-        if (mv.offset_min <= mv.offset_max) {
-            builder.append_int64(ci++,
-                                 static_cast<std::int64_t>(mv.offset_min));
-            builder.append_int64(ci++,
-                                 static_cast<std::int64_t>(mv.offset_max));
-        } else {
-            builder.append_null(ci++);
-            builder.append_null(ci++);
-        }
-
-        auto time_range = bucket_width_us > 0
-                              ? static_cast<std::int64_t>(
-                                    (kv.time_bucket - input.ctx->time_origin) /
-                                    bucket_width_us)
-                              : 0;
-        builder.append_int64(ci++, time_range);
-        // Counter (profile) rows align to the bucket grid: time_start is the
-        // bucket start, time_end one bucket later. Plain events keep the
-        // precise min/max event timestamps.
-        if (kv.map_type == AggMapType::PROFILE) {
-            auto bucket_start = static_cast<std::int64_t>(
-                kv.time_bucket - input.ctx->time_origin);
-            builder.append_int64(ci++, bucket_start);
-            builder.append_int64(ci++, bucket_start + static_cast<std::int64_t>(
-                                                          bucket_width_us));
-        } else {
-            builder.append_int64(ci++, static_cast<std::int64_t>(
-                                           mv.ts - input.ctx->time_origin));
-            builder.append_int64(ci++, static_cast<std::int64_t>(
-                                           mv.te - input.ctx->time_origin));
-        }
-        builder.end_row();
-
-        count++;
-        if (static_cast<Py_ssize_t>(count) >= input.batch_size) {
-            flush_builder(builder, count, results);
-        }
+        append_fine_row(builder, count, results, kv, mv, file_name, host_name,
+                        proc_name, io_cat, emit_ctx);
     };
 
     auto accumulate_coarse =
@@ -1610,96 +1719,7 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
                                 RecordBatchBuilder& builder, std::size_t& count,
                                 std::vector<ArrowExportResult>& results) {
             for (auto& [key, m] : map) {
-                std::size_t ci = 0;
-                for (std::size_t i = 0; i < cfg.order.size(); ++i) {
-                    switch (cfg.order[i]) {
-                        case GB_CAT:
-                            builder.append_dict_string(ci++, key.cat);
-                            break;
-                        case GB_FUNC_NAME:
-                            builder.append_dict_string(ci++, key.func_name);
-                            break;
-                        case GB_PID:
-                            builder.append_int64(
-                                ci++, static_cast<std::int64_t>(key.pid));
-                            break;
-                        case GB_TID:
-                            builder.append_int64(
-                                ci++, static_cast<std::int64_t>(key.tid));
-                            break;
-                        case GB_FILE_HASH:
-                            builder.append_dict_string(ci++, key.file_hash);
-                            break;
-                        case GB_HOST_HASH:
-                            builder.append_dict_string(ci++, key.host_hash);
-                            break;
-                        case GB_FILE_NAME:
-                            builder.append_dict_string(ci++, key.file_name);
-                            break;
-                        case GB_HOST_NAME:
-                            builder.append_dict_string(ci++, key.host_name);
-                            break;
-                        case GB_PROC_NAME:
-                            builder.append_dict_string(ci++, key.proc_name);
-                            break;
-                        case GB_IO_CAT:
-                            builder.append_int64(ci++, key.io_cat);
-                            break;
-                        case GB_ACC_PAT:
-                            builder.append_int64(ci++, key.acc_pat);
-                            break;
-                        case GB_TIME_RANGE:
-                            builder.append_int64(ci++, key.time_range);
-                            break;
-                    }
-                }
-                builder.append_int64(ci++, static_cast<std::int64_t>(m.count));
-                builder.append_double(ci++, m.time_sum);
-                if (m.has_size) {
-                    builder.append_int64(ci++,
-                                         static_cast<std::int64_t>(m.size_sum));
-                } else {
-                    builder.append_null(ci++);
-                }
-                builder.append_double(ci++, m.time_sq_sum);
-                if (m.has_size) {
-                    builder.append_double(ci++, m.size_sq_sum);
-                } else {
-                    builder.append_null(ci++);
-                }
-                builder.append_double(ci++, m.count > 0 ? m.time_min_val : 0.0);
-                builder.append_double(ci++, m.count > 0 ? m.time_max_val : 0.0);
-                if (m.has_size) {
-                    builder.append_int64(
-                        ci++, static_cast<std::int64_t>(m.size_min_val));
-                    builder.append_int64(
-                        ci++, static_cast<std::int64_t>(m.size_max_val));
-                } else {
-                    builder.append_null(ci++);
-                    builder.append_null(ci++);
-                }
-                builder.append_double(ci++,
-                                      m.count > 0 ? m.time_call_min_val : 0.0);
-                builder.append_double(ci++,
-                                      m.count > 0 ? m.time_call_max_val : 0.0);
-                if (m.has_size) {
-                    builder.append_int64(
-                        ci++, static_cast<std::int64_t>(m.size_call_min_val));
-                    builder.append_int64(
-                        ci++, static_cast<std::int64_t>(m.size_call_max_val));
-                } else {
-                    builder.append_null(ci++);
-                    builder.append_null(ci++);
-                }
-                builder.append_int64(
-                    ci++, m.has_time_bounds
-                              ? static_cast<std::int64_t>(m.time_start_val)
-                              : 0);
-                builder.append_int64(
-                    ci++, m.has_time_bounds
-                              ? static_cast<std::int64_t>(m.time_end_val)
-                              : 0);
-                builder.end_row();
+                append_coarse_row(builder, key, m, cfg);
                 ++count;
                 if (static_cast<Py_ssize_t>(count) >= input.batch_size) {
                     flush_builder(builder, count, results);

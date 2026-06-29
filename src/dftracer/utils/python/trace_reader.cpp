@@ -659,13 +659,94 @@ static bool str_contains_lower(std::string_view s, const char *needle) {
     return false;
 }
 
+// Fields extracted from a row's "args" object in a single pass.
+struct ParsedArgs {
+    std::optional<std::string_view> name, value, hhash, fhash;
+    std::optional<std::int64_t> epoch, step, size_sum, ret;
+    std::optional<std::int64_t> offset, image_idx, image_size;
+    // Other int/float args, kept for profile/sys columns.
+    std::unordered_map<std::string, std::int64_t> int_map;
+    std::unordered_map<std::string, double> float_map;
+};
+
+static ParsedArgs parse_row_args(JsonParser &parser) {
+    using SVH = JsonValueHelper;
+    ParsedArgs a;
+    parser.rewind();
+    parser.for_each_field(
+        "args", [&](std::string_view key, simdjson::ondemand::value val) {
+            if (key == "name") {
+                if (auto s = SVH::get_string(val)) a.name = s;
+            } else if (key == "value") {
+                if (auto s = SVH::get_string(val)) a.value = s;
+            } else if (key == "hhash") {
+                if (auto s = SVH::get_string(val)) a.hhash = s;
+            } else if (key == "fhash") {
+                if (auto s = SVH::get_string(val)) a.fhash = s;
+            } else if (key == "epoch") {
+                if (auto i = SVH::get_int64(val)) a.epoch = i;
+            } else if (key == "step") {
+                if (auto i = SVH::get_int64(val)) a.step = i;
+            } else if (key == "size_sum") {
+                if (auto i = SVH::get_int64(val)) a.size_sum = i;
+            } else if (key == "ret") {
+                if (auto i = SVH::get_int64(val)) a.ret = i;
+            } else if (key == "offset") {
+                if (auto i = SVH::get_int64(val)) a.offset = i;
+            } else if (key == "image_idx") {
+                if (auto i = SVH::get_int64(val)) a.image_idx = i;
+            } else if (key == "image_size") {
+                if (auto i = SVH::get_int64(val)) a.image_size = i;
+            } else {
+                if (auto i = SVH::get_int64(val)) {
+                    a.int_map[std::string(key)] = *i;
+                } else if (auto d = SVH::get_double(val)) {
+                    a.float_map[std::string(key)] = *d;
+                }
+            }
+        });
+    return a;
+}
+
+static void append_profile_columns(
+    RecordBatchBuilder &builder,
+    const std::unordered_map<std::string, std::int64_t> &int_map) {
+    static const char *profile_keys[] = {
+        "count",      "count_max",  "count_min",  "count_sum",  "dft_cnt",
+        "dur",        "dur_max",    "dur_min",    "dur_sum",    "epoch",
+        "flags",      "offset",     "offset_max", "offset_min", "offset_sum",
+        "ret",        "ret_max",    "ret_min",    "ret_sum",    "whence",
+        "whence_max", "whence_min", "whence_sum", nullptr};
+    for (const char **pk = profile_keys; *pk; ++pk) {
+        auto it = int_map.find(*pk);
+        if (it != int_map.end()) {
+            auto idx = builder.add_or_get_column(*pk, ColumnType::INT64);
+            builder.append_int64(idx, it->second);
+        }
+    }
+}
+
+static void append_system_columns(
+    RecordBatchBuilder &builder,
+    const std::unordered_map<std::string, double> &float_map) {
+    static const char *sys_keys[] = {
+        "user_pct", "system_pct",  "iowait_pct",   "idle_pct",
+        "irq_pct",  "softirq_pct", "MemAvailable", "MemFree",
+        "Cached",   "Dirty",       "Active",       nullptr};
+    for (const char **sk = sys_keys; *sk; ++sk) {
+        auto it = float_map.find(*sk);
+        if (it != float_map.end()) {
+            auto idx = builder.add_or_get_column(*sk, ColumnType::DOUBLE);
+            builder.append_double(idx, it->second);
+        }
+    }
+}
+
 // Normalize a raw JSON row (parsed with simdjson) into the semantic
 // output schema.  Appends one row to `builder` with the full set of output
 // columns.  Returns false if the row should be skipped (no valid name).
 static bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
                           JsonParser &parser) {
-    using SVH = JsonValueHelper;
-
     // --- Extract top-level fields ---
     auto ph = parser.get_string("ph").value_or(std::string_view{});
     auto name_sv = parser.get_string("name").value_or(std::string_view{});
@@ -675,49 +756,7 @@ static bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     auto ts_opt = parser.get_int64("ts");
     auto dur_opt = parser.get_int64("dur");
 
-    // Helper lambdas to access args fields (need to rewind after each access)
-    // We'll do a single pass over args instead
-    std::optional<std::string_view> args_name, args_value, args_hhash,
-        args_fhash;
-    std::optional<int64_t> args_epoch, args_step, args_size_sum, args_ret;
-    std::optional<int64_t> args_offset, args_image_idx, args_image_size;
-    std::unordered_map<std::string, int64_t> args_int_map;
-    std::unordered_map<std::string, double> args_float_map;
-
-    parser.rewind();
-    parser.for_each_field(
-        "args", [&](std::string_view key, simdjson::ondemand::value val) {
-            if (key == "name") {
-                if (auto s = SVH::get_string(val)) args_name = s;
-            } else if (key == "value") {
-                if (auto s = SVH::get_string(val)) args_value = s;
-            } else if (key == "hhash") {
-                if (auto s = SVH::get_string(val)) args_hhash = s;
-            } else if (key == "fhash") {
-                if (auto s = SVH::get_string(val)) args_fhash = s;
-            } else if (key == "epoch") {
-                if (auto i = SVH::get_int64(val)) args_epoch = i;
-            } else if (key == "step") {
-                if (auto i = SVH::get_int64(val)) args_step = i;
-            } else if (key == "size_sum") {
-                if (auto i = SVH::get_int64(val)) args_size_sum = i;
-            } else if (key == "ret") {
-                if (auto i = SVH::get_int64(val)) args_ret = i;
-            } else if (key == "offset") {
-                if (auto i = SVH::get_int64(val)) args_offset = i;
-            } else if (key == "image_idx") {
-                if (auto i = SVH::get_int64(val)) args_image_idx = i;
-            } else if (key == "image_size") {
-                if (auto i = SVH::get_int64(val)) args_image_size = i;
-            } else {
-                // Store other int/float args for profile/sys columns
-                if (auto i = SVH::get_int64(val)) {
-                    args_int_map[std::string(key)] = *i;
-                } else if (auto d = SVH::get_double(val)) {
-                    args_float_map[std::string(key)] = *d;
-                }
-            }
-        });
+    ParsedArgs args = parse_row_args(parser);
 
     // --- Type classification ---
     bool is_M = (ph == "M");
@@ -746,8 +785,8 @@ static bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
 
     // Name: metadata rows use args.name if available
     std::string_view out_name = name_sv;
-    if (is_M && args_name && !args_name->empty()) {
-        out_name = *args_name;
+    if (is_M && args.name && !args.name->empty()) {
+        out_name = *args.name;
     }
     if (out_name.empty()) return false;  // skip rows without name
 
@@ -796,21 +835,21 @@ static bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     if (tid_opt) builder.append_int64(ci_tid, *tid_opt);
 
     // hash / value
-    if (is_hash && args_value && !args_value->empty())
-        builder.append_string(ci_hash, *args_value);
-    if (row_type == ROW_METADATA && args_value && !args_value->empty())
-        builder.append_string(ci_value, *args_value);
+    if (is_hash && args.value && !args.value->empty())
+        builder.append_string(ci_hash, *args.value);
+    if (row_type == ROW_METADATA && args.value && !args.value->empty())
+        builder.append_string(ci_value, *args.value);
 
     // host_hash / file_hash
-    if (args_hhash && !args_hhash->empty())
-        builder.append_string(ci_host_hash, *args_hhash);
-    if (args_fhash && !args_fhash->empty())
-        builder.append_string(ci_file_hash, *args_fhash);
+    if (args.hhash && !args.hhash->empty())
+        builder.append_string(ci_host_hash, *args.hhash);
+    if (args.fhash && !args.fhash->empty())
+        builder.append_string(ci_file_hash, *args.fhash);
 
     // epoch / step
-    if (args_epoch && *args_epoch >= 0)
-        builder.append_int64(ci_epoch, *args_epoch);
-    if (args_step && *args_step >= 0) builder.append_int64(ci_step, *args_step);
+    if (args.epoch && *args.epoch >= 0)
+        builder.append_int64(ci_epoch, *args.epoch);
+    if (args.step && *args.step >= 0) builder.append_int64(ci_step, *args.step);
 
     // --- Temporal ---
     bool has_ts = (is_event || is_C) && ts_opt.has_value();
@@ -833,22 +872,22 @@ static bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
         int8_t io_cat = IO_OTHER;
 
         // size priority: size_sum > POSIX ret > image_size
-        if (args_size_sum) {
-            builder.append_int64(ci_size, *args_size_sum);
+        if (args.size_sum) {
+            builder.append_int64(ci_size, *args.size_sum);
             if (is_posix_stdio) io_cat = get_io_cat(out_name);
         } else if (is_posix_stdio) {
             io_cat = get_io_cat(out_name);
-            if (args_ret && *args_ret > 0 &&
+            if (args.ret && *args.ret > 0 &&
                 (io_cat == IO_READ || io_cat == IO_WRITE))
-                builder.append_int64(ci_size, *args_ret);
-            if (args_offset && *args_offset >= 0)
-                builder.append_int64(ci_offset, *args_offset);
+                builder.append_int64(ci_size, *args.ret);
+            if (args.offset && *args.offset >= 0)
+                builder.append_int64(ci_offset, *args.offset);
         } else {
-            if (args_image_idx && *args_image_idx > 0)
-                builder.append_int64(ci_image_id, *args_image_idx);
-            if (args_image_size && *args_image_size > 0 &&
+            if (args.image_idx && *args.image_idx > 0)
+                builder.append_int64(ci_image_id, *args.image_idx);
+            if (args.image_size && *args.image_size > 0 &&
                 !str_contains_lower(out_name, "open"))
-                builder.append_int64(ci_size, *args_image_size);
+                builder.append_int64(ci_size, *args.image_size);
         }
         builder.append_int64(ci_io_cat, io_cat);
     }
@@ -859,36 +898,12 @@ static bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
             str_iequal(cat_sv, "posix") || str_iequal(cat_sv, "stdio");
         int8_t io_cat = is_posix_stdio ? get_io_cat(out_name) : IO_OTHER;
         builder.append_int64(ci_io_cat, io_cat);
-
-        static const char *profile_keys[] = {
-            "count",      "count_max",  "count_min",  "count_sum",
-            "dft_cnt",    "dur",        "dur_max",    "dur_min",
-            "dur_sum",    "epoch",      "flags",      "offset",
-            "offset_max", "offset_min", "offset_sum", "ret",
-            "ret_max",    "ret_min",    "ret_sum",    "whence",
-            "whence_max", "whence_min", "whence_sum", nullptr};
-        for (const char **pk = profile_keys; *pk; ++pk) {
-            auto it = args_int_map.find(*pk);
-            if (it != args_int_map.end()) {
-                auto idx = builder.add_or_get_column(*pk, ColumnType::INT64);
-                builder.append_int64(idx, it->second);
-            }
-        }
+        append_profile_columns(builder, args.int_map);
     }
 
     // --- System columns ---
     if (is_sys) {
-        static const char *sys_keys[] = {
-            "user_pct", "system_pct",  "iowait_pct",   "idle_pct",
-            "irq_pct",  "softirq_pct", "MemAvailable", "MemFree",
-            "Cached",   "Dirty",       "Active",       nullptr};
-        for (const char **sk = sys_keys; *sk; ++sk) {
-            auto it = args_float_map.find(*sk);
-            if (it != args_float_map.end()) {
-                auto idx = builder.add_or_get_column(*sk, ColumnType::DOUBLE);
-                builder.append_double(idx, it->second);
-            }
-        }
+        append_system_columns(builder, args.float_map);
     }
 
     builder.end_row();
@@ -1293,6 +1308,173 @@ struct ArrowWorkItem {
     std::size_t end_line = 0;
 };
 
+// User-supplied byte/line clip applied to every emitted work item.
+struct ClipRange {
+    std::size_t start_byte = 0, end_byte = 0;
+    std::size_t start_line = 0, end_line = 0;
+    bool has_line_clip() const { return start_line > 0 || end_line > 0; }
+    bool has_byte_clip() const { return end_byte > start_byte; }
+};
+
+// Geometry of the pruner chunks for one file, derived from its gzip recovery
+// points. Pruner chunk_idx is 0-indexed over uncompressed slices: recovery
+// point ckpts[k] sits at the START of chunk (k+1); chunk 0 has no recovery
+// point at its start (decoded from gzip stream start). Total chunks =
+// ckpts.size()+1.
+struct ChunkGeometry {
+    const std::vector<dftracer::utils::utilities::indexer::IndexerCheckpoint>
+        &ckpts;
+
+    std::size_t total_chunks() const { return ckpts.size() + 1; }
+    std::size_t start_byte(std::uint64_t cidx) const {
+        if (cidx == 0) return 0;
+        return ckpts[cidx - 1].uc_offset;
+    }
+    std::size_t end_byte(std::uint64_t cidx) const {
+        if (cidx == 0) return ckpts.empty() ? 0 : ckpts[0].uc_offset;
+        std::size_t k = cidx - 1;
+        return ckpts[k].uc_offset + ckpts[k].uc_size;
+    }
+    // Chunk 0 covers everything before the first recovery point; chunk k>=1
+    // spans recovery point (k-1).
+    std::size_t first_line(std::uint64_t cidx) const {
+        if (cidx == 0) return 1;
+        return ckpts[cidx - 1].first_line_num;
+    }
+    std::size_t last_line(std::uint64_t cidx) const {
+        if (cidx == 0) {
+            if (ckpts.empty()) return SIZE_MAX;
+            return ckpts[0].first_line_num > 0 ? ckpts[0].first_line_num - 1
+                                               : 0;
+        }
+        return ckpts[cidx - 1].last_line_num;
+    }
+};
+
+// Select the chunk indices to scan for one file. Returns empty when the file
+// is fully pruned or no chunk overlaps the line clip (caller skips the file).
+static std::vector<std::uint64_t> select_kept_chunks(
+    const ChunkGeometry &geo, bool has_query,
+    const dftracer::utils::utilities::composites::dft::indexing::
+        ChunkPrunerOutput &pr,
+    const ClipRange &clip) {
+    const std::size_t total_chunks = geo.total_chunks();
+    std::vector<std::uint64_t> keep_chunks;
+    keep_chunks.reserve(total_chunks);
+    if (has_query) {
+        if (pr.success && !pr.file_may_match) {
+            return keep_chunks;  // whole file pruned
+        }
+        if (pr.success && !pr.candidate_checkpoints.empty() &&
+            pr.candidate_checkpoints.size() < pr.total_checkpoints) {
+            for (auto cidx : pr.candidate_checkpoints) {
+                if (cidx < total_chunks) keep_chunks.push_back(cidx);
+            }
+            std::sort(keep_chunks.begin(), keep_chunks.end());
+            keep_chunks.erase(
+                std::unique(keep_chunks.begin(), keep_chunks.end()),
+                keep_chunks.end());
+        } else {
+            for (std::uint64_t c = 0; c < total_chunks; ++c)
+                keep_chunks.push_back(c);
+        }
+    } else {
+        for (std::uint64_t c = 0; c < total_chunks; ++c)
+            keep_chunks.push_back(c);
+    }
+
+    // Intersect with the user's line range so workers only touch chunks that
+    // actually overlap it. Each work item carries the sub-line-range;
+    // LINE_RANGE on the read maps it back to bytes via the same checkpoint
+    // table the gzip stream uses.
+    if (clip.has_line_clip()) {
+        std::size_t lo = clip.start_line > 0 ? clip.start_line : 1;
+        std::size_t hi = clip.end_line > 0 ? clip.end_line : SIZE_MAX;
+        std::vector<std::uint64_t> filtered;
+        filtered.reserve(keep_chunks.size());
+        for (auto c : keep_chunks) {
+            std::size_t cf = geo.first_line(c);
+            std::size_t cl = geo.last_line(c);
+            if (cl < lo || cf > hi) continue;
+            filtered.push_back(c);
+        }
+        keep_chunks = std::move(filtered);
+    }
+    return keep_chunks;
+}
+
+// Group the kept chunks into contiguous work ranges (one per worker slot) and
+// append the resulting work items.
+static void emit_work_items(std::vector<ArrowWorkItem> &items,
+                            const std::string &fp, const ChunkGeometry &geo,
+                            const std::vector<std::uint64_t> &keep_chunks,
+                            bool file_pure_match, std::size_t max_workers,
+                            const ClipRange &clip) {
+    std::size_t target_ranges = std::max<std::size_t>(1, max_workers);
+    std::size_t per_range = std::max<std::size_t>(
+        1, (keep_chunks.size() + target_ranges - 1) / target_ranges);
+
+    std::size_t group_start = 0;
+    while (group_start < keep_chunks.size()) {
+        std::size_t group_end = group_start;
+        std::size_t emitted = 0;
+        while (group_end < keep_chunks.size() && emitted < per_range) {
+            if (group_end > group_start &&
+                keep_chunks[group_end] != keep_chunks[group_end - 1] + 1) {
+                break;
+            }
+            ++group_end;
+            ++emitted;
+        }
+        std::uint64_t scidx = keep_chunks[group_start];
+        std::uint64_t ecidx = keep_chunks[group_end - 1];
+        std::size_t start_byte = geo.start_byte(scidx);
+        std::size_t end_byte = geo.end_byte(ecidx);
+        // start_at_checkpoint: a gzip recovery point sits at start_byte (true
+        // for any cidx>=1; false for the implicit chunk 0 which decodes from
+        // stream start).
+        bool start_at_checkpoint = (scidx >= 1);
+        bool end_at_checkpoint = (group_end < keep_chunks.size());
+        if (clip.has_line_clip()) {
+            std::size_t lo = clip.start_line > 0 ? clip.start_line : 1;
+            std::size_t hi = clip.end_line > 0 ? clip.end_line : SIZE_MAX;
+            std::size_t cluster_first = geo.first_line(scidx);
+            std::size_t cluster_last = geo.last_line(ecidx);
+            std::size_t item_start = std::max<std::size_t>(lo, cluster_first);
+            std::size_t item_end = std::min<std::size_t>(hi, cluster_last);
+            if (item_start > item_end) {
+                group_start = group_end;
+                continue;
+            }
+            ArrowWorkItem item;
+            item.file_path = fp;
+            item.chunk_prune_only = file_pure_match;
+            item.start_line = item_start;
+            item.end_line = item_end;
+            items.push_back(std::move(item));
+            group_start = group_end;
+            continue;
+        }
+        if (clip.has_byte_clip()) {
+            if (start_byte < clip.start_byte) {
+                start_byte = clip.start_byte;
+                start_at_checkpoint = false;
+            }
+            if (end_byte > clip.end_byte) {
+                end_byte = clip.end_byte;
+                end_at_checkpoint = false;
+            }
+            if (start_byte >= end_byte) {
+                group_start = group_end;
+                continue;
+            }
+        }
+        items.push_back({fp, start_byte, end_byte, start_at_checkpoint,
+                         end_at_checkpoint, file_pure_match});
+        group_start = group_end;
+    }
+}
+
 static std::vector<ArrowWorkItem> enumerate_work_items(
     const std::vector<std::string> &files, const std::string &index_dir,
     const std::string &query_str, std::size_t max_workers,
@@ -1303,15 +1485,17 @@ static std::vector<ArrowWorkItem> enumerate_work_items(
     namespace indexer_ns = dftracer::utils::utilities::indexer;
     namespace indexing = dftracer::utils::utilities::composites::dft::indexing;
 
+    const ClipRange clip{clip_start_byte, clip_end_byte, clip_start_line,
+                         clip_end_line};
+
     std::vector<ArrowWorkItem> items;
     items.reserve(files.size() * 4);
 
-    const bool has_line_clip = (clip_start_line > 0 || clip_end_line > 0);
     auto push_unsplit = [&](const std::string &fp) {
         ArrowWorkItem item;
         item.file_path = fp;
-        item.start_line = clip_start_line;
-        item.end_line = clip_end_line;
+        item.start_line = clip.start_line;
+        item.end_line = clip.end_line;
         items.push_back(std::move(item));
     };
 
@@ -1411,81 +1595,9 @@ static std::vector<ArrowWorkItem> enumerate_work_items(
             auto &fc = file_ctxs[fc_idx];
             const auto &fp = files[fc.file_idx];
 
-            // Pruner chunk_idx semantics: 0-indexed over uncompressed
-            // slices. fc.ckpts holds gzip recovery points; recovery point
-            // fc.ckpts[k] sits at the START of pruner chunk (k+1). Pruner
-            // chunk 0 has no recovery point at its start (decoded from
-            // gzip stream start). Total pruner chunks = fc.ckpts.size()+1.
-            const std::size_t total_chunks = fc.ckpts.size() + 1;
-            auto chunk_start_byte = [&](std::uint64_t cidx) -> std::size_t {
-                if (cidx == 0) return 0;
-                return fc.ckpts[cidx - 1].uc_offset;
-            };
-            auto chunk_end_byte = [&](std::uint64_t cidx) -> std::size_t {
-                if (cidx == 0)
-                    return fc.ckpts.empty() ? 0 : fc.ckpts[0].uc_offset;
-                std::size_t k = cidx - 1;
-                return fc.ckpts[k].uc_offset + fc.ckpts[k].uc_size;
-            };
-            // Line ranges for a chunk. Chunk 0 covers everything before the
-            // first recovery point; chunk k>=1 spans recovery point (k-1).
-            auto chunk_first_line = [&](std::uint64_t cidx) -> std::size_t {
-                if (cidx == 0) return 1;
-                return fc.ckpts[cidx - 1].first_line_num;
-            };
-            auto chunk_last_line = [&](std::uint64_t cidx) -> std::size_t {
-                if (cidx == 0) {
-                    if (fc.ckpts.empty()) return SIZE_MAX;
-                    return fc.ckpts[0].first_line_num > 0
-                               ? fc.ckpts[0].first_line_num - 1
-                               : 0;
-                }
-                return fc.ckpts[cidx - 1].last_line_num;
-            };
-
-            std::vector<std::uint64_t> keep_chunks;
-            keep_chunks.reserve(total_chunks);
-            if (parsed) {
-                const auto &pr = pruner_outs[fc_idx];
-                if (pr.success && !pr.file_may_match) {
-                    continue;  // whole file pruned
-                }
-                if (pr.success && !pr.candidate_checkpoints.empty() &&
-                    pr.candidate_checkpoints.size() < pr.total_checkpoints) {
-                    for (auto cidx : pr.candidate_checkpoints) {
-                        if (cidx < total_chunks) keep_chunks.push_back(cidx);
-                    }
-                    std::sort(keep_chunks.begin(), keep_chunks.end());
-                    keep_chunks.erase(
-                        std::unique(keep_chunks.begin(), keep_chunks.end()),
-                        keep_chunks.end());
-                } else {
-                    for (std::uint64_t c = 0; c < total_chunks; ++c)
-                        keep_chunks.push_back(c);
-                }
-            } else {
-                for (std::uint64_t c = 0; c < total_chunks; ++c)
-                    keep_chunks.push_back(c);
-            }
-
-            // Intersect with the user's line range so workers only touch
-            // chunks that actually overlap it. Each work item carries the
-            // sub-line-range; LINE_RANGE on the read maps it back to bytes
-            // via the same checkpoint table the gzip stream uses.
-            if (has_line_clip) {
-                std::size_t lo = clip_start_line > 0 ? clip_start_line : 1;
-                std::size_t hi = clip_end_line > 0 ? clip_end_line : SIZE_MAX;
-                std::vector<std::uint64_t> filtered;
-                filtered.reserve(keep_chunks.size());
-                for (auto c : keep_chunks) {
-                    std::size_t cf = chunk_first_line(c);
-                    std::size_t cl = chunk_last_line(c);
-                    if (cl < lo || cf > hi) continue;
-                    filtered.push_back(c);
-                }
-                keep_chunks = std::move(filtered);
-            }
-
+            ChunkGeometry geo{fc.ckpts};
+            std::vector<std::uint64_t> keep_chunks = select_kept_chunks(
+                geo, parsed.has_value(), pruner_outs[fc_idx], clip);
             if (keep_chunks.empty()) continue;
 
             // All-or-nothing per file: if every kept chunk is uniform-matching
@@ -1498,73 +1610,8 @@ static std::vector<ArrowWorkItem> enumerate_work_items(
                     *idx_db, fc.fid, *eq_leaves, keep_chunks);
             }
 
-            std::size_t target_ranges = std::max<std::size_t>(1, max_workers);
-            std::size_t per_range = std::max<std::size_t>(
-                1, (keep_chunks.size() + target_ranges - 1) / target_ranges);
-
-            std::size_t group_start = 0;
-            while (group_start < keep_chunks.size()) {
-                std::size_t group_end = group_start;
-                std::size_t emitted = 0;
-                while (group_end < keep_chunks.size() && emitted < per_range) {
-                    if (group_end > group_start &&
-                        keep_chunks[group_end] !=
-                            keep_chunks[group_end - 1] + 1) {
-                        break;
-                    }
-                    ++group_end;
-                    ++emitted;
-                }
-                std::uint64_t scidx = keep_chunks[group_start];
-                std::uint64_t ecidx = keep_chunks[group_end - 1];
-                std::size_t start_byte = chunk_start_byte(scidx);
-                std::size_t end_byte = chunk_end_byte(ecidx);
-                // start_at_checkpoint: a gzip recovery point sits at
-                // start_byte (true for any cidx>=1; false for the implicit
-                // chunk 0 which decodes from stream start).
-                bool start_at_checkpoint = (scidx >= 1);
-                bool end_at_checkpoint = (group_end < keep_chunks.size());
-                if (has_line_clip) {
-                    std::size_t lo = clip_start_line > 0 ? clip_start_line : 1;
-                    std::size_t hi =
-                        clip_end_line > 0 ? clip_end_line : SIZE_MAX;
-                    std::size_t cluster_first = chunk_first_line(scidx);
-                    std::size_t cluster_last = chunk_last_line(ecidx);
-                    std::size_t item_start =
-                        std::max<std::size_t>(lo, cluster_first);
-                    std::size_t item_end =
-                        std::min<std::size_t>(hi, cluster_last);
-                    if (item_start > item_end) {
-                        group_start = group_end;
-                        continue;
-                    }
-                    ArrowWorkItem item;
-                    item.file_path = fp;
-                    item.chunk_prune_only = file_pure_match;
-                    item.start_line = item_start;
-                    item.end_line = item_end;
-                    items.push_back(std::move(item));
-                    group_start = group_end;
-                    continue;
-                }
-                if (clip_end_byte > clip_start_byte) {
-                    if (start_byte < clip_start_byte) {
-                        start_byte = clip_start_byte;
-                        start_at_checkpoint = false;
-                    }
-                    if (end_byte > clip_end_byte) {
-                        end_byte = clip_end_byte;
-                        end_at_checkpoint = false;
-                    }
-                    if (start_byte >= end_byte) {
-                        group_start = group_end;
-                        continue;
-                    }
-                }
-                items.push_back({fp, start_byte, end_byte, start_at_checkpoint,
-                                 end_at_checkpoint, file_pure_match});
-                group_start = group_end;
-            }
+            emit_work_items(items, fp, geo, keep_chunks, file_pure_match,
+                            max_workers, clip);
         }
     }
     return items;

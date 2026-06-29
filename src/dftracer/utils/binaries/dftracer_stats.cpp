@@ -441,12 +441,12 @@ static std::string resolve_display_key(
     return key;
 }
 
-static void print_text_detailed(
-    const std::string& file_path, const DetailedStatistics& detailed,
-    std::uint64_t total_chunks, std::uint64_t top_n,
-    const std::unordered_map<std::string, std::string>& hash_resolutions,
-    const TraceStatistics* summary = nullptr,
-    std::uint64_t top_n_pid_tid = 10) {
+// Header plus the optional summary sections (time span, categories, PID:TID).
+static void print_detailed_header(const std::string& file_path,
+                                  const DetailedStatistics& detailed,
+                                  std::uint64_t total_chunks,
+                                  const TraceStatistics* summary,
+                                  std::uint64_t top_n_pid_tid) {
     std::printf("========================================\n");
     std::printf("File: %s\n", file_path.c_str());
     std::printf("========================================\n");
@@ -493,8 +493,10 @@ static void print_text_detailed(
                         (unsigned long long)sorted_pid_tids[i].second);
         }
     }
+}
 
-    // Global duration distribution
+// Global (ungrouped) duration distribution and histogram.
+static void print_detailed_global_duration(const DetailedStatistics& detailed) {
     if (detailed.duration.count() > 0) {
         const auto& d = detailed.duration;
         std::printf("\n  Duration (all events):\n");
@@ -519,8 +521,12 @@ static void print_text_detailed(
         std::printf("\n  Duration Histogram:\n");
         std::printf("%s", d.histogram.render_blocks(20, "us").c_str());
     }
+}
 
-    // Per-group duration table, split by category
+// Per-group duration table, split by category.
+static void print_detailed_grouped_duration(
+    const DetailedStatistics& detailed, std::uint64_t top_n,
+    const std::unordered_map<std::string, std::string>& hash_resolutions) {
     if (!detailed.grouped_duration.empty()) {
         using DurPair = std::pair<std::string, const DistributionStats*>;
 
@@ -614,8 +620,12 @@ static void print_text_detailed(
             }
         }
     }
+}
 
-    // Per-group I/O metrics table
+// Per-group I/O metrics table (or simple global I/O stats when ungrouped).
+static void print_detailed_grouped_io(
+    const DetailedStatistics& detailed, std::uint64_t top_n,
+    const std::unordered_map<std::string, std::string>& hash_resolutions) {
     if (!detailed.grouped_io.empty()) {
         // Check if this is the global (no grouping) case
         bool is_global = (detailed.grouped_io.size() == 1 &&
@@ -723,7 +733,19 @@ static void print_text_detailed(
             }
         }
     }
+}
 
+static void print_text_detailed(
+    const std::string& file_path, const DetailedStatistics& detailed,
+    std::uint64_t total_chunks, std::uint64_t top_n,
+    const std::unordered_map<std::string, std::string>& hash_resolutions,
+    const TraceStatistics* summary = nullptr,
+    std::uint64_t top_n_pid_tid = 10) {
+    print_detailed_header(file_path, detailed, total_chunks, summary,
+                          top_n_pid_tid);
+    print_detailed_global_duration(detailed);
+    print_detailed_grouped_duration(detailed, top_n, hash_resolutions);
+    print_detailed_grouped_io(detailed, top_n, hash_resolutions);
     std::printf("\n");
 }
 

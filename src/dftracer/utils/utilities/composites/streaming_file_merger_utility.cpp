@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/composites/streaming_file_merger_utility.h>
@@ -180,8 +181,9 @@ StreamingFileConsumerUtility::process_async(
             // Uncompressed path: write directly to ofstream, zero allocs
             std::ofstream ofs(result.output_path, std::ios::binary);
             if (!ofs) {
-                throw std::runtime_error("Failed to open output: " +
-                                         result.output_path);
+                throw DFTUtilsException(
+                    ErrorCode::IO,
+                    "Failed to open output: " + result.output_path);
             }
 
             ofs.write("[\n", 2);

@@ -208,10 +208,6 @@ static coro::CoroTask<void> run_group_writer_task(
                 (*chunk_layouts_ptr)[cl.path] = std::move(cl.members);
             }
         }
-    } else {
-        DFTRACER_UTILS_LOG_ERROR("GroupWriter failed for %s: %s",
-                                 writer_config.group_name.c_str(),
-                                 writer_result.error_message.c_str());
     }
 }
 

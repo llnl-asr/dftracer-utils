@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/error.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
@@ -306,10 +307,12 @@ ArrowExportResult RecordBatchBuilder::finish() {
     nanoarrow::UniqueSchema schema;
     if (ArrowSchemaInitFromType(schema.get(), NANOARROW_TYPE_STRUCT) !=
         NANOARROW_OK) {
-        throw std::runtime_error("ArrowSchemaInitFromType(STRUCT) failed");
+        throw DFTUtilsException(ErrorCode::INTERNAL,
+                                "ArrowSchemaInitFromType(STRUCT) failed");
     }
     if (ArrowSchemaAllocateChildren(schema.get(), ncols) != NANOARROW_OK) {
-        throw std::runtime_error("ArrowSchemaAllocateChildren failed");
+        throw DFTUtilsException(ErrorCode::INTERNAL,
+                                "ArrowSchemaAllocateChildren failed");
     }
     for (std::int64_t i = 0; i < ncols; ++i) {
         const auto& col = columns_[static_cast<std::size_t>(i)];
@@ -319,30 +322,34 @@ ArrowExportResult RecordBatchBuilder::finish() {
             // Dictionary-encoded string: indices are INT32, values are STRING
             if (ArrowSchemaInitFromType(child_schema, NANOARROW_TYPE_INT32) !=
                 NANOARROW_OK) {
-                throw std::runtime_error(
+                throw DFTUtilsException(
+                    ErrorCode::INTERNAL,
                     "ArrowSchemaInitFromType(dict indices) failed");
             }
             if (ArrowSchemaAllocateDictionary(child_schema) != NANOARROW_OK) {
-                throw std::runtime_error(
-                    "ArrowSchemaAllocateDictionary failed");
+                throw DFTUtilsException(ErrorCode::INTERNAL,
+                                        "ArrowSchemaAllocateDictionary failed");
             }
             if (ArrowSchemaInitFromType(child_schema->dictionary,
                                         NANOARROW_TYPE_STRING) !=
                 NANOARROW_OK) {
-                throw std::runtime_error(
+                throw DFTUtilsException(
+                    ErrorCode::INTERNAL,
                     "ArrowSchemaInitFromType(dict values) failed");
             }
         } else {
             if (ArrowSchemaInitFromType(child_schema,
                                         to_nanoarrow_type(col.type)) !=
                 NANOARROW_OK) {
-                throw std::runtime_error(
+                throw DFTUtilsException(
+                    ErrorCode::INTERNAL,
                     "ArrowSchemaInitFromType(child) failed");
             }
         }
         if (ArrowSchemaSetName(child_schema, col.name.c_str()) !=
             NANOARROW_OK) {
-            throw std::runtime_error("ArrowSchemaSetName failed");
+            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                    "ArrowSchemaSetName failed");
         }
     }
 
@@ -350,11 +357,13 @@ ArrowExportResult RecordBatchBuilder::finish() {
     nanoarrow::UniqueArray array;
     if (ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr) !=
         NANOARROW_OK) {
-        throw std::runtime_error("ArrowArrayInitFromSchema failed");
+        throw DFTUtilsException(ErrorCode::INTERNAL,
+                                "ArrowArrayInitFromSchema failed");
     }
     // StartAppending initialises children recursively.
     if (ArrowArrayStartAppending(array.get()) != NANOARROW_OK) {
-        throw std::runtime_error("ArrowArrayStartAppending failed");
+        throw DFTUtilsException(ErrorCode::INTERNAL,
+                                "ArrowArrayStartAppending failed");
     }
 
     for (std::int64_t i = 0; i < ncols; ++i) {
@@ -362,7 +371,8 @@ ArrowExportResult RecordBatchBuilder::finish() {
         ArrowArray* child = array->children[i];
 
         if (ArrowArrayReserve(child, nrows) != NANOARROW_OK) {
-            throw std::runtime_error("ArrowArrayReserve failed");
+            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                    "ArrowArrayReserve failed");
         }
 
         const std::size_t row_count =
@@ -388,7 +398,8 @@ ArrowExportResult RecordBatchBuilder::finish() {
                                       static_cast<std::int64_t>(
                                           row_count * sizeof(std::int64_t))) !=
                     NANOARROW_OK) {
-                    throw std::runtime_error("INT64 buffer append failed");
+                    throw DFTUtilsException(ErrorCode::INTERNAL,
+                                            "INT64 buffer append failed");
                 }
                 break;
             }
@@ -399,7 +410,8 @@ ArrowExportResult RecordBatchBuilder::finish() {
                                       static_cast<std::int64_t>(
                                           row_count * sizeof(std::uint64_t))) !=
                     NANOARROW_OK) {
-                    throw std::runtime_error("UINT64 buffer append failed");
+                    throw DFTUtilsException(ErrorCode::INTERNAL,
+                                            "UINT64 buffer append failed");
                 }
                 break;
             }
@@ -410,7 +422,8 @@ ArrowExportResult RecordBatchBuilder::finish() {
                                       static_cast<std::int64_t>(
                                           row_count * sizeof(double))) !=
                     NANOARROW_OK) {
-                    throw std::runtime_error("DOUBLE buffer append failed");
+                    throw DFTUtilsException(ErrorCode::INTERNAL,
+                                            "DOUBLE buffer append failed");
                 }
                 break;
             }
@@ -436,14 +449,16 @@ ArrowExportResult RecordBatchBuilder::finish() {
                 for (std::size_t r = 0; r < row_count; ++r) {
                     if (col.has_nulls && col.validity[r] == 0) {
                         if (ArrowArrayAppendNull(child, 1) != NANOARROW_OK) {
-                            throw std::runtime_error(
+                            throw DFTUtilsException(
+                                ErrorCode::INTERNAL,
                                 "ArrowArrayAppendNull(bool) failed");
                         }
                         ++null_count;
                     } else {
                         if (ArrowArrayAppendInt(child, col.bool_values[r]) !=
                             NANOARROW_OK) {
-                            throw std::runtime_error(
+                            throw DFTUtilsException(
+                                ErrorCode::INTERNAL,
                                 "ArrowArrayAppendInt(bool) failed");
                         }
                     }
@@ -455,13 +470,15 @@ ArrowExportResult RecordBatchBuilder::finish() {
                 for (std::size_t r = 0; r < col.count; ++r) {
                     if (col.has_nulls && col.validity[r] == 0) {
                         if (ArrowArrayAppendNull(child, 1) != NANOARROW_OK) {
-                            throw std::runtime_error(
+                            throw DFTUtilsException(
+                                ErrorCode::INTERNAL,
                                 "ArrowArrayAppendNull(dict) failed");
                         }
                     } else {
                         if (ArrowArrayAppendInt(child, col.dict_indices[r]) !=
                             NANOARROW_OK) {
-                            throw std::runtime_error(
+                            throw DFTUtilsException(
+                                ErrorCode::INTERNAL,
                                 "ArrowArrayAppendInt(dict index) failed");
                         }
                     }
@@ -477,33 +494,38 @@ ArrowExportResult RecordBatchBuilder::finish() {
                 child->dictionary =
                     static_cast<ArrowArray*>(ArrowMalloc(sizeof(ArrowArray)));
                 if (!child->dictionary) {
-                    throw std::runtime_error("Failed to allocate dictionary");
+                    throw DFTUtilsException(ErrorCode::INTERNAL,
+                                            "Failed to allocate dictionary");
                 }
                 ArrowArrayInitFromType(child->dictionary,
                                        NANOARROW_TYPE_STRING);
                 if (ArrowArrayStartAppending(child->dictionary) !=
                     NANOARROW_OK) {
-                    throw std::runtime_error(
+                    throw DFTUtilsException(
+                        ErrorCode::INTERNAL,
                         "ArrowArrayStartAppending(dict) failed");
                 }
                 if (ArrowArrayReserve(
                         child->dictionary,
                         static_cast<std::int64_t>(col.dict_values.size())) !=
                     NANOARROW_OK) {
-                    throw std::runtime_error("ArrowArrayReserve(dict) failed");
+                    throw DFTUtilsException(ErrorCode::INTERNAL,
+                                            "ArrowArrayReserve(dict) failed");
                 }
                 for (const auto& s : col.dict_values) {
                     ArrowStringView asv{s.data(),
                                         static_cast<std::int64_t>(s.size())};
                     if (ArrowArrayAppendString(child->dictionary, asv) !=
                         NANOARROW_OK) {
-                        throw std::runtime_error(
+                        throw DFTUtilsException(
+                            ErrorCode::INTERNAL,
                             "ArrowArrayAppendString(dict) failed");
                     }
                 }
                 if (ArrowArrayFinishBuildingDefault(child->dictionary,
                                                     nullptr) != NANOARROW_OK) {
-                    throw std::runtime_error(
+                    throw DFTUtilsException(
+                        ErrorCode::INTERNAL,
                         "ArrowArrayFinishBuildingDefault(dict) failed");
                 }
                 break;
@@ -517,7 +539,8 @@ ArrowExportResult RecordBatchBuilder::finish() {
         }
 
         if (ArrowArrayFinishBuildingDefault(child, nullptr) != NANOARROW_OK) {
-            throw std::runtime_error(
+            throw DFTUtilsException(
+                ErrorCode::INTERNAL,
                 "ArrowArrayFinishBuildingDefault(child) failed");
         }
     }
@@ -526,7 +549,8 @@ ArrowExportResult RecordBatchBuilder::finish() {
     array->null_count = 0;
 
     if (ArrowArrayFinishBuildingDefault(array.get(), nullptr) != NANOARROW_OK) {
-        throw std::runtime_error(
+        throw DFTUtilsException(
+            ErrorCode::INTERNAL,
             "ArrowArrayFinishBuildingDefault(struct) failed");
     }
 

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_TASK_GRAPH_REDUCTION_H
 #define DFTRACER_UTILS_CORE_TASK_GRAPH_REDUCTION_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/task_graph/types.h>
 
 #include <cstddef>
@@ -28,7 +29,8 @@ template <typename T>
 std::vector<std::vector<T>> partition_all(std::size_t n,
                                           const std::vector<T>& items) {
     if (n == 0) {
-        throw std::invalid_argument("partition_all: n must be > 0");
+        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                "partition_all: n must be > 0");
     }
 
     std::vector<std::vector<T>> result;
@@ -58,7 +60,8 @@ template <typename T>
 std::vector<std::vector<T>> partition_all_move(std::size_t n,
                                                std::vector<T>& items) {
     if (n == 0) {
-        throw std::invalid_argument("partition_all_move: n must be > 0");
+        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                "partition_all_move: n must be > 0");
     }
 
     std::vector<std::vector<T>> result;

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_RUNTIME_H
 #define DFTRACER_UTILS_CORE_RUNTIME_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/executor.h>
@@ -132,7 +133,7 @@ class Runtime {
 template <typename T>
 TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw std::runtime_error("Runtime is shut down");
+        throw DFTUtilsException(ErrorCode::PIPELINE, "Runtime is shut down");
     }
     if (name.empty()) {
         name = "task-" + std::to_string(task_name_counter_++);

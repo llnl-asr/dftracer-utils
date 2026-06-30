@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_WRITER_UTILITY_H
 
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/fileio/types/streaming.h>
 
@@ -47,8 +48,9 @@ class StreamingFileWriterUtility {
         if (!create_dirs_ && path_.has_parent_path()) {
             fs::path parent = path_.parent_path();
             if (!fs::exists(parent)) {
-                throw std::runtime_error("Parent directory does not exist: " +
-                                         parent.string());
+                throw DFTUtilsException(
+                    ErrorCode::NOT_FOUND,
+                    "Parent directory does not exist: " + parent.string());
             }
         }
 
@@ -62,8 +64,9 @@ class StreamingFileWriterUtility {
 
         file_.open(path_, mode);
         if (!file_) {
-            throw std::runtime_error("Cannot open file for writing: " +
-                                     path_.string());
+            throw DFTUtilsException(
+                ErrorCode::IO,
+                "Cannot open file for writing: " + path_.string());
         }
 
         opened_ = true;
@@ -102,7 +105,8 @@ class StreamingFileWriterUtility {
      */
     coro::CoroTask<StreamWriteResult> process(ByteView chunk) {
         if (!opened_) {
-            throw std::runtime_error("Cannot write to closed file");
+            throw DFTUtilsException(ErrorCode::IO,
+                                    "Cannot write to closed file");
         }
 
         if (chunk.empty()) {
@@ -114,8 +118,8 @@ class StreamingFileWriterUtility {
                     static_cast<std::streamsize>(chunk.size()));
 
         if (!file_) {
-            throw std::runtime_error("Error writing to file: " +
-                                     path_.string());
+            throw DFTUtilsException(ErrorCode::IO,
+                                    "Error writing to file: " + path_.string());
         }
 
         total_bytes_ += chunk.size();

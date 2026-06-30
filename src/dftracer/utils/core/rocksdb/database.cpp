@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/env.h>
 #include <dftracer/utils/core/rocksdb/database.h>
@@ -163,9 +164,9 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
                                                          &column_family_names);
     if (!list_status.ok()) {
         if (open_mode_ == OpenMode::ReadOnly) {
-            throw std::runtime_error(
-                "Failed to list RocksDB column families at '" + db_path_ +
-                "': " + list_status.ToString());
+            throw DFTUtilsException(
+                ErrorCode::IO, "Failed to list RocksDB column families at '" +
+                                   db_path_ + "': " + list_status.ToString());
         }
         column_family_names.reserve(default_column_families().size());
         for (auto name : default_column_families()) {
@@ -204,8 +205,9 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     }
     if (!status.ok()) {
         cleanup_failed_open(db_, handles);
-        throw std::runtime_error("Failed to open RocksDB at '" + db_path_ +
-                                 "': " + status.ToString());
+        throw DFTUtilsException(ErrorCode::IO, "Failed to open RocksDB at '" +
+                                                   db_path_ +
+                                                   "': " + status.ToString());
     }
 
     column_families_.clear();
@@ -264,7 +266,8 @@ const std::string& RocksDatabase::path() const noexcept { return db_path_; }
                                             : std::string(column_family);
     const auto it = column_families_.find(name);
     if (it == column_families_.end() || it->second == nullptr) {
-        throw std::invalid_argument("Unknown RocksDB column family: " + name);
+        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                "Unknown RocksDB column family: " + name);
     }
     return it->second;
 }

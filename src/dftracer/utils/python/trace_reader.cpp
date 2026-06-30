@@ -13,6 +13,7 @@
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader.h>
@@ -2341,7 +2342,7 @@ static int TraceReader_init(TraceReaderObject *self, PyObject *args,
         TraceReader probe(std::move(cfg));
         self->has_index = probe.has_index() ? 1 : 0;
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         Py_DECREF(self->file_path);
         Py_DECREF(self->index_dir);
         self->file_path = NULL;
@@ -2381,7 +2382,7 @@ static PyObject *TraceReader_iter_lines(TraceReaderObject *self, PyObject *args,
     try {
         cfg = build_config(self);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -2429,7 +2430,7 @@ static PyObject *TraceReader_iter_lines(TraceReaderObject *self, PyObject *args,
             state->task_future = handle.future;
         }
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -2470,7 +2471,7 @@ static PyObject *TraceReader_iter_raw(TraceReaderObject *self, PyObject *args,
     try {
         cfg = build_config(self);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -2517,7 +2518,7 @@ static PyObject *TraceReader_iter_raw(TraceReaderObject *self, PyObject *args,
             state->task_future = handle.future;
         }
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -2565,7 +2566,7 @@ static PyObject *TraceReader_iter_json(TraceReaderObject *self, PyObject *args,
     try {
         cfg = build_config(self);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -2613,7 +2614,7 @@ static PyObject *TraceReader_iter_json(TraceReaderObject *self, PyObject *args,
             state->task_future = handle.future;
         }
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -2679,7 +2680,7 @@ static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
     try {
         cfg = build_config(self);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -2745,7 +2746,7 @@ static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
             state->task_future = handle.future;
         }
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -2794,7 +2795,7 @@ static std::shared_ptr<ArrowIteratorState> spawn_arrow_producer(
     try {
         cfg = build_config(self);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return nullptr;
     }
 
@@ -2846,7 +2847,7 @@ static std::shared_ptr<ArrowIteratorState> spawn_arrow_producer(
             state->task_future = handle.future;
         }
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return nullptr;
     }
 
@@ -3550,7 +3551,7 @@ static PyObject *TraceReader_get_max_bytes(TraceReaderObject *self,
         TraceReader reader(std::move(cfg));
         return PyLong_FromSize_t(reader.get_max_bytes());
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 }
@@ -3562,7 +3563,7 @@ static PyObject *TraceReader_get_num_lines(TraceReaderObject *self,
         TraceReader reader(std::move(cfg));
         return PyLong_FromSize_t(reader.get_num_lines());
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 }

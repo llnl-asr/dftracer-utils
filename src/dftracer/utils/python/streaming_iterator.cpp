@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
@@ -73,7 +74,7 @@ static PyObject* ArrowStreamingIterator_next(
                 try {
                     std::rethrow_exception(ex);
                 } catch (const std::exception& e) {
-                    PyErr_SetString(PyExc_RuntimeError, e.what());
+                    set_typed_py_error(e);
                     return NULL;
                 } catch (...) {
                     PyErr_SetString(PyExc_RuntimeError,

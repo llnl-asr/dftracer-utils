@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/pipeline/error.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -97,7 +98,8 @@ std::shared_ptr<Task> Task::operator&(std::shared_ptr<Task> other) {
             // inputs[0] is from first parent (this), inputs[1] is from second
             // (other)
             if (inputs.size() != 2) {
-                throw std::runtime_error(
+                throw DFTUtilsException(
+                    ErrorCode::INVALID_ARGUMENT,
                     "AND combiner expects exactly 2 inputs");
             }
             // Return tuple of both results

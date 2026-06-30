@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_line_iterator.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
@@ -316,7 +317,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                                .with_line_range(0, 5);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config1}),
-                            std::invalid_argument);
+                            dftracer::utils::DFTUtilsException);
 
             // End < Start
             auto config2 = IndexedFileLineIteratorConfig()
@@ -324,7 +325,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                                .with_line_range(10, 5);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config2}),
-                            std::invalid_argument);
+                            dftracer::utils::DFTUtilsException);
         }
 
         SUBCASE("Invalid byte range") {
@@ -341,7 +342,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_byte_range(1000, 500);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config}),
-                            std::invalid_argument);
+                            dftracer::utils::DFTUtilsException);
         }
 
         SUBCASE("Null reader") {
@@ -349,7 +350,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                 IndexedFileLineIteratorConfig().with_line_range(1, 10);
 
             CHECK_THROWS_AS((IndexedFileLineIterator{config}),
-                            std::invalid_argument);
+                            dftracer::utils::DFTUtilsException);
         }
 
         SUBCASE("Calling next() when no more lines") {

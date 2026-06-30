@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/common/statistics/mixture.h>
 
 #include <algorithm>
@@ -192,7 +193,8 @@ double cdf(const FittedMixture& mix, double x) {
 Sampler make_sampler(const FittedMixture& mix, std::optional<double> min_bound,
                      std::optional<double> max_bound) {
     if (!mix.valid) {
-        throw std::invalid_argument(
+        throw DFTUtilsException(
+            ErrorCode::INVALID_ARGUMENT,
             "make_sampler called with invalid FittedMixture");
     }
 

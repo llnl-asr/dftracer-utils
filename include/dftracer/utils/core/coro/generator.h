@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_GENERATOR_H
 #define DFTRACER_UTILS_CORE_CORO_GENERATOR_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/exception_helpers.h>
 
 #include <coroutine>
@@ -127,7 +128,8 @@ class Generator {
          */
         reference operator*() const {
             if (!handle_ || !handle_.promise().current_value_) {
-                throw std::runtime_error(
+                throw DFTUtilsException(
+                    ErrorCode::INVALID_ARGUMENT,
                     "Generator iterator: no value available");
             }
             return *handle_.promise().current_value_;
@@ -244,7 +246,8 @@ class Generator {
      */
     const T& value() const {
         if (!handle_ || !handle_.promise().current_value_) {
-            throw std::runtime_error("Generator: no value available");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "Generator: no value available");
         }
         return *handle_.promise().current_value_;
     }

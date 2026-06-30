@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_GRAPH_H
 #define DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_GRAPH_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/task_graph/reduction.h>
 #include <dftracer/utils/core/task_graph/task_graph_config.h>
@@ -94,8 +95,8 @@ std::shared_ptr<Task> make_tree_reduce(
     std::vector<std::shared_ptr<Task>> sources, split_every split,
     Reducer&& reducer, std::string name_prefix = "Reduce") {
     if (sources.empty()) {
-        throw std::invalid_argument(
-            "make_tree_reduce: sources cannot be empty");
+        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                "make_tree_reduce: sources cannot be empty");
     }
 
     if (sources.size() == 1) {
@@ -103,8 +104,8 @@ std::shared_ptr<Task> make_tree_reduce(
     }
 
     if (split.count < 2) {
-        throw std::invalid_argument(
-            "make_tree_reduce: split_every must be >= 2");
+        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                "make_tree_reduce: split_every must be >= 2");
     }
 
     std::vector<std::shared_ptr<Task>> current_level = std::move(sources);
@@ -264,8 +265,8 @@ class TaskGraph {
     TaskGroup<U> fan_out(const TaskGroup<T>& source, num_outputs count,
                          Func&& mapper, TaskGraphFanOutConfig opts = {}) {
         if (source.size() != 1) {
-            throw std::invalid_argument(
-                "fan_out: source must have exactly 1 task");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "fan_out: source must have exactly 1 task");
         }
 
         auto max_conc = resolve_max_concurrency(opts.max_concurrency);
@@ -381,7 +382,8 @@ class TaskGraph {
     TaskGroup<U> reduce(const TaskGroup<T>& group, split_every count,
                         Reducer&& reducer, TaskGraphReduceConfig opts = {}) {
         if (group.empty()) {
-            throw std::invalid_argument("reduce: group cannot be empty");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "reduce: group cannot be empty");
         }
 
         if (group.size() == 1) {
@@ -444,7 +446,8 @@ class TaskGraph {
     TaskGroup<T> fold(const TaskGroup<T>& group, T init, split_every count,
                       BinaryOp&& op, TaskGraphFoldConfig opts = {}) {
         if (group.empty()) {
-            throw std::invalid_argument("fold: group cannot be empty");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "fold: group cannot be empty");
         }
 
         if (group.size() == 1) {
@@ -521,7 +524,8 @@ class TaskGraph {
                                         num_partitions count,
                                         TaskGraphPartitionConfig opts = {}) {
         if (count.count == 0) {
-            throw std::invalid_argument("partition: count must be > 0");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "partition: count must be > 0");
         }
 
         TaskGroup<std::vector<T>> group;
@@ -562,8 +566,8 @@ class TaskGraph {
         const TaskGroup<std::vector<T>>& group,
         split_every count = split_every{2}, TaskGraphConcatConfig opts = {}) {
         if (group.empty()) {
-            throw std::invalid_argument(
-                "concat_partitions: group cannot be empty");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "concat_partitions: group cannot be empty");
         }
 
         if (group.size() == 1) {

@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/rocksdb/key_codec.h>
 
 #include <stdexcept>
@@ -9,8 +10,8 @@ namespace {
 template <typename T>
 T decode_big_endian(std::string_view bytes) {
     if (bytes.size() != sizeof(T)) {
-        throw std::invalid_argument(
-            "KeyCodec: invalid big-endian integer width");
+        throw DFTUtilsException(ErrorCode::PARSE,
+                                "KeyCodec: invalid big-endian integer width");
     }
 
     T value = 0;

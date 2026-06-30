@@ -79,11 +79,11 @@ static coro::CoroTask<int> run_reconstruct(const ReconstructArgParse* cli,
     input.compress = !cli->no_compress;
 
     ReconstructorUtility reconstructor;
-    auto result = co_await scope.spawn(reconstructor, std::move(input));
-
-    if (!result.success) {
-        DFTRACER_UTILS_LOG_ERROR("Reconstruction failed: %s",
-                                 result.error_message.c_str());
+    ReconstructorResult result;
+    try {
+        result = co_await scope.spawn(reconstructor, std::move(input));
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_ERROR("Reconstruction failed: %s", e.what());
         co_return 1;
     }
 

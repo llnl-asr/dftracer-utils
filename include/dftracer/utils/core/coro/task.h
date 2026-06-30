@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_TASK_H
 #define DFTRACER_UTILS_CORE_CORO_TASK_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/common/typedefs.h>
@@ -508,7 +509,8 @@ class CoroTask {
                     co_return co_await std::move(fall);
                 }
             }
-            throw std::logic_error("Unreachable code in operator| reached");
+            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                    "Unreachable code in operator| reached");
         }(std::move(primary), std::move(fallback));
     }
 };

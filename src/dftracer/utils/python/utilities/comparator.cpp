@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/channel.h>
@@ -289,7 +290,8 @@ static bool run_comparison_pipeline(ComparatorObject *self,
             auto parsed = ComparisonConfig::from_json_file(
                 args_copy.config_path, parse_error);
             if (!parsed) {
-                throw std::runtime_error("Config error: " + parse_error);
+                throw DFTUtilsException(ErrorCode::PARSE,
+                                        "Config error: " + parse_error);
             }
             config = std::move(*parsed);
         } else {
@@ -404,12 +406,14 @@ static bool run_comparison_pipeline(ComparatorObject *self,
                 });
 
             if (baseline_files.empty()) {
-                throw std::runtime_error("No trace files found in baseline: " +
-                                         config.baseline);
+                throw DFTUtilsException(
+                    ErrorCode::NOT_FOUND,
+                    "No trace files found in baseline: " + config.baseline);
             }
             if (variant_files.empty()) {
-                throw std::runtime_error("No trace files found in variant: " +
-                                         config.variant);
+                throw DFTUtilsException(
+                    ErrorCode::NOT_FOUND,
+                    "No trace files found in variant: " + config.variant);
             }
 
             output_ptr->baseline_path = config.baseline;
@@ -434,9 +438,10 @@ static bool run_comparison_pipeline(ComparatorObject *self,
                         auto result = common::query::Query::from_string(
                             visitor->composed_query);
                         if (!result) {
-                            throw std::runtime_error(
+                            throw DFTUtilsException(
+                                ErrorCode::QUERY,
                                 "Invalid query for node '" + visitor->name +
-                                "': " + result.error().format());
+                                    "': " + result.error().format());
                         }
                         query = std::move(*result);
                     }

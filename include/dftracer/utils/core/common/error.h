@@ -2,7 +2,9 @@
 #define DFTRACER_UTILS_CORE_COMMON_ERROR_H
 
 #include <dftracer/utils/core/common/expected.h>
+#include <dftracer/utils/core/common/str_format.h>
 
+#include <cstdarg>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -17,6 +19,7 @@ enum class ErrorCode {
     NOT_FOUND,         // missing file / key / entity
     IO,                // filesystem / I/O failure
     PARSE,             // parse / decode failure (JSON, format, ...)
+    COMPRESSION,       // (de)compression failure / corrupt compressed data
     QUERY,             // query DSL error
     READER,            // reader subsystem
     INDEXER,           // indexer subsystem
@@ -38,6 +41,8 @@ inline const char* error_code_name(ErrorCode code) noexcept {
             return "IO";
         case ErrorCode::PARSE:
             return "PARSE";
+        case ErrorCode::COMPRESSION:
+            return "COMPRESSION";
         case ErrorCode::QUERY:
             return "QUERY";
         case ErrorCode::READER:
@@ -88,6 +93,28 @@ class DFTUtilsException : public std::runtime_error {
         : std::runtime_error(message), code_(code) {}
     explicit DFTUtilsException(const DFTUtilsError& err)
         : std::runtime_error(err.message), code_(err.code) {}
+
+    // Concatenation factory (numbers via to_chars; no format string):
+    //   throw DFTUtilsException::cat(ErrorCode::IO,
+    //                                "Cannot open ", path, ": errno=", e);
+    template <typename... Args>
+    static DFTUtilsException cat(ErrorCode code, const Args&... args) {
+        return DFTUtilsException(code, str_cat(args...));
+    }
+
+    // printf-style factory:
+    //   throw DFTUtilsException::fmt(ErrorCode::IO,
+    //                                "Cannot open %s: errno=%d", path.c_str(),
+    //                                e);
+    // For a literal '%' in the message, escape as "%%" or use cat().
+    __attribute__((__format__(__printf__, 2, 3))) static DFTUtilsException fmt(
+        ErrorCode code, const char* format, ...) {
+        va_list ap;
+        va_start(ap, format);
+        std::string msg = vstring_format(format, ap);
+        va_end(ap);
+        return DFTUtilsException(code, std::move(msg));
+    }
 
     ErrorCode code() const noexcept { return code_; }
 

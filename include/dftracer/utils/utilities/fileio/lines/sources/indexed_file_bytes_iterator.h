@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_INDEXED_FILE_BYTES_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_INDEXED_FILE_BYTES_ITERATOR_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
@@ -77,10 +78,12 @@ class IndexedFileBytesIterator {
           has_buffered_line_(false),
           attempted_read_(false) {
         if (!reader_) {
-            throw std::invalid_argument("Reader cannot be null");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "Reader cannot be null");
         }
         if (start_byte_ >= end_byte_) {
-            throw std::invalid_argument("Invalid byte range");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "Invalid byte range");
         }
 
         // Resize (not reserve) to allocate the buffer with the correct size
@@ -100,7 +103,7 @@ class IndexedFileBytesIterator {
                 .from(start_byte_)
                 .to(end_byte_));
         if (!stream_) {
-            throw std::runtime_error("Failed to create stream");
+            throw DFTUtilsException(ErrorCode::IO, "Failed to create stream");
         }
     }
 
@@ -169,7 +172,8 @@ class IndexedFileBytesIterator {
      */
     Line next() {
         if (!has_next()) {
-            throw std::runtime_error("No more lines available");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "No more lines available");
         }
 
         // Return the buffered line

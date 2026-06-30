@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_HASH_HASHER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_HASH_HASHER_UTILITY_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 #include <dftracer/utils/utilities/hash/internal/base_hasher_utility.h>
 #include <dftracer/utils/utilities/hash/std_hasher_utility.h>
@@ -61,7 +62,8 @@ class HasherUtility : public internal::BaseHasherUtility {
 
     void reset() override {
         if (!impl_) {
-            throw std::runtime_error("impl_ is null in reset()!");
+            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                    "impl_ is null in reset()!");
         }
         impl_->reset();
         current_hash_ = impl_->get_hash();

@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 
 #include <algorithm>
@@ -93,7 +94,8 @@ BloomFilter::BloomFilter(std::vector<unsigned char> bits, std::size_t num_bits,
 BloomFilter BloomFilter::from_blob(const unsigned char* data,
                                    std::size_t size) {
     if (size < HEADER_SIZE) {
-        throw std::runtime_error(
+        throw DFTUtilsException(
+            ErrorCode::PARSE,
             "BloomFilter::from_blob: data too small for header");
     }
 
@@ -183,7 +185,8 @@ bool BloomFilter::possibly_contains(std::string_view value) const {
 void BloomFilter::merge_from(const BloomFilter& other) {
     if (bits_.size() != other.bits_.size() || num_bits_ != other.num_bits_ ||
         num_hashes_ != other.num_hashes_) {
-        throw std::runtime_error(
+        throw DFTUtilsException(
+            ErrorCode::INVALID_ARGUMENT,
             "BloomFilter::merge_from: incompatible filter parameters");
     }
 

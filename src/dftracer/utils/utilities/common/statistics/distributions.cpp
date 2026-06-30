@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/common/statistics/distributions.h>
 
 #include <algorithm>
@@ -410,7 +411,8 @@ Sampler make_sampler(const FittedDistribution& fit,
                      std::optional<double> min_bound,
                      std::optional<double> max_bound) {
     if (!fit.valid) {
-        throw std::invalid_argument(
+        throw DFTUtilsException(
+            ErrorCode::INVALID_ARGUMENT,
             "make_sampler called with invalid FittedDistribution");
     }
     const auto p0 = fit.params[0];

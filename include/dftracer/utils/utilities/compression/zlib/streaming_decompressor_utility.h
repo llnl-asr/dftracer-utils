@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_STREAMING_DECOMPRESSOR_UTILITY_H
 
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/utilities/compression/zlib/types.h>
 #include <zlib.h>
@@ -94,7 +95,8 @@ class StreamingDecompressorUtility {
             int ret = inflate(&stream_, Z_NO_FLUSH);
 
             if (ret == Z_STREAM_ERROR || ret == Z_MEM_ERROR) {
-                throw std::runtime_error("Inflate error: corrupted data");
+                throw DFTUtilsException(ErrorCode::COMPRESSION,
+                                        "Inflate error: corrupted data");
             }
 
             if (ret == Z_DATA_ERROR) {
@@ -102,7 +104,8 @@ class StreamingDecompressorUtility {
                     finished_ = true;
                     break;
                 }
-                throw std::runtime_error("Inflate error: corrupted data");
+                throw DFTUtilsException(ErrorCode::COMPRESSION,
+                                        "Inflate error: corrupted data");
             }
 
             std::size_t decompressed_size =
@@ -138,7 +141,8 @@ class StreamingDecompressorUtility {
         int ret = inflateInit2(&stream_, static_cast<int>(format_));
 
         if (ret != Z_OK) {
-            throw std::runtime_error("Failed to initialize inflate");
+            throw DFTUtilsException(ErrorCode::COMPRESSION,
+                                    "Failed to initialize inflate");
         }
 
         initialized_ = true;

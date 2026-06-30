@@ -68,8 +68,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
             std::error_code ec;
             fs::remove_all(root, ec);
             if (ec) {
-                throw std::runtime_error("failed to remove stale index " +
-                                         root + ": " + ec.message());
+                throw DFTUtilsException(ErrorCode::IO,
+                                        "failed to remove stale index " + root +
+                                            ": " + ec.message());
             }
         }
         result = co_await resolver.process(resolve_input);

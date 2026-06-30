@@ -465,12 +465,6 @@ ArrowExportResult AggregationBatch::to_dfanalyzer_arrow(
 
 coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     const AggregatorInput& input) {
-    if (!has_context()) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "AggregatorUtility requires CoroScope context. "
-            "Use Runtime::scope() to run this utility.");
-        co_return;
-    }
     CoroScope& scope = context();
 
     // Determine parallelism

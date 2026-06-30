@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_bytes_iterator.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
@@ -308,7 +309,7 @@ TEST_SUITE("IndexedFileBytesIterator") {
     TEST_CASE("IndexedFileBytesIterator - Error Handling") {
         SUBCASE("Null reader") {
             CHECK_THROWS_AS(IndexedFileBytesIterator(nullptr, 0, 100),
-                            std::invalid_argument);
+                            dftracer::utils::DFTUtilsException);
         }
 
         SUBCASE("Invalid byte range - start >= end") {
@@ -324,9 +325,9 @@ TEST_SUITE("IndexedFileBytesIterator") {
 
             // start >= end
             CHECK_THROWS_AS(IndexedFileBytesIterator(reader, 100, 100),
-                            std::invalid_argument);
+                            dftracer::utils::DFTUtilsException);
             CHECK_THROWS_AS(IndexedFileBytesIterator(reader, 100, 50),
-                            std::invalid_argument);
+                            dftracer::utils::DFTUtilsException);
         }
 
         SUBCASE("Calling next() when no more lines") {

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_TYPED_TASK_H
 #define DFTRACER_UTILS_CORE_TASKS_TYPED_TASK_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 
@@ -86,7 +87,8 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         // Default implementation - should be overridden
-        throw std::runtime_error("TypedTask::apply() must be overridden");
+        throw DFTUtilsException(ErrorCode::INTERNAL,
+                                "TypedTask::apply() must be overridden");
     }
 
     // Version with input, no output
@@ -96,7 +98,8 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
-        throw std::runtime_error("TypedTask::apply() must be overridden");
+        throw DFTUtilsException(ErrorCode::INTERNAL,
+                                "TypedTask::apply() must be overridden");
     }
 
     // Version with output, no input
@@ -106,7 +109,8 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
-        throw std::runtime_error("TypedTask::apply() must be overridden");
+        throw DFTUtilsException(ErrorCode::INTERNAL,
+                                "TypedTask::apply() must be overridden");
     }
 
     // Version with no input or output
@@ -116,7 +120,8 @@ class TypedTask : public Task {
         static_assert(std::is_same_v<I_, I> && std::is_same_v<O_, O>,
                       "Template parameters must match class parameters");
         DFTRACER_UTILS_LOG_ERROR("%s", "TypedTask::apply() not overridden");
-        throw std::runtime_error("TypedTask::apply() must be overridden");
+        throw DFTUtilsException(ErrorCode::INTERNAL,
+                                "TypedTask::apply() must be overridden");
     }
 
    protected:

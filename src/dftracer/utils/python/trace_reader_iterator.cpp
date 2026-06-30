@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/json.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -213,7 +214,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
                     try {
                         std::rethrow_exception(js->error);
                     } catch (const std::exception &e) {
-                        PyErr_SetString(PyExc_RuntimeError, e.what());
+                        set_typed_py_error(e);
                         return NULL;
                     } catch (...) {
                         PyErr_SetString(PyExc_RuntimeError,
@@ -246,7 +247,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
                 try {
                     std::rethrow_exception(astate->error);
                 } catch (const std::exception &e) {
-                    PyErr_SetString(PyExc_RuntimeError, e.what());
+                    set_typed_py_error(e);
                     return NULL;
                 } catch (...) {
                     PyErr_SetString(PyExc_RuntimeError,
@@ -298,7 +299,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
                 try {
                     std::rethrow_exception(bs->error);
                 } catch (const std::exception &e) {
-                    PyErr_SetString(PyExc_RuntimeError, e.what());
+                    set_typed_py_error(e);
                     return NULL;
                 } catch (...) {
                     PyErr_SetString(PyExc_RuntimeError,

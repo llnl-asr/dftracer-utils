@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_line_generator.h>
@@ -221,7 +222,7 @@ TEST_SUITE("AsyncIndexedFileLineGenerator") {
                 co_return;
             }(std::move(gen));
 
-            CHECK_THROWS_AS(task.get(), std::invalid_argument);
+            CHECK_THROWS_AS(task.get(), dftracer::utils::DFTUtilsException);
         }
 
         SUBCASE("Non-existent file throws") {

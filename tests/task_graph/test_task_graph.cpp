@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/task_graph/reduction.h>
 #include <dftracer/utils/core/task_graph/task_graph.h>
@@ -174,7 +175,8 @@ TEST_CASE("partition_all - empty input") {
 
 TEST_CASE("partition_all - throws on n=0") {
     std::vector<int> items{1, 2, 3};
-    CHECK_THROWS_AS(partition_all(0, items), std::invalid_argument);
+    CHECK_THROWS_AS(partition_all(0, items),
+                    dftracer::utils::DFTUtilsException);
 }
 
 TEST_CASE("tree_reduction_depth - various sizes") {

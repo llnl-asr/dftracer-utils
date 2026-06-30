@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPRESSION_ZLIB_STREAMING_COMPRESSOR_UTILITY_H
 
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/utilities/compression/zlib/types.h>
 #include <zlib.h>
@@ -96,7 +97,8 @@ class ManualStreamingCompressorUtility {
 
             int ret = deflate(&stream_, Z_NO_FLUSH);
             if (ret == Z_STREAM_ERROR) {
-                throw std::runtime_error("Deflate stream error");
+                throw DFTUtilsException(ErrorCode::COMPRESSION,
+                                        "Deflate stream error");
             }
 
             std::size_t compressed_size =
@@ -131,7 +133,8 @@ class ManualStreamingCompressorUtility {
 
             ret = deflate(&stream_, Z_FINISH);
             if (ret == Z_STREAM_ERROR) {
-                throw std::runtime_error(
+                throw DFTUtilsException(
+                    ErrorCode::COMPRESSION,
                     "Deflate stream error during finalization");
             }
 
@@ -144,7 +147,8 @@ class ManualStreamingCompressorUtility {
         } while (ret == Z_OK);
 
         if (ret != Z_STREAM_END) {
-            throw std::runtime_error("Failed to finalize compression");
+            throw DFTUtilsException(ErrorCode::COMPRESSION,
+                                    "Failed to finalize compression");
         }
 
         finalized_ = true;
@@ -167,7 +171,8 @@ class ManualStreamingCompressorUtility {
                          static_cast<int>(format_), 8, Z_DEFAULT_STRATEGY);
 
         if (ret != Z_OK) {
-            throw std::runtime_error("Failed to initialize deflate");
+            throw DFTUtilsException(ErrorCode::COMPRESSION,
+                                    "Failed to initialize deflate");
         }
 
         initialized_ = true;

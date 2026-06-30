@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/sst_distribution.h>
@@ -308,7 +309,7 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
             .get();
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -847,7 +848,7 @@ static PyObject *move_artifacts_fn(PyObject * /*self*/, PyObject *args,
         Py_BEGIN_ALLOW_THREADS moved = std::move(a).move_to(dest_dir);
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
     return artifacts_to_dict(moved);

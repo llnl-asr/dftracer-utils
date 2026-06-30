@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/task_handle.h>
 
@@ -39,7 +40,7 @@ static PyObject *TaskHandle_get(TaskHandleObject *self,
             Py_BEGIN_ALLOW_THREADS result = self->typed_future.get();
             Py_END_ALLOW_THREADS
         } catch (const std::exception &e) {
-            PyErr_SetString(PyExc_RuntimeError, e.what());
+            set_typed_py_error(e);
             return NULL;
         } catch (...) {
             PyErr_SetString(PyExc_RuntimeError, "Unknown error in task");
@@ -64,7 +65,7 @@ static PyObject *TaskHandle_get(TaskHandleObject *self,
         Py_BEGIN_ALLOW_THREADS self->future.get();
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     } catch (...) {
         PyErr_SetString(PyExc_RuntimeError, "Unknown error in task");
@@ -83,7 +84,7 @@ static PyObject *TaskHandle_wait(TaskHandleObject *self,
         Py_BEGIN_ALLOW_THREADS self->future.get();
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     } catch (...) {
         PyErr_SetString(PyExc_RuntimeError, "Unknown error in task");

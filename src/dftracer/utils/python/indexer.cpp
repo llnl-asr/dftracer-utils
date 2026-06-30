@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/indexer_checkpoint.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
@@ -189,7 +190,7 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
                 .get();
             Py_END_ALLOW_THREADS
         } catch (const std::exception &e) {
-            PyErr_SetString(PyExc_RuntimeError, e.what());
+            set_typed_py_error(e);
             return NULL;
         }
 

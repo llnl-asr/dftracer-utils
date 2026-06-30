@@ -1,4 +1,5 @@
 #include <dftracer/utils/python/index_database.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/sst_distribution.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
@@ -36,7 +37,7 @@ static int IndexDatabase_init(IndexDatabaseObject *self, PyObject *args,
     try {
         self->db = std::make_shared<IndexDatabase>(index_path);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return -1;
     }
     return 0;
@@ -52,7 +53,7 @@ static PyObject *IndexDatabase_init_schema(IndexDatabaseObject *self,
         Py_BEGIN_ALLOW_THREADS self->db->init_schema();
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
     Py_RETURN_NONE;
@@ -89,7 +90,7 @@ static PyObject *IndexDatabase_register_files(IndexDatabaseObject *self,
             self->db->register_files(paths, build_manifest != 0);
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
 
@@ -115,7 +116,7 @@ static PyObject *IndexDatabase_reserve_file_id_range(IndexDatabaseObject *self,
             self->db->reserve_file_id_range(static_cast<std::size_t>(count));
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
     return PyLong_FromLong(first);
@@ -160,7 +161,7 @@ static PyObject *IndexDatabase_bulk_ingest(IndexDatabaseObject *self,
         Py_BEGIN_ALLOW_THREADS self->db->bulk_ingest(*registry, skip_cfs);
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
     Py_RETURN_NONE;
@@ -191,7 +192,7 @@ static PyObject *IndexDatabase_write_agg_file_markers(IndexDatabaseObject *self,
         Py_BEGIN_ALLOW_THREADS self->db->write_agg_file_markers(file_ids);
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
     Py_RETURN_NONE;
@@ -212,7 +213,7 @@ static PyObject *IndexDatabase_write_agg_global_config(
             static_cast<std::uint32_t>(config_hash));
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
     Py_RETURN_NONE;
@@ -250,7 +251,7 @@ static PyObject *IndexDatabase_write_aggregation_tracker(
         Py_BEGIN_ALLOW_THREADS self->db->write_aggregation_tracker(blobs);
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
     Py_RETURN_NONE;
@@ -262,7 +263,7 @@ static PyObject *IndexDatabase_rebuild_root_summaries(IndexDatabaseObject *self,
         Py_BEGIN_ALLOW_THREADS self->db->rebuild_root_summaries();
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
     Py_RETURN_NONE;

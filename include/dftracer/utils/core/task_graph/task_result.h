@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_RESULT_H
 #define DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_RESULT_H
 
+#include <dftracer/utils/core/common/error.h>
+
 #include <cstddef>
 #include <memory>
 #include <type_traits>
@@ -65,8 +67,8 @@ class TaskResult {
      */
     const T& get() const {
         if (!data_) {
-            throw std::runtime_error(
-                "TaskResult::get() called on empty result");
+            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                    "TaskResult::get() called on empty result");
         }
         return *data_;
     }
@@ -79,7 +81,8 @@ class TaskResult {
      */
     T copy() const {
         if (!data_) {
-            throw std::runtime_error(
+            throw DFTUtilsException(
+                ErrorCode::INTERNAL,
                 "TaskResult::copy() called on empty result");
         }
         return T(*data_);

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_PLAIN_FILE_LINE_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_PLAIN_FILE_LINE_ITERATOR_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
@@ -52,7 +53,8 @@ class PlainFileLineIterator {
         validate_file();
 
         if (start_line < 1 || end_line < start_line)
-            throw std::invalid_argument("Invalid line range");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "Invalid line range");
 
         // Skip to start_line (inclusive)
         std::string dummy;
@@ -69,7 +71,9 @@ class PlainFileLineIterator {
     }
 
     Line next() {
-        if (!has_next()) throw std::runtime_error("No more lines available");
+        if (!has_next())
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "No more lines available");
 
         current_line_++;
         prefetched_ = false;  // next call will read the next line
@@ -87,9 +91,11 @@ class PlainFileLineIterator {
    private:
     void validate_file() {
         if (!stream_.is_open())
-            throw std::runtime_error("Cannot open file: " + file_path_);
+            throw DFTUtilsException(ErrorCode::IO,
+                                    "Cannot open file: " + file_path_);
         if (!fs::exists(file_path_))
-            throw std::runtime_error("File does not exist: " + file_path_);
+            throw DFTUtilsException(ErrorCode::NOT_FOUND,
+                                    "File does not exist: " + file_path_);
     }
 
     void prefetch() const {

@@ -1,5 +1,6 @@
 #include <dftracer/utils/python/py_errors.h>
 
+#include <stdexcept>
 #include <string>
 
 PyObject *g_dft_error = nullptr;
@@ -7,6 +8,7 @@ PyObject *g_dft_value_error = nullptr;
 PyObject *g_dft_not_found_error = nullptr;
 PyObject *g_dft_io_error = nullptr;
 PyObject *g_dft_parse_error = nullptr;
+PyObject *g_dft_compression_error = nullptr;
 PyObject *g_dft_query_error = nullptr;
 PyObject *g_dft_reader_error = nullptr;
 PyObject *g_dft_indexer_error = nullptr;
@@ -49,6 +51,9 @@ int init_py_errors(PyObject *m) {
         return -1;
     if (add_exc(m, "DFTUtilsParseError", g_dft_error, &g_dft_parse_error) < 0)
         return -1;
+    if (add_exc(m, "DFTUtilsCompressionError", g_dft_error,
+                &g_dft_compression_error) < 0)
+        return -1;
     if (add_exc(m, "DFTUtilsQueryError", g_dft_error, &g_dft_query_error) < 0)
         return -1;
     if (add_exc(m, "DFTUtilsReaderError", g_dft_error, &g_dft_reader_error) < 0)
@@ -75,6 +80,8 @@ PyObject *py_error_type_for(ErrorCode code) {
             return g_dft_io_error;
         case ErrorCode::PARSE:
             return g_dft_parse_error;
+        case ErrorCode::COMPRESSION:
+            return g_dft_compression_error;
         case ErrorCode::QUERY:
             return g_dft_query_error;
         case ErrorCode::READER:
@@ -90,4 +97,15 @@ PyObject *py_error_type_for(ErrorCode code) {
             return g_dft_error;
     }
     return g_dft_error;
+}
+
+void set_typed_py_error(const std::exception &e) {
+    if (const auto *de =
+            dynamic_cast<const dftracer::utils::DFTUtilsException *>(&e)) {
+        PyErr_SetString(py_error_type_for(de->code()), e.what());
+    } else if (dynamic_cast<const std::invalid_argument *>(&e)) {
+        PyErr_SetString(g_dft_value_error, e.what());
+    } else {
+        PyErr_SetString(g_dft_error, e.what());
+    }
 }

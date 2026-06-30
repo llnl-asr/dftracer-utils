@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
@@ -121,7 +122,8 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
     auto db_handle =
         agg::EventAggregator::open_read_only_with_merge_operator(db_path);
     if (!db_handle) {
-        throw std::runtime_error("dlio: failed to open RocksDB at " + db_path);
+        throw DFTUtilsException(ErrorCode::IO,
+                                "dlio: failed to open RocksDB at " + db_path);
     }
     auto& db = *db_handle;
 
@@ -151,7 +153,8 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
 
     auto it = db.new_iterator(rdb::cf::AGGREGATION);
     if (!it) {
-        throw std::runtime_error("dlio: failed to obtain AGGREGATION iterator");
+        throw DFTUtilsException(ErrorCode::IO,
+                                "dlio: failed to obtain AGGREGATION iterator");
     }
 
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
@@ -221,9 +224,9 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
     }
 
     if (!it->status().ok()) {
-        throw std::runtime_error(
-            "dlio: iteration over AGGREGATION CF failed: " +
-            it->status().ToString());
+        throw DFTUtilsException(ErrorCode::IO,
+                                "dlio: iteration over AGGREGATION CF failed: " +
+                                    it->status().ToString());
     }
 
     if (!out.any_data) {

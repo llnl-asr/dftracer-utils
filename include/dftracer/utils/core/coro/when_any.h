@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/coro/completion_latch.h>
 #include <dftracer/utils/core/coro/coro.h>
@@ -781,7 +782,8 @@ class TimeoutAwaitable {
 
     void await_suspend(std::coroutine_handle<> h) {
         if (!timer_service_) {
-            throw std::runtime_error(
+            throw DFTUtilsException(
+                ErrorCode::PIPELINE,
                 "TimeoutAwaitable: TimerService not available");
         }
 
@@ -797,7 +799,7 @@ class TimeoutAwaitable {
         completed_.store(true, std::memory_order_release);
 
         if (timed_out_->load(std::memory_order_acquire)) {
-            throw std::runtime_error("Operation timed out");
+            throw DFTUtilsException(ErrorCode::PIPELINE, "Operation timed out");
         }
     }
 

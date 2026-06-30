@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 
@@ -57,7 +58,7 @@ static int Runtime_init(RuntimeObject *self, PyObject *args, PyObject *kwds) {
         self->runtime =
             std::make_shared<dftracer::utils::Runtime>(config, true);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return -1;
     }
 
@@ -292,7 +293,7 @@ static PyObject *Runtime_wait_all(RuntimeObject *self,
         Py_BEGIN_ALLOW_THREADS self->runtime->wait_all();
         Py_END_ALLOW_THREADS
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return NULL;
     }
     Py_RETURN_NONE;

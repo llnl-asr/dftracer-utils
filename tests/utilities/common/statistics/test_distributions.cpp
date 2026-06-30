@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/common/statistics/distributions.h>
 #include <doctest/doctest.h>
 
@@ -169,6 +170,6 @@ TEST_SUITE("make_sampler") {
 
     TEST_CASE("throws on invalid fit") {
         FittedDistribution fit;  // valid = false
-        CHECK_THROWS_AS(make_sampler(fit), std::invalid_argument);
+        CHECK_THROWS_AS(make_sampler(fit), dftracer::utils::DFTUtilsException);
     }
 }

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_BYTES_RANGE_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_LINE_BYTES_RANGE_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_bytes_iterator.h>
@@ -109,7 +110,8 @@ class LineBytesRange {
      */
     Line next() {
         if (!iterator_.has_value()) {
-            throw std::runtime_error("LineBytesRange is empty");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "LineBytesRange is empty");
         }
         return std::visit([](auto& iter) { return iter.next(); }, *iterator_);
     }

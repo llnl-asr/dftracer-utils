@@ -37,8 +37,6 @@ struct ReconstructorResult {
     std::size_t total_events = 0;
     std::size_t total_bytes = 0;
     std::size_t total_segments = 0;
-    bool success = false;
-    std::string error_message;
 };
 
 class ReconstructorUtility

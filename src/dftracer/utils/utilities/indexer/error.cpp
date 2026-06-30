@@ -1,6 +1,6 @@
-#include <dftracer/utils/utilities/indexer/internal/error.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 
-namespace dftracer::utils::utilities::indexer::internal {
+namespace dftracer::utils::utilities::indexer {
 std::string IndexerError::format_message(Type type,
                                          const std::string &message) {
     const char *prefix = "";
@@ -26,4 +26,4 @@ std::string IndexerError::format_message(Type type,
     }
     return std::string(prefix) + ": " + message;
 }
-}  // namespace dftracer::utils::utilities::indexer::internal
+}  // namespace dftracer::utils::utilities::indexer

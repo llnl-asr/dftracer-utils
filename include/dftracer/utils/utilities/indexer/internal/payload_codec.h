@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_PAYLOAD_CODEC_H
 
 #include <dftracer/utils/core/rocksdb/key_codec.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -124,7 +125,7 @@ class Cursor {
             } else {
                 std::snprintf(err, sizeof(err), "Corrupt RocksDB payload");
             }
-            throw std::runtime_error(err);
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR, err);
         }
         auto chunk = data_.substr(offset_, len);
         offset_ += len;

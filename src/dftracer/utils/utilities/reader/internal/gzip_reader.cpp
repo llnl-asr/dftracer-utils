@@ -2,7 +2,7 @@
 #include <dftracer/utils/core/utils/timer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
-#include <dftracer/utils/utilities/reader/internal/error.h>
+#include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_byte_stream.h>
@@ -21,27 +21,25 @@ static void validate_parameters(
     std::size_t end_bytes,
     std::size_t max_bytes = std::numeric_limits<std::size_t>::max()) {
     if (!buffer || buffer_size == 0) {
-        throw dftracer::utils::utilities::reader::internal::ReaderError(
-            dftracer::utils::utilities::reader::internal::ReaderError::
-                INVALID_ARGUMENT,
+        throw dftracer::utils::utilities::reader::ReaderError(
+            dftracer::utils::utilities::reader::ReaderError::INVALID_ARGUMENT,
             "Invalid buffer parameters");
     }
     if (start_bytes >= end_bytes) {
-        throw dftracer::utils::utilities::reader::internal::ReaderError(
-            dftracer::utils::utilities::reader::internal::ReaderError::
-                INVALID_ARGUMENT,
+        throw dftracer::utils::utilities::reader::ReaderError(
+            dftracer::utils::utilities::reader::ReaderError::INVALID_ARGUMENT,
             "start_bytes must be less than end_bytes");
     }
     if (max_bytes != SIZE_MAX) {
         if (end_bytes > max_bytes) {
-            throw dftracer::utils::utilities::reader::internal::ReaderError(
-                dftracer::utils::utilities::reader::internal::ReaderError::
+            throw dftracer::utils::utilities::reader::ReaderError(
+                dftracer::utils::utilities::reader::ReaderError::
                     INVALID_ARGUMENT,
                 "end_bytes exceeds maximum available bytes");
         }
         if (start_bytes > max_bytes) {
-            throw dftracer::utils::utilities::reader::internal::ReaderError(
-                dftracer::utils::utilities::reader::internal::ReaderError::
+            throw dftracer::utils::utilities::reader::ReaderError(
+                dftracer::utils::utilities::reader::ReaderError::
                     INVALID_ARGUMENT,
                 "start_bytes exceeds maximum available bytes");
         }
@@ -50,7 +48,10 @@ static void validate_parameters(
 
 static void check_reader_state(bool is_open, const void *indexer) {
     if (!is_open || !indexer) {
-        throw std::runtime_error("Reader is not open");
+        throw dftracer::utils::utilities::reader::ReaderError(
+            dftracer::utils::utilities::reader::ReaderError::
+                INITIALIZATION_ERROR,
+            "Reader is not open");
     }
 }
 
@@ -230,17 +231,20 @@ coro::CoroTask<std::string> GzipReader::read_lines_async(std::size_t start_line,
     check_reader_state(is_open, indexer.get());
 
     if (start_line == 0 || end_line == 0) {
-        throw std::runtime_error("Line numbers must be 1-based (start from 1)");
+        throw ReaderError(ReaderError::INVALID_ARGUMENT,
+                          "Line numbers must be 1-based (start from 1)");
     }
 
     if (start_line > end_line) {
-        throw std::runtime_error("Start line must be <= end line");
+        throw ReaderError(ReaderError::INVALID_ARGUMENT,
+                          "Start line must be <= end line");
     }
 
     std::size_t total_lines = indexer.get()->get_num_lines();
     if (start_line > total_lines || end_line > total_lines) {
-        throw std::runtime_error("Line numbers exceed total lines in file (" +
-                                 std::to_string(total_lines) + ")");
+        throw ReaderError(ReaderError::INVALID_ARGUMENT,
+                          "Line numbers exceed total lines in file (" +
+                              std::to_string(total_lines) + ")");
     }
 
     // Check if we can reuse cached stream
@@ -278,17 +282,20 @@ coro::CoroTask<void> GzipReader::read_lines_with_processor_async(
     check_reader_state(is_open, indexer.get());
 
     if (start_line == 0 || end_line == 0) {
-        throw std::runtime_error("Line numbers must be 1-based (start from 1)");
+        throw ReaderError(ReaderError::INVALID_ARGUMENT,
+                          "Line numbers must be 1-based (start from 1)");
     }
 
     if (start_line > end_line) {
-        throw std::runtime_error("Start line must be <= end line");
+        throw ReaderError(ReaderError::INVALID_ARGUMENT,
+                          "Start line must be <= end line");
     }
 
     std::size_t total_lines = indexer.get()->get_num_lines();
     if (start_line > total_lines || end_line > total_lines) {
-        throw std::runtime_error("Line numbers exceed total lines in file (" +
-                                 std::to_string(total_lines) + ")");
+        throw ReaderError(ReaderError::INVALID_ARGUMENT,
+                          "Line numbers exceed total lines in file (" +
+                              std::to_string(total_lines) + ")");
     }
 
     processor.begin(start_line, end_line);

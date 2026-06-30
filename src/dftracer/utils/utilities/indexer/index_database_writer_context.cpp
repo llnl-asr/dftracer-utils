@@ -2,9 +2,9 @@
 #include <dftracer/utils/core/rocksdb/key_codec.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/error.h>
 #include <dftracer/utils/utilities/indexer/internal/index_batch_writer.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
@@ -107,21 +107,24 @@ IndexFileEntryCapability decode_file_capabilities(std::string_view record) {
 
 int decode_file_id(std::string_view record) {
     if (record.size() < 4) {
-        throw std::runtime_error("Corrupt file record");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt file record");
     }
     return static_cast<int>(rocks::KeyCodec::decode_be32(record.substr(0, 4)));
 }
 
 int decode_prefixed_file_id(std::string_view key) {
     if (key.size() < 4) {
-        throw std::runtime_error("Corrupt file-prefixed key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt file-prefixed key");
     }
     return static_cast<int>(rocks::KeyCodec::decode_be32(key.substr(0, 4)));
 }
 
 std::uint64_t decode_file_hash(std::string_view record) {
     if (record.size() < 28) {
-        throw std::runtime_error("Corrupt file record");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt file record");
     }
     return rocks::KeyCodec::decode_be64(record.substr(20, 8));
 }
@@ -269,7 +272,8 @@ std::string encode_root_scalar_stats_value(
 
 MergedStatisticsResult decode_file_scalar_stats_value(std::string_view value) {
     if (value.size() < 8) {
-        throw std::runtime_error("Corrupt file scalar statistics value");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt file scalar statistics value");
     }
     Cursor cursor(value);
     MergedStatisticsResult result;
@@ -366,8 +370,8 @@ void IndexDatabaseWriterContext::commit() {
     auto status = db_->commit_batch(batch_);
     committed_ = true;
     if (!status.ok()) {
-        throw std::runtime_error("Failed to commit WriteBatch: " +
-                                 status.ToString());
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Failed to commit WriteBatch: " + status.ToString());
     }
 }
 
@@ -727,9 +731,10 @@ void IndexDatabaseWriterContext::refresh_root_summaries_after_file_write(
             DecodeContextGuard ctx("root_scalar_stats size=%zu", value.size());
             root_scalar = decode_root_scalar_stats_value(value);
         } catch (const std::exception& e) {
-            throw std::runtime_error("Corrupt root_scalar_stats payload size=" +
-                                     std::to_string(value.size()) + ": " +
-                                     e.what());
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt root_scalar_stats payload size=" +
+                                   std::to_string(value.size()) + ": " +
+                                   e.what());
         }
     }
 
@@ -752,9 +757,10 @@ void IndexDatabaseWriterContext::refresh_root_summaries_after_file_write(
                                        value.size());
                 category_counts = decode_count_map_value(value);
             } catch (const std::exception& e) {
-                throw std::runtime_error(
-                    "Corrupt root_cat_counts payload size=" +
-                    std::to_string(value.size()) + ": " + e.what());
+                throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                                   "Corrupt root_cat_counts payload size=" +
+                                       std::to_string(value.size()) + ": " +
+                                       e.what());
             }
         } else if (!status.IsNotFound()) {
             throw_db_error("Failed to read root category counts", status);
@@ -778,9 +784,10 @@ void IndexDatabaseWriterContext::refresh_root_summaries_after_file_write(
                                        value.size());
                 name_counts = decode_count_map_value(value);
             } catch (const std::exception& e) {
-                throw std::runtime_error(
-                    "Corrupt root_name_counts payload size=" +
-                    std::to_string(value.size()) + ": " + e.what());
+                throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                                   "Corrupt root_name_counts payload size=" +
+                                       std::to_string(value.size()) + ": " +
+                                       e.what());
             }
         } else if (!status.IsNotFound()) {
             throw_db_error("Failed to read root name counts", status);
@@ -804,9 +811,10 @@ void IndexDatabaseWriterContext::refresh_root_summaries_after_file_write(
                                        value.size());
                 pid_tid_counts = decode_count_map_value(value);
             } catch (const std::exception& e) {
-                throw std::runtime_error(
-                    "Corrupt root_pid_tid_counts payload size=" +
-                    std::to_string(value.size()) + ": " + e.what());
+                throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                                   "Corrupt root_pid_tid_counts payload size=" +
+                                       std::to_string(value.size()) + ": " +
+                                       e.what());
             }
         } else if (!status.IsNotFound()) {
             throw_db_error("Failed to read root pid_tid counts", status);
@@ -885,10 +893,11 @@ void IndexDatabaseWriterContext::rebuild_root_summaries() {
                 rebuilt.stats.merge_from(row.stats);
                 rebuilt.num_chunks += row.num_chunks;
             } catch (const std::exception& e) {
-                throw std::runtime_error(
+                throw IndexerError(
+                    IndexerError::Type::DATABASE_ERROR,
                     "Corrupt file_scalar_stats payload file_id=" +
-                    std::to_string(fid) +
-                    " size=" + std::to_string(value.size()) + ": " + e.what());
+                        std::to_string(fid) + " size=" +
+                        std::to_string(value.size()) + ": " + e.what());
             }
         }
         const auto status = it->status();

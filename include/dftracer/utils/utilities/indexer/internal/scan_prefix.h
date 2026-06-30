@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_SCAN_PREFIX_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_SCAN_PREFIX_H
 
-#include <dftracer/utils/utilities/indexer/internal/error.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 #include <rocksdb/iterator.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/status.h>

@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/indexer/internal/error.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/internal/scan_prefix.h>
 #include <doctest/doctest.h>
 #include <rocksdb/iterator.h>
@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::utilities::indexer::internal::IndexerError;
+using dftracer::utils::utilities::indexer::IndexerError;
 using dftracer::utils::utilities::indexer::internal::scan_prefix_iterator;
 
 namespace {

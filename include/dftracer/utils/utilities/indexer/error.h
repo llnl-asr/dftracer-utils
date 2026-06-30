@@ -1,12 +1,12 @@
-#ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_ERROR_H
-#define DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_ERROR_H
+#ifndef DFTRACER_UTILS_UTILITIES_INDEXER_ERROR_H
+#define DFTRACER_UTILS_UTILITIES_INDEXER_ERROR_H
 
 #include <dftracer/utils/core/common/error.h>
 
 #include <stdexcept>
 #include <string>
 
-namespace dftracer::utils::utilities::indexer::internal {
+namespace dftracer::utils::utilities::indexer {
 
 class IndexerError : public DFTUtilsException {
    public:
@@ -30,6 +30,6 @@ class IndexerError : public DFTUtilsException {
     static std::string format_message(Type type, const std::string &message);
 };
 
-}  // namespace dftracer::utils::utilities::indexer::internal
+}  // namespace dftracer::utils::utilities::indexer
 
-#endif  // DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_ERROR_H
+#endif  // DFTRACER_UTILS_UTILITIES_INDEXER_ERROR_H

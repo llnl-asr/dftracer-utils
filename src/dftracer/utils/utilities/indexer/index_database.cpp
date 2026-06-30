@@ -6,10 +6,10 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/system_metrics_merge_operator.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
@@ -65,21 +65,24 @@ IndexFileEntryCapability decode_file_capabilities(std::string_view record) {
 
 int decode_file_id(std::string_view record) {
     if (record.size() < 4) {
-        throw std::runtime_error("Corrupt file record");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt file record");
     }
     return static_cast<int>(rocks::KeyCodec::decode_be32(record.substr(0, 4)));
 }
 
 int decode_prefixed_file_id(std::string_view key) {
     if (key.size() < 4) {
-        throw std::runtime_error("Corrupt file-prefixed key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt file-prefixed key");
     }
     return static_cast<int>(rocks::KeyCodec::decode_be32(key.substr(0, 4)));
 }
 
 std::uint64_t decode_file_hash(std::string_view record) {
     if (record.size() < 28) {
-        throw std::runtime_error("Corrupt file record");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt file record");
     }
     return rocks::KeyCodec::decode_be64(record.substr(20, 8));
 }
@@ -128,12 +131,14 @@ ChunkBloomResult decode_chunk_bloom(std::string_view key,
     auto checkpoint_pos = key.find('\0', prefix_size);
     if (checkpoint_pos == std::string_view::npos ||
         checkpoint_pos + 1 + 8 > key.size()) {
-        throw std::runtime_error("Corrupt chunk bloom key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt chunk bloom key");
     }
     result.checkpoint_idx =
         rocks::KeyCodec::decode_be64(key.substr(checkpoint_pos + 1, 8));
     if (value.size() < 8) {
-        throw std::runtime_error("Corrupt chunk bloom value");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt chunk bloom value");
     }
     result.num_entries = rocks::KeyCodec::decode_be64(value.substr(0, 8));
     result.bloom_data.assign(value.begin() + 8, value.end());
@@ -142,7 +147,8 @@ ChunkBloomResult decode_chunk_bloom(std::string_view key,
 
 FileBloomResult decode_file_bloom(std::string_view value) {
     if (value.size() < 8) {
-        throw std::runtime_error("Corrupt file bloom value");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt file bloom value");
     }
     FileBloomResult result;
     result.num_entries = rocks::KeyCodec::decode_be64(value.substr(0, 8));
@@ -202,7 +208,8 @@ ChunkStatistics decode_chunk_statistics_value(std::string_view value) {
 IndexerCheckpoint decode_checkpoint(std::string_view key,
                                     std::string_view value) {
     if (key.size() < 20) {
-        throw std::runtime_error("Corrupt checkpoint key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt checkpoint key");
     }
 
     IndexerCheckpoint checkpoint;
@@ -225,7 +232,8 @@ ChunkDimensionStatsResult decode_chunk_dimension_stats_value(
     std::string_view key, std::string_view value) {
     ChunkDimensionStatsResult result;
     if (key.size() < 12) {
-        throw std::runtime_error("Corrupt chunk dimension stats key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt chunk dimension stats key");
     }
     result.checkpoint_idx = rocks::KeyCodec::decode_be64(key.substr(4, 8));
     result.dimension = std::string(key.substr(12));
@@ -312,12 +320,14 @@ TarArchiveMetadata decode_tar_archive_value(std::string_view value) {
 
 TarFileRecord decode_tar_file(std::string_view key, std::string_view value) {
     if (key.size() < 13) {
-        throw std::runtime_error("Corrupt tar file key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt tar file key");
     }
 
     const auto name_pos = key.find('\0', 12);
     if (name_pos == std::string_view::npos) {
-        throw std::runtime_error("Corrupt tar file key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt tar file key");
     }
 
     Cursor cursor(value);
@@ -1074,10 +1084,11 @@ IndexDatabase::query_file_scalar_stats_batch(
                                    file_id, value.size());
             results.emplace(file_id, decode_file_scalar_stats_value(value));
         } catch (const std::exception& e) {
-            throw std::runtime_error(
-                "Corrupt file_scalar_stats payload file_id=" +
-                std::to_string(file_id) +
-                " size=" + std::to_string(value.size()) + ": " + e.what());
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt file_scalar_stats payload file_id=" +
+                                   std::to_string(file_id) +
+                                   " size=" + std::to_string(value.size()) +
+                                   ": " + e.what());
         }
     }
     return results;
@@ -1149,10 +1160,11 @@ IndexDatabase::query_file_category_counts_batch(
                                    file_id, value.size());
             results.emplace(file_id, decode_count_map_value(value));
         } catch (const std::exception& e) {
-            throw std::runtime_error(
-                "Corrupt file_cat_counts payload file_id=" +
-                std::to_string(file_id) +
-                " size=" + std::to_string(value.size()) + ": " + e.what());
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt file_cat_counts payload file_id=" +
+                                   std::to_string(file_id) +
+                                   " size=" + std::to_string(value.size()) +
+                                   ": " + e.what());
         }
     }
     return results;
@@ -1209,10 +1221,11 @@ IndexDatabase::query_file_pid_tid_counts_batch(
                                    file_id, value.size());
             results.emplace(file_id, decode_count_map_value(value));
         } catch (const std::exception& e) {
-            throw std::runtime_error(
-                "Corrupt file_pid_tid_counts payload file_id=" +
-                std::to_string(file_id) +
-                " size=" + std::to_string(value.size()) + ": " + e.what());
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt file_pid_tid_counts payload file_id=" +
+                                   std::to_string(file_id) +
+                                   " size=" + std::to_string(value.size()) +
+                                   ": " + e.what());
         }
     }
     return results;
@@ -1238,10 +1251,11 @@ IndexDatabase::query_file_name_summaries_batch(
                                    file_id, value.size());
             results.emplace(file_id, decode_name_summary_value(value));
         } catch (const std::exception& e) {
-            throw std::runtime_error(
-                "Corrupt file_name_counts payload file_id=" +
-                std::to_string(file_id) +
-                " size=" + std::to_string(value.size()) + ": " + e.what());
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt file_name_counts payload file_id=" +
+                                   std::to_string(file_id) +
+                                   " size=" + std::to_string(value.size()) +
+                                   ": " + e.what());
         }
     }
     return results;
@@ -1322,9 +1336,9 @@ std::optional<RootStatisticsResult> IndexDatabase::query_root_scalar_stats()
         DecodeContextGuard ctx("root_scalar_stats size=%zu", value.size());
         return decode_root_scalar_stats_value(value);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Corrupt root_scalar_stats payload size=" +
-                                 std::to_string(value.size()) + ": " +
-                                 e.what());
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt root_scalar_stats payload size=" +
+                               std::to_string(value.size()) + ": " + e.what());
     }
 }
 
@@ -1342,9 +1356,9 @@ StringViewMap<std::uint64_t> IndexDatabase::query_root_category_counts() const {
         DecodeContextGuard ctx("root_cat_counts size=%zu", value.size());
         return decode_count_map_value(value);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Corrupt root_cat_counts payload size=" +
-                                 std::to_string(value.size()) + ": " +
-                                 e.what());
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt root_cat_counts payload size=" +
+                               std::to_string(value.size()) + ": " + e.what());
     }
 }
 
@@ -1362,9 +1376,9 @@ StringViewMap<std::uint64_t> IndexDatabase::query_root_pid_tid_counts() const {
         DecodeContextGuard ctx("root_pid_tid_counts size=%zu", value.size());
         return decode_count_map_value(value);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Corrupt root_pid_tid_counts payload size=" +
-                                 std::to_string(value.size()) + ": " +
-                                 e.what());
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt root_pid_tid_counts payload size=" +
+                               std::to_string(value.size()) + ": " + e.what());
     }
 }
 
@@ -1382,9 +1396,9 @@ StringViewMap<std::uint64_t> IndexDatabase::query_root_name_counts() const {
         DecodeContextGuard ctx("root_name_counts size=%zu", value.size());
         return decode_count_map_value(value);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Corrupt root_name_counts payload size=" +
-                                 std::to_string(value.size()) + ": " +
-                                 e.what());
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt root_name_counts payload size=" +
+                               std::to_string(value.size()) + ": " + e.what());
     }
 }
 
@@ -1699,7 +1713,8 @@ std::vector<EventRangeResult> IndexDatabase::query_event_ranges(
         auto payload = std::string_view(key).substr(2 + 4 + 8);
         auto split = payload.find('\0');
         if (split == std::string_view::npos) {
-            throw std::runtime_error("Corrupt manifest event key");
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt manifest event key");
         }
         EventRangeResult result;
         result.checkpoint_idx =

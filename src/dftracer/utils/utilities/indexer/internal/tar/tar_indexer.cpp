@@ -1,10 +1,10 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/common/gzip_inflater.h>
-#include <dftracer/utils/utilities/indexer/internal/error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/tar_indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/tar_parser.h>

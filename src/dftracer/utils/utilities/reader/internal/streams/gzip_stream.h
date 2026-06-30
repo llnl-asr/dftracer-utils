@@ -4,7 +4,7 @@
 #include <dftracer/utils/core/common/checkpointer.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/reader/internal/error.h>
+#include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
 #include <dftracer/utils/utilities/reader/internal/streams/stream.h>
 #include <fcntl.h>

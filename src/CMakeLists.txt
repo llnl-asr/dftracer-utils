@@ -212,7 +212,7 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/index_encoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/checkpoint_size.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/error.cpp
     # Indexer factory
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_factory.cpp
     # GZIP indexer
@@ -226,7 +226,7 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/gzip_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/tar_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/error.cpp
     # Call Tree
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/call_tree/call_tree.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/call_tree/call_tree_internal.cpp

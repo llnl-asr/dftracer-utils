@@ -1,7 +1,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/rocksdb/database.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/error.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/statistics_codec.h>
 #include <rocksdb/sst_file_writer.h>
@@ -17,9 +17,8 @@ namespace encoding = internal::encoding;
 
 [[noreturn]] void throw_sst_error(std::string_view message,
                                   const ::rocksdb::Status& status) {
-    throw internal::IndexerError(
-        internal::IndexerError::Type::DATABASE_ERROR,
-        std::string(message) + ": " + status.ToString());
+    throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                       std::string(message) + ": " + status.ToString());
 }
 
 std::string emit_sst(const std::string& path,
@@ -110,9 +109,9 @@ void move_file(const fs::path& src, const fs::path& dst) {
     ec.clear();
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        throw std::runtime_error("Failed to move SST '" + src.string() +
-                                 "' to '" + dst.string() +
-                                 "': " + ec.message());
+        throw IndexerError(IndexerError::Type::FILE_ERROR,
+                           "Failed to move SST '" + src.string() + "' to '" +
+                               dst.string() + "': " + ec.message());
     }
     fs::remove(src, ec);  // best-effort; staging cleanup handled by caller
 }
@@ -136,8 +135,9 @@ IndexDatabaseSstWriterContext::Artifacts::move_to(
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) {
-        throw std::runtime_error("Failed to create SST move destination '" +
-                                 std::string(dest_dir) + "': " + ec.message());
+        throw IndexerError(IndexerError::Type::FILE_ERROR,
+                           "Failed to create SST move destination '" +
+                               std::string(dest_dir) + "': " + ec.message());
     }
 
     Artifacts out;
@@ -168,9 +168,9 @@ IndexDatabaseSstWriterContext::IndexDatabaseSstWriterContext(
     std::error_code ec;
     fs::create_directories(fs::path(staging_dir_) / batch_id_, ec);
     if (ec) {
-        throw std::runtime_error("Failed to create SST staging dir '" +
-                                 staging_dir_ + "/" + batch_id_ +
-                                 "': " + ec.message());
+        throw IndexerError(IndexerError::Type::FILE_ERROR,
+                           "Failed to create SST staging dir '" + staging_dir_ +
+                               "/" + batch_id_ + "': " + ec.message());
     }
 }
 

@@ -10,6 +10,7 @@
 #include <dftracer/utils/utilities/composites/dft/visitors/hash_table_visitor.h>
 #include <dftracer/utils/utilities/composites/dft/visitors/manifest_visitor.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_batch_sink.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
@@ -702,12 +703,14 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
         determine_index_path(config.file_paths.front(), config.index_dir);
     if (!config.file_slices.empty() &&
         config.file_slices.size() != config.file_paths.size()) {
-        throw std::runtime_error(
+        throw IndexerError(
+            IndexerError::Type::INVALID_ARGUMENT,
             "file_slices.size() must match file_paths.size() (or be empty)");
     }
     if (!config.preassigned_file_ids.empty()) {
         if (config.preassigned_file_ids.size() != config.file_paths.size()) {
-            throw std::runtime_error(
+            throw IndexerError(
+                IndexerError::Type::INVALID_ARGUMENT,
                 "preassigned_file_ids.size() must match file_paths.size()");
         }
         // Distributed path: coordinator has already registered files and
@@ -748,7 +751,8 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     state->sink_commit = std::move(config.sink_commit);
     if (static_cast<bool>(state->sink_factory) !=
         static_cast<bool>(state->sink_commit)) {
-        throw std::runtime_error(
+        throw IndexerError(
+            IndexerError::Type::INVALID_ARGUMENT,
             "IndexBuildBatchConfig: sink_factory and sink_commit must be set "
             "together (either both null for the default RocksDB path, or "
             "both non-null for the distributed SST path).");

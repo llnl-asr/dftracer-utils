@@ -126,6 +126,44 @@ Example:
        -DDFTRACER_UTILS_ENABLE_ARROW_IPC=ON \
        -DDFTRACER_USE_ZLIB_NG=ON
 
+Runtime Environment Variables
+-----------------------------
+
+These variables tune behavior at run time (they apply to the CLI tools, the
+C++ library, and the Python bindings alike):
+
+Threading
+~~~~~~~~~
+
+- ``DFTRACER_UTILS_THREADS`` - Number of executor worker threads. Overrides
+  the count requested in code and the ``--executor-threads`` CLI flag. ``0``
+  (or unset) uses ``std::thread::hardware_concurrency()``.
+
+Profiling / monitoring
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The built-in coroutine monitor is off unless one of these is set:
+
+- ``DFTRACER_UTILS_MONITOR`` - Enable monitoring and pick the report:
+
+  - ``1`` or ``summary`` - aggregate table at exit (per-coroutine time).
+  - ``tree`` - call tree at exit.
+  - ``deep`` - call tree including synchronous ``co_await``-ed coroutines
+    (more detail, higher overhead).
+  - ``trace`` - streaming trace output.
+  - ``0`` / ``false`` - off (the default).
+
+- ``DFTRACER_UTILS_MONITOR_FILE`` - Write monitoring output to this path as
+  CSV (``id,parent,coroutine,micros``). Setting it also enables monitoring.
+- ``DFTRACER_UTILS_MONITOR_MIN_US`` - In ``tree`` / ``deep`` mode, hide
+  coroutines whose wall time is below this many microseconds (cuts noise).
+
+Testing
+~~~~~~~
+
+- ``DFTRACER_UTILS_VALGRIND_MODE`` - Set by the Valgrind build to disable
+  io_uring (works around a Valgrind < 3.23.0 bug). Not needed for normal runs.
+
 Verifying Installation
 ----------------------
 

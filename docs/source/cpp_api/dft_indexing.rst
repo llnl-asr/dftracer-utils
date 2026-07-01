@@ -154,7 +154,7 @@ line groups for event-level routing.
 Supports incremental indexing: if ``existing_state`` is provided, only
 missing dimensions are indexed (detected via config hash comparison).
 
-Tagged ``Parallelizable`` — multiple instances run concurrently across chunks.
+Multiple instances run concurrently across chunks.
 
 Supporting Types
 ~~~~~~~~~~~~~~~~
@@ -233,7 +233,7 @@ The pruner walks the Query AST recursively:
 - ``OR`` → union candidate sets
 - ``NOT`` → complement via dictionary exclusivity (requires value_counts; without dictionary, cannot safely skip)
 
-Tagged ``Parallelizable`` — can query multiple files concurrently.
+Can query multiple files concurrently.
 
 .. code-block:: cpp
 

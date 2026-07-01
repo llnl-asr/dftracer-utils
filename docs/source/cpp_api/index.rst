@@ -12,6 +12,7 @@ This section contains the C++ API documentation for dftracer utilities.
     :caption: C++ Components:
 
     core_infrastructure
+    error_handling
     rocksdb
     reader
     indexer

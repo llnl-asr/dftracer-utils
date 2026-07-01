@@ -28,7 +28,8 @@ Utilities follow a consistent pattern:
 - **Input types**: Configuration structs with fluent builder API
 - **Output types**: Result structs with success status and data
 - **process() method**: Main entry point that transforms input to output
-- **Tags**: Metadata like ``Parallelizable`` for thread-safe utilities
+- **Tags**: Compile-time markers like ``NeedsContext`` that opt into
+  cross-cutting features (e.g. CoroScope access)
 
 .. mermaid::
 

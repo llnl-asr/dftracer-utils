@@ -129,6 +129,11 @@ Batch error handling with ``wait_all()``:
    # Strict mode: raise after all tasks complete
    rt.wait_all(raise_on_error=True)  # RuntimeError: 1 task(s) failed: ...
 
+``wait_all(raise_on_error=True)`` raises a summary ``RuntimeError``, but each
+individual failure (``h.exception``, and what ``.get()`` re-raises) is the
+task's original typed exception - ``DFTUtilsError`` or a subclass such as
+``DFTUtilsIOError``. See the error-handling section of :doc:`../quickstart`.
+
 Error callbacks for async notification:
 
 .. code-block:: python

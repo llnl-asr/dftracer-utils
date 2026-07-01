@@ -708,6 +708,11 @@ Error Handling
 
 Errors in pipeline tasks propagate to the caller of ``Pipeline::execute()``. Exceptions thrown in task lambdas are captured and re-thrown by the pipeline.
 
+The library throws ``DFTUtilsException`` (and its subsystem subclasses), which
+derive ``std::runtime_error`` and carry an ``ErrorCode`` via ``code()``. Catch
+``DFTUtilsException`` to inspect the category, or ``std::exception`` to handle
+any failure. See :doc:`cpp_api/error_handling`.
+
 **Exception propagation from tasks:**
 
 .. code-block:: cpp
@@ -717,9 +722,8 @@ Errors in pipeline tasks propagate to the caller of ``Pipeline::execute()``. Exc
         auto result = co_await io::open("missing.txt", O_RDONLY);
         if (result < 0) {
             // Negative result indicates OS error; convert to exception
-            throw std::runtime_error(
-                "Failed to open file: " +
-                std::string(std::strerror(-result)));
+            throw DFTUtilsException::cat(ErrorCode::IO, "Failed to open file: ",
+                                         std::strerror(-result));
         }
         co_return;
     });
@@ -741,7 +745,8 @@ Errors in pipeline tasks propagate to the caller of ``Pipeline::execute()``. Exc
             // This might throw
             int result = risky_operation();
             if (result < 0) {
-                throw std::runtime_error("Operation failed");
+                throw DFTUtilsException(ErrorCode::INTERNAL,
+                                        "Operation failed");
             }
             co_return result;
         });

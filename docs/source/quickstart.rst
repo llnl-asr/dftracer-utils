@@ -131,6 +131,9 @@ Error handling:
    for h in rt.get_failed():
        print(f"{h.name}: {h.exception}")
 
+Failures raised by library operations are typed (``DFTUtilsError`` and its
+subclasses); see `Error Handling`_ below.
+
 Arrow Data Interchange
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -264,6 +267,41 @@ Create and use indexes for faster access:
    checkpoints = indexer.get_checkpoints()
    for cp in checkpoints:
        print(f"Checkpoint {cp.checkpoint_idx}: {cp.num_lines} lines")
+
+Error Handling
+~~~~~~~~~~~~~~
+
+Operations raise typed exceptions so failures can be caught by category. Every
+exception derives ``DFTUtilsError``, which derives the built-in ``RuntimeError``
+(so ``except RuntimeError`` still catches everything):
+
+.. code-block:: python
+
+   from dftracer.utils import (
+       TraceReader,
+       DFTUtilsError,        # base of all library exceptions
+       DFTUtilsIOError,      # bad I/O / missing file
+       DFTUtilsNotFoundError,
+       DFTUtilsParseError,
+       DFTUtilsQueryError,
+   )
+
+   try:
+       reader = TraceReader("missing.pfw.gz")
+       for line in reader.read_lines():
+           process(line)
+   except DFTUtilsIOError as e:
+       print(f"I/O failed: {e}")
+   except DFTUtilsError as e:
+       # Catches any other library error (parse, query, indexer, ...)
+       print(f"dftracer error: {e}")
+
+The full set is ``DFTUtilsError`` (base) plus ``DFTUtilsValueError``,
+``DFTUtilsNotFoundError``, ``DFTUtilsIOError``, ``DFTUtilsParseError``,
+``DFTUtilsCompressionError``, ``DFTUtilsQueryError``, ``DFTUtilsReaderError``,
+``DFTUtilsIndexerError``, ``DFTUtilsPipelineError``, and
+``DFTUtilsAggregationError``. See :doc:`cpp_api/error_handling` for the
+underlying C++ model.
 
 C++ Quick Start
 ---------------

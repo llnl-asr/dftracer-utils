@@ -43,7 +43,7 @@ boundary event association, and Perfetto trace output.
        end
 
        subgraph Mapping["Chunk Mapping"]
-           CM["ChunkMapperUtility"]
+           CM["FileChunkMapperUtility"]
        end
 
        subgraph Parallel["Parallel Aggregation"]
@@ -58,7 +58,6 @@ boundary event association, and Perfetto trace output.
        end
 
        subgraph Output
-           Summary["AggregatorSummaryUtility"]
            Perfetto["PerfettoTraceWriterUtility"]
        end
 
@@ -70,7 +69,6 @@ boundary event association, and Perfetto trace output.
        CA2 --> EA
        CAN --> EA
        EA --> AR
-       AR --> Summary
        AR --> Perfetto
 
 Configuration
@@ -160,25 +158,24 @@ counters), giving ~256 bytes per sketch. When the bin range exceeds
 Pipeline Stages
 ---------------
 
-ChunkMapperUtility
-~~~~~~~~~~~~~~~~~~
+FileChunkMapperUtility
+~~~~~~~~~~~~~~~~~~~~~~~
 
-Maps trace files to parallel chunk work items.
+Maps a trace file to parallel chunk work items.
 
-Takes file metadata (from ``MetadataCollectorUtility``) and splits each file
+Takes file metadata (from ``MetadataCollectorUtility``) and splits the file
 into chunks based on checkpoint boundaries. Each chunk becomes a
 ``ChunkAggregatorInput`` for parallel processing.
 
 ChunkAggregatorUtility
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Per-chunk event aggregation (parallelizable).
+Per-chunk event aggregation.
 
 Reads events from a byte range within a trace file, applies filters,
 computes aggregation keys, and accumulates metrics. Uses bloom filter
-predicates for early chunk skipping when available.
-
-Tagged ``Parallelizable`` — multiple instances run concurrently across chunks.
+predicates for early chunk skipping when available. Multiple instances run
+concurrently across chunks.
 
 EventAggregator
 ~~~~~~~~~~~~~~~
@@ -262,11 +259,6 @@ Yields ``AggregationBatch`` objects that can be converted to Arrow via
 
 Output Utilities
 ----------------
-
-AggregatorSummaryUtility
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-Outputs a human-readable summary of aggregation results to stdout.
 
 PerfettoTraceWriterUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~

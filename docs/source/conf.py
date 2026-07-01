@@ -527,7 +527,9 @@ def _install_rtd_extension_stub() -> None:
                     If None, uses the default global Runtime.
 
             Raises:
-                RuntimeError: If *file_path* does not exist or cannot be opened.
+                DFTUtilsNotFoundError: If *file_path* does not exist.
+                DFTUtilsIOError: If the file cannot be opened or read.
+                    (Both derive DFTUtilsError, which derives RuntimeError.)
             """
             self._path = path
             self._index_dir = index_dir

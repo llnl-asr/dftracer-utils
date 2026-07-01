@@ -577,7 +577,7 @@ class GenFakeTraceArgParse : public cli::ArgParse {
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_gen_fake_trace",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

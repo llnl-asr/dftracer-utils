@@ -1,6 +1,7 @@
 #include <dftracer/utils/utilities/indexer/internal/tar/tar_parser.h>
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstring>
 
 namespace dftracer::utils::utilities::indexer::internal::tar {
@@ -76,7 +77,7 @@ bool TarParser::parse_single_header(const TarHeader* header,
                                     TarFileEntry& entry) {
     if (!TarParser::verify_checksum(header)) {
         DFTRACER_UTILS_LOG_DEBUG(
-            "TAR header checksum verification failed at offset %llu",
+            "TAR header checksum verification failed at offset %" PRIu64,
             header_offset);
         return false;
     }

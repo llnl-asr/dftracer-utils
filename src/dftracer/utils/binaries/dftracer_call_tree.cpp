@@ -53,7 +53,6 @@ class CallTreeArgParse : public cli::ArgParse {
     std::vector<std::string> inputs;
     bool recursive = false;
     std::string output;
-    bool verbose = false;
     bool no_save = false;
     bool gzip = false;
 
@@ -72,7 +71,6 @@ class CallTreeArgParse : public cli::ArgParse {
             .add_argument("-o", "--output")
             .help("Output JSON path (Chrome Tracing)")
             .default_value<std::string>("");
-        parser().add_argument("-v", "--verbose").flag();
         parser().add_argument("--no-save").flag();
         parser()
             .add_argument("--gzip")
@@ -84,7 +82,6 @@ class CallTreeArgParse : public cli::ArgParse {
         inputs = parser().get<std::vector<std::string>>("inputs");
         recursive = parser().get<bool>("--recursive");
         output = parser().get<std::string>("--output");
-        verbose = parser().get<bool>("--verbose");
         no_save = parser().get<bool>("--no-save");
         gzip = parser().get<bool>("--gzip");
     }
@@ -138,10 +135,9 @@ coro::CoroTask<void> task_scan(RunCtx* ctx) {
     ctx->scan_ms = std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t0)
                        .count();
-    if (ctx->cli->verbose && !ctx->failed) {
-        std::printf("[scan] %.2f ms: %zu files\n", ctx->scan_ms,
-                    ctx->trace_files.size());
-        std::fflush(stdout);
+    if (!ctx->failed) {
+        DFTRACER_UTILS_LOG_DEBUG("[scan] %.2f ms: %zu files", ctx->scan_ms,
+                                 ctx->trace_files.size());
     }
     co_return;
 }
@@ -197,11 +193,8 @@ coro::CoroTask<void> task_build(RunCtx* ctx, CoroScope* scope) {
     ctx->build_ms = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - t0)
                         .count();
-    if (ctx->cli->verbose) {
-        std::printf("[build] %.2f ms: %zu events across %zu files\n",
-                    ctx->build_ms, total_events.load(), n);
-        std::fflush(stdout);
-    }
+    DFTRACER_UTILS_LOG_DEBUG("[build] %.2f ms: %zu events across %zu files",
+                             ctx->build_ms, total_events.load(), n);
     co_return;
 }
 
@@ -217,11 +210,8 @@ coro::CoroTask<void> task_merge(RunCtx* ctx) {
     ctx->merge_ms = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - t0)
                         .count();
-    if (ctx->cli->verbose) {
-        std::printf("[merge] %.2f ms: %zu processes\n", ctx->merge_ms,
-                    ctx->process_keys.size());
-        std::fflush(stdout);
-    }
+    DFTRACER_UTILS_LOG_DEBUG("[merge] %.2f ms: %zu processes", ctx->merge_ms,
+                             ctx->process_keys.size());
     co_return;
 }
 
@@ -256,10 +246,7 @@ coro::CoroTask<void> task_hierarchy(RunCtx* ctx, CoroScope* scope) {
     ctx->hier_ms = std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t0)
                        .count();
-    if (ctx->cli->verbose) {
-        std::printf("[hierarchy] %.2f ms\n", ctx->hier_ms);
-        std::fflush(stdout);
-    }
+    DFTRACER_UTILS_LOG_DEBUG("[hierarchy] %.2f ms", ctx->hier_ms);
     co_return;
 }
 
@@ -432,16 +419,13 @@ coro::CoroTask<void> task_write_json(RunCtx* ctx, CoroScope* scope) {
     ctx->write_ms = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - t0)
                         .count();
-    if (ctx->cli->verbose) {
-        std::printf("[write] %.2f ms -> %s\n", ctx->write_ms,
-                    ctx->output_path.c_str());
-        std::fflush(stdout);
-    }
+    DFTRACER_UTILS_LOG_DEBUG("[write] %.2f ms -> %s", ctx->write_ms,
+                             ctx->output_path.c_str());
     co_return;
 }
 
 int run(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_call_tree",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -516,10 +500,10 @@ int run(int argc, char** argv) {
     pipeline.set_destination(write);
     pipeline.execute();
 
-    if (cli.verbose && !ctx.failed) {
-        std::printf(
+    if (!ctx.failed) {
+        DFTRACER_UTILS_LOG_DEBUG(
             "[done] scan=%.1fms build=%.1fms merge=%.1fms hierarchy=%.1fms "
-            "write=%.1fms\n",
+            "write=%.1fms",
             ctx.scan_ms, ctx.build_ms, ctx.merge_ms, ctx.hier_ms, ctx.write_ms);
     }
 

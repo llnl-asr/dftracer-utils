@@ -67,6 +67,39 @@ def _install_rtd_extension_stub() -> None:
         """RTD stub for native extension classes."""
         pass
 
+    class DFTUtilsError(RuntimeError):
+        """Base for all dftracer-utils typed errors (derives RuntimeError)."""
+
+    class DFTUtilsValueError(DFTUtilsError):
+        """Invalid argument / value."""
+
+    class DFTUtilsNotFoundError(DFTUtilsError):
+        """A required file or resource was not found."""
+
+    class DFTUtilsIOError(DFTUtilsError):
+        """An I/O operation failed."""
+
+    class DFTUtilsParseError(DFTUtilsError):
+        """Input could not be parsed."""
+
+    class DFTUtilsQueryError(DFTUtilsError):
+        """A query expression was invalid."""
+
+    class DFTUtilsReaderError(DFTUtilsError):
+        """A trace reader operation failed."""
+
+    class DFTUtilsIndexerError(DFTUtilsError):
+        """An indexer operation failed."""
+
+    class DFTUtilsPipelineError(DFTUtilsError):
+        """A pipeline/task execution failed."""
+
+    class DFTUtilsAggregationError(DFTUtilsError):
+        """An aggregation operation failed."""
+
+    class DFTUtilsCompressionError(DFTUtilsError):
+        """A (de)compression operation failed."""
+
     class _ArrowBatchCapsule(_BaseNative):
         """Internal Arrow batch wrapper implementing __arrow_c_array__ protocol."""
 
@@ -1155,6 +1188,18 @@ def _install_rtd_extension_stub() -> None:
         """Replace or clear the process-wide default runtime."""
         return None
 
+    def set_log_level(level: str) -> None:
+        """Set the C++ logger level ('trace'..'off'). Raises on bad name."""
+        return None
+
+    def get_log_level() -> str:
+        """Return the current C++ logger level name."""
+        return "info"
+
+    def set_log_color(mode: str) -> None:
+        """Set logger color mode ('auto', 'always', 'never'). Raises on bad name."""
+        return None
+
     def read_arrow_files_parallel(
         paths: list[str],
         runtime: Runtime | None = None,
@@ -1287,6 +1332,17 @@ def _install_rtd_extension_stub() -> None:
         "AggregatorUtility",
         "CheckpointIndexer",
         "ComparatorUtility",
+        "DFTUtilsAggregationError",
+        "DFTUtilsCompressionError",
+        "DFTUtilsError",
+        "DFTUtilsIndexerError",
+        "DFTUtilsIOError",
+        "DFTUtilsNotFoundError",
+        "DFTUtilsParseError",
+        "DFTUtilsPipelineError",
+        "DFTUtilsQueryError",
+        "DFTUtilsReaderError",
+        "DFTUtilsValueError",
         "IndexDatabase",
         "Indexer",
         "IndexerCheckpoint",
@@ -1306,6 +1362,7 @@ def _install_rtd_extension_stub() -> None:
         "enable_aggregation_deterministic_ids",
         "enumerate_gzip_members",
         "get_default_runtime",
+        "get_log_level",
         "move_artifacts",
         "plan_lpt_partition",
         "plan_work_units",
@@ -1313,6 +1370,8 @@ def _install_rtd_extension_stub() -> None:
         "scan_aggregation_manifest",
         "scan_files",
         "set_default_runtime",
+        "set_log_color",
+        "set_log_level",
     ]
 
     _local = locals()

@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cinttypes>
 #include <set>
 #include <unordered_set>
 
@@ -465,6 +466,7 @@ ArrowExportResult AggregationBatch::to_dfanalyzer_arrow(
 
 coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     const AggregatorInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("aggregate");
     CoroScope& scope = context();
 
     // Determine parallelism
@@ -634,9 +636,9 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     if (scan_result.needs_augmentation) {
         aug_config = AugmentationConfig{scan_result.stored_time_interval_us,
                                         input.config.time_interval_us};
-        DFTRACER_UTILS_LOG_INFO("Augmenting time interval: %lu us -> %lu us",
-                                scan_result.stored_time_interval_us,
-                                input.config.time_interval_us);
+        DFTRACER_UTILS_LOG_INFO(
+            "Augmenting time interval: %" PRIu64 " us -> %" PRIu64 " us",
+            scan_result.stored_time_interval_us, input.config.time_interval_us);
     }
 
     auto yield_batch = [&](AggregationBatch batch) -> AggregationBatch {

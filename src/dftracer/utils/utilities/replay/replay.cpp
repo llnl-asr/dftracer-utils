@@ -237,18 +237,18 @@ bool DFTracerExecutor::execute(const Trace& trace, const ReplayConfig& config) {
     }
 
     if (config.no_sleep) {
-        if (config.verbose && duration_us >= 100000.0) {
-            std::printf("DFTracer would sleep for %.3f ms for %.*s (skipped)\n",
-                        duration_us / 1000.0,
-                        static_cast<int>(trace.func_name.size()),
-                        trace.func_name.data());
+        if (duration_us >= 100000.0) {
+            DFTRACER_UTILS_LOG_DEBUG(
+                "DFTracer would sleep for %.3f ms for %.*s (skipped)",
+                duration_us / 1000.0, static_cast<int>(trace.func_name.size()),
+                trace.func_name.data());
         }
     } else {
-        if (config.verbose && duration_us >= 100.0) {
-            std::printf("DFTracer sleeping for %.3f ms for %.*s\n",
-                        duration_us / 1000.0,
-                        static_cast<int>(trace.func_name.size()),
-                        trace.func_name.data());
+        if (duration_us >= 100.0) {
+            DFTRACER_UTILS_LOG_DEBUG("DFTracer sleeping for %.3f ms for %.*s",
+                                     duration_us / 1000.0,
+                                     static_cast<int>(trace.func_name.size()),
+                                     trace.func_name.data());
         }
         sleep_for_duration(duration_us);
     }
@@ -537,13 +537,10 @@ void ReplayEngine::dispatch_trace(const Trace& trace, ReplayResult& result) {
         }
     } else {
         result.failed_events++;
-        if (config_.verbose) {
-            DFTRACER_UTILS_LOG_DEBUG(
-                "No executor found for function: %.*s (category: %.*s)",
-                static_cast<int>(trace.func_name.size()),
-                trace.func_name.data(), static_cast<int>(trace.cat.size()),
-                trace.cat.data());
-        }
+        DFTRACER_UTILS_LOG_DEBUG(
+            "No executor found for function: %.*s (category: %.*s)",
+            static_cast<int>(trace.func_name.size()), trace.func_name.data(),
+            static_cast<int>(trace.cat.size()), trace.cat.data());
     }
 }
 
@@ -634,17 +631,16 @@ void ReplayEngine::apply_timing(const Trace& trace) {
 
         const std::uint64_t MAX_SLEEP_US = 10 * 1000 * 1000;
         if (sleep_us > MAX_SLEEP_US) {
-            if (config_.verbose) {
-                std::printf("Warning: Capping sleep from %.3f ms to %.3f ms\n",
-                            static_cast<double>(sleep_us) / 1000.0,
-                            static_cast<double>(MAX_SLEEP_US) / 1000.0);
-            }
+            DFTRACER_UTILS_LOG_DEBUG(
+                "Warning: Capping sleep from %.3f ms to %.3f ms",
+                static_cast<double>(sleep_us) / 1000.0,
+                static_cast<double>(MAX_SLEEP_US) / 1000.0);
             sleep_us = MAX_SLEEP_US;
         }
 
-        if (config_.verbose && sleep_us > 1000) {
-            std::printf("Timing sleep: %.3f ms\n",
-                        static_cast<double>(sleep_us) / 1000.0);
+        if (sleep_us > 1000) {
+            DFTRACER_UTILS_LOG_DEBUG("Timing sleep: %.3f ms",
+                                     static_cast<double>(sleep_us) / 1000.0);
         }
 
         std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
@@ -1040,13 +1036,10 @@ void ReplayEngine::replay_call_tree_node(
         }
     } else {
         result.failed_events++;
-        if (config_.verbose) {
-            DFTRACER_UTILS_LOG_DEBUG(
-                "No executor found for function: %.*s (category: %.*s)",
-                static_cast<int>(trace.func_name.size()),
-                trace.func_name.data(), static_cast<int>(trace.cat.size()),
-                trace.cat.data());
-        }
+        DFTRACER_UTILS_LOG_DEBUG(
+            "No executor found for function: %.*s (category: %.*s)",
+            static_cast<int>(trace.func_name.size()), trace.func_name.data(),
+            static_cast<int>(trace.cat.size()), trace.cat.data());
     }
 }
 
@@ -1054,7 +1047,7 @@ void ReplayEngine::replay_call_tree_node(
 // ReplayResult::print_summary Implementation
 // =============================================================================
 
-void ReplayResult::print_summary(bool verbose) const {
+void ReplayResult::print_summary() const {
     std::printf("\n=== Replay Summary ===\n");
     std::printf("Total events: %zu\n", total_events);
     std::printf("Executed: %zu\n", executed_events);
@@ -1089,50 +1082,46 @@ void ReplayResult::print_summary(bool verbose) const {
     std::printf("  Unique PIDs: %zu\n", pid_counts.size());
     std::printf("  Unique TIDs: %zu\n", tid_counts.size());
 
-    if (verbose) {
-        if (!pid_counts.empty()) {
-            std::printf("\n  Events per PID:\n");
-            for (const auto& [pid, count] : pid_counts) {
-                std::printf("    PID %u: %zu events\n", pid, count);
-            }
+    if (!pid_counts.empty()) {
+        std::printf("\n  Events per PID:\n");
+        for (const auto& [pid, count] : pid_counts) {
+            std::printf("    PID %u: %zu events\n", pid, count);
         }
+    }
 
-        if (!tid_counts.empty() && tid_counts.size() > 1) {
-            std::printf("\n  Events per TID:\n");
-            for (const auto& [tid, count] : tid_counts) {
-                std::printf("    TID %u: %zu events\n", tid, count);
-            }
+    if (!tid_counts.empty() && tid_counts.size() > 1) {
+        std::printf("\n  Events per TID:\n");
+        for (const auto& [tid, count] : tid_counts) {
+            std::printf("    TID %u: %zu events\n", tid, count);
         }
+    }
 
-        if (!function_counts.empty()) {
-            std::printf("\n  Top functions by count:\n");
-            // function_counts keys are string_views into the replay intern
-            // pool; sorting needs an indexable copy. Keep the views to avoid
-            // re-allocating strings for the dictionary entries (read,
-            // write, ...).
-            std::vector<std::pair<std::string_view, std::size_t>> sorted_funcs(
-                function_counts.begin(), function_counts.end());
-            std::sort(sorted_funcs.begin(), sorted_funcs.end(),
-                      [](const auto& a, const auto& b) {
-                          return a.second > b.second;
-                      });
+    if (!function_counts.empty()) {
+        std::printf("\n  Top functions by count:\n");
+        // function_counts keys are string_views into the replay intern
+        // pool; sorting needs an indexable copy. Keep the views to avoid
+        // re-allocating strings for the dictionary entries (read,
+        // write, ...).
+        std::vector<std::pair<std::string_view, std::size_t>> sorted_funcs(
+            function_counts.begin(), function_counts.end());
+        std::sort(
+            sorted_funcs.begin(), sorted_funcs.end(),
+            [](const auto& a, const auto& b) { return a.second > b.second; });
 
-            std::size_t max_display =
-                std::min(sorted_funcs.size(), std::size_t(10));
-            for (std::size_t i = 0; i < max_display; i++) {
-                std::printf("    %-30.*s: %zu\n",
-                            static_cast<int>(sorted_funcs[i].first.size()),
-                            sorted_funcs[i].first.data(),
-                            sorted_funcs[i].second);
-            }
+        std::size_t max_display =
+            std::min(sorted_funcs.size(), std::size_t(10));
+        for (std::size_t i = 0; i < max_display; i++) {
+            std::printf("    %-30.*s: %zu\n",
+                        static_cast<int>(sorted_funcs[i].first.size()),
+                        sorted_funcs[i].first.data(), sorted_funcs[i].second);
         }
+    }
 
-        if (!category_counts.empty()) {
-            std::printf("\n  Events per category:\n");
-            for (const auto& [cat, count] : category_counts) {
-                std::printf("    %-20.*s: %zu\n", static_cast<int>(cat.size()),
-                            cat.data(), count);
-            }
+    if (!category_counts.empty()) {
+        std::printf("\n  Events per category:\n");
+        for (const auto& [cat, count] : category_counts) {
+            std::printf("    %-20.*s: %zu\n", static_cast<int>(cat.size()),
+                        cat.data(), count);
         }
     }
 

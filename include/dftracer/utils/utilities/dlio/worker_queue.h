@@ -23,7 +23,6 @@ class WorkerQueue {
    public:
     WorkerQueue(int num_workers, int prefetch_factor)
         : num_workers_(num_workers),
-          prefetch_factor_(prefetch_factor),
           queue_capacity_(static_cast<std::size_t>(num_workers) *
                           static_cast<std::size_t>(prefetch_factor)) {}
 
@@ -39,7 +38,6 @@ class WorkerQueue {
 
    private:
     int num_workers_;
-    int prefetch_factor_;
     std::size_t queue_capacity_;
     std::uint64_t stall_count_ = 0;
     std::vector<double> ready_batches_;  // sorted ready times

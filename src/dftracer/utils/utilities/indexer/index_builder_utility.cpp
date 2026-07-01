@@ -272,6 +272,7 @@ static coro::CoroTask<IndexBuildResult> run_index_build(
 
 coro::CoroTask<IndexBuildResult> IndexBuilderUtility::process(
     const IndexBuildConfig& config) {
+    DFTRACER_UTILS_TRACE_SCOPE("build index");
     return run_index_build(config);
 }
 
@@ -898,6 +899,7 @@ static coro::CoroTask<IndexBuildBatchResult> run_batch_write_pipeline(
 
 coro::CoroTask<IndexBuildBatchResult> IndexBatchBuilderUtility::process(
     CoroScope* scope, std::shared_ptr<IndexBuildBatchConfig> config_ptr) {
+    DFTRACER_UTILS_TRACE_SCOPE("build index batch");
     if (!config_ptr || config_ptr->file_paths.empty()) {
         co_return IndexBuildBatchResult{};
     }

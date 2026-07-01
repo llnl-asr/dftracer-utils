@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/exception_helpers.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/common/typedefs.h>
 #include <dftracer/utils/core/coro/yield.h>
@@ -11,6 +12,10 @@
 #include <atomic>
 #include <coroutine>
 #include <exception>
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+#include <cstdint>
+#include <source_location>
+#endif
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
@@ -31,6 +36,11 @@ struct PromiseBase {
     Executor* executor_{nullptr};
     std::atomic<bool>* cancellation_token_{nullptr};
     PromiseBase* root_promise_{nullptr};
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+    void* trace_handle_{nullptr};      // logging::coro_trace enter/leave handle
+    const char* trace_file_{nullptr};  // coroutine definition site
+    std::uint_least32_t trace_line_{0};
+#endif
 
     static void* operator new(std::size_t size) {
         return ObjectPool::instance().allocate(size);
@@ -113,7 +123,15 @@ class CoroTask {
     struct promise_type : PromiseBase, detail::ResultHolder<T> {
         std::exception_ptr exception_;
 
-        CoroTask<T> get_return_object() {
+        CoroTask<T> get_return_object(
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+            std::source_location loc = std::source_location::current()
+#endif
+        ) {
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+            this->trace_file_ = loc.file_name();
+            this->trace_line_ = loc.line();
+#endif
             return CoroTask{
                 std::coroutine_handle<promise_type>::from_promise(*this)};
         }
@@ -237,10 +255,23 @@ class CoroTask {
             return awaiting_coro;
         }
 
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+        if (logger::detail::enabled(logger::Level::Trace)) [[unlikely]] {
+            auto& p = coro_handle_.promise();
+            p.trace_handle_ = logger::detail::coro_trace_enter(
+                coro_handle_.address(), p.trace_file_, p.trace_line_);
+        }
+#endif
         return coro_handle_;
     }
 
     T await_resume() {
+#if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
+        if (coro_handle_.promise().trace_handle_) [[unlikely]] {
+            logger::detail::coro_trace_leave(
+                coro_handle_.promise().trace_handle_);
+        }
+#endif
         if (utilities::monitor_deep_enabled()) {
             utilities::monitor_sync_complete(coro_handle_.address());
         }
@@ -326,7 +357,7 @@ class CoroTask {
     /**
      * Chain operation using then() - transform result with a function
      * @param func Transformation function (T -> U)
-     * @return New CoroTask<U> with transformed result
+     * @return New CoroTask holding the transformed result
      *
      * Usage:
      * @code
@@ -449,8 +480,9 @@ class CoroTask {
 
     /**
      * Operator& for parallel composition (AND) - run both tasks, return tuple
-     * @param other Second task to run in parallel
-     * @return CoroTask<std::tuple<T, U>> with both results
+     * @param lhs First task to run in parallel
+     * @param rhs Second task to run in parallel
+     * @return CoroTask holding a tuple of both results
      *
      * Note: In the current synchronous execution model, these run sequentially.
      * For true parallel execution, use CoroScope::spawn().

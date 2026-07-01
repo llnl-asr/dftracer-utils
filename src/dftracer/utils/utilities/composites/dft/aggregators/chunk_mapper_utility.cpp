@@ -30,6 +30,7 @@ ChunkAggregatorInput make_chunk_input(const FileChunkMapperInput& input,
 
 coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
     const FileChunkMapperInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("map file chunks");
     const auto& meta = input.metadata;
     if (!meta.success) {
         DFTRACER_UTILS_LOG_WARN("Skipping unsuccessful file: %s",

@@ -463,7 +463,7 @@ TEST_SUITE("DFTracerReplay") {
         fs::remove_all(temp_dir, ec);
     }
 
-    TEST_CASE("verbose mode") {
+    TEST_CASE("summary reports totals") {
         auto binary = find_replay_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_replay binary not found, skipping.");
@@ -477,8 +477,8 @@ TEST_SUITE("DFTracerReplay") {
         create_sample_trace(trace_file, 5);
 
         int rc = 0;
-        auto output = run_replay_capture(
-            binary, {"--dry-run", "--verbose", trace_file}, &rc);
+        auto output =
+            run_replay_capture(binary, {"--dry-run", trace_file}, &rc);
         CHECK(rc == 0);
         CHECK(output.find("Total events:") != std::string::npos);
 
@@ -523,8 +523,8 @@ TEST_SUITE("DFTracerReplay") {
         create_multi_category_trace(trace_file);
 
         int rc = 0;
-        auto output = run_replay_capture(
-            binary, {"--dry-run", "--verbose", trace_file}, &rc);
+        auto output =
+            run_replay_capture(binary, {"--dry-run", trace_file}, &rc);
         CHECK(!output.empty());
 
         std::error_code ec;

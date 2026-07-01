@@ -36,7 +36,6 @@ class SplitArgParse : public cli::ArgParse {
     std::string output_dir = "./split";
     int chunk_size_mb = 4;
     bool compress = true;
-    bool verbose = false;
     bool verify = false;
 
     explicit SplitArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
@@ -70,11 +69,6 @@ class SplitArgParse : public cli::ArgParse {
             .default_value(true);
 
         parser()
-            .add_argument("-v", "--verbose")
-            .help("Enable verbose mode")
-            .flag();
-
-        parser()
             .add_argument("--verify")
             .help("Verify output chunks match input by comparing event IDs")
             .flag();
@@ -85,7 +79,6 @@ class SplitArgParse : public cli::ArgParse {
         output_dir = parser().get<std::string>("--output");
         chunk_size_mb = parser().get<int>("--chunk-size");
         compress = parser().get<bool>("--compress");
-        verbose = parser().get<bool>("--verbose");
         verify = parser().get<bool>("--verify");
     }
 };
@@ -452,7 +445,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_split",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

@@ -11,6 +11,7 @@
 #include <dftracer/utils/utilities/reader/internal/streams/multi_line_stream.h>
 #include <dftracer/utils/utilities/reader/internal/string_line_processor.h>
 
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -416,7 +417,7 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             actual_start_line = 1;
             DFTRACER_UTILS_LOG_DEBUG(
                 "No checkpoints found, using full file: start_bytes=%zu, "
-                "end_bytes=%zu, max_bytes=%zu",
+                "end_bytes=%zu, max_bytes=%" PRIu64,
                 start_bytes, end_bytes, indexer->get_max_bytes());
         } else {
             // Use checkpoint to determine byte range.
@@ -458,9 +459,13 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             end_bytes = last_checkpoint.uc_offset + last_checkpoint.uc_size;
 
             DFTRACER_UTILS_LOG_DEBUG(
-                "Using checkpoints: matched_first_idx=%zu "
-                "(first_line=%zu, last_line=%zu), "
-                "end_checkpoint_idx=%zu (first_line=%zu, last_line=%zu), "
+                "Using checkpoints: matched_first_idx=%" PRIu64
+                " "
+                "(first_line=%" PRIu64 ", last_line=%" PRIu64
+                "), "
+                "end_checkpoint_idx=%" PRIu64 " (first_line=%" PRIu64
+                ", last_line=%" PRIu64
+                "), "
                 "byte_range=%zu-%zu, actual_start_line=%zu",
                 checkpoints[0].checkpoint_idx, checkpoints[0].first_line_num,
                 checkpoints[0].last_line_num, last_checkpoint.checkpoint_idx,

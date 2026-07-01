@@ -8,6 +8,7 @@
 #include <dftracer/utils/utilities/reader/internal/tar_reader.h>
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstring>
 #include <sstream>
 #include <vector>
@@ -436,10 +437,11 @@ void TarReader::build_logical_mapping() const {
         cached_total_logical_lines = logical_line - 1;
         logical_mapping_cached = true;
 
-        DFTRACER_UTILS_LOG_DEBUG(
-            "Built logical mapping: %zu files, %zu bytes, %zu lines",
-            cached_file_mapping.size(), cached_total_logical_bytes,
-            cached_total_logical_lines);
+        DFTRACER_UTILS_LOG_DEBUG("Built logical mapping: %zu files, %" PRIu64
+                                 " bytes, %" PRIu64 " lines",
+                                 cached_file_mapping.size(),
+                                 cached_total_logical_bytes,
+                                 cached_total_logical_lines);
     } catch (const std::exception &e) {
         throw ReaderError(
             ReaderError::READ_ERROR,

@@ -92,6 +92,15 @@ class DirectoryScannerUtility
                 std::make_error_code(std::errc::not_a_directory));
         }
 
+        // With a context, a recursive scan fans out per subdirectory so many
+        // directories are read concurrently (fast on parallel filesystems like
+        // Lustre). Without a context (no runtime) fall back to a sequential
+        // single-iterator walk.
+        if (input.recursive && this->has_context()) {
+            co_return co_await scan_parallel(this->context(), input.path,
+                                             input.populate_size);
+        }
+
         if (input.recursive) {
             // Recursive directory iteration
             for (const auto& entry :
@@ -130,6 +139,44 @@ class DirectoryScannerUtility
             co_await coro::when_all(std::move(tasks));
 
         co_return entries;
+    }
+
+   private:
+    // Recursive parallel scan: read one directory level, spawn a child scan
+    // per subdirectory (so many directories are read concurrently), then merge.
+    // Uses error codes instead of exceptions so an unreadable directory is
+    // skipped rather than aborting the whole scan.
+    static coro::CoroTask<std::vector<FileEntry>> scan_parallel(
+        CoroScope& ctx, fs::path dir, bool populate_size) {
+        std::vector<FileEntry> files;
+        std::vector<coro::SpawnFuture<std::vector<FileEntry>>> subdirs;
+
+        std::error_code ec;
+        fs::directory_iterator it(dir, ec);
+        const fs::directory_iterator end;
+        for (; !ec && it != end; it.increment(ec)) {
+            const fs::directory_entry& entry = *it;
+            std::error_code sec;
+            if (entry.is_directory(sec) && !entry.is_symlink(sec)) {
+                subdirs.push_back(ctx.spawn(
+                    [p = entry.path(), populate_size](CoroScope& child)
+                        -> coro::CoroTask<std::vector<FileEntry>> {
+                        co_return co_await scan_parallel(child, p,
+                                                         populate_size);
+                    }));
+            } else {
+                files.emplace_back(entry, populate_size);
+            }
+        }
+
+        if (!subdirs.empty()) {
+            auto nested = co_await coro::when_all(std::move(subdirs));
+            for (auto& sub : nested) {
+                files.insert(files.end(), std::make_move_iterator(sub.begin()),
+                             std::make_move_iterator(sub.end()));
+            }
+        }
+        co_return files;
     }
 };
 

@@ -101,6 +101,7 @@ static void collect_referenced_hashes_batch(
 
 coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
     const ViewReaderInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("read view");
     const auto& query = input.query ? input.query : input.view.query;
     bool use_query = query.has_value();
 

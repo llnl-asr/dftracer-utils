@@ -552,7 +552,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_view",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

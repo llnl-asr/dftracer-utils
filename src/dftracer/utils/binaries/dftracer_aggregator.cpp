@@ -190,7 +190,7 @@ class AggregatorArgParse : public cli::ArgParse {
 };
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_aggregator",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

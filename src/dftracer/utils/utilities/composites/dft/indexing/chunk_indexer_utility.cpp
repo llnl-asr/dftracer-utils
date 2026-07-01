@@ -52,6 +52,7 @@ std::vector<std::string> get_target_dimensions(
 
 coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
     const ChunkIndexerInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("index chunk");
     ChunkIndexerOutput output;
     output.checkpoint_idx = input.checkpoint_idx;
     output.events_processed = 0;

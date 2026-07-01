@@ -81,6 +81,7 @@ static void build_group_key(std::string& key,
 
 coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
     const ChunkDetailScanInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("scan chunk details");
     ChunkDetailScanOutput output;
     output.success = false;
 

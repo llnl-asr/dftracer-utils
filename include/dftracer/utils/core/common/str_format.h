@@ -66,7 +66,8 @@ std::string str_cat(const Args&... args) {
 // literal '%' in the text, escape as "%%" (or use str_cat, which has no format
 // string). vstring_format is the va_list core; string_format is the variadic
 // front-end.
-inline std::string vstring_format(const char* fmt, va_list ap) {
+__attribute__((__format__(__printf__, 1, 0))) inline std::string vstring_format(
+    const char* fmt, va_list ap) {
     va_list ap2;
     va_copy(ap2, ap);
     int n = std::vsnprintf(nullptr, 0, fmt, ap2);

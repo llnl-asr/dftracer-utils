@@ -43,7 +43,6 @@ class InfoArgParse : public cli::ArgParse {
     cli::IndexingArgs indexing;
 
     std::string query_type = "summary";
-    bool verbose = false;
     bool force_rebuild = false;
 
     explicit InfoArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
@@ -63,11 +62,6 @@ class InfoArgParse : public cli::ArgParse {
             .default_value<std::string>("summary");
 
         parser()
-            .add_argument("-v", "--verbose")
-            .help("Show detailed information including index details")
-            .flag();
-
-        parser()
             .add_argument("-f", "--force-rebuild")
             .help("Force rebuild index files")
             .flag();
@@ -75,7 +69,6 @@ class InfoArgParse : public cli::ArgParse {
 
     void post_parse() override {
         query_type = parser().get<std::string>("--query");
-        verbose = parser().get<bool>("--verbose");
         force_rebuild = parser().get<bool>("--force-rebuild");
     }
 };
@@ -213,7 +206,7 @@ process_index_group_info(std::shared_ptr<std::string> index_path,
 }
 
 static void print_file_info(const MetadataCollectorUtilityOutput& info,
-                            bool verbose) {
+                            bool detailed) {
     std::printf("========================================\n");
     std::printf("File: %s\n", info.file_path.c_str());
     std::printf("========================================\n");
@@ -258,7 +251,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         std::printf("  Checkpoints: %zu\n", info.num_checkpoints);
     }
 
-    if (verbose) {
+    if (detailed) {
         std::printf("\nDetailed Statistics:\n");
         std::printf("  Start Line: %zu\n", info.start_line);
         std::printf("  End Line: %zu\n", info.end_line);
@@ -341,7 +334,6 @@ static coro::CoroTask<void> auto_index_and_resolve(
 static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
     const auto& directory = cli->directory.value;
     const auto& query_type = cli->query_type;
-    const auto verbose = cli->verbose;
     const auto force_rebuild = cli->force_rebuild;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
     const auto& index_dir = cli->indexing.index_dir;
@@ -567,7 +559,7 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
     }
 
     for (const auto& r : all_results) {
-        print_file_info(r, verbose);
+        print_file_info(r, !summary_mode);
     }
 
     if (files.size() > 1) {
@@ -600,7 +592,7 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_info",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

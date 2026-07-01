@@ -163,7 +163,7 @@ TEST_SUITE("DFTracerInfo") {
         CHECK(rc == 0);
     }
 
-    TEST_CASE("info with verbose produces more output") {
+    TEST_CASE("info detailed query produces more output") {
         auto binary = find_info_binary();
         if (binary.empty()) {
             MESSAGE("dftracer_info binary not found, skipping.");
@@ -180,14 +180,13 @@ TEST_SUITE("DFTracerInfo") {
         auto plain = run_info_capture(binary, {"--files", f}, &rc_plain);
         CHECK(rc_plain == 0);
 
-        int rc_verbose = 0;
-        auto verbose = run_info_capture(
-            binary, {"--files", f, "--query", "detailed", "--verbose"},
-            &rc_verbose);
-        CHECK(rc_verbose == 0);
+        int rc_detailed = 0;
+        auto detailed = run_info_capture(
+            binary, {"--files", f, "--query", "detailed"}, &rc_detailed);
+        CHECK(rc_detailed == 0);
 
-        // Detailed + verbose mode adds "Detailed Statistics:" section.
-        CHECK(verbose.find("Detailed Statistics") != std::string::npos);
+        // Detailed query adds the "Detailed Statistics:" section.
+        CHECK(detailed.find("Detailed Statistics") != std::string::npos);
     }
 
     TEST_CASE("info with force rebuild") {

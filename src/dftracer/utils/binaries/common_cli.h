@@ -26,6 +26,27 @@ struct CliSchema {
     virtual bool validate() { return true; }
 };
 
+// Register/apply the shared --log-level flag on any parser (used by the
+// ArgParse base and the few CLIs that parse argparse directly). A CLI flag
+// overrides the DFTRACER_UTILS_LOG_LEVEL environment variable.
+inline void add_log_level_arg(argparse::ArgumentParser& p) {
+    p.add_argument("--log-level")
+        .help("Logging verbosity: trace, debug, info, warn, error, off")
+        .default_value(std::string(""));
+}
+
+inline void apply_log_level_arg(const argparse::ArgumentParser& p) {
+    const auto name = p.get<std::string>("--log-level");
+    if (name.empty()) return;
+    if (auto level = logger::level_from_name(name)) {
+        logger::set_level(*level);
+    } else {
+        DFTRACER_UTILS_LOG_WARN("Unknown --log-level '%s'; keeping '%s'",
+                                name.c_str(),
+                                logger::level_name(logger::get_level()));
+    }
+}
+
 class ArgParse {
    public:
     explicit ArgParse(argparse::ArgumentParser& parser) : parser_(parser) {}
@@ -36,6 +57,7 @@ class ArgParse {
 
     void setup() {
         for (auto* s : schemas_) s->register_on(parser_);
+        add_log_level_arg(parser_);
         register_args();
     }
 
@@ -47,6 +69,7 @@ class ArgParse {
             std::fprintf(stderr, "%s\n", parser_.help().str().c_str());
             return false;
         }
+        apply_log_level_arg(parser_);
         for (auto* s : schemas_) s->parse_from(parser_);
         post_parse();
         for (auto* s : schemas_) {

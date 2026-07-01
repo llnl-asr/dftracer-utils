@@ -54,6 +54,7 @@ ViewBuilderInput& ViewBuilderInput::with_time_range(double b, double e) {
 
 coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
     const ViewBuilderInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("build view");
     ViewBuilderOutput output;
 
     std::uint64_t total_checkpoints =

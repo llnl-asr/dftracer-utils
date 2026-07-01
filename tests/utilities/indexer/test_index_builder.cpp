@@ -75,7 +75,7 @@ TEST_SUITE("IndexBuilder") {
         dftracer::utils::utilities::composites::dft::DFTracerEvent ev;
         REQUIRE(decltype(ev)::parse(json, ev));
         dftracer::utils::utilities::composites::dft::EventRecord record{
-            ev, json, json_line, 0, 0};
+            ev, json, json_line, 0, 0, 0};
         visitor.on_event(record);
 
         CHECK(visitor.num_chunks() >= 1);

@@ -1712,7 +1712,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     struct RocksDbExitGuard {
         ~RocksDbExitGuard() {

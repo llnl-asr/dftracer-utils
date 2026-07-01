@@ -18,6 +18,7 @@ using namespace fileio::lines;
 
 coro::CoroTask<ChunkExtractorUtilityOutput> ChunkExtractorUtility::process(
     const ChunkExtractorUtilityInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("extract chunks");
     ChunkExtractorUtilityOutput result;
     result.chunk_index = input.chunk_index;
     result.success = false;

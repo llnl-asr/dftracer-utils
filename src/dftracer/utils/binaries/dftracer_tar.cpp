@@ -13,6 +13,8 @@
 #include <cstring>
 #include <iostream>
 
+#include "common_cli.h"
+
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer::internal;
 
@@ -98,7 +100,7 @@ static coro::CoroTask<int> run_tar(const std::string& archive_path,
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_tar",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -123,6 +125,7 @@ int main(int argc, char** argv) {
     program.add_argument("--build-only")
         .help("Only build the index, don't perform other operations")
         .flag();
+    cli::add_log_level_arg(program);
 
     try {
         program.parse_args(argc, argv);
@@ -131,6 +134,7 @@ int main(int argc, char** argv) {
         std::cerr << program;
         return 1;
     }
+    cli::apply_log_level_arg(program);
 
     auto archive_path = program.get<std::string>("file");
     auto index_path = program.get<std::string>("index");

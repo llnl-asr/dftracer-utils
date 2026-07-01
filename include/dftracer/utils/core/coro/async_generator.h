@@ -141,7 +141,7 @@ AsyncGenerator<T> concat(AsyncGenerator<T> first, F factory) {
  *
  * Operators:
  *   gen > func        map: T -> U
- *   gen >> func       flat_map: T -> AsyncGenerator<U>
+ *   gen >> func       flat_map: T -> AsyncGenerator of U
  *   gen | factory     lazy concat: append factory() after gen exhausted
  */
 template <typename T>
@@ -332,7 +332,7 @@ class AsyncGenerator {
 
     /**
      * operator>> : flat_map -- each element produces a sub-generator,
-     * results are flattened (T -> AsyncGenerator<U>).
+     * results are flattened (T -> AsyncGenerator of U).
      */
     template <typename F,
               std::enable_if_t<detail::is_flat_map_fn_v<F, T>, int> = 0>

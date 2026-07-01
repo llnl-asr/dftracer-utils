@@ -14,7 +14,6 @@ endif()
 need_rocksdb()
 need_argparse()
 need_ghc_filesystem()
-need_cpplogger()
 need_simdjson()
 need_readerwriterqueue()
 need_concurrentqueue()
@@ -37,6 +36,8 @@ endif()
 
 set(DFTRACER_UTILS_CORE_SOURCES
     # Common
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/logging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/symbolize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/format_detector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/memory_budget.cpp
@@ -286,14 +287,6 @@ else()
   set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -ldftracer_zlib")
 endif()
 
-# Only add cpp-logger to pkg-config requirements if it was found on system
-if(cpp-logger_FOUND AND NOT cpplogger_CPM)
-  set(PKG_CONFIG_REQUIRES "${PKG_CONFIG_REQUIRES} cpp-logger")
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lcpp-logger")
-else()
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lcpp-logger")
-endif()
-
 # Add other dependencies built with CPM
 set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lsimdjson")
 
@@ -363,7 +356,6 @@ foreach(variant shared static)
   string(TOUPPER ${variant} VARIANT_UPPER)
   if(TARGET dftracer_utils_core_${variant})
     # Link dependencies using helper functions
-    link_cpp_logger(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_simdjson(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_rocksdb(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_zlib(dftracer_utils_core_${variant} ${VARIANT_UPPER})
@@ -449,6 +441,12 @@ create_library(
     dftracer_utils_core)
 
 # Post-process utilities library targets
+# simdjson (third-party) inlined here trips GCC's optimizer-based
+# -Wstrict-overflow that -isystem cannot suppress; keep =2 for our own code.
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader.cpp
+  PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-overflow>")
+
 foreach(variant shared static)
   if(TARGET dftracer_utils_utilities_${variant})
     # No need to link dependencies here - they're inherited from core
@@ -838,6 +836,7 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_reader.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_tar.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_event_count.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_validate.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_pgzip.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_merge.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_split.cpp

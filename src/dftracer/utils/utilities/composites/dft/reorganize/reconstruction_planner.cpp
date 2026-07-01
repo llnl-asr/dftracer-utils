@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstruction_planner.h>
 #include <dftracer/utils/utilities/indexer/provenance_database.h>
@@ -16,6 +17,7 @@ using dftracer::utils::utilities::indexer::ProvenanceDatabase;
 
 coro::CoroTask<ReconstructionPlan> ReconstructionPlannerUtility::process(
     const ReconstructionPlannerInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("plan reconstruction");
     ReconstructionPlan plan;
 
     for (const auto& reorg_file : input.reorganized_files) {

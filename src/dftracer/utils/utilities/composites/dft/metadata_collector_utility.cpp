@@ -10,6 +10,8 @@
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
+#include <cinttypes>
+
 namespace dftracer::utils::utilities::composites::dft {
 
 namespace hash = dftracer::utils::utilities::hash;
@@ -231,7 +233,8 @@ MetadataCollectorUtility::process_plain(
         meta.success = true;
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "File %s: %.2f MB, %zu valid events from %zu lines, %.8f MB/event",
+            "File %s: %.2f MB, %zu valid events from %" PRIu64
+            " lines, %.8f MB/event",
             input.file_path.c_str(), meta.size_mb, meta.valid_events,
             meta.num_lines, meta.size_per_line);
 

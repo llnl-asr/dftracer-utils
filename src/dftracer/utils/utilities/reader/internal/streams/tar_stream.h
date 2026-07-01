@@ -6,6 +6,7 @@
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 #include <dftracer/utils/utilities/reader/internal/tar_reader.h>
 
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -111,7 +112,7 @@ class TarStream : public GzipStream {
             logical_offset += tar_file.file_size;
 
             DFTRACER_UTILS_LOG_DEBUG(
-                "TAR file mapped: %s [%lu-%lu] size=%lu",
+                "TAR file mapped: %s [%" PRIu64 "-%" PRIu64 "] size=%" PRIu64,
                 mapped_file.file_name.c_str(), mapped_file.logical_start_offset,
                 mapped_file.logical_end_offset, mapped_file.file_size);
         }

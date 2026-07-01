@@ -22,7 +22,6 @@ class MergeArgParse : public cli::ArgParse {
     bool force = false;
     std::string output;
     bool compress = false;
-    bool verbose = false;
     bool gzip_only = false;
     bool verify = false;
     std::size_t channel_capacity = 100;
@@ -47,11 +46,6 @@ class MergeArgParse : public cli::ArgParse {
         parser()
             .add_argument("-c", "--compress")
             .help("Compress output file with gzip")
-            .flag();
-
-        parser()
-            .add_argument("-v", "--verbose")
-            .help("Enable verbose mode")
             .flag();
 
         parser()
@@ -81,7 +75,6 @@ class MergeArgParse : public cli::ArgParse {
         force = parser().get<bool>("--force");
         output = parser().get<std::string>("--output");
         compress = parser().get<bool>("--compress");
-        verbose = parser().get<bool>("--verbose");
         gzip_only = parser().get<bool>("--gzip-only");
         verify = parser().get<bool>("--verify");
         channel_capacity = parser().get<std::size_t>("--channel-capacity");
@@ -92,7 +85,7 @@ class MergeArgParse : public cli::ArgParse {
 static int run_merge(const MergeArgParse& cli);
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_merge",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -112,7 +105,6 @@ static int run_merge(const MergeArgParse& cli) {
     const auto output_file = fs::absolute(cli.output).string();
     const auto force_override = cli.force;
     const auto compress_output = cli.compress;
-    [[maybe_unused]] const auto verbose = cli.verbose;
     const auto gzip_only = cli.gzip_only;
     const auto verify = cli.verify;
     const auto channel_capacity = cli.channel_capacity;

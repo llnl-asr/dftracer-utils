@@ -83,7 +83,8 @@ Executor::Executor(const ExecutorConfig& config)
     DFTRACER_UTILS_LOG_DEBUG(
         "Executor created with %zu threads, idle_timeout=%lld s, "
         "deadlock_timeout=%lld s",
-        num_threads_, idle_timeout_.count(), deadlock_timeout_.count());
+        num_threads_, static_cast<long long>(idle_timeout_.count()),
+        static_cast<long long>(deadlock_timeout_.count()));
 }
 
 Executor::~Executor() {
@@ -390,8 +391,10 @@ bool Executor::is_responsive() const {
                 "Executor appears deadlocked: %zu threads, %zu active "
                 "tasks, idle for %lld ms",
                 num_threads_, active,
-                std::chrono::duration_cast<std::chrono::milliseconds>(idle_time)
-                    .count());
+                static_cast<long long>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        idle_time)
+                        .count()));
             return false;
         }
     }

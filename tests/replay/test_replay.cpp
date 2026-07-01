@@ -14,7 +14,7 @@
 using namespace dftracer::utils::utilities::replay;
 
 TEST_CASE("DFTracer Replay - Basic functionality") {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     // Create a temporary trace file with sample data
     fs::path temp_dir = fs::temp_directory_path() / "dftracer_replay_test";
@@ -64,7 +64,6 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         ReplayConfig config;
         config.dftracer_mode = true;
         config.maintain_timing = false;
-        config.verbose = false;
 
         ReplayEngine engine(config);
 
@@ -256,7 +255,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
 }
 
 TEST_CASE("DFTracer Replay - Trace structure") {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     SUBCASE("Test Trace struct defaults") {
         Trace trace;
@@ -287,7 +286,7 @@ TEST_CASE("DFTracer Replay - Trace structure") {
 }
 
 TEST_CASE("DFTracer Replay - ReplayResult statistics") {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     SUBCASE("Test result aggregation") {
         ReplayResult result;
@@ -302,13 +301,12 @@ TEST_CASE("DFTracer Replay - ReplayResult statistics") {
         result.total_bytes_written = 512 * 1024;
 
         // Test print_summary doesn't crash
-        result.print_summary(false);
-        result.print_summary(true);
+        result.print_summary();
     }
 }
 
 TEST_CASE("DFTracer Replay - Real trace files") {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     // Test with real traces from trace_short directory
     std::string trace_dir = "trace_short/bert_v100-1.pfw";
@@ -323,7 +321,6 @@ TEST_CASE("DFTracer Replay - Real trace files") {
         config.dftracer_mode = true;
         config.no_sleep = true;  // Fast mode for testing
         config.maintain_timing = false;
-        config.verbose = false;
 
         ReplayEngine engine(config);
 
@@ -345,7 +342,7 @@ TEST_CASE("DFTracer Replay - Real trace files") {
 }
 
 TEST_CASE("DFTracer Replay - Call tree integration") {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     // Test with trace_short/cosmoflow_h100/nodes-1 directory
     std::string trace_dir = "trace_short/cosmoflow_h100/nodes-1";
@@ -361,7 +358,6 @@ TEST_CASE("DFTracer Replay - Call tree integration") {
         config.dftracer_mode = true;
         config.no_sleep = true;
         config.maintain_timing = false;
-        config.verbose = false;
         config.use_call_tree = true;
         config.hierarchical_replay = false;
 

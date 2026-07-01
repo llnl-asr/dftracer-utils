@@ -83,7 +83,8 @@ Scheduler::Scheduler(Executor* executor, Watchdog* watchdog,
         watchdog_->set_warning_callback(
             [](const std::string& task_name, int64_t elapsed_ms) {
                 DFTRACER_UTILS_LOG_WARN("Long-running task: %s (%lld ms)",
-                                        task_name.c_str(), elapsed_ms);
+                                        task_name.c_str(),
+                                        static_cast<long long>(elapsed_ms));
             });
     }
 
@@ -166,7 +167,7 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
 
         submit_task_to_executor(source, src_input);
     } catch (...) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to prepare source task ID %d ('%s')",
+        DFTRACER_UTILS_LOG_ERROR("Failed to prepare source task ID %ld ('%s')",
                                  source->get_id(), source->get_name());
         source->set_exception(std::current_exception());
         handle_task_error(source);
@@ -189,8 +190,9 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
                 // Timeout occurred -- release done_mutex_ before calling
                 // request_shutdown() so it can lock done_mutex_ to prevent
                 // lost notifications on ARM.
-                DFTRACER_UTILS_LOG_ERROR("Pipeline timed out after %lld ms",
-                                         global_timeout_.count());
+                DFTRACER_UTILS_LOG_ERROR(
+                    "Pipeline timed out after %lld ms",
+                    static_cast<long long>(global_timeout_.count()));
                 lock.unlock();
                 request_shutdown();
                 throw PipelineError(PipelineError::TIMEOUT_ERROR,
@@ -234,7 +236,7 @@ void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
                             "Pipeline execution failed");
     }
 
-    DFTRACER_UTILS_LOG_DEBUG("Scheduling complete", "");
+    DFTRACER_UTILS_LOG_DEBUG("Scheduling complete");
 }
 
 void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
@@ -253,7 +255,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
         return;
     }
 
-    DFTRACER_UTILS_LOG_DEBUG("Task ID %d ('%s') completed notification",
+    DFTRACER_UTILS_LOG_DEBUG("Task ID %ld ('%s') completed notification",
                              task->get_id(), task->get_name());
 
     // Unregister from watchdog
@@ -312,7 +314,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
 
             if (has_failed_parent) {
                 DFTRACER_UTILS_LOG_WARN(
-                    "Skipping child task ID %d ('%s') because parent failed "
+                    "Skipping child task ID %ld ('%s') because parent failed "
                     "(CONTINUE policy)",
                     child->get_id(), child->get_name());
 
@@ -345,7 +347,7 @@ void Scheduler::on_task_completed(std::shared_ptr<Task> task) {
                     child->get_name());
             } catch (...) {
                 DFTRACER_UTILS_LOG_ERROR(
-                    "Failed to prepare input for child task ID %d "
+                    "Failed to prepare input for child task ID %ld "
                     "('%s')",
                     child->get_id(), child->get_name());
 
@@ -547,7 +549,7 @@ void Scheduler::initialize_pending_counts_dfs(
 }
 
 void Scheduler::handle_task_error(std::shared_ptr<Task> task) {
-    DFTRACER_UTILS_LOG_ERROR("Task ID %d ('%s') failed", task->get_id(),
+    DFTRACER_UTILS_LOG_ERROR("Task ID %ld ('%s') failed", task->get_id(),
                              task->get_name());
 
     has_error_ = true;
@@ -659,7 +661,7 @@ void Scheduler::skip_task_and_descendants(std::shared_ptr<Task> task) {
     task->set_exception(std::make_exception_ptr(
         PipelineError(PipelineError::EXECUTION_ERROR, "Parent task failed")));
 
-    DFTRACER_UTILS_LOG_DEBUG("Skipped task ID %d ('%s') due to failed parent",
+    DFTRACER_UTILS_LOG_DEBUG("Skipped task ID %ld ('%s') due to failed parent",
                              task->get_id(), task->get_name());
 
     // Recursively skip all children
@@ -728,12 +730,12 @@ void Scheduler::invoke_completion_callbacks(TaskIndex task_id) {
                     callback();  // Resume awaiting coroutines
                 } catch (const std::exception& e) {
                     DFTRACER_UTILS_LOG_ERROR(
-                        "Exception in completion callback for task ID %d: %s",
+                        "Exception in completion callback for task ID %ld: %s",
                         task_id, e.what());
                 } catch (...) {
                     DFTRACER_UTILS_LOG_ERROR(
                         "Unknown exception in completion callback for task ID "
-                        "%d",
+                        "%ld",
                         task_id);
                 }
             }

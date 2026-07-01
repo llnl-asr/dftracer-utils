@@ -1055,7 +1055,7 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_organize",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

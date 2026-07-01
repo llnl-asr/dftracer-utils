@@ -19,6 +19,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+#include "common_cli.h"
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities::indexer::internal;
 using namespace dftracer::utils::utilities::reader::internal;
@@ -172,7 +174,7 @@ static coro::CoroTask<int> run_reader(const std::string &gz_path,
 }
 
 int main(int argc, char **argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
     auto default_checkpoint_size_str =
         std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE) + " B (" +
         std::to_string(Indexer::DEFAULT_CHECKPOINT_SIZE / (1024 * 1024)) +
@@ -219,6 +221,7 @@ int main(int argc, char **argv) {
     program.add_argument("--index-dir")
         .help("Directory to store root-local .dftindex directories")
         .default_value<std::string>("");
+    cli::add_log_level_arg(program);
 
     try {
         program.parse_args(argc, argv);
@@ -227,6 +230,7 @@ int main(int argc, char **argv) {
         std::cerr << program;
         return 1;
     }
+    cli::apply_log_level_arg(program);
 
     std::string gz_path = program.get<std::string>("file");
     std::string index_path = program.get<std::string>("--index");

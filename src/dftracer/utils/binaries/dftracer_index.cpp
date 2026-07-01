@@ -303,7 +303,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_index",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

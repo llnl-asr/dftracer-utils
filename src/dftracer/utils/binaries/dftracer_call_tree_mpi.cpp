@@ -32,7 +32,6 @@ class CallTreeMpiArgParse : public cli::ArgParse {
     std::string input_dir;
     std::string output;
     std::string staging_dir;
-    bool verbose = false;
     bool gzip = false;
     bool keep_staging = false;
 
@@ -55,7 +54,6 @@ class CallTreeMpiArgParse : public cli::ArgParse {
                 "<output>.shards/)")
             .default_value<std::string>("");
         parser().add_argument("--gzip").flag();
-        parser().add_argument("-v", "--verbose").flag();
         parser().add_argument("--keep-staging").flag();
     }
 
@@ -64,7 +62,6 @@ class CallTreeMpiArgParse : public cli::ArgParse {
         output = parser().get<std::string>("--output");
         staging_dir = parser().get<std::string>("--staging-dir");
         gzip = parser().get<bool>("--gzip");
-        verbose = parser().get<bool>("--verbose");
         keep_staging = parser().get<bool>("--keep-staging");
     }
 };
@@ -78,7 +75,7 @@ struct RunCtx {
 };
 
 int run(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_call_tree_mpi",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -101,7 +98,6 @@ int run(int argc, char** argv) {
     ctx.cli = &cli;
 
     MPICallTreeConfig builder_cfg;
-    builder_cfg.verbose = cli.verbose;
     ctx.builder = std::make_unique<MPICallTreeBuilder>(builder_cfg);
 
     ctx.final_output = fs::absolute(cli.output).string();

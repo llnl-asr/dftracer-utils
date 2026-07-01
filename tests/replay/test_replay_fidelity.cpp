@@ -173,7 +173,7 @@ void check_fidelity(const FidelityStats& s, const char* label) {
 }  // namespace
 
 TEST_CASE("Replay fidelity - sync path") {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     fs::path temp_dir = fs::temp_directory_path() / "dftracer_replay_fid_sync";
     fs::create_directories(temp_dir);
@@ -204,7 +204,7 @@ TEST_CASE("Replay fidelity - sync path") {
 }
 
 TEST_CASE("Replay fidelity - pipelined path") {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     fs::path temp_dir =
         fs::temp_directory_path() / "dftracer_replay_fid_pipelined";
@@ -246,7 +246,7 @@ TEST_CASE("Replay fidelity - pipelined path") {
 }
 
 TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     fs::path temp_dir =
         fs::temp_directory_path() / "dftracer_replay_fid_anchor";

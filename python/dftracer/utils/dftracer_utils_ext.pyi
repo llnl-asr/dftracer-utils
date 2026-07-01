@@ -1134,3 +1134,15 @@ def scan_aggregation_manifest(
     `{"events": [...], "profiles": [...], "system": [...]}`.
     """
     ...
+
+def set_log_level(level: str) -> None:
+    """Set the C++ logger level (trace|debug|info|warn|error|off)."""
+    ...
+
+def get_log_level() -> str:
+    """Return the current C++ logger level as a string."""
+    ...
+
+def set_log_color(mode: str) -> None:
+    """Set the logger color mode (auto|always|never)."""
+    ...

@@ -245,6 +245,7 @@ static coro::CoroTask<void> run_reader(
 
 coro::CoroTask<ReconstructorResult> ReconstructorUtility::process(
     const ReconstructorInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("reconstruct");
     ReconstructorResult result;
 
     CoroScope& ctx = context();

@@ -476,6 +476,7 @@ std::set<std::uint64_t> evaluate_node(const query_ns::QueryNode& node,
 
 coro::CoroTask<ChunkPrunerOutput> ChunkPrunerUtility::process(
     const ChunkPrunerInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("prune chunks");
     auto do_query = [&input]() -> ChunkPrunerOutput {
         ChunkPrunerOutput out;
         out.success = false;

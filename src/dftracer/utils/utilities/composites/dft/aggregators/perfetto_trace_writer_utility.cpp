@@ -536,6 +536,7 @@ coro::CoroTask<bool> write_shard_events(
 
 coro::CoroTask<bool> PerfettoTraceWriterUtility::process(
     const PerfettoTraceWriterInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("write perfetto");
     using namespace dftracer::utils::utilities;
 
     constexpr std::size_t HEADER_BUFFER_BYTES = 4 * 1024 * 1024;

@@ -17,6 +17,9 @@ from .dftracer_utils_ext import (  # noqa: F401
     DFTUtilsValueError,
     IndexerCheckpoint,  # noqa: F401
     JsonDictValue,  # noqa: F401
+    get_log_level,
+    set_log_color,
+    set_log_level,
 )
 from .dftracer_utils_ext import (
     get_default_runtime as _get_default_native_runtime,
@@ -75,7 +78,10 @@ __all__ = [
     "Runtime",
     "TaskHandle",
     "get_default_runtime",
+    "get_log_level",
     "read_arrow",
     "set_default_runtime",
+    "set_log_color",
+    "set_log_level",
     "write_arrow",
 ]

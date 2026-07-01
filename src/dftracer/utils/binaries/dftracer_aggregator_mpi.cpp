@@ -1035,7 +1035,7 @@ coro::CoroTask<void> task_merge(RunCtx& ctx) {
 }
 
 int run(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_aggregator_mpi",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

@@ -11,6 +11,8 @@
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 #include <fcntl.h>
 
+#include <cinttypes>
+
 namespace dftracer::utils::utilities::reader::internal {
 
 /**
@@ -43,9 +45,10 @@ class ReaderInflater : public Inflater {
         int fd, off_t& offset,
         const dftracer::utils::utilities::indexer::internal::IndexerCheckpoint&
             checkpoint) {
-        DFTRACER_UTILS_LOG_DEBUG(
-            "Restoring from checkpoint: c_offset=%llu, uc_offset=%llu, bits=%d",
-            checkpoint.c_offset, checkpoint.uc_offset, checkpoint.bits);
+        DFTRACER_UTILS_LOG_DEBUG("Restoring from checkpoint: c_offset=%" PRIu64
+                                 ", uc_offset=%" PRIu64 ", bits=%d",
+                                 checkpoint.c_offset, checkpoint.uc_offset,
+                                 checkpoint.bits);
 
         // Calculate seek position (go back one byte if we have partial bits)
         off_t seek_pos = static_cast<off_t>(checkpoint.c_offset);

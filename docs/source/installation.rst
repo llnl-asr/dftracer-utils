@@ -91,6 +91,10 @@ options default to ``ON`` unless noted otherwise:
 - ``DFTRACER_UTILS_COVERAGE`` (default ``OFF``) - Enable coverage reporting.
 - ``DFTRACER_UTILS_DEBUG`` (default ``OFF``) - Enable debug mode with verbose
   logging.
+- ``DFTRACER_UTILS_LOGGER_LEVEL_TRACE`` (default ``ON``) - Compile in
+  Trace-level logging and coroutine auto-tracing. Still runtime-gated by
+  ``DFTRACER_UTILS_LOG_LEVEL``; set ``OFF`` to strip all Trace code for a
+  minimal build.
 - ``DFTRACER_UTILS_BUILD_SHARED`` (default ``ON``) - Build the shared library.
 - ``DFTRACER_UTILS_BUILD_STATIC`` (default ``ON``) - Build the static library.
 - ``DFTRACER_UTILS_BUILD_BINARIES`` (default ``ON``) - Build command-line
@@ -138,6 +142,24 @@ Threading
 - ``DFTRACER_UTILS_THREADS`` - Number of executor worker threads. Overrides
   the count requested in code and the ``--executor-threads`` CLI flag. ``0``
   (or unset) uses ``std::thread::hardware_concurrency()``.
+
+Logging
+~~~~~~~
+
+These override the programmatic logger configuration (so an operator can
+control logging regardless of what the program passes to ``logger::init()``):
+
+- ``DFTRACER_UTILS_LOG_LEVEL`` - Minimum level to emit:
+  ``trace``, ``debug``, ``info`` (default), ``warn``, ``error``, or ``off``.
+  ``trace`` additionally auto-traces every co_awaited coroutine (flat
+  ``-> name`` / ``<- name [ms]``). All levels are compiled in by default; only a
+  build with ``-DDFTRACER_UTILS_LOGGER_LEVEL_TRACE=OFF`` makes ``trace``
+  unavailable (see :doc:`developers`).
+- ``DFTRACER_UTILS_LOG_COLOR`` - ``auto`` (default; color only when the sink is
+  a TTY), ``always``, or ``never``. The ``NO_COLOR`` / ``FORCE_COLOR`` /
+  ``CLICOLOR_FORCE`` conventions are also honored.
+- ``DFTRACER_UTILS_LOG_FILE`` - Append log output to this file instead of
+  ``stderr``.
 
 Profiling / monitoring
 ~~~~~~~~~~~~~~~~~~~~~~~

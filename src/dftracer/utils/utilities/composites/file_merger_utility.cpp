@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/file_merger_utility.h>
 #include <dftracer/utils/utilities/fileio/file_reader_utility.h>
@@ -144,6 +145,7 @@ FileMergeValidatorUtility::process(
 
 coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
     const FileMergerUtilityInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("merge files");
     FileMergerUtilityOutput output;
     output.output_path = input.output_file;
 

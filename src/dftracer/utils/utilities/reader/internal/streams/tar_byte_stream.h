@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_byte_stream.h>
 #include <dftracer/utils/utilities/reader/internal/streams/tar_stream.h>
 
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -199,7 +200,8 @@ class TarByteStream : public TarStream {
         actual_end = actual_start + logical_size;
 
         DFTRACER_UTILS_LOG_DEBUG(
-            "Initializing stream for file %s: actual[%lu-%lu] logical[%lu-%lu]",
+            "Initializing stream for file %s: actual[%" PRIu64 "-%" PRIu64
+            "] logical[%" PRIu64 "-%" PRIu64 "]",
             current_file_->file_name.c_str(), actual_start, actual_end,
             logical_start, logical_end);
 

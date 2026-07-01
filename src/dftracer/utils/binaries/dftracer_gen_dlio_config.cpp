@@ -200,7 +200,7 @@ const char* model_label(const stats::BestModel& m) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_gen_dlio_config",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

@@ -107,7 +107,7 @@ static coro::CoroTask<int> run_reconstruct(const ReconstructArgParse* cli,
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_reconstruct",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

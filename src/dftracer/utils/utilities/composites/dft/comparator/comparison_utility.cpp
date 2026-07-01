@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_utility.h>
 
 #include <algorithm>
@@ -261,6 +262,7 @@ NodeResult ComparisonUtility::build_result_tree(
 
 coro::CoroTask<ComparisonUtilityOutput> ComparisonUtility::process(
     const ComparisonUtilityInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("compare");
     ComparisonUtilityOutput output;
     std::size_t visitor_index = 0;
     output.result =

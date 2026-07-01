@@ -372,7 +372,6 @@ class Task : public std::enable_shared_from_this<Task> {
      * Creates a combiner task that depends on both input tasks
      *
      * @param other Second task to run in parallel
-     * @param name Optional name for the combiner task
      * @return Task that waits for both and returns tuple of results
      *
      * Usage:

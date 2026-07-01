@@ -10,6 +10,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <cinttypes>
+
 namespace dftracer::utils::utilities::reader::internal {
 
 class GzipStream : public StreamBase {
@@ -137,7 +139,8 @@ class GzipStream : public StreamBase {
             if (indexer.find_checkpoint(0, checkpoint_)) {
                 if (inflate_init_from_checkpoint()) {
                     DFTRACER_UTILS_LOG_DEBUG(
-                        "Using first checkpoint at uncompressed offset %zu for "
+                        "Using first checkpoint at uncompressed offset %" PRIu64
+                        " for "
                         "early "
                         "target %zu",
                         checkpoint_.uc_offset, start_bytes);
@@ -148,8 +151,8 @@ class GzipStream : public StreamBase {
             if (indexer.find_checkpoint(start_bytes, checkpoint_)) {
                 if (inflate_init_from_checkpoint()) {
                     DFTRACER_UTILS_LOG_DEBUG(
-                        "Using checkpoint at uncompressed offset %llu for "
-                        "target %zu",
+                        "Using checkpoint at uncompressed offset %" PRIu64
+                        " for target %zu",
                         checkpoint_.uc_offset, start_bytes);
                     return true;
                 }

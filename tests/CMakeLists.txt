@@ -27,6 +27,7 @@ link_zlib(testing_utilities STATIC)
 set(TEST_CPP_SOURCES
     # Core tests
     core/test_runtime.cpp
+    core/test_logging.cpp
     # Pipeline tests
     pipeline/test_pipeline.cpp
 
@@ -195,6 +196,7 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_server.cpp
     binaries/test_dftracer_merge.cpp
     binaries/test_dftracer_event_count.cpp
+    binaries/test_dftracer_validate.cpp
     binaries/test_dftracer_split.cpp
     binaries/test_dftracer_pgzip.cpp
     binaries/test_dftracer_gen_fake_trace.cpp

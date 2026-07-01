@@ -50,7 +50,6 @@ class ReplayArgParse : public cli::ArgParse {
     bool dry_run = false;
     bool dftracer_mode = false;
     bool no_sleep = false;
-    bool verbose = false;
     bool recursive = false;
     bool use_call_tree = false;
     bool hierarchical_replay = false;
@@ -102,9 +101,6 @@ class ReplayArgParse : public cli::ArgParse {
             .help(
                 "When used with --dftracer-mode, disable sleep calls for "
                 "maximum speed")
-            .flag();
-        p.add_argument("--verbose")
-            .help("Enable verbose output and detailed statistics")
             .flag();
         p.add_argument("-r", "--recursive")
             .help("Recursively search directories for trace files")
@@ -197,7 +193,6 @@ class ReplayArgParse : public cli::ArgParse {
         dry_run = p.get<bool>("--dry-run");
         dftracer_mode = p.get<bool>("--dftracer-mode");
         no_sleep = p.get<bool>("--no-sleep");
-        verbose = p.get<bool>("--verbose");
         recursive = p.get<bool>("--recursive");
         use_call_tree = p.get<bool>("--use-call-tree");
         hierarchical_replay = p.get<bool>("--hierarchical-replay");
@@ -457,7 +452,7 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, CoroScope* scope) {
     if (ctx->is_root) {
         std::printf("\n=== Replay Completed ===\n");
         std::printf("Wall clock time: %.3f ms\n", ctx->execute_ms);
-        ctx->result.print_summary(ctx->config.verbose);
+        ctx->result.print_summary();
     }
 
     // Exit-code semantics preserved from the previous binary:
@@ -478,7 +473,7 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, CoroScope* scope) {
 }
 
 int run(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_replay",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -505,7 +500,6 @@ int run(int argc, char** argv) {
     c.dry_run = cli.dry_run;
     c.dftracer_mode = cli.dftracer_mode;
     c.no_sleep = cli.no_sleep;
-    c.verbose = cli.verbose;
     c.mpi_rank = ctx.mpi_rank;
     c.mpi_size = ctx.mpi_size;
     c.use_call_tree = cli.use_call_tree;
@@ -548,9 +542,9 @@ int run(int argc, char** argv) {
     pipeline.set_destination(execute);
     pipeline.execute();
 
-    if (cli.verbose && ctx.is_root) {
-        std::fprintf(stderr, "[done] scan=%.1fms execute=%.1fms\n", ctx.scan_ms,
-                     ctx.execute_ms);
+    if (ctx.is_root) {
+        DFTRACER_UTILS_LOG_DEBUG("[done] scan=%.1fms execute=%.1fms",
+                                 ctx.scan_ms, ctx.execute_ms);
     }
 
     return ctx.exit_code;

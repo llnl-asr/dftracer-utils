@@ -197,6 +197,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
 
 coro::CoroTask<ResolverResult> IndexResolverUtility::process(
     const ResolverInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("resolve index");
     ResolverResult result;
 
     if (!input.directory.empty()) {

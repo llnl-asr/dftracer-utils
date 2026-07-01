@@ -54,6 +54,7 @@ std::vector<PredicateGroup> parse_group_specs(
 
 coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
     const ReorganizationPlannerInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("plan reorganization");
     CoroScope& scope = context();
 
     ExtractionPlan plan;

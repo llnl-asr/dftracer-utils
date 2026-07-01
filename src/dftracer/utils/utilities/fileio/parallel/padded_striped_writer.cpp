@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
+#include <dftracer/utils/utilities/fileio/parallel/pwrite_fully.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -290,21 +291,8 @@ class PaddedStripedWriter : public ParallelWriter {
 
     coro::CoroTask<int> pwrite_bytes(const std::uint8_t* bytes,
                                      std::size_t size, off_t offset) {
-        if (size == 0) co_return 0;
-        std::size_t written = 0;
-        while (written < size) {
-            auto n = co_await ::dftracer::utils::io::pwrite(
-                fd_, bytes + written, size - written,
-                offset + static_cast<off_t>(written));
-            if (n <= 0) {
-                DFTRACER_UTILS_LOG_ERROR(
-                    "padded writer pwrite failed at %lld on %s",
-                    static_cast<long long>(offset), path_.c_str());
-                co_return -1;
-            }
-            written += static_cast<std::size_t>(n);
-        }
-        co_return 0;
+        co_return co_await pwrite_fully(fd_, path_.c_str(), bytes, size,
+                                        offset);
     }
 
     std::string path_;

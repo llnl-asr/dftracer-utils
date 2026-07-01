@@ -2,10 +2,12 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_PLAIN_FILE_BYTES_GENERATOR_H
 
 #include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
+#include <dftracer/utils/utilities/fileio/lines/sources/async_file_source.h>
 
 #include <string>
 #include <vector>
@@ -35,14 +37,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
                                 "Invalid byte range: start >= end");
     }
 
-    // Open file asynchronously
-    ssize_t fd_result =
-        co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
-    if (fd_result < 0) {
-        throw DFTUtilsException(ErrorCode::IO,
-                                "Cannot open file: " + file_path);
-    }
-    dftracer::utils::ScopedFd fd(static_cast<int>(fd_result));
+    ScopedFd fd = co_await async_open_read(file_path);
 
     std::vector<char> read_buffer(buffer_size);
     std::string line_buffer;
@@ -63,11 +58,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
                     file_offset);
 
                 if (bytes_read < 0) {
-                    throw DFTUtilsException(
-                        ErrorCode::IO,
-                        "Read error on file: " + file_path + " (errno=" +
-                            std::to_string(static_cast<int>(-bytes_read)) +
-                            ")");
+                    throw make_read_error(file_path, bytes_read);
                 }
 
                 if (bytes_read == 0) {
@@ -105,10 +96,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
                 fd.get(), read_buffer.data(), read_buffer.size(), file_offset);
 
             if (bytes_read < 0) {
-                throw DFTUtilsException(
-                    ErrorCode::IO,
-                    "Read error on file: " + file_path + " (errno=" +
-                        std::to_string(static_cast<int>(-bytes_read)) + ")");
+                throw make_read_error(file_path, bytes_read);
             }
 
             if (bytes_read == 0) {
@@ -148,9 +136,7 @@ inline coro::AsyncGenerator<Line> async_plain_file_bytes(
         ex = std::current_exception();
     }
 
-    if (ex) {
-        std::rethrow_exception(ex);
-    }
+    if (ex) rethrow_and_clear(ex);
 }
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

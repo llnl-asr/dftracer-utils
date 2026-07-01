@@ -85,46 +85,4 @@ coro::CoroTask<FileChunkMapperOutput> FileChunkMapperUtility::process(
     co_return chunks;
 }
 
-coro::CoroTask<ChunkMapperOutput> ChunkMapperUtility::process(
-    const ChunkMapperInput& input) {
-    ChunkMapperOutput all_chunks;
-    int global_chunk_index = 0;
-
-    std::size_t target_chunk_bytes = input.target_chunk_size_mb * 1024 * 1024;
-
-    DFTRACER_UTILS_LOG_INFO(
-        "Creating chunk mappings with target size: %zu MB (%zu bytes)",
-        input.target_chunk_size_mb, target_chunk_bytes);
-
-    FileChunkMapperUtility file_mapper;
-
-    for (const auto& meta : input.metadata) {
-        auto file_input =
-            FileChunkMapperInput::from_metadata(meta)
-                .with_config(input.config)
-                .with_checkpoint_size(input.checkpoint_size)
-                .with_target_chunk_size(input.target_chunk_size_mb)
-                .with_batch_size(input.batch_size)
-                .with_start_chunk_index(global_chunk_index);
-        file_input.query = input.query;
-
-        auto file_chunks = co_await file_mapper.process(file_input);
-        global_chunk_index += static_cast<int>(file_chunks.size());
-
-        all_chunks.insert(all_chunks.end(),
-                          std::make_move_iterator(file_chunks.begin()),
-                          std::make_move_iterator(file_chunks.end()));
-    }
-
-    DFTRACER_UTILS_LOG_INFO(
-        "Created %zu chunks from %zu files (avg %.1f chunks/file)",
-        all_chunks.size(), input.metadata.size(),
-        input.metadata.empty()
-            ? 0.0
-            : static_cast<double>(all_chunks.size()) /
-                  static_cast<double>(input.metadata.size()));
-
-    co_return all_chunks;
-}
-
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

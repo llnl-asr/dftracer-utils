@@ -19,7 +19,6 @@
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
-#include <iomanip>
 #include <memory>
 #include <mutex>
 
@@ -82,17 +81,7 @@ class InfoArgParse : public cli::ArgParse {
 };
 
 static std::string format_size(std::uint64_t bytes) {
-    const char* units[] = {"B", "KB", "MB", "GB", "TB"};
-    int unit_index = 0;
-    double size = static_cast<double>(bytes);
-    while (size >= 1024.0 && unit_index < 4) {
-        size /= 1024.0;
-        unit_index++;
-    }
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(2) << size << " "
-        << units[unit_index];
-    return oss.str();
+    return cli::human_bytes(static_cast<double>(bytes), "", 2);
 }
 
 using FileRegistry = std::unordered_map<std::string, FileRegistryEntry>;

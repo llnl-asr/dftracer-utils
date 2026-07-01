@@ -360,34 +360,12 @@ static std::vector<CountPair> sorted_by_count_desc(const Map& counts) {
 
 // Format a byte value for human-readable display
 static std::string format_bytes(double bytes) {
-    char buf[64];
-    if (bytes < 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.0f B", bytes);
-    } else if (bytes < 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB", bytes / 1024.0);
-    } else if (bytes < 1024.0 * 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f MB", bytes / (1024.0 * 1024.0));
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.1f GB",
-                      bytes / (1024.0 * 1024.0 * 1024.0));
-    }
-    return buf;
+    return cli::human_bytes(bytes);
 }
 
 // Format a bandwidth value (bytes/sec) for human-readable display
 static std::string format_bandwidth(double bps) {
-    char buf[64];
-    if (bps < 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f B/s", bps);
-    } else if (bps < 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB/s", bps / 1024.0);
-    } else if (bps < 1024.0 * 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f MB/s", bps / (1024.0 * 1024.0));
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.1f GB/s",
-                      bps / (1024.0 * 1024.0 * 1024.0));
-    }
-    return buf;
+    return cli::human_bytes(bps, "/s");
 }
 
 // Build a DetailedStatistics from TraceStatistics (summary path).

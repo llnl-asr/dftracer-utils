@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/byte_view.h>
 #include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/io/io.h>
@@ -113,9 +114,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
         ex = std::current_exception();
     }
 
-    if (ex) {
-        std::rethrow_exception(ex);
-    }
+    if (ex) rethrow_and_clear(ex);
 }
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

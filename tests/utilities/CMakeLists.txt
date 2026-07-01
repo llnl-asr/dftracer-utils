@@ -26,7 +26,6 @@ set(UTILITIES_TEST_SOURCES
     # DFT Composites
     composites/dft/test_chunk_extractor.cpp
     composites/dft/test_event_collector.cpp
-    composites/dft/test_event_hasher.cpp
     composites/dft/test_index_builder.cpp
     composites/dft/test_metadata_collector.cpp
 

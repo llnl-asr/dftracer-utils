@@ -355,6 +355,22 @@ inline std::string ensure_suffix(const std::string& path,
     return path + suffix;
 }
 
+// Human-readable byte count, e.g. "1.5 MB" or "3.0 MB/s". per_suffix appends a
+// rate unit (e.g. "/s"); precision controls the fractional digits.
+inline std::string human_bytes(double value, const char* per_suffix = "",
+                               int precision = 1) {
+    static const char* const UNITS[] = {"B", "KB", "MB", "GB", "TB"};
+    int i = 0;
+    while (value >= 1024.0 && i < 4) {
+        value /= 1024.0;
+        ++i;
+    }
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.*f %s%s", precision, value, UNITS[i],
+                  per_suffix);
+    return buf;
+}
+
 }  // namespace dftracer::utils::cli
 
 #endif  // DFTRACER_UTILS_BINARIES_COMMON_CLI_H

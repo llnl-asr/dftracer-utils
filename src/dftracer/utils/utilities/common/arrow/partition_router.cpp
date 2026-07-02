@@ -2,6 +2,7 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/common/arrow/array_view.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #include <dftracer/utils/utilities/common/arrow/partition_router.h>
 #include <nanoarrow/nanoarrow.h>
@@ -141,6 +142,35 @@ void append_row_from_view(RecordBatchBuilder& builder,
     }
 }
 
+// Column specs mirroring the input schema, typed from the view's storage type.
+std::vector<ColumnSpec> build_col_specs(const ArrowSchema* schema,
+                                        const ArrowArrayView& view) {
+    std::vector<ColumnSpec> col_specs;
+    col_specs.reserve(schema->n_children);
+    for (int64_t i = 0; i < schema->n_children; i++) {
+        col_specs.push_back(
+            {schema->children[i]->name,
+             nanoarrow_to_column_type(view.children[i]->storage_type)});
+    }
+    return col_specs;
+}
+
+// Indices of `partition_columns` within `schema` (first match per name).
+std::vector<int64_t> find_partition_indices(
+    const ArrowSchema* schema,
+    const std::vector<std::string>& partition_columns) {
+    std::vector<int64_t> indices;
+    for (const auto& col_name : partition_columns) {
+        for (int64_t i = 0; i < schema->n_children; i++) {
+            if (schema->children[i]->name == col_name) {
+                indices.push_back(i);
+                break;
+            }
+        }
+    }
+    return indices;
+}
+
 }  // namespace
 
 PartitionRouter::~PartitionRouter() {}
@@ -247,28 +277,13 @@ coro::CoroTask<int> PartitionRouter::route_column(ArrowExportResult& batch) {
     if (num_rows == 0) co_return 0;
 
     ArrowArrayView view;
-    ArrowError error;
-    int rc = ArrowArrayViewInitFromSchema(&view, schema, &error);
+    int rc = init_array_view(view, schema, array);
     if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
-        co_return rc;
-    }
-    rc = ArrowArrayViewSetArray(&view, array, &error);
-    if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
         co_return rc;
     }
 
-    std::vector<int64_t> partition_col_indices;
-    for (const auto& col_name : config_.partition_columns) {
-        for (int64_t i = 0; i < schema->n_children; i++) {
-            if (schema->children[i]->name == col_name) {
-                partition_col_indices.push_back(i);
-                break;
-            }
-        }
-    }
-
+    auto partition_col_indices =
+        find_partition_indices(schema, config_.partition_columns);
     if (partition_col_indices.size() != config_.partition_columns.size()) {
         ArrowArrayViewReset(&view);
         co_return -1;
@@ -289,13 +304,7 @@ coro::CoroTask<int> PartitionRouter::route_column(ArrowExportResult& batch) {
         partition_rows[partition_key].push_back(row);
     }
 
-    std::vector<ColumnSpec> col_specs;
-    col_specs.reserve(schema->n_children);
-    for (int64_t i = 0; i < schema->n_children; i++) {
-        ArrowType type = view.children[i]->storage_type;
-        col_specs.push_back(
-            {schema->children[i]->name, nanoarrow_to_column_type(type)});
-    }
+    auto col_specs = build_col_specs(schema, view);
 
     for (auto& [partition_key, rows] : partition_rows) {
         RecordBatchBuilder builder;
@@ -332,28 +341,13 @@ coro::CoroTask<int> PartitionRouter::route_bucketed(ArrowExportResult& batch) {
     if (num_rows == 0) co_return 0;
 
     ArrowArrayView view;
-    ArrowError error;
-    int rc = ArrowArrayViewInitFromSchema(&view, schema, &error);
+    int rc = init_array_view(view, schema, array);
     if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
-        co_return rc;
-    }
-    rc = ArrowArrayViewSetArray(&view, array, &error);
-    if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
         co_return rc;
     }
 
-    std::vector<int64_t> partition_col_indices;
-    for (const auto& col_name : config_.partition_columns) {
-        for (int64_t i = 0; i < schema->n_children; i++) {
-            if (schema->children[i]->name == col_name) {
-                partition_col_indices.push_back(i);
-                break;
-            }
-        }
-    }
-
+    auto partition_col_indices =
+        find_partition_indices(schema, config_.partition_columns);
     if (partition_col_indices.size() != config_.partition_columns.size()) {
         ArrowArrayViewReset(&view);
         co_return -1;
@@ -371,13 +365,7 @@ coro::CoroTask<int> PartitionRouter::route_bucketed(ArrowExportResult& batch) {
         bucket_rows[bucket].push_back(row);
     }
 
-    std::vector<ColumnSpec> col_specs;
-    col_specs.reserve(schema->n_children);
-    for (int64_t i = 0; i < schema->n_children; i++) {
-        col_specs.push_back(
-            {schema->children[i]->name,
-             nanoarrow_to_column_type(view.children[i]->storage_type)});
-    }
+    auto col_specs = build_col_specs(schema, view);
 
     auto bucket_key = [&](int bucket) {
         std::ostringstream ss;
@@ -422,15 +410,8 @@ coro::CoroTask<int> PartitionRouter::route_view(ArrowExportResult& batch) {
     if (num_rows == 0) co_return 0;
 
     ArrowArrayView view;
-    ArrowError error;
-    int rc = ArrowArrayViewInitFromSchema(&view, schema, &error);
+    int rc = init_array_view(view, schema, array);
     if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
-        co_return rc;
-    }
-    rc = ArrowArrayViewSetArray(&view, array, &error);
-    if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
         co_return rc;
     }
 
@@ -469,13 +450,7 @@ coro::CoroTask<int> PartitionRouter::route_view(ArrowExportResult& batch) {
         }
     }
 
-    std::vector<ColumnSpec> col_specs;
-    col_specs.reserve(schema->n_children);
-    for (int64_t i = 0; i < schema->n_children; i++) {
-        col_specs.push_back(
-            {schema->children[i]->name,
-             nanoarrow_to_column_type(view.children[i]->storage_type)});
-    }
+    auto col_specs = build_col_specs(schema, view);
 
     for (auto& [view_name, rows] : view_rows) {
         RecordBatchBuilder builder;

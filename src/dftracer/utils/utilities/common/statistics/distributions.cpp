@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <limits>
 #include <random>
-#include <stdexcept>
 
 // Boost.Math standalone is configured globally via -DBOOST_MATH_STANDALONE.
 #include <boost/math/distributions/exponential.hpp>
@@ -86,6 +85,20 @@ double compute_bic(double log_l, std::size_t n, int k) {
            2.0 * log_l;
 }
 
+// Shared goodness-of-fit tail: KS statistic against sorted data, log-likelihood
+// and BIC. Only the Boost distribution type varies across the fit_* functions.
+template <class Dist>
+void finalize_fit(FittedDistribution& f, const Dist& dist,
+                  const std::vector<double>& data, const SampleSummary& s) {
+    auto sorted = data;
+    std::sort(sorted.begin(), sorted.end());
+    f.ks_stat =
+        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
+    f.log_likelihood =
+        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
+    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+}
+
 // ---- Per-distribution MLE -------------------------------------------------
 
 FittedDistribution fit_normal(const std::vector<double>& data,
@@ -98,13 +111,7 @@ FittedDistribution fit_normal(const std::vector<double>& data,
     f.valid = true;
 
     bm::normal dist(s.mean, sigma);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 
@@ -131,13 +138,7 @@ FittedDistribution fit_lognormal(const std::vector<double>& data,
     f.valid = true;
 
     bm::lognormal dist(mean_log, sigma);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 
@@ -151,13 +152,7 @@ FittedDistribution fit_exponential(const std::vector<double>& data,
     f.valid = true;
 
     bm::exponential dist(rate);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 
@@ -208,13 +203,7 @@ FittedDistribution fit_gamma(const std::vector<double>& data,
     f.valid = true;
 
     bm::gamma_distribution<double> dist(k, theta);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 
@@ -267,13 +256,7 @@ FittedDistribution fit_weibull(const std::vector<double>& data,
     f.valid = true;
 
     bm::weibull dist(k, lambda);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 

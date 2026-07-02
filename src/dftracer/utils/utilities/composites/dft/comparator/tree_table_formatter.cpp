@@ -98,22 +98,26 @@ std::string fmt_duration(double us) {
     return buf;
 }
 
-std::string fmt_size(double bytes) {
+// Format a byte-scaled quantity with a binary (1024) ladder. `suffix` is
+// appended to the unit ("" for sizes, "/s" for bandwidth).
+std::string fmt_bytes_scaled(double value, const char* suffix) {
     char buf[32];
     constexpr double KB = 1024.0;
     constexpr double MB = 1024.0 * 1024.0;
     constexpr double GB = 1024.0 * 1024.0 * 1024.0;
-    if (bytes < KB) {
-        std::snprintf(buf, sizeof(buf), "%.0f B", bytes);
-    } else if (bytes < MB) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB", bytes / KB);
-    } else if (bytes < GB) {
-        std::snprintf(buf, sizeof(buf), "%.2f MB", bytes / MB);
+    if (value < KB) {
+        std::snprintf(buf, sizeof(buf), "%.0f B%s", value, suffix);
+    } else if (value < MB) {
+        std::snprintf(buf, sizeof(buf), "%.1f KB%s", value / KB, suffix);
+    } else if (value < GB) {
+        std::snprintf(buf, sizeof(buf), "%.2f MB%s", value / MB, suffix);
     } else {
-        std::snprintf(buf, sizeof(buf), "%.3f GB", bytes / GB);
+        std::snprintf(buf, sizeof(buf), "%.3f GB%s", value / GB, suffix);
     }
     return buf;
 }
+
+std::string fmt_size(double bytes) { return fmt_bytes_scaled(bytes, ""); }
 
 // True when every metric in the group is zero on both sides.
 bool all_group_zero(const std::vector<const MetricComparison*>& group) {
@@ -121,6 +125,43 @@ bool all_group_zero(const std::vector<const MetricComparison*>& group) {
         if (mc->baseline_value != 0.0 || mc->variant_value != 0.0) return false;
     }
     return true;
+}
+
+// A named bucket of metrics: standalone metrics keep their own name; metrics
+// sharing a metric_group() prefix collapse under that group name. Groups that
+// are all-zero on both sides are dropped. Item pointers alias `metrics`.
+struct MetricGroup {
+    std::string name;
+    std::vector<const MetricComparison*> items;
+};
+
+std::vector<MetricGroup> group_metrics(
+    const std::vector<MetricComparison>& metrics) {
+    std::vector<MetricGroup> groups;
+    std::unordered_map<std::string, std::size_t> group_idx;
+
+    for (const auto& mc : metrics) {
+        if (mc.baseline_value == 0.0 && mc.variant_value == 0.0) continue;
+        std::string grp = metric_group(mc.metric_name);
+        if (grp.empty()) {
+            groups.push_back({mc.metric_name, {&mc}});
+        } else {
+            auto it = group_idx.find(grp);
+            if (it == group_idx.end()) {
+                group_idx[grp] = groups.size();
+                groups.push_back({grp, {&mc}});
+            } else {
+                groups[it->second].items.push_back(&mc);
+            }
+        }
+    }
+
+    groups.erase(std::remove_if(groups.begin(), groups.end(),
+                                [](const MetricGroup& g) {
+                                    return all_group_zero(g.items);
+                                }),
+                 groups.end());
+    return groups;
 }
 
 // True when any metric has a non-zero value on either side.
@@ -246,22 +287,7 @@ static void collect_regressions(const NodeResult& node,
     }
 }
 
-std::string fmt_bandwidth(double bps) {
-    char buf[32];
-    constexpr double KB = 1024.0;
-    constexpr double MB = 1024.0 * 1024.0;
-    constexpr double GB = 1024.0 * 1024.0 * 1024.0;
-    if (bps < KB) {
-        std::snprintf(buf, sizeof(buf), "%.0f B/s", bps);
-    } else if (bps < MB) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB/s", bps / KB);
-    } else if (bps < GB) {
-        std::snprintf(buf, sizeof(buf), "%.2f MB/s", bps / MB);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.3f GB/s", bps / GB);
-    }
-    return buf;
-}
+std::string fmt_bandwidth(double bps) { return fmt_bytes_scaled(bps, "/s"); }
 
 std::string fmt_generic(double v) {
     char buf[32];
@@ -383,34 +409,7 @@ void TreeTableFormatter::measure_metrics_tree(
     // branch_mid/last are 4 display columns each (unicode or ASCII).
     const int BRANCH_W = 4;
 
-    struct MetricGroup {
-        std::string name;
-        std::vector<const MetricComparison*> items;
-    };
-    std::vector<MetricGroup> groups;
-    std::unordered_map<std::string, std::size_t> group_idx;
-
-    for (const auto& mc : metrics) {
-        if (mc.baseline_value == 0.0 && mc.variant_value == 0.0) continue;
-        std::string grp = metric_group(mc.metric_name);
-        if (grp.empty()) {
-            groups.push_back({mc.metric_name, {&mc}});
-        } else {
-            auto it = group_idx.find(grp);
-            if (it == group_idx.end()) {
-                group_idx[grp] = groups.size();
-                groups.push_back({grp, {&mc}});
-            } else {
-                groups[it->second].items.push_back(&mc);
-            }
-        }
-    }
-
-    groups.erase(std::remove_if(groups.begin(), groups.end(),
-                                [](const MetricGroup& g) {
-                                    return all_group_zero(g.items);
-                                }),
-                 groups.end());
+    auto groups = group_metrics(metrics);
 
     const int prefix_dw = display_width(prefix);
 
@@ -499,34 +498,7 @@ void TreeTableFormatter::render_metrics_tree(
     std::FILE* out, const std::vector<MetricComparison>& metrics,
     const std::string& prefix, bool /*is_last_section*/,
     const ColumnWidths& cw) const {
-    struct MetricGroup {
-        std::string name;
-        std::vector<const MetricComparison*> items;
-    };
-    std::vector<MetricGroup> groups;
-    std::unordered_map<std::string, std::size_t> group_idx;
-
-    for (const auto& mc : metrics) {
-        if (mc.baseline_value == 0.0 && mc.variant_value == 0.0) continue;
-        std::string grp = metric_group(mc.metric_name);
-        if (grp.empty()) {
-            groups.push_back({mc.metric_name, {&mc}});
-        } else {
-            auto it = group_idx.find(grp);
-            if (it == group_idx.end()) {
-                group_idx[grp] = groups.size();
-                groups.push_back({grp, {&mc}});
-            } else {
-                groups[it->second].items.push_back(&mc);
-            }
-        }
-    }
-
-    groups.erase(std::remove_if(groups.begin(), groups.end(),
-                                [](const MetricGroup& g) {
-                                    return all_group_zero(g.items);
-                                }),
-                 groups.end());
+    auto groups = group_metrics(metrics);
 
     if (groups.empty()) return;
 

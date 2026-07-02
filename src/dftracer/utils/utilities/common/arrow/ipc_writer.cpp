@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/io/ops.h>
+#include <dftracer/utils/utilities/common/arrow/array_view.h>
 #include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
 #include <fcntl.h>
 #include <flatcc/flatcc_builder.h>
@@ -17,7 +18,6 @@
 #endif
 
 #include <cstring>
-#include <new>
 #include <vector>
 
 #define ns(x) FLATBUFFERS_WRAP_NAMESPACE(org_apache_arrow_flatbuf, x)
@@ -458,16 +458,8 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
     ArrowArray* array = batch.get_array();
 
     ArrowArrayView view;
-    ArrowError error;
-    int rc = ArrowArrayViewInitFromSchema(&view, schema, &error);
+    int rc = init_array_view(view, schema, array);
     if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
-        co_return result;
-    }
-
-    rc = ArrowArrayViewSetArray(&view, array, &error);
-    if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
         co_return result;
     }
 

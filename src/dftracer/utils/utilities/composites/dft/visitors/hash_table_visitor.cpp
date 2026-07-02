@@ -1,4 +1,5 @@
 #include <dftracer/utils/utilities/composites/dft/visitors/hash_table_visitor.h>
+#include <dftracer/utils/utilities/composites/dft/visitors/visitor_dom_helpers.h>
 #include <dftracer/utils/utilities/indexer/index_batch_sink.h>
 
 namespace dftracer::utils::utilities::composites::dft::visitors {
@@ -20,15 +21,6 @@ void HashTableVisitor::on_event(const EventRecord& record) {
     if (!record.has_args) {
         return;
     }
-
-    auto dom_string = [](simdjson::dom::element obj,
-                         std::string_view key) -> std::string_view {
-        auto r = obj[key];
-        if (r.error()) return {};
-        auto v = r.value_unsafe();
-        if (!v.is_string()) return {};
-        return v.get_string().value_unsafe();
-    };
 
     auto name_val = dom_string(record.args_dom, "name");
     auto hash_val = dom_string(record.args_dom, "value");

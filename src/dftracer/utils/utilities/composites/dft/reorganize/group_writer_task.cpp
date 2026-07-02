@@ -455,8 +455,8 @@ void append_line(ChunkState& st, std::size_t w, ByteView line) {
 
 }  // namespace
 
-coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
-                                                   GroupWriterConfig config) {
+coro::CoroTask<Result<GroupWriterResult>> run_group_writer(
+    CoroScope* scope, GroupWriterConfig config) {
     auto result = std::make_unique<GroupWriterResult>();
     result->group_name = config.group_name;
 
@@ -846,12 +846,14 @@ coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
 
         if (any_chunk_inline_indexed) result->indexed_inline = true;
 
-        result->success = true;
-
-    } catch (const std::exception& e) {
-        result->error_message = e.what();
+    } catch (const DFTUtilsException& e) {
         DFTRACER_UTILS_LOG_ERROR("GroupWriter failed for %s: %s",
                                  config.group_name.c_str(), e.what());
+        co_return make_error(e.code(), e.what());
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_ERROR("GroupWriter failed for %s: %s",
+                                 config.group_name.c_str(), e.what());
+        co_return make_error(ErrorCode::INTERNAL, e.what());
     }
 
     co_return std::move(*result);

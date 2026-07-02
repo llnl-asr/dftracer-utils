@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_REORGANIZE_GROUP_WRITER_TASK_H
 
 #include <concurrentqueue.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -57,12 +58,10 @@ struct GroupWriterResult {
     /// Lets downstream indexing skip the post-write gzip header re-scan.
     std::vector<ChunkMemberLayout> chunk_layouts;
     bool indexed_inline = false;
-    bool success = false;
-    std::string error_message;
 };
 
-coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
-                                                   GroupWriterConfig config);
+coro::CoroTask<Result<GroupWriterResult>> run_group_writer(
+    CoroScope* scope, GroupWriterConfig config);
 
 }  // namespace dftracer::utils::utilities::composites::dft::reorganize
 

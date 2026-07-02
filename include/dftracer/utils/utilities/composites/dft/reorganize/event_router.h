@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_REORGANIZE_EVENT_ROUTER_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_REORGANIZE_EVENT_ROUTER_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
@@ -28,11 +29,10 @@ struct EventRouterResult {
     std::size_t chunks_created = 0;
     std::size_t source_files_processed = 0;
     std::vector<std::string> output_files;
-    bool success = false;
 };
 
-coro::CoroTask<EventRouterResult> route_events(CoroScope& scope,
-                                               const EventRouterConfig& config);
+coro::CoroTask<Result<EventRouterResult>> route_events(
+    CoroScope& scope, const EventRouterConfig& config);
 
 }  // namespace dftracer::utils::utilities::composites::dft::reorganize
 

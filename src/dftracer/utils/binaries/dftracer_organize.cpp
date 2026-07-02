@@ -191,20 +191,20 @@ static coro::CoroTask<void> run_group_writer_task(
     ChunkLayoutMap* chunk_layouts_ptr, GroupRuntime* runtime_ptr) {
     auto writer_result = co_await run_group_writer(inner_scope, writer_config);
 
-    if (writer_result.success) {
-        total_events_ptr->fetch_add(writer_result.events_written);
-        chunks_ptr->fetch_add(writer_result.chunks_created);
+    if (writer_result) {
+        total_events_ptr->fetch_add(writer_result->events_written);
+        chunks_ptr->fetch_add(writer_result->chunks_created);
         if (runtime_ptr) {
-            runtime_ptr->indexed_inline.store(writer_result.indexed_inline,
+            runtime_ptr->indexed_inline.store(writer_result->indexed_inline,
                                               std::memory_order_release);
         }
 
         std::lock_guard<std::mutex> lock(*output_mutex_ptr);
-        for (const auto& f : writer_result.output_files) {
+        for (const auto& f : writer_result->output_files) {
             output_files_ptr->push_back(f);
         }
         if (chunk_layouts_ptr) {
-            for (auto& cl : writer_result.chunk_layouts) {
+            for (auto& cl : writer_result->chunk_layouts) {
                 (*chunk_layouts_ptr)[cl.path] = std::move(cl.members);
             }
         }

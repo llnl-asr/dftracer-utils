@@ -52,7 +52,6 @@ namespace dftracer::utils::call_tree {
 namespace {
 
 using utilities::common::arrow::ArrowExportResult;
-using utilities::common::arrow::ColumnSpec;
 using utilities::common::arrow::ColumnType;
 using utilities::common::arrow::IpcCompression;
 using utilities::common::arrow::IpcReader;

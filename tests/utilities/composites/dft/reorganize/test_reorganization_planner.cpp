@@ -19,7 +19,6 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
 using dftracer::utils::utilities::behaviors::UtilityExecutor;
-using dftracer::utils::utilities::indexer::determine_provenance_index_path;
 using dftracer::utils::utilities::indexer::IndexBuildConfig;
 using dftracer::utils::utilities::indexer::IndexBuilderUtility;
 using dftracer::utils::utilities::indexer::ProvenanceDatabase;

@@ -56,7 +56,6 @@ using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
 using common::query::Query;
 using dftracer::utils::utilities::indexer::ChunkStatistics;
-using dftracer::utils::utilities::indexer::FileRegistryEntry;
 using dftracer::utils::utilities::indexer::has_capability;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::IndexFileEntryCapability;

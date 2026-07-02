@@ -10,8 +10,6 @@
 
 using dftracer::utils::utilities::indexer::ChunkStatistics;
 using dftracer::utils::utilities::indexer::IndexDatabase;
-using dftracer::utils::utilities::indexer::IndexDatabaseWriterContext;
-using dftracer::utils::utilities::indexer::MergedStatisticsResult;
 
 TEST_SUITE("IndexDatabase") {
     TEST_CASE("normalizes legacy .idx-style input to root-local .dftindex") {

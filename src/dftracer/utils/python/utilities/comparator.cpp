@@ -46,7 +46,6 @@ using namespace dftracer::utils::utilities::composites::dft::comparator;
 #include <dftracer/utils/core/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 using dftracer::utils::python::arrow_result_to_table;
-using dftracer::utils::utilities::common::arrow::ArrowExportResult;
 #endif
 
 DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(Comparator, ComparatorObject)

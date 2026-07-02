@@ -233,7 +233,7 @@ int main(int argc, char** argv) {
             run_input.verbose = true;
 
             auto run_result = agg::run_aggregation(std::move(run_input)).get();
-            if (!run_result.success || run_result.index_path.empty()) {
+            if (!run_result || run_result->index_path.empty()) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "Aggregation failed; cannot generate DLIO config");
                 return 1;
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
             loader_opts.seed = cli.seed;
             dlio::AggregatedTraces traces;
             try {
-                traces = dlio::load_aggregated_traces(run_result.index_path,
+                traces = dlio::load_aggregated_traces(run_result->index_path,
                                                       loader_opts);
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_ERROR("Failed to load AGGREGATION CF: %s",
@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
             std::printf("==========================================\n");
             std::printf("  Loaded %d rank(s), %d step(s) from index at %s\n",
                         traces.num_ranks, traces.num_steps,
-                        run_result.index_path.c_str());
+                        run_result->index_path.c_str());
             std::printf(
                 "  computation_times: %zu samples (min %.6fs, max %.6fs)\n",
                 traces.computation_times.size(), traces.fetch_block_stats.min(),

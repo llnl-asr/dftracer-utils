@@ -304,6 +304,6 @@ int main(int argc, char** argv) {
             input.verbose = true;
 
             auto result = run_aggregation(std::move(input)).get();
-            return result.success ? 0 : 1;
+            return result ? 0 : 1;
         });
 }

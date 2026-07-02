@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_CHUNK_PRUNER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_CHUNK_PRUNER_UTILITY_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
@@ -55,7 +56,6 @@ struct ChunkPrunerBatchInput {
 
 struct ChunkPrunerBatchOutput {
     std::vector<ChunkPrunerOutput> outputs;  ///< Parallel to items[].
-    bool success = false;
 };
 
 /// Three-tier chunk pruner: dictionary → min/max range → bloom filter.
@@ -70,7 +70,8 @@ class ChunkPrunerUtility
 
     /// Batch-prune many files against the same index with shared RocksDB
     /// range scans for dim_stats / chunk_statistics.
-    ChunkPrunerBatchOutput process_batch(const ChunkPrunerBatchInput& input);
+    Result<ChunkPrunerBatchOutput> process_batch(
+        const ChunkPrunerBatchInput& input);
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

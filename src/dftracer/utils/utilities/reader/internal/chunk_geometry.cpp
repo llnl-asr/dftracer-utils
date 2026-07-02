@@ -373,8 +373,8 @@ std::vector<ArrowWorkItem> enumerate_work_items(
             }
             indexing::ChunkPrunerUtility pruner;
             auto batch_out = pruner.process_batch(batch_in);
-            if (batch_out.success) {
-                pruner_outs = std::move(batch_out.outputs);
+            if (batch_out) {
+                pruner_outs = std::move(batch_out->outputs);
             }
         }
 

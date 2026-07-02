@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_RUNNER_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_RUNNER_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
@@ -50,8 +51,6 @@ struct AggregationRunInput {
 };
 
 struct AggregationRunResult {
-    bool success = false;
-
     // Path to the shared RocksDB index that now contains the AGGREGATION CF.
     // Downstream tools (dftracer_gen_dlio_config) open this read-only.
     std::string index_path;
@@ -71,7 +70,8 @@ struct AggregationRunResult {
 //   4. Optionally write the aggregated events to a Perfetto JSON / Arrow IPC
 //      file (when input.output_file is set).
 //   5. Write per-file tracking entries and global config to the AGGREGATION CF.
-coro::CoroTask<AggregationRunResult> run_aggregation(AggregationRunInput input);
+coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
+    AggregationRunInput input);
 
 // Persist the global aggregation config and per-file tracking markers into the
 // AGGREGATION column family of `db`, so already-aggregated files can be skipped

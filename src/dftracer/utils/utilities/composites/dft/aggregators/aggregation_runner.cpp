@@ -137,7 +137,7 @@ void write_aggregation_tracking(::dftracer::utils::rocksdb::RocksDatabase* db,
     db->commit_batch(batch);
 }
 
-coro::CoroTask<AggregationRunResult> run_aggregation(
+coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
     AggregationRunInput input) {
     AggregationRunResult result;
 
@@ -146,7 +146,11 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
             "Invalid output format: %s (supported: %s)",
             input.output_format.c_str(),
             AggregationConfig::supported_formats_str().c_str());
-        co_return result;
+        co_return make_error(
+            ErrorCode::INVALID_ARGUMENT,
+            "run_aggregation: invalid output format '" + input.output_format +
+                "' (supported: " + AggregationConfig::supported_formats_str() +
+                ")");
     }
 
     input.log_dir = fs::absolute(input.log_dir).string();
@@ -196,7 +200,10 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
     if (input_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
                                  input.log_dir.c_str());
-        co_return result;
+        co_return make_error(
+            ErrorCode::NOT_FOUND,
+            "run_aggregation: no .pfw or .pfw.gz files found in " +
+                input.log_dir);
     }
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
@@ -401,7 +408,6 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
     overall.stop();
     result.elapsed_ms = static_cast<double>(overall.elapsed()) / 1e6;
     result.total_keys = total_keys;
-    result.success = write_success;
 
     if (input.verbose) {
         std::printf("\n==========================================\n");
@@ -416,12 +422,19 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
         if (input.output_file) {
             std::printf("  Output file: %s\n", input.output_file->c_str());
             std::printf("  Write status: %s\n",
-                        result.success ? "SUCCESS" : "FAILED");
+                        write_success ? "SUCCESS" : "FAILED");
         }
         std::printf("==========================================\n");
     }
 
     if (stages) stages->print_stages();
+
+    if (!write_success) {
+        co_return make_error(
+            ErrorCode::AGGREGATION,
+            "run_aggregation: failed to write output file " +
+                (input.output_file ? *input.output_file : std::string("")));
+    }
 
     co_return result;
 }

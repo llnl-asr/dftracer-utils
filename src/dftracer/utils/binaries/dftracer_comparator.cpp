@@ -671,7 +671,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
 
                 ComparisonUtility cmp;
                 auto cmp_output = co_await cmp.process(cmp_input);
-                output.nodes.push_back(std::move(cmp_output.result));
+                output.nodes.push_back(std::move(cmp_output->result));
             }
 
             auto meta_rows = build_metadata_metrics(output.baseline_meta,

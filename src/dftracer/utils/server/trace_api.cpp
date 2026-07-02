@@ -280,9 +280,9 @@ static coro::AsyncGenerator<StreamChunk> stream_events(
 
         ViewBuilderUtility builder;
         auto build_output = co_await builder.process(builder_input);
-        if (!build_output.success || !build_output.file_may_match) continue;
+        if (!build_output || !build_output->file_may_match) continue;
 
-        for (const auto& candidate : build_output.candidates) {
+        for (const auto& candidate : build_output->candidates) {
             if (limit > 0 && emitted >= limit) break;
 
             ViewReaderInput reader_input;

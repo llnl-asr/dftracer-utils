@@ -938,14 +938,14 @@ CoroTask<WriteArrowResult> write_arrow_pipeline(
 
             auto build_output =
                 co_await ViewBuilderUtility{}.process(builder_input);
-            if (!build_output.success) {
+            if (!build_output) {
                 result.error = "ViewBuilder failed for view: " + view.name;
                 co_return result;
             }
 
-            result.chunks_skipped += build_output.skipped_checkpoints;
+            result.chunks_skipped += build_output->skipped_checkpoints;
 
-            if (!build_output.file_may_match) {
+            if (!build_output->file_may_match) {
                 auto stats = co_await writer.close();
                 result.stats.partitions[view.name] = std::move(stats);
                 continue;
@@ -954,7 +954,7 @@ CoroTask<WriteArrowResult> write_arrow_pipeline(
             RecordBatchBuilder builder;
             bool schema_locked = false;
 
-            for (const auto &candidate : build_output.candidates) {
+            for (const auto &candidate : build_output->candidates) {
                 ViewReaderInput reader_input;
                 reader_input.with_file_path(file_path)
                     .with_index_path(resolved_index)
@@ -1043,16 +1043,16 @@ CoroTask<GetViewChunksResult> get_view_chunks_pipeline(
 
         auto build_output =
             co_await ViewBuilderUtility{}.process(builder_input);
-        if (!build_output.success) {
+        if (!build_output) {
             result.error = "ViewBuilder failed";
             co_return result;
         }
 
-        result.file_may_match = build_output.file_may_match;
-        result.total_checkpoints = build_output.total_checkpoints;
-        result.skipped_checkpoints = build_output.skipped_checkpoints;
+        result.file_may_match = build_output->file_may_match;
+        result.total_checkpoints = build_output->total_checkpoints;
+        result.skipped_checkpoints = build_output->skipped_checkpoints;
 
-        for (const auto &candidate : build_output.candidates) {
+        for (const auto &candidate : build_output->candidates) {
             result.chunks.push_back({candidate.checkpoint_idx,
                                      candidate.start_byte, candidate.end_byte});
         }

@@ -80,11 +80,10 @@ static void build_group_key(std::string& key,
     }
 }
 
-coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
-    const ChunkDetailScanInput& input) {
+coro::CoroTask<Result<ChunkDetailScanOutput>>
+ChunkDetailScannerUtility::process(const ChunkDetailScanInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("scan chunk details");
     ChunkDetailScanOutput output;
-    output.success = false;
 
     std::unordered_set<std::string_view> name_filter;
     std::unordered_set<std::string_view> cat_filter;
@@ -116,7 +115,11 @@ coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
             "%llu",
             input.file_path.c_str(),
             static_cast<unsigned long long>(input.checkpoint_idx));
-        co_return output;
+        co_return make_error(
+            ErrorCode::READER,
+            "ChunkDetailScanner: Failed to create reader for " +
+                input.file_path + " checkpoint " +
+                std::to_string(input.checkpoint_idx));
     }
 
     auto stream = reader->stream(
@@ -133,7 +136,11 @@ coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
             "%llu",
             input.file_path.c_str(),
             static_cast<unsigned long long>(input.checkpoint_idx));
-        co_return output;
+        co_return make_error(
+            ErrorCode::READER,
+            "ChunkDetailScanner: Failed to create stream for " +
+                input.file_path + " checkpoint " +
+                std::to_string(input.checkpoint_idx));
     }
 
     std::string group_key_buf;
@@ -215,7 +222,6 @@ coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
     });
 
     output.stats.chunks_scanned = 1;
-    output.success = true;
     co_return output;
 }
 

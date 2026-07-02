@@ -419,9 +419,9 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
             ViewBuilderUtility builder;
             auto build_output = co_await builder.process(builder_input);
-            if (!build_output.success || !build_output.file_may_match) continue;
+            if (!build_output || !build_output->file_may_match) continue;
 
-            for (const auto& candidate : build_output.candidates) {
+            for (const auto& candidate : build_output->candidates) {
                 if (limit > 0 &&
                     static_cast<int>(collected_events.size()) >= limit) {
                     truncated = true;
@@ -504,10 +504,10 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
                     ViewBuilderUtility builder;
                     auto build_output = co_await builder.process(builder_input);
-                    if (!build_output.success || !build_output.file_may_match)
+                    if (!build_output || !build_output->file_may_match)
                         continue;
 
-                    for (const auto& candidate : build_output.candidates) {
+                    for (const auto& candidate : build_output->candidates) {
                         if (remaining->load(std::memory_order_relaxed) <= 0)
                             break;
 

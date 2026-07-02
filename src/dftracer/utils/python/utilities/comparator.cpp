@@ -476,7 +476,7 @@ static bool run_comparison_pipeline(ComparatorObject *self,
 
                 ComparisonUtility cmp;
                 auto cmp_output = co_await cmp.process(cmp_input);
-                output_ptr->nodes.push_back(std::move(cmp_output.result));
+                output_ptr->nodes.push_back(std::move(cmp_output->result));
             }
 
             // Inject metadata rows into root SUMMARY.

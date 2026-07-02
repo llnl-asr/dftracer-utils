@@ -753,8 +753,8 @@ static coro::CoroTask<std::optional<DetailedStatistics>> scan_chunk_detailed(
     ChunkDetailScannerUtility scanner;
     auto scan_output = co_await scanner.process(scan_input);
 
-    if (scan_output.success) {
-        co_return scan_output.stats;
+    if (scan_output) {
+        co_return scan_output->stats;
     }
 
     co_return std::nullopt;

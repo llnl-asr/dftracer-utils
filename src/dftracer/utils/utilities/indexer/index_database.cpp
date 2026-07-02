@@ -10,10 +10,12 @@
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
+#include <dftracer/utils/utilities/indexer/internal/batch_scan.h>
 #include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
+#include <dftracer/utils/utilities/indexer/internal/registry_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/scan_prefix.h>
 #include <dftracer/utils/utilities/indexer/internal/statistics_codec.h>
 
@@ -37,50 +39,6 @@ using namespace internal;
 namespace {
 
 constexpr std::uint32_t SCHEMA_VERSION = 1;
-
-std::string file_lookup_key(std::string_view logical_name) {
-    return std::string("f|") + std::string(logical_name);
-}
-
-std::string file_reverse_key(int file_id) {
-    std::string key("r|");
-    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
-    return key;
-}
-
-std::string schema_version_key() { return "_schema_version"; }
-
-IndexFileEntryCapability decode_file_capabilities(std::string_view record) {
-    if (record.size() < 5) {
-        return IndexFileEntryCapability::NONE;
-    }
-    return static_cast<IndexFileEntryCapability>(
-        static_cast<std::uint8_t>(record[4]));
-}
-
-int decode_file_id(std::string_view record) {
-    if (record.size() < 4) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Corrupt file record");
-    }
-    return static_cast<int>(rocks::KeyCodec::decode_be32(record.substr(0, 4)));
-}
-
-int decode_prefixed_file_id(std::string_view key) {
-    if (key.size() < 4) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Corrupt file-prefixed key");
-    }
-    return static_cast<int>(rocks::KeyCodec::decode_be32(key.substr(0, 4)));
-}
-
-std::uint64_t decode_file_hash(std::string_view record) {
-    if (record.size() < 28) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Corrupt file record");
-    }
-    return rocks::KeyCodec::decode_be64(record.substr(20, 8));
-}
 
 using encoding::prefix_for_file;
 
@@ -110,14 +68,9 @@ std::string file_pid_tid_counts_key(int file_id) {
 std::string file_name_counts_key(int file_id) {
     return prefix_for_file(file_id);
 }
-std::string root_scalar_stats_key() { return "_root"; }
-std::string root_category_counts_key() { return "_root"; }
-std::string root_name_counts_key() { return "_root"; }
-std::string root_pid_tid_counts_key() { return "_root"; }
 
 using encoding::name_lookup_key;
 using encoding::name_reverse_key;
-std::string tar_archive_key(int file_id) { return prefix_for_file(file_id); }
 
 ChunkBloomResult decode_chunk_bloom(std::string_view key,
                                     std::string_view value,
@@ -334,21 +287,6 @@ TarFileRecord decode_tar_file(std::string_view key, std::string_view value) {
     record.typeflag = static_cast<char>(cursor.u8());
     record.data_offset = cursor.u64();
     return record;
-}
-
-std::array<std::uint64_t, 3> decode_metadata_record(std::string_view value) {
-    Cursor cursor(value);
-    return {cursor.u64(), cursor.u64(), cursor.u64()};
-}
-
-std::string iterator_value(::rocksdb::Iterator& it) {
-    const auto slice = it.value();
-    return std::string(slice.data(), slice.size());
-}
-
-std::string iterator_key(::rocksdb::Iterator& it) {
-    const auto slice = it.key();
-    return std::string(slice.data(), slice.size());
 }
 
 template <typename Fn>
@@ -930,32 +868,15 @@ IndexDatabase::query_chunk_statistics_batch(
     }
     results.reserve(file_ids.size());
 
-    std::unordered_set<int> wanted(file_ids.begin(), file_ids.end());
-    const auto [min_it, max_it] =
-        std::minmax_element(file_ids.begin(), file_ids.end());
-    const auto min_prefix = prefix_for_file(*min_it);
-    const int max_file_id = *max_it;
-
-    auto it = db_->new_iterator(cf::CHUNK_STATS);
-    for (it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         it->Valid(); it->Next()) {
-        auto key = iterator_key(*it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
-
-        ChunkStatisticsResult result;
-        result.checkpoint_idx =
-            rocks::KeyCodec::decode_be64(std::string_view(key).substr(4, 8));
-        result.stats = decode_chunk_statistics_value(iterator_value(*it));
-        results[file_id].push_back(std::move(result));
-    }
-
-    const auto status = it->status();
+    auto status = for_each_file_in_batch(
+        *db_, cf::CHUNK_STATS, file_ids,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string& key) {
+            ChunkStatisticsResult result;
+            result.checkpoint_idx = rocks::KeyCodec::decode_be64(
+                std::string_view(key).substr(4, 8));
+            result.stats = decode_chunk_statistics_value(iterator_value(it));
+            results[file_id].push_back(std::move(result));
+        });
     if (!status.ok()) {
         throw IndexerError(
             IndexerError::Type::DATABASE_ERROR,
@@ -986,70 +907,48 @@ IndexDatabase::query_merged_statistics_batch(
     const auto min_prefix = prefix_for_file(*min_it);
     const int max_file_id = *max_it;
 
-    auto stats_it = db_->new_iterator(cf::CHUNK_STATS);
-    for (stats_it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         stats_it->Valid(); stats_it->Next()) {
-        auto key = iterator_key(*stats_it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
-
-        auto decoded = decode_chunk_statistics_value(iterator_value(*stats_it));
-        auto& merged = results[file_id];
-        if (merged.num_chunks == 0) {
-            merged.stats = std::move(decoded);
-        } else {
-            merged.stats.merge_from(decoded);
-        }
-        ++merged.num_chunks;
-    }
-
-    auto stats_status = stats_it->status();
+    auto stats_status = for_each_file_in_range(
+        *db_, cf::CHUNK_STATS, min_prefix, max_file_id, wanted,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string&) {
+            auto decoded = decode_chunk_statistics_value(iterator_value(it));
+            auto& merged = results[file_id];
+            if (merged.num_chunks == 0) {
+                merged.stats = std::move(decoded);
+            } else {
+                merged.stats.merge_from(decoded);
+            }
+            ++merged.num_chunks;
+        });
     if (!stats_status.ok()) {
         throw IndexerError(IndexerError::Type::DATABASE_ERROR,
                            "Failed to batch merge chunk statistics: " +
                                stats_status.ToString());
     }
 
-    auto dims_it = db_->new_iterator(cf::CHUNK_DIM_STATS);
-    for (dims_it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         dims_it->Valid(); dims_it->Next()) {
-        auto key = iterator_key(*dims_it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
+    auto dims_status = for_each_file_in_range(
+        *db_, cf::CHUNK_DIM_STATS, min_prefix, max_file_id, wanted,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string& key) {
+            auto decoded =
+                decode_chunk_dimension_stats_value(key, iterator_value(it));
+            if (!decoded.has_value_counts_payload()) return;
+            decoded.ensure_value_counts_decoded();
+            if (!decoded.value_counts) return;
 
-        auto decoded =
-            decode_chunk_dimension_stats_value(key, iterator_value(*dims_it));
-        if (!decoded.has_value_counts_payload()) continue;
-        decoded.ensure_value_counts_decoded();
-        if (!decoded.value_counts) continue;
-
-        auto& merged = results[file_id].stats;
-        if (decoded.dimension == "cat") {
-            for (const auto& [k, v] : *decoded.value_counts) {
-                merged.category_counts[k] += v;
+            auto& merged = results[file_id].stats;
+            if (decoded.dimension == "cat") {
+                for (const auto& [k, v] : *decoded.value_counts) {
+                    merged.category_counts[k] += v;
+                }
+            } else if (decoded.dimension == "name") {
+                for (const auto& [k, v] : *decoded.value_counts) {
+                    merged.name_counts[k] += v;
+                }
+            } else if (decoded.dimension == "pid_tid") {
+                for (const auto& [k, v] : *decoded.value_counts) {
+                    merged.pid_tid_counts[k] += v;
+                }
             }
-        } else if (decoded.dimension == "name") {
-            for (const auto& [k, v] : *decoded.value_counts) {
-                merged.name_counts[k] += v;
-            }
-        } else if (decoded.dimension == "pid_tid") {
-            for (const auto& [k, v] : *decoded.value_counts) {
-                merged.pid_tid_counts[k] += v;
-            }
-        }
-    }
-
-    auto dims_status = dims_it->status();
+        });
     if (!dims_status.ok()) {
         throw IndexerError(IndexerError::Type::DATABASE_ERROR,
                            "Failed to batch merge chunk dimension stats: " +
@@ -1098,35 +997,18 @@ IndexDatabase::query_file_metadata_batch(
     }
     results.reserve(file_ids.size());
 
-    std::unordered_set<int> wanted(file_ids.begin(), file_ids.end());
-    const auto [min_it, max_it] =
-        std::minmax_element(file_ids.begin(), file_ids.end());
-    const auto min_prefix = prefix_for_file(*min_it);
-    const int max_file_id = *max_it;
-
-    auto it = db_->new_iterator(cf::METADATA);
-    for (it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         it->Valid(); it->Next()) {
-        auto key = iterator_key(*it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
-
-        auto value = iterator_value(*it);
-        DecodeContextGuard ctx("metadata file_id=%d size=%zu", file_id,
-                               value.size());
-        auto decoded = decode_metadata_record(value);
-        auto& meta = results[file_id];
-        meta.checkpoint_size = decoded[0];
-        meta.num_lines = decoded[1];
-        meta.max_bytes = decoded[2];
-    }
-
-    const auto status = it->status();
+    auto status = for_each_file_in_batch(
+        *db_, cf::METADATA, file_ids,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string&) {
+            auto value = iterator_value(it);
+            DecodeContextGuard ctx("metadata file_id=%d size=%zu", file_id,
+                                   value.size());
+            auto decoded = decode_metadata_record(value);
+            auto& meta = results[file_id];
+            meta.checkpoint_size = decoded[0];
+            meta.num_lines = decoded[1];
+            meta.max_bytes = decoded[2];
+        });
     if (!status.ok()) {
         throw IndexerError(
             IndexerError::Type::DATABASE_ERROR,
@@ -1639,29 +1521,12 @@ IndexDatabase::query_chunk_dimension_stats_batch(
     }
     results.reserve(file_ids.size());
 
-    std::unordered_set<int> wanted(file_ids.begin(), file_ids.end());
-    const auto [min_it, max_it] =
-        std::minmax_element(file_ids.begin(), file_ids.end());
-    const auto min_prefix = prefix_for_file(*min_it);
-    const int max_file_id = *max_it;
-
-    auto it = db_->new_iterator(cf::CHUNK_DIM_STATS);
-    for (it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         it->Valid(); it->Next()) {
-        auto key = iterator_key(*it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
-
-        results[file_id].push_back(
-            decode_chunk_dimension_stats_value(key, iterator_value(*it)));
-    }
-
-    const auto status = it->status();
+    auto status = for_each_file_in_batch(
+        *db_, cf::CHUNK_DIM_STATS, file_ids,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string& key) {
+            results[file_id].push_back(
+                decode_chunk_dimension_stats_value(key, iterator_value(it)));
+        });
     if (!status.ok()) {
         throw IndexerError(IndexerError::Type::DATABASE_ERROR,
                            "Failed to batch query chunk dimension stats: " +

@@ -5,10 +5,12 @@
 #include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
+#include <dftracer/utils/utilities/indexer/internal/batch_scan.h>
 #include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/index_batch_writer.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
+#include <dftracer/utils/utilities/indexer/internal/registry_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/scan_prefix.h>
 #include <dftracer/utils/utilities/indexer/internal/statistics_codec.h>
 
@@ -65,20 +67,9 @@ using encoding::prefix_for_file;
 
 constexpr std::uint32_t SCHEMA_VERSION = 1;
 
-std::string file_lookup_key(std::string_view logical_name) {
-    return std::string("f|") + std::string(logical_name);
-}
-
-std::string file_reverse_key(int file_id) {
-    std::string key("r|");
-    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
-    return key;
-}
-
 std::string next_file_id_key() {
     return std::string(encoding::NEXT_FILE_ID_KEY);
 }
-std::string schema_version_key() { return "_schema_version"; }
 
 std::string encode_file_record(
     int file_id, std::uint64_t file_hash,
@@ -91,45 +82,6 @@ std::string encode_file_record(
     append_u64(value, file_hash);
     return value;
 }
-
-IndexFileEntryCapability decode_file_capabilities(std::string_view record) {
-    if (record.size() < 5) {
-        return IndexFileEntryCapability::NONE;
-    }
-    return static_cast<IndexFileEntryCapability>(
-        static_cast<std::uint8_t>(record[4]));
-}
-
-int decode_file_id(std::string_view record) {
-    if (record.size() < 4) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Corrupt file record");
-    }
-    return static_cast<int>(rocks::KeyCodec::decode_be32(record.substr(0, 4)));
-}
-
-int decode_prefixed_file_id(std::string_view key) {
-    if (key.size() < 4) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Corrupt file-prefixed key");
-    }
-    return static_cast<int>(rocks::KeyCodec::decode_be32(key.substr(0, 4)));
-}
-
-std::uint64_t decode_file_hash(std::string_view record) {
-    if (record.size() < 28) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Corrupt file record");
-    }
-    return rocks::KeyCodec::decode_be64(record.substr(20, 8));
-}
-
-std::string root_scalar_stats_key() { return "_root"; }
-std::string root_category_counts_key() { return "_root"; }
-std::string root_name_counts_key() { return "_root"; }
-std::string root_pid_tid_counts_key() { return "_root"; }
-
-std::string tar_archive_key(int file_id) { return prefix_for_file(file_id); }
 
 std::string tar_file_key(int file_id, std::uint64_t uncompressed_offset,
                          std::string_view file_name) {
@@ -199,21 +151,6 @@ std::string encode_tar_file_value(
     append_u8(value, static_cast<std::uint8_t>(record.typeflag));
     append_u64(value, record.data_offset);
     return value;
-}
-
-std::array<std::uint64_t, 3> decode_metadata_record(std::string_view value) {
-    Cursor cursor(value);
-    return {cursor.u64(), cursor.u64(), cursor.u64()};
-}
-
-std::string iterator_value(::rocksdb::Iterator& it) {
-    const auto slice = it.value();
-    return std::string(slice.data(), slice.size());
-}
-
-std::string iterator_key(::rocksdb::Iterator& it) {
-    const auto slice = it.key();
-    return std::string(slice.data(), slice.size());
 }
 
 template <typename Fn>
@@ -865,71 +802,43 @@ void IndexDatabaseWriterContext::rebuild_root_summaries() {
 
     rebuilt.num_files = static_cast<std::uint64_t>(file_ids.size());
 
-    if (!file_ids.empty()) {
-        std::unordered_set<int> wanted(file_ids.begin(), file_ids.end());
-        const auto [min_it, max_it] =
-            std::minmax_element(file_ids.begin(), file_ids.end());
-        const auto min_prefix = prefix_for_file(*min_it);
-        const int max_file_id = *max_it;
-
-        auto it = db_->new_iterator(cf::FILE_SCALAR_STATS);
-        for (it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-             it->Valid(); it->Next()) {
-            auto key = iterator_key(*it);
-            int fid = decode_prefixed_file_id(key);
-            if (fid > max_file_id) break;
-            if (!wanted.contains(fid)) continue;
-
-            auto value = iterator_value(*it);
-            try {
-                DecodeContextGuard ctx("file_scalar_stats file_id=%d size=%zu",
-                                       fid, value.size());
-                auto row = decode_file_scalar_stats_value(value);
-                rebuilt.stats.merge_from(row.stats);
-                rebuilt.num_chunks += row.num_chunks;
-            } catch (const std::exception& e) {
-                throw IndexerError(
-                    IndexerError::Type::DATABASE_ERROR,
-                    "Corrupt file_scalar_stats payload file_id=" +
-                        std::to_string(fid) + " size=" +
-                        std::to_string(value.size()) + ": " + e.what());
-            }
-        }
-        const auto status = it->status();
+    {
+        auto status = for_each_file_in_batch(
+            *db_, cf::FILE_SCALAR_STATS, file_ids,
+            [&](int fid, ::rocksdb::Iterator& it, const std::string&) {
+                auto value = iterator_value(it);
+                try {
+                    DecodeContextGuard ctx(
+                        "file_scalar_stats file_id=%d size=%zu", fid,
+                        value.size());
+                    auto row = decode_file_scalar_stats_value(value);
+                    rebuilt.stats.merge_from(row.stats);
+                    rebuilt.num_chunks += row.num_chunks;
+                } catch (const std::exception& e) {
+                    throw IndexerError(
+                        IndexerError::Type::DATABASE_ERROR,
+                        "Corrupt file_scalar_stats payload file_id=" +
+                            std::to_string(fid) + " size=" +
+                            std::to_string(value.size()) + ": " + e.what());
+                }
+            });
         if (!status.ok()) {
             throw_db_error("Failed to scan file scalar statistics", status);
         }
     }
 
     // Inline query_file_metadata_batch
-    if (!file_ids.empty()) {
-        std::unordered_set<int> wanted(file_ids.begin(), file_ids.end());
-        const auto [min_it, max_it] =
-            std::minmax_element(file_ids.begin(), file_ids.end());
-        const auto min_prefix = prefix_for_file(*min_it);
-        const int max_file_id = *max_it;
-
-        auto it = db_->new_iterator(cf::METADATA);
-        for (it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-             it->Valid(); it->Next()) {
-            auto key = iterator_key(*it);
-            int fid = decode_prefixed_file_id(key);
-            if (fid > max_file_id) {
-                break;
-            }
-            if (!wanted.contains(fid)) {
-                continue;
-            }
-
-            auto value = iterator_value(*it);
-            DecodeContextGuard ctx("metadata file_id=%d size=%zu", fid,
-                                   value.size());
-            auto decoded = decode_metadata_record(value);
-            rebuilt.total_lines += decoded[1];
-            rebuilt.total_uncompressed_bytes += decoded[2];
-        }
-
-        const auto status = it->status();
+    {
+        auto status = for_each_file_in_batch(
+            *db_, cf::METADATA, file_ids,
+            [&](int fid, ::rocksdb::Iterator& it, const std::string&) {
+                auto value = iterator_value(it);
+                DecodeContextGuard ctx("metadata file_id=%d size=%zu", fid,
+                                       value.size());
+                auto decoded = decode_metadata_record(value);
+                rebuilt.total_lines += decoded[1];
+                rebuilt.total_uncompressed_bytes += decoded[2];
+            });
         if (!status.ok()) {
             throw IndexerError(
                 IndexerError::Type::DATABASE_ERROR,
@@ -947,26 +856,21 @@ void IndexDatabaseWriterContext::rebuild_root_summaries() {
         auto scan_counts = [&](std::string_view cf_name,
                                std::string_view error_message, auto& target_map,
                                auto for_each_entry_fn) {
-            auto it = db_->new_iterator(cf_name);
-            for (it->Seek(
-                     ::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-                 it->Valid(); it->Next()) {
-                auto key = iterator_key(*it);
-                int fid = decode_prefixed_file_id(key);
-                if (fid > max_file_id) break;
-                if (!wanted.contains(fid)) continue;
-
-                auto value = iterator_value(*it);
-                DecodeContextGuard ctx("%.*s merge file_id=%d size=%zu",
-                                       static_cast<int>(cf_name.size()),
-                                       cf_name.data(), fid, value.size());
-                for_each_entry_fn(value, [&target_map](std::string_view k,
-                                                       std::uint64_t count) {
-                    auto entry = target_map.try_emplace(std::string(k), 0);
-                    entry.first->second += count;
+            auto status = for_each_file_in_range(
+                *db_, cf_name, min_prefix, max_file_id, wanted,
+                [&](int fid, ::rocksdb::Iterator& it, const std::string&) {
+                    auto value = iterator_value(it);
+                    DecodeContextGuard ctx("%.*s merge file_id=%d size=%zu",
+                                           static_cast<int>(cf_name.size()),
+                                           cf_name.data(), fid, value.size());
+                    for_each_entry_fn(
+                        value,
+                        [&target_map](std::string_view k, std::uint64_t count) {
+                            auto entry =
+                                target_map.try_emplace(std::string(k), 0);
+                            entry.first->second += count;
+                        });
                 });
-            }
-            const auto status = it->status();
             if (!status.ok()) {
                 throw_db_error(std::string(error_message), status);
             }

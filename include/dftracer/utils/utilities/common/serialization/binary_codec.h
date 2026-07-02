@@ -170,6 +170,13 @@ class BinaryReader {
         return take(len);
     }
 
+    void skip(std::size_t n) { take(n); }
+
+    void skip_blob() {
+        auto len = be32();
+        take(len);
+    }
+
     std::string_view str() {
         auto len = be16();
         return take(len);

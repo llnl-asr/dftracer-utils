@@ -24,7 +24,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -32,10 +31,6 @@ namespace dftracer::utils::server {
 
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::views;
-
-using dftracer::utils::utilities::common::json::JsonDocGuard;
-using dftracer::utils::utilities::common::json::JsonValue;
-using dftracer::utils::utilities::common::query::Query;
 
 static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
                                                                     "SH"};
@@ -287,16 +282,7 @@ static ViewDefinition build_viz_view(const QueryParams& params, double begin,
 // files whose cached time bounds don't overlap [begin, end]. Pure/synchronous.
 static std::vector<const TraceIndex::FileInfo*> select_viz_target_files(
     TraceIndex& index, const QueryParams& params, double begin, double end) {
-    std::vector<const TraceIndex::FileInfo*> target_files;
-    auto file_param = params.get("file");
-    if (!file_param.empty()) {
-        auto* f = index.find_file(std::string(file_param));
-        if (f) target_files.push_back(f);
-    } else {
-        for (const auto& f : index.files()) {
-            target_files.push_back(&f);
-        }
-    }
+    auto target_files = collect_candidate_files(index, params);
 
     if (begin > 0 || end > 0) {
         std::vector<const TraceIndex::FileInfo*> filtered;

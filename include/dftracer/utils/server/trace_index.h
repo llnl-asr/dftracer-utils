@@ -71,6 +71,14 @@ class TraceIndex {
     BloomCache bloom_cache_;
 };
 
+class QueryParams;
+
+/// Collect the candidate files for a streaming query: the explicit `?file=`
+/// (when present and found in the index) or all indexed files. Callers apply
+/// their own timestamp-overlap filter on top of this.
+std::vector<const TraceIndex::FileInfo*> collect_candidate_files(
+    TraceIndex& index, const QueryParams& params);
+
 }  // namespace dftracer::utils::server
 
 #endif  // DFTRACER_UTILS_SERVER_TRACE_INDEX_H

@@ -1,5 +1,6 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/ptr_hash.h>
 #include <dftracer/utils/core/common/symbolize.h>
 #include <dftracer/utils/core/env.h>
 #include <unistd.h>
@@ -237,17 +238,6 @@ void scope_close(void* handle) {
 }
 
 namespace {
-
-struct PtrHash {
-    using is_avalanching = void;
-    std::size_t operator()(const void* p) const noexcept {
-        std::size_t x = reinterpret_cast<std::size_t>(p);
-        x ^= x >> 33;
-        x *= 0xff51afd7ed558ccdULL;
-        x ^= x >> 33;
-        return x;
-    }
-};
 
 // Per-thread cache: many coroutine instances share one resume function, so the
 // dladdr + demangle runs once per function per thread.

@@ -1,10 +1,10 @@
 #include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/little_endian.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <stdexcept>
 
 namespace dftracer::utils::utilities::composites::dft::indexing {
 
@@ -23,21 +23,6 @@ constexpr std::uint32_t SALT[BLOCK_WORDS] = {
     0x47b6137bU, 0x44974d91U, 0x8824ad5bU, 0xa2b7289dU,
     0x705495c7U, 0x2df1424bU, 0x9efc4947U, 0x5c6bfb31U,
 };
-
-void write_u32_le(unsigned char* buf, std::uint32_t val) {
-    if (!buf) return;
-    buf[0] = static_cast<unsigned char>(val & 0xFF);
-    buf[1] = static_cast<unsigned char>((val >> 8) & 0xFF);
-    buf[2] = static_cast<unsigned char>((val >> 16) & 0xFF);
-    buf[3] = static_cast<unsigned char>((val >> 24) & 0xFF);
-}
-
-std::uint32_t read_u32_le(const unsigned char* buf) {
-    return static_cast<std::uint32_t>(buf[0]) |
-           (static_cast<std::uint32_t>(buf[1]) << 8) |
-           (static_cast<std::uint32_t>(buf[2]) << 16) |
-           (static_cast<std::uint32_t>(buf[3]) << 24);
-}
 
 inline std::size_t block_index(std::uint64_t h1, std::size_t num_blocks) {
     return static_cast<std::size_t>(

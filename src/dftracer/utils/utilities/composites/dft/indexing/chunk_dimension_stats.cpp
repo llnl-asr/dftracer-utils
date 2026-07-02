@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/little_endian.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_dimension_stats.h>
 #include <zlib.h>
 
@@ -150,12 +151,6 @@ namespace {
 std::uint16_t read_u16_le(const std::uint8_t* p) {
     return static_cast<std::uint16_t>(static_cast<std::uint16_t>(p[0]) |
                                       static_cast<std::uint16_t>(p[1] << 8));
-}
-std::uint32_t read_u32_le(const std::uint8_t* p) {
-    return static_cast<std::uint32_t>(p[0]) |
-           (static_cast<std::uint32_t>(p[1]) << 8) |
-           (static_cast<std::uint32_t>(p[2]) << 16) |
-           (static_cast<std::uint32_t>(p[3]) << 24);
 }
 std::uint64_t read_u64_le(const std::uint8_t* p) {
     std::uint64_t v = 0;

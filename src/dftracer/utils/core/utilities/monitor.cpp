@@ -1,4 +1,5 @@
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/core/common/ptr_hash.h>
 #include <dftracer/utils/core/common/sharded_mutex.h>
 #include <dftracer/utils/core/common/symbolize.h>
 #include <dftracer/utils/core/env.h>
@@ -7,7 +8,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,20 +48,6 @@ struct Done {
     CoroKind kind;
     int spawn_tid;   // worker that registered it
     int finish_tid;  // worker of the final resume (-1 if never finished)
-};
-
-// Avalanching pointer hash (splitmix64 finalizer). Coroutine frame addresses
-// are pointer-aligned, so the low bits are poor entropy; mixing gives good
-// distribution for both the open-addressing map and shard selection.
-struct PtrHash {
-    using is_avalanching = void;
-    std::size_t operator()(const void* p) const noexcept {
-        std::uint64_t x = reinterpret_cast<std::uintptr_t>(p);
-        x ^= x >> 33;
-        x *= 0xff51afd7ed558ccdULL;
-        x ^= x >> 33;
-        return static_cast<std::size_t>(x);
-    }
 };
 
 // Per-shard state: the live coroutine set plus the finished records collected

@@ -61,7 +61,7 @@ TEST_SUITE("FileDecompressor") {
             auto compress_input =
                 FileCompressionUtilityInput::from_file(original_file);
             auto compress_result = compressor.process(compress_input).get();
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(original_file);
 
@@ -75,7 +75,7 @@ TEST_SUITE("FileDecompressor") {
             CHECK(decompress_result->input_path == compressed_file);
             CHECK(decompress_result->output_path == decompressed_file);
             CHECK(decompress_result->compressed_size ==
-                  compress_result.compressed_size);
+                  compress_result->compressed_size);
             CHECK(decompress_result->decompressed_size ==
                   original_content.size());
             CHECK(fs::exists(decompressed_file));
@@ -142,7 +142,7 @@ TEST_SUITE("FileDecompressor") {
                     .process(
                         FileCompressionUtilityInput::from_file(original_file))
                     .get();
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(original_file);
 
@@ -182,7 +182,7 @@ TEST_SUITE("FileDecompressor") {
                         FileCompressionUtilityInput::from_file(original_file)
                             .with_chunk_size(1024))
                     .get();
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(original_file);
 
@@ -253,7 +253,7 @@ TEST_SUITE("FileDecompressor") {
                 compressor
                     .process(FileCompressionUtilityInput::from_file(empty_file))
                     .get();
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(empty_file);
 
@@ -297,8 +297,7 @@ TEST_SUITE("FileDecompressor") {
                     .process(
                         FileCompressionUtilityInput::from_file(binary_file))
                     .get();
-            INFO("Compression error: ", compress_result.error_message);
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(binary_file);
 
@@ -340,7 +339,7 @@ TEST_SUITE("FileDecompressor") {
                     .process(
                         FileCompressionUtilityInput::from_file(original_file))
                     .get();
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
             fs::remove(original_file);
 
             FileDecompressorUtility decompressor;

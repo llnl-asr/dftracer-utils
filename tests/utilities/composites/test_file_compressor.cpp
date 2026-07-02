@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <doctest/doctest.h>
@@ -41,14 +42,14 @@ TEST_SUITE("FileCompressor") {
 
             auto result = compressor.process(input).get();
 
-            CHECK(result.success == true);
-            CHECK(result.input_path == test_file);
-            CHECK(result.output_path == expected_output);
-            CHECK(result.original_size == original_size);
-            CHECK(result.compressed_size > 0);
-            CHECK(result.compressed_size < result.original_size);
-            CHECK(result.compression_ratio() > 0.0);
-            CHECK(result.compression_ratio() < 1.0);
+            REQUIRE(result.has_value());
+            CHECK(result->input_path == test_file);
+            CHECK(result->output_path == expected_output);
+            CHECK(result->original_size == original_size);
+            CHECK(result->compressed_size > 0);
+            CHECK(result->compressed_size < result->original_size);
+            CHECK(result->compression_ratio() > 0.0);
+            CHECK(result->compression_ratio() < 1.0);
             CHECK(fs::exists(expected_output));
         }
 
@@ -69,8 +70,8 @@ TEST_SUITE("FileCompressor") {
 
             auto result = compressor.process(input).get();
 
-            CHECK(result.success == true);
-            CHECK(result.output_path == custom_output);
+            REQUIRE(result.has_value());
+            CHECK(result->output_path == custom_output);
             CHECK(fs::exists(custom_output));
         }
     }
@@ -104,9 +105,9 @@ TEST_SUITE("FileCompressor") {
                               .with_compression_level(9);
             auto result9 = compressor.process(input9).get();
 
-            CHECK(result1.success == true);
-            CHECK(result9.success == true);
-            CHECK(result9.compressed_size <= result1.compressed_size);
+            REQUIRE(result1.has_value());
+            REQUIRE(result9.has_value());
+            CHECK(result9->compressed_size <= result1->compressed_size);
         }
     }
 
@@ -146,15 +147,15 @@ TEST_SUITE("FileCompressor") {
                                    .with_chunk_size(64 * 1024);
             auto result_large = compressor.process(input_large).get();
 
-            CHECK(result_small.success == true);
-            CHECK(result_large.success == true);
+            REQUIRE(result_small.has_value());
+            REQUIRE(result_large.has_value());
 
             double size_diff =
-                std::abs(static_cast<double>(result_small.compressed_size) -
-                         static_cast<double>(result_large.compressed_size));
+                std::abs(static_cast<double>(result_small->compressed_size) -
+                         static_cast<double>(result_large->compressed_size));
             double avg_size =
-                static_cast<double>(result_small.compressed_size +
-                                    result_large.compressed_size) /
+                static_cast<double>(result_small->compressed_size +
+                                    result_large->compressed_size) /
                 2.0;
             double diff_ratio = size_diff / avg_size;
 
@@ -174,8 +175,9 @@ TEST_SUITE("FileCompressor") {
             auto input = FileCompressionUtilityInput::from_file(non_existent);
             auto result = compressor.process(input).get();
 
-            CHECK(result.success == false);
-            CHECK(result.error_message.find("does not exist") !=
+            REQUIRE(!result);
+            CHECK(result.error().code == dftracer::utils::ErrorCode::NOT_FOUND);
+            CHECK(result.error().message.find("does not exist") !=
                   std::string::npos);
             CHECK(!fs::exists(non_existent + ".gz"));
         }
@@ -192,10 +194,9 @@ TEST_SUITE("FileCompressor") {
             auto input = FileCompressionUtilityInput::from_file(test_file);
             auto result = compressor.process(input).get();
 
-            INFO("Compression error: ", result.error_message);
-            CHECK(result.success == true);
-            CHECK(result.original_size == 0);
-            CHECK(result.compressed_size >= 0);
+            REQUIRE(result.has_value());
+            CHECK(result->original_size == 0);
+            CHECK(result->compressed_size >= 0);
             CHECK(fs::exists(output_file));
         }
 
@@ -212,7 +213,7 @@ TEST_SUITE("FileCompressor") {
                              .with_compression_level(100);
             auto result = compressor.process(input).get();
 
-            if (result.success) {
+            if (result.has_value()) {
                 CHECK(fs::exists(test_file + ".gz"));
             }
         }
@@ -244,10 +245,9 @@ TEST_SUITE("FileCompressor") {
             auto input = FileCompressionUtilityInput::from_file(test_file);
             auto result = compressor.process(input).get();
 
-            INFO("Compression error: ", result.error_message);
-            CHECK(result.success == true);
-            CHECK(result.original_size == data.size());
-            CHECK(result.compressed_size > 0);
+            REQUIRE(result.has_value());
+            CHECK(result->original_size == data.size());
+            CHECK(result->compressed_size > 0);
             CHECK(fs::exists(output_file));
         }
     }

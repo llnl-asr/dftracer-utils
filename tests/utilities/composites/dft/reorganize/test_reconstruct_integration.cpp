@@ -363,7 +363,7 @@ TEST_SUITE("ReconstructIntegration") {
                 compressor
                     .process(FileCompressionUtilityInput::from_file(pfw_path))
                     .get();
-            REQUIRE(comp_result.success);
+            REQUIRE(comp_result.has_value());
             std::string gz_path = pfw_path + ".gz";
             REQUIRE(fs::exists(gz_path));
             fs::remove(pfw_path);
@@ -565,7 +565,7 @@ TEST_SUITE("ReconstructIntegration") {
                 compressor
                     .process(FileCompressionUtilityInput::from_file(pfw_path))
                     .get();
-            REQUIRE(comp_result.success);
+            REQUIRE(comp_result.has_value());
 
             std::string gz_path = pfw_path + ".gz";
             REQUIRE(fs::exists(gz_path));

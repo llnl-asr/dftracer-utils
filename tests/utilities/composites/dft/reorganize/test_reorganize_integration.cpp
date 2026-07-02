@@ -366,7 +366,7 @@ TEST_SUITE("ReorganizeIntegration") {
         auto comp_result =
             compressor.process(FileCompressionUtilityInput::from_file(io_pfw))
                 .get();
-        CHECK(comp_result.success);
+        CHECK(comp_result.has_value());
 
         std::string io_gz = io_pfw + ".gz";
         CHECK(fs::exists(io_gz));

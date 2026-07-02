@@ -241,7 +241,7 @@ coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
             FileCompressorUtility compressor;
             auto compress_result = co_await compressor.process(compress_input);
 
-            if (compress_result.success) {
+            if (compress_result.has_value()) {
                 fs::remove(input.output_file);
                 output.output_path = input.output_file + ".gz";
                 DFTRACER_UTILS_LOG_INFO("Created compressed output: %s",

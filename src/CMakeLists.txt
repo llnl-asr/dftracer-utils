@@ -265,6 +265,7 @@ endif()
 if(DFTRACER_UTILS_ENABLE_ARROW)
   list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/column_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/dfanalyzer/dfanalyzer_scan.cpp
   )
 endif()
 

@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/task_handle.h>
 
@@ -36,16 +37,8 @@ static PyObject *TaskHandle_get(TaskHandleObject *self,
     }
     if (self->has_typed_future) {
         std::any result;
-        try {
-            Py_BEGIN_ALLOW_THREADS result = self->typed_future.get();
-            Py_END_ALLOW_THREADS
-        } catch (const std::exception &e) {
-            set_typed_py_error(e);
+        if (!run_blocking_r([&] { return self->typed_future.get(); }, result))
             return NULL;
-        } catch (...) {
-            PyErr_SetString(PyExc_RuntimeError, "Unknown error in task");
-            return NULL;
-        }
         if (result.has_value()) {
             try {
                 PyObject *obj = std::any_cast<PyObject *>(result);
@@ -61,16 +54,7 @@ static PyObject *TaskHandle_get(TaskHandleObject *self,
     }
 
     // Void task: .get() returns void and rethrows stored exceptions.
-    try {
-        Py_BEGIN_ALLOW_THREADS self->future.get();
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        set_typed_py_error(e);
-        return NULL;
-    } catch (...) {
-        PyErr_SetString(PyExc_RuntimeError, "Unknown error in task");
-        return NULL;
-    }
+    if (!run_blocking([&] { self->future.get(); })) return NULL;
     Py_RETURN_NONE;
 }
 
@@ -80,16 +64,7 @@ static PyObject *TaskHandle_wait(TaskHandleObject *self,
         Py_RETURN_NONE;
     }
     // Use .get() (not .wait()) so stored exceptions are rethrown.
-    try {
-        Py_BEGIN_ALLOW_THREADS self->future.get();
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        set_typed_py_error(e);
-        return NULL;
-    } catch (...) {
-        PyErr_SetString(PyExc_RuntimeError, "Unknown error in task");
-        return NULL;
-    }
+    if (!run_blocking([&] { self->future.get(); })) return NULL;
     Py_RETURN_NONE;
 }
 

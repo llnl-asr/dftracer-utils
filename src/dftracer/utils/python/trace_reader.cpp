@@ -14,6 +14,8 @@
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_list_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader.h>
@@ -2874,22 +2876,6 @@ static PyObject *TraceReader_read_arrow(TraceReaderObject *self, PyObject *args,
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-static int parse_str_list_trace(PyObject *obj, std::vector<std::string> &out,
-                                const char *param_name) {
-    if (!obj || obj == Py_None) return 0;
-    if (!PyList_Check(obj)) {
-        PyErr_Format(PyExc_TypeError, "%s must be a list of str", param_name);
-        return -1;
-    }
-    Py_ssize_t n = PyList_Size(obj);
-    for (Py_ssize_t i = 0; i < n; i++) {
-        const char *s = PyUnicode_AsUTF8(PyList_GetItem(obj, i));
-        if (!s) return -1;
-        out.emplace_back(s);
-    }
-    return 0;
-}
-
 static PyObject *TraceReader_write_arrow(TraceReaderObject *self,
                                          PyObject *args, PyObject *kwds) {
     static const char *kwlist[] = {"path",        "views",      "chunk_size_mb",
@@ -3004,24 +2990,19 @@ static PyObject *TraceReader_write_arrow(TraceReaderObject *self,
 
     std::string output_path(path);
     WriteArrowResult result;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
-        result =
-            rt->submit(write_arrow_pipeline(
-                           file_path, index_path, checkpoint_size,
-                           std::move(views), output_path, chunk_size_bytes,
-                           compression, static_cast<std::size_t>(batch_size)),
-                       "write_arrow")
-                .get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r(
+            [&] {
+                Runtime *rt = get_runtime(self);
+                return rt
+                    ->submit(
+                        write_arrow_pipeline(
+                            file_path, index_path, checkpoint_size,
+                            std::move(views), output_path, chunk_size_bytes,
+                            compression, static_cast<std::size_t>(batch_size)),
+                        "write_arrow")
+                    .get();
+            },
+            result)) {
         return NULL;
     }
 
@@ -3151,21 +3132,16 @@ static PyObject *TraceReader_get_view_chunks(TraceReaderObject *self,
     std::size_t checkpoint_size = self->checkpoint_size;
 
     GetViewChunksResult result;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
-        result = rt->submit(get_view_chunks_pipeline(file_path, index_path,
-                                                     checkpoint_size, view),
-                            "get_view_chunks")
-                     .get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r(
+            [&] {
+                Runtime *rt = get_runtime(self);
+                return rt
+                    ->submit(get_view_chunks_pipeline(file_path, index_path,
+                                                      checkpoint_size, view),
+                             "get_view_chunks")
+                    .get();
+            },
+            result)) {
         return NULL;
     }
 
@@ -3285,26 +3261,21 @@ static PyObject *TraceReader_write_view_chunk(TraceReaderObject *self,
     std::size_t checkpoint_size = self->checkpoint_size;
 
     WriteViewChunkResult result;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
-        result =
-            rt->submit(write_view_chunk_pipeline(
-                           file_path, index_path, checkpoint_size, view,
-                           checkpoint_idx, static_cast<std::size_t>(start_byte),
-                           static_cast<std::size_t>(end_byte),
-                           std::string(output_file), compression,
-                           static_cast<std::size_t>(batch_size)),
-                       "write_view_chunk")
-                .get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r(
+            [&] {
+                Runtime *rt = get_runtime(self);
+                return rt
+                    ->submit(write_view_chunk_pipeline(
+                                 file_path, index_path, checkpoint_size, view,
+                                 checkpoint_idx,
+                                 static_cast<std::size_t>(start_byte),
+                                 static_cast<std::size_t>(end_byte),
+                                 std::string(output_file), compression,
+                                 static_cast<std::size_t>(batch_size)),
+                             "write_view_chunk")
+                    .get();
+            },
+            result)) {
         return NULL;
     }
 
@@ -3436,23 +3407,18 @@ static PyObject *TraceReader_write_view_chunks(TraceReaderObject *self,
     std::size_t checkpoint_size = self->checkpoint_size;
 
     WriteViewChunksResult result;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
-        result = rt->submit(write_view_chunks_pipeline(
-                                file_path, index_path, checkpoint_size, view,
-                                std::move(chunks), compression,
-                                static_cast<std::size_t>(batch_size)),
-                            "write_view_chunks")
-                     .get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r(
+            [&] {
+                Runtime *rt = get_runtime(self);
+                return rt
+                    ->submit(write_view_chunks_pipeline(
+                                 file_path, index_path, checkpoint_size, view,
+                                 std::move(chunks), compression,
+                                 static_cast<std::size_t>(batch_size)),
+                             "write_view_chunks")
+                    .get();
+            },
+            result)) {
         return NULL;
     }
 

@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_list_helpers.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
@@ -12,23 +13,8 @@
 using dftracer::utils::Runtime;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
 
-static Runtime *get_runtime(ReconstructionPlannerObject *self) {
-    return resolve_runtime(self);
-}
-
-static void ReconstructionPlanner_dealloc(ReconstructionPlannerObject *self) {
-    runtime_backed_dealloc(self);
-}
-
-static PyObject *ReconstructionPlanner_new(PyTypeObject *type, PyObject *args,
-                                           PyObject *kwds) {
-    return runtime_backed_new<ReconstructionPlannerObject>(type, args, kwds);
-}
-
-static int ReconstructionPlanner_init(ReconstructionPlannerObject *self,
-                                      PyObject *args, PyObject *kwds) {
-    return runtime_backed_init(self, args, kwds);
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(ReconstructionPlanner,
+                                    ReconstructionPlannerObject)
 
 static PyObject *ReconstructionPlanner_plan(ReconstructionPlannerObject *self,
                                             PyObject *args, PyObject *kwds) {
@@ -42,20 +28,8 @@ static PyObject *ReconstructionPlanner_plan(ReconstructionPlannerObject *self,
                                      &files_obj, &index_dir))
         return NULL;
 
-    if (!PyList_Check(files_obj)) {
-        PyErr_SetString(PyExc_TypeError, "reorganized_files must be a list");
-        return NULL;
-    }
-
-    Py_ssize_t nfiles = PyList_Size(files_obj);
     std::vector<std::string> files;
-    files.reserve(static_cast<std::size_t>(nfiles));
-    for (Py_ssize_t i = 0; i < nfiles; i++) {
-        PyObject *item = PyList_GetItem(files_obj, i);
-        const char *s = PyUnicode_AsUTF8(item);
-        if (!s) return NULL;
-        files.emplace_back(s);
-    }
+    if (!parse_str_list(files_obj, "reorganized_files", files)) return NULL;
 
     ReconstructionPlannerInput input;
     input.reorganized_files = std::move(files);
@@ -66,7 +40,7 @@ static PyObject *ReconstructionPlanner_plan(ReconstructionPlannerObject *self,
     ReconstructionPlannerInput input_copy = input;
 
     if (!run_blocking([&] {
-            Runtime *rt = get_runtime(self);
+            Runtime *rt = resolve_runtime(self);
             auto task = [plan_p, input_copy]() -> CoroTask<void> {
                 ReconstructionPlannerUtility util;
                 *plan_p = co_await util.process(input_copy);

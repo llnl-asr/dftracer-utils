@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
@@ -47,24 +48,8 @@ static PyObject* ArrowStreamingIterator_next(
     }
 
     std::optional<ArrowExportResult> result;
-    bool had_error = false;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        result = self->cpp_state->pull_next();
-    } catch (const std::exception& e) {
-        had_error = true;
-        error_msg = e.what();
-    } catch (...) {
-        had_error = true;
-        error_msg = "Unknown error in streaming iterator";
-    }
-    Py_END_ALLOW_THREADS
-
-        if (had_error) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r([&] { return self->cpp_state->pull_next(); }, result))
         return NULL;
-    }
 
     if (!result.has_value()) {
         // Check for error

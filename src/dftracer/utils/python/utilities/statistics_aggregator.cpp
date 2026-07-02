@@ -16,23 +16,8 @@ using dftracer::utils::Runtime;
 using dftracer::utils::coro::CoroTask;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
 
-static Runtime *get_runtime(StatisticsAggregatorObject *self) {
-    return resolve_runtime(self);
-}
-
-static void StatisticsAggregator_dealloc(StatisticsAggregatorObject *self) {
-    runtime_backed_dealloc(self);
-}
-
-static PyObject *StatisticsAggregator_new(PyTypeObject *type, PyObject *args,
-                                          PyObject *kwds) {
-    return runtime_backed_new<StatisticsAggregatorObject>(type, args, kwds);
-}
-
-static int StatisticsAggregator_init(StatisticsAggregatorObject *self,
-                                     PyObject *args, PyObject *kwds) {
-    return runtime_backed_init(self, args, kwds);
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(StatisticsAggregator,
+                                    StatisticsAggregatorObject)
 
 static PyObject *StatisticsAggregator_compute(StatisticsAggregatorObject *self,
                                               PyObject *args, PyObject *kwds) {
@@ -48,7 +33,7 @@ static PyObject *StatisticsAggregator_compute(StatisticsAggregatorObject *self,
     TraceStatistics stats;
 
     if (!run_blocking([&] {
-            Runtime *rt = get_runtime(self);
+            Runtime *rt = resolve_runtime(self);
 
             StatisticsAggregatorInput input;
             input.file_path = file_path_str;

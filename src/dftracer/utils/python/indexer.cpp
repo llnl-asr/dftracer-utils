@@ -3,6 +3,7 @@
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/indexer_checkpoint.h>
 #include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
@@ -174,23 +175,21 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         Runtime *rt = get_indexer_runtime(self);
         IndexBuildBatchResult batch_result;
 
-        try {
-            Py_BEGIN_ALLOW_THREADS rt
-                ->submit(
-                    run_coro_scope(
-                        rt->executor(),
-                        [](CoroScope &scope,
-                           std::shared_ptr<IndexBuildBatchConfig> cfg,
-                           IndexBuildBatchResult *out) -> coro::CoroTask<void> {
-                            *out = co_await IndexBatchBuilderUtility::process(
-                                &scope, std::move(cfg));
-                        },
-                        batch_config, &batch_result),
-                    "indexer-build")
-                .get();
-            Py_END_ALLOW_THREADS
-        } catch (const std::exception &e) {
-            set_typed_py_error(e);
+        if (!run_blocking([&] {
+                rt->submit(
+                      run_coro_scope(
+                          rt->executor(),
+                          [](CoroScope &scope,
+                             std::shared_ptr<IndexBuildBatchConfig> cfg,
+                             IndexBuildBatchResult *out)
+                              -> coro::CoroTask<void> {
+                              *out = co_await IndexBatchBuilderUtility::process(
+                                  &scope, std::move(cfg));
+                          },
+                          batch_config, &batch_result),
+                      "indexer-build")
+                    .get();
+            })) {
             return NULL;
         }
 

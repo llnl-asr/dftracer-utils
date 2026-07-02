@@ -16,23 +16,7 @@ using dftracer::utils::Runtime;
 using dftracer::utils::coro::CoroTask;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
 
-static Runtime *get_runtime(StatisticsQueryObject *self) {
-    return resolve_runtime(self);
-}
-
-static void StatisticsQuery_dealloc(StatisticsQueryObject *self) {
-    runtime_backed_dealloc(self);
-}
-
-static PyObject *StatisticsQuery_new(PyTypeObject *type, PyObject *args,
-                                     PyObject *kwds) {
-    return runtime_backed_new<StatisticsQueryObject>(type, args, kwds);
-}
-
-static int StatisticsQuery_init(StatisticsQueryObject *self, PyObject *args,
-                                PyObject *kwds) {
-    return runtime_backed_init(self, args, kwds);
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(StatisticsQuery, StatisticsQueryObject)
 
 static PyObject *StatisticsQuery_query(StatisticsQueryObject *self,
                                        PyObject *args, PyObject *kwds) {
@@ -82,7 +66,7 @@ static PyObject *StatisticsQuery_query(StatisticsQueryObject *self,
     auto top_n_copy = static_cast<std::uint64_t>(top_n);
 
     if (!run_blocking([&] {
-            Runtime *rt = get_runtime(self);
+            Runtime *rt = resolve_runtime(self);
 
             StatisticsAggregatorInput agg_input;
             agg_input.file_path = file_path_str;

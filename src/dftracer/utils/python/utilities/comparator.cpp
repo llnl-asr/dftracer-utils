@@ -49,23 +49,7 @@ using dftracer::utils::python::arrow_result_to_table;
 using dftracer::utils::utilities::common::arrow::ArrowExportResult;
 #endif
 
-static Runtime *get_runtime(ComparatorObject *self) {
-    return resolve_runtime(self);
-}
-
-static void Comparator_dealloc(ComparatorObject *self) {
-    runtime_backed_dealloc(self);
-}
-
-static PyObject *Comparator_new(PyTypeObject *type, PyObject *args,
-                                PyObject *kwds) {
-    return runtime_backed_new<ComparatorObject>(type, args, kwds);
-}
-
-static int Comparator_init(ComparatorObject *self, PyObject *args,
-                           PyObject *kwds) {
-    return runtime_backed_init(self, args, kwds);
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(Comparator, ComparatorObject)
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -330,7 +314,7 @@ static bool run_comparison_pipeline(ComparatorObject *self,
         using indexer::IndexBatchBuilderUtility;
         using indexer::IndexBuildBatchConfig;
 
-        Runtime *rt = get_runtime(self);
+        Runtime *rt = resolve_runtime(self);
 
         auto task = [config, output_ptr, rt]() -> CoroTask<void> {
             auto resolve_and_build =

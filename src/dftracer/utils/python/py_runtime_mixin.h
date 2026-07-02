@@ -6,6 +6,7 @@
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/runtime.h>
 
+#include <exception>
 #include <stdexcept>
 #include <string>
 
@@ -95,5 +96,42 @@ bool run_blocking(F &&body) {
     }
     return true;
 }
+
+// Like run_blocking, but for a body that produces a value. Runs `body` with
+// the GIL released, assigning its result into `out`. On a thrown exception the
+// exception is captured off-GIL, the GIL is re-acquired, the typed Python error
+// is raised, and false is returned. `out` is only modified on success.
+template <typename F, typename T>
+bool run_blocking_r(F &&body, T &out) {
+    std::exception_ptr eptr;
+    Py_BEGIN_ALLOW_THREADS try { out = body(); } catch (...) {
+        eptr = std::current_exception();
+    }
+    Py_END_ALLOW_THREADS if (eptr) {
+        try {
+            std::rethrow_exception(eptr);
+        } catch (const std::exception &e) {
+            set_typed_py_error(e);
+        } catch (...) {
+            PyErr_SetString(g_dft_error ? g_dft_error : PyExc_RuntimeError,
+                            "unknown C++ exception");
+        }
+        return false;
+    }
+    return true;
+}
+
+// Generate the tp_dealloc / tp_new / tp_init shims for a utility object whose
+// layout is `struct { PyObject_HEAD PyObject *runtime_obj; }`. PREFIX is the
+// type's function-name prefix (e.g. Aggregator); OBJ is its object struct.
+#define DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(PREFIX, OBJ)                      \
+    static void PREFIX##_dealloc(OBJ *self) { runtime_backed_dealloc(self); } \
+    static PyObject *PREFIX##_new(PyTypeObject *type, PyObject *args,         \
+                                  PyObject *kwds) {                           \
+        return runtime_backed_new<OBJ>(type, args, kwds);                     \
+    }                                                                         \
+    static int PREFIX##_init(OBJ *self, PyObject *args, PyObject *kwds) {     \
+        return runtime_backed_init(self, args, kwds);                         \
+    }
 
 #endif  // DFTRACER_UTILS_PYTHON_PY_RUNTIME_MIXIN_H

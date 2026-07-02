@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_list_helpers.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
@@ -17,23 +18,8 @@ using dftracer::utils::utilities::behaviors::UtilityExecutor;
 namespace tags = dftracer::utils::utilities::tags;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
 
-static Runtime *get_runtime(ReorganizationPlannerObject *self) {
-    return resolve_runtime(self);
-}
-
-static void ReorganizationPlanner_dealloc(ReorganizationPlannerObject *self) {
-    runtime_backed_dealloc(self);
-}
-
-static PyObject *ReorganizationPlanner_new(PyTypeObject *type, PyObject *args,
-                                           PyObject *kwds) {
-    return runtime_backed_new<ReorganizationPlannerObject>(type, args, kwds);
-}
-
-static int ReorganizationPlanner_init(ReorganizationPlannerObject *self,
-                                      PyObject *args, PyObject *kwds) {
-    return runtime_backed_init(self, args, kwds);
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(ReorganizationPlanner,
+                                    ReorganizationPlannerObject)
 
 static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
                                             PyObject *args, PyObject *kwds) {
@@ -49,20 +35,8 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
                                      &index_dir))
         return NULL;
 
-    if (!PyList_Check(source_files_obj)) {
-        PyErr_SetString(PyExc_TypeError, "source_files must be a list");
-        return NULL;
-    }
-
-    Py_ssize_t nfiles = PyList_Size(source_files_obj);
     std::vector<std::string> files;
-    files.reserve(static_cast<std::size_t>(nfiles));
-    for (Py_ssize_t i = 0; i < nfiles; i++) {
-        PyObject *item = PyList_GetItem(source_files_obj, i);
-        const char *s = PyUnicode_AsUTF8(item);
-        if (!s) return NULL;
-        files.emplace_back(s);
-    }
+    if (!parse_str_list(source_files_obj, "source_files", files)) return NULL;
 
     std::vector<PredicateGroup> groups;
     if (groups_obj && groups_obj != Py_None) {
@@ -102,7 +76,7 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
     ReorganizationPlannerInput input_copy = input;
 
     if (!run_blocking([&] {
-            Runtime *rt = get_runtime(self);
+            Runtime *rt = resolve_runtime(self);
             auto task = run_coro_scope(
                 rt->executor(),
                 [plan_p, input_copy](CoroScope &scope) -> CoroTask<void> {

@@ -1,3 +1,4 @@
+import atexit
 from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
@@ -57,6 +58,21 @@ def set_default_runtime(runtime: Optional["Runtime"]) -> None:
     else:
         _set_default_native_runtime(runtime._native)
         _default_wrapper = runtime
+
+
+@atexit.register
+def _shutdown_default_runtime() -> None:
+    # Join executor threads while the interpreter is still alive to avoid
+    # teardown hangs. Only act on a lazily-created default; never force one.
+    global _default_wrapper
+    wrapper = _default_wrapper
+    if wrapper is None:
+        return
+    _default_wrapper = None
+    try:
+        wrapper.shutdown(wait=True)
+    except Exception:
+        pass
 
 
 try:

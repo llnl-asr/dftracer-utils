@@ -2,6 +2,7 @@
 #include <Python.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 
@@ -289,13 +290,7 @@ static PyObject *Runtime_wait_all(RuntimeObject *self,
         PyErr_SetString(PyExc_RuntimeError, "Runtime not initialized");
         return NULL;
     }
-    try {
-        Py_BEGIN_ALLOW_THREADS self->runtime->wait_all();
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        set_typed_py_error(e);
-        return NULL;
-    }
+    if (!run_blocking([&] { self->runtime->wait_all(); })) return NULL;
     Py_RETURN_NONE;
 }
 

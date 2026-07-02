@@ -5,6 +5,8 @@
 #include <Python.h>
 #include <dftracer/utils/python/arrow_parallel_reader.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_list_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/utilities/common/arrow/parallel_reader.h>
@@ -31,23 +33,8 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
     }
 
     // Convert paths to vector<string>
-    if (!PyList_Check(paths_obj)) {
-        PyErr_SetString(PyExc_TypeError, "paths must be a list of strings");
-        return nullptr;
-    }
-
-    Py_ssize_t n = PyList_Size(paths_obj);
     std::vector<std::string> paths;
-    paths.reserve(n);
-
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject* item = PyList_GetItem(paths_obj, i);
-        if (!PyUnicode_Check(item)) {
-            PyErr_SetString(PyExc_TypeError, "all paths must be strings");
-            return nullptr;
-        }
-        paths.push_back(PyUnicode_AsUTF8(item));
-    }
+    if (!parse_str_list(paths_obj, "paths", paths)) return nullptr;
 
     // Get runtime
     Runtime* runtime = nullptr;
@@ -64,23 +51,13 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
 
     // Call C++ parallel reader (releases GIL during file I/O)
     utilities::common::arrow::ParallelReadResult result;
-    bool had_error = false;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        auto task = read_arrow_files_parallel(std::move(paths));
-        result = runtime->submit(std::move(task), "read_arrow_files").get();
-    } catch (const std::exception& e) {
-        had_error = true;
-        error_msg = e.what();
-    } catch (...) {
-        had_error = true;
-        error_msg = "Unknown error in read_arrow_files";
-    }
-    Py_END_ALLOW_THREADS
-
-        if (had_error) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r(
+            [&] {
+                auto task = read_arrow_files_parallel(std::move(paths));
+                return runtime->submit(std::move(task), "read_arrow_files")
+                    .get();
+            },
+            result)) {
         return nullptr;
     }
 

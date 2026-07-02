@@ -17,23 +17,7 @@ using dftracer::utils::Runtime;
 using dftracer::utils::coro::CoroTask;
 using namespace dftracer::utils::utilities::composites::dft;
 
-static Runtime *get_runtime(MetadataCollectorObject *self) {
-    return resolve_runtime(self);
-}
-
-static void MetadataCollector_dealloc(MetadataCollectorObject *self) {
-    runtime_backed_dealloc(self);
-}
-
-static PyObject *MetadataCollector_new(PyTypeObject *type, PyObject *args,
-                                       PyObject *kwds) {
-    return runtime_backed_new<MetadataCollectorObject>(type, args, kwds);
-}
-
-static int MetadataCollector_init(MetadataCollectorObject *self, PyObject *args,
-                                  PyObject *kwds) {
-    return runtime_backed_init(self, args, kwds);
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(MetadataCollector, MetadataCollectorObject)
 
 static PyObject *MetadataCollector_collect(MetadataCollectorObject *self,
                                            PyObject *args, PyObject *kwds) {
@@ -49,7 +33,7 @@ static PyObject *MetadataCollector_collect(MetadataCollectorObject *self,
     MetadataCollectorUtilityOutput output;
 
     if (!run_blocking([&] {
-            Runtime *rt = get_runtime(self);
+            Runtime *rt = resolve_runtime(self);
 
             MetadataCollectorUtilityInput input;
             input.file_path = file_path_str;

@@ -10,6 +10,8 @@
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_list_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/utilities/common/query/query.h>
@@ -262,29 +264,23 @@ static PyObject* Indexer_resolve(IndexerObject* self,
     }
 
     ResolverResult result;
-    std::string error_msg;
 
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime* rt = get_batch_indexer_runtime(self);
-        rt->submit(run_coro_scope(
-                       rt->executor(),
-                       [](CoroScope& scope, ResolverInput in,
-                          ResolverResult* out) -> CoroTask<void> {
-                           IndexResolverUtility resolver;
-                           // Use scope.spawn(utility, input) which auto-binds
-                           // context for utilities with NeedsContext tag
-                           *out = co_await scope.spawn(resolver, std::move(in));
-                       },
-                       std::move(input), &result),
-                   "batch-indexer-resolve")
-            .get();
-    } catch (const std::exception& e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking([&] {
+            Runtime* rt = get_batch_indexer_runtime(self);
+            rt->submit(run_coro_scope(
+                           rt->executor(),
+                           [](CoroScope& scope, ResolverInput in,
+                              ResolverResult* out) -> CoroTask<void> {
+                               IndexResolverUtility resolver;
+                               // scope.spawn(utility, input) auto-binds context
+                               // for utilities with the NeedsContext tag
+                               *out = co_await scope.spawn(resolver,
+                                                           std::move(in));
+                           },
+                           std::move(input), &result),
+                       "batch-indexer-resolve")
+                .get();
+        })) {
         return nullptr;
     }
 
@@ -386,27 +382,19 @@ static PyObject* Indexer_build(IndexerObject* self,
         }
     }
 
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime* rt = get_batch_indexer_runtime(self);
-        rt->submit(run_coro_scope(
-                       rt->executor(),
-                       [](CoroScope& scope,
-                          ResolveAndBuildInput in) -> CoroTask<void> {
-                           co_await resolve_and_build_index(&scope,
-                                                            std::move(in));
-                       },
-                       std::move(input)),
-                   "batch-indexer-build")
-            .get();
-    } catch (const std::exception& e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking([&] {
+            Runtime* rt = get_batch_indexer_runtime(self);
+            rt->submit(run_coro_scope(
+                           rt->executor(),
+                           [](CoroScope& scope,
+                              ResolveAndBuildInput in) -> CoroTask<void> {
+                               co_await resolve_and_build_index(&scope,
+                                                                std::move(in));
+                           },
+                           std::move(input)),
+                       "batch-indexer-build")
+                .get();
+        })) {
         return nullptr;
     }
 
@@ -540,20 +528,14 @@ static PyObject* Indexer_get_hash_table(IndexerObject* self, PyObject* args) {
     std::string index_path = std::move(*idx_opt);
 
     std::unordered_map<std::string, std::string> hash_map;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        IndexDatabase db(
-            index_path,
-            dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-        hash_map = db.query_hash_table(type);
-    } catch (const std::exception& e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r(
+            [&] {
+                IndexDatabase db(index_path,
+                                 dftracer::utils::rocksdb::RocksDatabase::
+                                     OpenMode::ReadOnly);
+                return db.query_hash_table(type);
+            },
+            hash_map)) {
         return nullptr;
     }
 
@@ -584,20 +566,14 @@ static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
     std::string index_path = std::move(*idx_opt);
 
     std::unordered_set<std::uint64_t> pids;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        IndexDatabase db(
-            index_path,
-            dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-        pids = db.query_file_pids(file_id);
-    } catch (const std::exception& e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r(
+            [&] {
+                IndexDatabase db(index_path,
+                                 dftracer::utils::rocksdb::RocksDatabase::
+                                     OpenMode::ReadOnly);
+                return db.query_file_pids(file_id);
+            },
+            pids)) {
         return nullptr;
     }
 
@@ -622,20 +598,14 @@ static PyObject* Indexer_query_all_file_pids(IndexerObject* self,
     std::string index_path = std::move(*idx_opt);
 
     std::unordered_map<int, std::unordered_set<std::uint64_t>> all_pids;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        IndexDatabase db(
-            index_path,
-            dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-        all_pids = db.query_all_file_pids();
-    } catch (const std::exception& e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r(
+            [&] {
+                IndexDatabase db(index_path,
+                                 dftracer::utils::rocksdb::RocksDatabase::
+                                     OpenMode::ReadOnly);
+                return db.query_all_file_pids();
+            },
+            all_pids)) {
         return nullptr;
     }
 
@@ -668,21 +638,14 @@ static PyObject* Indexer_query_file_info(IndexerObject* self,
 
     std::unordered_map<std::string, int> file_ids;
     std::unordered_map<int, std::unordered_set<std::uint64_t>> all_pids;
-    std::string error_msg;
 
-    Py_BEGIN_ALLOW_THREADS try {
-        IndexDatabase db(
-            index_path,
-            dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-        file_ids = db.query_all_file_info_ids();
-        all_pids = db.query_all_file_pids();
-    } catch (const std::exception& e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking([&] {
+            IndexDatabase db(
+                index_path,
+                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+            file_ids = db.query_all_file_info_ids();
+            all_pids = db.query_all_file_pids();
+        })) {
         return nullptr;
     }
 
@@ -2217,31 +2180,6 @@ static PyObject* Indexer_iter_arrow_dfanalyzer_all(IndexerObject* self,
 // `scratch_dir` lifetime and should remove it after gathering results.
 // ---------------------------------------------------------------------------
 
-static bool collect_string_list(PyObject* obj, const char* name,
-                                std::vector<std::string>& out) {
-    if (!obj || obj == Py_None) return true;
-    PyObject* seq = PySequence_Fast(obj, name);
-    if (!seq) return false;
-    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-    out.reserve(static_cast<std::size_t>(n));
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject* item = PySequence_Fast_GET_ITEM(seq, i);
-        if (!PyUnicode_Check(item)) {
-            Py_DECREF(seq);
-            PyErr_Format(PyExc_TypeError, "%s items must be str", name);
-            return false;
-        }
-        const char* s = PyUnicode_AsUTF8(item);
-        if (!s) {
-            Py_DECREF(seq);
-            return false;
-        }
-        out.emplace_back(s);
-    }
-    Py_DECREF(seq);
-    return true;
-}
-
 static bool collect_string_string_dict(
     PyObject* obj, const char* name,
     std::unordered_map<std::string, std::string>& out) {
@@ -2309,10 +2247,8 @@ static PyObject* scan_aggregation_manifest_fn(PyObject* /*self*/,
 
     std::vector<std::string> agg_ssts;
     std::vector<std::string> sys_ssts;
-    if (!collect_string_list(agg_ssts_obj, "agg_ssts", agg_ssts))
-        return nullptr;
-    if (!collect_string_list(sys_ssts_obj, "sys_ssts", sys_ssts))
-        return nullptr;
+    if (!parse_str_list(agg_ssts_obj, "agg_ssts", agg_ssts)) return nullptr;
+    if (!parse_str_list(sys_ssts_obj, "sys_ssts", sys_ssts)) return nullptr;
 
     std::unordered_map<std::string, std::string> preloaded_file_hashes;
     std::unordered_map<std::string, std::string> preloaded_host_hashes;

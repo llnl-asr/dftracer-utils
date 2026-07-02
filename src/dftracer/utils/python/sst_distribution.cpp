@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/sst_distribution.h>
@@ -293,23 +294,20 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
     PatternDirectoryScannerUtilityInput input(directory, patterns,
                                               recursive != 0, true);
     std::vector<FileEntry> entries;
-    try {
-        Py_BEGIN_ALLOW_THREADS rt
-            ->submit(dftracer::utils::run_coro_scope(
-                         rt->executor(),
-                         [](dftracer::utils::CoroScope &scope,
-                            PatternDirectoryScannerUtilityInput in,
-                            std::vector<FileEntry> *out)
-                             -> dftracer::utils::coro::CoroTask<void> {
-                             PatternDirectoryScannerUtility scanner;
-                             *out = co_await scope.spawn(scanner, in);
-                         },
-                         std::move(input), &entries),
-                     "scan-files")
-            .get();
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        set_typed_py_error(e);
+    if (!run_blocking([&] {
+            rt->submit(dftracer::utils::run_coro_scope(
+                           rt->executor(),
+                           [](dftracer::utils::CoroScope &scope,
+                              PatternDirectoryScannerUtilityInput in,
+                              std::vector<FileEntry> *out)
+                               -> dftracer::utils::coro::CoroTask<void> {
+                               PatternDirectoryScannerUtility scanner;
+                               *out = co_await scope.spawn(scanner, in);
+                           },
+                           std::move(input), &entries),
+                       "scan-files")
+                .get();
+        })) {
         return NULL;
     }
 
@@ -715,25 +713,21 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     };
 
     IndexBuildBatchResult result;
-    std::string submit_error;
-    Py_BEGIN_ALLOW_THREADS try {
-        rt->submit(dftracer::utils::run_coro_scope(
-                       rt->executor(),
-                       [](dftracer::utils::CoroScope &scope,
-                          std::shared_ptr<IndexBuildBatchConfig> cfg,
-                          IndexBuildBatchResult *out)
-                           -> dftracer::utils::coro::CoroTask<void> {
-                           *out = co_await IndexBatchBuilderUtility::process(
-                               &scope, std::move(cfg));
-                       },
-                       batch_config, &result),
-                   "build-sst-batch")
-            .get();
-    } catch (const std::exception &e) {
-        submit_error = e.what();
-    }
-    Py_END_ALLOW_THREADS if (!submit_error.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, submit_error.c_str());
+    if (!run_blocking([&] {
+            rt->submit(dftracer::utils::run_coro_scope(
+                           rt->executor(),
+                           [](dftracer::utils::CoroScope &scope,
+                              std::shared_ptr<IndexBuildBatchConfig> cfg,
+                              IndexBuildBatchResult *out)
+                               -> dftracer::utils::coro::CoroTask<void> {
+                               *out =
+                                   co_await IndexBatchBuilderUtility::process(
+                                       &scope, std::move(cfg));
+                           },
+                           batch_config, &result),
+                       "build-sst-batch")
+                .get();
+        })) {
         return NULL;
     }
 
@@ -844,13 +838,8 @@ static PyObject *move_artifacts_fn(PyObject * /*self*/, PyObject *args,
     IndexDatabaseSstWriterContext::Artifacts a;
     if (!artifacts_from_dict(dict, &a)) return NULL;
     IndexDatabaseSstWriterContext::Artifacts moved;
-    try {
-        Py_BEGIN_ALLOW_THREADS moved = std::move(a).move_to(dest_dir);
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        set_typed_py_error(e);
+    if (!run_blocking_r([&] { return std::move(a).move_to(dest_dir); }, moved))
         return NULL;
-    }
     return artifacts_to_dict(moved);
 }
 
@@ -918,41 +907,38 @@ static PyObject *enumerate_gzip_members_fn(PyObject * /*self*/, PyObject *args,
     }
 
     std::vector<std::vector<GzipMember>> results(files.size());
-    std::string submit_error;
-    Py_BEGIN_ALLOW_THREADS try {
-        rt->submit(
-              dftracer::utils::run_coro_scope(
-                  rt->executor(),
-                  [](dftracer::utils::CoroScope &scope,
-                     const std::vector<std::string> *paths,
-                     std::vector<std::vector<GzipMember>> *out)
-                      -> dftracer::utils::coro::CoroTask<void> {
-                      co_await scope.scope(
-                          [paths, out](dftracer::utils::CoroScope &child)
-                              -> dftracer::utils::coro::CoroTask<void> {
-                              for (std::size_t i = 0; i < paths->size(); ++i) {
-                                  const std::string &path = (*paths)[i];
-                                  auto *slot = &(*out)[i];
-                                  child.spawn(
-                                      [path, slot](dftracer::utils::CoroScope &)
-                                          -> dftracer::utils::coro::CoroTask<
-                                              void> {
-                                          co_await scan_one_gzip_file(path,
-                                                                      slot);
-                                      });
-                              }
-                              co_return;
-                          });
-                      co_return;
-                  },
-                  &files, &results),
-              "enumerate-gzip-members")
-            .get();
-    } catch (const std::exception &e) {
-        submit_error = e.what();
-    }
-    Py_END_ALLOW_THREADS if (!submit_error.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, submit_error.c_str());
+    if (!run_blocking([&] {
+            rt->submit(
+                  dftracer::utils::run_coro_scope(
+                      rt->executor(),
+                      [](dftracer::utils::CoroScope &scope,
+                         const std::vector<std::string> *paths,
+                         std::vector<std::vector<GzipMember>> *out)
+                          -> dftracer::utils::coro::CoroTask<void> {
+                          co_await scope.scope(
+                              [paths, out](dftracer::utils::CoroScope &child)
+                                  -> dftracer::utils::coro::CoroTask<void> {
+                                  for (std::size_t i = 0; i < paths->size();
+                                       ++i) {
+                                      const std::string &path = (*paths)[i];
+                                      auto *slot = &(*out)[i];
+                                      child.spawn(
+                                          [path,
+                                           slot](dftracer::utils::CoroScope &)
+                                              -> dftracer::utils::coro::CoroTask<
+                                                  void> {
+                                              co_await scan_one_gzip_file(path,
+                                                                          slot);
+                                          });
+                                  }
+                                  co_return;
+                              });
+                          co_return;
+                      },
+                      &files, &results),
+                  "enumerate-gzip-members")
+                .get();
+        })) {
         return NULL;
     }
 

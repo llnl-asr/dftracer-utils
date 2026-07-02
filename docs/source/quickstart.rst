@@ -303,6 +303,25 @@ The full set is ``DFTUtilsError`` (base) plus ``DFTUtilsValueError``,
 ``DFTUtilsAggregationError``. See :doc:`cpp_api/error_handling` for the
 underlying C++ model.
 
+Controlling Log Output
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The C++ logger is initialized when ``dftracer.utils`` is imported. Change the
+verbosity from Python at any time, or set the ``DFTRACER_UTILS_LOG_LEVEL``
+environment variable before running (see :doc:`installation`):
+
+.. code-block:: python
+
+   import dftracer.utils as du
+
+   du.set_log_level("debug")   # trace, debug, info (default), warn, error, off
+   print(du.get_log_level())   # -> "debug"
+   du.set_log_color("never")   # auto (default), always, never
+
+The levels and color modes mirror the CLI ``--log-level`` flag and the
+``DFTRACER_UTILS_LOG_*`` environment variables. An unknown level or color name
+raises ``ValueError``.
+
 C++ Quick Start
 ---------------
 

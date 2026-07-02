@@ -277,13 +277,8 @@ void AggregationVisitor::on_event(const EventRecord& record) {
                     entry.custom_metrics = std::make_unique<CustomMetricsMap>();
                 }
                 auto& cm = *entry.custom_metrics;
-                auto cm_it = cm.find(field);
-                if (cm_it == cm.end()) {
-                    cm_it = cm.emplace(std::string(field),
-                                       MetricStats(config_.sketch_accuracy))
-                                .first;
-                }
-                auto& stats = cm_it->second;
+                auto& stats =
+                    find_or_create(cm, field, config_.sketch_accuracy);
                 stats.count += ev_count;
                 stats.total += a_sum.get<std::uint64_t>();
                 if (a_min.exists() && a_min.is_number()) {

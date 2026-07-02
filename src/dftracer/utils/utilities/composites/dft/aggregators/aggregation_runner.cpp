@@ -34,33 +34,6 @@ namespace {
 namespace rcf = ::dftracer::utils::rocksdb::cf;
 namespace idx = composites::dft::indexing;
 
-void write_aggregation_tracking(::dftracer::utils::rocksdb::RocksDatabase* db,
-                                const AggregationConfig& config,
-                                const std::vector<std::string>& processed_files,
-                                const std::string& index_path) {
-    indexer::IndexDatabase idx_db(
-        index_path,
-        ::dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-
-    auto batch = db->begin_batch();
-
-    AggGlobalConfig global_cfg;
-    global_cfg.time_interval_us = config.time_interval_us;
-    global_cfg.config_hash = 0;
-    db->put(batch, rcf::AGGREGATION, std::string_view(AGG_GLOBAL_CONFIG_KEY, 2),
-            serialize_agg_global_config(global_cfg));
-
-    for (const auto& file_path : processed_files) {
-        int file_id = idx_db.find_file(file_path);
-        if (file_id >= 0) {
-            auto key = make_agg_file_key(file_id);
-            db->put(batch, rcf::AGGREGATION, key, "");
-        }
-    }
-
-    db->commit_batch(batch);
-}
-
 coro::CoroTask<indexer::IndexBuildBatchResult> batch_index_and_aggregate(
     CoroScope* scope, std::vector<std::string> file_paths,
     std::string index_dir, std::size_t checkpoint_size, bool force_rebuild,
@@ -135,6 +108,34 @@ PerfettoTraceWriterInput build_streaming_input(
 }
 
 }  // namespace
+
+void write_aggregation_tracking(::dftracer::utils::rocksdb::RocksDatabase* db,
+                                const AggregationConfig& config,
+                                const std::vector<std::string>& processed_files,
+                                const std::string& index_path,
+                                std::uint32_t config_hash) {
+    indexer::IndexDatabase idx_db(
+        index_path,
+        ::dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+
+    auto batch = db->begin_batch();
+
+    AggGlobalConfig global_cfg;
+    global_cfg.time_interval_us = config.time_interval_us;
+    global_cfg.config_hash = config_hash;
+    db->put(batch, rcf::AGGREGATION, std::string_view(AGG_GLOBAL_CONFIG_KEY, 2),
+            serialize_agg_global_config(global_cfg));
+
+    for (const auto& file_path : processed_files) {
+        int file_id = idx_db.find_file(file_path);
+        if (file_id >= 0) {
+            auto key = make_agg_file_key(file_id);
+            db->put(batch, rcf::AGGREGATION, key, "");
+        }
+    }
+
+    db->commit_batch(batch);
+}
 
 coro::CoroTask<AggregationRunResult> run_aggregation(
     AggregationRunInput input) {
@@ -280,7 +281,7 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
                                                        "write_tracking");
                     write_aggregation_tracking(agg_db.get(), input.agg_config,
                                                files_to_process,
-                                               shared_index_path);
+                                               shared_index_path, config_hash);
                 }
             }
 

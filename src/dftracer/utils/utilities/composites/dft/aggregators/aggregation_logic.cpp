@@ -165,14 +165,10 @@ void update_aggregation_entry(const DFTracerEvent& ev,
                         std::make_unique<CustomMetricsMap>();
                 }
                 auto& cm = *metrics.custom_metrics;
-                auto cm_it = cm.find(field);
-                if (cm_it == cm.end()) {
-                    cm_it = cm.emplace(std::string(field),
-                                       MetricStats(metrics.sketch_accuracy))
-                                .first;
-                }
-                apply_preaggregated_metric(cm_it->second, ev_count, a_sum,
-                                           a_min, a_max);
+                auto& cm_stats =
+                    find_or_create(cm, field, metrics.sketch_accuracy);
+                apply_preaggregated_metric(cm_stats, ev_count, a_sum, a_min,
+                                           a_max);
             }
         } else {
             auto field_val = ev.args[field];

@@ -35,6 +35,21 @@ struct EventId {
     bool is_valid() const { return id > 0; }
 };
 
+// Fill id/pid/tid on `event` from a parsed JSON object `root`. Missing or
+// non-integer fields are left untouched. Templated on the element type to keep
+// the simdjson dependency out of this header. Zero-copy.
+template <typename Element>
+void extract_event_id(const Element& root, EventId& event) {
+    auto id_result = root["id"].get_int64();
+    if (!id_result.error()) event.id = id_result.value_unsafe();
+
+    auto pid_result = root["pid"].get_int64();
+    if (!pid_result.error()) event.pid = pid_result.value_unsafe();
+
+    auto tid_result = root["tid"].get_int64();
+    if (!tid_result.error()) event.tid = tid_result.value_unsafe();
+}
+
 /**
  * @brief Input for event ID extraction.
  */

@@ -9,8 +9,14 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/perfetto_trace_writer_utility.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
+
+namespace dftracer::utils::rocksdb {
+class RocksDatabase;
+}
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
@@ -66,6 +72,15 @@ struct AggregationRunResult {
 //      file (when input.output_file is set).
 //   5. Write per-file tracking entries and global config to the AGGREGATION CF.
 coro::CoroTask<AggregationRunResult> run_aggregation(AggregationRunInput input);
+
+// Persist the global aggregation config and per-file tracking markers into the
+// AGGREGATION column family of `db`, so already-aggregated files can be skipped
+// on later runs. `index_path` is opened read-only to map file paths to ids.
+void write_aggregation_tracking(::dftracer::utils::rocksdb::RocksDatabase* db,
+                                const AggregationConfig& config,
+                                const std::vector<std::string>& processed_files,
+                                const std::string& index_path,
+                                std::uint32_t config_hash);
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators
 

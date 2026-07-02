@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_augmentation.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_drain.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_runner.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregator_utility.h>
@@ -22,7 +23,6 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cinttypes>
 #include <set>
 #include <unordered_set>
@@ -552,31 +552,9 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
 
         // Write global config and per-file markers for cache detection
         if (!processed_files.empty()) {
-            namespace rcf = dftracer::utils::rocksdb::cf;
-            indexer::IndexDatabase idx_db(
-                shared_index_path,
-                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-
-            auto batch = agg_db->begin_batch();
-
-            // Write global config (0xFFFE key)
-            AggGlobalConfig global_cfg;
-            global_cfg.time_interval_us = input.config.time_interval_us;
-            global_cfg.config_hash = input.config.compute_hash();
-            agg_db->put(batch, rcf::AGGREGATION,
-                        std::string_view(AGG_GLOBAL_CONFIG_KEY, 2),
-                        serialize_agg_global_config(global_cfg));
-
-            // Write per-file markers (0xFFFF + file_id keys)
-            for (const auto& file_path : processed_files) {
-                int file_id = idx_db.find_file(file_path);
-                if (file_id >= 0) {
-                    agg_db->put(batch, rcf::AGGREGATION,
-                                make_agg_file_key(file_id), "");
-                }
-            }
-
-            agg_db->commit_batch(batch);
+            write_aggregation_tracking(agg_db.get(), input.config,
+                                       processed_files, shared_index_path,
+                                       input.config.compute_hash());
         }
     }
 

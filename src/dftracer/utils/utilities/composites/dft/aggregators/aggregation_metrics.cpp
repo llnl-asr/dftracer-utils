@@ -149,13 +149,8 @@ void AggregationMetrics::update_custom_metric(std::string_view name,
     if (!custom_metrics) {
         custom_metrics = std::make_unique<CustomMetricsMap>();
     }
-    auto it = custom_metrics->find(name);
-    if (it == custom_metrics->end()) {
-        auto [new_it, _] = custom_metrics->emplace(
-            std::string(name), MetricStats(sketch_accuracy));
-        it = new_it;
-    }
-    it->second.update(value, compute_percentiles);
+    find_or_create(*custom_metrics, name, sketch_accuracy)
+        .update(value, compute_percentiles);
 }
 
 void AggregationMetrics::merge_from(const AggregationMetrics& other) {
@@ -173,13 +168,8 @@ void AggregationMetrics::merge_from(const AggregationMetrics& other) {
             custom_metrics = std::make_unique<CustomMetricsMap>();
         }
         for (const auto& [name, other_metric] : *other.custom_metrics) {
-            auto it = custom_metrics->find(name);
-            if (it == custom_metrics->end()) {
-                auto [new_it, _] =
-                    custom_metrics->emplace(name, MetricStats(sketch_accuracy));
-                it = new_it;
-            }
-            it->second.merge_from(other_metric);
+            find_or_create(*custom_metrics, name, sketch_accuracy)
+                .merge_from(other_metric);
         }
     }
 }

@@ -5,8 +5,8 @@
 #include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_file_entry_capability.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
+#include <dftracer/utils/utilities/indexer/internal/iterator_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
-#include <rocksdb/iterator.h>
 
 #include <array>
 #include <cstdint>
@@ -77,16 +77,6 @@ inline std::array<std::uint64_t, 3> decode_metadata_record(
     std::string_view value) {
     Cursor cursor(value);
     return {cursor.u64(), cursor.u64(), cursor.u64()};
-}
-
-inline std::string iterator_value(::rocksdb::Iterator& it) {
-    const auto slice = it.value();
-    return std::string(slice.data(), slice.size());
-}
-
-inline std::string iterator_key(::rocksdb::Iterator& it) {
-    const auto slice = it.key();
-    return std::string(slice.data(), slice.size());
 }
 
 }  // namespace dftracer::utils::utilities::indexer::internal

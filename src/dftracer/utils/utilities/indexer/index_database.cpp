@@ -25,7 +25,6 @@
 #include <limits>
 #include <optional>
 #include <shared_mutex>
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::utilities::indexer {
@@ -41,6 +40,21 @@ namespace {
 constexpr std::uint32_t SCHEMA_VERSION = 1;
 
 using encoding::prefix_for_file;
+
+// LEB128 varint decode with return-on-truncation policy: if the buffer ends
+// mid-varint, return the value accumulated so far (does not throw). Advances
+// off past the bytes consumed.
+std::uint64_t decode_varint(std::string_view value, std::size_t& off) {
+    std::uint64_t v = 0;
+    unsigned shift = 0;
+    while (off < value.size()) {
+        auto b = static_cast<std::uint8_t>(value[off++]);
+        v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
+        if ((b & 0x80) == 0) return v;
+        shift += 7;
+    }
+    return v;
+}
 
 std::string make_dimension_key(int file_id, std::string_view dimension) {
     std::string key("d|");
@@ -695,9 +709,7 @@ std::unordered_set<int> IndexDatabase::query_files_with_file_scalar_stats()
 
     const auto status = it->status();
     if (!status.ok()) {
-        throw IndexerError(
-            IndexerError::Type::DATABASE_ERROR,
-            "Failed to scan file scalar stats: " + status.ToString());
+        throw_db_error("Failed to scan file scalar stats", status);
     }
 
     return results;
@@ -719,8 +731,7 @@ std::unordered_set<int> IndexDatabase::query_files_with_bloom_data() const {
 
     const auto status = it->status();
     if (!status.ok()) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to scan bloom data: " + status.ToString());
+        throw_db_error("Failed to scan bloom data", status);
     }
     return results;
 }
@@ -878,9 +889,7 @@ IndexDatabase::query_chunk_statistics_batch(
             results[file_id].push_back(std::move(result));
         });
     if (!status.ok()) {
-        throw IndexerError(
-            IndexerError::Type::DATABASE_ERROR,
-            "Failed to batch query chunk statistics: " + status.ToString());
+        throw_db_error("Failed to batch query chunk statistics", status);
     }
 
     for (auto& [_, entries] : results) {
@@ -920,9 +929,7 @@ IndexDatabase::query_merged_statistics_batch(
             ++merged.num_chunks;
         });
     if (!stats_status.ok()) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to batch merge chunk statistics: " +
-                               stats_status.ToString());
+        throw_db_error("Failed to batch merge chunk statistics", stats_status);
     }
 
     auto dims_status = for_each_file_in_range(
@@ -950,9 +957,8 @@ IndexDatabase::query_merged_statistics_batch(
             }
         });
     if (!dims_status.ok()) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to batch merge chunk dimension stats: " +
-                               dims_status.ToString());
+        throw_db_error("Failed to batch merge chunk dimension stats",
+                       dims_status);
     }
 
     return results;
@@ -1010,9 +1016,7 @@ IndexDatabase::query_file_metadata_batch(
             meta.max_bytes = decoded[2];
         });
     if (!status.ok()) {
-        throw IndexerError(
-            IndexerError::Type::DATABASE_ERROR,
-            "Failed to batch read file metadata: " + status.ToString());
+        throw_db_error("Failed to batch read file metadata", status);
     }
     return results;
 }
@@ -1659,22 +1663,10 @@ std::unordered_set<std::uint64_t> IndexDatabase::query_file_pids(
 
     // Decode: count (varint) + sorted PIDs (each as varint)
     std::size_t off = 0;
-    auto decode_varint = [&value, &off]() -> std::uint64_t {
-        std::uint64_t v = 0;
-        unsigned shift = 0;
-        while (off < value.size()) {
-            auto b = static_cast<std::uint8_t>(value[off++]);
-            v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
-            if ((b & 0x80) == 0) return v;
-            shift += 7;
-        }
-        return v;
-    };
-
-    auto count = decode_varint();
+    auto count = decode_varint(value, off);
     pids.reserve(count);
     for (std::uint64_t i = 0; i < count; ++i) {
-        pids.insert(decode_varint());
+        pids.insert(decode_varint(value, off));
     }
     return pids;
 }
@@ -1692,23 +1684,11 @@ IndexDatabase::query_all_file_pids() const {
         auto value = iterator_value(it);
         std::size_t off = 0;
 
-        auto decode_varint = [&value, &off]() -> std::uint64_t {
-            std::uint64_t v = 0;
-            unsigned shift = 0;
-            while (off < value.size()) {
-                auto b = static_cast<std::uint8_t>(value[off++]);
-                v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
-                if ((b & 0x80) == 0) return v;
-                shift += 7;
-            }
-            return v;
-        };
-
-        auto count = decode_varint();
+        auto count = decode_varint(value, off);
         std::unordered_set<std::uint64_t> pids;
         pids.reserve(count);
         for (std::uint64_t i = 0; i < count; ++i) {
-            pids.insert(decode_varint());
+            pids.insert(decode_varint(value, off));
         }
         result[file_id] = std::move(pids);
     });

@@ -5,7 +5,6 @@
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
 #include <cstddef>
-#include <cstdint>
 #include <span>
 #include <vector>
 
@@ -14,18 +13,13 @@ namespace dftracer::utils::utilities::reader::internal {
 class GzipByteStream : public GzipStream {
    private:
     std::size_t buffer_size_;
-    std::vector<char> buffer_;
-    std::size_t valid_bytes_;
-    std::size_t buffer_pos_;  // Current position in buffer for copy-based reads
-    static constexpr std::size_t DEFAULT_BUFFER_SIZE = 64 * 1024;  // 64KB
 
    public:
     explicit GzipByteStream(std::size_t buffer_size = 0)
-        : GzipStream(),
-          buffer_size_(buffer_size > 0 ? buffer_size : DEFAULT_BUFFER_SIZE),
-          buffer_(buffer_size_, 0),  // Initialize all bytes to 0
-          valid_bytes_(0),
-          buffer_pos_(0) {}
+        : GzipStream(buffer_size > 0 ? buffer_size : DEFAULT_BUFFER_SIZE),
+          buffer_size_(buffer_size > 0 ? buffer_size : DEFAULT_BUFFER_SIZE) {}
+
+    using GzipStream::read_async;
 
     void initialize(const std::string &gz_path, std::size_t start_bytes,
                     std::size_t end_bytes,
@@ -99,48 +93,6 @@ class GzipByteStream : public GzipStream {
             current_position_, target_end_bytes_);
 
         co_return std::span<const char>(buffer_.data(), bytes_read);
-    }
-
-    coro::CoroTask<std::size_t> read_async(char *buffer,
-                                           std::size_t buffer_size) override {
-#ifdef __GNUC__
-        __builtin_prefetch(buffer, 1, 3);
-#endif
-
-        // Check if we have unconsumed data from previous read
-        if (buffer_pos_ < valid_bytes_) {
-            std::size_t remaining = valid_bytes_ - buffer_pos_;
-            std::size_t copy_size = std::min(remaining, buffer_size);
-            std::memcpy(buffer, buffer_.data() + buffer_pos_, copy_size);
-            buffer_pos_ += copy_size;
-
-            DFTRACER_UTILS_LOG_DEBUG(
-                "Copied %zu bytes from existing buffer (pos %zu/%zu)",
-                copy_size, buffer_pos_, valid_bytes_);
-
-            co_return copy_size;
-        }
-
-        // Buffer exhausted, get new chunk via zero-copy read
-        auto span = co_await read_async();
-        if (span.empty()) {
-            co_return 0;
-        }
-
-        // Update our tracking of the buffer state
-        valid_bytes_ = span.size();
-        buffer_pos_ = 0;
-
-        std::size_t copy_size = std::min(valid_bytes_, buffer_size);
-        std::memcpy(buffer, span.data(), copy_size);
-        buffer_pos_ = copy_size;
-
-        DFTRACER_UTILS_LOG_DEBUG(
-            "Got new chunk via zero-copy, copied %zu bytes (total in buffer: "
-            "%zu)",
-            copy_size, valid_bytes_);
-
-        co_return copy_size;
     }
 };
 

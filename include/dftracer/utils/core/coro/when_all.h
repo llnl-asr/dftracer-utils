@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ALL_H
 
 #include <dftracer/utils/core/common/exception_helpers.h>
-#include <dftracer/utils/core/coro/completion_latch.h>
+#include <dftracer/utils/core/coro/completion_state.h>
 #include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
 
@@ -44,45 +44,13 @@ struct FireAndForget {
  * Heap-allocated to ensure lifetime extends beyond await_suspend
  */
 template <typename Awaitable>
-struct WhenAllVectorState {
+struct WhenAllVectorState : WhenAllCompletionState {
     std::vector<Awaitable> awaitables_;
     std::vector<typename Awaitable::result_type> results_;
-    std::exception_ptr exception_;
-    std::atomic<bool> has_exception_{false};
-    std::atomic<std::size_t> completed_count_{0};
-    std::coroutine_handle<> awaiting_coroutine_;
-    std::size_t total_;
-    Executor* executor_{nullptr};
-
-    CompletionLatch latch_;
 
     explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
-        : awaitables_(std::move(awaitables)),
-          results_(awaitables_.size()),
-          total_(awaitables_.size()) {}
-
-    void on_one_complete() {
-        std::size_t count =
-            completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
-        if (count == total_) {
-            if (latch_.on_completed())
-                resume_continuation(executor_, awaiting_coroutine_);
-        }
-    }
-
-    void on_exception(std::exception_ptr e) {
-        bool expected = false;
-        if (has_exception_.compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed)) {
-            exception_ = e;
-        }
-        on_one_complete();
-    }
-
-    void mark_suspended_and_check_completion() {
-        if (latch_.on_suspended())
-            resume_continuation(executor_, awaiting_coroutine_);
+        : awaitables_(std::move(awaitables)), results_(awaitables_.size()) {
+        total_ = awaitables_.size();
     }
 };
 
@@ -222,43 +190,12 @@ auto when_all(std::initializer_list<Awaitable> awaitables) {
 
 template <typename Awaitable>
     requires(std::is_void_v<typename Awaitable::result_type>)
-struct WhenAllVectorState<Awaitable> {
+struct WhenAllVectorState<Awaitable> : WhenAllCompletionState {
     std::vector<Awaitable> awaitables_;
-    std::exception_ptr exception_;
-    std::atomic<bool> has_exception_{false};
-    std::atomic<std::size_t> completed_count_{0};
-    std::coroutine_handle<> awaiting_coroutine_;
-    std::size_t total_;
-    Executor* executor_{nullptr};
-
-    CompletionLatch latch_;
 
     explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
-        : awaitables_(std::move(awaitables)), total_(awaitables_.size()) {}
-
-    void on_one_complete() {
-        std::size_t count =
-            completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
-        if (count == total_) {
-            if (latch_.on_completed())
-                resume_continuation(executor_, awaiting_coroutine_);
-        }
-    }
-
-    void on_exception(std::exception_ptr ex) {
-        bool expected = false;
-        if (has_exception_.compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed)) {
-            exception_ = ex;
-        }
-        on_one_complete();
-    }
-
-    // Called by await_suspend after deciding to suspend but before returning
-    void mark_suspended_and_check_completion() {
-        if (latch_.on_suspended())
-            resume_continuation(executor_, awaiting_coroutine_);
+        : awaitables_(std::move(awaitables)) {
+        total_ = awaitables_.size();
     }
 };
 
@@ -355,46 +292,15 @@ using when_all_result_t =
  * Heap-allocated so lifetime extends beyond await_suspend.
  */
 template <typename... Awaitables>
-struct WhenAllTupleState {
-    static constexpr std::size_t total_ = sizeof...(Awaitables);
-
+struct WhenAllTupleState : WhenAllCompletionState {
     std::tuple<Awaitables...> awaitables_;
     std::tuple<
         std::optional<when_all_result_t<typename Awaitables::result_type>>...>
         results_;
-    std::exception_ptr exception_;
-    std::atomic<bool> has_exception_{false};
-    std::atomic<std::size_t> completed_count_{0};
-    std::coroutine_handle<> awaiting_coroutine_;
-    Executor* executor_{nullptr};
-
-    CompletionLatch latch_;
 
     explicit WhenAllTupleState(Awaitables&&... awaitables)
-        : awaitables_(std::forward<Awaitables>(awaitables)...) {}
-
-    void on_one_complete() {
-        std::size_t count =
-            completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
-        if (count == total_) {
-            if (latch_.on_completed())
-                resume_continuation(executor_, awaiting_coroutine_);
-        }
-    }
-
-    void on_exception(std::exception_ptr e) {
-        bool expected = false;
-        if (has_exception_.compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed)) {
-            exception_ = e;
-        }
-        on_one_complete();
-    }
-
-    void mark_suspended_and_check_completion() {
-        if (latch_.on_suspended())
-            resume_continuation(executor_, awaiting_coroutine_);
+        : awaitables_(std::forward<Awaitables>(awaitables)...) {
+        total_ = sizeof...(Awaitables);
     }
 };
 
@@ -433,7 +339,7 @@ class WhenAllTupleAwaitable {
             state_->executor_ = root->get_executor();
         }
 
-        if constexpr (WhenAllTupleState<Awaitables...>::total_ == 0) {
+        if constexpr (sizeof...(Awaitables) == 0) {
             return false;
         }
 
@@ -441,7 +347,7 @@ class WhenAllTupleAwaitable {
 
         // Check if all completed synchronously during launch
         if (state_->completed_count_.load(std::memory_order_acquire) ==
-            WhenAllTupleState<Awaitables...>::total_) {
+            state_->total_) {
             return false;  // Don't suspend
         }
 

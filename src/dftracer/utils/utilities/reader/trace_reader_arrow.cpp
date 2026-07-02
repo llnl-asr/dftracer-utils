@@ -1,5 +1,6 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/core/common/string_arena.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
@@ -8,7 +9,6 @@
 #include <dftracer/utils/utilities/reader/internal/trace_reader_shared.h>
 #include <simdjson.h>
 
-#include <algorithm>
 #include <cstring>
 #include <optional>
 #include <span>
@@ -32,31 +32,6 @@ namespace {
 using common::arrow::ArrowExportResult;
 using common::arrow::ColumnType;
 using common::arrow::RecordBatchBuilder;
-
-// Bump arena for string_views that must survive until builder.finish().
-struct ArrowStringArena {
-    static constexpr std::size_t BLOCK_SIZE = 64 * 1024;
-    std::vector<std::vector<char>> blocks;
-    std::size_t pos = 0;
-
-    ArrowStringArena() { blocks.emplace_back(BLOCK_SIZE); }
-
-    std::string_view push(const char* data, std::size_t len) {
-        if (pos + len > blocks.back().size()) {
-            blocks.emplace_back(std::max(BLOCK_SIZE, len));
-            pos = 0;
-        }
-        char* dst = blocks.back().data() + pos;
-        std::memcpy(dst, data, len);
-        pos += len;
-        return {dst, len};
-    }
-
-    void clear() {
-        if (blocks.size() > 1) blocks.resize(1);
-        pos = 0;
-    }
-};
 
 struct ArrowKeyHint {
     std::string key;
@@ -241,8 +216,7 @@ template <typename Yield>
 void parse_padded_into_arrow(simdjson::ondemand::parser& bulk_parser,
                              simdjson::padded_string& padded,
                              const std::optional<Query>& query, bool flatten,
-                             RecordBatchBuilder& builder,
-                             ArrowStringArena& arena,
+                             RecordBatchBuilder& builder, StringArena& arena,
                              std::vector<ArrowKeyHint>& hints,
                              std::size_t batch_size, std::string* carry,
                              Yield&& yield_one) {
@@ -384,7 +358,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         // Fallback: drive the per-line read_json path and build rows.
         auto json_gen = read_json(config);
         RecordBatchBuilder builder;
-        ArrowStringArena arena;
+        StringArena arena;
         std::vector<ArrowKeyHint> hints;
         builder.reserve(batch_size);
         while (auto opt = co_await json_gen.next()) {
@@ -430,7 +404,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
 
     simdjson::ondemand::parser bulk_parser;
     RecordBatchBuilder builder;
-    ArrowStringArena arena;
+    StringArena arena;
     std::vector<ArrowKeyHint> hints;
     builder.reserve(batch_size);
 

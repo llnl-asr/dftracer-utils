@@ -568,8 +568,8 @@ static CoroTask<void> produce_raw_parallel(
 using dftracer::utils::utilities::common::arrow::ArrowExportResult;
 using dftracer::utils::utilities::common::arrow::RecordBatchBuilder;
 
+using dftracer::utils::StringArena;
 using dftracer::utils::utilities::reader::internal::build_arrow_row;
-using dftracer::utils::utilities::reader::internal::StringArena;
 
 static CoroTask<void> produce_arrow_for_file(
     dftracer::utils::coro::Channel<ArrowExportResult> *chan,

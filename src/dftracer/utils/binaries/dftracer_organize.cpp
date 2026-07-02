@@ -431,10 +431,10 @@ static coro::CoroTask<void> run_group_indexing(
 static coro::CoroTask<void> run_manifest_extractor_task(
     ManifestExtractorConfig extractor_config) {
     auto extract_result = co_await extract_from_manifest(extractor_config);
-    if (!extract_result.success) {
+    if (!extract_result) {
         DFTRACER_UTILS_LOG_WARN("ManifestExtractor failed for %s: %s",
                                 extractor_config.file_path.c_str(),
-                                extract_result.error_message.c_str());
+                                extract_result.error().message.c_str());
     }
 }
 

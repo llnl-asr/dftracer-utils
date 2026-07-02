@@ -71,9 +71,10 @@ LineGroupMapping build_line_group_mapping(
 
 }  // namespace
 
-coro::CoroTask<ManifestExtractorResult> extract_from_manifest(
+coro::CoroTask<Result<ManifestExtractorResult>> extract_from_manifest(
     ManifestExtractorConfig config) {
-    ManifestExtractorResult result;
+    std::size_t events_extracted = 0;
+    std::size_t events_unmatched = 0;
 
     try {
         indexer::IndexDatabase db(
@@ -82,15 +83,15 @@ coro::CoroTask<ManifestExtractorResult> extract_from_manifest(
 
         int file_id = db.get_file_info_id(config.file_path);
         if (file_id < 0) {
-            result.error_message =
-                "File not found in index: " + config.file_path;
-            co_return result;
+            co_return make_error(
+                ErrorCode::NOT_FOUND,
+                "File not found in index: " + config.file_path);
         }
 
         if (!db.has_manifest_data(file_id)) {
-            result.error_message =
-                "No manifest data for file: " + config.file_path;
-            co_return result;
+            co_return make_error(
+                ErrorCode::NOT_FOUND,
+                "No manifest data for file: " + config.file_path);
         }
 
         auto event_ranges = db.query_event_ranges(file_id);
@@ -133,7 +134,7 @@ coro::CoroTask<ManifestExtractorResult> extract_from_manifest(
                 batch.append_line(line.content, config.source_file_idx,
                                   /*checkpoint_idx=*/0, line_num);
 
-                result.events_extracted++;
+                events_extracted++;
 
                 if (batch.size() >= config.batch_size) {
                     auto& channel = config.group_channels[group_idx];
@@ -145,7 +146,7 @@ coro::CoroTask<ManifestExtractorResult> extract_from_manifest(
                     batch.reserve(config.batch_size);
                 }
             } else {
-                result.events_unmatched++;
+                events_unmatched++;
             }
 
             line_num++;
@@ -162,14 +163,15 @@ coro::CoroTask<ManifestExtractorResult> extract_from_manifest(
             }
         }
 
-        result.success = true;
-
     } catch (const std::exception& e) {
-        result.error_message = e.what();
         DFTRACER_UTILS_LOG_ERROR("ManifestExtractor failed for %s: %s",
                                  config.file_path.c_str(), e.what());
+        co_return make_error(ErrorCode::INDEXER, e.what());
     }
 
+    ManifestExtractorResult result;
+    result.events_extracted = events_extracted;
+    result.events_unmatched = events_unmatched;
     co_return result;
 }
 

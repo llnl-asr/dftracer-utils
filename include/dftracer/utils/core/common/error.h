@@ -124,4 +124,18 @@ class DFTUtilsException : public std::runtime_error {
 
 }  // namespace dftracer::utils
 
+// DFT_TRY: error-propagation helper for coroutines returning Result<...>.
+// Evaluates a Result-returning `expr`; on failure it co_returns the error,
+// otherwise it binds the moved-out value to `decl`. The temporary is named
+// with a line-derived suffix so multiple uses in one scope do not collide.
+// Usage: DFT_TRY(auto value, co_await something_returning_result());
+#define DFT_TRY_CONCAT_(a, b) a##b
+#define DFT_TRY_CONCAT(a, b) DFT_TRY_CONCAT_(a, b)
+#define DFT_TRY(decl, expr)                                         \
+    auto DFT_TRY_CONCAT(dft_try_, __LINE__) = (expr);               \
+    if (!DFT_TRY_CONCAT(dft_try_, __LINE__))                        \
+        co_return ::dftracer::utils::unexpected(                    \
+            std::move(DFT_TRY_CONCAT(dft_try_, __LINE__)).error()); \
+    decl = *std::move(DFT_TRY_CONCAT(dft_try_, __LINE__))
+
 #endif  // DFTRACER_UTILS_CORE_COMMON_ERROR_H

@@ -716,15 +716,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_comparator",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Compare DFTracer trace metrics between baseline and variant");
-
-    ComparatorArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    return run_comparator(&cli);
+    return cli::cli_main<ComparatorArgParse>(
+        argc, argv, "dftracer_comparator",
+        "Compare DFTracer trace metrics between baseline and variant",
+        [](ComparatorArgParse& cli) { return run_comparator(&cli); });
 }

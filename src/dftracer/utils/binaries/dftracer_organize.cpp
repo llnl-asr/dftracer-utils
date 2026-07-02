@@ -1055,16 +1055,9 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_organize",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<OrganizeArgParse>(
+        argc, argv, "dftracer_organize",
         "Reorganize DFTracer trace files by routing events to "
-        "predicate-based groups with chunked output.");
-
-    OrganizeArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    return run_organize(&cli).get();
+        "predicate-based groups with chunked output.",
+        [](OrganizeArgParse& cli) { return run_organize(&cli).get(); });
 }

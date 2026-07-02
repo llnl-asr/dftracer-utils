@@ -43,7 +43,6 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -56,15 +55,11 @@ using namespace dftracer::utils::utilities::composites::dft::statistics;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
 using common::query::Query;
-using dftracer::utils::utilities::composites::dft::DFTracerEvent;
-using dftracer::utils::utilities::fileio::lines::sources::
-    async_streaming_gz_lines;
 using dftracer::utils::utilities::indexer::ChunkStatistics;
 using dftracer::utils::utilities::indexer::FileRegistryEntry;
 using dftracer::utils::utilities::indexer::has_capability;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::IndexFileEntryCapability;
-using dftracer::utils::utilities::indexer::RootStatisticsResult;
 namespace cli = dftracer::utils::cli;
 
 struct StatsConfig {
@@ -1700,26 +1695,23 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
+    // Guard stays at main() scope so its destructor runs at true process exit.
     struct RocksDbExitGuard {
         ~RocksDbExitGuard() {
             dftracer::utils::rocksdb::mark_process_exiting_for_rocksdb();
         }
     } rocksdb_exit_guard;
 
-    argparse::ArgumentParser program("dftracer_stats",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<StatsArgParse>(
+        argc, argv, "dftracer_stats",
         "Display statistics for DFTracer trace files from pre-built "
         ".dftindex databases. Auto-builds indexes if missing. "
-        "Zero-cost reads from RocksDB metadata, no decompression.");
-
-    StatsArgParse args(program);
-    if (!cli::setup_and_parse(args, argc, argv)) return 1;
-
-    return cli::run_single_task("DFTracer Stats Main", args.pipeline,
-                                [&args](CoroScope& ctx) -> coro::CoroTask<int> {
-                                    co_return co_await run_stats(ctx, &args);
-                                });
+        "Zero-cost reads from RocksDB metadata, no decompression.",
+        [](StatsArgParse& args) {
+            return cli::run_single_task(
+                "DFTracer Stats Main", args.pipeline,
+                [&args](CoroScope& ctx) -> coro::CoroTask<int> {
+                    co_return co_await run_stats(ctx, &args);
+                });
+        });
 }

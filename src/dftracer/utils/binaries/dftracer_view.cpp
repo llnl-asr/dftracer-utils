@@ -552,22 +552,17 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_view",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<ViewArgParse>(
+        argc, argv, "dftracer_view",
         "Apply filtered views to DFTracer trace files. Uses bloom filter "
         "indices for efficient chunk-skipping. Supports predefined views "
-        "(io, compute, dlio), custom recipes, and inline queries.");
-
-    ViewArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    try {
-        return run_view(&cli).get();
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Fatal: %s", e.what());
-        return 1;
-    }
+        "(io, compute, dlio), custom recipes, and inline queries.",
+        [](ViewArgParse& cli) -> int {
+            try {
+                return run_view(&cli).get();
+            } catch (const std::exception& e) {
+                DFTRACER_UTILS_LOG_ERROR("Fatal: %s", e.what());
+                return 1;
+            }
+        });
 }

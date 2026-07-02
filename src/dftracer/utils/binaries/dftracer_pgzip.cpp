@@ -422,17 +422,10 @@ static int run_pgzip(const PgzipArgParse& cli) {
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_pgzip",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<PgzipArgParse>(
+        argc, argv, "dftracer_pgzip",
         "Parallel gzip compression for DFTracer .pfw files. "
         "Splits each file into chunks and compresses them in parallel "
-        "as independent gzip members.");
-
-    PgzipArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    return run_pgzip(cli);
+        "as independent gzip members.",
+        [](PgzipArgParse& cli) { return run_pgzip(cli); });
 }

@@ -98,18 +98,11 @@ static coro::CoroTask<EventCountBatchResult> process_index_group_event_counts(
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_event_count",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<EventCountArgParse>(
+        argc, argv, "dftracer_event_count",
         "Count valid events in DFTracer .pfw or .pfw.gz files using composable "
-        "utilities and pipeline processing");
-
-    EventCountArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    return run_event_count(&cli);
+        "utilities and pipeline processing",
+        [](EventCountArgParse& cli) { return run_event_count(&cli); });
 }
 
 static int run_event_count(const EventCountArgParse* cli) {

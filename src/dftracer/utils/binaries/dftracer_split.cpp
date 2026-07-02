@@ -445,16 +445,9 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_split",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<SplitArgParse>(
+        argc, argv, "dftracer_split",
         "Split DFTracer traces into equal-sized chunks using explicit pipeline "
-        "with maximum parallelism");
-
-    SplitArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    return run_split(&cli).get();
+        "with maximum parallelism",
+        [](SplitArgParse& cli) { return run_split(&cli).get(); });
 }

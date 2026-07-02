@@ -592,19 +592,15 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_info",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<InfoArgParse>(
+        argc, argv, "dftracer_info",
         "Display metadata and index information for DFTracer compressed files "
-        "using composable utilities and pipeline processing");
-
-    InfoArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    return cli::run_single_task("DFTracer Info", cli.pipeline,
-                                [&cli](CoroScope& ctx) -> coro::CoroTask<int> {
-                                    co_return co_await run_info(ctx, &cli);
-                                });
+        "using composable utilities and pipeline processing",
+        [](InfoArgParse& cli) {
+            return cli::run_single_task(
+                "DFTracer Info", cli.pipeline,
+                [&cli](CoroScope& ctx) -> coro::CoroTask<int> {
+                    co_return co_await run_info(ctx, &cli);
+                });
+        });
 }

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_BINARIES_COMMON_CLI_H
 #define DFTRACER_UTILS_BINARIES_COMMON_CLI_H
 
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
@@ -112,6 +113,21 @@ template <class Cli>
 bool setup_and_parse(Cli& cli, int argc, char** argv) {
     cli.setup();
     return cli.parse(argc, argv);
+}
+
+// Shared CLI main prologue: logger init, parser construction with the package
+// version, description, ArgParse (CliT) setup+parse (returns 1 on failure),
+// then `run(cli)`. `run` is a template param so it inlines with no type
+// erasure; it receives the parsed CliT and returns the process exit code.
+template <class CliT, class RunFn>
+int cli_main(int argc, char** argv, const char* name, const char* description,
+             RunFn&& run) {
+    dftracer::utils::logger::init();
+    argparse::ArgumentParser program(name, DFTRACER_UTILS_PACKAGE_VERSION);
+    program.add_description(description);
+    CliT cli(program);
+    if (!setup_and_parse(cli, argc, argv)) return 1;
+    return run(cli);
 }
 
 enum class DirMode { DEFAULT_DOT, DEFAULT_EMPTY, REQUIRED };

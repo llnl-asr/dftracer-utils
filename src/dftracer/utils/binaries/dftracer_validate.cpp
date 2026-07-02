@@ -23,9 +23,6 @@
 
 using namespace dftracer::utils;
 using dftracer::utils::json_trim_and_validate;
-using dftracer::utils::utilities::filesystem::PatternDirectoryScannerUtility;
-using dftracer::utils::utilities::filesystem::
-    PatternDirectoryScannerUtilityInput;
 using dftracer::utils::utilities::reader::ReadConfig;
 using dftracer::utils::utilities::reader::TraceReader;
 using dftracer::utils::utilities::reader::TraceReaderConfig;
@@ -196,17 +193,10 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_validate",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<ValidateArgParse>(
+        argc, argv, "dftracer_validate",
         "Validate DFTracer .pfw / .pfw.gz trace files: every non-wrapper line "
         "must be valid JSON. Parallel C++ equivalent of the dftracer_validate "
-        "script.");
-
-    ValidateArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    return run_validate(&cli).get();
+        "script.",
+        [](ValidateArgParse& cli) { return run_validate(&cli).get(); });
 }

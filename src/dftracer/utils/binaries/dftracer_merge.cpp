@@ -85,18 +85,11 @@ class MergeArgParse : public cli::ArgParse {
 static int run_merge(const MergeArgParse& cli);
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_merge",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<MergeArgParse>(
+        argc, argv, "dftracer_merge",
         "Merge DFTracer .pfw or .pfw.gz files into a single JSON array file "
-        "using streaming producer-consumer pattern");
-
-    MergeArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    return run_merge(cli);
+        "using streaming producer-consumer pattern",
+        [](MergeArgParse& cli) { return run_merge(cli); });
 }
 
 static int run_merge(const MergeArgParse& cli) {

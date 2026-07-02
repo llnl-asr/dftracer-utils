@@ -303,17 +303,10 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
-
-    argparse::ArgumentParser program("dftracer_index",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<IndexArgParse>(
+        argc, argv, "dftracer_index",
         "Build per-chunk bloom filter indices for DFTracer trace files. "
         "Creates root-local .dftindex databases enabling fast chunk-skipping "
-        "queries.");
-
-    IndexArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    return run_index(&cli).get();
+        "queries.",
+        [](IndexArgParse& cli) { return run_index(&cli).get(); });
 }

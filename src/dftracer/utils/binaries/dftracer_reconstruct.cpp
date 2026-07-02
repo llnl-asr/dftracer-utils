@@ -107,22 +107,17 @@ static coro::CoroTask<int> run_reconstruct(const ReconstructArgParse* cli,
 }
 
 int main(int argc, char** argv) {
-    dftracer::utils::logger::init();
+    return cli::cli_main<ReconstructArgParse>(
+        argc, argv, "dftracer_reconstruct",
+        "Reconstruct original trace files from reorganized output.",
+        [](ReconstructArgParse& cli) {
+            fs::create_directories(cli.output_dir);
 
-    argparse::ArgumentParser program("dftracer_reconstruct",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Reconstruct original trace files from reorganized output.");
-
-    ReconstructArgParse cli(program);
-    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
-
-    fs::create_directories(cli.output_dir);
-
-    auto* cli_ptr = &cli;
-    return cli::run_single_task(
-        "Reconstruct", cli.pipeline,
-        [cli_ptr](CoroScope& scope) -> coro::CoroTask<int> {
-            co_return co_await run_reconstruct(cli_ptr, scope);
+            auto* cli_ptr = &cli;
+            return cli::run_single_task(
+                "Reconstruct", cli.pipeline,
+                [cli_ptr](CoroScope& scope) -> coro::CoroTask<int> {
+                    co_return co_await run_reconstruct(cli_ptr, scope);
+                });
         });
 }

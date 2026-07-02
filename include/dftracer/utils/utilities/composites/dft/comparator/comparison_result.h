@@ -24,6 +24,14 @@ using aggregators::AggregationMap;
 using aggregators::AggregationMetrics;
 using aggregators::MetricStats;
 
+/// Metric-name classification, shared by the Arrow exporter and the tree
+/// formatter so the atomic-name set cannot drift between them. Atomic names are
+/// standalone metrics (e.g. "count"); others split into group + leaf, e.g.
+/// "dur_mean" -> group "dur", leaf "mean".
+bool is_atomic_metric(const std::string& name);
+std::string metric_group(const std::string& name);
+std::string metric_leaf(const std::string& name);
+
 /// Cohen's d effect size classification.
 enum class Significance : int {
     NEGLIGIBLE = 0,  ///< |d| <= 0.2
@@ -31,6 +39,9 @@ enum class Significance : int {
     MEDIUM = 2,      ///< |d| > 0.5
     LARGE = 3        ///< |d| > 0.8
 };
+
+/// Human-readable name of an effect-size bucket (e.g. "MEDIUM").
+const char* significance_to_string(Significance s);
 
 /// Comparison of a single metric between baseline and variant.
 struct MetricComparison {

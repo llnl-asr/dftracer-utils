@@ -454,28 +454,7 @@ class CoroTask {
     template <typename Func>
     friend auto operator<(Func&& func, CoroTask<T>&& task)
         -> CoroTask<typename detail::invoke_res<Func, T>::type> {
-        return
-            [](CoroTask<T> self, auto f)
-                -> CoroTask<typename detail::invoke_res<decltype(f), T>::type> {
-                using U = typename detail::invoke_res<decltype(f), T>::type;
-                if constexpr (std::is_void_v<T>) {
-                    co_await std::move(self);
-                    if constexpr (std::is_void_v<U>) {
-                        f();
-                        co_return;
-                    } else {
-                        co_return f();
-                    }
-                } else {
-                    T result = co_await std::move(self);
-                    if constexpr (std::is_void_v<U>) {
-                        f(std::move(result));
-                        co_return;
-                    } else {
-                        co_return f(std::move(result));
-                    }
-                }
-            }(std::move(task), std::forward<Func>(func));
+        return std::move(task).then(std::forward<Func>(func));
     }
 
     /**

@@ -2,16 +2,11 @@
     defined(__NetBSD__) || defined(__DragonFly__)
 
 #include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/io/io_sendfile.h>
 #include <dftracer/utils/core/io/kqueue_thread_pool_backend.h>
-#include <dftracer/utils/core/io/thread_pool_backend.h>  // IoRequest, IoOp
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <sys/event.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <sys/uio.h>
 #include <unistd.h>
 
 #include <cerrno>
@@ -22,7 +17,7 @@ namespace dftracer::utils::io {
 KqueueThreadPoolBackend::KqueueThreadPoolBackend(Executor& executor,
                                                  std::size_t pool_size,
                                                  unsigned batch_threshold)
-    : executor_(executor), pool_(pool_size, batch_threshold) {}
+    : ThreadPoolFileOps(executor, pool_size, batch_threshold) {}
 
 KqueueThreadPoolBackend::~KqueueThreadPoolBackend() {
     // Ensure cleanup even if stop() was not called.
@@ -103,189 +98,6 @@ void KqueueThreadPoolBackend::kqueue_loop() {
         }
     }
 }
-
-// File I/O reuses ThreadPoolBackend's shared request plumbing
-// (make_request / submit_to_pool / execute_request): the syscall dispatch is
-// identical and platform-aware via #ifdef.
-
-IoAwaitable KqueueThreadPoolBackend::submit_read(int fd, void* buf,
-                                                 std::size_t len) {
-    return ThreadPoolBackend::make_request(IoOp::READ, fd, buf, len, 0, nullptr,
-                                           0, 0, &executor_, &pool_);
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_write(int fd, const void* buf,
-                                                  std::size_t len) {
-    return ThreadPoolBackend::make_request(IoOp::WRITE, fd,
-                                           const_cast<void*>(buf), len, 0,
-                                           nullptr, 0, 0, &executor_, &pool_);
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_pread(int fd, void* buf,
-                                                  std::size_t len,
-                                                  off_t offset) {
-    return ThreadPoolBackend::make_request(IoOp::PREAD, fd, buf, len, offset,
-                                           nullptr, 0, 0, &executor_, &pool_);
-}
-
-void KqueueThreadPoolBackend::submit_pread_callback(int fd, void* buf,
-                                                    std::size_t len,
-                                                    off_t offset,
-                                                    IoCompletionFn completion,
-                                                    void* context) {
-    auto* req = new IoRequest{};
-    req->op = IoOp::PREAD;
-    req->fd = fd;
-    req->buf = buf;
-    req->len = len;
-    req->offset = offset;
-    req->completion = completion;
-    req->completion_ctx = context;
-    req->pool = &pool_;
-    pool_.submit([req] { ThreadPoolBackend::execute_request(req); });
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_pwrite(int fd, const void* buf,
-                                                   std::size_t len,
-                                                   off_t offset) {
-    return ThreadPoolBackend::make_request(IoOp::PWRITE, fd,
-                                           const_cast<void*>(buf), len, offset,
-                                           nullptr, 0, 0, &executor_, &pool_);
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_open(const char* path, int flags,
-                                                 mode_t mode) {
-    return ThreadPoolBackend::make_request(IoOp::OPEN, -1, nullptr, 0, 0, path,
-                                           flags, mode, &executor_, &pool_);
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_close(int fd) {
-    return ThreadPoolBackend::make_request(IoOp::CLOSE, fd, nullptr, 0, 0,
-                                           nullptr, 0, 0, &executor_, &pool_);
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_fsync(int fd) {
-    return ThreadPoolBackend::make_request(IoOp::FSYNC, fd, nullptr, 0, 0,
-                                           nullptr, 0, 0, &executor_, &pool_);
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_ftruncate(int fd, off_t length) {
-    return ThreadPoolBackend::make_request(IoOp::FTRUNCATE, fd, nullptr, 0,
-                                           length, nullptr, 0, 0, &executor_,
-                                           &pool_);
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_fstat(int fd, struct stat* buf) {
-    auto req_awaitable = ThreadPoolBackend::make_request(
-        IoOp::FSTAT, fd, nullptr, 0, 0, nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->stat_buf = buf;
-    return req_awaitable;
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_accept(int listen_fd,
-                                                   struct sockaddr* addr,
-                                                   socklen_t* addrlen) {
-    auto req_awaitable =
-        ThreadPoolBackend::make_request(IoOp::ACCEPT, listen_fd, nullptr, 0, 0,
-                                        nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->addr = addr;
-    req->addrlen = addrlen;
-    return req_awaitable;
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_recv(int fd, void* buf,
-                                                 std::size_t len, int flags) {
-    auto req_awaitable = ThreadPoolBackend::make_request(
-        IoOp::RECV, fd, buf, len, 0, nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->msg_flags = flags;
-    return req_awaitable;
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_send(int fd, const void* buf,
-                                                 std::size_t len, int flags) {
-    auto req_awaitable = ThreadPoolBackend::make_request(
-        IoOp::SEND, fd, const_cast<void*>(buf), len, 0, nullptr, 0, 0,
-        &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->msg_flags = flags;
-    return req_awaitable;
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_readv(int fd,
-                                                  const struct iovec* iov,
-                                                  int iovcnt) {
-    auto req_awaitable = ThreadPoolBackend::make_request(
-        IoOp::READV, fd, nullptr, 0, 0, nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->iov = iov;
-    req->iovcnt = iovcnt;
-    return req_awaitable;
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_writev(int fd,
-                                                   const struct iovec* iov,
-                                                   int iovcnt) {
-    auto req_awaitable = ThreadPoolBackend::make_request(
-        IoOp::WRITEV, fd, nullptr, 0, 0, nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->iov = iov;
-    req->iovcnt = iovcnt;
-    return req_awaitable;
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_preadv(int fd,
-                                                   const struct iovec* iov,
-                                                   int iovcnt, off_t offset) {
-    auto req_awaitable =
-        ThreadPoolBackend::make_request(IoOp::PREADV, fd, nullptr, 0, offset,
-                                        nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->iov = iov;
-    req->iovcnt = iovcnt;
-    return req_awaitable;
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_pwritev(int fd,
-                                                    const struct iovec* iov,
-                                                    int iovcnt, off_t offset) {
-    auto req_awaitable =
-        ThreadPoolBackend::make_request(IoOp::PWRITEV, fd, nullptr, 0, offset,
-                                        nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->iov = iov;
-    req->iovcnt = iovcnt;
-    return req_awaitable;
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_lseek(int fd, off_t offset,
-                                                  int whence) {
-    auto req_awaitable = ThreadPoolBackend::make_request(
-        IoOp::LSEEK, fd, nullptr, 0, offset, nullptr, 0, 0, &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->whence = whence;
-    return req_awaitable;
-}
-
-IoAwaitable KqueueThreadPoolBackend::submit_sendfile(int out_fd, int in_fd,
-                                                     off_t offset,
-                                                     std::size_t count) {
-    auto req_awaitable = ThreadPoolBackend::make_request(
-        IoOp::SENDFILE, in_fd, nullptr, count, offset, nullptr, 0, 0,
-        &executor_, &pool_);
-    auto* req = static_cast<IoRequest*>(req_awaitable.submit_ctx_);
-    req->dest_fd = out_fd;
-    return req_awaitable;
-}
-
-std::size_t KqueueThreadPoolBackend::poll(int /*timeout_ms*/) {
-    // Completions fire via thread pool callbacks -- nothing to poll.
-    return 0;
-}
-
-int KqueueThreadPoolBackend::flush() { return static_cast<int>(pool_.flush()); }
 
 }  // namespace dftracer::utils::io
 

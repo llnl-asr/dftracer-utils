@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
+#include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/index_batch_writer.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
@@ -63,12 +64,6 @@ using encoding::metadata_key;
 using encoding::prefix_for_file;
 
 constexpr std::uint32_t SCHEMA_VERSION = 1;
-
-[[noreturn]] void throw_db_error(std::string_view message,
-                                 const ::rocksdb::Status& status) {
-    throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                       std::string(message) + ": " + status.ToString());
-}
 
 std::string file_lookup_key(std::string_view logical_name) {
     return std::string("f|") + std::string(logical_name);

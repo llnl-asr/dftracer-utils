@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
+#include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/statistics_codec.h>
 #include <rocksdb/sst_file_writer.h>
@@ -14,12 +15,6 @@ namespace dftracer::utils::utilities::indexer {
 namespace {
 
 namespace encoding = internal::encoding;
-
-[[noreturn]] void throw_sst_error(std::string_view message,
-                                  const ::rocksdb::Status& status) {
-    throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                       std::string(message) + ": " + status.ToString());
-}
 
 std::string emit_sst(const std::string& path,
                      std::vector<std::pair<std::string, std::string>>& buffer) {
@@ -43,19 +38,19 @@ std::string emit_sst(const std::string& path,
 
     auto status = writer.Open(path);
     if (!status.ok()) {
-        throw_sst_error("Failed to open SST writer at '" + path + "'", status);
+        throw_db_error("Failed to open SST writer at '" + path + "'", status);
     }
 
     for (const auto& [key, value] : buffer) {
         status = writer.Put(key, value);
         if (!status.ok()) {
-            throw_sst_error("Failed to append to SST '" + path + "'", status);
+            throw_db_error("Failed to append to SST '" + path + "'", status);
         }
     }
 
     status = writer.Finish();
     if (!status.ok()) {
-        throw_sst_error("Failed to finalize SST '" + path + "'", status);
+        throw_db_error("Failed to finalize SST '" + path + "'", status);
     }
 
     return path;
@@ -79,18 +74,18 @@ std::string emit_mixed_sst(
 
     auto status = writer.Open(path);
     if (!status.ok()) {
-        throw_sst_error("Failed to open SST writer at '" + path + "'", status);
+        throw_db_error("Failed to open SST writer at '" + path + "'", status);
     }
     for (const auto& entry : buffer) {
         status = entry.is_merge ? writer.Merge(entry.key, entry.value)
                                 : writer.Put(entry.key, entry.value);
         if (!status.ok()) {
-            throw_sst_error("Failed to append to SST '" + path + "'", status);
+            throw_db_error("Failed to append to SST '" + path + "'", status);
         }
     }
     status = writer.Finish();
     if (!status.ok()) {
-        throw_sst_error("Failed to finalize SST '" + path + "'", status);
+        throw_db_error("Failed to finalize SST '" + path + "'", status);
     }
     return path;
 }

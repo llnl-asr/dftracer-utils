@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/utilities/common/json/json_escape.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/tree_table_formatter.h>
 
 #include <algorithm>
@@ -9,6 +10,8 @@
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::comparator {
+
+using common::json::escape_json_string;
 
 TreeTableFormatter::TreeTableFormatter(FormatterOptions options)
     : options_(options) {}
@@ -110,27 +113,6 @@ std::string fmt_size(double bytes) {
         std::snprintf(buf, sizeof(buf), "%.3f GB", bytes / GB);
     }
     return buf;
-}
-
-// Extract the group prefix: "dur_mean" -> "dur", "size_p50" -> "size".
-// Returns "" for standalone metrics (no prefix, or known atomic names).
-std::string metric_group(const std::string& name) {
-    // Atomic metric names that must not be split on '_'.
-    if (name == "transfer_size" || name == "bandwidth" || name == "total_bytes")
-        return "";
-    auto pos = name.find('_');
-    if (pos == std::string::npos) return "";
-    return name.substr(0, pos);
-}
-
-// Strip the group prefix: "dur_mean" -> "mean", "size_p50" -> "p50".
-// Returns the full name when there is no prefix (or atomic).
-std::string strip_prefix(const std::string& name) {
-    if (name == "transfer_size" || name == "bandwidth" || name == "total_bytes")
-        return name;
-    auto pos = name.find('_');
-    if (pos == std::string::npos) return name;
-    return name.substr(pos + 1);
 }
 
 // True when every metric in the group is zero on both sides.
@@ -460,7 +442,7 @@ void TreeTableFormatter::measure_metrics_tree(
 
             // Children: prefix + branch + cont + leaf_name.
             for (const auto* mc : g.items) {
-                std::string leaf = strip_prefix(mc->metric_name);
+                std::string leaf = metric_leaf(mc->metric_name);
                 int lw = prefix_dw + BRANCH_W + BRANCH_W +
                          static_cast<int>(leaf.size());
                 if (lw > cw.left) cw.left = lw;
@@ -566,7 +548,7 @@ void TreeTableFormatter::render_metrics_tree(
                 bool leaf_last = (i + 1 == g.items.size());
                 const char* lbr = leaf_last ? branch_last() : branch_mid();
                 render_leaf(out, *g.items[i], cont + lbr,
-                            strip_prefix(g.items[i]->metric_name), cw);
+                            metric_leaf(g.items[i]->metric_name), cw);
             }
         }
     }
@@ -819,54 +801,6 @@ void TreeTableFormatter::render(std::FILE* out,
 
 namespace {
 
-const char* sig_str(Significance s) {
-    switch (s) {
-        case Significance::NEGLIGIBLE:
-            return "NEGLIGIBLE";
-        case Significance::SMALL:
-            return "SMALL";
-        case Significance::MEDIUM:
-            return "MEDIUM";
-        case Significance::LARGE:
-            return "LARGE";
-    }
-    return "NEGLIGIBLE";
-}
-
-std::string escape_json_string(const std::string& s) {
-    std::string result;
-    result.reserve(s.size());
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                result += "\\\"";
-                break;
-            case '\\':
-                result += "\\\\";
-                break;
-            case '\b':
-                result += "\\b";
-                break;
-            case '\f':
-                result += "\\f";
-                break;
-            case '\n':
-                result += "\\n";
-                break;
-            case '\r':
-                result += "\\r";
-                break;
-            case '\t':
-                result += "\\t";
-                break;
-            default:
-                result += c;
-                break;
-        }
-    }
-    return result;
-}
-
 std::string double_to_json(double v) {
     if (!std::isfinite(v)) return "0";
     char buf[32];
@@ -883,7 +817,8 @@ void build_metric_json(std::ostringstream& out, const MetricComparison& mc) {
     out << "\"delta\":" << double_to_json(safe(mc.delta)) << ",";
     out << "\"pct_change\":" << double_to_json(safe(mc.pct_change)) << ",";
     out << "\"cohens_d\":" << double_to_json(safe(mc.cohens_d)) << ",";
-    out << "\"significance\":\"" << sig_str(mc.significance) << "\",";
+    out << "\"significance\":\"" << significance_to_string(mc.significance)
+        << "\",";
     out << "\"is_regression\":" << (mc.is_regression ? "true" : "false");
     out << "}";
 }

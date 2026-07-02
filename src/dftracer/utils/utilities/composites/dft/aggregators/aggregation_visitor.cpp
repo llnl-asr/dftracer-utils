@@ -4,6 +4,7 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/reserved_args.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/system_metrics_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/args_map.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
@@ -12,36 +13,6 @@
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
 namespace rcf = dftracer::utils::rocksdb::cf;
-
-namespace {
-
-inline bool is_reserved_arg(std::string_view k) {
-    if (k.empty()) return false;
-    switch (k[0]) {
-        case 'h':
-            return k == "hhash";
-        case 'f':
-            return k == "fhash";
-        case 'd':
-            return k == "dur" || k == "dur_sum" || k == "dur_min" ||
-                   k == "dur_max" || k == "dft_cnt";
-        case 'r':
-            return k == "ret" || k == "ret_sum" || k == "ret_min" ||
-                   k == "ret_max";
-        case 'o':
-            return k == "offset" || k == "offset_sum" || k == "offset_min" ||
-                   k == "offset_max";
-    }
-    return false;
-}
-
-inline bool is_preagg_suffix(std::string_view k) {
-    if (k.size() <= 4) return false;
-    std::string_view tail = k.substr(k.size() - 4);
-    return tail == "_sum" || tail == "_min" || tail == "_max";
-}
-
-}  // namespace
 
 namespace {
 

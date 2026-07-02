@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/rocksdb/key_codec.h>
 #include <dftracer/utils/utilities/indexer/error.h>
+#include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/scan_prefix.h>
@@ -17,12 +18,6 @@ namespace cf = rocks::cf;
 using namespace internal;
 
 namespace {
-
-[[noreturn]] void throw_db_error(std::string_view message,
-                                 const ::rocksdb::Status& status) {
-    throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                       std::string(message) + ": " + status.ToString());
-}
 
 std::string file_key(std::string_view path) {
     return std::string("pf|") + std::string(path);

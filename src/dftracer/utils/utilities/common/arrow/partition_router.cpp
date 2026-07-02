@@ -99,6 +99,48 @@ uint64_t fnv1a_hash(const std::string& s) {
     return hash;
 }
 
+// Append one row of `view`'s columns into `builder`, dispatching per storage
+// type (nulls become append_null). Shared by the route_* partition builders.
+void append_row_from_view(RecordBatchBuilder& builder,
+                          const ArrowArrayView& view, int64_t n_cols,
+                          int64_t row) {
+    for (int64_t col = 0; col < n_cols; col++) {
+        const ArrowArrayView* col_view = view.children[col];
+        if (is_null(col_view, row)) {
+            builder.append_null(col);
+            continue;
+        }
+        switch (col_view->storage_type) {
+            case NANOARROW_TYPE_INT64:
+            case NANOARROW_TYPE_INT32:
+            case NANOARROW_TYPE_INT16:
+            case NANOARROW_TYPE_INT8:
+                builder.append_int64(col, extract_int64(col_view, row));
+                break;
+            case NANOARROW_TYPE_UINT64:
+            case NANOARROW_TYPE_UINT32:
+            case NANOARROW_TYPE_UINT16:
+            case NANOARROW_TYPE_UINT8:
+                builder.append_uint64(col, extract_uint64(col_view, row));
+                break;
+            case NANOARROW_TYPE_DOUBLE:
+            case NANOARROW_TYPE_FLOAT:
+                builder.append_double(col, extract_double(col_view, row));
+                break;
+            case NANOARROW_TYPE_STRING:
+            case NANOARROW_TYPE_LARGE_STRING:
+                builder.append_string(col, extract_string(col_view, row));
+                break;
+            case NANOARROW_TYPE_BOOL:
+                builder.append_bool(col, extract_int64(col_view, row) != 0);
+                break;
+            default:
+                builder.append_null(col);
+                break;
+        }
+    }
+}
+
 }  // namespace
 
 PartitionRouter::~PartitionRouter() {}
@@ -261,47 +303,7 @@ coro::CoroTask<int> PartitionRouter::route_column(ArrowExportResult& batch) {
         builder.reserve(rows.size());
 
         for (int64_t row : rows) {
-            for (int64_t col = 0; col < schema->n_children; col++) {
-                const ArrowArrayView* col_view = view.children[col];
-
-                if (is_null(col_view, row)) {
-                    builder.append_null(col);
-                } else {
-                    switch (col_view->storage_type) {
-                        case NANOARROW_TYPE_INT64:
-                        case NANOARROW_TYPE_INT32:
-                        case NANOARROW_TYPE_INT16:
-                        case NANOARROW_TYPE_INT8:
-                            builder.append_int64(col,
-                                                 extract_int64(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_UINT64:
-                        case NANOARROW_TYPE_UINT32:
-                        case NANOARROW_TYPE_UINT16:
-                        case NANOARROW_TYPE_UINT8:
-                            builder.append_uint64(
-                                col, extract_uint64(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_DOUBLE:
-                        case NANOARROW_TYPE_FLOAT:
-                            builder.append_double(
-                                col, extract_double(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_STRING:
-                        case NANOARROW_TYPE_LARGE_STRING:
-                            builder.append_string(
-                                col, extract_string(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_BOOL:
-                            builder.append_bool(
-                                col, extract_int64(col_view, row) != 0);
-                            break;
-                        default:
-                            builder.append_null(col);
-                            break;
-                    }
-                }
-            }
+            append_row_from_view(builder, view, schema->n_children, row);
             builder.end_row();
         }
 
@@ -390,47 +392,7 @@ coro::CoroTask<int> PartitionRouter::route_bucketed(ArrowExportResult& batch) {
         builder.reserve(rows.size());
 
         for (int64_t row : rows) {
-            for (int64_t col = 0; col < schema->n_children; col++) {
-                const ArrowArrayView* col_view = view.children[col];
-
-                if (is_null(col_view, row)) {
-                    builder.append_null(col);
-                } else {
-                    switch (col_view->storage_type) {
-                        case NANOARROW_TYPE_INT64:
-                        case NANOARROW_TYPE_INT32:
-                        case NANOARROW_TYPE_INT16:
-                        case NANOARROW_TYPE_INT8:
-                            builder.append_int64(col,
-                                                 extract_int64(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_UINT64:
-                        case NANOARROW_TYPE_UINT32:
-                        case NANOARROW_TYPE_UINT16:
-                        case NANOARROW_TYPE_UINT8:
-                            builder.append_uint64(
-                                col, extract_uint64(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_DOUBLE:
-                        case NANOARROW_TYPE_FLOAT:
-                            builder.append_double(
-                                col, extract_double(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_STRING:
-                        case NANOARROW_TYPE_LARGE_STRING:
-                            builder.append_string(
-                                col, extract_string(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_BOOL:
-                            builder.append_bool(
-                                col, extract_int64(col_view, row) != 0);
-                            break;
-                        default:
-                            builder.append_null(col);
-                            break;
-                    }
-                }
-            }
+            append_row_from_view(builder, view, schema->n_children, row);
             builder.end_row();
         }
 
@@ -521,47 +483,7 @@ coro::CoroTask<int> PartitionRouter::route_view(ArrowExportResult& batch) {
         builder.reserve(rows.size());
 
         for (int64_t row : rows) {
-            for (int64_t col = 0; col < schema->n_children; col++) {
-                const ArrowArrayView* col_view = view.children[col];
-
-                if (is_null(col_view, row)) {
-                    builder.append_null(col);
-                } else {
-                    switch (col_view->storage_type) {
-                        case NANOARROW_TYPE_INT64:
-                        case NANOARROW_TYPE_INT32:
-                        case NANOARROW_TYPE_INT16:
-                        case NANOARROW_TYPE_INT8:
-                            builder.append_int64(col,
-                                                 extract_int64(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_UINT64:
-                        case NANOARROW_TYPE_UINT32:
-                        case NANOARROW_TYPE_UINT16:
-                        case NANOARROW_TYPE_UINT8:
-                            builder.append_uint64(
-                                col, extract_uint64(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_DOUBLE:
-                        case NANOARROW_TYPE_FLOAT:
-                            builder.append_double(
-                                col, extract_double(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_STRING:
-                        case NANOARROW_TYPE_LARGE_STRING:
-                            builder.append_string(
-                                col, extract_string(col_view, row));
-                            break;
-                        case NANOARROW_TYPE_BOOL:
-                            builder.append_bool(
-                                col, extract_int64(col_view, row) != 0);
-                            break;
-                        default:
-                            builder.append_null(col);
-                            break;
-                    }
-                }
-            }
+            append_row_from_view(builder, view, schema->n_children, row);
             builder.end_row();
         }
 

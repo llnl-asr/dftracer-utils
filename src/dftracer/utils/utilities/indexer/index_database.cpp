@@ -10,6 +10,7 @@
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
+#include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
@@ -36,12 +37,6 @@ using namespace internal;
 namespace {
 
 constexpr std::uint32_t SCHEMA_VERSION = 1;
-
-[[noreturn]] void throw_db_error(std::string_view message,
-                                 const ::rocksdb::Status& status) {
-    throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                       std::string(message) + ": " + status.ToString());
-}
 
 std::string file_lookup_key(std::string_view logical_name) {
     return std::string("f|") + std::string(logical_name);

@@ -1,3 +1,4 @@
+#include <dftracer/utils/utilities/common/json/json_escape.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <simdjson.h>
 
@@ -6,6 +7,8 @@
 #include <string>
 
 namespace dftracer::utils::utilities::composites::dft::views {
+
+using common::json::escape_json_string;
 
 ViewDefinition& ViewDefinition::with_name(const std::string& n) {
     name = n;
@@ -34,44 +37,6 @@ ViewDefinition& ViewDefinition::with_include_metadata(bool v) {
     include_metadata = v;
     return *this;
 }
-
-namespace {
-
-std::string escape_json_string(const std::string& s) {
-    std::string result;
-    result.reserve(s.size());
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                result += "\\\"";
-                break;
-            case '\\':
-                result += "\\\\";
-                break;
-            case '\b':
-                result += "\\b";
-                break;
-            case '\f':
-                result += "\\f";
-                break;
-            case '\n':
-                result += "\\n";
-                break;
-            case '\r':
-                result += "\\r";
-                break;
-            case '\t':
-                result += "\\t";
-                break;
-            default:
-                result += c;
-                break;
-        }
-    }
-    return result;
-}
-
-}  // namespace
 
 std::string ViewDefinition::to_json() const {
     std::ostringstream out;

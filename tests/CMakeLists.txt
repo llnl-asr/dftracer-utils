@@ -56,6 +56,8 @@ set(TEST_CPP_SOURCES
     reader/test_reader_formats.cpp
     reader/test_reader_robustness.cpp
     # reader/test_reader_tar_comprehensive.cpp
+    # Trace generation utility tests
+    utilities/trace_gen/test_fake_trace_writer.cpp
     # Replay tests
     replay/test_replay.cpp
     replay/test_replay_fidelity.cpp

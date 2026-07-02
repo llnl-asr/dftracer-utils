@@ -236,6 +236,8 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/call_tree/json_serializer.cpp
     # Replay
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_executors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_result.cpp
     # Server (HTTP/TCP)
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/cursor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_connection.cpp

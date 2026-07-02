@@ -28,6 +28,7 @@
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/reader/internal/arrow_row_builder.h>
 #include <dftracer/utils/utilities/reader/internal/chunk_geometry.h>
+#include <dftracer/utils/utilities/reader/internal/json_dict_builder.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 
 #include <algorithm>
@@ -69,7 +70,6 @@ using dftracer::utils::utilities::reader::TraceReader;
 using dftracer::utils::utilities::reader::TraceReaderConfig;
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 using dftracer::utils::utilities::common::arrow::RecordBatchBuilder;
-using dftracer::utils::utilities::common::json::JsonParser;
 #endif
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 using dftracer::utils::utilities::common::arrow::IpcCompression;
@@ -152,70 +152,12 @@ CoroTask<void> produce_raw_batched(
     }
 }
 
-using dftracer::utils::utilities::common::json::JsonParser;
+using dftracer::utils::utilities::reader::internal::parse_json_to_event;
 
 static constexpr std::size_t ESTIMATED_BYTES_PER_LINE = 256;
 static constexpr std::size_t ESTIMATED_BYTES_PER_RAW_CHUNK = 4 * 1024 * 1024;
 static constexpr std::size_t ESTIMATED_BYTES_PER_JSON_EVENT = 512;
 static constexpr std::size_t ESTIMATED_BYTES_PER_ARROW_ROW = 1024;
-
-static void insert_simdjson_value(ArgsMap &map, std::string_view key,
-                                  simdjson::ondemand::value val) {
-    auto type = val.type();
-    if (type.error()) return;
-    switch (type.value_unsafe()) {
-        case simdjson::ondemand::json_type::string: {
-            auto r = val.get_string();
-            if (!r.error()) map.insert(key, std::string(r.value_unsafe()));
-            break;
-        }
-        case simdjson::ondemand::json_type::number: {
-            auto ri = val.get_int64();
-            if (!ri.error()) {
-                auto v = ri.value_unsafe();
-                if (v >= 0)
-                    map.insert(key, static_cast<std::uint64_t>(v));
-                else
-                    map.insert(key, v);
-            } else {
-                auto rd = val.get_double();
-                if (!rd.error()) map.insert(key, rd.value_unsafe());
-            }
-            break;
-        }
-        case simdjson::ondemand::json_type::boolean: {
-            auto r = val.get_bool();
-            if (!r.error()) map.insert(key, r.value_unsafe());
-            break;
-        }
-        default:
-            break;
-    }
-}
-
-static void parse_json_to_event(JsonParser &parser, JsonDictEvent &ev) {
-    ev.top.set_valid(true);
-    parser.for_each_field(
-        [&](std::string_view key, simdjson::ondemand::value val) {
-            if (key == "args") {
-                auto obj = val.get_object();
-                if (!obj.error()) {
-                    ev.args.set_valid(true);
-                    for (auto field : obj.value_unsafe()) {
-                        if (field.error()) continue;
-                        auto fkey = field.unescaped_key();
-                        if (fkey.error()) continue;
-                        auto fval = field.value();
-                        if (fval.error()) continue;
-                        insert_simdjson_value(ev.args, fkey.value_unsafe(),
-                                              fval.value_unsafe());
-                    }
-                }
-            } else {
-                insert_simdjson_value(ev.top, key, val);
-            }
-        });
-}
 
 CoroTask<void> produce_json_dicts(
     std::shared_ptr<JsonDictIteratorState> state,
@@ -1934,6 +1876,44 @@ static PyObject *TraceReader_read_arrow(TraceReaderObject *self, PyObject *args,
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
+// Parse a single view spec (string name/preset or dict with optional "name"
+// and "query") into `view`. Returns false with a Python error set on failure.
+// When `strict`, a value that is neither string nor dict raises TypeError;
+// otherwise it is silently ignored (leaving `view` default-constructed).
+static bool parse_view_spec(PyObject *view_obj, ViewDefinition &view,
+                            bool strict) {
+    if (view_obj && view_obj != Py_None) {
+        if (PyUnicode_Check(view_obj)) {
+            const char *name = PyUnicode_AsUTF8(view_obj);
+            if (!name) return false;
+            std::string name_str(name);
+            if (name_str == "io") {
+                view = ViewDefinition::io_view();
+            } else if (name_str == "compute") {
+                view = ViewDefinition::compute_view();
+            } else if (name_str == "dlio") {
+                view = ViewDefinition::dlio_view();
+            } else {
+                view.with_name(name_str);
+            }
+        } else if (PyDict_Check(view_obj)) {
+            PyObject *name_obj = PyDict_GetItemString(view_obj, "name");
+            if (name_obj && PyUnicode_Check(name_obj)) {
+                view.with_name(PyUnicode_AsUTF8(name_obj));
+            }
+            PyObject *query_obj = PyDict_GetItemString(view_obj, "query");
+            if (query_obj && query_obj != Py_None &&
+                PyUnicode_Check(query_obj)) {
+                view.with_query(PyUnicode_AsUTF8(query_obj));
+            }
+        } else if (strict) {
+            PyErr_SetString(PyExc_TypeError, "view must be a string or dict");
+            return false;
+        }
+    }
+    return true;
+}
+
 static PyObject *TraceReader_write_arrow(TraceReaderObject *self,
                                          PyObject *args, PyObject *kwds) {
     static const char *kwlist[] = {"path",        "views",      "chunk_size_mb",
@@ -2151,35 +2131,7 @@ static PyObject *TraceReader_get_view_chunks(TraceReaderObject *self,
     }
 
     ViewDefinition view;
-    if (view_obj && view_obj != Py_None) {
-        if (PyUnicode_Check(view_obj)) {
-            const char *name = PyUnicode_AsUTF8(view_obj);
-            if (!name) return NULL;
-            std::string name_str(name);
-            if (name_str == "io") {
-                view = ViewDefinition::io_view();
-            } else if (name_str == "compute") {
-                view = ViewDefinition::compute_view();
-            } else if (name_str == "dlio") {
-                view = ViewDefinition::dlio_view();
-            } else {
-                view.with_name(name_str);
-            }
-        } else if (PyDict_Check(view_obj)) {
-            PyObject *name_obj = PyDict_GetItemString(view_obj, "name");
-            if (name_obj && PyUnicode_Check(name_obj)) {
-                view.with_name(PyUnicode_AsUTF8(name_obj));
-            }
-            PyObject *query_obj = PyDict_GetItemString(view_obj, "query");
-            if (query_obj && query_obj != Py_None &&
-                PyUnicode_Check(query_obj)) {
-                view.with_query(PyUnicode_AsUTF8(query_obj));
-            }
-        } else {
-            PyErr_SetString(PyExc_TypeError, "view must be a string or dict");
-            return NULL;
-        }
-    }
+    if (!parse_view_spec(view_obj, view, /*strict=*/true)) return NULL;
 
     std::string file_path = PyUnicode_AsUTF8(self->file_path);
     std::string index_path;
@@ -2283,32 +2235,7 @@ static PyObject *TraceReader_write_view_chunk(TraceReaderObject *self,
     }
 
     ViewDefinition view;
-    if (view_obj && view_obj != Py_None) {
-        if (PyUnicode_Check(view_obj)) {
-            const char *name = PyUnicode_AsUTF8(view_obj);
-            if (!name) return NULL;
-            std::string name_str(name);
-            if (name_str == "io") {
-                view = ViewDefinition::io_view();
-            } else if (name_str == "compute") {
-                view = ViewDefinition::compute_view();
-            } else if (name_str == "dlio") {
-                view = ViewDefinition::dlio_view();
-            } else {
-                view.with_name(name_str);
-            }
-        } else if (PyDict_Check(view_obj)) {
-            PyObject *name_obj = PyDict_GetItemString(view_obj, "name");
-            if (name_obj && PyUnicode_Check(name_obj)) {
-                view.with_name(PyUnicode_AsUTF8(name_obj));
-            }
-            PyObject *query_obj = PyDict_GetItemString(view_obj, "query");
-            if (query_obj && query_obj != Py_None &&
-                PyUnicode_Check(query_obj)) {
-                view.with_query(PyUnicode_AsUTF8(query_obj));
-            }
-        }
-    }
+    if (!parse_view_spec(view_obj, view, /*strict=*/false)) return NULL;
 
     std::string file_path = PyUnicode_AsUTF8(self->file_path);
     std::string index_path;
@@ -2390,32 +2317,7 @@ static PyObject *TraceReader_write_view_chunks(TraceReaderObject *self,
     }
 
     ViewDefinition view;
-    if (view_obj && view_obj != Py_None) {
-        if (PyUnicode_Check(view_obj)) {
-            const char *name = PyUnicode_AsUTF8(view_obj);
-            if (!name) return NULL;
-            std::string name_str(name);
-            if (name_str == "io") {
-                view = ViewDefinition::io_view();
-            } else if (name_str == "compute") {
-                view = ViewDefinition::compute_view();
-            } else if (name_str == "dlio") {
-                view = ViewDefinition::dlio_view();
-            } else {
-                view.with_name(name_str);
-            }
-        } else if (PyDict_Check(view_obj)) {
-            PyObject *name_obj = PyDict_GetItemString(view_obj, "name");
-            if (name_obj && PyUnicode_Check(name_obj)) {
-                view.with_name(PyUnicode_AsUTF8(name_obj));
-            }
-            PyObject *query_obj = PyDict_GetItemString(view_obj, "query");
-            if (query_obj && query_obj != Py_None &&
-                PyUnicode_Check(query_obj)) {
-                view.with_query(PyUnicode_AsUTF8(query_obj));
-            }
-        }
-    }
+    if (!parse_view_spec(view_obj, view, /*strict=*/false)) return NULL;
 
     std::vector<ChunkDescriptor> chunks;
     Py_ssize_t num_chunks = PyList_Size(chunks_list);

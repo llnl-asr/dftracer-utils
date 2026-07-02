@@ -6,10 +6,9 @@
 #include <dftracer/utils/core/task_handle.h>
 #include <dftracer/utils/python/memoryview_batch.h>
 #include <dftracer/utils/utilities/composites/dft/args_map.h>
+#include <dftracer/utils/utilities/reader/internal/json_dict_builder.h>
 
 #include <memory>
-#include <string>
-#include <vector>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 
@@ -51,14 +50,8 @@ struct ArrowIteratorState {
 using ArgsValue = dftracer::utils::utilities::composites::dft::ArgsValue;
 using ArgsMap = dftracer::utils::utilities::composites::dft::ArgsMap;
 
-struct JsonDictEvent {
-    ArgsMap top;
-    ArgsMap args;
-};
-
-struct JsonDictBatch {
-    std::vector<JsonDictEvent> events;
-};
+using dftracer::utils::utilities::reader::internal::JsonDictBatch;
+using dftracer::utils::utilities::reader::internal::JsonDictEvent;
 
 struct JsonDictIteratorState {
     std::shared_ptr<dftracer::utils::coro::Channel<JsonDictBatch>> channel;

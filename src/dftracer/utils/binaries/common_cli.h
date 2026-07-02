@@ -5,14 +5,24 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/core/coro/channel.h>
+#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
+#include <algorithm>
 #include <argparse/argparse.hpp>
 #include <chrono>
 #include <cstddef>
 #include <cstdio>
+#include <iterator>
 #include <sstream>
 #include <string>
+#include <system_error>
+#include <type_traits>
 #include <vector>
 
 namespace dftracer::utils::cli {
@@ -95,6 +105,14 @@ class ArgParse {
     argparse::ArgumentParser& parser_;
     std::vector<CliSchema*> schemas_;
 };
+
+// Register schemas/args then parse argv; returns false on parse error (help
+// is already printed). Collapses the two-line prologue every CLI main repeats.
+template <class Cli>
+bool setup_and_parse(Cli& cli, int argc, char** argv) {
+    cli.setup();
+    return cli.parse(argc, argv);
+}
 
 enum class DirMode { DEFAULT_DOT, DEFAULT_EMPTY, REQUIRED };
 
@@ -392,6 +410,99 @@ inline std::string human_bytes(double value, const char* per_suffix = "",
     std::snprintf(buf, sizeof(buf), "%.*f %s%s", precision, value, UNITS[i],
                   per_suffix);
     return buf;
+}
+
+// Parallel per-subdirectory scan of `directory` for .pfw/.pfw.gz files via
+// ctx.spawn (context lets a recursive walk fan out per subdirectory); sizes
+// are not populated. Returns the matched paths.
+inline coro::CoroTask<std::vector<std::string>> scan_directory_trace_files(
+    CoroScope& ctx, const std::string& directory, bool recursive) {
+    utilities::filesystem::PatternDirectoryScannerUtility scanner;
+    utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
+        directory, {".pfw", ".pfw.gz"}, recursive};
+    auto matched = co_await ctx.spawn(scanner, scan_input);
+    std::vector<std::string> files;
+    files.reserve(matched.size());
+    for (const auto& entry : matched) {
+        files.push_back(entry.path.string());
+    }
+    co_return files;
+}
+
+// Enumerate trace files from input paths (each a file or directory).
+// Directories are scanned via the parallel scanner above; results are sorted
+// for deterministic output. `on_missing(path)` runs for inputs that are
+// neither a regular file nor a directory (template param so it inlines).
+template <class OnMissing>
+coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
+    CoroScope& ctx, const std::vector<std::string>& inputs, bool recursive,
+    OnMissing&& on_missing) {
+    std::vector<std::string> out;
+    for (const auto& in : inputs) {
+        std::error_code ec;
+        if (fs::is_directory(in, ec)) {
+            auto scanned =
+                co_await scan_directory_trace_files(ctx, in, recursive);
+            out.insert(out.end(), std::make_move_iterator(scanned.begin()),
+                       std::make_move_iterator(scanned.end()));
+        } else if (fs::is_regular_file(in, ec)) {
+            out.push_back(in);
+        } else {
+            on_missing(in);
+        }
+    }
+    std::sort(out.begin(), out.end());
+    co_return out;
+}
+
+inline coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
+    CoroScope& ctx, const std::vector<std::string>& inputs, bool recursive) {
+    co_return co_await collect_input_trace_files(ctx, inputs, recursive,
+                                                 [](const std::string&) {});
+}
+
+// Run `body` as a single-node pipeline and return its int result. `body` is a
+// template param (inlinable, no type erasure); it runs exactly once.
+template <class Body>
+int run_single_task(const std::string& name, const PipelineArgs& pipeline,
+                    Body&& body) {
+    Pipeline p(build_pipeline_config(name, pipeline));
+    auto task =
+        make_task([body = std::forward<Body>(body)](CoroScope& ctx)
+                      -> coro::CoroTask<int> { co_return co_await body(ctx); },
+                  name);
+    p.set_source(task);
+    p.set_destination(task);
+    p.execute();
+    return task->template get<int>();
+}
+
+// Channel-backed fan-out: a single bounded producer feeds `items` (moved in)
+// to `threads` consumers, each running `co_await worker(item)`. `worker` is a
+// template param so it inlines on the work path (never std::function). Spawns
+// onto `scope`; the caller's enclosing scope waits for completion.
+template <class Range, class Worker>
+void parallel_for_each(CoroScope& scope, Range items, std::size_t threads,
+                       Worker worker) {
+    using Item = std::decay_t<decltype(*std::begin(items))>;
+    auto chan = coro::make_channel<Item>(threads * 2);
+    scope.spawn([ch = chan->producer(), items = std::move(items)](
+                    CoroScope&) mutable -> coro::CoroTask<void> {
+        auto guard = ch.guard();
+        for (const auto& item : items) {
+            if (!co_await ch.send(item)) co_return;
+        }
+        co_return;
+    });
+    for (std::size_t w = 0; w < threads; ++w) {
+        scope.spawn([ch = chan->consumer(),
+                     worker](CoroScope&) mutable -> coro::CoroTask<void> {
+            while (auto item = co_await ch.receive()) {
+                co_await worker(*item);
+            }
+            co_return;
+        });
+    }
 }
 
 }  // namespace dftracer::utils::cli

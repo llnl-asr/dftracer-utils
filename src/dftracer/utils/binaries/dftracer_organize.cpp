@@ -1064,8 +1064,7 @@ int main(int argc, char** argv) {
         "predicate-based groups with chunked output.");
 
     OrganizeArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     return run_organize(&cli).get();
 }

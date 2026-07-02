@@ -140,8 +140,7 @@ int main(int argc, char** argv) {
         "trace events via REST API.");
 
     ServerArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     install_signal_handlers();
 

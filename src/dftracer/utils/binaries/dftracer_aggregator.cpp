@@ -199,8 +199,7 @@ int main(int argc, char** argv) {
         "coroutine pipeline with minimal memory footprint");
 
     AggregatorArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     // Resolve enum-like CLI strings.
     PerfettoEventFormat event_format = PerfettoEventFormat::COUNTER;

@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdio>
 #include <memory>
+#include <ranges>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -61,15 +62,10 @@ coro::CoroTask<std::vector<std::string>> collect_files(
         if (cli::is_trace_file(f)) files.push_back(std::move(f));
     }
     if (!directory.empty() && fs::exists(directory)) {
-        PatternDirectoryScannerUtility scanner;
-        PatternDirectoryScannerUtilityInput scan_input{std::move(directory),
-                                                       {".pfw", ".pfw.gz"},
-                                                       /*recursive=*/true,
-                                                       /*populate_size=*/false};
-        auto matched = co_await ctx.spawn(scanner, scan_input);
-        for (const auto& entry : matched) {
-            files.push_back(entry.path.string());
-        }
+        auto scanned = co_await cli::scan_directory_trace_files(
+            ctx, directory, /*recursive=*/true);
+        files.insert(files.end(), std::make_move_iterator(scanned.begin()),
+                     std::make_move_iterator(scanned.end()));
     }
     co_return files;
 }
@@ -142,28 +138,12 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
             results.resize(files->size());
             co_await ctx.scope([files, &results, executor_threads](
                                    CoroScope& scope) -> coro::CoroTask<void> {
-                auto chan =
-                    coro::make_channel<std::size_t>(executor_threads * 2);
-
-                scope.spawn([ch = chan->producer(), n = files->size()](
-                                CoroScope&) mutable -> coro::CoroTask<void> {
-                    auto guard = ch.guard();
-                    for (std::size_t i = 0; i < n; ++i) {
-                        if (!co_await ch.send(i)) co_return;
-                    }
-                    co_return;
-                });
-
-                for (std::size_t w = 0; w < executor_threads; ++w) {
-                    scope.spawn([ch = chan->consumer(), files,
-                                 &results](CoroScope&) -> coro::CoroTask<void> {
-                        while (auto idx = co_await ch.receive()) {
-                            co_await validate_file((*files)[*idx],
-                                                   &results[*idx]);
-                        }
-                        co_return;
+                cli::parallel_for_each(
+                    scope, std::views::iota(std::size_t{0}, files->size()),
+                    executor_threads,
+                    [files, &results](std::size_t idx) -> coro::CoroTask<void> {
+                        co_await validate_file((*files)[idx], &results[idx]);
                     });
-                }
                 co_return;
             });
             co_return;
@@ -226,8 +206,7 @@ int main(int argc, char** argv) {
         "script.");
 
     ValidateArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     return run_validate(&cli).get();
 }

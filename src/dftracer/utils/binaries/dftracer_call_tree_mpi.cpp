@@ -84,8 +84,7 @@ int run(int argc, char** argv) {
         "slice of PIDs and emits a Chrome Tracing JSON shard; rank 0 merges.");
 
     CallTreeMpiArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     int rank = 0, size = 1;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);

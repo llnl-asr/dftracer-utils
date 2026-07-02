@@ -1045,8 +1045,7 @@ int run(int argc, char** argv) {
         "write the final gzip JSON output.");
 
     AggregatorMpiArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     RunCtx ctx;
     ctx.cli = &cli;

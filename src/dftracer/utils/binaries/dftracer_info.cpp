@@ -601,21 +601,10 @@ int main(int argc, char** argv) {
         "using composable utilities and pipeline processing");
 
     InfoArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
-    auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Info", cli.pipeline);
-    Pipeline pipeline(pipeline_config);
-
-    auto info_task = make_task(
-        [&cli](CoroScope& ctx) -> coro::CoroTask<int> {
-            co_return co_await run_info(ctx, &cli);
-        },
-        "InfoMain");
-
-    pipeline.set_source(info_task);
-    pipeline.set_destination(info_task);
-    pipeline.execute();
-    return info_task->get<int>();
+    return cli::run_single_task("DFTracer Info", cli.pipeline,
+                                [&cli](CoroScope& ctx) -> coro::CoroTask<int> {
+                                    co_return co_await run_info(ctx, &cli);
+                                });
 }

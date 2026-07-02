@@ -105,29 +105,10 @@ struct RunCtx {
     double write_ms = 0;
 };
 
-coro::CoroTask<void> task_scan(RunCtx* ctx) {
+coro::CoroTask<void> task_scan(RunCtx* ctx, CoroScope& scope) {
     const auto t0 = std::chrono::steady_clock::now();
-    for (const auto& in : ctx->cli->inputs) {
-        std::error_code ec;
-        if (fs::is_directory(in, ec)) {
-            if (ctx->cli->recursive) {
-                for (const auto& e : fs::recursive_directory_iterator(in, ec)) {
-                    if (e.is_regular_file(ec) &&
-                        cli::is_trace_file(e.path().string()))
-                        ctx->trace_files.push_back(e.path().string());
-                }
-            } else {
-                for (const auto& e : fs::directory_iterator(in, ec)) {
-                    if (e.is_regular_file(ec) &&
-                        cli::is_trace_file(e.path().string()))
-                        ctx->trace_files.push_back(e.path().string());
-                }
-            }
-        } else if (fs::is_regular_file(in, ec)) {
-            ctx->trace_files.push_back(in);
-        }
-    }
-    std::sort(ctx->trace_files.begin(), ctx->trace_files.end());
+    ctx->trace_files = co_await cli::collect_input_trace_files(
+        scope, ctx->cli->inputs, ctx->cli->recursive);
     if (ctx->trace_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("%s", "no trace files found");
         ctx->failed = true;
@@ -434,8 +415,7 @@ int run(int argc, char** argv) {
         "JSON.");
 
     CallTreeArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     RunCtx ctx;
     ctx.cli = &cli;
@@ -466,8 +446,8 @@ int run(int argc, char** argv) {
 
     RunCtx* ctx_ptr = &ctx;
     auto scan = make_task(
-        [ctx_ptr](CoroScope&) -> coro::CoroTask<void> {
-            co_await task_scan(ctx_ptr);
+        [ctx_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            co_await task_scan(ctx_ptr, scope);
         },
         "scan");
     auto build = make_task(

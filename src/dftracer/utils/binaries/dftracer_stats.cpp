@@ -1056,20 +1056,8 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
             co_return std::vector<std::string>{};
         }
 
-        auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
-        PatternDirectoryScannerUtilityInput scan_input{
-            directory, {".pfw", ".pfw.gz"}, false, false};
-        utilities::behaviors::UtilityExecutor<
-            PatternDirectoryScannerUtilityInput,
-            std::vector<filesystem::FileEntry>, utilities::tags::NeedsContext>
-            executor(scanner);
-        auto matched = co_await executor.execute(ctx, scan_input);
-
-        std::vector<std::string> files;
-        files.reserve(matched.size());
-        for (const auto& entry : matched) {
-            files.push_back(entry.path.string());
-        }
+        auto files = co_await cli::scan_directory_trace_files(
+            ctx, directory, /*recursive=*/false);
 
         if (files.empty()) {
             DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
@@ -1728,19 +1716,10 @@ int main(int argc, char** argv) {
         "Zero-cost reads from RocksDB metadata, no decompression.");
 
     StatsArgParse args(program);
-    args.setup();
-    if (!args.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(args, argc, argv)) return 1;
 
-    auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Stats Main", args.pipeline);
-    Pipeline pipeline(pipeline_config);
-    auto stats_task = make_task(
-        [&args](CoroScope& ctx) -> coro::CoroTask<int> {
-            co_return co_await run_stats(ctx, &args);
-        },
-        "StatsMain");
-    pipeline.set_source(stats_task);
-    pipeline.set_destination(stats_task);
-    pipeline.execute();
-    return stats_task->get<int>();
+    return cli::run_single_task("DFTracer Stats Main", args.pipeline,
+                                [&args](CoroScope& ctx) -> coro::CoroTask<int> {
+                                    co_return co_await run_stats(ctx, &args);
+                                });
 }

@@ -115,26 +115,14 @@ int main(int argc, char** argv) {
         "Reconstruct original trace files from reorganized output.");
 
     ReconstructArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     fs::create_directories(cli.output_dir);
 
-    auto pipeline_config =
-        cli::build_pipeline_config("Reconstruct", cli.pipeline);
-    Pipeline pipeline(pipeline_config);
-
-    int exit_code = 0;
     auto* cli_ptr = &cli;
-    auto task = make_task(
-        [cli_ptr, &exit_code](CoroScope& scope) -> coro::CoroTask<void> {
-            exit_code = co_await run_reconstruct(cli_ptr, scope);
-        },
-        "ReconstructMain");
-
-    pipeline.set_source(task);
-    pipeline.set_destination(task);
-    pipeline.execute();
-
-    return exit_code;
+    return cli::run_single_task(
+        "Reconstruct", cli.pipeline,
+        [cli_ptr](CoroScope& scope) -> coro::CoroTask<int> {
+            co_return co_await run_reconstruct(cli_ptr, scope);
+        });
 }

@@ -587,8 +587,7 @@ int main(int argc, char** argv) {
         "suitable for testing bloom-filter indexing.");
 
     GenFakeTraceArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     const auto& output_dir = cli.output_dir;
     const int num_ranks = cli.num_ranks;

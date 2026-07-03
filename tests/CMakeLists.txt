@@ -116,7 +116,8 @@ foreach(test_file ${TEST_CPP_SOURCES})
 
   # These thread-heavy tests contend heavily when run together on low-core CI.
   # Give them extra timeout and serialize via a shared lock.
-  if(bin_exec STREQUAL "pipeline/test_task_scope"
+  if(bin_exec STREQUAL "core/test_runtime"
+     OR bin_exec STREQUAL "pipeline/test_task_scope"
      OR bin_exec STREQUAL "pipeline/test_pipeline"
      OR bin_exec STREQUAL "coro/test_channel")
     set(heavy_thread_timeout 180)

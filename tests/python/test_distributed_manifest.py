@@ -52,6 +52,7 @@ class TestDistributedIndexUnified:
                 "distributed_index should produce a unified-shape index"
             )
 
+    @pytest.mark.valgrind
     def test_aggregation_matches_serial(self):
         """Distributed build's aggregation data must equal a serial build."""
         with Environment(lines=200) as env:

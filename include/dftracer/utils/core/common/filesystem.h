@@ -85,4 +85,19 @@ namespace fs = ghc::filesystem;
 
 #endif
 
+namespace dftracer::utils {
+
+// Best-effort cleanup: remove `path` if it exists, ignoring any error.
+inline void remove_file_quietly(const fs::path& path) {
+    if (fs::exists(path)) {
+        try {
+            fs::remove(path);
+        } catch (...) {
+            // Ignore cleanup errors.
+        }
+    }
+}
+
+}  // namespace dftracer::utils
+
 #endif  // DFTRACER_UTILS_CORE_COMMON_FILESYSTEM_H

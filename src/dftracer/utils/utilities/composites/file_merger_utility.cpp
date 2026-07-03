@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <iterator>
-#include <sstream>
 
 namespace dftracer::utils::utilities::composites {
 

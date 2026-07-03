@@ -181,13 +181,7 @@ class FileCompressorUtility
 
         } catch (const std::exception& e) {
             // Clean up partial output file on error
-            if (fs::exists(input.output_path)) {
-                try {
-                    fs::remove(input.output_path);
-                } catch (...) {
-                    // Ignore cleanup errors
-                }
-            }
+            remove_file_quietly(input.output_path);
 
             co_return make_error(
                 ErrorCode::COMPRESSION,

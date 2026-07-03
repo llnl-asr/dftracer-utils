@@ -1,3 +1,5 @@
+#include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/env.h>
 #include <dftracer/utils/core/rocksdb/database.h>
@@ -113,14 +115,19 @@ const decltype(cf::ALL)& RocksDatabase::default_column_families() {
 
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
     options.compression = ::rocksdb::kZSTD;
-    options.compression_opts.level = 9;
-    options.compression_opts.max_dict_bytes = 262144;
-    options.compression_opts.zstd_max_train_bytes = 1048576;
+    options.compression_opts.level = constants::rocksdb::ZSTD_COMPRESSION_LEVEL;
+    options.compression_opts.max_dict_bytes =
+        constants::rocksdb::ZSTD_MAX_DICT_BYTES;
+    options.compression_opts.zstd_max_train_bytes =
+        constants::rocksdb::ZSTD_MAX_TRAIN_BYTES;
     options.compression_opts.enabled = true;
     options.bottommost_compression = ::rocksdb::kZSTD;
-    options.bottommost_compression_opts.level = 9;
-    options.bottommost_compression_opts.max_dict_bytes = 262144;
-    options.bottommost_compression_opts.zstd_max_train_bytes = 1048576;
+    options.bottommost_compression_opts.level =
+        constants::rocksdb::ZSTD_COMPRESSION_LEVEL;
+    options.bottommost_compression_opts.max_dict_bytes =
+        constants::rocksdb::ZSTD_MAX_DICT_BYTES;
+    options.bottommost_compression_opts.zstd_max_train_bytes =
+        constants::rocksdb::ZSTD_MAX_TRAIN_BYTES;
     options.bottommost_compression_opts.enabled = true;
 #elif defined(DFTRACER_UTILS_ENABLE_LZ4)
     options.compression = ::rocksdb::kLZ4Compression;
@@ -157,9 +164,9 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
                                                          &column_family_names);
     if (!list_status.ok()) {
         if (open_mode_ == OpenMode::ReadOnly) {
-            throw std::runtime_error(
-                "Failed to list RocksDB column families at '" + db_path_ +
-                "': " + list_status.ToString());
+            throw DFTUtilsException(
+                ErrorCode::IO, "Failed to list RocksDB column families at '" +
+                                   db_path_ + "': " + list_status.ToString());
         }
         column_family_names.reserve(default_column_families().size());
         for (auto name : default_column_families()) {
@@ -198,8 +205,9 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     }
     if (!status.ok()) {
         cleanup_failed_open(db_, handles);
-        throw std::runtime_error("Failed to open RocksDB at '" + db_path_ +
-                                 "': " + status.ToString());
+        throw DFTUtilsException(ErrorCode::IO, "Failed to open RocksDB at '" +
+                                                   db_path_ +
+                                                   "': " + status.ToString());
     }
 
     column_families_.clear();
@@ -258,7 +266,8 @@ const std::string& RocksDatabase::path() const noexcept { return db_path_; }
                                             : std::string(column_family);
     const auto it = column_families_.find(name);
     if (it == column_families_.end() || it->second == nullptr) {
-        throw std::invalid_argument("Unknown RocksDB column family: " + name);
+        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                "Unknown RocksDB column family: " + name);
     }
     return it->second;
 }

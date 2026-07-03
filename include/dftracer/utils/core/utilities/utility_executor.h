@@ -2,13 +2,9 @@
 #define DFTRACER_UTILS_UTILITIES_BEHAVIORS_UTILITY_EXECUTOR_H
 
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility.h>
-#include <dftracer/utils/core/utilities/utility_traits.h>
 
-#include <exception>
 #include <memory>
-#include <optional>
 
 namespace dftracer {
 namespace utils {
@@ -16,17 +12,8 @@ namespace utilities {
 namespace behaviors {
 
 /**
- * @brief Executes a utility with behavior chain wrapping.
- *
- * UtilityExecutor orchestrates the execution of a utility by:
- * 1. Running before_process hooks on all behaviors
- * 2. Executing the utility's process() method
- * 3. Running after_process hooks on all behaviors
- * 4. Handling errors through behavior on_error hooks
- *
- * This class bridges utilities and behaviors, providing a unified
- * execution path regardless of which process() overload the utility
- * implements.
+ * @brief Runs a utility's process(), injecting the CoroScope context when the
+ *        utility needs it.
  *
  * @tparam I Input type
  * @tparam O Output type
@@ -36,78 +23,53 @@ template <typename I, typename O, typename... Tags>
 class UtilityExecutor {
    private:
     std::shared_ptr<Utility<I, O, Tags...>> utility_;
-    BehaviorChain<I, O> behavior_chain_;
 
    public:
     /**
-     * @brief Construct executor with utility and behavior chain.
+     * @brief Construct an executor for the given utility.
      *
      * @param utility The utility to execute
-     * @param chain Behavior chain to wrap execution
      */
-    UtilityExecutor(std::shared_ptr<Utility<I, O, Tags...>> utility,
-                    BehaviorChain<I, O> chain)
-        : utility_(utility), behavior_chain_(std::move(chain)) {}
+    explicit UtilityExecutor(std::shared_ptr<Utility<I, O, Tags...>> utility)
+        : utility_(std::move(utility)) {}
 
     /**
-     * @brief Execute utility without context using middleware pattern.
-     *
-     * Builds a middleware chain where each behavior wraps execution.
-     * Behaviors can intercept, skip, transform, retry, or cache execution.
+     * @brief Execute the utility's process() without a CoroScope context.
      *
      * @param input Input to process
      * @return Output result
-     * @throws Any exception from utility or behaviors
+     * @throws Any exception propagated from the utility's process()
      */
     coro::CoroTask<O> execute(const I& input) {
-        co_return co_await behavior_chain_.process(
-            input, [this](const I& inp) -> coro::CoroTask<O> {
-                return utility_->process(inp);
-            });
+        co_return co_await utility_->process(input);
     }
 
     /**
-     * @brief Execute utility with context using middleware pattern.
+     * @brief Execute the utility with a CoroScope context.
      *
-     * Sets context reference before calling process(), then clears it after.
+     * Sets the context reference before calling process() and clears it
+     * afterwards (including on error), so context-needing utilities can emit
+     * dynamic tasks for the duration of execution.
      *
-     * @param input Input to process
      * @param ctx Task context for dynamic task emission
+     * @param input Input to process
      * @return Output result
-     * @throws Any exception from utility or behaviors
+     * @throws Any exception propagated from the utility's process()
      */
-    coro::CoroTask<O> execute_with_context(CoroScope& ctx, const I& input) {
-        co_return co_await behavior_chain_.process(
-            input, [this, &ctx](const I& inp) -> coro::CoroTask<O> {
-                utility_->set_context(ctx);
-                try {
-                    O result = co_await utility_->process(inp);
-                    utility_->clear_context();
-                    co_return result;
-                } catch (...) {
-                    utility_->clear_context();
-                    throw;
-                }
-            });
+    coro::CoroTask<O> execute(CoroScope& ctx, const I& input) {
+        utility_->set_context(ctx);
+        try {
+            O result = co_await utility_->process(input);
+            utility_->clear_context();
+            co_return result;
+        } catch (...) {
+            utility_->clear_context();
+            throw;
+        }
     }
 
-    /**
-     * @brief Get reference to underlying utility.
-     */
     std::shared_ptr<Utility<I, O, Tags...>> get_utility() const {
         return utility_;
-    }
-
-    /**
-     * @brief Get reference to behavior chain.
-     */
-    BehaviorChain<I, O>& get_behavior_chain() { return behavior_chain_; }
-
-    /**
-     * @brief Get const reference to behavior chain.
-     */
-    const BehaviorChain<I, O>& get_behavior_chain() const {
-        return behavior_chain_;
     }
 };
 

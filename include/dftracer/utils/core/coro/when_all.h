@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ALL_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ALL_H
 
+#include <dftracer/utils/core/common/exception_helpers.h>
+#include <dftracer/utils/core/coro/completion_state.h>
 #include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
 
@@ -24,6 +26,15 @@ namespace dftracer::utils::coro {
 /// Coroutine that destroys its own frame on completion.
 struct FireAndForget {
     struct promise_type {
+        // Route wrapper coroutine frames through ObjectPool like every other
+        // promise (PromiseBase in task.h, CoroPromise in coro.h).
+        static void* operator new(std::size_t size) {
+            return ObjectPool::instance().allocate(size);
+        }
+        static void operator delete(void* ptr, std::size_t size) {
+            ObjectPool::instance().deallocate(ptr, size);
+        }
+
         FireAndForget get_return_object() { return {}; }
         std::suspend_never initial_suspend() { return {}; }
         std::suspend_never final_suspend() noexcept { return {}; }
@@ -42,67 +53,13 @@ struct FireAndForget {
  * Heap-allocated to ensure lifetime extends beyond await_suspend
  */
 template <typename Awaitable>
-struct WhenAllVectorState {
+struct WhenAllVectorState : WhenAllCompletionState {
     std::vector<Awaitable> awaitables_;
     std::vector<typename Awaitable::result_type> results_;
-    std::exception_ptr exception_;
-    std::atomic<bool> has_exception_{false};
-    std::atomic<std::size_t> completed_count_{0};
-    std::coroutine_handle<> awaiting_coroutine_;
-    std::size_t total_;
-    Executor* executor_{nullptr};
-
-    static constexpr std::uint8_t BIT_SUSPENDED = 1;
-    static constexpr std::uint8_t BIT_COMPLETED = 2;
-    std::atomic<std::uint8_t> sync_state_{0};
 
     explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
-        : awaitables_(std::move(awaitables)),
-          results_(awaitables_.size()),
-          total_(awaitables_.size()) {}
-
-    void on_one_complete() {
-        std::size_t count =
-            completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
-        if (count == total_) {
-            auto prev =
-                sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
-            if (prev & BIT_SUSPENDED) {
-                if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
-                    if (executor_) {
-                        schedule_coroutine_resumption_helper(
-                            executor_, awaiting_coroutine_);
-                    } else {
-                        awaiting_coroutine_.resume();
-                    }
-                }
-            }
-        }
-    }
-
-    void on_exception(std::exception_ptr e) {
-        bool expected = false;
-        if (has_exception_.compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed)) {
-            exception_ = e;
-        }
-        on_one_complete();
-    }
-
-    void mark_suspended_and_check_completion() {
-        auto prev =
-            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
-        if (prev & BIT_COMPLETED) {
-            if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
-                if (executor_) {
-                    schedule_coroutine_resumption_helper(executor_,
-                                                         awaiting_coroutine_);
-                } else {
-                    awaiting_coroutine_.resume();
-                }
-            }
-        }
+        : awaitables_(std::move(awaitables)), results_(awaitables_.size()) {
+        total_ = awaitables_.size();
     }
 };
 
@@ -175,9 +132,7 @@ class WhenAllVectorAwaitable {
 
     result_type await_resume() {
         if (state_->exception_) {
-            auto ex = std::move(state_->exception_);
-            state_->exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception_);
         }
         return std::move(state_->results_);
     }
@@ -244,65 +199,12 @@ auto when_all(std::initializer_list<Awaitable> awaitables) {
 
 template <typename Awaitable>
     requires(std::is_void_v<typename Awaitable::result_type>)
-struct WhenAllVectorState<Awaitable> {
+struct WhenAllVectorState<Awaitable> : WhenAllCompletionState {
     std::vector<Awaitable> awaitables_;
-    std::exception_ptr exception_;
-    std::atomic<bool> has_exception_{false};
-    std::atomic<std::size_t> completed_count_{0};
-    std::coroutine_handle<> awaiting_coroutine_;
-    std::size_t total_;
-    Executor* executor_{nullptr};
-
-    static constexpr std::uint8_t BIT_SUSPENDED = 1;
-    static constexpr std::uint8_t BIT_COMPLETED = 2;
-    std::atomic<std::uint8_t> sync_state_{0};
 
     explicit WhenAllVectorState(std::vector<Awaitable> awaitables)
-        : awaitables_(std::move(awaitables)), total_(awaitables_.size()) {}
-
-    void on_one_complete() {
-        std::size_t count =
-            completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
-        if (count == total_) {
-            auto prev =
-                sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
-            if (prev & BIT_SUSPENDED) {
-                if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
-                    if (executor_) {
-                        schedule_coroutine_resumption_helper(
-                            executor_, awaiting_coroutine_);
-                    } else {
-                        awaiting_coroutine_.resume();
-                    }
-                }
-            }
-        }
-    }
-
-    void on_exception(std::exception_ptr ex) {
-        bool expected = false;
-        if (has_exception_.compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed)) {
-            exception_ = ex;
-        }
-        on_one_complete();
-    }
-
-    // Called by await_suspend after deciding to suspend but before returning
-    void mark_suspended_and_check_completion() {
-        auto prev =
-            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
-        if (prev & BIT_COMPLETED) {
-            if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
-                if (executor_) {
-                    schedule_coroutine_resumption_helper(executor_,
-                                                         awaiting_coroutine_);
-                } else {
-                    awaiting_coroutine_.resume();
-                }
-            }
-        }
+        : awaitables_(std::move(awaitables)) {
+        total_ = awaitables_.size();
     }
 };
 
@@ -361,9 +263,7 @@ class WhenAllVectorAwaitable<Awaitable> {
 
     void await_resume() {
         if (state_->exception_) {
-            auto ex = std::move(state_->exception_);
-            state_->exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception_);
         }
     }
 
@@ -401,68 +301,15 @@ using when_all_result_t =
  * Heap-allocated so lifetime extends beyond await_suspend.
  */
 template <typename... Awaitables>
-struct WhenAllTupleState {
-    static constexpr std::size_t total_ = sizeof...(Awaitables);
-
+struct WhenAllTupleState : WhenAllCompletionState {
     std::tuple<Awaitables...> awaitables_;
     std::tuple<
         std::optional<when_all_result_t<typename Awaitables::result_type>>...>
         results_;
-    std::exception_ptr exception_;
-    std::atomic<bool> has_exception_{false};
-    std::atomic<std::size_t> completed_count_{0};
-    std::coroutine_handle<> awaiting_coroutine_;
-    Executor* executor_{nullptr};
-
-    static constexpr std::uint8_t BIT_SUSPENDED = 1;
-    static constexpr std::uint8_t BIT_COMPLETED = 2;
-    std::atomic<std::uint8_t> sync_state_{0};
 
     explicit WhenAllTupleState(Awaitables&&... awaitables)
-        : awaitables_(std::forward<Awaitables>(awaitables)...) {}
-
-    void on_one_complete() {
-        std::size_t count =
-            completed_count_.fetch_add(1, std::memory_order_acq_rel) + 1;
-        if (count == total_) {
-            auto prev =
-                sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
-            if (prev & BIT_SUSPENDED) {
-                if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
-                    if (executor_) {
-                        schedule_coroutine_resumption_helper(
-                            executor_, awaiting_coroutine_);
-                    } else {
-                        awaiting_coroutine_.resume();
-                    }
-                }
-            }
-        }
-    }
-
-    void on_exception(std::exception_ptr e) {
-        bool expected = false;
-        if (has_exception_.compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_relaxed)) {
-            exception_ = e;
-        }
-        on_one_complete();
-    }
-
-    void mark_suspended_and_check_completion() {
-        auto prev =
-            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
-        if (prev & BIT_COMPLETED) {
-            if (awaiting_coroutine_ && !awaiting_coroutine_.done()) {
-                if (executor_) {
-                    schedule_coroutine_resumption_helper(executor_,
-                                                         awaiting_coroutine_);
-                } else {
-                    awaiting_coroutine_.resume();
-                }
-            }
-        }
+        : awaitables_(std::forward<Awaitables>(awaitables)...) {
+        total_ = sizeof...(Awaitables);
     }
 };
 
@@ -501,7 +348,7 @@ class WhenAllTupleAwaitable {
             state_->executor_ = root->get_executor();
         }
 
-        if constexpr (WhenAllTupleState<Awaitables...>::total_ == 0) {
+        if constexpr (sizeof...(Awaitables) == 0) {
             return false;
         }
 
@@ -509,7 +356,7 @@ class WhenAllTupleAwaitable {
 
         // Check if all completed synchronously during launch
         if (state_->completed_count_.load(std::memory_order_acquire) ==
-            WhenAllTupleState<Awaitables...>::total_) {
+            state_->total_) {
             return false;  // Don't suspend
         }
 
@@ -527,9 +374,7 @@ class WhenAllTupleAwaitable {
 
     result_type await_resume() {
         if (state_->exception_) {
-            auto ex = std::move(state_->exception_);
-            state_->exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception_);
         }
         return build_result(std::index_sequence_for<Awaitables...>{});
     }

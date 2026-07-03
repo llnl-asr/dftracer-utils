@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/tasks/task_result.h>
 
 #include <cassert>
@@ -76,7 +77,7 @@ std::any TaskResult::get() const {
         std::rethrow_exception(exception_);
     }
     if (s == State::cancelled) {
-        throw std::runtime_error("Task was cancelled");
+        throw DFTUtilsException(ErrorCode::PIPELINE, "Task was cancelled");
     }
     return value_;  // returns COPY
 }
@@ -89,7 +90,7 @@ std::any TaskResult::get_ready() const {
         std::rethrow_exception(exception_);
     }
     if (s == State::cancelled) {
-        throw std::runtime_error("Task was cancelled");
+        throw DFTUtilsException(ErrorCode::PIPELINE, "Task was cancelled");
     }
     return value_;  // returns COPY
 }

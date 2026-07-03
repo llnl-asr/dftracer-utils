@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_ASYNC_GENERATOR_H
 #define DFTRACER_UTILS_CORE_CORO_ASYNC_GENERATOR_H
 
+#include <dftracer/utils/core/common/exception_helpers.h>
+
 #include <coroutine>
 #include <cstddef>
 #include <exception>
@@ -139,7 +141,7 @@ AsyncGenerator<T> concat(AsyncGenerator<T> first, F factory) {
  *
  * Operators:
  *   gen > func        map: T -> U
- *   gen >> func       flat_map: T -> AsyncGenerator<U>
+ *   gen >> func       flat_map: T -> AsyncGenerator of U
  *   gen | factory     lazy concat: append factory() after gen exhausted
  */
 template <typename T>
@@ -216,9 +218,7 @@ class AsyncGenerator {
                 return std::nullopt;
             }
             if (handle_.promise().exception_) {
-                auto ex = std::move(handle_.promise().exception_);
-                handle_.promise().exception_ = nullptr;
-                std::rethrow_exception(std::move(ex));
+                rethrow_and_clear(handle_.promise().exception_);
             }
             if (handle_.done()) {
                 return std::nullopt;
@@ -278,9 +278,7 @@ class AsyncGenerator {
 
     void rethrow_if_exception() {
         if (handle_ && handle_.promise().exception_) {
-            auto ex = std::move(handle_.promise().exception_);
-            handle_.promise().exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(handle_.promise().exception_);
         }
     }
 
@@ -334,7 +332,7 @@ class AsyncGenerator {
 
     /**
      * operator>> : flat_map -- each element produces a sub-generator,
-     * results are flattened (T -> AsyncGenerator<U>).
+     * results are flattened (T -> AsyncGenerator of U).
      */
     template <typename F,
               std::enable_if_t<detail::is_flat_map_fn_v<F, T>, int> = 0>

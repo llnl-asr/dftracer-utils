@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_TASKS_CORO_SCOPE_H
 #define DFTRACER_UTILS_CORE_TASKS_CORO_SCOPE_H
 
+#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/channel.h>
@@ -79,7 +81,8 @@ class CoroScope {
     /// Returns the Coro's coroutine_handle for callers that need it.
     void enqueue_coro(coro::Coro& c) {
         if (!executor_->is_running()) {
-            throw std::runtime_error(
+            throw DFTUtilsException(
+                ErrorCode::PIPELINE,
                 "Cannot spawn coroutine: executor is not running");
         }
         join_handle_.track(c);
@@ -522,9 +525,7 @@ class CoroScope {
         }
         co_await child.join();
         if (error) {
-            auto ex = std::move(error);
-            error = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(error);
         }
         co_return;
     }
@@ -573,9 +574,7 @@ inline coro::CoroTask<void> run_coro_scope(Executor* executor, Func scope_func,
     }
     co_await scope.join();
     if (error) {
-        auto ex = std::move(error);
-        error = nullptr;
-        std::rethrow_exception(std::move(ex));
+        rethrow_and_clear(error);
     }
     co_return;
 }

@@ -1,12 +1,14 @@
 #ifndef DFTRACER_UTILS_CORE_PIPELINE_ERROR_H
 #define DFTRACER_UTILS_CORE_PIPELINE_ERROR_H
 
+#include <dftracer/utils/core/common/error.h>
+
 #include <stdexcept>
 #include <string>
 
 namespace dftracer::utils {
 
-class PipelineError : public std::runtime_error {
+class PipelineError : public DFTUtilsException {
    public:
     enum Type {
         TYPE_MISMATCH,
@@ -22,7 +24,8 @@ class PipelineError : public std::runtime_error {
     };
 
     PipelineError(Type type, const std::string &message)
-        : std::runtime_error(format_message(type, message)), type_(type) {}
+        : DFTUtilsException(ErrorCode::PIPELINE, format_message(type, message)),
+          type_(type) {}
 
     inline Type get_type() const { return type_; }
 

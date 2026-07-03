@@ -35,6 +35,14 @@ using StringViewMap =
     ankerl::unordered_dense::map<std::string, V, TransparentStringHash,
                                  TransparentStringEqual>;
 
+// Keyed by std::string_view rather than an owned std::string. The caller MUST
+// ensure every key outlives the map (e.g. views into an interned pool); a
+// transient view will dangle. Unlike StringViewMap it stores no key copies.
+template <typename V>
+using InternedStringViewMap =
+    ankerl::unordered_dense::map<std::string_view, V, TransparentStringHash,
+                                 TransparentStringEqual>;
+
 using StringViewSet =
     ankerl::unordered_dense::set<std::string, TransparentStringHash,
                                  TransparentStringEqual>;

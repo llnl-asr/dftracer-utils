@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_GROUP_H
 #define DFTRACER_UTILS_CORE_TASK_GRAPH_TASK_GROUP_H
 
+#include <dftracer/utils/core/common/error.h>
+
 #include <cassert>
 #include <cstddef>
 #include <memory>
@@ -58,9 +60,10 @@ class TaskGroup {
      */
     std::shared_ptr<Task> task() const {
         if (tasks_.size() != 1) {
-            throw std::runtime_error("TaskGroup::task() called on group with " +
-                                     std::to_string(tasks_.size()) +
-                                     " tasks (expected 1)");
+            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                    "TaskGroup::task() called on group with " +
+                                        std::to_string(tasks_.size()) +
+                                        " tasks (expected 1)");
         }
         return tasks_[0];
     }
@@ -70,7 +73,8 @@ class TaskGroup {
      */
     std::shared_ptr<Task> at(std::size_t index) const {
         if (index >= tasks_.size()) {
-            throw std::out_of_range("TaskGroup index out of range");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "TaskGroup index out of range");
         }
         return tasks_[index];
     }
@@ -129,16 +133,18 @@ class TaskGroup<void> {
 
     std::shared_ptr<Task> task() const {
         if (tasks_.size() != 1) {
-            throw std::runtime_error("TaskGroup::task() called on group with " +
-                                     std::to_string(tasks_.size()) +
-                                     " tasks (expected 1)");
+            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                    "TaskGroup::task() called on group with " +
+                                        std::to_string(tasks_.size()) +
+                                        " tasks (expected 1)");
         }
         return tasks_[0];
     }
 
     std::shared_ptr<Task> at(std::size_t index) const {
         if (index >= tasks_.size()) {
-            throw std::out_of_range("TaskGroup index out of range");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "TaskGroup index out of range");
         }
         return tasks_[index];
     }

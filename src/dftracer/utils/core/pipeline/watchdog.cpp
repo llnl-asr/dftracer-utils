@@ -16,8 +16,10 @@ Watchdog::Watchdog(std::chrono::milliseconds check_interval,
     DFTRACER_UTILS_LOG_DEBUG(
         "Watchdog created: check_interval=%lld ms, global_timeout=%lld ms, "
         "task_timeout=%lld ms, warning_threshold=%lld ms",
-        check_interval_.count(), global_timeout_.count(),
-        default_task_timeout_.count(), warning_threshold_.count());
+        static_cast<long long>(check_interval_.count()),
+        static_cast<long long>(global_timeout_.count()),
+        static_cast<long long>(default_task_timeout_.count()),
+        static_cast<long long>(warning_threshold_.count()));
 }
 
 Watchdog::~Watchdog() { stop(); }
@@ -78,8 +80,9 @@ void Watchdog::register_task_start(TaskIndex task_id,
     active_tasks_[task_id] = exec;
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "Watchdog: registered task '%s' (ID: %llu) with timeout: %lld ms",
-        task->get_name(), task_id, effective_timeout.count());
+        "Watchdog: registered task '%s' (ID: %ld) with timeout: %lld ms",
+        task->get_name(), task_id,
+        static_cast<long long>(effective_timeout.count()));
 }
 
 void Watchdog::unregister_task(TaskIndex task_id) {
@@ -87,7 +90,7 @@ void Watchdog::unregister_task(TaskIndex task_id) {
 
     auto it = active_tasks_.find(task_id);
     if (it != active_tasks_.end()) {
-        DFTRACER_UTILS_LOG_DEBUG("Watchdog: unregistered task '%s' (ID: %llu)",
+        DFTRACER_UTILS_LOG_DEBUG("Watchdog: unregistered task '%s' (ID: %ld)",
                                  it->second.task->get_name(), task_id);
 
         active_tasks_.erase(it);
@@ -153,7 +156,7 @@ void Watchdog::watchdog_loop() {
         }
     }
 
-    DFTRACER_UTILS_LOG_DEBUG("Watchdog loop ended", "");
+    DFTRACER_UTILS_LOG_DEBUG("Watchdog loop ended");
 }
 
 bool Watchdog::check_global_timeout() {
@@ -171,7 +174,8 @@ bool Watchdog::check_global_timeout() {
 
         DFTRACER_UTILS_LOG_ERROR(
             "Global timeout exceeded: %lld ms elapsed (limit: %lld ms)",
-            elapsed_ms.count(), global_timeout_.count());
+            static_cast<long long>(elapsed_ms.count()),
+            static_cast<long long>(global_timeout_.count()));
 
         trigger_timeout("Global pipeline timeout after " +
                         std::to_string(elapsed_ms.count()) + " ms (limit: " +
@@ -196,10 +200,11 @@ bool Watchdog::check_task_timeouts() {
         // Check timeout
         if (execution.timeout.count() > 0 && elapsed > execution.timeout) {
             DFTRACER_UTILS_LOG_ERROR(
-                "Task timeout: '%s' (ID: %llu) ran for %lld ms (limit: %lld "
+                "Task timeout: '%s' (ID: %ld) ran for %lld ms (limit: %lld "
                 "ms)",
-                execution.task->get_name(), task_id, elapsed_ms.count(),
-                execution.timeout.count());
+                execution.task->get_name(), task_id,
+                static_cast<long long>(elapsed_ms.count()),
+                static_cast<long long>(execution.timeout.count()));
 
             {
                 char buf[1024];
@@ -221,9 +226,10 @@ bool Watchdog::check_task_timeouts() {
             execution.warning_logged = true;
 
             DFTRACER_UTILS_LOG_WARN(
-                "Long-running task: '%s' (ID: %llu) has been running for %lld "
+                "Long-running task: '%s' (ID: %ld) has been running for %lld "
                 "ms",
-                execution.task->get_name(), task_id, elapsed_ms.count());
+                execution.task->get_name(), task_id,
+                static_cast<long long>(elapsed_ms.count()));
 
             trigger_warning(execution.task->get_name(), elapsed_ms.count());
         }

@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_CORE_UTILITIES_UTILITY_H
 
 #include <dftracer/utils/core/common/const_string.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/type_name.h>
 #include <dftracer/utils/core/coro/task.h>
 
@@ -20,7 +21,6 @@ namespace dftracer::utils::utilities {
 
 namespace tags {
 struct NeedsContext;
-struct Parallelizable;
 }  // namespace tags
 
 namespace behaviors {
@@ -49,7 +49,8 @@ consteval auto make_utility_signature() {
 /**
  * @brief Shared machinery for all utility variants.
  *
- * Holds tags and context pointer.
+ * Holds the context pointer; tags are compile-time markers (queried via
+ * has_tag<>()), not stored per instance.
  * Type signature is generated at compile time and stored as a static constexpr
  * string_view.
  *
@@ -59,7 +60,6 @@ consteval auto make_utility_signature() {
 template <typename I, typename... Tags>
 class UtilityBase {
    private:
-    std::tuple<Tags...> tags_;
     CoroScope* ctx_ = nullptr;
 
     static constexpr auto sig_ = make_input_signature<I>();
@@ -69,12 +69,6 @@ class UtilityBase {
     using TagsTuple = std::tuple<Tags...>;
 
     UtilityBase() = default;
-
-    template <typename Dummy = void,
-              typename = std::enable_if_t<(sizeof...(Tags) > 0) &&
-                                          std::is_void_v<Dummy>>>
-    explicit UtilityBase(Tags... tags)
-        : tags_(std::make_tuple(std::move(tags)...)) {}
 
     virtual ~UtilityBase() = default;
 
@@ -86,21 +80,6 @@ class UtilityBase {
     template <typename Tag>
     static constexpr bool has_tag() {
         return (std::is_same_v<Tag, Tags> || ...);
-    }
-
-    template <typename Tag>
-    const Tag& get_tag() const {
-        return std::get<Tag>(tags_);
-    }
-
-    template <typename Tag>
-    Tag& get_tag() {
-        return std::get<Tag>(tags_);
-    }
-
-    template <typename Tag>
-    void set_tag(Tag tag) {
-        std::get<Tag>(tags_) = std::move(tag);
     }
 
     static constexpr std::string_view get_type_signature() { return sig_; }
@@ -119,9 +98,11 @@ class UtilityBase {
             "Add tags::NeedsContext to your Utility class template "
             "parameters.");
         if (!ctx_) {
-            throw std::runtime_error(
-                "CoroScope not available. Ensure utility is executed via "
-                "UtilityExecutor or pipeline with proper executor.");
+            throw DFTUtilsException::cat(
+                ErrorCode::PIPELINE, get_name(),
+                " requires a bound CoroScope. Execute it via Runtime::scope(), "
+                "UtilityExecutor, or a pipeline, not by calling process() "
+                "directly.");
         }
         return *ctx_;
     }
@@ -173,16 +154,19 @@ class Utility : public UtilityBase<I, Tags...> {
     coro::CoroTask<O> process(I&& input) {
 #if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ < 14)
         // GCC 12/13 miscalculate frame offsets for non-trivial locals in
-        // coroutine frames (coroutine-caveats.md §3). Heap-allocate so only
-        // a trivial unique_ptr slot lives in the wrapper frame, isolating
-        // the input object from frame-layout corruption. Drop this branch
-        // once the GCC 12/13 baseline is retired.
-        auto owned = std::make_unique<I>(std::move(input));
-        co_return co_await this->process(static_cast<const I&>(*owned));
+        // coroutine frames. Only non-trivial I is affected, so heap-allocate it
+        // (a trivial pointer slot lives in the frame) and let
+        // trivially-copyable I stay a zero-alloc frame local. Drop once GCC
+        // 12/13 is retired.
+        if constexpr (!std::is_trivially_copyable_v<I>) {
+            auto owned = std::make_unique<I>(std::move(input));
+            co_return co_await this->process(static_cast<const I&>(*owned));
+        } else {
+            I local(std::move(input));
+            co_return co_await this->process(static_cast<const I&>(local));
+        }
 #else
-        // GCC 14+, Clang 14+, MSVC: frame-local is safe per the language
-        // rules, the local lives in the wrapper coroutine frame and the
-        // inner co_await holds a reference to it across suspension.
+        // GCC 14+, Clang 14+, MSVC: frame-local is safe per the language rules.
         I local(std::move(input));
         co_return co_await this->process(static_cast<const I&>(local));
 #endif

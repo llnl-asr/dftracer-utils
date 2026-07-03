@@ -5,13 +5,53 @@
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/core/utilities/monitor.h>
+#include <zlib.h>
 
 #include <chrono>
 #include <coroutine>
 #include <exception>
+#include <mutex>
 #include <vector>
 
 namespace dftracer::utils {
+
+namespace {
+
+// Force zlib-ng's lazy CPU-feature functable init single-threaded before any
+// worker spawns, so concurrent first-use does not race on the global table.
+void warmup_vendored_libs() noexcept {
+    unsigned char src[64];
+    for (std::size_t i = 0; i < sizeof(src); ++i) {
+        src[i] = static_cast<unsigned char>(i);
+    }
+    unsigned char comp[128];
+    unsigned char back[64];
+
+    z_stream def{};
+    if (deflateInit2(&def, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 31, 8,
+                     Z_DEFAULT_STRATEGY) == Z_OK) {
+        def.next_in = src;
+        def.avail_in = sizeof(src);
+        def.next_out = comp;
+        def.avail_out = sizeof(comp);
+        deflate(&def, Z_FINISH);
+        uInt comp_len = static_cast<uInt>(sizeof(comp) - def.avail_out);
+        deflateEnd(&def);
+
+        z_stream inf{};
+        if (inflateInit2(&inf, 31) == Z_OK) {
+            inf.next_in = comp;
+            inf.avail_in = comp_len;
+            inf.next_out = back;
+            inf.avail_out = sizeof(back);
+            inflate(&inf, Z_FINISH);
+            inflateEnd(&inf);
+        }
+    }
+}
+
+}  // namespace
 
 static thread_local void* tls_current_worker_context = nullptr;
 
@@ -82,7 +122,8 @@ Executor::Executor(const ExecutorConfig& config)
     DFTRACER_UTILS_LOG_DEBUG(
         "Executor created with %zu threads, idle_timeout=%lld s, "
         "deadlock_timeout=%lld s",
-        num_threads_, idle_timeout_.count(), deadlock_timeout_.count());
+        num_threads_, static_cast<long long>(idle_timeout_.count()),
+        static_cast<long long>(deadlock_timeout_.count()));
 }
 
 Executor::~Executor() {
@@ -99,6 +140,9 @@ void Executor::start() {
     running_ = true;
     workers_.clear();
     workers_.reserve(num_threads_);
+
+    static std::once_flag warmup_once;
+    std::call_once(warmup_once, warmup_vendored_libs);
 
     timer_service_.start();
 
@@ -192,6 +236,12 @@ void Executor::worker_thread(WorkerContext* context) {
     tls_current_executor = this;
     coro::reset_timeslice();
 
+    // Fixed for the process lifetime; read once to keep the resume loop cheap.
+    const bool monitor = utilities::monitoring_enabled();
+    if (monitor) {
+        utilities::monitor_set_worker(static_cast<int>(context->worker_id));
+    }
+
     while (running_) {
         RunQueueEntry pending_entry;
 
@@ -230,7 +280,14 @@ void Executor::worker_thread(WorkerContext* context) {
                     }
                 }
                 DFTRACER_TSAN_ACQUIRE(pending_resume.address());
+                if (monitor) {
+                    utilities::monitor_resume_begin(pending_entry.monitor_id);
+                }
                 pending_resume.resume();
+                if (monitor) {
+                    utilities::monitor_resume_end(pending_resume.address(),
+                                                  pending_resume.done());
+                }
             }
             // Destroy coroutine frames that FinalAwaiter deferred to this
             // thread.  Safe: resume() has fully returned, so the frame
@@ -331,8 +388,16 @@ void Executor::enqueue(std::coroutine_handle<> handle, TaskIndex task_id) {
         return;  // Invalid or already completed
     }
 
+    long long monitor_id = -1;
+    if (utilities::monitoring_enabled()) {
+        // task_id >= 0 marks a tracked submitted task; otherwise it is spawn
+        // fan-out (or a re-enqueue of an already-seen coroutine).
+        monitor_id = utilities::monitor_enqueue(
+            handle.address(), task_id >= 0 ? utilities::CoroKind::Task
+                                           : utilities::CoroKind::Spawn);
+    }
     DFTRACER_TSAN_RELEASE(handle.address());
-    run_queue_.enqueue(RunQueueEntry{handle, task_id});
+    run_queue_.enqueue(RunQueueEntry{handle, task_id, monitor_id});
     signal_global_work();
 }
 
@@ -368,8 +433,10 @@ bool Executor::is_responsive() const {
                 "Executor appears deadlocked: %zu threads, %zu active "
                 "tasks, idle for %lld ms",
                 num_threads_, active,
-                std::chrono::duration_cast<std::chrono::milliseconds>(idle_time)
-                    .count());
+                static_cast<long long>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        idle_time)
+                        .count()));
             return false;
         }
     }

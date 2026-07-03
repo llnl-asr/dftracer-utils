@@ -1,18 +1,14 @@
-#ifndef DFTRACER_UTILS_CORE_IO_IO_URING_BACKEND_H
-#define DFTRACER_UTILS_CORE_IO_IO_URING_BACKEND_H
-#ifdef DFTRACER_UTILS_HAVE_IO_URING
+#ifndef DFTRACER_UTILS_CORE_IO_THREAD_POOL_FILE_OPS_H
+#define DFTRACER_UTILS_CORE_IO_THREAD_POOL_FILE_OPS_H
 
 #include <dftracer/utils/core/common/object_pool.h>
-#include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/core/io/io_backend.h>
-#include <dftracer/utils/core/io/io_completion_thread.h>
 #include <dftracer/utils/core/io/io_op.h>
-#include <dftracer/utils/core/io/io_uring_wrapper.h>
+#include <dftracer/utils/core/io/io_thread_pool.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
 
 #include <cstddef>
-#include <mutex>
 #include <string>
 
 namespace dftracer::utils {
@@ -21,9 +17,9 @@ class Executor;
 
 namespace dftracer::utils::io {
 
-/// io_uring request. Stored in the SQE's user_data so we can
-/// recover the IoAwaitable pointer on completion.
-struct IoUringRequest {
+/// Request descriptor that doubles as SubmitContext.
+/// Heap-allocated per I/O operation, freed after completion.
+struct IoRequest : SubmitContext {
     static void* operator new(std::size_t size) {
         return ObjectPool::instance().allocate(size);
     }
@@ -31,25 +27,38 @@ struct IoUringRequest {
         ObjectPool::instance().deallocate(ptr, size);
     }
 
+    IoOp op = IoOp::READ;
+    int fd = -1;
+    void* buf = nullptr;
+    std::size_t len = 0;
+    off_t offset = 0;
+    const char* path = nullptr;
+    int flags = 0;
+    mode_t mode = 0;
+    struct stat* stat_buf = nullptr;
+    struct sockaddr* addr = nullptr;
+    socklen_t* addrlen = nullptr;
+    int msg_flags = 0;
+    const struct iovec* iov = nullptr;
+    int iovcnt = 0;
+    int whence = 0;
+    int dest_fd = -1;
     IoAwaitable* awaitable = nullptr;
     IoCompletionFn completion = nullptr;
     void* completion_ctx = nullptr;
+    Executor* executor = nullptr;
+    IoThreadPool* pool = nullptr;
 };
 
-/// io_uring I/O backend using raw syscalls (no liburing dependency).
-/// Uses a dedicated completion thread that blocks on wait_cqe and
-/// enqueues completed coroutine handles back to the executor.
-class IoUringBackend : public IoBackend {
+/// Shared base for the thread-pool-backed I/O backends.
+/// Owns the executor reference and the I/O thread pool, and implements the
+/// full submit_* surface once. Concrete backends (pure thread pool, epoll,
+/// kqueue) derive from this and add only their reactor-specific bits
+/// (start/stop, name, event loop). io_uring uses a separate SQE-based path.
+class ThreadPoolFileOps : public IoBackend {
    public:
-    explicit IoUringBackend(Executor& executor, unsigned ring_entries = 256,
-                            unsigned batch_threshold = 16);
-
-    /// Probe whether io_uring actually works on this kernel at runtime.
-    /// Returns true if io_uring_setup succeeds.
-    bool probe();
-
-    void start() override;
-    void stop() override;
+    explicit ThreadPoolFileOps(Executor& executor, std::size_t pool_size = 4,
+                               unsigned batch_threshold = 0);
 
     IoAwaitable submit_read(int fd, void* buf, std::size_t len) override;
     IoAwaitable submit_write(int fd, const void* buf, std::size_t len) override;
@@ -83,61 +92,33 @@ class IoUringBackend : public IoBackend {
     IoAwaitable submit_sendfile(int out_fd, int in_fd, off_t offset,
                                 std::size_t count) override;
 
+    /// Thread-pool backends complete via callbacks; nothing to reap.
     std::size_t poll(int timeout_ms) override;
+
+    /// Flush pending batched submissions.
     int flush() override;
-    std::string name() const override { return "io_uring"; }
 
-    /// Static callback for SubmitContext::submit.
-    static void submit_fn(SubmitContext* ctx, IoAwaitable* awaitable);
+    /// Called by await_suspend via SubmitContext::submit.
+    /// Submits the IoRequest to the thread pool.
+    static void submit_to_pool(SubmitContext* ctx, IoAwaitable* awaitable);
 
-   private:
-    /// Completion loop run by the completion thread.
-    void completion_loop();
+    /// Execute the blocking syscall and resume the coroutine. The syscall
+    /// dispatch is identical across the thread-pool backends and
+    /// platform-aware via #ifdef.
+    static void execute_request(IoRequest* req);
 
-    /// Flush pending SQEs if threshold reached. Called under submit_mutex_.
-    void maybe_flush_locked();
+    /// Allocate and initialize an IoRequest for the common scalar ops.
+    /// Op-specific fields are post-configured by the caller.
+    static IoAwaitable make_request(IoOp op, int fd, void* buf, std::size_t len,
+                                    off_t offset, const char* path, int flags,
+                                    mode_t mode, Executor* executor,
+                                    IoThreadPool* pool);
 
+   protected:
     Executor& executor_;
-    unsigned ring_entries_;
-    unsigned batch_threshold_;
-    uring::Ring ring_;
-    IoCompletionThread completion_thread_;
-    std::mutex submit_mutex_;
-};
-
-/// SubmitContext subclass for io_uring. Carries the operation
-/// details needed to prepare an SQE on await_suspend.
-struct IoUringSubmitCtx : SubmitContext {
-    static void* operator new(std::size_t size) {
-        return ObjectPool::instance().allocate(size);
-    }
-    static void operator delete(void* ptr, std::size_t size) {
-        ObjectPool::instance().deallocate(ptr, size);
-    }
-
-    IoOp op = IoOp::READ;
-    int fd = -1;
-    void* buf = nullptr;
-    std::size_t len = 0;
-    off_t offset = 0;
-    const char* path = nullptr;
-    int flags = 0;
-    mode_t mode = 0;
-    struct stat* stat_buf = nullptr;
-    struct sockaddr* addr = nullptr;
-    socklen_t* addrlen = nullptr;
-    int accept_flags = 0;
-    int msg_flags = 0;
-    const struct iovec* iov = nullptr;
-    int iovcnt = 0;
-    int whence = 0;
-    int dest_fd = -1;
-    IoUringBackend* backend = nullptr;
-    IoCompletionFn completion = nullptr;
-    void* completion_ctx = nullptr;
+    IoThreadPool pool_;
 };
 
 }  // namespace dftracer::utils::io
 
-#endif  // DFTRACER_UTILS_HAVE_IO_URING
-#endif  // DFTRACER_UTILS_CORE_IO_IO_URING_BACKEND_H
+#endif  // DFTRACER_UTILS_CORE_IO_THREAD_POOL_FILE_OPS_H

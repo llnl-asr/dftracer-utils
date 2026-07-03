@@ -1,6 +1,9 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_GENERATOR_H
 #define DFTRACER_UTILS_CORE_CORO_GENERATOR_H
 
+#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/exception_helpers.h>
+
 #include <coroutine>
 #include <exception>
 #include <iterator>
@@ -105,9 +108,7 @@ class Generator {
             if (handle_ && !handle_.done()) {
                 handle_.resume();
                 if (handle_.promise().exception_) {
-                    auto ex = std::move(handle_.promise().exception_);
-                    handle_.promise().exception_ = nullptr;
-                    std::rethrow_exception(std::move(ex));
+                    rethrow_and_clear(handle_.promise().exception_);
                 }
             }
             return *this;
@@ -127,7 +128,8 @@ class Generator {
          */
         reference operator*() const {
             if (!handle_ || !handle_.promise().current_value_) {
-                throw std::runtime_error(
+                throw DFTUtilsException(
+                    ErrorCode::INVALID_ARGUMENT,
                     "Generator iterator: no value available");
             }
             return *handle_.promise().current_value_;
@@ -205,9 +207,7 @@ class Generator {
         handle_.resume();
 
         if (handle_.promise().exception_) {
-            auto ex = std::move(handle_.promise().exception_);
-            handle_.promise().exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(handle_.promise().exception_);
         }
 
         if (handle_.done()) {
@@ -234,9 +234,7 @@ class Generator {
         handle_.resume();
 
         if (handle_.promise().exception_) {
-            auto ex = std::move(handle_.promise().exception_);
-            handle_.promise().exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(handle_.promise().exception_);
         }
 
         return !handle_.done();
@@ -248,7 +246,8 @@ class Generator {
      */
     const T& value() const {
         if (!handle_ || !handle_.promise().current_value_) {
-            throw std::runtime_error("Generator: no value available");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "Generator: no value available");
         }
         return *handle_.promise().current_value_;
     }
@@ -270,9 +269,7 @@ class Generator {
      */
     void rethrow_if_exception() {
         if (handle_ && handle_.promise().exception_) {
-            auto ex = std::move(handle_.promise().exception_);
-            handle_.promise().exception_ = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(handle_.promise().exception_);
         }
     }
 };

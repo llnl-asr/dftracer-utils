@@ -1,6 +1,9 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 #define DFTRACER_UTILS_CORE_CORO_WHEN_ANY_H
 
+#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/exception_helpers.h>
+#include <dftracer/utils/core/coro/completion_state.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/resumption_helper.h>
 #include <dftracer/utils/core/coro/task.h>
@@ -70,11 +73,10 @@ struct WhenAnySharedState;
 // ============================================================================
 
 template <typename Awaitable>
-struct WhenAnySharedState {
+struct WhenAnySharedState : WhenAnyCompletionState {
     std::atomic<bool> completed{false};
     WhenAnyResult<typename Awaitable::result_type> result;
     std::exception_ptr exception;
-    std::coroutine_handle<> awaiting_coroutine;
     std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
     // Wrappers are fire-and-forget Coro instances managed by the
     // executor's FinalAwaiter lifecycle.  No wrapper_tasks vector is
@@ -82,16 +84,6 @@ struct WhenAnySharedState {
     std::atomic<std::size_t> wrappers_done{0};
     std::size_t total_wrappers{0};
     std::vector<Awaitable> awaitables;
-    Executor* executor{nullptr};
-
-    // Single-atomic coordination between await_suspend and wrapper
-    // completion.  Uses fetch_or(acq_rel) on a bitmask -- the total
-    // modification order on one atomic guarantees exactly one side sees the
-    // other's bit, eliminating the store-buffer (SB) reordering hazard that
-    // two independent atomics with seq_cst were guarding against.
-    static constexpr std::uint8_t BIT_SUSPENDED = 1;
-    static constexpr std::uint8_t BIT_COMPLETED = 2;
-    std::atomic<std::uint8_t> sync_state_{0};
 
     explicit WhenAnySharedState(std::vector<Awaitable> aws)
         : awaitables(std::move(aws)) {
@@ -117,38 +109,6 @@ struct WhenAnySharedState {
         for (auto& a : awaitables) {
             if constexpr (requires { a.detach(); }) {
                 a.detach();
-            }
-        }
-    }
-
-    // Called by the first wrapper to complete (winner of CAS)
-    void on_first_complete() {
-        auto prev =
-            sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
-        if (prev & BIT_SUSPENDED) {
-            if (awaiting_coroutine && !awaiting_coroutine.done()) {
-                if (executor) {
-                    schedule_coroutine_resumption_helper(executor,
-                                                         awaiting_coroutine);
-                } else {
-                    awaiting_coroutine.resume();
-                }
-            }
-        }
-    }
-
-    // Called by await_suspend after deciding to suspend but before returning
-    void mark_suspended_and_check_completion() {
-        auto prev =
-            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
-        if (prev & BIT_COMPLETED) {
-            if (awaiting_coroutine && !awaiting_coroutine.done()) {
-                if (executor) {
-                    schedule_coroutine_resumption_helper(executor,
-                                                         awaiting_coroutine);
-                } else {
-                    awaiting_coroutine.resume();
-                }
             }
         }
     }
@@ -219,11 +179,11 @@ class WhenAnyAwaitable {
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        state_->awaiting_coroutine = h;
+        state_->awaiting_coroutine_ = h;
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            state_->executor = root->get_executor();
+            state_->executor_ = root->get_executor();
         }
 
         if (state_->awaitables.empty()) {
@@ -267,9 +227,7 @@ class WhenAnyAwaitable {
             }
         }
         if (state_->exception) {
-            auto ex = std::move(state_->exception);
-            state_->exception = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception);
         }
         return std::move(state_->result);
     }
@@ -335,7 +293,7 @@ class WhenAnyAwaitable {
 
         // Set executor on the Coro's promise so FinalAwaiter can
         // schedule deferred destruction via the worker's TLS list.
-        wrapper.handle().promise().executor = state_->executor;
+        wrapper.handle().promise().executor = state_->executor_;
         // Release ownership: the executor manages the frame from
         // now on.  FinalAwaiter will see released==true and schedule
         // deferred destruction when the wrapper completes.
@@ -483,20 +441,14 @@ struct WhenAnyTupleResult {
 };
 
 template <typename... Awaitables>
-struct WhenAnyTupleState {
+struct WhenAnyTupleState : WhenAnyCompletionState {
     static constexpr std::size_t total_ = sizeof...(Awaitables);
 
     std::tuple<Awaitables...> awaitables_;
     std::atomic<bool> completed{false};
     WhenAnyTupleResult<Awaitables...> result;
     std::exception_ptr exception;
-    std::coroutine_handle<> awaiting_coroutine;
     std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
-    Executor* executor{nullptr};
-
-    static constexpr std::uint8_t BIT_SUSPENDED = 1;
-    static constexpr std::uint8_t BIT_COMPLETED = 2;
-    std::atomic<std::uint8_t> sync_state_{0};
 
     explicit WhenAnyTupleState(Awaitables&&... aws)
         : awaitables_(std::forward<Awaitables>(aws)...) {
@@ -531,36 +483,6 @@ struct WhenAnyTupleState {
                     ...);
             },
             awaitables_);
-    }
-
-    void on_first_complete() {
-        auto prev =
-            sync_state_.fetch_or(BIT_COMPLETED, std::memory_order_acq_rel);
-        if (prev & BIT_SUSPENDED) {
-            if (awaiting_coroutine && !awaiting_coroutine.done()) {
-                if (executor) {
-                    schedule_coroutine_resumption_helper(executor,
-                                                         awaiting_coroutine);
-                } else {
-                    awaiting_coroutine.resume();
-                }
-            }
-        }
-    }
-
-    void mark_suspended_and_check_completion() {
-        auto prev =
-            sync_state_.fetch_or(BIT_SUSPENDED, std::memory_order_acq_rel);
-        if (prev & BIT_COMPLETED) {
-            if (awaiting_coroutine && !awaiting_coroutine.done()) {
-                if (executor) {
-                    schedule_coroutine_resumption_helper(executor,
-                                                         awaiting_coroutine);
-                } else {
-                    awaiting_coroutine.resume();
-                }
-            }
-        }
     }
 };
 
@@ -643,7 +565,7 @@ class WhenAnyTupleAwaitable {
             co_return;
         }(state_);
 
-        wrapper.handle().promise().executor = state_->executor;
+        wrapper.handle().promise().executor = state_->executor_;
         auto h = wrapper.release();
         h.resume();
     }
@@ -712,11 +634,11 @@ class WhenAnyTupleAwaitable {
 
     template <typename Promise>
     bool await_suspend(std::coroutine_handle<Promise> h) {
-        state_->awaiting_coroutine = h;
+        state_->awaiting_coroutine_ = h;
 
         if constexpr (std::is_base_of_v<PromiseBase, Promise>) {
             auto* root = h.promise().get_root_promise();
-            state_->executor = root->get_executor();
+            state_->executor_ = root->get_executor();
         }
 
         launch_all(std::make_index_sequence<sizeof...(Awaitables)>{});
@@ -752,9 +674,7 @@ class WhenAnyTupleAwaitable {
             state_->awaitables_);
 
         if (state_->exception) {
-            auto ex = std::move(state_->exception);
-            state_->exception = nullptr;
-            std::rethrow_exception(std::move(ex));
+            rethrow_and_clear(state_->exception);
         }
         return std::move(state_->result);
     }
@@ -827,7 +747,8 @@ class TimeoutAwaitable {
 
     void await_suspend(std::coroutine_handle<> h) {
         if (!timer_service_) {
-            throw std::runtime_error(
+            throw DFTUtilsException(
+                ErrorCode::PIPELINE,
                 "TimeoutAwaitable: TimerService not available");
         }
 
@@ -843,7 +764,7 @@ class TimeoutAwaitable {
         completed_.store(true, std::memory_order_release);
 
         if (timed_out_->load(std::memory_order_acquire)) {
-            throw std::runtime_error("Operation timed out");
+            throw DFTUtilsException(ErrorCode::PIPELINE, "Operation timed out");
         }
     }
 

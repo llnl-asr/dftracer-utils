@@ -122,7 +122,7 @@ inline constexpr bool has_tags_tuple_v = has_tags_tuple<T>::value;
  *
  * Usage:
  * @code
- * if constexpr (has_tag<tags::Parallelizable, MyUtility>()) {
+ * if constexpr (has_tag<tags::NeedsContext, MyUtility>()) {
  *     // Utility is parallelizable
  * }
  * @endcode
@@ -142,7 +142,7 @@ constexpr bool has_tag() {
  * Usage:
  * @code
  * auto utility = std::make_shared<MyUtility>();
- * if constexpr (has_tag_v<tags::Parallelizable, decltype(*utility)>) {
+ * if constexpr (has_tag_v<tags::NeedsContext, decltype(*utility)>) {
  *     // Utility is parallelizable
  * }
  * @endcode

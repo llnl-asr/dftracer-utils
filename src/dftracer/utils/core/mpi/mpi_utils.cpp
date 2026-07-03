@@ -3,6 +3,37 @@
 
 namespace dftracer::utils::mpi {
 
+namespace {
+
+#ifdef DFTRACER_UTILS_MPI_ENABLED
+// Prefix-sum recv_counts into displacements; returns the total element count.
+int compute_displacements(const std::vector<int>& recv_counts, int world_size,
+                          std::vector<int>& displacements) {
+    displacements.resize(world_size);
+    int total = 0;
+    for (int i = 0; i < world_size; i++) {
+        displacements[i] = total;
+        total += recv_counts[i];
+    }
+    return total;
+}
+#endif
+
+// Single-rank fallback: the gathered result is just the local send buffer.
+template <typename T>
+void serial_gatherv_fallback(const std::vector<T>& send_data,
+                             std::vector<T>& recv_data,
+                             std::vector<int>& recv_counts,
+                             std::vector<int>& displacements) {
+    recv_data = send_data;
+    recv_counts.clear();
+    recv_counts.push_back(static_cast<int>(send_data.size()));
+    displacements.clear();
+    displacements.push_back(0);
+}
+
+}  // namespace
+
 MPIUtils::MPIUtils() : rank_(0), world_size_(1), initialized_(false) {}
 
 MPIUtils::~MPIUtils() {
@@ -149,12 +180,8 @@ void MPIUtils::gatherv_uint32(const std::vector<std::uint32_t>& send_data,
 
     // Calculate displacements and total size on root
     if (rank_ == root) {
-        displacements.resize(world_size_);
-        int total = 0;
-        for (int i = 0; i < world_size_; i++) {
-            displacements[i] = total;
-            total += recv_counts[i];
-        }
+        int total =
+            compute_displacements(recv_counts, world_size_, displacements);
         recv_data.resize(total);
     }
 
@@ -162,11 +189,7 @@ void MPIUtils::gatherv_uint32(const std::vector<std::uint32_t>& send_data,
                 recv_counts.data(), displacements.data(), MPI_UINT32_T, root,
                 MPI_COMM_WORLD);
 #else
-    recv_data = send_data;
-    recv_counts.clear();
-    recv_counts.push_back(static_cast<int>(send_data.size()));
-    displacements.clear();
-    displacements.push_back(0);
+    serial_gatherv_fallback(send_data, recv_data, recv_counts, displacements);
     (void)root;
 #endif
 }
@@ -194,11 +217,8 @@ void MPIUtils::allgatherv_char(const std::vector<char>& send_data,
                                std::vector<int>& displacements) {
 #ifdef DFTRACER_UTILS_MPI_ENABLED
     if (!initialized_) {
-        recv_data = send_data;
-        recv_sizes.clear();
-        recv_sizes.push_back(static_cast<int>(send_data.size()));
-        displacements.clear();
-        displacements.push_back(0);
+        serial_gatherv_fallback(send_data, recv_data, recv_sizes,
+                                displacements);
         return;
     }
 
@@ -207,24 +227,14 @@ void MPIUtils::allgatherv_char(const std::vector<char>& send_data,
     MPI_Allgather(&send_size, 1, MPI_INT, recv_sizes.data(), 1, MPI_INT,
                   MPI_COMM_WORLD);
 
-    // Calculate displacements and total size
-    displacements.resize(world_size_);
-    int total_recv = 0;
-    for (int i = 0; i < world_size_; i++) {
-        displacements[i] = total_recv;
-        total_recv += recv_sizes[i];
-    }
-
+    int total_recv =
+        compute_displacements(recv_sizes, world_size_, displacements);
     recv_data.resize(total_recv);
     MPI_Allgatherv(send_data.data(), send_size, MPI_CHAR, recv_data.data(),
                    recv_sizes.data(), displacements.data(), MPI_CHAR,
                    MPI_COMM_WORLD);
 #else
-    recv_data = send_data;
-    recv_sizes.clear();
-    recv_sizes.push_back(static_cast<int>(send_data.size()));
-    displacements.clear();
-    displacements.push_back(0);
+    serial_gatherv_fallback(send_data, recv_data, recv_sizes, displacements);
 #endif
 }
 

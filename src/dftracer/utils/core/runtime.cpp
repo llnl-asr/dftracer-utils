@@ -1,15 +1,34 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/core/env.h>
 #include <dftracer/utils/core/runtime.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <thread>
 
 namespace dftracer::utils {
 
-Runtime::Runtime(std::size_t threads)
-    : threads_(threads == 0 ? dftracer_utils_hardware_concurrency() : threads) {
+namespace {
+// Resolve the worker-thread count. DFTRACER_UTILS_THREADS overrides everything
+// (a debugging lever: force a fixed count, e.g. 1 for a single-threaded async
+// loop). Otherwise 0 means hardware_concurrency.
+std::size_t resolve_threads(std::size_t requested) {
+    if (auto env = Env::get<std::string_view>("DFTRACER_UTILS_THREADS");
+        env.has_value()) {
+        const long long n =
+            std::strtoll(std::string(*env).c_str(), nullptr, 10);
+        if (n > 0) return static_cast<std::size_t>(n);
+    }
+    return requested == 0 ? dftracer_utils_hardware_concurrency() : requested;
+}
+}  // namespace
+
+Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
     ExecutorConfig config;
     config.num_threads = threads_;
     executor_ = std::make_unique<Executor>(config);
@@ -20,9 +39,10 @@ Runtime::Runtime(std::size_t threads)
 }
 
 Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
-    : threads_(config.num_threads == 0 ? dftracer_utils_hardware_concurrency()
-                                       : config.num_threads) {
-    executor_ = std::make_unique<Executor>(config);
+    : threads_(resolve_threads(config.num_threads)) {
+    ExecutorConfig cfg = config;
+    cfg.num_threads = threads_;
+    executor_ = std::make_unique<Executor>(cfg);
     executor_->start();
 
     if (enable_watchdog) {
@@ -33,9 +53,10 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
 
 Runtime::Runtime(const ExecutorConfig& config,
                  std::unique_ptr<Watchdog> watchdog)
-    : threads_(config.num_threads == 0 ? dftracer_utils_hardware_concurrency()
-                                       : config.num_threads) {
-    executor_ = std::make_unique<Executor>(config);
+    : threads_(resolve_threads(config.num_threads)) {
+    ExecutorConfig cfg = config;
+    cfg.num_threads = threads_;
+    executor_ = std::make_unique<Executor>(cfg);
     executor_->start();
 
     watchdog_ = std::move(watchdog);
@@ -48,7 +69,7 @@ Runtime::~Runtime() { shutdown(); }
 
 TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw std::runtime_error("Runtime is shut down");
+        throw DFTUtilsException(ErrorCode::PIPELINE, "Runtime is shut down");
     }
     if (name.empty()) {
         name = "task-" + std::to_string(task_name_counter_++);
@@ -127,7 +148,8 @@ bool Runtime::is_responsive() const { return executor_->is_responsive(); }
 
 void Runtime::set_global_timeout(std::chrono::milliseconds timeout) {
     if (!watchdog_) {
-        throw std::runtime_error(
+        throw DFTUtilsException(
+            ErrorCode::PIPELINE,
             "Cannot set timeout: Runtime created without watchdog");
     }
     watchdog_->set_global_timeout(timeout);
@@ -135,7 +157,8 @@ void Runtime::set_global_timeout(std::chrono::milliseconds timeout) {
 
 void Runtime::set_default_task_timeout(std::chrono::milliseconds timeout) {
     if (!watchdog_) {
-        throw std::runtime_error(
+        throw DFTUtilsException(
+            ErrorCode::PIPELINE,
             "Cannot set timeout: Runtime created without watchdog");
     }
     watchdog_->set_default_task_timeout(timeout);

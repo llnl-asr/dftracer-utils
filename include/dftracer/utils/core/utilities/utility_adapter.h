@@ -4,158 +4,44 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
-#include <dftracer/utils/core/utilities/behaviors/default_behaviors.h>
-#include <dftracer/utils/core/utilities/tags/monitored.h>
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/core/utilities/utility_traits.h>
 
 #include <memory>
-#include <optional>
-#include <vector>
 
 namespace dftracer::utils::utilities {
 
 /**
- * @brief Adapter that wraps Utility as a Task with behavior support.
+ * @brief Adapter that wraps a Utility as a Task.
  *
- * This adapter provides a fluent interface for converting utilities into tasks
- * with optional behaviors. The primary operation is as_task() which returns a
- * std::shared_ptr<Task> that can be used with the standard Task API.
- *
- * Design Philosophy:
- * - Utilities are just specialized functions that can be wrapped as tasks
- * - Behaviors are EXPLICIT and opt-in via with_behavior()
- * - The Task API handles dependencies, scheduling, and execution
- * - No coupling to Pipeline - work directly with Scheduler
+ * Provides the fluent `use(utility).as_task()` API: it returns a
+ * std::shared_ptr<Task> usable with the standard Task API (depends_on, etc.).
+ * Execution goes through UtilityExecutor, which injects the CoroScope context
+ * for context-needing utilities and applies env-gated monitoring.
  *
  * Usage:
  * @code
- * // Basic: Convert utility to task
- * auto task = use(utility).as_task();
- * scheduler.schedule(task, input);
- *
- * // With dependency (using Task API)
  * auto task = use(utility).as_task();
  * task->depends_on(parent_task);
- * scheduler.schedule(root_task, initial_input);
- *
- * // With explicit behavior
- * auto task = use(utility)
- *     .with_behavior(std::make_shared<TimingBehavior<I, O>>())
- *     .as_task();
- *
- * // Implicit conversion to Task
- * std::shared_ptr<Task> task = use(utility);  // Calls as_task() implicitly
- *
- * // Dynamic submission from within a task
- * auto outer_task = make_task([&](CoroScope& ctx) {
- *     auto inner = use(utility).as_task();
- *     auto future = ctx.submit_task(inner, data);
- *     return future.get();
- * });
  * @endcode
+ *
+ * @tparam I Input type
+ * @tparam O Output type
+ * @tparam Tags Variadic tag types
  */
 template <typename I, typename O, typename... Tags>
 class UtilityAdapter {
    private:
     std::shared_ptr<Utility<I, O, Tags...>> utility_;
-    behaviors::BehaviorChain<I, O> behavior_chain_;
-
-    /**
-     * @brief Build behavior chain from utility's tags.
-     *
-     * Uses BehaviorFactory to create behaviors for each tag that has
-     * a registered behavior creator.
-     */
-    void build_behaviors_from_tags() {
-        auto& factory = behaviors::get_default_behavior_factory<I, O>();
-
-        // Try to create behavior for each tag type
-        build_behavior_for_tag<Tags...>(factory);
-    }
-
-    /**
-     * @brief Recursively build behaviors for each tag type.
-     */
-    template <typename FirstTag, typename... RestTags>
-    void build_behavior_for_tag(behaviors::BehaviorFactory<I, O>& factory) {
-        // Check if factory has a behavior for this tag
-        if (factory.template has<FirstTag>()) {
-            // Get tag instance from utility
-            auto tag = utility_->template get_tag<FirstTag>();
-
-            // Special handling for Monitored tag - inject utility class name
-            if constexpr (std::is_same_v<FirstTag, tags::Monitored>) {
-                if (tag.utility_name == "Utility") {
-                    tag.utility_name =
-                        std::string(utility_->get_type_signature());
-                }
-            }
-
-            // Create behavior from tag
-            auto behavior = factory.template create<FirstTag>(tag);
-            if (behavior) {
-                behavior_chain_.add_behavior(behavior);
-            }
-        }
-
-        // Process remaining tags
-        if constexpr (sizeof...(RestTags) > 0) {
-            build_behavior_for_tag<RestTags...>(factory);
-        }
-    }
-
-    /**
-     * @brief Base case for tag recursion.
-     */
-    template <typename... EmptyTags>
-    void build_behavior_for_tag(
-        [[maybe_unused]] behaviors::BehaviorFactory<I, O>& factory,
-        std::enable_if_t<sizeof...(EmptyTags) == 0>* = nullptr) {
-        // Base case: no tags to process
-    }
 
    public:
-    /**
-     * @brief Construct adapter from utility.
-     *
-     * Automatically creates behaviors from the utility's tags using
-     * the default BehaviorFactory.
-     *
-     * @param utility Shared pointer to the utility to adapt
-     */
     explicit UtilityAdapter(std::shared_ptr<Utility<I, O, Tags...>> utility)
-        : utility_(std::move(utility)) {
-        build_behaviors_from_tags();
-    }
+        : utility_(std::move(utility)) {}
 
     /**
-     * @brief Add a custom behavior to the chain.
-     *
-     * Manually adds a behavior beyond those automatically created from tags.
-     * Useful for custom behaviors or when not using tags.
-     *
-     * @param behavior Shared pointer to behavior to add
-     * @return Reference to this adapter for chaining
-     *
-     * Usage:
-     * @code
-     * use(utility)
-     *     .with_behavior(std::make_shared<MyCustomBehavior<I, O>>())
-     *     .emit_on(pipeline);
-     * @endcode
-     */
-    UtilityAdapter& with_behavior(
-        std::shared_ptr<behaviors::UtilityBehavior<I, O>> behavior) {
-        behavior_chain_.add_behavior(behavior);
-        return *this;
-    }
-
-    /**
-     * @brief Check if utility needs CoroScope at compile time.
+     * @brief Check if the utility needs CoroScope at compile time.
      */
     static constexpr bool needs_context() {
         using UtilityType = Utility<I, O, Tags...>;
@@ -167,43 +53,25 @@ class UtilityAdapter {
     }
 
     /**
-     * @brief Convert utility to a Task (primary operation).
+     * @brief Convert the utility to a Task.
      *
-     * Creates a std::shared_ptr<Task> that wraps the utility with any behaviors
-     * that have been added. The returned task can be used with the standard
-     * Task API (depends_on, with_name, etc.) and scheduled via Scheduler.
-     *
-     * The task automatically detects if the utility needs CoroScope and
-     * creates the appropriate function signature.
-     *
-     * @return Shared pointer to Task wrapping this utility
-     *
-     * @example
-     * @code
-     * auto task = use(utility).as_task();
-     * task->with_name("MyUtility");
-     * task->depends_on(parent_task);
-     * scheduler.schedule(root, input);
-     * auto result = task->get<OutputType>();
-     * @endcode
+     * Detects whether the utility needs CoroScope and builds the matching task
+     * signature, executing via UtilityExecutor.
      */
     std::shared_ptr<Task> as_task() {
         using UtilityType = Utility<I, O, Tags...>;
         using ConcreteType =
             typename std::remove_reference<decltype(*utility_)>::type;
 
-        // Create executor with utility and behavior chain
         auto executor =
             std::make_shared<behaviors::UtilityExecutor<I, O, Tags...>>(
-                utility_, behavior_chain_);
+                utility_);
 
-        // Create task based on whether utility needs context
         if constexpr (UtilityType::template has_tag<tags::NeedsContext>() ||
                       detail::has_process_with_context_v<ConcreteType, I, O>) {
             return make_task(
                 [executor](CoroScope& ctx, I input) -> coro::CoroTask<O> {
-                    co_return co_await executor->execute_with_context(ctx,
-                                                                      input);
+                    co_return co_await executor->execute(ctx, input);
                 },
                 UtilityType::get_name());
         } else {
@@ -217,17 +85,11 @@ class UtilityAdapter {
 
     /**
      * @brief Implicit conversion to Task for convenience.
-     *
-     * Allows using UtilityAdapter directly where a std::shared_ptr<Task> is
-     * expected:
-     * @code
-     * std::shared_ptr<Task> task = use(utility);  // Implicit conversion
-     * @endcode
      */
     operator std::shared_ptr<Task>() { return as_task(); }
 };
 
-// Helper to expand tuple tags into parameter pack
+// Helper to expand tuple tags into a parameter pack.
 namespace detail {
 template <typename I, typename O, typename TagsTuple>
 struct UseHelper;
@@ -244,39 +106,30 @@ struct UseHelper<I, O, std::tuple<Tags...>> {
 }  // namespace detail
 
 /**
- * @brief Factory function to create a UtilityAdapter with natural syntax.
+ * @brief Factory function to create a UtilityAdapter: `use(utility).as_task()`.
  *
- * This function provides convenient template argument deduction and enables
- * fluent, natural-language-like syntax for wrapping utilities as tasks:
+ * Reads naturally as "use this utility as a task". Deduces the base Utility
+ * type from the utility's Input/Output/TagsTuple, so it also works with derived
+ * utility classes.
  *
  * @code
  * auto utility = std::make_shared<MyUtility>();
  *
- * // Basic usage: Convert to task
+ * // Basic usage: convert to a task and schedule it
  * auto task = use(utility).as_task();
  * scheduler.schedule(task, input);
  *
- * // With behaviors (explicit)
- * auto task = use(utility)
- *     .with_behavior(std::make_shared<MonitoringBehavior<I, O>>())
- *     .as_task();
- *
- * // Implicit conversion
+ * // Implicit conversion to std::shared_ptr<Task>
  * std::shared_ptr<Task> task = use(utility);
  *
- * // Use with Task API
+ * // Use with the Task API
  * auto parent = make_task([]() { return 42; });
  * auto child = use(utility).as_task();
  * child->depends_on(parent);
  * @endcode
  *
- * The name "use" was chosen to read naturally: "use this utility as a task".
- *
- * This function automatically handles derived utility classes by deducing
- * the base Utility type from the Input, Output, and TagsTuple members.
- *
- * @param utility Shared pointer to utility (can be derived class)
- * @return UtilityAdapter ready for conversion to Task via as_task()
+ * @param utility Shared pointer to the utility (may be a derived class)
+ * @return UtilityAdapter ready for conversion to a Task via as_task()
  */
 template <typename DerivedUtility>
 auto use(std::shared_ptr<DerivedUtility> utility) {

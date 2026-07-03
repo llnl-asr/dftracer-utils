@@ -208,6 +208,7 @@ class Executor {
     struct RunQueueEntry {
         std::coroutine_handle<> handle{};
         TaskIndex task_id{-1};
+        long long monitor_id{-1};  // coroutine monitor id, -1 if untracked
     };
 
     moodycamel::ConcurrentQueue<RunQueueEntry> run_queue_;

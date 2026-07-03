@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_RUNTIME_H
 #define DFTRACER_UTILS_CORE_RUNTIME_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/coro.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/executor.h>
@@ -43,6 +44,10 @@ coro::CoroTask<void> run_scoped_utility(CoroScope& scope, UtilityT* utility,
 /// Intended for Python bindings and other non-DAG consumers.
 class Runtime {
    public:
+    // The worker-thread count can be overridden at runtime by the
+    // DFTRACER_UTILS_THREADS environment variable (takes precedence over the
+    // requested count; e.g. set it to 1 for a single-threaded async loop when
+    // debugging). 0/unset means hardware_concurrency.
     explicit Runtime(std::size_t threads = 0);
     explicit Runtime(const ExecutorConfig& config, bool enable_watchdog = true);
     Runtime(const ExecutorConfig& config, std::unique_ptr<Watchdog> watchdog);
@@ -128,7 +133,7 @@ class Runtime {
 template <typename T>
 TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
-        throw std::runtime_error("Runtime is shut down");
+        throw DFTUtilsException(ErrorCode::PIPELINE, "Runtime is shut down");
     }
     if (name.empty()) {
         name = "task-" + std::to_string(task_name_counter_++);

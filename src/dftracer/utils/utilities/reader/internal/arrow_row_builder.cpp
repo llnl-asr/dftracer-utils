@@ -63,7 +63,8 @@ std::int8_t get_io_cat(std::string_view func) {
             return m;
         }();
     auto it = op_to_cat.find(func);
-    return it != op_to_cat.end() ? it->second : IO_OTHER;
+    return it != op_to_cat.end() ? it->second
+                                 : static_cast<std::int8_t>(IO_OTHER);
 }
 
 bool str_iequal(std::string_view a, const char *b) {
@@ -104,42 +105,51 @@ struct ParsedArgs {
     std::unordered_map<std::string, double> float_map;
 };
 
-ParsedArgs parse_row_args(JsonParser &parser) {
+// Parse a row's "args" object (already located during the single top-level
+// walk) into the extracted fields. Mirrors the previous per-key dispatch.
+ParsedArgs parse_row_args(simdjson::ondemand::value &args_val) {
     using SVH = JsonValueHelper;
     ParsedArgs a;
-    parser.rewind();
-    parser.for_each_field(
-        "args", [&](std::string_view key, simdjson::ondemand::value val) {
-            if (key == "name") {
-                if (auto s = SVH::get_string(val)) a.name = s;
-            } else if (key == "value") {
-                if (auto s = SVH::get_string(val)) a.value = s;
-            } else if (key == "hhash") {
-                if (auto s = SVH::get_string(val)) a.hhash = s;
-            } else if (key == "fhash") {
-                if (auto s = SVH::get_string(val)) a.fhash = s;
-            } else if (key == "epoch") {
-                if (auto i = SVH::get_int64(val)) a.epoch = i;
-            } else if (key == "step") {
-                if (auto i = SVH::get_int64(val)) a.step = i;
-            } else if (key == "size_sum") {
-                if (auto i = SVH::get_int64(val)) a.size_sum = i;
-            } else if (key == "ret") {
-                if (auto i = SVH::get_int64(val)) a.ret = i;
-            } else if (key == "offset") {
-                if (auto i = SVH::get_int64(val)) a.offset = i;
-            } else if (key == "image_idx") {
-                if (auto i = SVH::get_int64(val)) a.image_idx = i;
-            } else if (key == "image_size") {
-                if (auto i = SVH::get_int64(val)) a.image_size = i;
-            } else {
-                if (auto i = SVH::get_int64(val)) {
-                    a.int_map[std::string(key)] = *i;
-                } else if (auto d = SVH::get_double(val)) {
-                    a.float_map[std::string(key)] = *d;
-                }
+    auto obj = args_val.get_object();
+    if (obj.error()) return a;
+    for (auto field : obj.value_unsafe()) {
+        if (field.error()) continue;
+        auto key_r = field.unescaped_key();
+        if (key_r.error()) continue;
+        std::string_view key = key_r.value_unsafe();
+        auto val_r = field.value();
+        if (val_r.error()) continue;
+        auto val = val_r.value_unsafe();
+        if (key == "name") {
+            if (auto s = SVH::get_string(val)) a.name = s;
+        } else if (key == "value") {
+            if (auto s = SVH::get_string(val)) a.value = s;
+        } else if (key == "hhash") {
+            if (auto s = SVH::get_string(val)) a.hhash = s;
+        } else if (key == "fhash") {
+            if (auto s = SVH::get_string(val)) a.fhash = s;
+        } else if (key == "epoch") {
+            if (auto i = SVH::get_int64(val)) a.epoch = i;
+        } else if (key == "step") {
+            if (auto i = SVH::get_int64(val)) a.step = i;
+        } else if (key == "size_sum") {
+            if (auto i = SVH::get_int64(val)) a.size_sum = i;
+        } else if (key == "ret") {
+            if (auto i = SVH::get_int64(val)) a.ret = i;
+        } else if (key == "offset") {
+            if (auto i = SVH::get_int64(val)) a.offset = i;
+        } else if (key == "image_idx") {
+            if (auto i = SVH::get_int64(val)) a.image_idx = i;
+        } else if (key == "image_size") {
+            if (auto i = SVH::get_int64(val)) a.image_size = i;
+        } else {
+            if (auto i = SVH::get_int64(val)) {
+                a.int_map[std::string(key)] = *i;
+            } else if (auto d = SVH::get_double(val)) {
+                a.float_map[std::string(key)] = *d;
             }
-        });
+        }
+    }
     return a;
 }
 
@@ -182,16 +192,32 @@ void append_system_columns(
 // columns.  Returns false if the row should be skipped (no valid name).
 bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
                    JsonParser &parser) {
-    // --- Extract top-level fields ---
-    auto ph = parser.get_string("ph").value_or(std::string_view{});
-    auto name_sv = parser.get_string("name").value_or(std::string_view{});
-    auto cat_sv = parser.get_string("cat").value_or(std::string_view{});
-    auto pid_opt = parser.get_int64("pid");
-    auto tid_opt = parser.get_int64("tid");
-    auto ts_opt = parser.get_int64("ts");
-    auto dur_opt = parser.get_int64("dur");
-
-    ParsedArgs args = parse_row_args(parser);
+    using SVH = JsonValueHelper;
+    // --- Single-pass extraction: capture top-level fields and args in one
+    // member walk (dispatch on key, any field order). ---
+    std::string_view ph, name_sv, cat_sv;
+    std::optional<std::int64_t> pid_opt, tid_opt, ts_opt, dur_opt;
+    ParsedArgs args;
+    parser.for_each_field(
+        [&](std::string_view key, simdjson::ondemand::value val) {
+            if (key == "ph") {
+                if (auto s = SVH::get_string(val)) ph = *s;
+            } else if (key == "name") {
+                if (auto s = SVH::get_string(val)) name_sv = *s;
+            } else if (key == "cat") {
+                if (auto s = SVH::get_string(val)) cat_sv = *s;
+            } else if (key == "pid") {
+                pid_opt = SVH::get_int64(val);
+            } else if (key == "tid") {
+                tid_opt = SVH::get_int64(val);
+            } else if (key == "ts") {
+                ts_opt = SVH::get_int64(val);
+            } else if (key == "dur") {
+                dur_opt = SVH::get_int64(val);
+            } else if (key == "args") {
+                args = parse_row_args(val);
+            }
+        });
 
     // --- Type classification ---
     bool is_M = (ph == "M");

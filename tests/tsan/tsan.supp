@@ -1,0 +1,12 @@
+# ThreadSanitizer suppressions for known-benign, third-party first-use races.
+#
+# RocksDB caches CPU CRC32C support lazily on the first crc32c() call. The
+# first concurrent call races to set an idempotent, read-only flag (every
+# thread computes the same value; it is read-only afterward). This is in
+# RocksDB's internal util/crc32c.cc, not our code, and there is no clean
+# single-threaded trigger to warm it (the header is not public). Benign.
+race:IsFastCrc32Supported
+race:crc32c.cc
+
+# Note: zlib-ng's analogous lazy functable init race is NOT suppressed here -
+# it is eliminated by warming zlib single-threaded in Executor::start().

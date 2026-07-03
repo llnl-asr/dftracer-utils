@@ -248,6 +248,9 @@
       "name": "tsan",
       "displayName": "Run TSAN Tests",
       "configurePreset": "tsan",
+      "environment": {
+        "TSAN_OPTIONS": "suppressions=${sourceDir}/tests/tsan/tsan.supp"
+      },
       "execution": {
         "jobs": 0
       },

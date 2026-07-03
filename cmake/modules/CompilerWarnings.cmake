@@ -107,6 +107,9 @@ function(target_set_warnings TARGET_NAME)
                                          # maybe-uninitialized variables
                 -Wno-missing-field-initializers # GCC false positive with
                                                 # aggregate/designated init
+                -Wno-psabi # Silence the noisy aarch64 ABI note for by-value
+                           # small aggregates (e.g. std::pair<double,double>);
+                           # informational, not a bug
                 # -Wuseless-cast          # Warn about useless casts
       )
 

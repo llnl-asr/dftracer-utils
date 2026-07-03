@@ -266,6 +266,11 @@ class CoroTask {
     }
 
     T await_resume() {
+#if defined(__GNUC__) || defined(__clang__)
+        // Never null here (await_resume runs on a live task); silences a
+        // spurious GCC -Wnull-dereference on the promise() reads below.
+        if (!coro_handle_) __builtin_unreachable();
+#endif
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
         if (coro_handle_.promise().trace_handle_) [[unlikely]] {
             logger::detail::coro_trace_leave(

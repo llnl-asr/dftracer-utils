@@ -1,4 +1,7 @@
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define PY_SSIZE_T_CLEAN
@@ -45,24 +48,8 @@ static PyObject* ArrowStreamingIterator_next(
     }
 
     std::optional<ArrowExportResult> result;
-    bool had_error = false;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        result = self->cpp_state->pull_next();
-    } catch (const std::exception& e) {
-        had_error = true;
-        error_msg = e.what();
-    } catch (...) {
-        had_error = true;
-        error_msg = "Unknown error in streaming iterator";
-    }
-    Py_END_ALLOW_THREADS
-
-        if (had_error) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r([&] { return self->cpp_state->pull_next(); }, result))
         return NULL;
-    }
 
     if (!result.has_value()) {
         // Check for error
@@ -72,7 +59,7 @@ static PyObject* ArrowStreamingIterator_next(
                 try {
                     std::rethrow_exception(ex);
                 } catch (const std::exception& e) {
-                    PyErr_SetString(PyExc_RuntimeError, e.what());
+                    set_typed_py_error(e);
                     return NULL;
                 } catch (...) {
                     PyErr_SetString(PyExc_RuntimeError,
@@ -151,14 +138,9 @@ PyTypeObject ArrowStreamingIteratorType = {
 };
 
 int init_arrow_streaming_iterator(PyObject* m) {
-    if (PyType_Ready(&ArrowStreamingIteratorType) < 0) return -1;
-
-    Py_INCREF(&ArrowStreamingIteratorType);
-    if (PyModule_AddObject(m, "_ArrowStreamingIterator",
-                           (PyObject*)&ArrowStreamingIteratorType) < 0) {
-        Py_DECREF(&ArrowStreamingIteratorType);
+    if (register_type(m, &ArrowStreamingIteratorType,
+                      "_ArrowStreamingIterator") < 0)
         return -1;
-    }
 
     return 0;
 }

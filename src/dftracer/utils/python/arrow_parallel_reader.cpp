@@ -4,6 +4,9 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/python/arrow_parallel_reader.h>
+#include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_list_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/utilities/common/arrow/parallel_reader.h>
@@ -30,23 +33,8 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
     }
 
     // Convert paths to vector<string>
-    if (!PyList_Check(paths_obj)) {
-        PyErr_SetString(PyExc_TypeError, "paths must be a list of strings");
-        return nullptr;
-    }
-
-    Py_ssize_t n = PyList_Size(paths_obj);
     std::vector<std::string> paths;
-    paths.reserve(n);
-
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject* item = PyList_GetItem(paths_obj, i);
-        if (!PyUnicode_Check(item)) {
-            PyErr_SetString(PyExc_TypeError, "all paths must be strings");
-            return nullptr;
-        }
-        paths.push_back(PyUnicode_AsUTF8(item));
-    }
+    if (!parse_str_list(paths_obj, "paths", paths)) return nullptr;
 
     // Get runtime
     Runtime* runtime = nullptr;
@@ -63,23 +51,13 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
 
     // Call C++ parallel reader (releases GIL during file I/O)
     utilities::common::arrow::ParallelReadResult result;
-    bool had_error = false;
-    std::string error_msg;
-
-    Py_BEGIN_ALLOW_THREADS try {
-        auto task = read_arrow_files_parallel(std::move(paths));
-        result = runtime->submit(std::move(task), "read_arrow_files").get();
-    } catch (const std::exception& e) {
-        had_error = true;
-        error_msg = e.what();
-    } catch (...) {
-        had_error = true;
-        error_msg = "Unknown error in read_arrow_files";
-    }
-    Py_END_ALLOW_THREADS
-
-        if (had_error) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking_r(
+            [&] {
+                auto task = read_arrow_files_parallel(std::move(paths));
+                return runtime->submit(std::move(task), "read_arrow_files")
+                    .get();
+            },
+            result)) {
         return nullptr;
     }
 
@@ -95,29 +73,17 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
             return nullptr;
         }
 
-        // path
-        PyObject* path_str = PyUnicode_FromString(fr.path.c_str());
-        PyDict_SetItemString(fr_dict, "path", path_str);
-        Py_DECREF(path_str);
+        dict_set_str(fr_dict, "path", fr.path.c_str());
+        dict_set_bool(fr_dict, "success", fr.success);
 
-        // success
-        PyDict_SetItemString(fr_dict, "success",
-                             fr.success ? Py_True : Py_False);
-
-        // error
         if (!fr.error.empty()) {
-            PyObject* err_str = PyUnicode_FromString(fr.error.c_str());
-            PyDict_SetItemString(fr_dict, "error", err_str);
-            Py_DECREF(err_str);
+            dict_set_str(fr_dict, "error", fr.error.c_str());
         } else {
             Py_INCREF(Py_None);
             PyDict_SetItemString(fr_dict, "error", Py_None);
         }
 
-        // total_rows
-        PyObject* rows = PyLong_FromLongLong(fr.total_rows);
-        PyDict_SetItemString(fr_dict, "total_rows", rows);
-        Py_DECREF(rows);
+        dict_set_i64(fr_dict, "total_rows", fr.total_rows);
 
         // batches - list of ArrowBatchCapsule objects
         PyObject* batches_list = PyList_New(fr.batches->size());
@@ -159,21 +125,10 @@ static PyObject* py_read_arrow_files_parallel(PyObject* /*self*/,
     PyDict_SetItemString(result_dict, "file_results", file_results_list);
     Py_DECREF(file_results_list);
 
-    PyObject* total_rows = PyLong_FromLongLong(result.total_rows);
-    PyDict_SetItemString(result_dict, "total_rows", total_rows);
-    Py_DECREF(total_rows);
-
-    PyObject* total_batches = PyLong_FromLongLong(result.total_batches);
-    PyDict_SetItemString(result_dict, "total_batches", total_batches);
-    Py_DECREF(total_batches);
-
-    PyObject* files_read = PyLong_FromSize_t(result.files_read);
-    PyDict_SetItemString(result_dict, "files_read", files_read);
-    Py_DECREF(files_read);
-
-    PyObject* files_failed = PyLong_FromSize_t(result.files_failed);
-    PyDict_SetItemString(result_dict, "files_failed", files_failed);
-    Py_DECREF(files_failed);
+    dict_set_i64(result_dict, "total_rows", result.total_rows);
+    dict_set_i64(result_dict, "total_batches", result.total_batches);
+    dict_set_size(result_dict, "files_read", result.files_read);
+    dict_set_size(result_dict, "files_failed", result.files_failed);
 
     return result_dict;
 }

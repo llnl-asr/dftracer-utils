@@ -3,6 +3,8 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/json.h>
+#include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <nanoarrow/nanoarrow.h>
@@ -212,7 +214,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
                     try {
                         std::rethrow_exception(js->error);
                     } catch (const std::exception &e) {
-                        PyErr_SetString(PyExc_RuntimeError, e.what());
+                        set_typed_py_error(e);
                         return NULL;
                     } catch (...) {
                         PyErr_SetString(PyExc_RuntimeError,
@@ -245,7 +247,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
                 try {
                     std::rethrow_exception(astate->error);
                 } catch (const std::exception &e) {
-                    PyErr_SetString(PyExc_RuntimeError, e.what());
+                    set_typed_py_error(e);
                     return NULL;
                 } catch (...) {
                     PyErr_SetString(PyExc_RuntimeError,
@@ -297,7 +299,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
                 try {
                     std::rethrow_exception(bs->error);
                 } catch (const std::exception &e) {
-                    PyErr_SetString(PyExc_RuntimeError, e.what());
+                    set_typed_py_error(e);
                     return NULL;
                 } catch (...) {
                     PyErr_SetString(PyExc_RuntimeError,
@@ -361,24 +363,12 @@ PyTypeObject TraceReaderIteratorType = {
 };
 
 int init_trace_reader_iterator(PyObject *m) {
-    if (PyType_Ready(&TraceReaderIteratorType) < 0) return -1;
-
-    Py_INCREF(&TraceReaderIteratorType);
-    if (PyModule_AddObject(m, "TraceReaderIterator",
-                           (PyObject *)&TraceReaderIteratorType) < 0) {
-        Py_DECREF(&TraceReaderIteratorType);
-        Py_DECREF(m);
+    if (register_type(m, &TraceReaderIteratorType, "TraceReaderIterator") < 0)
         return -1;
-    }
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    if (PyType_Ready(&ArrowBatchCapsuleType) < 0) return -1;
-    Py_INCREF(&ArrowBatchCapsuleType);
-    if (PyModule_AddObject(m, "_ArrowBatchCapsule",
-                           (PyObject *)&ArrowBatchCapsuleType) < 0) {
-        Py_DECREF(&ArrowBatchCapsuleType);
+    if (register_type(m, &ArrowBatchCapsuleType, "_ArrowBatchCapsule") < 0)
         return -1;
-    }
 #endif
 
     return 0;

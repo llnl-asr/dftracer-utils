@@ -84,32 +84,18 @@ void json_escape(std::string_view in, std::string &out) {
     }
 }
 
-void append_json_scalar(const ArrowSchema *child_schema,
-                        const ArrowArray *child_array, int64_t row,
+// `view` is prepared once per column (init + SetArray) by the caller; a null
+// view signals a column that failed to bind and always emits JSON null.
+void append_json_scalar(const ArrowArrayView *view, ArrowType t, int64_t row,
                         std::string &out) {
-    if (!child_schema || !child_array) {
+    if (!view || ArrowArrayViewIsNull(view, row)) {
         out.append("null");
         return;
     }
-    ArrowArrayView view;
-    ArrowArrayViewInitFromType(&view, type_from_format(child_schema));
-    ArrowError err;
-    ArrowErrorInit(&err);
-    if (ArrowArrayViewSetArray(&view, child_array, &err) != NANOARROW_OK) {
-        out.append("null");
-        ArrowArrayViewReset(&view);
-        return;
-    }
-    if (ArrowArrayViewIsNull(&view, row)) {
-        out.append("null");
-        ArrowArrayViewReset(&view);
-        return;
-    }
-    ArrowType t = type_from_format(child_schema);
     switch (t) {
         case NANOARROW_TYPE_BOOL:
-            out.append(ArrowArrayViewGetIntUnsafe(&view, row) ? "true"
-                                                              : "false");
+            out.append(ArrowArrayViewGetIntUnsafe(view, row) ? "true"
+                                                             : "false");
             break;
         case NANOARROW_TYPE_INT8:
         case NANOARROW_TYPE_INT16:
@@ -118,7 +104,7 @@ void append_json_scalar(const ArrowSchema *child_schema,
             char buf[32];
             std::snprintf(
                 buf, sizeof(buf), "%lld",
-                static_cast<long long>(ArrowArrayViewGetIntUnsafe(&view, row)));
+                static_cast<long long>(ArrowArrayViewGetIntUnsafe(view, row)));
             out.append(buf);
             break;
         }
@@ -129,7 +115,7 @@ void append_json_scalar(const ArrowSchema *child_schema,
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%llu",
                           static_cast<unsigned long long>(
-                              ArrowArrayViewGetUIntUnsafe(&view, row)));
+                              ArrowArrayViewGetUIntUnsafe(view, row)));
             out.append(buf);
             break;
         }
@@ -137,13 +123,13 @@ void append_json_scalar(const ArrowSchema *child_schema,
         case NANOARROW_TYPE_DOUBLE: {
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%g",
-                          ArrowArrayViewGetDoubleUnsafe(&view, row));
+                          ArrowArrayViewGetDoubleUnsafe(view, row));
             out.append(buf);
             break;
         }
         case NANOARROW_TYPE_STRING:
         case NANOARROW_TYPE_LARGE_STRING: {
-            auto sv = ArrowArrayViewGetStringUnsafe(&view, row);
+            auto sv = ArrowArrayViewGetStringUnsafe(view, row);
             out.push_back('"');
             json_escape(std::string_view(sv.data, sv.size_bytes), out);
             out.push_back('"');
@@ -152,7 +138,6 @@ void append_json_scalar(const ArrowSchema *child_schema,
         default:
             out.append("null");
     }
-    ArrowArrayViewReset(&view);
 }
 
 }  // namespace
@@ -312,12 +297,38 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
             last_error_ = "failed to start appending to _extra";
             return -1;
         }
+        // Bind one ArrowArrayView per unknown column once, then index by row.
+        // A column that fails to init/bind is marked invalid (emits null).
+        struct UnknownColumn {
+            ArrowArrayView view;
+            ArrowType type = NANOARROW_TYPE_NA;
+            bool valid = false;
+        };
+        std::vector<UnknownColumn> unknown_views(unknown_in.size());
+        for (size_t k = 0; k < unknown_in.size(); ++k) {
+            int64_t u = unknown_in[k];
+            const ArrowSchema *cs = in_schema->children[u];
+            const ArrowArray *ca = in_array->children[u];
+            if (!cs || !ca || !cs->name) continue;
+            UnknownColumn &uc = unknown_views[k];
+            uc.type = type_from_format(cs);
+            ArrowArrayViewInitFromType(&uc.view, uc.type);
+            ArrowError verr;
+            ArrowErrorInit(&verr);
+            if (ArrowArrayViewSetArray(&uc.view, ca, &verr) == NANOARROW_OK) {
+                uc.valid = true;
+            } else {
+                ArrowArrayViewReset(&uc.view);
+            }
+        }
+
         std::string buf;
         for (int64_t row = 0; row < num_rows; ++row) {
             buf.clear();
             buf.push_back('{');
             bool first = true;
-            for (int64_t u : unknown_in) {
+            for (size_t k = 0; k < unknown_in.size(); ++k) {
+                int64_t u = unknown_in[k];
                 const ArrowSchema *cs = in_schema->children[u];
                 const ArrowArray *ca = in_array->children[u];
                 if (!cs || !ca || !cs->name) continue;
@@ -326,14 +337,22 @@ int SchemaReconciler::reconcile(const ArrowSchema *in_schema,
                 buf.push_back('"');
                 json_escape(cs->name, buf);
                 buf.append("\":");
-                append_json_scalar(cs, ca, row, buf);
+                const UnknownColumn &uc = unknown_views[k];
+                append_json_scalar(uc.valid ? &uc.view : nullptr, uc.type, row,
+                                   buf);
             }
             buf.push_back('}');
             ArrowStringView sv{buf.data(), static_cast<int64_t>(buf.size())};
             if (ArrowArrayAppendString(extra_slot, sv) != NANOARROW_OK) {
                 last_error_ = "failed to append _extra row";
+                for (auto &uc : unknown_views) {
+                    if (uc.valid) ArrowArrayViewReset(&uc.view);
+                }
                 return -1;
             }
+        }
+        for (auto &uc : unknown_views) {
+            if (uc.valid) ArrowArrayViewReset(&uc.view);
         }
         if (ArrowArrayFinishBuildingDefault(extra_slot, &err) != NANOARROW_OK) {
             last_error_ = "failed to finish _extra column";

@@ -1,8 +1,10 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_list_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/reorganization_planner.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reorganization_planner.h>
@@ -12,61 +14,12 @@
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::utilities::behaviors::BehaviorChain;
 using dftracer::utils::utilities::behaviors::UtilityExecutor;
 namespace tags = dftracer::utils::utilities::tags;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
 
-static Runtime *get_runtime(ReorganizationPlannerObject *self) {
-    if (self->runtime_obj)
-        return ((RuntimeObject *)self->runtime_obj)->runtime.get();
-    return get_default_runtime();
-}
-
-static void ReorganizationPlanner_dealloc(ReorganizationPlannerObject *self) {
-    Py_XDECREF(self->runtime_obj);
-    Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-static PyObject *ReorganizationPlanner_new(PyTypeObject *type, PyObject *args,
-                                           PyObject *kwds) {
-    ReorganizationPlannerObject *self;
-    self = (ReorganizationPlannerObject *)type->tp_alloc(type, 0);
-    if (self != NULL) {
-        self->runtime_obj = NULL;
-    }
-    return (PyObject *)self;
-}
-
-static int ReorganizationPlanner_init(ReorganizationPlannerObject *self,
-                                      PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"runtime", NULL};
-    PyObject *runtime_arg = NULL;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", (char **)kwlist,
-                                     &runtime_arg)) {
-        return -1;
-    }
-
-    if (runtime_arg && runtime_arg != Py_None) {
-        if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
-            Py_INCREF(runtime_arg);
-            self->runtime_obj = runtime_arg;
-        } else {
-            PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
-            if (native && PyObject_TypeCheck(native, &RuntimeType)) {
-                self->runtime_obj = native;
-            } else {
-                Py_XDECREF(native);
-                PyErr_SetString(PyExc_TypeError,
-                                "runtime must be a Runtime instance or None");
-                return -1;
-            }
-        }
-    }
-
-    return 0;
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(ReorganizationPlanner,
+                                    ReorganizationPlannerObject)
 
 static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
                                             PyObject *args, PyObject *kwds) {
@@ -82,20 +35,8 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
                                      &index_dir))
         return NULL;
 
-    if (!PyList_Check(source_files_obj)) {
-        PyErr_SetString(PyExc_TypeError, "source_files must be a list");
-        return NULL;
-    }
-
-    Py_ssize_t nfiles = PyList_Size(source_files_obj);
     std::vector<std::string> files;
-    files.reserve(static_cast<std::size_t>(nfiles));
-    for (Py_ssize_t i = 0; i < nfiles; i++) {
-        PyObject *item = PyList_GetItem(source_files_obj, i);
-        const char *s = PyUnicode_AsUTF8(item);
-        if (!s) return NULL;
-        files.emplace_back(s);
-    }
+    if (!parse_str_list(source_files_obj, "source_files", files)) return NULL;
 
     std::vector<PredicateGroup> groups;
     if (groups_obj && groups_obj != Py_None) {
@@ -133,28 +74,21 @@ static PyObject *ReorganizationPlanner_plan(ReorganizationPlannerObject *self,
     ExtractionPlan plan;
     auto *plan_p = &plan;
     ReorganizationPlannerInput input_copy = input;
-    std::string error_msg;
 
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
-        auto task = run_coro_scope(
-            rt->executor(),
-            [plan_p, input_copy](CoroScope &scope) -> CoroTask<void> {
-                auto planner = std::make_shared<ReorganizationPlannerUtility>();
-                UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
-                                tags::NeedsContext>
-                    exec(planner, BehaviorChain<ReorganizationPlannerInput,
-                                                ExtractionPlan>{});
-                *plan_p = co_await exec.execute_with_context(scope, input_copy);
-            });
-        rt->submit(std::move(task), "reorganization-planner").wait();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking([&] {
+            Runtime *rt = resolve_runtime(self);
+            auto task = run_coro_scope(
+                rt->executor(),
+                [plan_p, input_copy](CoroScope &scope) -> CoroTask<void> {
+                    auto planner =
+                        std::make_shared<ReorganizationPlannerUtility>();
+                    UtilityExecutor<ReorganizationPlannerInput, ExtractionPlan,
+                                    tags::NeedsContext>
+                        exec(planner);
+                    *plan_p = co_await exec.execute(scope, input_copy);
+                });
+            rt->submit(std::move(task), "reorganization-planner").wait();
+        })) {
         return NULL;
     }
 
@@ -325,15 +259,9 @@ PyTypeObject ReorganizationPlannerType = {
 };
 
 int init_reorganization_planner(PyObject *m) {
-    if (PyType_Ready(&ReorganizationPlannerType) < 0) return -1;
-
-    Py_INCREF(&ReorganizationPlannerType);
-    if (PyModule_AddObject(m, "ReorganizationPlannerUtility",
-                           (PyObject *)&ReorganizationPlannerType) < 0) {
-        Py_DECREF(&ReorganizationPlannerType);
-        Py_DECREF(m);
+    if (register_type(m, &ReorganizationPlannerType,
+                      "ReorganizationPlannerUtility") < 0)
         return -1;
-    }
 
     return 0;
 }

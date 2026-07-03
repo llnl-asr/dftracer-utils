@@ -24,7 +24,13 @@ except ImportError:
     pa = None  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
 from dftracer.utils import Runtime, TraceReader, get_default_runtime, set_default_runtime
-from dftracer.utils.indexer import AggregationConfig, Indexer
+from dftracer.utils.arrow import (
+    batch_to_ipc,
+    decode_dictionary_columns,
+    empty_write_result,
+    fold_write_results,
+)
+from dftracer.utils.indexer import AggregationConfig, Indexer, _open_readonly_indexer
 
 if WorkerPlugin is not None:
 
@@ -244,23 +250,11 @@ def distributed_write_arrow(
     chunks_result = reader.get_view_chunks(view=view)
 
     if not chunks_result["file_may_match"]:
-        return {
-            "files": [],
-            "total_chunks": 0,
-            "skipped_chunks": chunks_result["skipped_checkpoints"],
-            "total_rows": 0,
-            "total_events_matched": 0,
-        }
+        return empty_write_result(chunks_result["skipped_checkpoints"])
 
     chunks = chunks_result["chunks"]
     if not chunks:
-        return {
-            "files": [],
-            "total_chunks": 0,
-            "skipped_chunks": chunks_result["skipped_checkpoints"],
-            "total_rows": 0,
-            "total_events_matched": 0,
-        }
+        return empty_write_result(chunks_result["skipped_checkpoints"])
 
     if chunks_per_task <= 0:
         chunks_per_task = 1
@@ -283,23 +277,7 @@ def distributed_write_arrow(
 
     batch_results = dask.compute(*delayed_tasks)
 
-    files = []
-    total_rows = 0
-    total_events_matched = 0
-    for br in batch_results:
-        for r in br.get("results", []):
-            if r.get("rows_written", 0) > 0:
-                files.append(r["output_file"])
-        total_rows += br.get("total_rows", 0)
-        total_events_matched += br.get("total_events_matched", 0)
-
-    return {
-        "files": files,
-        "total_chunks": len(chunks),
-        "skipped_chunks": chunks_result["skipped_checkpoints"],
-        "total_rows": total_rows,
-        "total_events_matched": total_events_matched,
-    }
+    return fold_write_results(batch_results, len(chunks), chunks_result["skipped_checkpoints"])
 
 
 def _assign_files_by_pid(
@@ -364,15 +342,7 @@ def _aggregate_files_task(
         return []
 
     # Use existing index (read-only) - coordinator already built it
-    indexer = Indexer(
-        files=files,
-        index_dir=os.path.dirname(index_path) if index_path else "",
-        require_checkpoint=False,  # Don't rebuild
-        require_bloom=False,
-        require_manifest=False,
-        require_aggregation=False,  # Already aggregated
-        force_rebuild=False,
-    )
+    indexer = _open_readonly_indexer(files, index_path)
 
     # Collect Arrow batches as IPC buffers
     ipc_buffers = []
@@ -381,13 +351,7 @@ def _aggregate_files_task(
         time_granularity=time_granularity,
         time_resolution=time_resolution,
     ):
-        batch = pa.record_batch(batch_capsule)
-        # Serialize to IPC buffer for transfer
-        sink = pa.BufferOutputStream()
-        writer = pa.ipc.new_stream(sink, batch.schema)
-        writer.write_batch(batch)
-        writer.close()
-        ipc_buffers.append(sink.getvalue().to_pybytes())
+        ipc_buffers.append(batch_to_ipc(pa.record_batch(batch_capsule)))
 
     return ipc_buffers
 
@@ -418,15 +382,7 @@ def _aggregate_files_task_all(
     if not files:
         return {"events": [], "profiles": [], "system": []}
 
-    indexer = Indexer(
-        files=files,
-        index_dir=os.path.dirname(index_path) if index_path else "",
-        require_checkpoint=False,
-        require_bloom=False,
-        require_manifest=False,
-        require_aggregation=False,
-        force_rebuild=False,
-    )
+    indexer = _open_readonly_indexer(files, index_path)
 
     all_batches = indexer.iter_arrow_dfanalyzer_all(
         time_granularity=time_granularity,
@@ -439,12 +395,7 @@ def _aggregate_files_task_all(
     for data_type in ("events", "profiles", "system"):
         ipc_buffers = []
         for batch_capsule in all_batches.get(data_type, []):
-            batch = pa.record_batch(batch_capsule)
-            sink = pa.BufferOutputStream()
-            writer = pa.ipc.new_stream(sink, batch.schema)
-            writer.write_batch(batch)
-            writer.close()
-            ipc_buffers.append(sink.getvalue().to_pybytes())
+            ipc_buffers.append(batch_to_ipc(pa.record_batch(batch_capsule)))
         result[data_type] = ipc_buffers
 
     return result
@@ -478,6 +429,37 @@ def _merge_welford(group):
         "size_max": group["size_max"].max(),
     }
     return result
+
+
+def _plan_worker_files(indexer, status, client):
+    """Assign trace files to Dask workers by PID affinity.
+
+    Closes the indexer (releasing the RocksDB lock) before returning, then
+    returns ``(worker_files, worker_pids, index_path, worker_list)``.
+    """
+    file_id_to_path, file_pids = indexer.query_file_info()
+    index_path = status.index_path
+
+    # Close indexer before distributing (release RocksDB lock)
+    indexer.close()
+
+    worker_nthreads = client.nthreads()
+    n_workers = len(worker_nthreads) or 1
+    worker_list = list(worker_nthreads.keys())
+
+    full_file_pids = {fid: file_pids.get(fid, set()) for fid in file_id_to_path}
+    worker_file_ids = _assign_files_by_pid(full_file_pids, n_workers)
+
+    worker_files: Dict[int, List[str]] = {}
+    worker_pids: Dict[int, set] = {}
+    for worker_id, fids in worker_file_ids.items():
+        worker_files[worker_id] = [file_id_to_path[fid] for fid in fids if fid in file_id_to_path]
+        pids: set = set()
+        for fid in fids:
+            pids.update(file_pids.get(fid, set()))
+        worker_pids[worker_id] = pids
+
+    return worker_files, worker_pids, index_path, worker_list
 
 
 def distributed_aggregate(
@@ -568,25 +550,9 @@ def distributed_aggregate(
 
     # Distributed execution: assign files to workers by PID affinity
     all_files = status.ready + status.needs_work
-    file_id_to_path, file_pids = indexer.query_file_info()
-    index_path = status.index_path
-
-    # Close indexer before distributing (release RocksDB lock)
-    indexer.close()
-
-    worker_nthreads = client.nthreads()
-    n_workers = len(worker_nthreads) or 1
-
-    all_file_ids = set(file_id_to_path.keys())
-    full_file_pids = {fid: file_pids.get(fid, set()) for fid in all_file_ids}
-    worker_file_ids = _assign_files_by_pid(full_file_pids, n_workers)
-
-    worker_files: Dict[int, List[str]] = {}
-    for worker_id, fids in worker_file_ids.items():
-        worker_files[worker_id] = [file_id_to_path[fid] for fid in fids if fid in file_id_to_path]
+    worker_files, _, index_path, worker_list = _plan_worker_files(indexer, status, client)
 
     futures = []
-    worker_list = list(worker_nthreads.keys())
     for worker_id, wfiles in worker_files.items():
         if not wfiles:
             continue
@@ -748,31 +714,9 @@ def distributed_aggregate_all(
         return tables
 
     # Distributed execution: assign files to workers by PID affinity
-    file_id_to_path, file_pids = indexer.query_file_info()
-    index_path = status.index_path
-
-    # Close indexer before distributing (release RocksDB lock)
-    indexer.close()
-
-    worker_nthreads = client.nthreads()
-    n_workers = len(worker_nthreads) or 1
-
-    all_file_ids = set(file_id_to_path.keys())
-    full_file_pids = {fid: file_pids.get(fid, set()) for fid in all_file_ids}
-    worker_file_ids = _assign_files_by_pid(full_file_pids, n_workers)
-
-    worker_files: Dict[int, List[str]] = {}
-    worker_pids: Dict[int, set] = {}
-    for worker_id, fids in worker_file_ids.items():
-        worker_files[worker_id] = [file_id_to_path[fid] for fid in fids if fid in file_id_to_path]
-        pids = set()
-        for fid in fids:
-            if fid in file_pids:
-                pids.update(file_pids[fid])
-        worker_pids[worker_id] = pids
+    worker_files, worker_pids, index_path, worker_list = _plan_worker_files(indexer, status, client)
 
     futures = []
-    worker_list = list(worker_nthreads.keys())
     for worker_id, wfiles in worker_files.items():
         if not wfiles:
             continue
@@ -813,11 +757,7 @@ def distributed_aggregate_all(
         if not batches:
             tables[data_type] = pa.table({})
             continue
-        table = pa.Table.from_batches(batches)
-        # Unify dictionary columns from different workers to plain strings
-        for i, field in enumerate(table.schema):
-            if pa.types.is_dictionary(field.type):
-                table = table.set_column(i, field.name, table.column(i).cast(pa.string()))
+        table = decode_dictionary_columns(pa.Table.from_batches(batches))
         tables[data_type] = table
 
     return tables

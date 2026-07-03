@@ -1,5 +1,9 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 
 #include <chrono>
@@ -55,7 +59,7 @@ static int Runtime_init(RuntimeObject *self, PyObject *args, PyObject *kwds) {
         self->runtime =
             std::make_shared<dftracer::utils::Runtime>(config, true);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return -1;
     }
 
@@ -73,36 +77,19 @@ static PyObject *Runtime_shutdown(RuntimeObject *self,
 }
 
 static bool set_size(PyObject *d, const char *key, std::size_t val) {
-    PyObject *v = PyLong_FromSize_t(val);
-    if (!v) return false;
-    int rc = PyDict_SetItemString(d, key, v);
-    Py_DECREF(v);
-    return rc == 0;
+    return dict_set_size(d, key, val) == 0;
 }
 
 static bool set_double(PyObject *d, const char *key, double val) {
-    PyObject *v = PyFloat_FromDouble(val);
-    if (!v) return false;
-    int rc = PyDict_SetItemString(d, key, v);
-    Py_DECREF(v);
-    return rc == 0;
+    return dict_set_f64(d, key, val) == 0;
 }
 
 static bool set_str(PyObject *d, const char *key, const std::string &val) {
-    PyObject *v = PyUnicode_FromStringAndSize(
-        val.data(), static_cast<Py_ssize_t>(val.size()));
-    if (!v) return false;
-    int rc = PyDict_SetItemString(d, key, v);
-    Py_DECREF(v);
-    return rc == 0;
+    return dict_set_str(d, key, val.c_str()) == 0;
 }
 
 static bool set_bool(PyObject *d, const char *key, bool val) {
-    PyObject *v = val ? Py_True : Py_False;
-    Py_INCREF(v);
-    int rc = PyDict_SetItemString(d, key, v);
-    Py_DECREF(v);
-    return rc == 0;
+    return dict_set_bool(d, key, val) == 0;
 }
 
 static PyObject *build_task_progress(const dftracer::utils::TaskProgress &tp) {
@@ -303,13 +290,7 @@ static PyObject *Runtime_wait_all(RuntimeObject *self,
         PyErr_SetString(PyExc_RuntimeError, "Runtime not initialized");
         return NULL;
     }
-    try {
-        Py_BEGIN_ALLOW_THREADS self->runtime->wait_all();
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return NULL;
-    }
+    if (!run_blocking([&] { self->runtime->wait_all(); })) return NULL;
     Py_RETURN_NONE;
 }
 
@@ -478,14 +459,7 @@ static PyMethodDef runtime_module_methods[] = {
     {NULL}};
 
 int init_runtime(PyObject *m) {
-    if (PyType_Ready(&RuntimeType) < 0) return -1;
-
-    Py_INCREF(&RuntimeType);
-    if (PyModule_AddObject(m, "Runtime", (PyObject *)&RuntimeType) < 0) {
-        Py_DECREF(&RuntimeType);
-        Py_DECREF(m);
-        return -1;
-    }
+    if (register_type(m, &RuntimeType, "Runtime") < 0) return -1;
 
     for (PyMethodDef *def = runtime_module_methods; def->ml_name; ++def) {
         PyObject *fn = PyCFunction_New(def, NULL);

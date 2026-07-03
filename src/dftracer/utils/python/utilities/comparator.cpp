@@ -1,4 +1,5 @@
 #define PY_SSIZE_T_CLEAN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/channel.h>
@@ -10,6 +11,8 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/python/arrow_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/comparator.h>
 #include <dftracer/utils/utilities/common/query/query.h>
@@ -29,6 +32,7 @@
 #include <chrono>
 #include <cstdio>
 #include <ctime>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -42,58 +46,9 @@ using namespace dftracer::utils::utilities::composites::dft::comparator;
 #include <dftracer/utils/core/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 using dftracer::utils::python::arrow_result_to_table;
-using dftracer::utils::utilities::common::arrow::ArrowExportResult;
 #endif
 
-static Runtime *get_runtime(ComparatorObject *self) {
-    if (self->runtime_obj)
-        return ((RuntimeObject *)self->runtime_obj)->runtime.get();
-    return get_default_runtime();
-}
-
-static void Comparator_dealloc(ComparatorObject *self) {
-    Py_XDECREF(self->runtime_obj);
-    Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-static PyObject *Comparator_new(PyTypeObject *type, PyObject *args,
-                                PyObject *kwds) {
-    ComparatorObject *self = (ComparatorObject *)type->tp_alloc(type, 0);
-    if (self) {
-        self->runtime_obj = NULL;
-    }
-    return (PyObject *)self;
-}
-
-static int Comparator_init(ComparatorObject *self, PyObject *args,
-                           PyObject *kwds) {
-    static const char *kwlist[] = {"runtime", NULL};
-    PyObject *runtime_arg = NULL;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", (char **)kwlist,
-                                     &runtime_arg)) {
-        return -1;
-    }
-
-    if (runtime_arg && runtime_arg != Py_None) {
-        if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
-            Py_INCREF(runtime_arg);
-            self->runtime_obj = runtime_arg;
-        } else {
-            PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
-            if (native && PyObject_TypeCheck(native, &RuntimeType)) {
-                self->runtime_obj = native;
-            } else {
-                Py_XDECREF(native);
-                PyErr_SetString(PyExc_TypeError,
-                                "runtime must be a Runtime instance or None");
-                return -1;
-            }
-        }
-    }
-
-    return 0;
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(Comparator, ComparatorObject)
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -305,22 +260,21 @@ CoroTask<EventAggregatorOutput> run_aggregation(
 
 }  // namespace
 
-static int run_comparison_pipeline(ComparatorObject *self,
-                                   const ComparatorArgs &cargs,
-                                   ComparisonOutput &output,
-                                   std::string &error_msg) {
+static bool run_comparison_pipeline(ComparatorObject *self,
+                                    const ComparatorArgs &cargs,
+                                    ComparisonOutput &output) {
     ComparatorArgs args_copy = cargs;
     auto *output_ptr = &output;
 
-    Py_BEGIN_ALLOW_THREADS try {
+    return run_blocking([&] {
         ComparisonConfig config;
         if (!args_copy.config_path.empty()) {
             std::string parse_error;
             auto parsed = ComparisonConfig::from_json_file(
                 args_copy.config_path, parse_error);
             if (!parsed) {
-                error_msg = "Config error: " + parse_error;
-                goto done;
+                throw DFTUtilsException(ErrorCode::PARSE,
+                                        "Config error: " + parse_error);
             }
             config = std::move(*parsed);
         } else {
@@ -359,11 +313,9 @@ static int run_comparison_pipeline(ComparatorObject *self,
         using indexer::IndexBatchBuilderUtility;
         using indexer::IndexBuildBatchConfig;
 
-        Runtime *rt = get_runtime(self);
+        Runtime *rt = resolve_runtime(self);
 
-        auto *error_msg_ptr = &error_msg;
-        auto task = [config, output_ptr, error_msg_ptr,
-                     rt]() -> CoroTask<void> {
+        auto task = [config, output_ptr, rt]() -> CoroTask<void> {
             auto resolve_and_build =
                 [&config](
                     CoroScope &scope, const std::string &path,
@@ -437,14 +389,14 @@ static int run_comparison_pipeline(ComparatorObject *self,
                 });
 
             if (baseline_files.empty()) {
-                *error_msg_ptr =
-                    "No trace files found in baseline: " + config.baseline;
-                co_return;
+                throw DFTUtilsException(
+                    ErrorCode::NOT_FOUND,
+                    "No trace files found in baseline: " + config.baseline);
             }
             if (variant_files.empty()) {
-                *error_msg_ptr =
-                    "No trace files found in variant: " + config.variant;
-                co_return;
+                throw DFTUtilsException(
+                    ErrorCode::NOT_FOUND,
+                    "No trace files found in variant: " + config.variant);
             }
 
             output_ptr->baseline_path = config.baseline;
@@ -469,10 +421,10 @@ static int run_comparison_pipeline(ComparatorObject *self,
                         auto result = common::query::Query::from_string(
                             visitor->composed_query);
                         if (!result) {
-                            *error_msg_ptr = "Invalid query for node '" +
-                                             visitor->name +
-                                             "': " + result.error().format();
-                            co_return;
+                            throw DFTUtilsException(
+                                ErrorCode::QUERY,
+                                "Invalid query for node '" + visitor->name +
+                                    "': " + result.error().format());
                         }
                         query = std::move(*result);
                     }
@@ -524,7 +476,7 @@ static int run_comparison_pipeline(ComparatorObject *self,
 
                 ComparisonUtility cmp;
                 auto cmp_output = co_await cmp.process(cmp_input);
-                output_ptr->nodes.push_back(std::move(cmp_output.result));
+                output_ptr->nodes.push_back(std::move(cmp_output->result));
             }
 
             // Inject metadata rows into root SUMMARY.
@@ -542,15 +494,7 @@ static int run_comparison_pipeline(ComparatorObject *self,
         };
 
         rt->submit(task(), "comparator").get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-done:
-    Py_END_ALLOW_THREADS
-
-        return error_msg.empty()
-        ? 0
-        : -1;
+    });
 }
 
 // -----------------------------------------------------------------------
@@ -563,9 +507,7 @@ static PyObject *Comparator_compare(ComparatorObject *self, PyObject *args,
     if (parse_comparator_args(args, kwds, cargs) < 0) return NULL;
 
     ComparisonOutput output;
-    std::string error_msg;
-    if (run_comparison_pipeline(self, cargs, output, error_msg) < 0) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_comparison_pipeline(self, cargs, output)) {
         return NULL;
     }
 
@@ -595,9 +537,7 @@ static PyObject *Comparator_compare_json(ComparatorObject *self, PyObject *args,
     if (parse_comparator_args(args, kwds, cargs) < 0) return NULL;
 
     ComparisonOutput output;
-    std::string error_msg;
-    if (run_comparison_pipeline(self, cargs, output, error_msg) < 0) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_comparison_pipeline(self, cargs, output)) {
         return NULL;
     }
 
@@ -616,9 +556,7 @@ static PyObject *Comparator_compare_table(ComparatorObject *self,
     if (parse_comparator_args(args, kwds, cargs) < 0) return NULL;
 
     ComparisonOutput output;
-    std::string error_msg;
-    if (run_comparison_pipeline(self, cargs, output, error_msg) < 0) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_comparison_pipeline(self, cargs, output)) {
         return NULL;
     }
 
@@ -804,15 +742,7 @@ PyTypeObject ComparatorType = {
 };
 
 int init_comparator(PyObject *m) {
-    if (PyType_Ready(&ComparatorType) < 0) return -1;
-
-    Py_INCREF(&ComparatorType);
-    if (PyModule_AddObject(m, "ComparatorUtility",
-                           (PyObject *)&ComparatorType) < 0) {
-        Py_DECREF(&ComparatorType);
-        Py_DECREF(m);
-        return -1;
-    }
+    if (register_type(m, &ComparatorType, "ComparatorUtility") < 0) return -1;
 
     return 0;
 }

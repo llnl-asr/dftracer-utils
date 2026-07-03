@@ -1,10 +1,14 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/python/arrow_helpers.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_list_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/trace_reader_iterator.h>
 #include <dftracer/utils/python/utilities/aggregator.h>
@@ -47,75 +51,11 @@ using dftracer::utils::utilities::common::arrow::PartitionWriteStats;
 using dftracer::utils::utilities::common::query::Query;
 #endif
 
-static Runtime *get_runtime(AggregatorObject *self) {
-    if (self->runtime_obj)
-        return ((RuntimeObject *)self->runtime_obj)->runtime.get();
-    return get_default_runtime();
-}
-
-static void Aggregator_dealloc(AggregatorObject *self) {
-    Py_XDECREF(self->runtime_obj);
-    Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-static PyObject *Aggregator_new(PyTypeObject *type, PyObject *args,
-                                PyObject *kwds) {
-    AggregatorObject *self = (AggregatorObject *)type->tp_alloc(type, 0);
-    if (self) {
-        self->runtime_obj = NULL;
-    }
-    return (PyObject *)self;
-}
-
-static int Aggregator_init(AggregatorObject *self, PyObject *args,
-                           PyObject *kwds) {
-    static const char *kwlist[] = {"runtime", NULL};
-    PyObject *runtime_arg = NULL;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", (char **)kwlist,
-                                     &runtime_arg)) {
-        return -1;
-    }
-
-    if (runtime_arg && runtime_arg != Py_None) {
-        if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
-            Py_INCREF(runtime_arg);
-            self->runtime_obj = runtime_arg;
-        } else {
-            PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
-            if (native && PyObject_TypeCheck(native, &RuntimeType)) {
-                self->runtime_obj = native;
-            } else {
-                Py_XDECREF(native);
-                PyErr_SetString(PyExc_TypeError,
-                                "runtime must be a Runtime instance or None");
-                return -1;
-            }
-        }
-    }
-
-    return 0;
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(Aggregator, AggregatorObject)
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-static int parse_str_list(PyObject *obj, std::vector<std::string> &out,
-                          const char *param_name) {
-    if (!obj || obj == Py_None) return 0;
-    if (!PyList_Check(obj)) {
-        PyErr_Format(PyExc_TypeError, "%s must be a list of str", param_name);
-        return -1;
-    }
-    Py_ssize_t n = PyList_Size(obj);
-    for (Py_ssize_t i = 0; i < n; i++) {
-        const char *s = PyUnicode_AsUTF8(PyList_GetItem(obj, i));
-        if (!s) return -1;
-        out.emplace_back(s);
-    }
-    return 0;
-}
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 // Parse a view query string into an optional Query
@@ -163,7 +103,8 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
     PyObject *categories_obj = Py_None;
     PyObject *names_obj = Py_None;
     const char *index_dir = "";
-    Py_ssize_t checkpoint_size = 32 * 1024 * 1024;
+    Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
+        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     int force_rebuild = 0;
     Py_ssize_t parallelism = 0;
     Py_ssize_t event_batch_size = 10000;
@@ -202,28 +143,28 @@ static int parse_aggregator_args(PyObject *args, PyObject *kwds,
     input.event_batch_size = static_cast<std::size_t>(event_batch_size);
     input.config.compute_percentiles = compute_percentiles != 0;
 
-    if (parse_str_list(group_keys_obj, input.config.extra_group_keys,
-                       "group_keys") < 0)
+    if (!parse_str_list(group_keys_obj, "group_keys",
+                        input.config.extra_group_keys))
         return -1;
-    if (parse_str_list(custom_metrics_obj, input.config.custom_metric_fields,
-                       "custom_metric_fields") < 0)
+    if (!parse_str_list(custom_metrics_obj, "custom_metric_fields",
+                        input.config.custom_metric_fields))
         return -1;
 
     return 0;
 }
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-static int run_aggregator_pipeline(
+static bool run_aggregator_pipeline(
     AggregatorObject *self, const AggregatorInput &input,
-    std::vector<ArrowExportResult> &results, std::string &error_msg,
+    std::vector<ArrowExportResult> &results,
     const std::optional<Query> *query = nullptr) {
     auto *rp = &results;
     AggregatorInput input_copy = input;
     std::optional<Query> query_copy;
     if (query) query_copy = *query;
 
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
+    return run_blocking([&] {
+        Runtime *rt = resolve_runtime(self);
         rt->submit(run_coro_scope(
                        rt->executor(),
                        [](CoroScope &scope, std::vector<ArrowExportResult> *out,
@@ -255,14 +196,7 @@ static int run_aggregator_pipeline(
                        rp, std::move(input_copy), std::move(query_copy)),
                    "aggregator")
             .get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        return error_msg.empty()
-        ? 0
-        : -1;
+    });
 }
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
 
@@ -331,13 +265,11 @@ static PyObject *Aggregator_process(AggregatorObject *self, PyObject *args,
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
     std::vector<ArrowExportResult> results;
-    std::string error_msg;
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
-    if (run_aggregator_pipeline(self, input, results, error_msg, &query) < 0) {
+    if (!run_aggregator_pipeline(self, input, results, &query)) {
 #else
-    if (run_aggregator_pipeline(self, input, results, error_msg) < 0) {
+    if (!run_aggregator_pipeline(self, input, results)) {
 #endif
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
         return NULL;
     }
 
@@ -401,7 +333,7 @@ static PyObject *Aggregator_iter_arrow(AggregatorObject *self, PyObject *args,
     };
     iter_obj->cpp_state->cancel = [state]() { state->cancel(); };
 
-    Runtime *rt = get_runtime(self);
+    Runtime *rt = resolve_runtime(self);
     AggregatorInput input_copy = input;
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
     std::optional<Query> query_copy = std::move(query);
@@ -536,7 +468,8 @@ static PyObject *Aggregator_write_arrow(AggregatorObject *self, PyObject *args,
     PyObject *categories_obj = Py_None;
     PyObject *names_obj = Py_None;
     const char *index_dir = "";
-    Py_ssize_t checkpoint_size = 32 * 1024 * 1024;
+    Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
+        dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     int force_rebuild = 0;
     Py_ssize_t parallelism = 0;
     Py_ssize_t event_batch_size = 10000;
@@ -673,23 +606,16 @@ static PyObject *Aggregator_write_arrow(AggregatorObject *self, PyObject *args,
     std::string output_path_str(output_path);
     AggregatorWriteArrowResult result;
     auto *rp = &result;
-    std::string error_msg;
 
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
-        rt->submit(
-              run_coro_scope(rt->executor(), run_aggregator_write_arrow, rp,
-                             std::move(input), output_path_str,
-                             std::move(views), chunk_size_bytes, compression),
-              "aggregator_write_arrow")
-            .get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+    if (!run_blocking([&] {
+            Runtime *rt = resolve_runtime(self);
+            rt->submit(run_coro_scope(
+                           rt->executor(), run_aggregator_write_arrow, rp,
+                           std::move(input), output_path_str, std::move(views),
+                           chunk_size_bytes, compression),
+                       "aggregator_write_arrow")
+                .get();
+        })) {
         return NULL;
     }
 
@@ -932,15 +858,7 @@ PyTypeObject AggregatorType = {
 };
 
 int init_aggregator(PyObject *m) {
-    if (PyType_Ready(&AggregatorType) < 0) return -1;
-
-    Py_INCREF(&AggregatorType);
-    if (PyModule_AddObject(m, "AggregatorUtility",
-                           (PyObject *)&AggregatorType) < 0) {
-        Py_DECREF(&AggregatorType);
-        Py_DECREF(m);
-        return -1;
-    }
+    if (register_type(m, &AggregatorType, "AggregatorUtility") < 0) return -1;
 
     return 0;
 }

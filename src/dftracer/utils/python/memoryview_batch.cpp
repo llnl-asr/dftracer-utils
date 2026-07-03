@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/python/memoryview_batch.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 
 #include <cstring>
 
@@ -104,13 +105,8 @@ PyTypeObject MemoryViewBatchType = {
 };
 
 int init_memoryview_batch(PyObject *m) {
-    if (PyType_Ready(&MemoryViewBatchType) < 0) return -1;
-    Py_INCREF(&MemoryViewBatchType);
-    if (PyModule_AddObject(m, "_MemoryViewBatch",
-                           (PyObject *)&MemoryViewBatchType) < 0) {
-        Py_DECREF(&MemoryViewBatchType);
+    if (register_type(m, &MemoryViewBatchType, "_MemoryViewBatch") < 0)
         return -1;
-    }
     return 0;
 }
 

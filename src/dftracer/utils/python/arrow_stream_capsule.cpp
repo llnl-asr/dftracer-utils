@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define PY_SSIZE_T_CLEAN
@@ -301,13 +302,8 @@ PyTypeObject ArrowBatchStreamType = {
 };
 
 int init_arrow_batch_stream(PyObject *m) {
-    if (PyType_Ready(&ArrowBatchStreamType) < 0) return -1;
-    Py_INCREF(&ArrowBatchStreamType);
-    if (PyModule_AddObject(m, "_ArrowBatchStream",
-                           (PyObject *)&ArrowBatchStreamType) < 0) {
-        Py_DECREF(&ArrowBatchStreamType);
+    if (register_type(m, &ArrowBatchStreamType, "_ArrowBatchStream") < 0)
         return -1;
-    }
     return 0;
 }
 

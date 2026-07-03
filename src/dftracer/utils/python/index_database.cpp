@@ -1,4 +1,8 @@
 #include <dftracer/utils/python/index_database.h>
+#include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_list_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/sst_distribution.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
@@ -35,7 +39,7 @@ static int IndexDatabase_init(IndexDatabaseObject *self, PyObject *args,
     try {
         self->db = std::make_shared<IndexDatabase>(index_path);
     } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+        set_typed_py_error(e);
         return -1;
     }
     return 0;
@@ -47,13 +51,7 @@ static PyObject *IndexDatabase_init_schema(IndexDatabaseObject *self,
         PyErr_SetString(PyExc_RuntimeError, "IndexDatabase not initialised");
         return NULL;
     }
-    try {
-        Py_BEGIN_ALLOW_THREADS self->db->init_schema();
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return NULL;
-    }
+    if (!run_blocking([&] { self->db->init_schema(); })) return NULL;
     Py_RETURN_NONE;
 }
 
@@ -67,28 +65,14 @@ static PyObject *IndexDatabase_register_files(IndexDatabaseObject *self,
         return NULL;
     }
     std::vector<std::string> paths;
-    PyObject *seq = PySequence_Fast(paths_obj, "paths must be a sequence");
-    if (!seq) return NULL;
-    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-    paths.reserve(n);
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
-        const char *s = PyUnicode_AsUTF8(item);
-        if (!s) {
-            Py_DECREF(seq);
-            return NULL;
-        }
-        paths.emplace_back(s);
-    }
-    Py_DECREF(seq);
+    if (!parse_str_list(paths_obj, "paths", paths)) return NULL;
 
     std::vector<int> ids;
-    try {
-        Py_BEGIN_ALLOW_THREADS ids =
-            self->db->register_files(paths, build_manifest != 0);
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    if (!run_blocking_r(
+            [&] {
+                return self->db->register_files(paths, build_manifest != 0);
+            },
+            ids)) {
         return NULL;
     }
 
@@ -109,12 +93,12 @@ static PyObject *IndexDatabase_reserve_file_id_range(IndexDatabaseObject *self,
         return NULL;
     }
     int first;
-    try {
-        Py_BEGIN_ALLOW_THREADS first =
-            self->db->reserve_file_id_range(static_cast<std::size_t>(count));
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    if (!run_blocking_r(
+            [&] {
+                return self->db->reserve_file_id_range(
+                    static_cast<std::size_t>(count));
+            },
+            first)) {
         return NULL;
     }
     return PyLong_FromLong(first);
@@ -155,13 +139,8 @@ static PyObject *IndexDatabase_bulk_ingest(IndexDatabaseObject *self,
         Py_DECREF(seq);
     }
 
-    try {
-        Py_BEGIN_ALLOW_THREADS self->db->bulk_ingest(*registry, skip_cfs);
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    if (!run_blocking([&] { self->db->bulk_ingest(*registry, skip_cfs); }))
         return NULL;
-    }
     Py_RETURN_NONE;
 }
 
@@ -186,13 +165,8 @@ static PyObject *IndexDatabase_write_agg_file_markers(IndexDatabaseObject *self,
     }
     Py_DECREF(seq);
 
-    try {
-        Py_BEGIN_ALLOW_THREADS self->db->write_agg_file_markers(file_ids);
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    if (!run_blocking([&] { self->db->write_agg_file_markers(file_ids); }))
         return NULL;
-    }
     Py_RETURN_NONE;
 }
 
@@ -205,13 +179,11 @@ static PyObject *IndexDatabase_write_agg_global_config(
                                      &time_interval_us, &config_hash)) {
         return NULL;
     }
-    try {
-        Py_BEGIN_ALLOW_THREADS self->db->write_agg_global_config(
-            static_cast<std::uint64_t>(time_interval_us),
-            static_cast<std::uint32_t>(config_hash));
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    if (!run_blocking([&] {
+            self->db->write_agg_global_config(
+                static_cast<std::uint64_t>(time_interval_us),
+                static_cast<std::uint32_t>(config_hash));
+        })) {
         return NULL;
     }
     Py_RETURN_NONE;
@@ -245,25 +217,14 @@ static PyObject *IndexDatabase_write_aggregation_tracker(
         if (len > 0) blobs.emplace_back(buf, static_cast<std::size_t>(len));
     }
     Py_DECREF(seq);
-    try {
-        Py_BEGIN_ALLOW_THREADS self->db->write_aggregation_tracker(blobs);
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
+    if (!run_blocking([&] { self->db->write_aggregation_tracker(blobs); }))
         return NULL;
-    }
     Py_RETURN_NONE;
 }
 
 static PyObject *IndexDatabase_rebuild_root_summaries(IndexDatabaseObject *self,
                                                       PyObject * /*ignored*/) {
-    try {
-        Py_BEGIN_ALLOW_THREADS self->db->rebuild_root_summaries();
-        Py_END_ALLOW_THREADS
-    } catch (const std::exception &e) {
-        PyErr_SetString(PyExc_RuntimeError, e.what());
-        return NULL;
-    }
+    if (!run_blocking([&] { self->db->rebuild_root_summaries(); })) return NULL;
     Py_RETURN_NONE;
 }
 
@@ -352,12 +313,6 @@ PyTypeObject IndexDatabaseType = {
 };
 
 int init_index_database(PyObject *m) {
-    if (PyType_Ready(&IndexDatabaseType) < 0) return -1;
-    Py_INCREF(&IndexDatabaseType);
-    if (PyModule_AddObject(m, "IndexDatabase", (PyObject *)&IndexDatabaseType) <
-        0) {
-        Py_DECREF(&IndexDatabaseType);
-        return -1;
-    }
+    if (register_type(m, &IndexDatabaseType, "IndexDatabase") < 0) return -1;
     return 0;
 }

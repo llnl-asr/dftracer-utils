@@ -1,11 +1,26 @@
+import atexit
 from importlib.metadata import PackageNotFoundError, version
 from typing import Optional
 
 from .arrow import read_arrow, write_arrow  # noqa: F401
-from .dftracer_utils_ext import (
+from .dftracer_utils_ext import (  # noqa: F401
     CheckpointIndexer,  # noqa: F401
+    DFTUtilsAggregationError,
+    DFTUtilsCompressionError,
+    DFTUtilsError,
+    DFTUtilsIndexerError,
+    DFTUtilsIOError,
+    DFTUtilsNotFoundError,
+    DFTUtilsParseError,
+    DFTUtilsPipelineError,
+    DFTUtilsQueryError,
+    DFTUtilsReaderError,
+    DFTUtilsValueError,
     IndexerCheckpoint,  # noqa: F401
     JsonDictValue,  # noqa: F401
+    get_log_level,
+    set_log_color,
+    set_log_level,
 )
 from .dftracer_utils_ext import (
     get_default_runtime as _get_default_native_runtime,
@@ -45,6 +60,21 @@ def set_default_runtime(runtime: Optional["Runtime"]) -> None:
         _default_wrapper = runtime
 
 
+@atexit.register
+def _shutdown_default_runtime() -> None:
+    # Join executor threads while the interpreter is still alive to avoid
+    # teardown hangs. Only act on a lazily-created default; never force one.
+    global _default_wrapper
+    wrapper = _default_wrapper
+    if wrapper is None:
+        return
+    _default_wrapper = None
+    try:
+        wrapper.shutdown(wait=True)
+    except Exception:
+        pass
+
+
 try:
     __version__ = version("dftracer-utils")
 except PackageNotFoundError:
@@ -64,7 +94,10 @@ __all__ = [
     "Runtime",
     "TaskHandle",
     "get_default_runtime",
+    "get_log_level",
     "read_arrow",
     "set_default_runtime",
+    "set_log_color",
+    "set_log_level",
     "write_arrow",
 ]

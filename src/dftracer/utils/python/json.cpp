@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/python/json.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 
 using dftracer::utils::utilities::composites::dft::ArgsValueProxy;
 
@@ -353,12 +354,6 @@ PyTypeObject JsonDictValueType = {
 };
 
 int init_json_dict_value(PyObject *m) {
-    if (PyType_Ready(&JsonDictValueType) < 0) return -1;
-    Py_INCREF(&JsonDictValueType);
-    if (PyModule_AddObject(m, "JsonDictValue", (PyObject *)&JsonDictValueType) <
-        0) {
-        Py_DECREF(&JsonDictValueType);
-        return -1;
-    }
+    if (register_type(m, &JsonDictValueType, "JsonDictValue") < 0) return -1;
     return 0;
 }

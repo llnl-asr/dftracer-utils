@@ -2,6 +2,9 @@
 #include <dftracer/utils/core/common/archive_format.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/metadata_collector.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
@@ -14,56 +17,7 @@ using dftracer::utils::Runtime;
 using dftracer::utils::coro::CoroTask;
 using namespace dftracer::utils::utilities::composites::dft;
 
-static Runtime *get_runtime(MetadataCollectorObject *self) {
-    if (self->runtime_obj)
-        return ((RuntimeObject *)self->runtime_obj)->runtime.get();
-    return get_default_runtime();
-}
-
-static void MetadataCollector_dealloc(MetadataCollectorObject *self) {
-    Py_XDECREF(self->runtime_obj);
-    Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-static PyObject *MetadataCollector_new(PyTypeObject *type, PyObject *args,
-                                       PyObject *kwds) {
-    MetadataCollectorObject *self =
-        (MetadataCollectorObject *)type->tp_alloc(type, 0);
-    if (self) {
-        self->runtime_obj = NULL;
-    }
-    return (PyObject *)self;
-}
-
-static int MetadataCollector_init(MetadataCollectorObject *self, PyObject *args,
-                                  PyObject *kwds) {
-    static const char *kwlist[] = {"runtime", NULL};
-    PyObject *runtime_arg = NULL;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", (char **)kwlist,
-                                     &runtime_arg)) {
-        return -1;
-    }
-
-    if (runtime_arg && runtime_arg != Py_None) {
-        if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
-            Py_INCREF(runtime_arg);
-            self->runtime_obj = runtime_arg;
-        } else {
-            PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
-            if (native && PyObject_TypeCheck(native, &RuntimeType)) {
-                self->runtime_obj = native;
-            } else {
-                Py_XDECREF(native);
-                PyErr_SetString(PyExc_TypeError,
-                                "runtime must be a Runtime instance or None");
-                return -1;
-            }
-        }
-    }
-
-    return 0;
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(MetadataCollector, MetadataCollectorObject)
 
 static PyObject *MetadataCollector_collect(MetadataCollectorObject *self,
                                            PyObject *args, PyObject *kwds) {
@@ -76,115 +30,53 @@ static PyObject *MetadataCollector_collect(MetadataCollectorObject *self,
 
     std::string file_path_str(file_path);
     std::string index_dir_str(index_dir);
-    std::string error_msg;
     MetadataCollectorUtilityOutput output;
 
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
+    if (!run_blocking([&] {
+            Runtime *rt = resolve_runtime(self);
 
-        MetadataCollectorUtilityInput input;
-        input.file_path = file_path_str;
-        input.index_path = dftracer::utils::utilities::composites::dft::
-            internal::determine_index_path(file_path_str, index_dir_str);
+            MetadataCollectorUtilityInput input;
+            input.file_path = file_path_str;
+            input.index_path = dftracer::utils::utilities::composites::dft::
+                internal::determine_index_path(file_path_str, index_dir_str);
 
-        auto *out_p = &output;
-        auto input_copy = input;
-        auto task = [out_p, input_copy]() -> CoroTask<void> {
-            MetadataCollectorUtility util;
-            *out_p = co_await util.process(input_copy);
-        };
-        rt->submit(task(), "metadata-collector").get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+            auto *out_p = &output;
+            auto input_copy = input;
+            auto task = [out_p, input_copy]() -> CoroTask<void> {
+                MetadataCollectorUtility util;
+                *out_p = co_await util.process(input_copy);
+            };
+            rt->submit(task(), "metadata-collector").get();
+        })) {
         return NULL;
     }
 
     PyObject *d = PyDict_New();
     if (!d) return NULL;
 
-#define SET_STR(k, v)                                    \
-    do {                                                 \
-        PyObject *_v = PyUnicode_FromString(v);          \
-        if (!_v || PyDict_SetItemString(d, k, _v) < 0) { \
-            Py_XDECREF(_v);                              \
-            Py_DECREF(d);                                \
-            return NULL;                                 \
-        }                                                \
-        Py_DECREF(_v);                                   \
-    } while (0)
+    int rc = 0;
+    rc |= dict_set_str(d, "file_path", output.file_path.c_str());
+    rc |= dict_set_str(d, "index_path", output.index_path.c_str());
+    rc |= dict_set_f64(d, "size_mb", output.size_mb);
+    rc |= dict_set_size(d, "start_line", output.start_line);
+    rc |= dict_set_size(d, "end_line", output.end_line);
+    rc |= dict_set_size(d, "valid_events", output.valid_events);
+    rc |= dict_set_f64(d, "size_per_line", output.size_per_line);
+    rc |= dict_set_bool(d, "success", output.success);
+    rc |= dict_set_bool(d, "has_index", output.has_index);
+    rc |= dict_set_bool(d, "index_valid", output.index_valid);
+    rc |= dict_set_u64(d, "compressed_size", output.compressed_size);
+    rc |= dict_set_u64(d, "uncompressed_size", output.uncompressed_size);
+    rc |= dict_set_u64(d, "num_lines", output.num_lines);
+    rc |= dict_set_u64(d, "checkpoint_size", output.checkpoint_size);
+    rc |= dict_set_size(d, "num_checkpoints", output.num_checkpoints);
+    rc |= dict_set_str(d, "format", get_format_name(output.format));
+    rc |= dict_set_str(d, "error_message", output.error_message.c_str());
 
-#define SET_DBL(k, v)                                    \
-    do {                                                 \
-        PyObject *_v = PyFloat_FromDouble(v);            \
-        if (!_v || PyDict_SetItemString(d, k, _v) < 0) { \
-            Py_XDECREF(_v);                              \
-            Py_DECREF(d);                                \
-            return NULL;                                 \
-        }                                                \
-        Py_DECREF(_v);                                   \
-    } while (0)
-
-#define SET_SZT(k, v)                                    \
-    do {                                                 \
-        PyObject *_v = PyLong_FromSize_t(v);             \
-        if (!_v || PyDict_SetItemString(d, k, _v) < 0) { \
-            Py_XDECREF(_v);                              \
-            Py_DECREF(d);                                \
-            return NULL;                                 \
-        }                                                \
-        Py_DECREF(_v);                                   \
-    } while (0)
-
-#define SET_ULL(k, v)                                    \
-    do {                                                 \
-        PyObject *_v = PyLong_FromUnsignedLongLong(v);   \
-        if (!_v || PyDict_SetItemString(d, k, _v) < 0) { \
-            Py_XDECREF(_v);                              \
-            Py_DECREF(d);                                \
-            return NULL;                                 \
-        }                                                \
-        Py_DECREF(_v);                                   \
-    } while (0)
-
-#define SET_BOOL(k, v)                                   \
-    do {                                                 \
-        PyObject *_v = PyBool_FromLong(v ? 1 : 0);       \
-        if (!_v || PyDict_SetItemString(d, k, _v) < 0) { \
-            Py_XDECREF(_v);                              \
-            Py_DECREF(d);                                \
-            return NULL;                                 \
-        }                                                \
-        Py_DECREF(_v);                                   \
-    } while (0)
-
-    SET_STR("file_path", output.file_path.c_str());
-    SET_STR("index_path", output.index_path.c_str());
-    SET_DBL("size_mb", output.size_mb);
-    SET_SZT("start_line", output.start_line);
-    SET_SZT("end_line", output.end_line);
-    SET_SZT("valid_events", output.valid_events);
-    SET_DBL("size_per_line", output.size_per_line);
-    SET_BOOL("success", output.success);
-    SET_BOOL("has_index", output.has_index);
-    SET_BOOL("index_valid", output.index_valid);
-    SET_ULL("compressed_size", output.compressed_size);
-    SET_ULL("uncompressed_size", output.uncompressed_size);
-    SET_ULL("num_lines", output.num_lines);
-    SET_ULL("checkpoint_size", output.checkpoint_size);
-    SET_SZT("num_checkpoints", output.num_checkpoints);
-    SET_STR("format", get_format_name(output.format));
-    SET_STR("error_message", output.error_message.c_str());
-
-#undef SET_STR
-#undef SET_DBL
-#undef SET_SZT
-#undef SET_ULL
-#undef SET_BOOL
+    if (rc != 0) {
+        Py_DECREF(d);
+        return NULL;
+    }
 
     return d;
 }
@@ -255,15 +147,9 @@ PyTypeObject MetadataCollectorType = {
 };
 
 int init_metadata_collector(PyObject *m) {
-    if (PyType_Ready(&MetadataCollectorType) < 0) return -1;
-
-    Py_INCREF(&MetadataCollectorType);
-    if (PyModule_AddObject(m, "MetadataCollectorUtility",
-                           (PyObject *)&MetadataCollectorType) < 0) {
-        Py_DECREF(&MetadataCollectorType);
-        Py_DECREF(m);
+    if (register_type(m, &MetadataCollectorType, "MetadataCollectorUtility") <
+        0)
         return -1;
-    }
 
     return 0;
 }

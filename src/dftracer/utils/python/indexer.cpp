@@ -2,6 +2,9 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/indexer_checkpoint.h>
+#include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
@@ -172,23 +175,21 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         Runtime *rt = get_indexer_runtime(self);
         IndexBuildBatchResult batch_result;
 
-        try {
-            Py_BEGIN_ALLOW_THREADS rt
-                ->submit(
-                    run_coro_scope(
-                        rt->executor(),
-                        [](CoroScope &scope,
-                           std::shared_ptr<IndexBuildBatchConfig> cfg,
-                           IndexBuildBatchResult *out) -> coro::CoroTask<void> {
-                            *out = co_await IndexBatchBuilderUtility::process(
-                                &scope, std::move(cfg));
-                        },
-                        batch_config, &batch_result),
-                    "indexer-build")
-                .get();
-            Py_END_ALLOW_THREADS
-        } catch (const std::exception &e) {
-            PyErr_SetString(PyExc_RuntimeError, e.what());
+        if (!run_blocking([&] {
+                rt->submit(
+                      run_coro_scope(
+                          rt->executor(),
+                          [](CoroScope &scope,
+                             std::shared_ptr<IndexBuildBatchConfig> cfg,
+                             IndexBuildBatchResult *out)
+                              -> coro::CoroTask<void> {
+                              *out = co_await IndexBatchBuilderUtility::process(
+                                  &scope, std::move(cfg));
+                          },
+                          batch_config, &batch_result),
+                      "indexer-build")
+                    .get();
+            })) {
             return NULL;
         }
 
@@ -484,7 +485,7 @@ PyTypeObject CheckpointIndexerType = {
     0,                                        /* tp_setattro */
     0,                                        /* tp_as_buffer */
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE, /* tp_flags */
-    "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=1048576, "
+    "CheckpointIndexer(gz_path, index_path=None, checkpoint_size=33554432, "
     "force_rebuild=False, build_bloom=False, build_manifest=False, "
     "runtime=None)\n"
     "--\n"
@@ -526,15 +527,8 @@ PyTypeObject CheckpointIndexerType = {
 };
 
 int init_checkpoint_indexer(PyObject *m) {
-    if (PyType_Ready(&CheckpointIndexerType) < 0) return -1;
-
-    Py_INCREF(&CheckpointIndexerType);
-    if (PyModule_AddObject(m, "CheckpointIndexer",
-                           (PyObject *)&CheckpointIndexerType) < 0) {
-        Py_DECREF(&CheckpointIndexerType);
-        Py_DECREF(m);
+    if (register_type(m, &CheckpointIndexerType, "CheckpointIndexer") < 0)
         return -1;
-    }
 
     return 0;
 }

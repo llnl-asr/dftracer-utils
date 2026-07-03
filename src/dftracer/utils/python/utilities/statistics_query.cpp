@@ -1,6 +1,9 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/python/py_dict_helpers.h>
+#include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/statistics_query.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
@@ -13,56 +16,7 @@ using dftracer::utils::Runtime;
 using dftracer::utils::coro::CoroTask;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
 
-static Runtime *get_runtime(StatisticsQueryObject *self) {
-    if (self->runtime_obj)
-        return ((RuntimeObject *)self->runtime_obj)->runtime.get();
-    return get_default_runtime();
-}
-
-static void StatisticsQuery_dealloc(StatisticsQueryObject *self) {
-    Py_XDECREF(self->runtime_obj);
-    Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-static PyObject *StatisticsQuery_new(PyTypeObject *type, PyObject *args,
-                                     PyObject *kwds) {
-    StatisticsQueryObject *self =
-        (StatisticsQueryObject *)type->tp_alloc(type, 0);
-    if (self) {
-        self->runtime_obj = NULL;
-    }
-    return (PyObject *)self;
-}
-
-static int StatisticsQuery_init(StatisticsQueryObject *self, PyObject *args,
-                                PyObject *kwds) {
-    static const char *kwlist[] = {"runtime", NULL};
-    PyObject *runtime_arg = NULL;
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", (char **)kwlist,
-                                     &runtime_arg)) {
-        return -1;
-    }
-
-    if (runtime_arg && runtime_arg != Py_None) {
-        if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
-            Py_INCREF(runtime_arg);
-            self->runtime_obj = runtime_arg;
-        } else {
-            PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
-            if (native && PyObject_TypeCheck(native, &RuntimeType)) {
-                self->runtime_obj = native;
-            } else {
-                Py_XDECREF(native);
-                PyErr_SetString(PyExc_TypeError,
-                                "runtime must be a Runtime instance or None");
-                return -1;
-            }
-        }
-    }
-
-    return 0;
-}
+DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(StatisticsQuery, StatisticsQueryObject)
 
 static PyObject *StatisticsQuery_query(StatisticsQueryObject *self,
                                        PyObject *args, PyObject *kwds) {
@@ -106,46 +60,39 @@ static PyObject *StatisticsQuery_query(StatisticsQueryObject *self,
 
     std::string file_path_str(file_path);
     std::string index_dir_str(index_dir);
-    std::string error_msg;
     TraceStatistics stats;
     StatisticsQueryOutput output;
     auto qt_copy = qt;
     auto top_n_copy = static_cast<std::uint64_t>(top_n);
 
-    Py_BEGIN_ALLOW_THREADS try {
-        Runtime *rt = get_runtime(self);
+    if (!run_blocking([&] {
+            Runtime *rt = resolve_runtime(self);
 
-        StatisticsAggregatorInput agg_input;
-        agg_input.file_path = file_path_str;
-        agg_input.index_dir = index_dir_str;
-        agg_input.index_path = dftracer::utils::utilities::composites::dft::
-            internal::determine_index_path(file_path_str, index_dir_str);
+            StatisticsAggregatorInput agg_input;
+            agg_input.file_path = file_path_str;
+            agg_input.index_dir = index_dir_str;
+            agg_input.index_path = dftracer::utils::utilities::composites::dft::
+                internal::determine_index_path(file_path_str, index_dir_str);
 
-        auto *stats_p = &stats;
-        auto agg_task = [stats_p, agg_input]() -> CoroTask<void> {
-            StatisticsAggregatorUtility util;
-            *stats_p = co_await util.process(agg_input);
-        };
-        rt->submit(agg_task(), "stats-agg").get();
+            auto *stats_p = &stats;
+            auto agg_task = [stats_p, agg_input]() -> CoroTask<void> {
+                StatisticsAggregatorUtility util;
+                *stats_p = co_await util.process(agg_input);
+            };
+            rt->submit(agg_task(), "stats-agg").get();
 
-        StatisticsQueryInput query_input;
-        query_input.stats = std::move(stats);
-        query_input.query_type = qt_copy;
-        query_input.top_n = top_n_copy;
+            StatisticsQueryInput query_input;
+            query_input.stats = std::move(stats);
+            query_input.query_type = qt_copy;
+            query_input.top_n = top_n_copy;
 
-        auto *out_p = &output;
-        auto query_task = [out_p, query_input]() -> CoroTask<void> {
-            StatisticsQueryUtility util;
-            *out_p = co_await util.process(query_input);
-        };
-        rt->submit(query_task(), "stats-query").get();
-    } catch (const std::exception &e) {
-        error_msg = e.what();
-    }
-    Py_END_ALLOW_THREADS
-
-        if (!error_msg.empty()) {
-        PyErr_SetString(PyExc_RuntimeError, error_msg.c_str());
+            auto *out_p = &output;
+            auto query_task = [out_p, query_input]() -> CoroTask<void> {
+                StatisticsQueryUtility util;
+                *out_p = co_await util.process(query_input);
+            };
+            rt->submit(query_task(), "stats-query").get();
+        })) {
         return NULL;
     }
 
@@ -172,63 +119,24 @@ static PyObject *StatisticsQuery_query(StatisticsQueryObject *self,
         return NULL;
     }
 
-#define SET_STR(k, v)                                    \
-    do {                                                 \
-        PyObject *_v = PyUnicode_FromString(v);          \
-        if (!_v || PyDict_SetItemString(d, k, _v) < 0) { \
-            Py_XDECREF(_v);                              \
-            Py_DECREF(results_list);                     \
-            Py_DECREF(d);                                \
-            return NULL;                                 \
-        }                                                \
-        Py_DECREF(_v);                                   \
-    } while (0)
+    int rc = 0;
+    rc |= dict_set_str(d, "query_type", output.query_type_name.c_str());
+    rc |= dict_set_u64(d, "total_events", output.total_events);
+    rc |= dict_set_u64(d, "min_timestamp_us", output.min_timestamp_us);
+    rc |= dict_set_u64(d, "max_timestamp_us", output.max_timestamp_us);
+    rc |= dict_set_f64(d, "time_span_seconds", output.time_span_seconds);
+    rc |= dict_set_u64(d, "duration_count", output.duration_count);
+    rc |= dict_set_f64(d, "duration_mean_us", output.duration_mean_us);
+    rc |= dict_set_f64(d, "duration_stddev_us", output.duration_stddev_us);
+    rc |= dict_set_u64(d, "duration_min_us", output.duration_min_us);
+    rc |= dict_set_u64(d, "duration_max_us", output.duration_max_us);
+    // Steals (and always releases) the results_list reference.
+    rc |= dict_set_steal(d, "results", results_list);
 
-#define SET_ULL(k, v)                                    \
-    do {                                                 \
-        PyObject *_v = PyLong_FromUnsignedLongLong(v);   \
-        if (!_v || PyDict_SetItemString(d, k, _v) < 0) { \
-            Py_XDECREF(_v);                              \
-            Py_DECREF(results_list);                     \
-            Py_DECREF(d);                                \
-            return NULL;                                 \
-        }                                                \
-        Py_DECREF(_v);                                   \
-    } while (0)
-
-#define SET_DBL(k, v)                                    \
-    do {                                                 \
-        PyObject *_v = PyFloat_FromDouble(v);            \
-        if (!_v || PyDict_SetItemString(d, k, _v) < 0) { \
-            Py_XDECREF(_v);                              \
-            Py_DECREF(results_list);                     \
-            Py_DECREF(d);                                \
-            return NULL;                                 \
-        }                                                \
-        Py_DECREF(_v);                                   \
-    } while (0)
-
-    SET_STR("query_type", output.query_type_name.c_str());
-    SET_ULL("total_events", output.total_events);
-    SET_ULL("min_timestamp_us", output.min_timestamp_us);
-    SET_ULL("max_timestamp_us", output.max_timestamp_us);
-    SET_DBL("time_span_seconds", output.time_span_seconds);
-    SET_ULL("duration_count", output.duration_count);
-    SET_DBL("duration_mean_us", output.duration_mean_us);
-    SET_DBL("duration_stddev_us", output.duration_stddev_us);
-    SET_ULL("duration_min_us", output.duration_min_us);
-    SET_ULL("duration_max_us", output.duration_max_us);
-
-    if (PyDict_SetItemString(d, "results", results_list) < 0) {
-        Py_DECREF(results_list);
+    if (rc != 0) {
         Py_DECREF(d);
         return NULL;
     }
-    Py_DECREF(results_list);
-
-#undef SET_STR
-#undef SET_ULL
-#undef SET_DBL
 
     return d;
 }
@@ -305,15 +213,9 @@ PyTypeObject StatisticsQueryUtilityType = {
 };
 
 int init_statistics_query(PyObject *m) {
-    if (PyType_Ready(&StatisticsQueryUtilityType) < 0) return -1;
-
-    Py_INCREF(&StatisticsQueryUtilityType);
-    if (PyModule_AddObject(m, "StatisticsQueryUtility",
-                           (PyObject *)&StatisticsQueryUtilityType) < 0) {
-        Py_DECREF(&StatisticsQueryUtilityType);
-        Py_DECREF(m);
+    if (register_type(m, &StatisticsQueryUtilityType,
+                      "StatisticsQueryUtility") < 0)
         return -1;
-    }
 
     return 0;
 }

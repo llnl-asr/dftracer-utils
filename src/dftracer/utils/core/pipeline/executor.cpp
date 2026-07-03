@@ -315,6 +315,11 @@ void Executor::worker_thread(WorkerContext* context) {
                 }
             }
             drain_destroy_queue();
+            // Re-check after snapshotting the signal: shutdown()'s bump may
+            // have landed post-snapshot, so wait() would park forever.
+            if (!running_.load(std::memory_order_acquire)) {
+                break;
+            }
             work_signal_.wait(observed_signal, std::memory_order_acquire);
         }
     }

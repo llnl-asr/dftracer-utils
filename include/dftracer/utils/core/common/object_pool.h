@@ -135,18 +135,23 @@ class ObjectPool {
     void* allocate(std::size_t size) {
         auto* stack = get_stack(size);
         if (!stack) return ::operator new(size);
-        void* block = stack->pop();
-        if (block) return block;
-        return ::operator new(size);
+        // Hand out the payload past the reserved header, so
+        // load_next/store_next (the only accessors of `next`) never race the
+        // caller's writes.
+        if (void* block = stack->pop()) {
+            return static_cast<char*>(block) + BLOCK_HEADER;
+        }
+        void* block = ::operator new(BLOCK_HEADER + size);
+        return static_cast<char*>(block) + BLOCK_HEADER;
     }
 
-    void deallocate(void* block, std::size_t size) {
+    void deallocate(void* ptr, std::size_t size) {
         auto* stack = get_stack(size);
         if (!stack) {
-            ::operator delete(block);
+            ::operator delete(ptr);
             return;
         }
-        stack->push(block);
+        stack->push(static_cast<char*>(ptr) - BLOCK_HEADER);
     }
 
     ObjectPool(const ObjectPool&) = delete;
@@ -169,6 +174,12 @@ class ObjectPool {
             }
         }
     }
+
+    // Reserved header holding the free-list `next`; max-aligned so the payload
+    // past it keeps default-new alignment.
+    static constexpr std::size_t BLOCK_HEADER = alignof(std::max_align_t);
+    static_assert(BLOCK_HEADER >= sizeof(void*),
+                  "block header must hold a next pointer");
 
     static constexpr std::size_t ALIGNMENT = 8;
     static constexpr std::size_t MAX_FAST_SIZE = 4096;

@@ -219,10 +219,11 @@ MergedStatisticsResult decode_file_scalar_stats_value(std::string_view value) {
     stats.duration_count = cursor.u64();
     stats.duration_m2 = cursor.f64();
 
-    auto duration_sketch = cursor.blob();
+    auto duration_sketch = cursor.blob_view();
     if (!duration_sketch.empty()) {
         stats.duration_sketch = common::statistics::DDSketch::deserialize(
-            duration_sketch.data(), duration_sketch.size());
+            reinterpret_cast<const std::uint8_t*>(duration_sketch.data()),
+            duration_sketch.size());
     }
 
     auto duration_histogram = cursor.str();
@@ -233,11 +234,12 @@ MergedStatisticsResult decode_file_scalar_stats_value(std::string_view value) {
 
     result.num_chunks = cursor.u64();
 
-    auto ts_hist_blob = cursor.blob();
+    auto ts_hist_blob = cursor.blob_view();
     if (!ts_hist_blob.empty()) {
         stats.timestamp_histogram =
             common::statistics::TimestampHistogram::deserialize(
-                ts_hist_blob.data(), ts_hist_blob.size());
+                reinterpret_cast<const std::uint8_t*>(ts_hist_blob.data()),
+                ts_hist_blob.size());
     }
 
     return result;
@@ -256,10 +258,11 @@ RootStatisticsResult decode_root_scalar_stats_value(std::string_view value) {
     stats.duration_count = cursor.u64();
     stats.duration_m2 = cursor.f64();
 
-    auto duration_sketch = cursor.blob();
+    auto duration_sketch = cursor.blob_view();
     if (!duration_sketch.empty()) {
         stats.duration_sketch = common::statistics::DDSketch::deserialize(
-            duration_sketch.data(), duration_sketch.size());
+            reinterpret_cast<const std::uint8_t*>(duration_sketch.data()),
+            duration_sketch.size());
     }
 
     auto duration_histogram = cursor.str();
@@ -270,11 +273,12 @@ RootStatisticsResult decode_root_scalar_stats_value(std::string_view value) {
 
     result.num_chunks = cursor.u64();
 
-    auto ts_hist_blob = cursor.blob();
+    auto ts_hist_blob = cursor.blob_view();
     if (!ts_hist_blob.empty()) {
         stats.timestamp_histogram =
             common::statistics::TimestampHistogram::deserialize(
-                ts_hist_blob.data(), ts_hist_blob.size());
+                reinterpret_cast<const std::uint8_t*>(ts_hist_blob.data()),
+                ts_hist_blob.size());
     }
 
     result.num_files = cursor.u64();

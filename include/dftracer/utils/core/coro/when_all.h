@@ -26,6 +26,15 @@ namespace dftracer::utils::coro {
 /// Coroutine that destroys its own frame on completion.
 struct FireAndForget {
     struct promise_type {
+        // Route wrapper coroutine frames through ObjectPool like every other
+        // promise (PromiseBase in task.h, CoroPromise in coro.h).
+        static void* operator new(std::size_t size) {
+            return ObjectPool::instance().allocate(size);
+        }
+        static void operator delete(void* ptr, std::size_t size) {
+            ObjectPool::instance().deallocate(ptr, size);
+        }
+
         FireAndForget get_return_object() { return {}; }
         std::suspend_never initial_suspend() { return {}; }
         std::suspend_never final_suspend() noexcept { return {}; }

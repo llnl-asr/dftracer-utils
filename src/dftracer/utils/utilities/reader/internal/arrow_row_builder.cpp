@@ -2,6 +2,7 @@
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 
@@ -47,19 +48,22 @@ enum IOCat : std::int8_t {
 
 std::int8_t get_io_cat(std::string_view func) {
     using namespace dftracer::utils::utilities::composites::dft::internal;
-    for (auto op : posix_ops::READ)
-        if (op == func) return IO_READ;
-    for (auto op : posix_ops::WRITE)
-        if (op == func) return IO_WRITE;
-    for (auto op : posix_ops::SYNC)
-        if (op == func) return IO_SYNC;
-    for (auto op : posix_ops::PCTL)
-        if (op == func) return IO_PCTL;
-    for (auto op : posix_ops::IPC)
-        if (op == func) return IO_IPC;
-    for (auto op : posix_ops::METADATA)
-        if (op == func) return IO_METADATA;
-    return IO_OTHER;
+    // Op sets are disjoint, so a single flat lookup preserves the original
+    // first-match semantics. Keys view the constexpr op arrays (static
+    // storage).
+    static const ankerl::unordered_dense::map<std::string_view, std::int8_t>
+        op_to_cat = [] {
+            ankerl::unordered_dense::map<std::string_view, std::int8_t> m;
+            for (auto op : posix_ops::READ) m.emplace(op, IO_READ);
+            for (auto op : posix_ops::WRITE) m.emplace(op, IO_WRITE);
+            for (auto op : posix_ops::SYNC) m.emplace(op, IO_SYNC);
+            for (auto op : posix_ops::PCTL) m.emplace(op, IO_PCTL);
+            for (auto op : posix_ops::IPC) m.emplace(op, IO_IPC);
+            for (auto op : posix_ops::METADATA) m.emplace(op, IO_METADATA);
+            return m;
+        }();
+    auto it = op_to_cat.find(func);
+    return it != op_to_cat.end() ? it->second : IO_OTHER;
 }
 
 bool str_iequal(std::string_view a, const char *b) {

@@ -20,6 +20,7 @@ std::string metadata_key(int file_id) { return prefix_for_file(file_id); }
 std::string checkpoint_key(int file_id, std::uint64_t uc_offset,
                            std::uint64_t checkpoint_idx) {
     std::string key = prefix_for_file(file_id);
+    key.reserve(sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t));
     append_u64(key, uc_offset);
     append_u64(key, checkpoint_idx);
     return key;
@@ -28,6 +29,8 @@ std::string checkpoint_key(int file_id, std::uint64_t uc_offset,
 std::string manifest_event_key(int file_id, std::uint64_t checkpoint_idx,
                                std::string_view cat, std::string_view name) {
     std::string key("E|");
+    key.reserve(2 + sizeof(std::uint32_t) + sizeof(std::uint64_t) + 1 +
+                cat.size() + name.size());
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     append_u64(key, checkpoint_idx);
     key.append(cat);
@@ -39,6 +42,8 @@ std::string manifest_event_key(int file_id, std::uint64_t checkpoint_idx,
 std::string manifest_metadata_key(int file_id, std::uint64_t checkpoint_idx,
                                   std::string_view meta_type) {
     std::string key("M|");
+    key.reserve(2 + sizeof(std::uint32_t) + sizeof(std::uint64_t) +
+                meta_type.size());
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     append_u64(key, checkpoint_idx);
     key.append(meta_type);
@@ -102,12 +107,14 @@ std::string encode_metadata_value(std::span<const std::uint32_t> lines) {
 
 std::string file_pids_key(int file_id) {
     std::string key("P|");
+    key.reserve(2 + sizeof(std::uint32_t));
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     return key;
 }
 
 std::string make_dimension_key(int file_id, std::string_view dimension) {
     std::string key("d|");
+    key.reserve(2 + sizeof(std::uint32_t) + dimension.size());
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     key.append(dimension);
     return key;
@@ -116,6 +123,8 @@ std::string make_dimension_key(int file_id, std::string_view dimension) {
 std::string chunk_bloom_key(int file_id, std::string_view dimension,
                             std::uint64_t checkpoint_idx) {
     std::string key = prefix_for_file(file_id);
+    key.reserve(sizeof(std::uint32_t) + dimension.size() + 1 +
+                sizeof(std::uint64_t));
     key.append(dimension);
     key.push_back('\0');
     append_u64(key, checkpoint_idx);
@@ -124,12 +133,14 @@ std::string chunk_bloom_key(int file_id, std::string_view dimension,
 
 std::string file_bloom_key(int file_id, std::string_view dimension) {
     std::string key = prefix_for_file(file_id);
+    key.reserve(sizeof(std::uint32_t) + dimension.size());
     key.append(dimension);
     return key;
 }
 
 std::string chunk_stats_key(int file_id, std::uint64_t checkpoint_idx) {
     std::string key = prefix_for_file(file_id);
+    key.reserve(sizeof(std::uint32_t) + sizeof(std::uint64_t));
     append_u64(key, checkpoint_idx);
     return key;
 }
@@ -153,6 +164,8 @@ std::string file_name_counts_key(int file_id) {
 std::string chunk_dim_stats_key(int file_id, std::uint64_t checkpoint_idx,
                                 std::string_view dimension) {
     std::string key = prefix_for_file(file_id);
+    key.reserve(sizeof(std::uint32_t) + sizeof(std::uint64_t) +
+                dimension.size());
     append_u64(key, checkpoint_idx);
     key.append(dimension);
     return key;
@@ -215,18 +228,21 @@ std::string encode_chunk_dimension_stats_value(
 
 std::string name_lookup_key(std::string_view name) {
     std::string key("s|");
+    key.reserve(2 + name.size());
     key.append(name);
     return key;
 }
 
 std::string name_reverse_key(std::uint64_t name_id) {
     std::string key("i|");
+    key.reserve(2 + sizeof(std::uint64_t));
     append_u64(key, name_id);
     return key;
 }
 
 std::string name_file_posting_key(std::uint64_t name_id, int file_id) {
     std::string key("n|");
+    key.reserve(2 + sizeof(std::uint64_t) + sizeof(std::uint32_t));
     append_u64(key, name_id);
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     return key;
@@ -234,6 +250,7 @@ std::string name_file_posting_key(std::uint64_t name_id, int file_id) {
 
 std::string name_file_owner_key(int file_id, std::uint64_t name_id) {
     std::string key("o|");
+    key.reserve(2 + sizeof(std::uint32_t) + sizeof(std::uint64_t));
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     append_u64(key, name_id);
     return key;
@@ -241,6 +258,7 @@ std::string name_file_owner_key(int file_id, std::uint64_t name_id) {
 
 std::string name_file_owner_prefix(int file_id) {
     std::string key("o|");
+    key.reserve(2 + sizeof(std::uint32_t));
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     return key;
 }
@@ -248,6 +266,7 @@ std::string name_file_owner_prefix(int file_id) {
 std::string name_chunk_posting_key(std::uint64_t name_id, int file_id,
                                    std::uint64_t checkpoint_idx) {
     std::string key("n|");
+    key.reserve(2 + 2 * sizeof(std::uint64_t) + sizeof(std::uint32_t));
     append_u64(key, name_id);
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     append_u64(key, checkpoint_idx);
@@ -257,6 +276,7 @@ std::string name_chunk_posting_key(std::uint64_t name_id, int file_id,
 std::string name_chunk_owner_key(int file_id, std::uint64_t name_id,
                                  std::uint64_t checkpoint_idx) {
     std::string key("o|");
+    key.reserve(2 + sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t));
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     append_u64(key, name_id);
     append_u64(key, checkpoint_idx);
@@ -265,6 +285,7 @@ std::string name_chunk_owner_key(int file_id, std::uint64_t name_id,
 
 std::string name_chunk_owner_prefix(int file_id) {
     std::string key("o|");
+    key.reserve(2 + sizeof(std::uint32_t));
     rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
     return key;
 }

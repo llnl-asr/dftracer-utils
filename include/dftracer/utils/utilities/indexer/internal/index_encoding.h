@@ -103,6 +103,9 @@ std::string encode_chunk_dimension_stats_value(
 template <typename Map>
 std::string encode_count_map_value(const Map& counts) {
     std::string value;
+    value.reserve(sizeof(std::uint32_t) +
+                  counts.size() *
+                      (sizeof(std::uint32_t) + sizeof(std::uint64_t)));
     dftracer::utils::rocksdb::KeyCodec::append_be32(
         value, static_cast<std::uint32_t>(counts.size()));
     for (const auto& [key, count] : counts) {
@@ -117,6 +120,9 @@ std::string encode_name_summary_value(const Map& counts,
                                       std::uint64_t other_count,
                                       std::uint64_t unique_count) {
     std::string value;
+    value.reserve(sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t) +
+                  counts.size() *
+                      (sizeof(std::uint32_t) + sizeof(std::uint64_t)));
     dftracer::utils::rocksdb::KeyCodec::append_be32(
         value, static_cast<std::uint32_t>(counts.size()));
     append_u64(value, other_count);

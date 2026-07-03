@@ -112,6 +112,14 @@ class Cursor {
         return std::vector<unsigned char>(bytes.begin(), bytes.end());
     }
 
+    // Length-prefixed blob as a non-owning view into the cursor's backing
+    // buffer (no copy). Valid only while that buffer outlives the view; use
+    // for transient decodes that consume the bytes immediately.
+    std::string_view blob_view() {
+        auto len = static_cast<std::size_t>(u32());
+        return take(len);
+    }
+
     std::size_t offset() const { return offset_; }
     bool eof() const { return offset_ >= data_.size(); }
 

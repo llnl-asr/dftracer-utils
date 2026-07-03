@@ -130,10 +130,11 @@ ChunkStatistics decode_chunk_statistics_value(std::string_view value) {
     stats.duration_count = cursor.u64();
     stats.duration_m2 = cursor.f64();
 
-    auto duration_sketch = cursor.blob();
+    auto duration_sketch = cursor.blob_view();
     if (!duration_sketch.empty()) {
         stats.duration_sketch = common::statistics::DDSketch::deserialize(
-            duration_sketch.data(), duration_sketch.size());
+            reinterpret_cast<const std::uint8_t*>(duration_sketch.data()),
+            duration_sketch.size());
     }
 
     auto duration_histogram = cursor.str();
@@ -142,11 +143,12 @@ ChunkStatistics decode_chunk_statistics_value(std::string_view value) {
             common::statistics::Log2Histogram::from_json(duration_histogram);
     }
 
-    auto name_sketches = cursor.blob();
+    auto name_sketches = cursor.blob_view();
     if (!name_sketches.empty()) {
         stats.name_duration_sketches =
             ChunkStatistics::deserialize_name_duration_sketches(
-                name_sketches.data(), name_sketches.size());
+                reinterpret_cast<const std::uint8_t*>(name_sketches.data()),
+                name_sketches.size());
     }
 
     stats.name_duration_histograms =
@@ -157,11 +159,12 @@ ChunkStatistics decode_chunk_statistics_value(std::string_view value) {
         ChunkStatistics::parse_double_map_json(cursor.str());
     stats.name_category = ChunkStatistics::parse_string_map_json(cursor.str());
 
-    auto ts_hist_blob = cursor.blob();
+    auto ts_hist_blob = cursor.blob_view();
     if (!ts_hist_blob.empty()) {
         stats.timestamp_histogram =
             common::statistics::TimestampHistogram::deserialize(
-                ts_hist_blob.data(), ts_hist_blob.size());
+                reinterpret_cast<const std::uint8_t*>(ts_hist_blob.data()),
+                ts_hist_blob.size());
     }
 
     return stats;
@@ -215,8 +218,9 @@ ChunkDimensionStatsResult decode_chunk_dimension_stats_value(
 }
 
 std::vector<std::uint32_t> decode_line_numbers(Cursor& cursor) {
-    auto blob = cursor.blob();
-    return queries::unpack_line_numbers(blob.data(), blob.size());
+    auto blob = cursor.blob_view();
+    return queries::unpack_line_numbers(
+        reinterpret_cast<const unsigned char*>(blob.data()), blob.size());
 }
 
 StringViewMap<std::uint64_t> decode_count_map_value(std::string_view value) {

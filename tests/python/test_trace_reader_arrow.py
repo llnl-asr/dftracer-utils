@@ -120,6 +120,35 @@ class TestReadArrow:
             assert table.num_batches >= 1
             assert not table.empty
 
+    def test_read_arrow_normalize_names_not_corrupted(self):
+        """Regression: normalize=True must not corrupt name via simdjson
+        string-buffer reuse. The old rewind-based args pass overwrote the
+        name view, so names read back as fragments of the args (e.g. hhash).
+        """
+        import pyarrow as pa
+
+        with Environment(lines=40) as env:
+            gz_file = env.create_test_gzip_file()
+            with dft_utils.TraceReader(gz_file) as reader:
+                rbr = pa.RecordBatchReader.from_stream(reader.iter_arrow_stream(normalize=True))
+                table = rbr.read_all()
+            names = set(table.column("name").to_pylist())
+            cats = {c for c in table.column("cat").to_pylist() if c is not None}
+        expected = {
+            "pread",
+            "pwrite",
+            "read",
+            "write",
+            "fread",
+            "fwrite",
+            "open",
+            "close",
+        }
+        assert names, "no normalized rows produced"
+        # Corruption would surface as fragments of the args (e.g. "abc123").
+        assert names <= expected, f"corrupted normalized names: {names - expected}"
+        assert cats <= {"posix", "stdio"}, f"corrupted normalized cats: {cats}"
+
 
 class TestIterArrowStream:
     """Tests for TraceReader.iter_arrow_stream()."""

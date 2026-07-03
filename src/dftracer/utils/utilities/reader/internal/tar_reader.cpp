@@ -2,11 +2,13 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
+#include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/streams/tar_byte_stream.h>
 #include <dftracer/utils/utilities/reader/internal/string_line_processor.h>
 #include <dftracer/utils/utilities/reader/internal/tar_reader.h>
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstring>
 #include <sstream>
 #include <vector>
@@ -53,9 +55,9 @@ TarReader::TarReader(const std::string &tar_gz_path_,
             "Successfully created TAR reader for gz: %s and index: %s",
             tar_gz_path.c_str(), index_path.c_str());
     } catch (const std::exception &e) {
-        throw std::runtime_error(
-            "Failed to initialize TAR reader with indexer: " +
-            std::string(e.what()));
+        throw ReaderError(ReaderError::INITIALIZATION_ERROR,
+                          "Failed to initialize TAR reader with indexer: " +
+                              std::string(e.what()));
     }
 }
 
@@ -66,7 +68,8 @@ TarReader::TarReader(std::shared_ptr<TarIndexer> indexer_)
       cached_total_logical_bytes(0),
       cached_total_logical_lines(0) {
     if (indexer == nullptr) {
-        throw std::runtime_error("Invalid indexer provided");
+        throw ReaderError(ReaderError::INVALID_ARGUMENT,
+                          "Invalid indexer provided");
     }
     is_open = true;
     tar_gz_path = indexer->get_tar_gz_path();
@@ -131,7 +134,8 @@ void TarReader::set_buffer_size(std::size_t size) {
 std::unique_ptr<ReaderStream> TarReader::stream(
     [[maybe_unused]] const StreamConfig &config) {
     // TODO: Implement TAR stream creation
-    throw std::runtime_error("TarReader::stream() not yet implemented");
+    throw ReaderError(ReaderError::UNKNOWN_ERROR,
+                      "TarReader::stream() not yet implemented");
 }
 
 // Archive structure operations
@@ -433,13 +437,15 @@ void TarReader::build_logical_mapping() const {
         cached_total_logical_lines = logical_line - 1;
         logical_mapping_cached = true;
 
-        DFTRACER_UTILS_LOG_DEBUG(
-            "Built logical mapping: %zu files, %zu bytes, %zu lines",
-            cached_file_mapping.size(), cached_total_logical_bytes,
-            cached_total_logical_lines);
+        DFTRACER_UTILS_LOG_DEBUG("Built logical mapping: %zu files, %" PRIu64
+                                 " bytes, %" PRIu64 " lines",
+                                 cached_file_mapping.size(),
+                                 cached_total_logical_bytes,
+                                 cached_total_logical_lines);
     } catch (const std::exception &e) {
-        throw std::runtime_error("Failed to build TAR logical mapping: " +
-                                 std::string(e.what()));
+        throw ReaderError(
+            ReaderError::READ_ERROR,
+            "Failed to build TAR logical mapping: " + std::string(e.what()));
     }
 }
 

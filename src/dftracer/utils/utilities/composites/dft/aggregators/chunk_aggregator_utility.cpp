@@ -12,6 +12,7 @@ using dftracer::utils::utilities::composites::dft::DFTracerEvent;
 
 coro::CoroTask<ChunkAggregationOutput> ChunkAggregatorUtility::process(
     const ChunkAggregatorInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("aggregate chunk");
     ChunkAggregationOutput output;
     output.chunk_index = input.chunk_index;
     output.events_processed = 0;

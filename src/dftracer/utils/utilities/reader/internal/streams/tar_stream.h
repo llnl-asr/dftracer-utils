@@ -6,6 +6,8 @@
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 #include <dftracer/utils/utilities/reader/internal/tar_reader.h>
 
+#include <algorithm>
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -111,7 +113,7 @@ class TarStream : public GzipStream {
             logical_offset += tar_file.file_size;
 
             DFTRACER_UTILS_LOG_DEBUG(
-                "TAR file mapped: %s [%lu-%lu] size=%lu",
+                "TAR file mapped: %s [%" PRIu64 "-%" PRIu64 "] size=%" PRIu64,
                 mapped_file.file_name.c_str(), mapped_file.logical_start_offset,
                 mapped_file.logical_end_offset, mapped_file.file_size);
         }
@@ -163,6 +165,44 @@ class TarStream : public GzipStream {
 
         DFTRACER_UTILS_LOG_DEBUG("Advanced to file %s",
                                  current_file_->file_name.c_str());
+        return true;
+    }
+
+    // Look up the current TAR entry in the index and compute its actual
+    // (compressed-file) and logical byte ranges, clamped to target_end_bytes_.
+    // Returns false when the entry is missing or the clamped logical range is
+    // empty; callers should skip creating a stream in that case. Requires
+    // current_file_ to be non-null.
+    bool compute_current_file_range(
+        dftracer::utils::utilities::indexer::internal::tar::TarIndexer&
+            tar_indexer,
+        std::uint64_t& actual_start, std::uint64_t& actual_end,
+        std::uint64_t& logical_start, std::uint64_t& logical_end) {
+        dftracer::utils::utilities::indexer::internal::tar::TarIndexer::
+            TarFileInfo tar_file_info;
+        if (!tar_indexer.find_file(current_file_->file_name, tar_file_info)) {
+            DFTRACER_UTILS_LOG_ERROR("Failed to find TAR file: %s",
+                                     current_file_->file_name.c_str());
+            return false;
+        }
+
+        // Calculate actual byte range for this file segment
+        actual_start = tar_file_info.data_offset + current_file_offset_;
+        actual_end = tar_file_info.data_offset + current_file_->file_size;
+
+        // Clamp to our target range
+        logical_start =
+            current_file_->logical_start_offset + current_file_offset_;
+        logical_end = std::min(static_cast<std::uint64_t>(target_end_bytes_),
+                               current_file_->logical_end_offset);
+
+        if (logical_start >= logical_end) {
+            return false;
+        }
+
+        // Adjust actual end based on logical constraint
+        std::uint64_t logical_size = logical_end - logical_start;
+        actual_end = actual_start + logical_size;
         return true;
     }
 

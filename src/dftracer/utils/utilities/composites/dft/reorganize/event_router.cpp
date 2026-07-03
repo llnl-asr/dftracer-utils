@@ -167,7 +167,7 @@ coro::CoroTask<SourceResult> process_source(
 
 }  // namespace
 
-coro::CoroTask<EventRouterResult> route_events(
+coro::CoroTask<Result<EventRouterResult>> route_events(
     CoroScope& scope, const EventRouterConfig& config) {
     EventRouterResult result;
     const auto& plan = config.plan;
@@ -178,47 +178,61 @@ coro::CoroTask<EventRouterResult> route_events(
         tasks_by_source[task.source_file_idx].push_back(&task);
     }
 
-    auto permits = coro::make_channel<bool>(config.executor_threads * 2);
-    for (std::size_t i = 0; i < config.executor_threads * 2; ++i) {
-        permits->try_send(true);
-    }
-
-    std::vector<coro::SpawnFuture<SourceResult>> futures;
-    futures.reserve(tasks_by_source.size());
-
-    for (const auto& [src_idx, src_tasks] : tasks_by_source) {
-        auto* config_ptr = &config;
-        futures.push_back(
-            scope.spawn([src_idx, config_ptr, tasks = src_tasks, permits](
-                            CoroScope& s) -> coro::CoroTask<SourceResult> {
-                co_await s.receive(permits);
-                try {
-                    auto r =
-                        co_await process_source(src_idx, *config_ptr, tasks);
-                    permits->try_send(true);
-                    co_return r;
-                } catch (...) {
-                    permits->try_send(true);
-                    throw;
-                }
-            }));
-    }
-
-    for (auto& future : futures) {
-        auto src_result = co_await future;
-        if (src_result.success) {
-            result.total_events_written += src_result.events_written;
-            result.total_bytes_written += src_result.bytes_written;
-            result.chunks_created += src_result.chunks_created;
-            result.source_files_processed++;
-            result.output_files.insert(result.output_files.end(),
-                                       src_result.output_files.begin(),
-                                       src_result.output_files.end());
+    try {
+        auto permits = coro::make_channel<bool>(config.executor_threads * 2);
+        for (std::size_t i = 0; i < config.executor_threads * 2; ++i) {
+            permits->try_send(true);
         }
-    }
 
-    result.success = result.source_files_processed == tasks_by_source.size();
-    co_return result;
+        std::vector<coro::SpawnFuture<SourceResult>> futures;
+        futures.reserve(tasks_by_source.size());
+
+        for (const auto& [src_idx, src_tasks] : tasks_by_source) {
+            auto* config_ptr = &config;
+            futures.push_back(
+                scope.spawn([src_idx, config_ptr, tasks = src_tasks, permits](
+                                CoroScope& s) -> coro::CoroTask<SourceResult> {
+                    co_await s.receive(permits);
+                    try {
+                        auto r = co_await process_source(src_idx, *config_ptr,
+                                                         tasks);
+                        permits->try_send(true);
+                        co_return r;
+                    } catch (...) {
+                        permits->try_send(true);
+                        throw;
+                    }
+                }));
+        }
+
+        for (auto& future : futures) {
+            auto src_result = co_await future;
+            if (src_result.success) {
+                result.total_events_written += src_result.events_written;
+                result.total_bytes_written += src_result.bytes_written;
+                result.chunks_created += src_result.chunks_created;
+                result.source_files_processed++;
+                result.output_files.insert(result.output_files.end(),
+                                           src_result.output_files.begin(),
+                                           src_result.output_files.end());
+            }
+        }
+
+        if (result.source_files_processed != tasks_by_source.size()) {
+            co_return make_error(
+                ErrorCode::INTERNAL,
+                "route_events: only " +
+                    std::to_string(result.source_files_processed) + " of " +
+                    std::to_string(tasks_by_source.size()) +
+                    " source files were routed successfully");
+        }
+        co_return result;
+    } catch (const std::exception& e) {
+        co_return make_error(
+            ErrorCode::IO,
+            std::string("route_events failed while routing events: ") +
+                e.what());
+    }
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::reorganize

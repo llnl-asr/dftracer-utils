@@ -1,5 +1,6 @@
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_logic.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/reserved_args.h>
 #include <dftracer/utils/utilities/composites/dft/args_map.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 
@@ -164,14 +165,10 @@ void update_aggregation_entry(const DFTracerEvent& ev,
                         std::make_unique<CustomMetricsMap>();
                 }
                 auto& cm = *metrics.custom_metrics;
-                auto cm_it = cm.find(field);
-                if (cm_it == cm.end()) {
-                    cm_it = cm.emplace(std::string(field),
-                                       MetricStats(metrics.sketch_accuracy))
-                                .first;
-                }
-                apply_preaggregated_metric(cm_it->second, ev_count, a_sum,
-                                           a_min, a_max);
+                auto& cm_stats =
+                    find_or_create(cm, field, metrics.sketch_accuracy);
+                apply_preaggregated_metric(cm_stats, ev_count, a_sum, a_min,
+                                           a_max);
             }
         } else {
             auto field_val = ev.args[field];
@@ -188,20 +185,6 @@ void update_aggregation_entry(const DFTracerEvent& ev,
     }
 
     if (config.track_default_args) {
-        auto is_reserved = [](std::string_view k) {
-            return k == "hhash" || k == "fhash" || k == "dft_cnt" ||
-                   k == "dur" || k == "dur_sum" || k == "dur_min" ||
-                   k == "dur_max" || k == "ret" || k == "ret_sum" ||
-                   k == "ret_min" || k == "ret_max" || k == "offset" ||
-                   k == "offset_sum" || k == "offset_min" || k == "offset_max";
-        };
-
-        auto is_preagg_suffix = [](std::string_view k) {
-            return k.size() > 4 && (k.substr(k.size() - 4) == "_sum" ||
-                                    k.substr(k.size() - 4) == "_min" ||
-                                    k.substr(k.size() - 4) == "_max");
-        };
-
         auto is_extra_group_key = [&](std::string_view k) {
             for (const auto& gk : config.extra_group_keys) {
                 if (gk == k) return true;
@@ -217,7 +200,8 @@ void update_aggregation_entry(const DFTracerEvent& ev,
         };
 
         ev.args.for_each_member([&](std::string_view k, ArgsValueProxy v) {
-            if (is_reserved(k) || is_extra_group_key(k) || is_custom_field(k))
+            if (is_reserved_arg(k) || is_extra_group_key(k) ||
+                is_custom_field(k))
                 return;
             if (ev.is_counter() && is_preagg_suffix(k)) return;
             if (!v.is_number()) return;

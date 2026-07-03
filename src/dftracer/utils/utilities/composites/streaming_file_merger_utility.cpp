@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/utilities/composites/streaming_file_merger_utility.h>
@@ -129,7 +130,7 @@ StreamingFileProducerUtility::process_async(
 // Consumer: read raw byte batches from channel, write with array wrapper
 // ============================================================================
 
-coro::CoroTask<StreamingFileConsumerOutput>
+coro::CoroTask<Result<StreamingFileConsumerOutput>>
 StreamingFileConsumerUtility::process_async(
     [[maybe_unused]] CoroScope& ctx, const StreamingFileConsumerInput& input) {
     StreamingFileConsumerOutput result;
@@ -180,8 +181,9 @@ StreamingFileConsumerUtility::process_async(
             // Uncompressed path: write directly to ofstream, zero allocs
             std::ofstream ofs(result.output_path, std::ios::binary);
             if (!ofs) {
-                throw std::runtime_error("Failed to open output: " +
-                                         result.output_path);
+                throw DFTUtilsException(
+                    ErrorCode::IO,
+                    "Failed to open output: " + result.output_path);
             }
 
             ofs.write("[\n", 2);
@@ -206,10 +208,12 @@ StreamingFileConsumerUtility::process_async(
             }
             ofs.close();
         }
-        result.success = true;
 
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Consumer error: %s", e.what());
+        co_return make_error(ErrorCode::IO,
+                             std::string("Consumer failed writing ") +
+                                 result.output_path + ": " + e.what());
     }
 
     co_return result;

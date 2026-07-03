@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_PAYLOAD_CODEC_H
 
 #include <dftracer/utils/core/rocksdb/key_codec.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -111,6 +112,14 @@ class Cursor {
         return std::vector<unsigned char>(bytes.begin(), bytes.end());
     }
 
+    // Length-prefixed blob as a non-owning view into the cursor's backing
+    // buffer (no copy). Valid only while that buffer outlives the view; use
+    // for transient decodes that consume the bytes immediately.
+    std::string_view blob_view() {
+        auto len = static_cast<std::size_t>(u32());
+        return take(len);
+    }
+
     std::size_t offset() const { return offset_; }
     bool eof() const { return offset_ >= data_.size(); }
 
@@ -124,7 +133,7 @@ class Cursor {
             } else {
                 std::snprintf(err, sizeof(err), "Corrupt RocksDB payload");
             }
-            throw std::runtime_error(err);
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR, err);
         }
         auto chunk = data_.substr(offset_, len);
         offset_ += len;

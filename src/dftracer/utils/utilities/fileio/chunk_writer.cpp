@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/generator.h>
@@ -42,7 +43,8 @@ coro::CoroTask<void> ChunkWriter::open_next_chunk() {
     ssize_t result =
         co_await io::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (result < 0) {
-        throw std::runtime_error("Cannot open chunk file: " + path);
+        throw DFTUtilsException(ErrorCode::IO,
+                                "Cannot open chunk file: " + path);
     }
     fd_ = static_cast<int>(result);
     open_ = true;

@@ -476,6 +476,7 @@ std::set<std::uint64_t> evaluate_node(const query_ns::QueryNode& node,
 
 coro::CoroTask<ChunkPrunerOutput> ChunkPrunerUtility::process(
     const ChunkPrunerInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("prune chunks");
     auto do_query = [&input]() -> ChunkPrunerOutput {
         ChunkPrunerOutput out;
         out.success = false;
@@ -581,11 +582,10 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPrunerUtility::process(
     co_return do_query();
 }
 
-ChunkPrunerBatchOutput ChunkPrunerUtility::process_batch(
+Result<ChunkPrunerBatchOutput> ChunkPrunerUtility::process_batch(
     const ChunkPrunerBatchInput& input) {
     ChunkPrunerBatchOutput batch_out;
     batch_out.outputs.resize(input.items.size());
-    batch_out.success = false;
 
     try {
         std::optional<IndexDatabase> owned_db;
@@ -697,10 +697,12 @@ ChunkPrunerBatchOutput ChunkPrunerUtility::process_batch(
             }
         }
 
-        batch_out.success = true;
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_WARN("ChunkPruner: batch error for index %s: %s",
                                 input.index_path.c_str(), e.what());
+        return make_error(ErrorCode::INDEXER,
+                          "ChunkPruner: batch error for index " +
+                              input.index_path + ": " + e.what());
     }
 
     return batch_out;

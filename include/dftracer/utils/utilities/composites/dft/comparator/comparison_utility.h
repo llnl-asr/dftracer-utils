@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_COMPARATOR_COMPARISON_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_COMPARATOR_COMPARISON_UTILITY_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_config.h>
@@ -36,22 +37,22 @@ struct ComparisonUtilityInput {
     std::size_t variant_file_count = 0;
 };
 
-/// Output from ComparisonUtility::process().
+/// Success payload from ComparisonUtility::process(); failures are
+/// reported via Result<ComparisonUtilityOutput>.
 struct ComparisonUtilityOutput {
     /// Hierarchical comparison result tree.
     NodeResult result;
-    /// Whether the comparison completed successfully.
-    bool success = false;
 };
 
 /// Joins baseline and variant aggregation outputs, builds the
 /// hierarchical comparison tree (root -> categories -> operations),
 /// and computes deltas with Cohen's d significance classification.
-class ComparisonUtility : public utilities::Utility<ComparisonUtilityInput,
-                                                    ComparisonUtilityOutput> {
+class ComparisonUtility
+    : public utilities::Utility<ComparisonUtilityInput,
+                                Result<ComparisonUtilityOutput>> {
    public:
     /// Run the comparison pipeline.
-    coro::CoroTask<ComparisonUtilityOutput> process(
+    coro::CoroTask<Result<ComparisonUtilityOutput>> process(
         const ComparisonUtilityInput& input) override;
 
    private:

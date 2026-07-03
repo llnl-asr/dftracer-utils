@@ -6,7 +6,6 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
-#include <dftracer/utils/utilities/composites/dft/aggregators/aggregator_summary_utility.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_resolver_utility.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>

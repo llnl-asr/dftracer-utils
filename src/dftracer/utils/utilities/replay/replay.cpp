@@ -8,14 +8,8 @@
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <dftracer/utils/utilities/replay/replay.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
-#include <algorithm>
 #include <chrono>
-#include <cstdio>
-#include <cstring>
 #include <random>
 #include <thread>
 
@@ -35,243 +29,7 @@ std::string_view intern_sv(std::string_view sv) {
     return replay_intern().intern(sv);
 }
 
-/**
- * Create directory path if it doesn't exist
- */
-bool ensure_directory_exists(const std::string& path) {
-    std::string dir_path = path.substr(0, path.find_last_of('/'));
-    if (dir_path.empty() || dir_path == path) return true;
-
-    struct stat st;
-    if (stat(dir_path.c_str(), &st) == 0) {
-        return S_ISDIR(st.st_mode);
-    }
-
-    // Try to create directory recursively
-    return ensure_directory_exists(dir_path) &&
-           (mkdir(dir_path.c_str(), 0755) == 0);
-}
-
 }  // anonymous namespace
-
-// =============================================================================
-// PosixExecutor Implementation
-// =============================================================================
-
-bool PosixExecutor::execute(const Trace& trace, const ReplayConfig& config) {
-    std::string_view func_name = trace.func_name;
-
-    if (config.dry_run) {
-        DFTRACER_UTILS_LOG_DEBUG("DRY RUN: Would execute POSIX %.*s",
-                                 static_cast<int>(func_name.size()),
-                                 func_name.data());
-        return true;
-    }
-
-    if (func_name == "open" || func_name == "open64" || func_name == "openat") {
-        return execute_open(trace, config);
-    } else if (func_name == "close") {
-        return execute_close(trace, config);
-    } else if (func_name == "read" || func_name == "pread" ||
-               func_name == "pread64") {
-        return execute_read(trace, config);
-    } else if (func_name == "write" || func_name == "pwrite" ||
-               func_name == "pwrite64") {
-        return execute_write(trace, config);
-    } else if (func_name == "lseek" || func_name == "lseek64") {
-        return execute_seek(trace, config);
-    } else if (func_name == "stat" || func_name == "stat64" ||
-               func_name == "lstat" || func_name == "fstat") {
-        return execute_stat(trace, config);
-    }
-
-    DFTRACER_UTILS_LOG_DEBUG("Unsupported POSIX function: %.*s",
-                             static_cast<int>(func_name.size()),
-                             func_name.data());
-    return false;
-}
-
-bool PosixExecutor::can_handle(const Trace& trace) const {
-    return trace.cat == "posix" || trace.cat == "POSIX";
-}
-
-bool PosixExecutor::execute_open(const Trace& trace,
-                                 const ReplayConfig& config) {
-    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX open");
-
-    if (!trace.fhash.empty()) {
-        std::string file_path;
-        if (config.output_directory.empty()) {
-            file_path.reserve(12 + trace.fhash.size());
-            file_path = "replay_file_";
-        } else {
-            file_path.reserve(config.output_directory.size() + 13 +
-                              trace.fhash.size());
-            file_path = config.output_directory;
-            file_path += "/replay_file_";
-        }
-        file_path.append(trace.fhash.data(), trace.fhash.size());
-
-        ensure_directory_exists(file_path);
-
-        int fd = open(file_path.c_str(), O_CREAT | O_RDWR, 0644);
-        if (fd >= 0) {
-            open_files_[trace.fhash] = fd;
-            DFTRACER_UTILS_LOG_DEBUG("Opened file %s with fd %d",
-                                     file_path.c_str(), fd);
-            return true;
-        } else {
-            DFTRACER_UTILS_LOG_ERROR("Failed to open file %s: %s",
-                                     file_path.c_str(), strerror(errno));
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool PosixExecutor::execute_close(const Trace& trace,
-                                  [[maybe_unused]] const ReplayConfig& config) {
-    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX close");
-
-    auto it = open_files_.find(trace.fhash);
-    if (it != open_files_.end()) {
-        close(it->second);
-        open_files_.erase(it);
-        DFTRACER_UTILS_LOG_DEBUG("Closed file with hash %.*s",
-                                 static_cast<int>(trace.fhash.size()),
-                                 trace.fhash.data());
-    }
-
-    return true;
-}
-
-void PosixExecutor::ensure_io_buffer(std::size_t size) {
-    if (io_buffer_.size() < size) {
-        io_buffer_.resize(size, 'A');
-    }
-}
-
-bool PosixExecutor::execute_read(const Trace& trace,
-                                 const ReplayConfig& config) {
-    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX read (size: %lld)",
-                             static_cast<long long>(trace.size));
-
-    auto it = open_files_.find(trace.fhash);
-    if (it != open_files_.end() && trace.size > 0) {
-        std::size_t n = std::min(static_cast<std::size_t>(trace.size),
-                                 config.max_file_size);
-        ensure_io_buffer(n);
-        [[maybe_unused]] ssize_t bytes_read =
-            read(it->second, io_buffer_.data(), n);
-        DFTRACER_UTILS_LOG_DEBUG("Read %zd bytes", bytes_read);
-    }
-
-    return true;
-}
-
-bool PosixExecutor::execute_write(const Trace& trace,
-                                  const ReplayConfig& config) {
-    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX write (size: %lld)",
-                             static_cast<long long>(trace.size));
-
-    auto it = open_files_.find(trace.fhash);
-    if (it != open_files_.end() && trace.size > 0) {
-        std::size_t write_size = std::min(static_cast<std::size_t>(trace.size),
-                                          config.max_file_size);
-        ensure_io_buffer(write_size);
-        [[maybe_unused]] ssize_t bytes_written =
-            write(it->second, io_buffer_.data(), write_size);
-        DFTRACER_UTILS_LOG_DEBUG("Wrote %zd bytes", bytes_written);
-    }
-
-    return true;
-}
-
-bool PosixExecutor::execute_seek(const Trace& trace,
-                                 [[maybe_unused]] const ReplayConfig& config) {
-    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX seek (offset: %lld)",
-                             static_cast<long long>(trace.offset));
-
-    auto it = open_files_.find(trace.fhash);
-    if (it != open_files_.end() && trace.offset >= 0) {
-        [[maybe_unused]] off_t result =
-            lseek(it->second, trace.offset, SEEK_SET);
-        DFTRACER_UTILS_LOG_DEBUG("Seek to offset %lld, result: %lld",
-                                 static_cast<long long>(trace.offset),
-                                 static_cast<long long>(result));
-    }
-
-    return true;
-}
-
-bool PosixExecutor::execute_stat([[maybe_unused]] const Trace& trace,
-                                 [[maybe_unused]] const ReplayConfig& config) {
-    DFTRACER_UTILS_LOG_DEBUG("Executing POSIX stat");
-
-    if (!trace.fhash.empty()) {
-        DFTRACER_UTILS_LOG_DEBUG("Would stat file with hash %.*s",
-                                 static_cast<int>(trace.fhash.size()),
-                                 trace.fhash.data());
-    }
-
-    return true;
-}
-
-// =============================================================================
-// DFTracerExecutor Implementation
-// =============================================================================
-
-bool DFTracerExecutor::execute(const Trace& trace, const ReplayConfig& config) {
-    if (config.dry_run) {
-        return true;
-    }
-
-    // Sleep for the duration of the operation instead of doing actual I/O
-    double duration_us = static_cast<double>(trace.time_end - trace.time_start);
-
-    // Cap individual operation sleeps to 1ms for practical testing
-    const double MAX_DFTRACER_SLEEP_US = 1.0 * 1000.0;
-    if (duration_us > MAX_DFTRACER_SLEEP_US) {
-        duration_us = MAX_DFTRACER_SLEEP_US;
-    }
-
-    if (config.no_sleep) {
-        if (config.verbose && duration_us >= 100000.0) {
-            std::printf("DFTracer would sleep for %.3f ms for %.*s (skipped)\n",
-                        duration_us / 1000.0,
-                        static_cast<int>(trace.func_name.size()),
-                        trace.func_name.data());
-        }
-    } else {
-        if (config.verbose && duration_us >= 100.0) {
-            std::printf("DFTracer sleeping for %.3f ms for %.*s\n",
-                        duration_us / 1000.0,
-                        static_cast<int>(trace.func_name.size()),
-                        trace.func_name.data());
-        }
-        sleep_for_duration(duration_us);
-    }
-
-    return true;
-}
-
-bool DFTracerExecutor::can_handle([[maybe_unused]] const Trace& trace) const {
-    return true;  // Handle all trace events
-}
-
-void DFTracerExecutor::sleep_for_duration(double duration_microseconds) {
-    if (duration_microseconds <= 0) return;
-
-    const double MAX_SLEEP_US = 10.0 * 1000.0 * 1000.0;
-    if (duration_microseconds > MAX_SLEEP_US) {
-        duration_microseconds = MAX_SLEEP_US;
-    }
-
-    auto sleep_duration = std::chrono::nanoseconds(
-        static_cast<std::int64_t>(duration_microseconds * 1000));
-    std::this_thread::sleep_for(sleep_duration);
-}
 
 // =============================================================================
 // ReplayEngine Implementation
@@ -537,13 +295,10 @@ void ReplayEngine::dispatch_trace(const Trace& trace, ReplayResult& result) {
         }
     } else {
         result.failed_events++;
-        if (config_.verbose) {
-            DFTRACER_UTILS_LOG_DEBUG(
-                "No executor found for function: %.*s (category: %.*s)",
-                static_cast<int>(trace.func_name.size()),
-                trace.func_name.data(), static_cast<int>(trace.cat.size()),
-                trace.cat.data());
-        }
+        DFTRACER_UTILS_LOG_DEBUG(
+            "No executor found for function: %.*s (category: %.*s)",
+            static_cast<int>(trace.func_name.size()), trace.func_name.data(),
+            static_cast<int>(trace.cat.size()), trace.cat.data());
     }
 }
 
@@ -634,17 +389,16 @@ void ReplayEngine::apply_timing(const Trace& trace) {
 
         const std::uint64_t MAX_SLEEP_US = 10 * 1000 * 1000;
         if (sleep_us > MAX_SLEEP_US) {
-            if (config_.verbose) {
-                std::printf("Warning: Capping sleep from %.3f ms to %.3f ms\n",
-                            static_cast<double>(sleep_us) / 1000.0,
-                            static_cast<double>(MAX_SLEEP_US) / 1000.0);
-            }
+            DFTRACER_UTILS_LOG_DEBUG(
+                "Warning: Capping sleep from %.3f ms to %.3f ms",
+                static_cast<double>(sleep_us) / 1000.0,
+                static_cast<double>(MAX_SLEEP_US) / 1000.0);
             sleep_us = MAX_SLEEP_US;
         }
 
-        if (config_.verbose && sleep_us > 1000) {
-            std::printf("Timing sleep: %.3f ms\n",
-                        static_cast<double>(sleep_us) / 1000.0);
+        if (sleep_us > 1000) {
+            DFTRACER_UTILS_LOG_DEBUG("Timing sleep: %.3f ms",
+                                     static_cast<double>(sleep_us) / 1000.0);
         }
 
         std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
@@ -1040,116 +794,11 @@ void ReplayEngine::replay_call_tree_node(
         }
     } else {
         result.failed_events++;
-        if (config_.verbose) {
-            DFTRACER_UTILS_LOG_DEBUG(
-                "No executor found for function: %.*s (category: %.*s)",
-                static_cast<int>(trace.func_name.size()),
-                trace.func_name.data(), static_cast<int>(trace.cat.size()),
-                trace.cat.data());
-        }
+        DFTRACER_UTILS_LOG_DEBUG(
+            "No executor found for function: %.*s (category: %.*s)",
+            static_cast<int>(trace.func_name.size()), trace.func_name.data(),
+            static_cast<int>(trace.cat.size()), trace.cat.data());
     }
-}
-
-// =============================================================================
-// ReplayResult::print_summary Implementation
-// =============================================================================
-
-void ReplayResult::print_summary(bool verbose) const {
-    std::printf("\n=== Replay Summary ===\n");
-    std::printf("Total events: %zu\n", total_events);
-    std::printf("Executed: %zu\n", executed_events);
-    std::printf("Filtered: %zu\n", filtered_events);
-    std::printf("Failed: %zu\n", failed_events);
-
-    double success_rate = total_events > 0
-                              ? (static_cast<double>(executed_events) /
-                                 static_cast<double>(total_events) * 100.0)
-                              : 0.0;
-    std::printf("Success rate: %.2f%%\n", success_rate);
-
-    std::printf("\nTiming:\n");
-    std::printf("  Total duration: %.3f ms\n",
-                static_cast<double>(total_duration.count()) / 1000.0);
-    std::printf("  Execution duration: %.3f ms\n",
-                static_cast<double>(execution_duration.count()) / 1000.0);
-
-    if (first_timestamp != UINT64_MAX && last_timestamp > 0) {
-        std::printf(
-            "  Trace timespan: %.6f seconds\n",
-            static_cast<double>(last_timestamp - first_timestamp) / 1000000.0);
-    }
-
-    std::printf("\nI/O Statistics:\n");
-    std::printf("  Bytes read: %zu (%.2f MB)\n", total_bytes_read,
-                static_cast<double>(total_bytes_read) / (1024.0 * 1024.0));
-    std::printf("  Bytes written: %zu (%.2f MB)\n", total_bytes_written,
-                static_cast<double>(total_bytes_written) / (1024.0 * 1024.0));
-
-    std::printf("\nProcess/Thread Statistics:\n");
-    std::printf("  Unique PIDs: %zu\n", pid_counts.size());
-    std::printf("  Unique TIDs: %zu\n", tid_counts.size());
-
-    if (verbose) {
-        if (!pid_counts.empty()) {
-            std::printf("\n  Events per PID:\n");
-            for (const auto& [pid, count] : pid_counts) {
-                std::printf("    PID %u: %zu events\n", pid, count);
-            }
-        }
-
-        if (!tid_counts.empty() && tid_counts.size() > 1) {
-            std::printf("\n  Events per TID:\n");
-            for (const auto& [tid, count] : tid_counts) {
-                std::printf("    TID %u: %zu events\n", tid, count);
-            }
-        }
-
-        if (!function_counts.empty()) {
-            std::printf("\n  Top functions by count:\n");
-            // function_counts keys are string_views into the replay intern
-            // pool; sorting needs an indexable copy. Keep the views to avoid
-            // re-allocating strings for the dictionary entries (read,
-            // write, ...).
-            std::vector<std::pair<std::string_view, std::size_t>> sorted_funcs(
-                function_counts.begin(), function_counts.end());
-            std::sort(sorted_funcs.begin(), sorted_funcs.end(),
-                      [](const auto& a, const auto& b) {
-                          return a.second > b.second;
-                      });
-
-            std::size_t max_display =
-                std::min(sorted_funcs.size(), std::size_t(10));
-            for (std::size_t i = 0; i < max_display; i++) {
-                std::printf("    %-30.*s: %zu\n",
-                            static_cast<int>(sorted_funcs[i].first.size()),
-                            sorted_funcs[i].first.data(),
-                            sorted_funcs[i].second);
-            }
-        }
-
-        if (!category_counts.empty()) {
-            std::printf("\n  Events per category:\n");
-            for (const auto& [cat, count] : category_counts) {
-                std::printf("    %-20.*s: %zu\n", static_cast<int>(cat.size()),
-                            cat.data(), count);
-            }
-        }
-    }
-
-    if (!error_messages.empty()) {
-        std::printf("\n=== Errors (%zu total) ===\n", error_messages.size());
-        std::size_t max_errors =
-            std::min(error_messages.size(), std::size_t(10));
-        for (std::size_t i = 0; i < max_errors; i++) {
-            std::printf("  %s\n", error_messages[i].c_str());
-        }
-        if (error_messages.size() > 10) {
-            std::printf("  ... and %zu more errors\n",
-                        error_messages.size() - 10);
-        }
-    }
-
-    std::printf("=====================\n");
 }
 
 }  // namespace dftracer::utils::utilities::replay

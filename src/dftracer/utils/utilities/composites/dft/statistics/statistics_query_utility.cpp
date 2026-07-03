@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_query_utility.h>
 
 #include <algorithm>
@@ -57,6 +58,7 @@ const char* query_type_to_string(StatisticsQueryType t) {
 
 coro::CoroTask<StatisticsQueryOutput> StatisticsQueryUtility::process(
     const StatisticsQueryInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("query statistics");
     StatisticsQueryOutput output;
     const auto& stats = input.stats;
     const auto& merged = stats.merged;

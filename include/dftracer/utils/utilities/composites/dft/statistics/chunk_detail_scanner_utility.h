@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_CHUNK_DETAIL_SCANNER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_STATISTICS_CHUNK_DETAIL_SCANNER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/detailed_statistics.h>
 
@@ -25,18 +25,18 @@ struct ChunkDetailScanInput {
     const std::vector<std::string>* group_by = nullptr;
 };
 
+// Success payload; failures are reported via Result<ChunkDetailScanOutput>.
 struct ChunkDetailScanOutput {
     DetailedStatistics stats;
-    bool success = false;
 };
 
 class ChunkDetailScannerUtility
-    : public utilities::Utility<ChunkDetailScanInput, ChunkDetailScanOutput,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<ChunkDetailScanInput,
+                                Result<ChunkDetailScanOutput>> {
    public:
     ChunkDetailScannerUtility() = default;
 
-    coro::CoroTask<ChunkDetailScanOutput> process(
+    coro::CoroTask<Result<ChunkDetailScanOutput>> process(
         const ChunkDetailScanInput& input) override;
 };
 

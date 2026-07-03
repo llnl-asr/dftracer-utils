@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_SERIALIZATION_BINARY_CODEC_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_SERIALIZATION_BINARY_CODEC_H
 
+#include <dftracer/utils/core/common/error.h>
+
 #include <cstdint>
 #include <cstring>
 #include <span>
@@ -168,6 +170,13 @@ class BinaryReader {
         return take(len);
     }
 
+    void skip(std::size_t n) { take(n); }
+
+    void skip_blob() {
+        auto len = be32();
+        take(len);
+    }
+
     std::string_view str() {
         auto len = be16();
         return take(len);
@@ -182,7 +191,8 @@ class BinaryReader {
             if ((b & 0x80) == 0) return v;
             shift += 7;
         }
-        throw std::runtime_error("binary_codec: truncated varint");
+        throw DFTUtilsException(ErrorCode::PARSE,
+                                "binary_codec: truncated varint");
     }
 
     bool has_remaining() const { return off_ < data_.size(); }
@@ -194,7 +204,8 @@ class BinaryReader {
    private:
     std::string_view take(std::size_t n) {
         if (off_ + n > data_.size()) {
-            throw std::runtime_error("binary_codec: truncated data");
+            throw DFTUtilsException(ErrorCode::PARSE,
+                                    "binary_codec: truncated data");
         }
         auto s = data_.substr(off_, n);
         off_ += n;

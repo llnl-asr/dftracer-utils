@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/tar/tar_indexer.h>
+#include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <dftracer/utils/utilities/reader/internal/tar_reader.h>
@@ -29,8 +30,9 @@ std::shared_ptr<Reader> ReaderFactory::create(const std::string &archive_path,
                                                index_ckpt_size);
 
         default:
-            throw std::runtime_error("Unsupported archive format for file: " +
-                                     archive_path);
+            throw ReaderError(
+                ReaderError::INVALID_ARGUMENT,
+                "Unsupported archive format for file: " + archive_path);
     }
 }
 
@@ -38,7 +40,8 @@ std::shared_ptr<Reader> ReaderFactory::create(
     std::shared_ptr<dftracer::utils::utilities::indexer::internal::Indexer>
         indexer) {
     if (!indexer) {
-        throw std::invalid_argument("Indexer cannot be null");
+        throw ReaderError(ReaderError::INVALID_ARGUMENT,
+                          "Indexer cannot be null");
     }
 
     if (indexer->get_format_type() == ArchiveFormat::TAR_GZ) {

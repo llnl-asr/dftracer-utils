@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_INDEX_BATCH_WRITER_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_INDEX_BATCH_WRITER_H
 
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/visitors/bloom_visitor.h>
@@ -82,6 +83,9 @@ inline coro::CoroTask<void> index_batch_write_worker(
             } catch (const std::exception& e) {
                 job.success = false;
                 job.error_message = e.what();
+                DFTRACER_UTILS_LOG_ERROR(
+                    "Failed to write index for %s: %s; file dropped from index",
+                    job.file_path.c_str(), e.what());
             }
         }
         commit_sink(sink);

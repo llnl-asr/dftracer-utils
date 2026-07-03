@@ -4,7 +4,6 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/core/utilities/utility_traits.h>
 
@@ -48,12 +47,13 @@ class BatchProcessorUtility
     ~BatchProcessorUtility() override = default;
 
     /**
-     * @brief Construct batch processor with a parallelizable utility.
+     * @brief Construct batch processor from a utility.
      *
-     * This constructor enforces at compile-time that the utility has the
-     * tags::Parallelizable tag, ensuring thread-safety.
+     * Items are processed concurrently (one spawned coroutine each), so the
+     * utility must be re-entrant: its process() must not mutate shared instance
+     * state. Stateful utilities should not be batch-processed.
      *
-     * @tparam UtilityType Type of the utility (must have tags::Parallelizable)
+     * @tparam UtilityType Type of the utility
      * @param utility Shared pointer to the utility
      */
     template <typename UtilityType,
@@ -61,14 +61,6 @@ class BatchProcessorUtility
                   UtilityType, ItemInput, ItemOutput>>>
     explicit BatchProcessorUtility(std::shared_ptr<UtilityType> utility)
         : comparator_(std::nullopt) {
-        // Compile-time check: Utility must have tags::Parallelizable
-        static_assert(
-            utilities::has_tag_v<utilities::tags::Parallelizable, UtilityType>,
-            "Utility must have tags::Parallelizable for parallel "
-            "BatchProcessor! "
-            "Add tags::Parallelizable to your Utility class template "
-            "parameters.");
-
         // Create processor function from utility
         processor_ = [utility](CoroScope&,
                                const ItemInput& input) -> ItemOutput {

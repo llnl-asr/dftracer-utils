@@ -2,7 +2,6 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_PERFETTO_TRACE_WRITER_UTILITY_H
 
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
@@ -60,9 +59,9 @@ struct PerfettoTraceWriterInput {
 using PerfettoTraceWriterOutput = bool;
 
 class PerfettoTraceWriterUtility
-    : public utilities::Utility<
-          PerfettoTraceWriterInput, PerfettoTraceWriterOutput,
-          utilities::tags::Parallelizable, utilities::tags::NeedsContext> {
+    : public utilities::Utility<PerfettoTraceWriterInput,
+                                PerfettoTraceWriterOutput,
+                                utilities::tags::NeedsContext> {
    public:
     coro::CoroTask<bool> process(
         const PerfettoTraceWriterInput& input) override;

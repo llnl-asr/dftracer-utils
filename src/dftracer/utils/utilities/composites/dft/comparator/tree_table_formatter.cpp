@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/utilities/common/json/json_escape.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/tree_table_formatter.h>
 
 #include <algorithm>
@@ -9,6 +10,8 @@
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::comparator {
+
+using common::json::escape_json_string;
 
 TreeTableFormatter::TreeTableFormatter(FormatterOptions options)
     : options_(options) {}
@@ -95,43 +98,26 @@ std::string fmt_duration(double us) {
     return buf;
 }
 
-std::string fmt_size(double bytes) {
+// Format a byte-scaled quantity with a binary (1024) ladder. `suffix` is
+// appended to the unit ("" for sizes, "/s" for bandwidth).
+std::string fmt_bytes_scaled(double value, const char* suffix) {
     char buf[32];
     constexpr double KB = 1024.0;
     constexpr double MB = 1024.0 * 1024.0;
     constexpr double GB = 1024.0 * 1024.0 * 1024.0;
-    if (bytes < KB) {
-        std::snprintf(buf, sizeof(buf), "%.0f B", bytes);
-    } else if (bytes < MB) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB", bytes / KB);
-    } else if (bytes < GB) {
-        std::snprintf(buf, sizeof(buf), "%.2f MB", bytes / MB);
+    if (value < KB) {
+        std::snprintf(buf, sizeof(buf), "%.0f B%s", value, suffix);
+    } else if (value < MB) {
+        std::snprintf(buf, sizeof(buf), "%.1f KB%s", value / KB, suffix);
+    } else if (value < GB) {
+        std::snprintf(buf, sizeof(buf), "%.2f MB%s", value / MB, suffix);
     } else {
-        std::snprintf(buf, sizeof(buf), "%.3f GB", bytes / GB);
+        std::snprintf(buf, sizeof(buf), "%.3f GB%s", value / GB, suffix);
     }
     return buf;
 }
 
-// Extract the group prefix: "dur_mean" -> "dur", "size_p50" -> "size".
-// Returns "" for standalone metrics (no prefix, or known atomic names).
-std::string metric_group(const std::string& name) {
-    // Atomic metric names that must not be split on '_'.
-    if (name == "transfer_size" || name == "bandwidth" || name == "total_bytes")
-        return "";
-    auto pos = name.find('_');
-    if (pos == std::string::npos) return "";
-    return name.substr(0, pos);
-}
-
-// Strip the group prefix: "dur_mean" -> "mean", "size_p50" -> "p50".
-// Returns the full name when there is no prefix (or atomic).
-std::string strip_prefix(const std::string& name) {
-    if (name == "transfer_size" || name == "bandwidth" || name == "total_bytes")
-        return name;
-    auto pos = name.find('_');
-    if (pos == std::string::npos) return name;
-    return name.substr(pos + 1);
-}
+std::string fmt_size(double bytes) { return fmt_bytes_scaled(bytes, ""); }
 
 // True when every metric in the group is zero on both sides.
 bool all_group_zero(const std::vector<const MetricComparison*>& group) {
@@ -139,6 +125,43 @@ bool all_group_zero(const std::vector<const MetricComparison*>& group) {
         if (mc->baseline_value != 0.0 || mc->variant_value != 0.0) return false;
     }
     return true;
+}
+
+// A named bucket of metrics: standalone metrics keep their own name; metrics
+// sharing a metric_group() prefix collapse under that group name. Groups that
+// are all-zero on both sides are dropped. Item pointers alias `metrics`.
+struct MetricGroup {
+    std::string name;
+    std::vector<const MetricComparison*> items;
+};
+
+std::vector<MetricGroup> group_metrics(
+    const std::vector<MetricComparison>& metrics) {
+    std::vector<MetricGroup> groups;
+    std::unordered_map<std::string, std::size_t> group_idx;
+
+    for (const auto& mc : metrics) {
+        if (mc.baseline_value == 0.0 && mc.variant_value == 0.0) continue;
+        std::string grp = metric_group(mc.metric_name);
+        if (grp.empty()) {
+            groups.push_back({mc.metric_name, {&mc}});
+        } else {
+            auto it = group_idx.find(grp);
+            if (it == group_idx.end()) {
+                group_idx[grp] = groups.size();
+                groups.push_back({grp, {&mc}});
+            } else {
+                groups[it->second].items.push_back(&mc);
+            }
+        }
+    }
+
+    groups.erase(std::remove_if(groups.begin(), groups.end(),
+                                [](const MetricGroup& g) {
+                                    return all_group_zero(g.items);
+                                }),
+                 groups.end());
+    return groups;
 }
 
 // True when any metric has a non-zero value on either side.
@@ -264,22 +287,7 @@ static void collect_regressions(const NodeResult& node,
     }
 }
 
-std::string fmt_bandwidth(double bps) {
-    char buf[32];
-    constexpr double KB = 1024.0;
-    constexpr double MB = 1024.0 * 1024.0;
-    constexpr double GB = 1024.0 * 1024.0 * 1024.0;
-    if (bps < KB) {
-        std::snprintf(buf, sizeof(buf), "%.0f B/s", bps);
-    } else if (bps < MB) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB/s", bps / KB);
-    } else if (bps < GB) {
-        std::snprintf(buf, sizeof(buf), "%.2f MB/s", bps / MB);
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.3f GB/s", bps / GB);
-    }
-    return buf;
-}
+std::string fmt_bandwidth(double bps) { return fmt_bytes_scaled(bps, "/s"); }
 
 std::string fmt_generic(double v) {
     char buf[32];
@@ -401,34 +409,7 @@ void TreeTableFormatter::measure_metrics_tree(
     // branch_mid/last are 4 display columns each (unicode or ASCII).
     const int BRANCH_W = 4;
 
-    struct MetricGroup {
-        std::string name;
-        std::vector<const MetricComparison*> items;
-    };
-    std::vector<MetricGroup> groups;
-    std::unordered_map<std::string, std::size_t> group_idx;
-
-    for (const auto& mc : metrics) {
-        if (mc.baseline_value == 0.0 && mc.variant_value == 0.0) continue;
-        std::string grp = metric_group(mc.metric_name);
-        if (grp.empty()) {
-            groups.push_back({mc.metric_name, {&mc}});
-        } else {
-            auto it = group_idx.find(grp);
-            if (it == group_idx.end()) {
-                group_idx[grp] = groups.size();
-                groups.push_back({grp, {&mc}});
-            } else {
-                groups[it->second].items.push_back(&mc);
-            }
-        }
-    }
-
-    groups.erase(std::remove_if(groups.begin(), groups.end(),
-                                [](const MetricGroup& g) {
-                                    return all_group_zero(g.items);
-                                }),
-                 groups.end());
+    auto groups = group_metrics(metrics);
 
     const int prefix_dw = display_width(prefix);
 
@@ -460,7 +441,7 @@ void TreeTableFormatter::measure_metrics_tree(
 
             // Children: prefix + branch + cont + leaf_name.
             for (const auto* mc : g.items) {
-                std::string leaf = strip_prefix(mc->metric_name);
+                std::string leaf = metric_leaf(mc->metric_name);
                 int lw = prefix_dw + BRANCH_W + BRANCH_W +
                          static_cast<int>(leaf.size());
                 if (lw > cw.left) cw.left = lw;
@@ -517,34 +498,7 @@ void TreeTableFormatter::render_metrics_tree(
     std::FILE* out, const std::vector<MetricComparison>& metrics,
     const std::string& prefix, bool /*is_last_section*/,
     const ColumnWidths& cw) const {
-    struct MetricGroup {
-        std::string name;
-        std::vector<const MetricComparison*> items;
-    };
-    std::vector<MetricGroup> groups;
-    std::unordered_map<std::string, std::size_t> group_idx;
-
-    for (const auto& mc : metrics) {
-        if (mc.baseline_value == 0.0 && mc.variant_value == 0.0) continue;
-        std::string grp = metric_group(mc.metric_name);
-        if (grp.empty()) {
-            groups.push_back({mc.metric_name, {&mc}});
-        } else {
-            auto it = group_idx.find(grp);
-            if (it == group_idx.end()) {
-                group_idx[grp] = groups.size();
-                groups.push_back({grp, {&mc}});
-            } else {
-                groups[it->second].items.push_back(&mc);
-            }
-        }
-    }
-
-    groups.erase(std::remove_if(groups.begin(), groups.end(),
-                                [](const MetricGroup& g) {
-                                    return all_group_zero(g.items);
-                                }),
-                 groups.end());
+    auto groups = group_metrics(metrics);
 
     if (groups.empty()) return;
 
@@ -566,7 +520,7 @@ void TreeTableFormatter::render_metrics_tree(
                 bool leaf_last = (i + 1 == g.items.size());
                 const char* lbr = leaf_last ? branch_last() : branch_mid();
                 render_leaf(out, *g.items[i], cont + lbr,
-                            strip_prefix(g.items[i]->metric_name), cw);
+                            metric_leaf(g.items[i]->metric_name), cw);
             }
         }
     }
@@ -819,54 +773,6 @@ void TreeTableFormatter::render(std::FILE* out,
 
 namespace {
 
-const char* sig_str(Significance s) {
-    switch (s) {
-        case Significance::NEGLIGIBLE:
-            return "NEGLIGIBLE";
-        case Significance::SMALL:
-            return "SMALL";
-        case Significance::MEDIUM:
-            return "MEDIUM";
-        case Significance::LARGE:
-            return "LARGE";
-    }
-    return "NEGLIGIBLE";
-}
-
-std::string escape_json_string(const std::string& s) {
-    std::string result;
-    result.reserve(s.size());
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                result += "\\\"";
-                break;
-            case '\\':
-                result += "\\\\";
-                break;
-            case '\b':
-                result += "\\b";
-                break;
-            case '\f':
-                result += "\\f";
-                break;
-            case '\n':
-                result += "\\n";
-                break;
-            case '\r':
-                result += "\\r";
-                break;
-            case '\t':
-                result += "\\t";
-                break;
-            default:
-                result += c;
-                break;
-        }
-    }
-    return result;
-}
-
 std::string double_to_json(double v) {
     if (!std::isfinite(v)) return "0";
     char buf[32];
@@ -883,7 +789,8 @@ void build_metric_json(std::ostringstream& out, const MetricComparison& mc) {
     out << "\"delta\":" << double_to_json(safe(mc.delta)) << ",";
     out << "\"pct_change\":" << double_to_json(safe(mc.pct_change)) << ",";
     out << "\"cohens_d\":" << double_to_json(safe(mc.cohens_d)) << ",";
-    out << "\"significance\":\"" << sig_str(mc.significance) << "\",";
+    out << "\"significance\":\"" << significance_to_string(mc.significance)
+        << "\",";
     out << "\"is_regression\":" << (mc.is_regression ? "true" : "false");
     out << "}";
 }

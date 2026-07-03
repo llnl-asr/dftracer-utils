@@ -32,7 +32,6 @@ struct ReplayConfig {
     double timing_scale =
         1.0;  // Scale timing (1.0 = original, 0.5 = 2x faster, 2.0 = 2x slower)
     std::uint64_t start_time_offset = 0;  // Offset to add to all timestamps
-    bool verbose = false;                 // Verbose logging
     std::string output_directory;  // Directory for creating files (empty = use
                                    // original paths)
     std::size_t max_file_size =
@@ -131,9 +130,8 @@ struct ReplayResult {
 
     /**
      * Print summary statistics
-     * @param verbose Include detailed breakdown
      */
-    void print_summary(bool verbose = false) const;
+    void print_summary() const;
 };
 
 /**

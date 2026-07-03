@@ -46,20 +46,7 @@ class EventIdCollector : public reader::internal::LineProcessor {
         if (!root.is_object()) co_return true;
 
         EventId event;
-        auto id_result = root["id"].get_int64();
-        if (!id_result.error()) {
-            event.id = id_result.value_unsafe();
-        }
-
-        auto pid_result = root["pid"].get_int64();
-        if (!pid_result.error()) {
-            event.pid = pid_result.value_unsafe();
-        }
-
-        auto tid_result = root["tid"].get_int64();
-        if (!tid_result.error()) {
-            event.tid = tid_result.value_unsafe();
-        }
+        extract_event_id(root, event);
 
         if (event.is_valid()) {
             events.push_back(event);

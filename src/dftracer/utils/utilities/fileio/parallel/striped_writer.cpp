@@ -1,6 +1,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
+#include <dftracer/utils/utilities/fileio/parallel/pwrite_fully.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -49,21 +50,10 @@ class StripedWriter final : public ParallelWriter {
         if (worker_idx < per_worker_layout_.size()) {
             per_worker_layout_[worker_idx].push_back({base, data.size()});
         }
-        const auto* bytes = reinterpret_cast<const char*>(data.data());
-        std::size_t written = 0;
-        while (written < data.size()) {
-            auto n = co_await ::dftracer::utils::io::pwrite(
-                fd_, bytes + written, data.size() - written,
-                static_cast<off_t>(base + written));
-            if (n <= 0) {
-                DFTRACER_UTILS_LOG_ERROR("pwrite failed on %s (offset=%llu)",
-                                         path_.c_str(),
-                                         static_cast<unsigned long long>(base));
-                co_return -1;
-            }
-            written += static_cast<std::size_t>(n);
-        }
-        co_return 0;
+        co_return co_await pwrite_fully(
+            fd_, path_.c_str(),
+            reinterpret_cast<const std::uint8_t*>(data.data()), data.size(),
+            static_cast<off_t>(base));
     }
 
     coro::CoroTask<int> write_footer(ByteView data) override {
@@ -113,21 +103,10 @@ class StripedWriter final : public ParallelWriter {
         if (data.size() == 0) co_return 0;
         const auto base =
             offset_.fetch_add(data.size(), std::memory_order_relaxed);
-        const auto* bytes = reinterpret_cast<const char*>(data.data());
-        std::size_t written = 0;
-        while (written < data.size()) {
-            auto n = co_await ::dftracer::utils::io::pwrite(
-                fd_, bytes + written, data.size() - written,
-                static_cast<off_t>(base + written));
-            if (n <= 0) {
-                DFTRACER_UTILS_LOG_ERROR("pwrite failed on %s (offset=%llu)",
-                                         path_.c_str(),
-                                         static_cast<unsigned long long>(base));
-                co_return -1;
-            }
-            written += static_cast<std::size_t>(n);
-        }
-        co_return 0;
+        co_return co_await pwrite_fully(
+            fd_, path_.c_str(),
+            reinterpret_cast<const std::uint8_t*>(data.data()), data.size(),
+            static_cast<off_t>(base));
     }
 
     std::string path_;

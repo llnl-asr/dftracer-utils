@@ -8,6 +8,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/core/utils/timer.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_drain.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_runner.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
@@ -32,33 +33,6 @@ namespace {
 
 namespace rcf = ::dftracer::utils::rocksdb::cf;
 namespace idx = composites::dft::indexing;
-
-void write_aggregation_tracking(::dftracer::utils::rocksdb::RocksDatabase* db,
-                                const AggregationConfig& config,
-                                const std::vector<std::string>& processed_files,
-                                const std::string& index_path) {
-    indexer::IndexDatabase idx_db(
-        index_path,
-        ::dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-
-    auto batch = db->begin_batch();
-
-    AggGlobalConfig global_cfg;
-    global_cfg.time_interval_us = config.time_interval_us;
-    global_cfg.config_hash = 0;
-    db->put(batch, rcf::AGGREGATION, std::string_view(AGG_GLOBAL_CONFIG_KEY, 2),
-            serialize_agg_global_config(global_cfg));
-
-    for (const auto& file_path : processed_files) {
-        int file_id = idx_db.find_file(file_path);
-        if (file_id >= 0) {
-            auto key = make_agg_file_key(file_id);
-            db->put(batch, rcf::AGGREGATION, key, "");
-        }
-    }
-
-    db->commit_batch(batch);
-}
 
 coro::CoroTask<indexer::IndexBuildBatchResult> batch_index_and_aggregate(
     CoroScope* scope, std::vector<std::string> file_paths,
@@ -135,7 +109,35 @@ PerfettoTraceWriterInput build_streaming_input(
 
 }  // namespace
 
-coro::CoroTask<AggregationRunResult> run_aggregation(
+void write_aggregation_tracking(::dftracer::utils::rocksdb::RocksDatabase* db,
+                                const AggregationConfig& config,
+                                const std::vector<std::string>& processed_files,
+                                const std::string& index_path,
+                                std::uint32_t config_hash) {
+    indexer::IndexDatabase idx_db(
+        index_path,
+        ::dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+
+    auto batch = db->begin_batch();
+
+    AggGlobalConfig global_cfg;
+    global_cfg.time_interval_us = config.time_interval_us;
+    global_cfg.config_hash = config_hash;
+    db->put(batch, rcf::AGGREGATION, std::string_view(AGG_GLOBAL_CONFIG_KEY, 2),
+            serialize_agg_global_config(global_cfg));
+
+    for (const auto& file_path : processed_files) {
+        int file_id = idx_db.find_file(file_path);
+        if (file_id >= 0) {
+            auto key = make_agg_file_key(file_id);
+            db->put(batch, rcf::AGGREGATION, key, "");
+        }
+    }
+
+    db->commit_batch(batch);
+}
+
+coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
     AggregationRunInput input) {
     AggregationRunResult result;
 
@@ -144,7 +146,11 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
             "Invalid output format: %s (supported: %s)",
             input.output_format.c_str(),
             AggregationConfig::supported_formats_str().c_str());
-        co_return result;
+        co_return make_error(
+            ErrorCode::INVALID_ARGUMENT,
+            "run_aggregation: invalid output format '" + input.output_format +
+                "' (supported: " + AggregationConfig::supported_formats_str() +
+                ")");
     }
 
     input.log_dir = fs::absolute(input.log_dir).string();
@@ -194,7 +200,10 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
     if (input_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
                                  input.log_dir.c_str());
-        co_return result;
+        co_return make_error(
+            ErrorCode::NOT_FOUND,
+            "run_aggregation: no .pfw or .pfw.gz files found in " +
+                input.log_dir);
     }
 
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", input_files.size());
@@ -269,25 +278,8 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
                     {
                         ::dftracer::utils::ScopedTimer _vd(stages,
                                                            "visitor_drain");
-                        for (auto& file_visitors :
-                             batch_result.extra_visitors) {
-                            for (auto& visitor : file_visitors) {
-                                auto* agg_visitor =
-                                    dynamic_cast<AggregationVisitor*>(
-                                        visitor.get());
-                                if (agg_visitor) {
-                                    for (const auto& k :
-                                         agg_visitor->observed_extra_keys())
-                                        merger->add_observed_extra_key(k);
-                                    for (const auto& m :
-                                         agg_visitor->observed_custom_metrics())
-                                        merger->add_observed_custom_metric(m);
-                                    auto output = agg_visitor->take_output();
-                                    merger->merge_chunk(std::move(output));
-                                }
-                            }
-                            file_visitors.clear();
-                        }
+                        merge_aggregation_visitors(batch_result.extra_visitors,
+                                                   merger.get());
                     }
                 }
 
@@ -296,7 +288,7 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
                                                        "write_tracking");
                     write_aggregation_tracking(agg_db.get(), input.agg_config,
                                                files_to_process,
-                                               shared_index_path);
+                                               shared_index_path, config_hash);
                 }
             }
 
@@ -416,7 +408,6 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
     overall.stop();
     result.elapsed_ms = static_cast<double>(overall.elapsed()) / 1e6;
     result.total_keys = total_keys;
-    result.success = write_success;
 
     if (input.verbose) {
         std::printf("\n==========================================\n");
@@ -431,12 +422,19 @@ coro::CoroTask<AggregationRunResult> run_aggregation(
         if (input.output_file) {
             std::printf("  Output file: %s\n", input.output_file->c_str());
             std::printf("  Write status: %s\n",
-                        result.success ? "SUCCESS" : "FAILED");
+                        write_success ? "SUCCESS" : "FAILED");
         }
         std::printf("==========================================\n");
     }
 
     if (stages) stages->print_stages();
+
+    if (!write_success) {
+        co_return make_error(
+            ErrorCode::AGGREGATION,
+            "run_aggregation: failed to write output file " +
+                (input.output_file ? *input.output_file : std::string("")));
+    }
 
     co_return result;
 }

@@ -3,7 +3,6 @@
 
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utilities.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -72,7 +71,6 @@ struct ResolverResult {
 
 class IndexResolverUtility
     : public utilities::Utility<ResolverInput, ResolverResult,
-                                utilities::tags::Parallelizable,
                                 utilities::tags::NeedsContext> {
    private:
     filesystem::PatternDirectoryScannerUtility scanner_;

@@ -145,10 +145,7 @@ class StreamingLineReader {
     /**
      * @brief Read lines from a file using indexed reader.
      *
-     * @param file_path Path to the compressed file
      * @param config Indexed reader configuration
-     * @param start_line Starting line (1-based, inclusive), 0 means start
-     * @param end_line Ending line (1-based, inclusive), 0 means end
      * @return LineRange for streaming iteration
      */
     static LineRange read_indexed(

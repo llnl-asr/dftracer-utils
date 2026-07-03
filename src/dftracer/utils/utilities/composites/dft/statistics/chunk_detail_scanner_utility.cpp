@@ -2,6 +2,7 @@
 #include <dftracer/utils/utilities/common/json/json.h>
 #include <dftracer/utils/utilities/composites/dft/args_map.h>
 #include <dftracer/utils/utilities/composites/dft/event.h>
+#include <dftracer/utils/utilities/composites/dft/internal/chunk_line_scanner.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/chunk_detail_scanner_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
@@ -79,10 +80,10 @@ static void build_group_key(std::string& key,
     }
 }
 
-coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
-    const ChunkDetailScanInput& input) {
+coro::CoroTask<Result<ChunkDetailScanOutput>>
+ChunkDetailScannerUtility::process(const ChunkDetailScanInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("scan chunk details");
     ChunkDetailScanOutput output;
-    output.success = false;
 
     std::unordered_set<std::string_view> name_filter;
     std::unordered_set<std::string_view> cat_filter;
@@ -114,7 +115,11 @@ coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
             "%llu",
             input.file_path.c_str(),
             static_cast<unsigned long long>(input.checkpoint_idx));
-        co_return output;
+        co_return make_error(
+            ErrorCode::READER,
+            "ChunkDetailScanner: Failed to create reader for " +
+                input.file_path + " checkpoint " +
+                std::to_string(input.checkpoint_idx));
     }
 
     auto stream = reader->stream(
@@ -131,7 +136,11 @@ coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
             "%llu",
             input.file_path.c_str(),
             static_cast<unsigned long long>(input.checkpoint_idx));
-        co_return output;
+        co_return make_error(
+            ErrorCode::READER,
+            "ChunkDetailScanner: Failed to create stream for " +
+                input.file_path + " checkpoint " +
+                std::to_string(input.checkpoint_idx));
     }
 
     std::string group_key_buf;
@@ -140,112 +149,79 @@ coro::CoroTask<ChunkDetailScanOutput> ChunkDetailScannerUtility::process(
 
     simdjson::dom::parser parser;
 
-    while (!stream->done()) {
-        auto chunk = co_await stream->read_async();
+    co_await dft::internal::scan_chunk_lines(*stream, [&](std::string_view line,
+                                                          std::uint32_t) {
+        auto result = parser.parse(line.data(), line.size());
+        if (!result.error()) {
+            auto root = result.value_unsafe();
+            if (root.is_object()) {
+                JsonValue json(root);
+                DFTracerEvent ev;
+                if (!DFTracerEvent::parse(json, ev)) {
+                    return;
+                }
 
-        if (chunk.empty()) {
-            break;
-        }
+                if (!ev.is_metadata()) {
+                    bool passes = true;
+                    if (has_name_filter &&
+                        name_filter.find(ev.name) == name_filter.end()) {
+                        passes = false;
+                    }
+                    if (passes && has_cat_filter &&
+                        cat_filter.find(ev.cat) == cat_filter.end()) {
+                        passes = false;
+                    }
 
-        std::size_t bytes_read = chunk.size();
-        const char* data = chunk.data();
-        std::size_t pos = 0;
+                    if (passes) {
+                        double dur = static_cast<double>(ev.dur);
 
-        while (pos < bytes_read) {
-            const char* line_start = data + pos;
-            const char* newline = static_cast<const char*>(
-                memchr(line_start, '\n', bytes_read - pos));
+                        output.stats.duration.update(dur);
 
-            if (!newline) {
-                break;
-            }
+                        bool is_io = is_io_event(ev.name);
+                        const std::string* io_key_ptr;
 
-            std::size_t line_len = newline - line_start;
+                        if (has_grouping) {
+                            build_group_key(group_key_buf, *input.group_by, ev);
 
-            if (line_len > 0) {
-                auto result = parser.parse(line_start, line_len);
-                if (!result.error()) {
-                    auto root = result.value_unsafe();
-                    if (root.is_object()) {
-                        JsonValue json(root);
-                        DFTracerEvent ev;
-                        if (!DFTracerEvent::parse(json, ev)) {
-                            pos = (newline - data) + 1;
-                            continue;
+                            output.stats.grouped_duration[group_key_buf].update(
+                                dur);
+                            output.stats.group_key_category.try_emplace(
+                                group_key_buf, ev.cat);
+                            io_key_ptr = &group_key_buf;
+                        } else {
+                            io_key_ptr = &global_key;
                         }
 
-                        if (!ev.is_metadata()) {
-                            bool passes = true;
-                            if (has_name_filter && name_filter.find(ev.name) ==
-                                                       name_filter.end()) {
-                                passes = false;
-                            }
-                            if (passes && has_cat_filter &&
-                                cat_filter.find(ev.cat) == cat_filter.end()) {
-                                passes = false;
-                            }
-
-                            if (passes) {
-                                double dur = static_cast<double>(ev.dur);
-
-                                output.stats.duration.update(dur);
-
-                                bool is_io = is_io_event(ev.name);
-                                const std::string* io_key_ptr;
-
-                                if (has_grouping) {
-                                    build_group_key(group_key_buf,
-                                                    *input.group_by, ev);
-
-                                    output.stats.grouped_duration[group_key_buf]
-                                        .update(dur);
-                                    output.stats.group_key_category.try_emplace(
-                                        group_key_buf, ev.cat);
-                                    io_key_ptr = &group_key_buf;
-                                } else {
-                                    io_key_ptr = &global_key;
+                        if (is_io && ev.args.exists()) {
+                            auto ret_opt =
+                                ev.args["ret"].get_optional<std::int64_t>();
+                            if (ret_opt.has_value() && ret_opt.value() > 0) {
+                                double ret =
+                                    static_cast<double>(ret_opt.value());
+                                auto& io = output.stats.grouped_io[*io_key_ptr];
+                                io.duration.update(dur);
+                                io.size.update(ret);
+                                if (dur > 0) {
+                                    io.bandwidth.update(ret * 1e6 / dur);
                                 }
-
-                                if (is_io && ev.args.exists()) {
-                                    auto ret_opt =
-                                        ev.args["ret"]
-                                            .get_optional<std::int64_t>();
-                                    if (ret_opt.has_value() &&
-                                        ret_opt.value() > 0) {
-                                        double ret = static_cast<double>(
-                                            ret_opt.value());
-                                        auto& io = output.stats
-                                                       .grouped_io[*io_key_ptr];
-                                        io.duration.update(dur);
-                                        io.size.update(ret);
-                                        if (dur > 0) {
-                                            io.bandwidth.update(ret * 1e6 /
-                                                                dur);
-                                        }
-                                        auto offset_opt =
-                                            ev.args["offset"]
-                                                .get_optional<std::uint64_t>();
-                                        if (offset_opt.has_value()) {
-                                            io.offset.update(
-                                                static_cast<double>(
-                                                    offset_opt.value()));
-                                        }
-                                    }
+                                auto offset_opt =
+                                    ev.args["offset"]
+                                        .get_optional<std::uint64_t>();
+                                if (offset_opt.has_value()) {
+                                    io.offset.update(static_cast<double>(
+                                        offset_opt.value()));
                                 }
-
-                                output.stats.events_scanned++;
                             }
                         }
+
+                        output.stats.events_scanned++;
                     }
                 }
             }
-
-            pos = (newline - data) + 1;
         }
-    }
+    });
 
     output.stats.chunks_scanned = 1;
-    output.success = true;
     co_return output;
 }
 

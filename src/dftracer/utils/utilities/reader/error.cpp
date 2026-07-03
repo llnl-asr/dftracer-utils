@@ -1,6 +1,6 @@
-#include <dftracer/utils/utilities/reader/internal/error.h>
+#include <dftracer/utils/utilities/reader/error.h>
 
-namespace dftracer::utils::utilities::reader::internal {
+namespace dftracer::utils::utilities::reader {
 std::string ReaderError::format_message(Type type, const std::string &message) {
     const char *prefix = "";
     switch (type) {
@@ -29,4 +29,4 @@ std::string ReaderError::format_message(Type type, const std::string &message) {
     return std::string(prefix) + ": " + message;
 }
 
-}  // namespace dftracer::utils::utilities::reader::internal
+}  // namespace dftracer::utils::utilities::reader

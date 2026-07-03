@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/common/statistics/distributions.h>
 
 #include <algorithm>
@@ -5,7 +6,6 @@
 #include <cstddef>
 #include <limits>
 #include <random>
-#include <stdexcept>
 
 // Boost.Math standalone is configured globally via -DBOOST_MATH_STANDALONE.
 #include <boost/math/distributions/exponential.hpp>
@@ -20,9 +20,9 @@ namespace bm = boost::math;
 
 namespace {
 
-constexpr double kMinPositive = 1e-12;
-constexpr int kNewtonMaxIter = 100;
-constexpr double kNewtonTol = 1e-8;
+constexpr double MIN_POSITIVE = 1e-12;
+constexpr int NEWTON_MAX_ITER = 100;
+constexpr double NEWTON_TOL = 1e-8;
 
 // Sample statistics computed in one pass via Welford for numerical stability.
 struct SampleSummary {
@@ -85,6 +85,20 @@ double compute_bic(double log_l, std::size_t n, int k) {
            2.0 * log_l;
 }
 
+// Shared goodness-of-fit tail: KS statistic against sorted data, log-likelihood
+// and BIC. Only the Boost distribution type varies across the fit_* functions.
+template <class Dist>
+void finalize_fit(FittedDistribution& f, const Dist& dist,
+                  const std::vector<double>& data, const SampleSummary& s) {
+    auto sorted = data;
+    std::sort(sorted.begin(), sorted.end());
+    f.ks_stat =
+        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
+    f.log_likelihood =
+        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
+    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+}
+
 // ---- Per-distribution MLE -------------------------------------------------
 
 FittedDistribution fit_normal(const std::vector<double>& data,
@@ -97,13 +111,7 @@ FittedDistribution fit_normal(const std::vector<double>& data,
     f.valid = true;
 
     bm::normal dist(s.mean, sigma);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 
@@ -130,13 +138,7 @@ FittedDistribution fit_lognormal(const std::vector<double>& data,
     f.valid = true;
 
     bm::lognormal dist(mean_log, sigma);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 
@@ -150,13 +152,7 @@ FittedDistribution fit_exponential(const std::vector<double>& data,
     f.valid = true;
 
     bm::exponential dist(rate);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 
@@ -188,17 +184,17 @@ FittedDistribution fit_gamma(const std::vector<double>& data,
     if (rhs <= 0.0) {
         // Data is degenerate; fall back to MoM.
     } else {
-        for (int it = 0; it < kNewtonMaxIter; ++it) {
+        for (int it = 0; it < NEWTON_MAX_ITER; ++it) {
             const double g = std::log(k) - bm::digamma(k) - rhs;
             const double gp = 1.0 / k - bm::trigamma(k);
             if (!std::isfinite(g) || !std::isfinite(gp) || gp == 0.0) break;
             const double dk = g / gp;
             k -= dk;
-            if (k <= kMinPositive) {
-                k = kMinPositive;
+            if (k <= MIN_POSITIVE) {
+                k = MIN_POSITIVE;
                 break;
             }
-            if (std::abs(dk) < kNewtonTol) break;
+            if (std::abs(dk) < NEWTON_TOL) break;
         }
     }
     const double theta = s.mean / k;
@@ -207,13 +203,7 @@ FittedDistribution fit_gamma(const std::vector<double>& data,
     f.valid = true;
 
     bm::gamma_distribution<double> dist(k, theta);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 
@@ -233,7 +223,7 @@ FittedDistribution fit_weibull(const std::vector<double>& data,
     // Initial shape via rough variance heuristic; ~1.0 works for most cases.
     double k = 1.0;
 
-    for (int it = 0; it < kNewtonMaxIter; ++it) {
+    for (int it = 0; it < NEWTON_MAX_ITER; ++it) {
         double s_xk = 0.0, s_xk_lnx = 0.0, s_xk_lnx2 = 0.0;
         for (double x : data) {
             const double lx = std::log(x);
@@ -251,11 +241,11 @@ FittedDistribution fit_weibull(const std::vector<double>& data,
         if (!std::isfinite(g) || !std::isfinite(gp) || gp == 0.0) break;
         const double dk = g / gp;
         k -= dk;
-        if (k <= kMinPositive) {
-            k = kMinPositive;
+        if (k <= MIN_POSITIVE) {
+            k = MIN_POSITIVE;
             break;
         }
-        if (std::abs(dk) < kNewtonTol) break;
+        if (std::abs(dk) < NEWTON_TOL) break;
     }
 
     double s_xk = 0.0;
@@ -266,13 +256,7 @@ FittedDistribution fit_weibull(const std::vector<double>& data,
     f.valid = true;
 
     bm::weibull dist(k, lambda);
-    auto sorted = data;
-    std::sort(sorted.begin(), sorted.end());
-    f.ks_stat =
-        ks_statistic(sorted, [&](double x) { return bm::cdf(dist, x); });
-    f.log_likelihood =
-        log_likelihood(data, [&](double x) { return bm::pdf(dist, x); });
-    f.bic = compute_bic(f.log_likelihood, s.n, free_parameter_count(f.kind));
+    finalize_fit(f, dist, data, s);
     return f;
 }
 
@@ -410,7 +394,8 @@ Sampler make_sampler(const FittedDistribution& fit,
                      std::optional<double> min_bound,
                      std::optional<double> max_bound) {
     if (!fit.valid) {
-        throw std::invalid_argument(
+        throw DFTUtilsException(
+            ErrorCode::INVALID_ARGUMENT,
             "make_sampler called with invalid FittedDistribution");
     }
     const auto p0 = fit.params[0];

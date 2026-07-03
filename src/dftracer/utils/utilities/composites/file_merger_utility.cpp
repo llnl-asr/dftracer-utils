@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/file_merger_utility.h>
 #include <dftracer/utils/utilities/fileio/file_reader_utility.h>
@@ -8,7 +9,6 @@
 
 #include <algorithm>
 #include <iterator>
-#include <sstream>
 
 namespace dftracer::utils::utilities::composites {
 
@@ -142,8 +142,9 @@ FileMergeValidatorUtility::process(
 // FileMergerUtility Implementation
 // ============================================================================
 
-coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
+coro::CoroTask<Result<FileMergerUtilityOutput>> FileMergerUtility::process(
     const FileMergerUtilityInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("merge files");
     FileMergerUtilityOutput output;
     output.output_path = input.output_file;
 
@@ -239,7 +240,7 @@ coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
             FileCompressorUtility compressor;
             auto compress_result = co_await compressor.process(compress_input);
 
-            if (compress_result.success) {
+            if (compress_result.has_value()) {
                 fs::remove(input.output_file);
                 output.output_path = input.output_file + ".gz";
                 DFTRACER_UTILS_LOG_INFO("Created compressed output: %s",
@@ -250,11 +251,11 @@ coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
             }
         }
 
-        output.success = true;
-
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Error combining files: %s", e.what());
-        output.success = false;
+        co_return make_error(ErrorCode::IO,
+                             std::string("Error combining files into ") +
+                                 input.output_file + ": " + e.what());
     }
 
     co_return output;

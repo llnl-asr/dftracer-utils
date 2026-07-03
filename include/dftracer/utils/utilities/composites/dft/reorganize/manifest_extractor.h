@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_REORGANIZE_MANIFEST_EXTRACTOR_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_REORGANIZE_MANIFEST_EXTRACTOR_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/organize_visitor.h>
@@ -23,14 +24,13 @@ struct ManifestExtractorConfig {
     std::size_t batch_size = 1024;
 };
 
+// Success payload; failures are reported via Result<ManifestExtractorResult>.
 struct ManifestExtractorResult {
     std::size_t events_extracted = 0;
     std::size_t events_unmatched = 0;
-    bool success = false;
-    std::string error_message;
 };
 
-coro::CoroTask<ManifestExtractorResult> extract_from_manifest(
+coro::CoroTask<Result<ManifestExtractorResult>> extract_from_manifest(
     ManifestExtractorConfig config);
 
 }  // namespace dftracer::utils::utilities::composites::dft::reorganize

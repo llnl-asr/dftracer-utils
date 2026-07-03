@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/when_all.h>
@@ -19,7 +20,6 @@
 #include <cctype>
 #include <map>
 #include <set>
-#include <stdexcept>
 
 namespace dftracer::utils::utilities::composites::dft::reorganize {
 
@@ -54,10 +54,7 @@ std::vector<PredicateGroup> parse_group_specs(
 
 coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
     const ReorganizationPlannerInput& input) {
-    if (!has_context()) {
-        throw std::runtime_error(
-            "ReorganizationPlannerUtility requires CoroScope context");
-    }
+    DFTRACER_UTILS_TRACE_SCOPE("plan reorganization");
     CoroScope& scope = context();
 
     ExtractionPlan plan;
@@ -70,9 +67,9 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         } else {
             auto result = Query::from_string(group.query);
             if (!result) {
-                throw std::runtime_error("Invalid query for group '" +
-                                         group.name +
-                                         "': " + result.error().format());
+                throw DFTUtilsException(
+                    ErrorCode::QUERY, "Invalid query for group '" + group.name +
+                                          "': " + result.error().format());
             }
             parsed_queries.push_back(std::move(*result));
         }
@@ -142,9 +139,10 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
 
         for (const auto& result : batch_result.results) {
             if (!result.success) {
-                throw std::runtime_error(
+                throw DFTUtilsException(
+                    ErrorCode::INDEXER,
                     "Failed to build index for: " + result.file_path + ": " +
-                    result.error_message);
+                        result.error_message);
             }
         }
     }
@@ -181,8 +179,8 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         const auto& meta = metadata_results[fi];
 
         if (!meta.success) {
-            throw std::runtime_error("Failed to collect metadata for: " +
-                                     file_path);
+            throw DFTUtilsException(
+                ErrorCode::IO, "Failed to collect metadata for: " + file_path);
         }
 
         std::string index_path =
@@ -211,8 +209,9 @@ coro::CoroTask<ExtractionPlan> ReorganizationPlannerUtility::process(
         int file_info_id = idx_db.get_file_info_id(
             indexer::internal::get_logical_path(file_path));
         if (file_info_id < 0) {
-            throw std::runtime_error("File not found in .dftindex: " +
-                                     file_path);
+            throw DFTUtilsException(
+                ErrorCode::NOT_FOUND,
+                "File not found in .dftindex: " + file_path);
         }
 
         const bool has_manifest = idx_db.has_manifest_data(file_info_id);

@@ -52,8 +52,9 @@ ViewBuilderInput& ViewBuilderInput::with_time_range(double b, double e) {
     return *this;
 }
 
-coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
+coro::CoroTask<Result<ViewBuilderOutput>> ViewBuilderUtility::process(
     const ViewBuilderInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("build view");
     ViewBuilderOutput output;
 
     std::uint64_t total_checkpoints =
@@ -80,7 +81,6 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
                 candidate_checkpoints.empty()) {
                 output.file_may_match = false;
                 output.skipped_checkpoints = total_checkpoints;
-                output.success = true;
                 co_return output;
             }
         } else {
@@ -166,7 +166,6 @@ coro::CoroTask<ViewBuilderOutput> ViewBuilderUtility::process(
     output.file_may_match = !output.candidates.empty();
     output.skipped_checkpoints =
         total_checkpoints - candidate_checkpoints.size();
-    output.success = true;
     co_return output;
 }
 

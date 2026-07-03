@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_INDEXED_FILE_LINE_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_INDEXED_FILE_LINE_ITERATOR_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
@@ -176,7 +177,8 @@ class IndexedFileLineIterator {
    private:
     void validate_and_initialize() {
         if (!config_.reader()) {
-            throw std::invalid_argument("Reader cannot be null");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "Reader cannot be null");
         }
 
         // Validate range based on type
@@ -195,13 +197,14 @@ class IndexedFileLineIterator {
                 config_.start(), config_.end());
 
             if (config_.start() < 1 || config_.end() < config_.start()) {
-                throw std::invalid_argument(
+                throw DFTUtilsException(
+                    ErrorCode::INVALID_ARGUMENT,
                     "Invalid line range (must be 1-based and start <= end)");
             }
         } else {
             if (config_.end() < config_.start()) {
-                throw std::invalid_argument(
-                    "Invalid byte range (start <= end)");
+                throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                        "Invalid byte range (start <= end)");
             }
         }
 
@@ -228,7 +231,7 @@ class IndexedFileLineIterator {
 
         stream_ = config_.reader()->stream(stream_config);
         if (!stream_) {
-            throw std::runtime_error("Failed to create stream");
+            throw DFTUtilsException(ErrorCode::IO, "Failed to create stream");
         }
     }
 
@@ -302,7 +305,8 @@ class IndexedFileLineIterator {
      */
     Line next() {
         if (!has_next()) {
-            throw std::runtime_error("No more lines available");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "No more lines available");
         }
 
         // Return the buffered line

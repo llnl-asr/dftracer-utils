@@ -4,7 +4,6 @@
 #include <dftracer/utils/utilities/hash/internal/base_hasher_utility.h>
 
 #include <cstddef>
-#include <functional>
 #include <string_view>
 
 namespace dftracer::utils::utilities::hash {
@@ -29,8 +28,7 @@ class StdHasherUtility : public internal::BaseHasherUtility {
     }
 
     void update(std::string_view data) override {
-        accumulator_ ^= std::hash<std::string_view>{}(data) + 0x9e3779b9 +
-                        (accumulator_ << 6) + (accumulator_ >> 2);
+        dftracer::utils::hash_combine_value(accumulator_, data);
         current_hash_ = Hash{accumulator_};
     }
 };

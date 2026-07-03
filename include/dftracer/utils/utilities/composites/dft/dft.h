@@ -13,7 +13,6 @@
 #include <dftracer/utils/utilities/composites/dft/chunk_extractor_utility.h>
 #include <dftracer/utils/utilities/composites/dft/chunk_manifest_mapper_utility.h>
 #include <dftracer/utils/utilities/composites/dft/event_collector_utility.h>
-#include <dftracer/utils/utilities/composites/dft/event_hasher_utility.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 
 // DFTracer-specific types

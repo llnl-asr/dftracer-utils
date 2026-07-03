@@ -292,8 +292,8 @@ coro::CoroTask<bool> MPICallTreeBuilder::discover_pids(CoroScope* scope) {
         assigned_pids_.insert(sorted_pids[i]);
     }
 
-    if (config_.verbose && rank_ == 0) {
-        DFTRACER_UTILS_LOG_INFO(
+    if (rank_ == 0) {
+        DFTRACER_UTILS_LOG_DEBUG(
             "[rank 0] discovered %zu unique pids across %zu "
             "files",
             all_pids_.size(), trace_files_.size());
@@ -331,12 +331,9 @@ coro::CoroTask<bool> MPICallTreeBuilder::build(CoroScope* scope) {
         if (t) call_tree_->merge_from(std::move(*t));
     my_process_keys_ = call_tree_->keys();
 
-    if (config_.verbose) {
-        std::printf("[rank %d/%d] build done: %zu events, %zu processes\n",
-                    rank_, world_size_, total_events.load(),
-                    my_process_keys_.size());
-        std::fflush(stdout);
-    }
+    DFTRACER_UTILS_LOG_DEBUG(
+        "[rank %d/%d] build done: %zu events, %zu processes", rank_,
+        world_size_, total_events.load(), my_process_keys_.size());
     co_return true;
 }
 

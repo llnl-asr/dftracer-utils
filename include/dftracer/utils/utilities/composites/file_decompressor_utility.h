@@ -2,9 +2,9 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_FILE_DECOMPRESSOR_UTILITY_H
 
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_decompressor_utility.h>
 #include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
@@ -77,32 +77,19 @@ struct FileDecompressionUtilityInput {
 };
 
 /**
- * @brief Output from file decompression workflow.
+ * @brief Success payload from file decompression workflow.
+ *
+ * Failures are reported via Result<FileDecompressionUtilityOutput>, so this
+ * struct carries only the successful-result data.
  */
 struct FileDecompressionUtilityOutput {
     std::string input_path;         // Original .gz input file path
     std::string output_path;        // Decompressed output file path
-    bool success;                   // Decompression succeeded?
     std::size_t compressed_size;    // Compressed file size (bytes)
     std::size_t decompressed_size;  // Decompressed file size (bytes)
-    std::string error_message;      // Error message if failed
 
     FileDecompressionUtilityOutput()
-        : success(false), compressed_size(0), decompressed_size(0) {}
-
-    FileDecompressionUtilityOutput& with_error(const std::string& error) {
-        success = false;
-        error_message = error;
-        return *this;
-    }
-
-    FileDecompressionUtilityOutput& with_success(std::size_t comp_size,
-                                                 std::size_t decomp_size) {
-        success = true;
-        compressed_size = comp_size;
-        decompressed_size = decomp_size;
-        return *this;
-    }
+        : compressed_size(0), decompressed_size(0) {}
 
     FileDecompressionUtilityOutput& with_paths(const std::string& in_path,
                                                const std::string& out_path) {
@@ -115,17 +102,6 @@ struct FileDecompressionUtilityOutput {
                                                std::size_t decomp_size) {
         compressed_size = comp_size;
         decompressed_size = decomp_size;
-        return *this;
-    }
-
-    FileDecompressionUtilityOutput& with_success(bool succ) {
-        success = succ;
-        return *this;
-    }
-
-    FileDecompressionUtilityOutput& with_error_message(
-        const std::string& error) {
-        error_message = error;
         return *this;
     }
 
@@ -167,8 +143,6 @@ struct FileDecompressionUtilityOutput {
  * 2. Decompresses each chunk using StreamingDecompressor
  * 3. Writes decompressed data to output file using StreamingFileWriter
  *
- * Tagged with Parallelizable - safe for parallel batch processing.
- *
  * Usage:
  * @code
  * // Single file decompression
@@ -191,8 +165,7 @@ struct FileDecompressionUtilityOutput {
  */
 class FileDecompressorUtility
     : public utilities::Utility<FileDecompressionUtilityInput,
-                                FileDecompressionUtilityOutput,
-                                utilities::tags::Parallelizable> {
+                                Result<FileDecompressionUtilityOutput>> {
    public:
     FileDecompressorUtility() = default;
     ~FileDecompressorUtility() override = default;
@@ -201,24 +174,23 @@ class FileDecompressorUtility
      * @brief Decompress a gzip file using streaming decompression.
      *
      * @param input Decompression configuration
-     * @return Decompression result with statistics
+     * @return Decompression payload, or an error on failure.
      */
-    coro::CoroTask<FileDecompressionUtilityOutput> process(
+    coro::CoroTask<Result<FileDecompressionUtilityOutput>> process(
         const FileDecompressionUtilityInput& input) override {
-        FileDecompressionUtilityOutput result;
-        result.input_path = input.input_path;
-        result.output_path = input.output_path;
+        std::size_t compressed_size = 0;
+        std::size_t decompressed_size = 0;
 
         try {
             // Validate input file exists
             if (!fs::exists(input.input_path)) {
-                result.error_message =
-                    "Input file does not exist: " + input.input_path;
-                co_return result;
+                co_return make_error(
+                    ErrorCode::NOT_FOUND,
+                    "Input file does not exist: " + input.input_path);
             }
 
             // Get compressed file size
-            result.compressed_size = fs::file_size(input.input_path);
+            compressed_size = fs::file_size(input.input_path);
 
             compression::zlib::StreamingDecompressorUtility decompressor(
                 input.format);
@@ -234,24 +206,21 @@ class FileDecompressorUtility
             writer.close();
 
             // Get final decompressed size
-            result.decompressed_size = fs::file_size(input.output_path);
-            result.success = true;
+            decompressed_size = fs::file_size(input.output_path);
 
         } catch (const std::exception& e) {
-            result.error_message =
-                std::string("Decompression failed: ") + e.what();
-
             // Clean up partial output file on error
-            if (fs::exists(input.output_path)) {
-                try {
-                    fs::remove(input.output_path);
-                } catch (...) {
-                    // Ignore cleanup errors
-                }
-            }
+            remove_file_quietly(input.output_path);
+
+            co_return make_error(
+                ErrorCode::COMPRESSION,
+                std::string("Decompression failed: ") + e.what());
         }
 
-        co_return result;
+        FileDecompressionUtilityOutput payload;
+        payload.with_paths(input.input_path, input.output_path)
+            .with_sizes(compressed_size, decompressed_size);
+        co_return payload;
     }
 };
 

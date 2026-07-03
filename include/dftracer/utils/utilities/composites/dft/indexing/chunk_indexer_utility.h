@@ -1,7 +1,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_CHUNK_INDEXER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_CHUNK_INDEXER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
@@ -206,8 +205,7 @@ struct ChunkIndexerOutput {
 };
 
 class ChunkIndexerUtility
-    : public utilities::Utility<ChunkIndexerInput, ChunkIndexerOutput,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<ChunkIndexerInput, ChunkIndexerOutput> {
    public:
     ChunkIndexerUtility() = default;
 

@@ -3,7 +3,6 @@
 
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/utilities/streaming_utility.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
@@ -63,8 +62,7 @@ struct ViewReaderBatch {
 };
 
 class ViewReaderUtility
-    : public StreamingUtility<ViewReaderInput, ViewReaderBatch,
-                              tags::Parallelizable> {
+    : public StreamingUtility<ViewReaderInput, ViewReaderBatch> {
    public:
     coro::AsyncGenerator<ViewReaderBatch> process(
         const ViewReaderInput& input) override;

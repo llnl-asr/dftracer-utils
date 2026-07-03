@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_drain.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
-#include <cstring>
 #include <set>
 #include <stdexcept>
 #include <system_error>
@@ -68,8 +68,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
             std::error_code ec;
             fs::remove_all(root, ec);
             if (ec) {
-                throw std::runtime_error("failed to remove stale index " +
-                                         root + ": " + ec.message());
+                throw DFTUtilsException(ErrorCode::IO,
+                                        "failed to remove stale index " + root +
+                                            ": " + ec.message());
             }
         }
         result = co_await resolver.process(resolve_input);
@@ -145,23 +146,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         // Drain visitors and merge aggregation results
         std::vector<std::string> processed_files;
         if (merger) {
-            for (auto& file_visitors : batch_result.extra_visitors) {
-                for (auto& visitor : file_visitors) {
-                    auto* agg_visitor =
-                        dynamic_cast<AggregationVisitor*>(visitor.get());
-                    if (agg_visitor) {
-                        for (const auto& k : agg_visitor->observed_extra_keys())
-                            merger->add_observed_extra_key(k);
-                        for (const auto& m :
-                             agg_visitor->observed_custom_metrics())
-                            merger->add_observed_custom_metric(m);
-                        auto output = agg_visitor->take_output();
-                        processed_files.push_back(output.file_path);
-                        merger->merge_chunk(std::move(output));
-                    }
-                }
-                file_visitors.clear();
-            }
+            processed_files = merge_aggregation_visitors(
+                batch_result.extra_visitors, merger.get());
 
             // Persist accumulated min/max time bucket so a later read-only
             // reopen recovers the trace origin (otherwise time_range is
@@ -191,14 +177,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
                     int file_id =
                         idx_db.get_file_info_id(get_logical_path(file_path));
                     if (file_id >= 0) {
-                        char marker_key[6];
-                        marker_key[0] = '\xFF';
-                        marker_key[1] = '\xFF';
-                        auto fid_u32 = static_cast<std::uint32_t>(file_id);
-                        std::uint32_t fid_be = __builtin_bswap32(fid_u32);
-                        std::memcpy(&marker_key[2], &fid_be, 4);
                         agg_db->put(batch, rcf::AGGREGATION,
-                                    std::string_view(marker_key, 6),
+                                    aggregators::make_agg_file_key(file_id),
                                     std::string_view());
                     }
                 }

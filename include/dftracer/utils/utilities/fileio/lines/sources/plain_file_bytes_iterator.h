@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_PLAIN_FILE_BYTES_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_PLAIN_FILE_BYTES_ITERATOR_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 
@@ -72,11 +73,12 @@ class PlainFileBytesIterator {
                            std::size_t end)
         : start_(start), end_(end) {
         if (start >= end)
-            throw std::invalid_argument("Invalid byte range: start >= end");
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "Invalid byte range: start >= end");
 
         file_.open(path, std::ios::binary);
         if (!file_.is_open())
-            throw std::runtime_error("Cannot open file: " + path);
+            throw DFTUtilsException(ErrorCode::IO, "Cannot open file: " + path);
 
         align_to_next_line();
         // Don't prefetch in constructor - let has_next() do it
@@ -89,7 +91,9 @@ class PlainFileBytesIterator {
     }
 
     Line next() {
-        if (!has_next()) throw std::runtime_error("No more lines available");
+        if (!has_next())
+            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                                    "No more lines available");
 
         current_line_++;
         prefetched_ = false;  // Next call to has_next() will prefetch

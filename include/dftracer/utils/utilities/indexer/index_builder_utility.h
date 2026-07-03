@@ -38,7 +38,7 @@ inline constexpr std::array<std::string_view, 5> DEFAULT_EXTRA_DIMENSIONS = {
 struct IndexBuildConfig {
     std::string file_path;
     std::string index_dir;
-    std::size_t checkpoint_size = 32 * 1024 * 1024;
+    std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
     bool build_manifest = false;
     composites::dft::indexing::ChunkIndexerConfig bloom_config;
@@ -71,7 +71,7 @@ struct IndexBuildResult {
 struct IndexBuildBatchConfig {
     std::vector<std::string> file_paths;
     std::string index_dir;
-    std::size_t checkpoint_size = 32 * 1024 * 1024;
+    std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t parallelism = 1;
     bool force_rebuild = false;
     bool build_manifest = false;

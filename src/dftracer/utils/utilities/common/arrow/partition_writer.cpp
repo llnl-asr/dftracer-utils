@@ -2,10 +2,10 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/common/arrow/array_view.h>
 #include <dftracer/utils/utilities/common/arrow/partition_writer.h>
 #include <nanoarrow/nanoarrow.h>
 
-#include <cstdio>
 #include <iomanip>
 #include <sstream>
 
@@ -99,16 +99,7 @@ int64_t PartitionWriter::calculate_uncompressed_size(ArrowExportResult& batch) {
     ArrowArray* array = batch.get_array();
 
     ArrowArrayView view;
-    ArrowError error;
-    int rc = ArrowArrayViewInitFromSchema(&view, schema, &error);
-    if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
-        return 0;
-    }
-
-    rc = ArrowArrayViewSetArray(&view, array, &error);
-    if (rc != NANOARROW_OK) {
-        ArrowArrayViewReset(&view);
+    if (init_array_view(view, schema, array) != NANOARROW_OK) {
         return 0;
     }
 

@@ -207,36 +207,13 @@ class TarLineByteStream : public TarStream {
             return;
         }
 
-        // Get the actual file data offset from the TAR indexer
-        dftracer::utils::utilities::indexer::internal::tar::TarIndexer::
-            TarFileInfo tar_file_info;
-        if (!tar_indexer_ptr_->find_file(current_file_->file_name,
-                                         tar_file_info)) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to find TAR file: %s",
-                                     current_file_->file_name.c_str());
+        std::uint64_t actual_start = 0, actual_end = 0, logical_start = 0,
+                      logical_end = 0;
+        if (!compute_current_file_range(*tar_indexer_ptr_, actual_start,
+                                        actual_end, logical_start,
+                                        logical_end)) {
             return;
         }
-
-        // Calculate actual byte range for this file segment
-        std::uint64_t actual_start =
-            tar_file_info.data_offset + current_file_offset_;
-        std::uint64_t actual_end =
-            tar_file_info.data_offset + current_file_->file_size;
-
-        // Clamp to our target range
-        std::uint64_t logical_start =
-            current_file_->logical_start_offset + current_file_offset_;
-        std::uint64_t logical_end =
-            std::min(static_cast<std::uint64_t>(target_end_bytes_),
-                     current_file_->logical_end_offset);
-
-        if (logical_start >= logical_end) {
-            return;
-        }
-
-        // Adjust actual end based on logical constraint
-        std::uint64_t logical_size = logical_end - logical_start;
-        actual_end = actual_start + logical_size;
 
         DFTRACER_UTILS_LOG_DEBUG(
             "Initializing line stream for file %s: actual[%lu-%lu] "

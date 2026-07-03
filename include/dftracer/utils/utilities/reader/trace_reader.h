@@ -33,7 +33,8 @@ struct JsonLine {
 struct TraceReaderConfig {
     std::string file_path;  ///< Path to trace file (.pfw.gz or plain).
     std::string index_dir;  ///< Directory containing `.dftindex` roots.
-    std::size_t checkpoint_size = 32 * 1024 * 1024;  ///< Checkpoint interval.
+    std::size_t checkpoint_size =
+        constants::indexer::DEFAULT_CHECKPOINT_SIZE;  ///< Checkpoint interval.
     bool auto_build_index = false;  ///< Auto-build index if missing.
 };
 

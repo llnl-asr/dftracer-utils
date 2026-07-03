@@ -121,13 +121,10 @@ struct MetadataCollectorUtilityOutput {
  * Supports both plain (.pfw) and compressed (.pfw.gz) files.
  * For compressed files, builds/uses the root-local `.dftindex` store for
  * efficient access.
- *
- * Tagged with Parallelizable - safe for parallel batch processing.
  */
 class MetadataCollectorUtility
     : public utilities::Utility<MetadataCollectorUtilityInput,
-                                MetadataCollectorUtilityOutput,
-                                utilities::tags::Parallelizable> {
+                                MetadataCollectorUtilityOutput> {
    public:
     MetadataCollectorUtility() = default;
 

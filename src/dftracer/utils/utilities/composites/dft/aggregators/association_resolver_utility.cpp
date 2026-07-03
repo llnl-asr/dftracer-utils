@@ -2,6 +2,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_resolver_utility.h>
 
+#include <cinttypes>
 #include <cstdint>
 #include <limits>
 #include <unordered_map>
@@ -11,6 +12,7 @@ namespace dftracer::utils::utilities::composites::dft::aggregators {
 
 coro::CoroTask<AssociationResolverOutput> AssociationResolverUtility::process(
     const AssociationResolverInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("resolve associations");
     DFTRACER_UTILS_LOG_INFO(
         "Resolving associations globally from %zu trackers...",
         input.trackers.size());
@@ -51,7 +53,7 @@ coro::CoroTask<AssociationResolverOutput> AssociationResolverUtility::process(
         std::size_t count = 0;
         for (std::uint64_t pid : root_pids) {
             if (count < 5) {
-                DFTRACER_UTILS_LOG_INFO("  Root PID: %lu", pid);
+                DFTRACER_UTILS_LOG_INFO("  Root PID: %" PRIu64, pid);
                 count++;
             }
         }
@@ -158,10 +160,11 @@ void AssociationResolverUtility::compute_trace_metadata(
         }
     }
 
-    DFTRACER_UTILS_LOG_INFO(
-        "Computed trace metadata: trace_duration=%lu us, %zu boundary "
-        "types, %zu total boundaries",
-        output.trace_duration, output.boundary_ranges.size(), total_boundaries);
+    DFTRACER_UTILS_LOG_INFO("Computed trace metadata: trace_duration=%" PRIu64
+                            " us, %zu boundary "
+                            "types, %zu total boundaries",
+                            output.trace_duration,
+                            output.boundary_ranges.size(), total_boundaries);
 }
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_QUERY_PARSER_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_QUERY_PARSER_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/expected.h>
 #include <dftracer/utils/utilities/common/query/ast.h>
 
@@ -23,7 +24,7 @@ struct QueryError {
 };
 
 /// Exception wrapping a QueryError.
-class QueryParseError : public std::runtime_error {
+class QueryParseError : public DFTUtilsException {
    public:
     explicit QueryParseError(QueryError err);
     const QueryError& error() const { return err_; }

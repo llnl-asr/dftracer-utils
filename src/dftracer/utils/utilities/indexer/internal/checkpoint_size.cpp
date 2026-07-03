@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstring>
 
 // GZIP header parsing utilities
@@ -211,7 +212,8 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
     }
 
     // Calculate optimal checkpoint size
-    DFTRACER_UTILS_LOG_DEBUG("comp_bytes=%zu, est_uncomp=%zu\n", comp_bytes, U);
+    DFTRACER_UTILS_LOG_DEBUG("comp_bytes=%" PRIu64 ", est_uncomp=%zu\n",
+                             comp_bytes, U);
     return choose_divisible_checkpoint(U, user_checkpoint_size, window, max_chk,
                                        max_parts);
 }

@@ -1,7 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_SCAN_PREFIX_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INTERNAL_SCAN_PREFIX_H
 
-#include <dftracer/utils/utilities/indexer/internal/error.h>
+#include <dftracer/utils/utilities/indexer/error.h>
+#include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <rocksdb/iterator.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/status.h>
@@ -27,9 +28,7 @@ void scan_prefix_iterator(std::string_view error_message,
 
     const auto status = it->status();
     if (!status.ok()) {
-        throw IndexerError(
-            IndexerError::Type::DATABASE_ERROR,
-            std::string(error_message) + ": " + status.ToString());
+        throw_db_error(error_message, status);
     }
 }
 

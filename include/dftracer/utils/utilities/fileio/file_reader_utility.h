@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_FILE_READER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_FILE_READER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <dftracer/utils/utilities/text/shared.h>
@@ -53,8 +53,7 @@ namespace dftracer::utils::utilities::fileio {
  * @endcode
  */
 class FileReaderUtility
-    : public utilities::Utility<filesystem::FileEntry, text::Text,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<filesystem::FileEntry, text::Text> {
    public:
     FileReaderUtility() = default;
     ~FileReaderUtility() = default;
@@ -69,19 +68,21 @@ class FileReaderUtility
     coro::CoroTask<text::Text> process(
         const filesystem::FileEntry& input) override {
         if (!fs::exists(input.path)) {
-            throw std::runtime_error("File does not exist: " +
-                                     input.path.string());
+            throw DFTUtilsException(
+                ErrorCode::NOT_FOUND,
+                "File does not exist: " + input.path.string());
         }
 
         if (!input.is_regular_file) {
-            throw std::runtime_error("Path is not a regular file: " +
-                                     input.path.string());
+            throw DFTUtilsException(
+                ErrorCode::IO,
+                "Path is not a regular file: " + input.path.string());
         }
 
         std::ifstream file(input.path, std::ios::binary);
         if (!file) {
-            throw std::runtime_error("Cannot open file: " +
-                                     input.path.string());
+            throw DFTUtilsException(ErrorCode::IO,
+                                    "Cannot open file: " + input.path.string());
         }
 
         std::ostringstream content;

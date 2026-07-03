@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/coro/channel.h>
@@ -244,12 +245,9 @@ static coro::CoroTask<void> run_reader(
 
 coro::CoroTask<ReconstructorResult> ReconstructorUtility::process(
     const ReconstructorInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("reconstruct");
     ReconstructorResult result;
 
-    if (!has_context()) {
-        result.error_message = "No context bound";
-        co_return result;
-    }
     CoroScope& ctx = context();
 
     std::vector<std::string> reorg_files;
@@ -264,8 +262,9 @@ coro::CoroTask<ReconstructorResult> ReconstructorUtility::process(
     }
 
     if (reorg_files.empty()) {
-        result.error_message = "No reorganized files found";
-        co_return result;
+        throw DFTUtilsException(ErrorCode::NOT_FOUND,
+                                "Reconstruction failed: no reorganized files "
+                                "found in input directory");
     }
 
     ReconstructionPlannerUtility planner;
@@ -273,16 +272,9 @@ coro::CoroTask<ReconstructorResult> ReconstructorUtility::process(
     planner_input.reorganized_files = reorg_files;
     planner_input.index_dir = "";
 
-    ReconstructionPlan plan;
-    try {
-        plan = co_await planner.process(planner_input);
-    } catch (const std::exception& e) {
-        result.error_message = std::string("Planning failed: ") + e.what();
-        co_return result;
-    }
+    ReconstructionPlan plan = co_await planner.process(planner_input);
 
     if (plan.files.empty()) {
-        result.success = true;
         co_return result;
     }
 
@@ -402,7 +394,6 @@ coro::CoroTask<ReconstructorResult> ReconstructorUtility::process(
     result.files = std::move(file_results);
     result.total_events = total_events.load();
     result.total_bytes = total_bytes.load();
-    result.success = true;
 
     co_return result;
 }

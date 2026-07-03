@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
 #include <simdjson.h>
@@ -6,6 +7,7 @@ namespace dftracer::utils::utilities::composites::dft {
 
 coro::CoroTask<EventIdExtractionOutput> EventIdExtractor::process(
     const EventIdExtractionInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("extract event ids");
     EventId event;
 
     simdjson::dom::parser parser;
@@ -19,20 +21,7 @@ coro::CoroTask<EventIdExtractionOutput> EventIdExtractor::process(
         co_return event;
     }
 
-    auto id_result = root["id"].get_int64();
-    if (!id_result.error()) {
-        event.id = id_result.value_unsafe();
-    }
-
-    auto pid_result = root["pid"].get_int64();
-    if (!pid_result.error()) {
-        event.pid = pid_result.value_unsafe();
-    }
-
-    auto tid_result = root["tid"].get_int64();
-    if (!tid_result.error()) {
-        event.tid = tid_result.value_unsafe();
-    }
+    extract_event_id(root, event);
 
     co_return event;
 }

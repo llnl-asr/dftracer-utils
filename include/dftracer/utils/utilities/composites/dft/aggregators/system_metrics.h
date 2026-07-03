@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
 
 #include <cmath>
 #include <cstdint>
@@ -164,14 +165,8 @@ struct SystemAggregationMetrics {
         if (!metrics) {
             metrics = std::make_unique<FloatMetricsMap>();
         }
-        auto it = metrics->find(name);
-        if (it == metrics->end()) {
-            it = metrics
-                     ->emplace(std::string(name),
-                               FloatMetricStats(sketch_accuracy))
-                     .first;
-        }
-        it->second.update(value, compute_percentiles);
+        find_or_create(*metrics, name, sketch_accuracy)
+            .update(value, compute_percentiles);
     }
 
     void update_timestamp(std::uint64_t event_ts) {
@@ -189,13 +184,8 @@ struct SystemAggregationMetrics {
                 metrics = std::make_unique<FloatMetricsMap>();
             }
             for (const auto& [name, stats] : *other.metrics) {
-                auto it = metrics->find(name);
-                if (it == metrics->end()) {
-                    it = metrics
-                             ->emplace(name, FloatMetricStats(sketch_accuracy))
-                             .first;
-                }
-                it->second.merge_from(stats);
+                find_or_create(*metrics, name, sketch_accuracy)
+                    .merge_from(stats);
             }
         }
     }

@@ -3,7 +3,9 @@
 #include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_augmentation.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_drain.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_runner.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregator_utility.h>
@@ -21,7 +23,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 
 #include <algorithm>
-#include <atomic>
+#include <cinttypes>
 #include <set>
 #include <unordered_set>
 
@@ -464,12 +466,7 @@ ArrowExportResult AggregationBatch::to_dfanalyzer_arrow(
 
 coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     const AggregatorInput& input) {
-    if (!has_context()) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "AggregatorUtility requires CoroScope context. "
-            "Use Runtime::scope() to run this utility.");
-        co_return;
-    }
+    DFTRACER_UTILS_TRACE_SCOPE("aggregate");
     CoroScope& scope = context();
 
     // Determine parallelism
@@ -550,51 +547,14 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
             &scope, std::move(batch_config));
 
         // Drain visitors and merge results
-        std::vector<std::string> processed_files;
-        for (auto& file_visitors : batch_result.extra_visitors) {
-            for (auto& visitor : file_visitors) {
-                auto* agg_visitor =
-                    dynamic_cast<AggregationVisitor*>(visitor.get());
-                if (agg_visitor) {
-                    for (const auto& k : agg_visitor->observed_extra_keys())
-                        merger->add_observed_extra_key(k);
-                    for (const auto& m : agg_visitor->observed_custom_metrics())
-                        merger->add_observed_custom_metric(m);
-                    auto output = agg_visitor->take_output();
-                    processed_files.push_back(output.file_path);
-                    merger->merge_chunk(std::move(output));
-                }
-            }
-            file_visitors.clear();
-        }
+        std::vector<std::string> processed_files = merge_aggregation_visitors(
+            batch_result.extra_visitors, merger.get());
 
         // Write global config and per-file markers for cache detection
         if (!processed_files.empty()) {
-            namespace rcf = dftracer::utils::rocksdb::cf;
-            indexer::IndexDatabase idx_db(
-                shared_index_path,
-                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-
-            auto batch = agg_db->begin_batch();
-
-            // Write global config (0xFFFE key)
-            AggGlobalConfig global_cfg;
-            global_cfg.time_interval_us = input.config.time_interval_us;
-            global_cfg.config_hash = input.config.compute_hash();
-            agg_db->put(batch, rcf::AGGREGATION,
-                        std::string_view(AGG_GLOBAL_CONFIG_KEY, 2),
-                        serialize_agg_global_config(global_cfg));
-
-            // Write per-file markers (0xFFFF + file_id keys)
-            for (const auto& file_path : processed_files) {
-                int file_id = idx_db.find_file(file_path);
-                if (file_id >= 0) {
-                    agg_db->put(batch, rcf::AGGREGATION,
-                                make_agg_file_key(file_id), "");
-                }
-            }
-
-            agg_db->commit_batch(batch);
+            write_aggregation_tracking(agg_db.get(), input.config,
+                                       processed_files, shared_index_path,
+                                       input.config.compute_hash());
         }
     }
 
@@ -654,9 +614,9 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     if (scan_result.needs_augmentation) {
         aug_config = AugmentationConfig{scan_result.stored_time_interval_us,
                                         input.config.time_interval_us};
-        DFTRACER_UTILS_LOG_INFO("Augmenting time interval: %lu us -> %lu us",
-                                scan_result.stored_time_interval_us,
-                                input.config.time_interval_us);
+        DFTRACER_UTILS_LOG_INFO(
+            "Augmenting time interval: %" PRIu64 " us -> %" PRIu64 " us",
+            scan_result.stored_time_interval_us, input.config.time_interval_us);
     }
 
     auto yield_batch = [&](AggregationBatch batch) -> AggregationBatch {

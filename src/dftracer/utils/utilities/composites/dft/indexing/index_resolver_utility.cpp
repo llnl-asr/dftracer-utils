@@ -48,8 +48,6 @@ struct ResolveGroupOutput {
     std::vector<FileWorkItem> needs_manifest;
     std::vector<FileWorkItem> needs_aggregation;
     std::vector<ResolvedFile> cached;
-    bool success = true;
-    std::string error_message;
 
     // Aggregation augmentation info
     bool needs_augmentation = false;
@@ -182,11 +180,10 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
             result.cached.push_back(ResolvedFile{
                 f.file_index, std::move(f.file_path), reg.file_id, caps});
         }
-
-        result.success = true;
     } catch (const std::exception& e) {
-        result.success = false;
-        result.error_message = e.what();
+        DFTRACER_UTILS_LOG_WARN(
+            "Index resolve failed (%s); falling back to full rebuild",
+            e.what());
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(
                 FileWorkItem{f.file_index, std::move(f.file_path), -1});
@@ -200,6 +197,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
 
 coro::CoroTask<ResolverResult> IndexResolverUtility::process(
     const ResolverInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("resolve index");
     ResolverResult result;
 
     if (!input.directory.empty()) {

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATOR_UTILITY_H
 
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/utilities/streaming_utility.h>
 #include <dftracer/utils/core/utilities/tags/needs_context.h>
 #include <dftracer/utils/utilities/common/query/query.h>
@@ -17,7 +18,7 @@ struct AggregatorInput {
     std::string directory;
     AggregationConfig config;
     std::optional<common::query::Query> query;
-    std::size_t checkpoint_size = 32 * 1024 * 1024;
+    std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::string index_dir;
     bool force_rebuild = false;
     std::size_t parallelism = 0;  // 0 = use all available threads

@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 #include <simdjson.h>
 
@@ -23,12 +24,12 @@ void ChunkStatistics::update_from_event(std::string_view name,
     char pt_buf[pid_tid_buf_size];
     auto [pp, ec1] = std::to_chars(pt_buf, pt_buf + sizeof(pt_buf), pid);
     if (ec1 != std::errc{} || pp == pt_buf + sizeof(pt_buf)) {
-        throw std::runtime_error("failed to format pid");
+        throw DFTUtilsException(ErrorCode::INTERNAL, "failed to format pid");
     }
     *pp++ = ':';
     auto [tp, ec2] = std::to_chars(pp, pt_buf + sizeof(pt_buf), tid);
     if (ec2 != std::errc{}) {
-        throw std::runtime_error("failed to format tid");
+        throw DFTUtilsException(ErrorCode::INTERNAL, "failed to format tid");
     }
     std::string_view pt_sv(pt_buf, tp - pt_buf);
 

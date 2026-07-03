@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/pipeline/executor.h>
@@ -454,8 +455,8 @@ void append_line(ChunkState& st, std::size_t w, ByteView line) {
 
 }  // namespace
 
-coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
-                                                   GroupWriterConfig config) {
+coro::CoroTask<Result<GroupWriterResult>> run_group_writer(
+    CoroScope* scope, GroupWriterConfig config) {
     auto result = std::make_unique<GroupWriterResult>();
     result->group_name = config.group_name;
 
@@ -525,7 +526,8 @@ coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
                         *cs, path, config.compress, config.compression_level,
                         config.chunk_size_bytes, baseline_workers, &group_scope,
                         config)) {
-                    throw std::runtime_error("Failed to open initial chunk");
+                    throw DFTUtilsException(ErrorCode::IO,
+                                            "Failed to open initial chunk");
                 }
                 open_inline_sink(*cs, path);
             }
@@ -601,10 +603,12 @@ coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
                             *cs_p,
                             ByteView(reinterpret_cast<const char*>(footer), 2),
                             true)) {
-                        throw std::runtime_error("Failed to write footer");
+                        throw DFTUtilsException(ErrorCode::IO,
+                                                "Failed to write footer");
                     }
                     if (co_await cs_p->writer->close() != 0) {
-                        throw std::runtime_error("Failed to close writer");
+                        throw DFTUtilsException(ErrorCode::IO,
+                                                "Failed to close writer");
                     }
                     if (cs_p->inline_index_enabled) {
                         auto bases = cs_p->writer->shard_base_offsets();
@@ -622,7 +626,8 @@ coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
                         auto shards = cs_p->writer->output_paths();
                         if (co_await fileio::parallel::merge_shards(
                                 cs_p->output_path, shards) != 0) {
-                            throw std::runtime_error("merge_shards failed");
+                            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                                    "merge_shards failed");
                         }
                     }
 
@@ -768,7 +773,8 @@ coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
                             line_idx++;
                             if (ww.payload.size() >= cs_ptr->flush_threshold) {
                                 if (!co_await dispatch_flush(*cs_ptr, worker)) {
-                                    throw std::runtime_error(
+                                    throw DFTUtilsException(
+                                        ErrorCode::INTERNAL,
                                         "Failed to dispatch flush");
                                 }
                                 break;
@@ -793,7 +799,8 @@ coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
                 }
 
                 if (!co_await dispatch_flush_all(*cs_ptr)) {
-                    throw std::runtime_error(
+                    throw DFTUtilsException(
+                        ErrorCode::INTERNAL,
                         "Failed to dispatch trailing flush");
                 }
                 for (auto& ch : cs_ptr->flush_channels) ch->close();
@@ -811,7 +818,8 @@ coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
                         *cs, next_path, config.compress,
                         config.compression_level, config.chunk_size_bytes,
                         baseline_workers, &group_scope, config)) {
-                    throw std::runtime_error("Failed to open next chunk");
+                    throw DFTUtilsException(ErrorCode::IO,
+                                            "Failed to open next chunk");
                 }
                 open_inline_sink(*cs, next_path);
             }
@@ -838,12 +846,14 @@ coro::CoroTask<GroupWriterResult> run_group_writer(CoroScope* scope,
 
         if (any_chunk_inline_indexed) result->indexed_inline = true;
 
-        result->success = true;
-
-    } catch (const std::exception& e) {
-        result->error_message = e.what();
+    } catch (const DFTUtilsException& e) {
         DFTRACER_UTILS_LOG_ERROR("GroupWriter failed for %s: %s",
                                  config.group_name.c_str(), e.what());
+        co_return make_error(e.code(), e.what());
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_ERROR("GroupWriter failed for %s: %s",
+                                 config.group_name.c_str(), e.what());
+        co_return make_error(ErrorCode::INTERNAL, e.what());
     }
 
     co_return std::move(*result);

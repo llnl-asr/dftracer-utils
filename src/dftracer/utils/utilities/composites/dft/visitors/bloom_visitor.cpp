@@ -4,6 +4,7 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_statistics.h>
 #include <dftracer/utils/utilities/composites/dft/visitors/bloom_visitor.h>
+#include <dftracer/utils/utilities/composites/dft/visitors/visitor_dom_helpers.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 #include <dftracer/utils/utilities/indexer/index_batch_sink.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
@@ -42,15 +43,6 @@ int fixed_bloom_index(std::string_view name) {
         if (FIXED_BLOOM_NAMES[i] == name) return static_cast<int>(i);
     }
     return -1;
-}
-
-inline std::string_view dom_string(simdjson::dom::element obj,
-                                   std::string_view key) {
-    auto r = obj[key];
-    if (r.error()) return {};
-    auto v = r.value_unsafe();
-    if (!v.is_string()) return {};
-    return v.get_string().value_unsafe();
 }
 
 bool dom_value_to_string(simdjson::dom::element val, std::string& out) {

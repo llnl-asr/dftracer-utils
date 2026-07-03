@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_VIEWS_VIEW_BUILDER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_VIEWS_VIEW_BUILDER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
@@ -40,18 +40,18 @@ struct ViewChunkCandidate {
     std::size_t end_byte = 0;
 };
 
+// Success payload; failures are reported via Result<ViewBuilderOutput>.
 struct ViewBuilderOutput {
     bool file_may_match = false;
     std::vector<ViewChunkCandidate> candidates;
     std::uint64_t total_checkpoints = 0;
     std::uint64_t skipped_checkpoints = 0;
-    bool success = false;
 };
 
-class ViewBuilderUtility : public Utility<ViewBuilderInput, ViewBuilderOutput,
-                                          tags::Parallelizable> {
+class ViewBuilderUtility
+    : public Utility<ViewBuilderInput, Result<ViewBuilderOutput>> {
    public:
-    coro::CoroTask<ViewBuilderOutput> process(
+    coro::CoroTask<Result<ViewBuilderOutput>> process(
         const ViewBuilderInput& input) override;
 };
 

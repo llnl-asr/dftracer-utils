@@ -2,9 +2,9 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_FILE_COMPRESSOR_UTILITY_H
 
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/compression/zlib/streaming_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
@@ -75,15 +75,16 @@ struct FileCompressionUtilityInput {
 };
 
 /**
- * @brief Output from file compression workflow.
+ * @brief Success payload from file compression workflow.
+ *
+ * Failures are reported via Result<FileCompressionUtilityOutput>, so this
+ * struct carries only the successful-result data.
  */
 struct FileCompressionUtilityOutput {
     std::string input_path;       // Original input file path
     std::string output_path;      // Compressed output file path
-    bool success;                 // Compression succeeded?
     std::size_t original_size;    // Original file size (bytes)
     std::size_t compressed_size;  // Compressed file size (bytes)
-    std::string error_message;    // Error message if failed
 
     /**
      * @brief Get compression ratio (compressed / original).
@@ -110,8 +111,6 @@ struct FileCompressionUtilityOutput {
  * 2. Compresses each chunk using StreamingCompressor
  * 3. Writes compressed data to .gz file using StreamingFileWriter
  *
- * Tagged with Parallelizable - safe for parallel batch processing.
- *
  * Usage:
  * @code
  * // Single file compression
@@ -135,8 +134,7 @@ struct FileCompressionUtilityOutput {
  */
 class FileCompressorUtility
     : public utilities::Utility<FileCompressionUtilityInput,
-                                FileCompressionUtilityOutput,
-                                utilities::tags::Parallelizable> {
+                                Result<FileCompressionUtilityOutput>> {
    public:
     FileCompressorUtility() = default;
     ~FileCompressorUtility() override = default;
@@ -145,29 +143,23 @@ class FileCompressorUtility
      * @brief Compress a file using streaming gzip compression.
      *
      * @param input Compression configuration
-     * @return Compression result with statistics
+     * @return Compression payload, or an error on failure.
      */
-    coro::CoroTask<FileCompressionUtilityOutput> process(
+    coro::CoroTask<Result<FileCompressionUtilityOutput>> process(
         const FileCompressionUtilityInput& input) override {
-        FileCompressionUtilityOutput result{
-            input.input_path,
-            input.output_path,
-            false,  // success
-            0,      // original_size
-            0,      // compressed_size
-            ""      // error_message
-        };
+        std::size_t original_size = 0;
+        std::size_t compressed_size = 0;
 
         try {
             // Validate input file exists
             if (!fs::exists(input.input_path)) {
-                result.error_message =
-                    "Input file does not exist: " + input.input_path;
-                co_return result;
+                co_return make_error(
+                    ErrorCode::NOT_FOUND,
+                    "Input file does not exist: " + input.input_path);
             }
 
             // Get original file size
-            result.original_size = fs::file_size(input.input_path);
+            original_size = fs::file_size(input.input_path);
 
             compression::zlib::ManualStreamingCompressorUtility compressor(
                 input.compression_level, input.format);
@@ -185,24 +177,23 @@ class FileCompressorUtility
             writer.close();
 
             // Get final compressed size
-            result.compressed_size = fs::file_size(input.output_path);
-            result.success = true;
+            compressed_size = fs::file_size(input.output_path);
 
         } catch (const std::exception& e) {
-            result.error_message =
-                std::string("Compression failed: ") + e.what();
-
             // Clean up partial output file on error
-            if (fs::exists(input.output_path)) {
-                try {
-                    fs::remove(input.output_path);
-                } catch (...) {
-                    // Ignore cleanup errors
-                }
-            }
+            remove_file_quietly(input.output_path);
+
+            co_return make_error(
+                ErrorCode::COMPRESSION,
+                std::string("Compression failed: ") + e.what());
         }
 
-        co_return result;
+        FileCompressionUtilityOutput payload;
+        payload.input_path = input.input_path;
+        payload.output_path = input.output_path;
+        payload.original_size = original_size;
+        payload.compressed_size = compressed_size;
+        co_return payload;
     }
 };
 

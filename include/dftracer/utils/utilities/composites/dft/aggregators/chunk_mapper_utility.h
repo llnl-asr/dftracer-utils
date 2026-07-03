@@ -9,7 +9,6 @@
 
 #include <cstddef>
 #include <optional>
-#include <string>
 #include <vector>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
@@ -64,54 +63,6 @@ class FileChunkMapperUtility
    public:
     coro::CoroTask<FileChunkMapperOutput> process(
         const FileChunkMapperInput& input) override;
-};
-
-struct ChunkMapperInput {
-    std::vector<utilities::composites::dft::MetadataCollectorUtilityOutput>
-        metadata;
-    AggregationConfig config;
-    std::optional<common::query::Query> query;
-    std::size_t checkpoint_size;
-    std::size_t target_chunk_size_mb;
-    std::size_t batch_size = 4 * 1024 * 1024;
-
-    static ChunkMapperInput from_metadata(
-        const std::vector<
-            utilities::composites::dft::MetadataCollectorUtilityOutput>& meta) {
-        ChunkMapperInput input;
-        input.metadata = meta;
-        input.target_chunk_size_mb = 4;
-        return input;
-    }
-
-    ChunkMapperInput& with_config(const AggregationConfig& cfg) {
-        config = cfg;
-        return *this;
-    }
-
-    ChunkMapperInput& with_checkpoint_size(std::size_t size) {
-        checkpoint_size = size;
-        return *this;
-    }
-
-    ChunkMapperInput& with_target_chunk_size(std::size_t size_mb) {
-        target_chunk_size_mb = size_mb;
-        return *this;
-    }
-
-    ChunkMapperInput& with_batch_size(std::size_t size_bytes) {
-        batch_size = size_bytes;
-        return *this;
-    }
-};
-
-using ChunkMapperOutput = std::vector<ChunkAggregatorInput>;
-
-class ChunkMapperUtility
-    : public utilities::Utility<ChunkMapperInput, ChunkMapperOutput> {
-   public:
-    coro::CoroTask<ChunkMapperOutput> process(
-        const ChunkMapperInput& input) override;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

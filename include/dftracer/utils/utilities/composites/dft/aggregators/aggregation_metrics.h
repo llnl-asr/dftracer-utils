@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
@@ -73,6 +74,20 @@ struct MetricStats {
 using CustomMetricsMap =
     std::unordered_map<std::string, MetricStats, TransparentStringHash,
                        TransparentStringEqual>;
+
+// Return the entry for `name`, inserting a value constructed from `accuracy`
+// if absent. Works for any transparent-lookup map whose mapped_type is
+// constructible from a sketch accuracy. Returns a reference (no copy).
+template <typename Map>
+typename Map::mapped_type& find_or_create(Map& map, std::string_view name,
+                                          double accuracy) {
+    auto it = map.find(name);
+    if (it == map.end()) {
+        it = map.emplace(std::string(name), typename Map::mapped_type(accuracy))
+                 .first;
+    }
+    return it->second;
+}
 
 struct AggregationMetrics {
     std::uint64_t count = 0;

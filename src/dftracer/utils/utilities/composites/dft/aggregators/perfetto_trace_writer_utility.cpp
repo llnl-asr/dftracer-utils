@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
@@ -141,72 +142,10 @@ class JsonBuffer {
     std::size_t size_;
 };
 
-class ByteReader {
-   public:
-    explicit ByteReader(std::string_view data) : data_(data), off_(0) {}
+using dftracer::utils::utilities::common::serialization::BinaryReader;
 
-    std::uint8_t u8() { return static_cast<std::uint8_t>(data_[off_++]); }
-
-    std::uint16_t be16() {
-        auto hi = static_cast<std::uint8_t>(data_[off_++]);
-        auto lo = static_cast<std::uint8_t>(data_[off_++]);
-        return static_cast<std::uint16_t>((hi << 8) | lo);
-    }
-
-    void skip(std::size_t n) { off_ += n; }
-
-    std::uint64_t varint() {
-        std::uint64_t v = 0;
-        unsigned shift = 0;
-        while (off_ < data_.size()) {
-            auto b = static_cast<std::uint8_t>(data_[off_++]);
-            v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
-            if ((b & 0x80) == 0) return v;
-            shift += 7;
-        }
-        return v;
-    }
-
-    std::uint64_t be64() {
-        std::uint64_t v = 0;
-        for (int i = 0; i < 8; ++i) {
-            v = (v << 8) | static_cast<std::uint8_t>(data_[off_++]);
-        }
-        return v;
-    }
-
-    double f64() {
-        std::uint64_t bits = be64();
-        double v;
-        std::memcpy(&v, &bits, 8);
-        return v;
-    }
-
-    std::string_view str() {
-        auto len_hi = static_cast<std::uint8_t>(data_[off_++]);
-        auto len_lo = static_cast<std::uint8_t>(data_[off_++]);
-        std::size_t len = (static_cast<std::size_t>(len_hi) << 8) | len_lo;
-        auto s = data_.substr(off_, len);
-        off_ += len;
-        return s;
-    }
-
-    void skip_blob() {
-        std::uint32_t len = 0;
-        for (int i = 0; i < 4; ++i) {
-            len = (len << 8) | static_cast<std::uint8_t>(data_[off_++]);
-        }
-        off_ += len;
-    }
-
-    std::size_t offset() const { return off_; }
-
-   private:
-    std::string_view data_;
-    std::size_t off_;
-};
-
-inline void emit_metric_stats_from_bytes(ByteReader& r, std::string_view prefix,
+inline void emit_metric_stats_from_bytes(BinaryReader& r,
+                                         std::string_view prefix,
                                          bool compute_statistics,
                                          JsonBuffer& buf) {
     auto fmt = r.u8();
@@ -273,7 +212,7 @@ inline void emit_metric_stats_from_bytes(ByteReader& r, std::string_view prefix,
     }
 }
 
-inline void skip_metric_stats(ByteReader& r) {
+inline void skip_metric_stats(BinaryReader& r) {
     auto fmt = r.u8();
     if (fmt == METRIC_FMT_COMPACT) {
         r.varint();
@@ -350,7 +289,7 @@ coro::CoroTask<bool> write_shard_events(
             //         time_bucket(varint) num_extra(2) [k(varint ID) v(varint
             //         ID)]*
             auto& intern = aggregation_intern();
-            ByteReader kr(key_bytes);
+            BinaryReader kr(key_bytes);
             kr.skip(2);     // shard
             (void)kr.u8();  // map_type
             auto cat = intern.resolve(static_cast<std::uint32_t>(kr.varint()));
@@ -369,7 +308,7 @@ coro::CoroTask<bool> write_shard_events(
             // For REGULAR, pre-parse ts/te by skipping through value bytes.
             std::uint64_t regular_ts = 0, regular_te = 0;
             if (input->format == PerfettoEventFormat::REGULAR) {
-                ByteReader tmp(value_bytes);
+                BinaryReader tmp(value_bytes);
                 tmp.varint();            // count
                 skip_metric_stats(tmp);  // duration
                 skip_metric_stats(tmp);  // size
@@ -434,7 +373,7 @@ coro::CoroTask<bool> write_shard_events(
 
             // Value bytes: count, dur, size, ts, te, parent_pid, num_custom,
             // customs
-            ByteReader vr(value_bytes);
+            BinaryReader vr(value_bytes);
             auto count = vr.varint();
 
             buf.append_literal(",\"dft_cnt\":");
@@ -536,6 +475,7 @@ coro::CoroTask<bool> write_shard_events(
 
 coro::CoroTask<bool> PerfettoTraceWriterUtility::process(
     const PerfettoTraceWriterInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("write perfetto");
     using namespace dftracer::utils::utilities;
 
     constexpr std::size_t HEADER_BUFFER_BYTES = 4 * 1024 * 1024;

@@ -1,12 +1,13 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/rocksdb/key_codec.h>
-#include <dftracer/utils/utilities/indexer/internal/error.h>
+#include <dftracer/utils/utilities/indexer/error.h>
+#include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
+#include <dftracer/utils/utilities/indexer/internal/iterator_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/scan_prefix.h>
 #include <dftracer/utils/utilities/indexer/provenance_database.h>
 
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::utilities::indexer {
@@ -17,12 +18,6 @@ namespace cf = rocks::cf;
 using namespace internal;
 
 namespace {
-
-[[noreturn]] void throw_db_error(std::string_view message,
-                                 const ::rocksdb::Status& status) {
-    throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                       std::string(message) + ": " + status.ToString());
-}
 
 std::string file_key(std::string_view path) {
     return std::string("pf|") + std::string(path);
@@ -46,14 +41,16 @@ std::string encode_file_record(int file_info_id, std::uint64_t file_hash) {
 
 int decode_file_id(std::string_view value) {
     if (value.size() < 4) {
-        throw std::runtime_error("Corrupt provenance file record");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt provenance file record");
     }
     return static_cast<int>(rocks::KeyCodec::decode_be32(value.substr(0, 4)));
 }
 
 std::uint64_t decode_hash(std::string_view value) {
     if (value.size() < 12) {
-        throw std::runtime_error("Corrupt provenance file record");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt provenance file record");
     }
     return rocks::KeyCodec::decode_be64(value.substr(4, 8));
 }
@@ -290,8 +287,8 @@ ProvenanceDatabase::query_sources(int file_info_id) const {
     rocks::KeyCodec::append_be32(prefix,
                                  static_cast<std::uint32_t>(file_info_id));
     scan_prefix(*db_, prefix, [&](::rocksdb::Iterator& it) {
-        const auto key = std::string(it.key().data(), it.key().size());
-        const auto value = std::string(it.value().data(), it.value().size());
+        const auto key = iterator_key(it);
+        const auto value = iterator_value(it);
         ProvenanceSource source;
         source.source_idx = static_cast<int>(
             rocks::KeyCodec::decode_be32(std::string_view(key).substr(7, 4)));
@@ -313,8 +310,8 @@ ProvenanceDatabase::query_segments(int file_info_id, int source_idx) const {
     rocks::KeyCodec::append_be32(prefix,
                                  static_cast<std::uint32_t>(source_idx));
     scan_prefix(*db_, prefix, [&](::rocksdb::Iterator& it) {
-        const auto key = std::string(it.key().data(), it.key().size());
-        const auto value = std::string(it.value().data(), it.value().size());
+        const auto key = iterator_key(it);
+        const auto value = iterator_value(it);
         Cursor cursor(value);
         ProvenanceSegment segment;
         segment.source_idx = source_idx;
@@ -335,8 +332,8 @@ ProvenanceDatabase::query_all_segments(int file_info_id) const {
     rocks::KeyCodec::append_be32(prefix,
                                  static_cast<std::uint32_t>(file_info_id));
     scan_prefix(*db_, prefix, [&](::rocksdb::Iterator& it) {
-        const auto key = std::string(it.key().data(), it.key().size());
-        const auto value = std::string(it.value().data(), it.value().size());
+        const auto key = iterator_key(it);
+        const auto value = iterator_value(it);
         Cursor cursor(value);
         ProvenanceSegment segment;
         segment.source_idx = static_cast<int>(
@@ -369,7 +366,7 @@ std::string ProvenanceDatabase::query_group_name(int file_info_id) const {
     const auto prefix = group_prefix(file_info_id);
     scan_prefix(*db_, prefix, [&](::rocksdb::Iterator& it) {
         if (result.empty()) {
-            const auto key = std::string(it.key().data(), it.key().size());
+            const auto key = iterator_key(it);
             result = key.substr(prefix.size());
         }
     });
@@ -380,7 +377,7 @@ std::string ProvenanceDatabase::query_group_predicate(int file_info_id) const {
     std::string result;
     scan_prefix(*db_, group_prefix(file_info_id), [&](::rocksdb::Iterator& it) {
         if (result.empty()) {
-            result = std::string(it.value().data(), it.value().size());
+            result = iterator_value(it);
         }
     });
     return result;

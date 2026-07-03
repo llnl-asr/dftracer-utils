@@ -6,13 +6,16 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/system_metrics_merge_operator.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
+#include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
-#include <dftracer/utils/utilities/indexer/internal/error.h>
+#include <dftracer/utils/utilities/indexer/internal/batch_scan.h>
+#include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/payload_codec.h>
+#include <dftracer/utils/utilities/indexer/internal/registry_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/scan_prefix.h>
 #include <dftracer/utils/utilities/indexer/internal/statistics_codec.h>
 
@@ -22,7 +25,6 @@
 #include <limits>
 #include <optional>
 #include <shared_mutex>
-#include <stdexcept>
 #include <utility>
 
 namespace dftracer::utils::utilities::indexer {
@@ -37,54 +39,22 @@ namespace {
 
 constexpr std::uint32_t SCHEMA_VERSION = 1;
 
-[[noreturn]] void throw_db_error(std::string_view message,
-                                 const ::rocksdb::Status& status) {
-    throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                       std::string(message) + ": " + status.ToString());
-}
-
-std::string file_lookup_key(std::string_view logical_name) {
-    return std::string("f|") + std::string(logical_name);
-}
-
-std::string file_reverse_key(int file_id) {
-    std::string key("r|");
-    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
-    return key;
-}
-
-std::string schema_version_key() { return "_schema_version"; }
-
-IndexFileEntryCapability decode_file_capabilities(std::string_view record) {
-    if (record.size() < 5) {
-        return IndexFileEntryCapability::NONE;
-    }
-    return static_cast<IndexFileEntryCapability>(
-        static_cast<std::uint8_t>(record[4]));
-}
-
-int decode_file_id(std::string_view record) {
-    if (record.size() < 4) {
-        throw std::runtime_error("Corrupt file record");
-    }
-    return static_cast<int>(rocks::KeyCodec::decode_be32(record.substr(0, 4)));
-}
-
-int decode_prefixed_file_id(std::string_view key) {
-    if (key.size() < 4) {
-        throw std::runtime_error("Corrupt file-prefixed key");
-    }
-    return static_cast<int>(rocks::KeyCodec::decode_be32(key.substr(0, 4)));
-}
-
-std::uint64_t decode_file_hash(std::string_view record) {
-    if (record.size() < 28) {
-        throw std::runtime_error("Corrupt file record");
-    }
-    return rocks::KeyCodec::decode_be64(record.substr(20, 8));
-}
-
 using encoding::prefix_for_file;
+
+// LEB128 varint decode with return-on-truncation policy: if the buffer ends
+// mid-varint, return the value accumulated so far (does not throw). Advances
+// off past the bytes consumed.
+std::uint64_t decode_varint(std::string_view value, std::size_t& off) {
+    std::uint64_t v = 0;
+    unsigned shift = 0;
+    while (off < value.size()) {
+        auto b = static_cast<std::uint8_t>(value[off++]);
+        v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
+        if ((b & 0x80) == 0) return v;
+        shift += 7;
+    }
+    return v;
+}
 
 std::string make_dimension_key(int file_id, std::string_view dimension) {
     std::string key("d|");
@@ -112,14 +82,9 @@ std::string file_pid_tid_counts_key(int file_id) {
 std::string file_name_counts_key(int file_id) {
     return prefix_for_file(file_id);
 }
-std::string root_scalar_stats_key() { return "_root"; }
-std::string root_category_counts_key() { return "_root"; }
-std::string root_name_counts_key() { return "_root"; }
-std::string root_pid_tid_counts_key() { return "_root"; }
 
 using encoding::name_lookup_key;
 using encoding::name_reverse_key;
-std::string tar_archive_key(int file_id) { return prefix_for_file(file_id); }
 
 ChunkBloomResult decode_chunk_bloom(std::string_view key,
                                     std::string_view value,
@@ -128,12 +93,14 @@ ChunkBloomResult decode_chunk_bloom(std::string_view key,
     auto checkpoint_pos = key.find('\0', prefix_size);
     if (checkpoint_pos == std::string_view::npos ||
         checkpoint_pos + 1 + 8 > key.size()) {
-        throw std::runtime_error("Corrupt chunk bloom key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt chunk bloom key");
     }
     result.checkpoint_idx =
         rocks::KeyCodec::decode_be64(key.substr(checkpoint_pos + 1, 8));
     if (value.size() < 8) {
-        throw std::runtime_error("Corrupt chunk bloom value");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt chunk bloom value");
     }
     result.num_entries = rocks::KeyCodec::decode_be64(value.substr(0, 8));
     result.bloom_data.assign(value.begin() + 8, value.end());
@@ -142,7 +109,8 @@ ChunkBloomResult decode_chunk_bloom(std::string_view key,
 
 FileBloomResult decode_file_bloom(std::string_view value) {
     if (value.size() < 8) {
-        throw std::runtime_error("Corrupt file bloom value");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt file bloom value");
     }
     FileBloomResult result;
     result.num_entries = rocks::KeyCodec::decode_be64(value.substr(0, 8));
@@ -162,10 +130,11 @@ ChunkStatistics decode_chunk_statistics_value(std::string_view value) {
     stats.duration_count = cursor.u64();
     stats.duration_m2 = cursor.f64();
 
-    auto duration_sketch = cursor.blob();
+    auto duration_sketch = cursor.blob_view();
     if (!duration_sketch.empty()) {
         stats.duration_sketch = common::statistics::DDSketch::deserialize(
-            duration_sketch.data(), duration_sketch.size());
+            reinterpret_cast<const std::uint8_t*>(duration_sketch.data()),
+            duration_sketch.size());
     }
 
     auto duration_histogram = cursor.str();
@@ -174,11 +143,12 @@ ChunkStatistics decode_chunk_statistics_value(std::string_view value) {
             common::statistics::Log2Histogram::from_json(duration_histogram);
     }
 
-    auto name_sketches = cursor.blob();
+    auto name_sketches = cursor.blob_view();
     if (!name_sketches.empty()) {
         stats.name_duration_sketches =
             ChunkStatistics::deserialize_name_duration_sketches(
-                name_sketches.data(), name_sketches.size());
+                reinterpret_cast<const std::uint8_t*>(name_sketches.data()),
+                name_sketches.size());
     }
 
     stats.name_duration_histograms =
@@ -189,11 +159,12 @@ ChunkStatistics decode_chunk_statistics_value(std::string_view value) {
         ChunkStatistics::parse_double_map_json(cursor.str());
     stats.name_category = ChunkStatistics::parse_string_map_json(cursor.str());
 
-    auto ts_hist_blob = cursor.blob();
+    auto ts_hist_blob = cursor.blob_view();
     if (!ts_hist_blob.empty()) {
         stats.timestamp_histogram =
             common::statistics::TimestampHistogram::deserialize(
-                ts_hist_blob.data(), ts_hist_blob.size());
+                reinterpret_cast<const std::uint8_t*>(ts_hist_blob.data()),
+                ts_hist_blob.size());
     }
 
     return stats;
@@ -202,7 +173,8 @@ ChunkStatistics decode_chunk_statistics_value(std::string_view value) {
 IndexerCheckpoint decode_checkpoint(std::string_view key,
                                     std::string_view value) {
     if (key.size() < 20) {
-        throw std::runtime_error("Corrupt checkpoint key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt checkpoint key");
     }
 
     IndexerCheckpoint checkpoint;
@@ -225,7 +197,8 @@ ChunkDimensionStatsResult decode_chunk_dimension_stats_value(
     std::string_view key, std::string_view value) {
     ChunkDimensionStatsResult result;
     if (key.size() < 12) {
-        throw std::runtime_error("Corrupt chunk dimension stats key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt chunk dimension stats key");
     }
     result.checkpoint_idx = rocks::KeyCodec::decode_be64(key.substr(4, 8));
     result.dimension = std::string(key.substr(12));
@@ -245,8 +218,9 @@ ChunkDimensionStatsResult decode_chunk_dimension_stats_value(
 }
 
 std::vector<std::uint32_t> decode_line_numbers(Cursor& cursor) {
-    auto blob = cursor.blob();
-    return queries::unpack_line_numbers(blob.data(), blob.size());
+    auto blob = cursor.blob_view();
+    return queries::unpack_line_numbers(
+        reinterpret_cast<const unsigned char*>(blob.data()), blob.size());
 }
 
 StringViewMap<std::uint64_t> decode_count_map_value(std::string_view value) {
@@ -312,12 +286,14 @@ TarArchiveMetadata decode_tar_archive_value(std::string_view value) {
 
 TarFileRecord decode_tar_file(std::string_view key, std::string_view value) {
     if (key.size() < 13) {
-        throw std::runtime_error("Corrupt tar file key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt tar file key");
     }
 
     const auto name_pos = key.find('\0', 12);
     if (name_pos == std::string_view::npos) {
-        throw std::runtime_error("Corrupt tar file key");
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt tar file key");
     }
 
     Cursor cursor(value);
@@ -329,21 +305,6 @@ TarFileRecord decode_tar_file(std::string_view key, std::string_view value) {
     record.typeflag = static_cast<char>(cursor.u8());
     record.data_offset = cursor.u64();
     return record;
-}
-
-std::array<std::uint64_t, 3> decode_metadata_record(std::string_view value) {
-    Cursor cursor(value);
-    return {cursor.u64(), cursor.u64(), cursor.u64()};
-}
-
-std::string iterator_value(::rocksdb::Iterator& it) {
-    const auto slice = it.value();
-    return std::string(slice.data(), slice.size());
-}
-
-std::string iterator_key(::rocksdb::Iterator& it) {
-    const auto slice = it.key();
-    return std::string(slice.data(), slice.size());
 }
 
 template <typename Fn>
@@ -752,9 +713,7 @@ std::unordered_set<int> IndexDatabase::query_files_with_file_scalar_stats()
 
     const auto status = it->status();
     if (!status.ok()) {
-        throw IndexerError(
-            IndexerError::Type::DATABASE_ERROR,
-            "Failed to scan file scalar stats: " + status.ToString());
+        throw_db_error("Failed to scan file scalar stats", status);
     }
 
     return results;
@@ -776,8 +735,7 @@ std::unordered_set<int> IndexDatabase::query_files_with_bloom_data() const {
 
     const auto status = it->status();
     if (!status.ok()) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to scan bloom data: " + status.ToString());
+        throw_db_error("Failed to scan bloom data", status);
     }
     return results;
 }
@@ -925,36 +883,17 @@ IndexDatabase::query_chunk_statistics_batch(
     }
     results.reserve(file_ids.size());
 
-    std::unordered_set<int> wanted(file_ids.begin(), file_ids.end());
-    const auto [min_it, max_it] =
-        std::minmax_element(file_ids.begin(), file_ids.end());
-    const auto min_prefix = prefix_for_file(*min_it);
-    const int max_file_id = *max_it;
-
-    auto it = db_->new_iterator(cf::CHUNK_STATS);
-    for (it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         it->Valid(); it->Next()) {
-        auto key = iterator_key(*it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
-
-        ChunkStatisticsResult result;
-        result.checkpoint_idx =
-            rocks::KeyCodec::decode_be64(std::string_view(key).substr(4, 8));
-        result.stats = decode_chunk_statistics_value(iterator_value(*it));
-        results[file_id].push_back(std::move(result));
-    }
-
-    const auto status = it->status();
+    auto status = for_each_file_in_batch(
+        *db_, cf::CHUNK_STATS, file_ids,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string& key) {
+            ChunkStatisticsResult result;
+            result.checkpoint_idx = rocks::KeyCodec::decode_be64(
+                std::string_view(key).substr(4, 8));
+            result.stats = decode_chunk_statistics_value(iterator_value(it));
+            results[file_id].push_back(std::move(result));
+        });
     if (!status.ok()) {
-        throw IndexerError(
-            IndexerError::Type::DATABASE_ERROR,
-            "Failed to batch query chunk statistics: " + status.ToString());
+        throw_db_error("Failed to batch query chunk statistics", status);
     }
 
     for (auto& [_, entries] : results) {
@@ -981,74 +920,49 @@ IndexDatabase::query_merged_statistics_batch(
     const auto min_prefix = prefix_for_file(*min_it);
     const int max_file_id = *max_it;
 
-    auto stats_it = db_->new_iterator(cf::CHUNK_STATS);
-    for (stats_it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         stats_it->Valid(); stats_it->Next()) {
-        auto key = iterator_key(*stats_it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
-
-        auto decoded = decode_chunk_statistics_value(iterator_value(*stats_it));
-        auto& merged = results[file_id];
-        if (merged.num_chunks == 0) {
-            merged.stats = std::move(decoded);
-        } else {
-            merged.stats.merge_from(decoded);
-        }
-        ++merged.num_chunks;
-    }
-
-    auto stats_status = stats_it->status();
+    auto stats_status = for_each_file_in_range(
+        *db_, cf::CHUNK_STATS, min_prefix, max_file_id, wanted,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string&) {
+            auto decoded = decode_chunk_statistics_value(iterator_value(it));
+            auto& merged = results[file_id];
+            if (merged.num_chunks == 0) {
+                merged.stats = std::move(decoded);
+            } else {
+                merged.stats.merge_from(decoded);
+            }
+            ++merged.num_chunks;
+        });
     if (!stats_status.ok()) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to batch merge chunk statistics: " +
-                               stats_status.ToString());
+        throw_db_error("Failed to batch merge chunk statistics", stats_status);
     }
 
-    auto dims_it = db_->new_iterator(cf::CHUNK_DIM_STATS);
-    for (dims_it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         dims_it->Valid(); dims_it->Next()) {
-        auto key = iterator_key(*dims_it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
+    auto dims_status = for_each_file_in_range(
+        *db_, cf::CHUNK_DIM_STATS, min_prefix, max_file_id, wanted,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string& key) {
+            auto decoded =
+                decode_chunk_dimension_stats_value(key, iterator_value(it));
+            if (!decoded.has_value_counts_payload()) return;
+            decoded.ensure_value_counts_decoded();
+            if (!decoded.value_counts) return;
 
-        auto decoded =
-            decode_chunk_dimension_stats_value(key, iterator_value(*dims_it));
-        if (!decoded.has_value_counts_payload()) continue;
-        decoded.ensure_value_counts_decoded();
-        if (!decoded.value_counts) continue;
-
-        auto& merged = results[file_id].stats;
-        if (decoded.dimension == "cat") {
-            for (const auto& [k, v] : *decoded.value_counts) {
-                merged.category_counts[k] += v;
+            auto& merged = results[file_id].stats;
+            if (decoded.dimension == "cat") {
+                for (const auto& [k, v] : *decoded.value_counts) {
+                    merged.category_counts[k] += v;
+                }
+            } else if (decoded.dimension == "name") {
+                for (const auto& [k, v] : *decoded.value_counts) {
+                    merged.name_counts[k] += v;
+                }
+            } else if (decoded.dimension == "pid_tid") {
+                for (const auto& [k, v] : *decoded.value_counts) {
+                    merged.pid_tid_counts[k] += v;
+                }
             }
-        } else if (decoded.dimension == "name") {
-            for (const auto& [k, v] : *decoded.value_counts) {
-                merged.name_counts[k] += v;
-            }
-        } else if (decoded.dimension == "pid_tid") {
-            for (const auto& [k, v] : *decoded.value_counts) {
-                merged.pid_tid_counts[k] += v;
-            }
-        }
-    }
-
-    auto dims_status = dims_it->status();
+        });
     if (!dims_status.ok()) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Failed to batch merge chunk dimension stats: " +
-                               dims_status.ToString());
+        throw_db_error("Failed to batch merge chunk dimension stats",
+                       dims_status);
     }
 
     return results;
@@ -1074,10 +988,11 @@ IndexDatabase::query_file_scalar_stats_batch(
                                    file_id, value.size());
             results.emplace(file_id, decode_file_scalar_stats_value(value));
         } catch (const std::exception& e) {
-            throw std::runtime_error(
-                "Corrupt file_scalar_stats payload file_id=" +
-                std::to_string(file_id) +
-                " size=" + std::to_string(value.size()) + ": " + e.what());
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt file_scalar_stats payload file_id=" +
+                                   std::to_string(file_id) +
+                                   " size=" + std::to_string(value.size()) +
+                                   ": " + e.what());
         }
     }
     return results;
@@ -1092,39 +1007,20 @@ IndexDatabase::query_file_metadata_batch(
     }
     results.reserve(file_ids.size());
 
-    std::unordered_set<int> wanted(file_ids.begin(), file_ids.end());
-    const auto [min_it, max_it] =
-        std::minmax_element(file_ids.begin(), file_ids.end());
-    const auto min_prefix = prefix_for_file(*min_it);
-    const int max_file_id = *max_it;
-
-    auto it = db_->new_iterator(cf::METADATA);
-    for (it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         it->Valid(); it->Next()) {
-        auto key = iterator_key(*it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
-
-        auto value = iterator_value(*it);
-        DecodeContextGuard ctx("metadata file_id=%d size=%zu", file_id,
-                               value.size());
-        auto decoded = decode_metadata_record(value);
-        auto& meta = results[file_id];
-        meta.checkpoint_size = decoded[0];
-        meta.num_lines = decoded[1];
-        meta.max_bytes = decoded[2];
-    }
-
-    const auto status = it->status();
+    auto status = for_each_file_in_batch(
+        *db_, cf::METADATA, file_ids,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string&) {
+            auto value = iterator_value(it);
+            DecodeContextGuard ctx("metadata file_id=%d size=%zu", file_id,
+                                   value.size());
+            auto decoded = decode_metadata_record(value);
+            auto& meta = results[file_id];
+            meta.checkpoint_size = decoded[0];
+            meta.num_lines = decoded[1];
+            meta.max_bytes = decoded[2];
+        });
     if (!status.ok()) {
-        throw IndexerError(
-            IndexerError::Type::DATABASE_ERROR,
-            "Failed to batch read file metadata: " + status.ToString());
+        throw_db_error("Failed to batch read file metadata", status);
     }
     return results;
 }
@@ -1149,10 +1045,11 @@ IndexDatabase::query_file_category_counts_batch(
                                    file_id, value.size());
             results.emplace(file_id, decode_count_map_value(value));
         } catch (const std::exception& e) {
-            throw std::runtime_error(
-                "Corrupt file_cat_counts payload file_id=" +
-                std::to_string(file_id) +
-                " size=" + std::to_string(value.size()) + ": " + e.what());
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt file_cat_counts payload file_id=" +
+                                   std::to_string(file_id) +
+                                   " size=" + std::to_string(value.size()) +
+                                   ": " + e.what());
         }
     }
     return results;
@@ -1209,10 +1106,11 @@ IndexDatabase::query_file_pid_tid_counts_batch(
                                    file_id, value.size());
             results.emplace(file_id, decode_count_map_value(value));
         } catch (const std::exception& e) {
-            throw std::runtime_error(
-                "Corrupt file_pid_tid_counts payload file_id=" +
-                std::to_string(file_id) +
-                " size=" + std::to_string(value.size()) + ": " + e.what());
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt file_pid_tid_counts payload file_id=" +
+                                   std::to_string(file_id) +
+                                   " size=" + std::to_string(value.size()) +
+                                   ": " + e.what());
         }
     }
     return results;
@@ -1238,10 +1136,11 @@ IndexDatabase::query_file_name_summaries_batch(
                                    file_id, value.size());
             results.emplace(file_id, decode_name_summary_value(value));
         } catch (const std::exception& e) {
-            throw std::runtime_error(
-                "Corrupt file_name_counts payload file_id=" +
-                std::to_string(file_id) +
-                " size=" + std::to_string(value.size()) + ": " + e.what());
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt file_name_counts payload file_id=" +
+                                   std::to_string(file_id) +
+                                   " size=" + std::to_string(value.size()) +
+                                   ": " + e.what());
         }
     }
     return results;
@@ -1322,9 +1221,9 @@ std::optional<RootStatisticsResult> IndexDatabase::query_root_scalar_stats()
         DecodeContextGuard ctx("root_scalar_stats size=%zu", value.size());
         return decode_root_scalar_stats_value(value);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Corrupt root_scalar_stats payload size=" +
-                                 std::to_string(value.size()) + ": " +
-                                 e.what());
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt root_scalar_stats payload size=" +
+                               std::to_string(value.size()) + ": " + e.what());
     }
 }
 
@@ -1342,9 +1241,9 @@ StringViewMap<std::uint64_t> IndexDatabase::query_root_category_counts() const {
         DecodeContextGuard ctx("root_cat_counts size=%zu", value.size());
         return decode_count_map_value(value);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Corrupt root_cat_counts payload size=" +
-                                 std::to_string(value.size()) + ": " +
-                                 e.what());
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt root_cat_counts payload size=" +
+                               std::to_string(value.size()) + ": " + e.what());
     }
 }
 
@@ -1362,9 +1261,9 @@ StringViewMap<std::uint64_t> IndexDatabase::query_root_pid_tid_counts() const {
         DecodeContextGuard ctx("root_pid_tid_counts size=%zu", value.size());
         return decode_count_map_value(value);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Corrupt root_pid_tid_counts payload size=" +
-                                 std::to_string(value.size()) + ": " +
-                                 e.what());
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt root_pid_tid_counts payload size=" +
+                               std::to_string(value.size()) + ": " + e.what());
     }
 }
 
@@ -1382,9 +1281,9 @@ StringViewMap<std::uint64_t> IndexDatabase::query_root_name_counts() const {
         DecodeContextGuard ctx("root_name_counts size=%zu", value.size());
         return decode_count_map_value(value);
     } catch (const std::exception& e) {
-        throw std::runtime_error("Corrupt root_name_counts payload size=" +
-                                 std::to_string(value.size()) + ": " +
-                                 e.what());
+        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                           "Corrupt root_name_counts payload size=" +
+                               std::to_string(value.size()) + ": " + e.what());
     }
 }
 
@@ -1630,29 +1529,12 @@ IndexDatabase::query_chunk_dimension_stats_batch(
     }
     results.reserve(file_ids.size());
 
-    std::unordered_set<int> wanted(file_ids.begin(), file_ids.end());
-    const auto [min_it, max_it] =
-        std::minmax_element(file_ids.begin(), file_ids.end());
-    const auto min_prefix = prefix_for_file(*min_it);
-    const int max_file_id = *max_it;
-
-    auto it = db_->new_iterator(cf::CHUNK_DIM_STATS);
-    for (it->Seek(::rocksdb::Slice(min_prefix.data(), min_prefix.size()));
-         it->Valid(); it->Next()) {
-        auto key = iterator_key(*it);
-        int file_id = decode_prefixed_file_id(key);
-        if (file_id > max_file_id) {
-            break;
-        }
-        if (!wanted.contains(file_id)) {
-            continue;
-        }
-
-        results[file_id].push_back(
-            decode_chunk_dimension_stats_value(key, iterator_value(*it)));
-    }
-
-    const auto status = it->status();
+    auto status = for_each_file_in_batch(
+        *db_, cf::CHUNK_DIM_STATS, file_ids,
+        [&](int file_id, ::rocksdb::Iterator& it, const std::string& key) {
+            results[file_id].push_back(
+                decode_chunk_dimension_stats_value(key, iterator_value(it)));
+        });
     if (!status.ok()) {
         throw IndexerError(IndexerError::Type::DATABASE_ERROR,
                            "Failed to batch query chunk dimension stats: " +
@@ -1699,7 +1581,8 @@ std::vector<EventRangeResult> IndexDatabase::query_event_ranges(
         auto payload = std::string_view(key).substr(2 + 4 + 8);
         auto split = payload.find('\0');
         if (split == std::string_view::npos) {
-            throw std::runtime_error("Corrupt manifest event key");
+            throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+                               "Corrupt manifest event key");
         }
         EventRangeResult result;
         result.checkpoint_idx =
@@ -1784,22 +1667,10 @@ std::unordered_set<std::uint64_t> IndexDatabase::query_file_pids(
 
     // Decode: count (varint) + sorted PIDs (each as varint)
     std::size_t off = 0;
-    auto decode_varint = [&value, &off]() -> std::uint64_t {
-        std::uint64_t v = 0;
-        unsigned shift = 0;
-        while (off < value.size()) {
-            auto b = static_cast<std::uint8_t>(value[off++]);
-            v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
-            if ((b & 0x80) == 0) return v;
-            shift += 7;
-        }
-        return v;
-    };
-
-    auto count = decode_varint();
+    auto count = decode_varint(value, off);
     pids.reserve(count);
     for (std::uint64_t i = 0; i < count; ++i) {
-        pids.insert(decode_varint());
+        pids.insert(decode_varint(value, off));
     }
     return pids;
 }
@@ -1817,23 +1688,11 @@ IndexDatabase::query_all_file_pids() const {
         auto value = iterator_value(it);
         std::size_t off = 0;
 
-        auto decode_varint = [&value, &off]() -> std::uint64_t {
-            std::uint64_t v = 0;
-            unsigned shift = 0;
-            while (off < value.size()) {
-                auto b = static_cast<std::uint8_t>(value[off++]);
-                v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
-                if ((b & 0x80) == 0) return v;
-                shift += 7;
-            }
-            return v;
-        };
-
-        auto count = decode_varint();
+        auto count = decode_varint(value, off);
         std::unordered_set<std::uint64_t> pids;
         pids.reserve(count);
         for (std::uint64_t i = 0; i < count; ++i) {
-            pids.insert(decode_varint());
+            pids.insert(decode_varint(value, off));
         }
         result[file_id] = std::move(pids);
     });

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_READER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_READER_UTILITY_H
 
-#include <dftracer/utils/core/utilities/tags/parallelizable.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/utilities/utility.h>
 #include <dftracer/utils/utilities/fileio/types/types.h>
 
@@ -45,8 +45,7 @@ namespace dftracer::utils::utilities::fileio {
  * @endcode
  */
 class StreamingFileReaderUtility
-    : public utilities::Utility<StreamReadInput, ChunkRange,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<StreamReadInput, ChunkRange> {
    public:
     StreamingFileReaderUtility() = default;
     ~StreamingFileReaderUtility() = default;
@@ -60,13 +59,15 @@ class StreamingFileReaderUtility
      */
     coro::CoroTask<ChunkRange> process(const StreamReadInput& input) override {
         if (!fs::exists(input.path)) {
-            throw std::runtime_error("File does not exist: " +
-                                     input.path.string());
+            throw DFTUtilsException(
+                ErrorCode::NOT_FOUND,
+                "File does not exist: " + input.path.string());
         }
 
         if (!fs::is_regular_file(input.path)) {
-            throw std::runtime_error("Path is not a regular file: " +
-                                     input.path.string());
+            throw DFTUtilsException(
+                ErrorCode::IO,
+                "Path is not a regular file: " + input.path.string());
         }
 
         co_return ChunkRange{input.path, input.chunk_size};

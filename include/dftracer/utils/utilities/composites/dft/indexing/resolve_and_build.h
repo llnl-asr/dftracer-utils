@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_RESOLVE_AND_BUILD_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_INDEXING_RESOLVE_AND_BUILD_H
 
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
@@ -17,7 +18,7 @@ struct ResolveAndBuildInput {
     std::vector<std::string> files;
     std::string index_dir;
 
-    std::size_t checkpoint_size = 32 * 1024 * 1024;  // 32MB default
+    std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t parallelism = 0;
     bool force_rebuild = false;
 

@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
@@ -17,6 +18,7 @@ using fileio::lines::sources::async_streaming_gz_lines;
 
 coro::CoroTask<TraceStatistics> StatisticsAggregatorUtility::process(
     const StatisticsAggregatorInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("aggregate statistics");
     TraceStatistics result;
     result.file_path = input.file_path;
 

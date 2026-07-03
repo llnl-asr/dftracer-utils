@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_INDEXED_FILE_READER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_INDEXED_FILE_READER_UTILITY_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/rocksdb/db_manager.h>
@@ -52,7 +53,8 @@ class IndexedFileReaderUtility
         const IndexedReadInput& input) override {
         // Validate input
         if (!fs::exists(input.file_path)) {
-            throw std::runtime_error("File does not exist: " + input.file_path);
+            throw DFTUtilsException(ErrorCode::NOT_FOUND,
+                                    "File does not exist: " + input.file_path);
         }
 
         const std::string normalized_index_path =

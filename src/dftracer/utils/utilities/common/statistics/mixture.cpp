@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/utilities/common/statistics/mixture.h>
 
 #include <algorithm>
@@ -14,11 +15,11 @@ namespace bm = boost::math;
 
 namespace {
 
-constexpr double kInvSqrt2Pi = 0.3989422804014327;  // 1 / sqrt(2*pi)
+constexpr double INV_SQRT_2PI = 0.3989422804014327;  // 1 / sqrt(2*pi)
 
 inline double normal_pdf(double x, double mean, double stddev) {
     const double z = (x - mean) / stddev;
-    return (kInvSqrt2Pi / stddev) * std::exp(-0.5 * z * z);
+    return (INV_SQRT_2PI / stddev) * std::exp(-0.5 * z * z);
 }
 
 // log(sum_k exp(log_x[k])) computed with the standard log-sum-exp trick to
@@ -192,7 +193,8 @@ double cdf(const FittedMixture& mix, double x) {
 Sampler make_sampler(const FittedMixture& mix, std::optional<double> min_bound,
                      std::optional<double> max_bound) {
     if (!mix.valid) {
-        throw std::invalid_argument(
+        throw DFTUtilsException(
+            ErrorCode::INVALID_ARGUMENT,
             "make_sampler called with invalid FittedMixture");
     }
 

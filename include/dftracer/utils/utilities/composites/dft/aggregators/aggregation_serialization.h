@@ -129,6 +129,20 @@ struct AggKeyView {
     std::uint64_t time_bucket;
 };
 
+/// Decode a LEB128 varint, advancing `p` (bounded by `end`).
+inline std::uint64_t decode_varint(const std::uint8_t*& p,
+                                   const std::uint8_t* end) {
+    std::uint64_t v = 0;
+    unsigned shift = 0;
+    while (p < end) {
+        std::uint8_t b = *p++;
+        v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
+        if ((b & 0x80) == 0) break;
+        shift += 7;
+    }
+    return v;
+}
+
 /// Parse aggregation key: reads varint intern IDs and resolves to strings.
 /// Returns false if parsing fails.
 inline bool parse_agg_key_view(std::string_view data, AggKeyView& out) {
@@ -141,17 +155,7 @@ inline bool parse_agg_key_view(std::string_view data, AggKeyView& out) {
 
     out.map_type = static_cast<AggMapType>(*p++);
 
-    auto read_varint = [&]() -> std::uint64_t {
-        std::uint64_t v = 0;
-        unsigned shift = 0;
-        while (p < end) {
-            auto b = *p++;
-            v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
-            if ((b & 0x80) == 0) return v;
-            shift += 7;
-        }
-        return v;
-    };
+    auto read_varint = [&]() { return decode_varint(p, end); };
 
     auto& intern = aggregation_intern();
     auto cat_id = static_cast<std::uint32_t>(read_varint());
@@ -231,17 +235,7 @@ inline bool parse_agg_value_view(std::string_view data, AggMetricsView& out) {
     const auto* p = reinterpret_cast<const std::uint8_t*>(data.data());
     const auto* end = p + data.size();
 
-    auto read_varint = [&]() -> std::uint64_t {
-        std::uint64_t v = 0;
-        int shift = 0;
-        while (p < end) {
-            std::uint8_t b = *p++;
-            v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
-            if ((b & 0x80) == 0) break;
-            shift += 7;
-        }
-        return v;
-    };
+    auto read_varint = [&]() { return decode_varint(p, end); };
 
     auto skip_f64 = [&]() { p += 8; };
 
@@ -283,23 +277,14 @@ inline bool parse_agg_value_full_view(std::string_view data,
     const auto* p = reinterpret_cast<const std::uint8_t*>(data.data());
     const auto* end = p + data.size();
 
-    auto read_varint = [&]() -> std::uint64_t {
-        std::uint64_t v = 0;
-        int shift = 0;
-        while (p < end) {
-            std::uint8_t b = *p++;
-            v |= static_cast<std::uint64_t>(b & 0x7F) << shift;
-            if ((b & 0x80) == 0) break;
-            shift += 7;
-        }
-        return v;
-    };
+    auto read_varint = [&]() { return decode_varint(p, end); };
 
     auto read_f64 = [&]() -> double {
         if (p + 8 > end) return 0.0;
+        // Big-endian, matching put_double/put_be64 on the write side.
         std::uint64_t bits = 0;
         for (int i = 0; i < 8; ++i) {
-            bits |= static_cast<std::uint64_t>(*p++) << (i * 8);
+            bits = (bits << 8) | static_cast<std::uint64_t>(*p++);
         }
         double result;
         std::memcpy(&result, &bits, sizeof(result));

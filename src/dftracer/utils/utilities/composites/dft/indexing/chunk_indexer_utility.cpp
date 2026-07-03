@@ -2,6 +2,7 @@
 #include <dftracer/utils/utilities/common/json/json_doc_guard.h>
 #include <dftracer/utils/utilities/common/json/parser.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_indexer_utility.h>
+#include <dftracer/utils/utilities/composites/dft/internal/chunk_line_scanner.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
@@ -52,6 +53,7 @@ std::vector<std::string> get_target_dimensions(
 
 coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
     const ChunkIndexerInput& input) {
+    DFTRACER_UTILS_TRACE_SCOPE("index chunk");
     ChunkIndexerOutput output;
     output.checkpoint_idx = input.checkpoint_idx;
     output.events_processed = 0;
@@ -182,7 +184,6 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
         co_return output;
     }
 
-    std::uint32_t line_number = 0;
     std::map<std::pair<std::string, std::string>, std::vector<std::uint32_t>>
         event_lines;
     std::map<std::string, std::vector<std::uint32_t>> metadata_lines;
@@ -200,239 +201,189 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexerUtility::process(
     const bool need_shash = output.bloom_filters.count(DIM_SHASH) > 0;
     const bool has_extra_dims = !input.config.extra_dimensions.empty();
 
-    while (!stream->done()) {
-        auto chunk = co_await stream->read_async();
-
-        if (chunk.empty()) {
-            break;
+    co_await dft::internal::scan_chunk_lines(*stream, [&](std::string_view
+                                                              line_sv,
+                                                          std::uint32_t
+                                                              line_number) {
+        if (!parser.parse(line_sv)) {
+            return;
         }
 
-        std::size_t bytes_read = chunk.size();
-        const char* data = chunk.data();
-        std::size_t pos = 0;
+        // Extract ph first to determine event type
+        auto ph = parser.get_string("ph");
+        if (!ph) {
+            return;
+        }
 
-        while (pos < bytes_read) {
-            const char* line_start = data + pos;
-            const char* newline = static_cast<const char*>(
-                memchr(line_start, '\n', bytes_read - pos));
+        bool is_metadata = (*ph == "M");
 
-            if (!newline) {
-                break;
-            }
+        if (is_metadata) {
+            // Metadata event: extract name and args in single pass
+            // Re-parse to get fresh document state
+            parser.parse(line_sv);
 
-            std::size_t line_len = newline - line_start;
+            std::string event_name;
+            std::string hash_val;
+            std::string resolved;
 
-            if (line_len > 0) {
-                std::string_view line_sv(line_start, line_len);
-                if (!parser.parse(line_sv)) {
-                    pos = (newline - data) + 1;
-                    line_number++;
-                    continue;
-                }
+            parser.for_each_field(
+                [&](std::string_view key, simdjson::ondemand::value val) {
+                    if (key == "name") {
+                        auto s = val.get_string();
+                        if (!s.error()) event_name = std::string(s.value());
+                    } else if (key == "args") {
+                        auto obj = val.get_object();
+                        if (!obj.error()) {
+                            for (auto field : obj.value()) {
+                                if (field.error()) continue;
+                                auto fkey = field.unescaped_key();
+                                if (fkey.error()) continue;
+                                auto fval = field.value();
+                                if (fval.error()) continue;
 
-                // Extract ph first to determine event type
-                auto ph = parser.get_string("ph");
-                if (!ph) {
-                    pos = (newline - data) + 1;
-                    line_number++;
-                    continue;
-                }
-
-                bool is_metadata = (*ph == "M");
-
-                if (is_metadata) {
-                    // Metadata event: extract name and args in single pass
-                    // Re-parse to get fresh document state
-                    parser.parse(line_sv);
-
-                    std::string event_name;
-                    std::string hash_val;
-                    std::string resolved;
-
-                    parser.for_each_field([&](std::string_view key,
-                                              simdjson::ondemand::value val) {
-                        if (key == "name") {
-                            auto s = val.get_string();
-                            if (!s.error()) event_name = std::string(s.value());
-                        } else if (key == "args") {
-                            auto obj = val.get_object();
-                            if (!obj.error()) {
-                                for (auto field : obj.value()) {
-                                    if (field.error()) continue;
-                                    auto fkey = field.unescaped_key();
-                                    if (fkey.error()) continue;
-                                    auto fval = field.value();
-                                    if (fval.error()) continue;
-
-                                    if (fkey.value() == "value") {
-                                        auto s = fval.value().get_string();
-                                        if (!s.error())
-                                            hash_val = std::string(s.value());
-                                    } else if (fkey.value() == "name") {
-                                        auto s = fval.value().get_string();
-                                        if (!s.error())
-                                            resolved = std::string(s.value());
-                                    }
+                                if (fkey.value() == "value") {
+                                    auto s = fval.value().get_string();
+                                    if (!s.error())
+                                        hash_val = std::string(s.value());
+                                } else if (fkey.value() == "name") {
+                                    auto s = fval.value().get_string();
+                                    if (!s.error())
+                                        resolved = std::string(s.value());
                                 }
                             }
                         }
-                    });
+                    }
+                });
 
-                    if (!hash_val.empty() && !resolved.empty()) {
-                        if (event_name == "HH") {
-                            output.hash_resolutions[DIM_HHASH][hash_val] =
-                                resolved;
-                        } else if (event_name == "FH") {
-                            output.hash_resolutions[DIM_FHASH][hash_val] =
-                                resolved;
-                        } else if (event_name == "SH") {
-                            output.hash_resolutions[DIM_SHASH][hash_val] =
-                                resolved;
+            if (!hash_val.empty() && !resolved.empty()) {
+                if (event_name == "HH") {
+                    output.hash_resolutions[DIM_HHASH][hash_val] = resolved;
+                } else if (event_name == "FH") {
+                    output.hash_resolutions[DIM_FHASH][hash_val] = resolved;
+                } else if (event_name == "SH") {
+                    output.hash_resolutions[DIM_SHASH][hash_val] = resolved;
+                }
+            }
+
+            if (collect_manifest) {
+                metadata_lines[event_name].push_back(line_number);
+            }
+        } else {
+            // Regular event: re-parse for fresh state and extract
+            // fields
+            parser.parse(line_sv);
+            auto name_opt = parser.get_string("name");
+            std::string_view name = name_opt.value_or("");
+            auto cat_opt = parser.get_string("cat");
+            std::string_view cat = cat_opt.value_or("");
+
+            auto pid = parser.get_uint64("pid").value_or(0);
+            auto tid = parser.get_uint64("tid").value_or(0);
+            auto ts = parser.get_uint64("ts").value_or(0);
+            auto dur = parser.get_uint64("dur").value_or(0);
+
+            // Update statistics
+            output.statistics.update_from_event(name, cat, pid, tid, ts, dur);
+
+            // Add to bloom filters
+            if (need_name && !name.empty()) {
+                output.bloom_filters[DIM_NAME].add(name);
+            }
+
+            if (need_cat && !cat.empty()) {
+                output.bloom_filters[DIM_CAT].add(cat);
+            }
+
+            if (need_pid) {
+                char pid_buf[32];
+                int n = std::snprintf(pid_buf, sizeof(pid_buf), "%llu",
+                                      static_cast<unsigned long long>(pid));
+                output.bloom_filters[DIM_PID].add(std::string_view(pid_buf, n));
+            }
+
+            if (need_tid) {
+                char tid_buf[32];
+                int n = std::snprintf(tid_buf, sizeof(tid_buf), "%llu",
+                                      static_cast<unsigned long long>(tid));
+                output.bloom_filters[DIM_TID].add(std::string_view(tid_buf, n));
+            }
+
+            // Process args for hash dimensions and extra dimensions
+            if (need_hhash || need_fhash || need_shash || has_extra_dims) {
+                parser.for_each_field("args", [&](std::string_view key,
+                                                  simdjson::ondemand::value
+                                                      val) {
+                    if (need_hhash && key == "hhash") {
+                        auto s = val.get_string();
+                        if (!s.error() && !s.value().empty()) {
+                            output.bloom_filters[DIM_HHASH].add(s.value());
                         }
-                    }
-
-                    if (collect_manifest) {
-                        metadata_lines[event_name].push_back(line_number);
-                    }
-                } else {
-                    // Regular event: re-parse for fresh state and extract
-                    // fields
-                    parser.parse(line_sv);
-                    auto name_opt = parser.get_string("name");
-                    std::string_view name = name_opt.value_or("");
-                    auto cat_opt = parser.get_string("cat");
-                    std::string_view cat = cat_opt.value_or("");
-
-                    auto pid = parser.get_uint64("pid").value_or(0);
-                    auto tid = parser.get_uint64("tid").value_or(0);
-                    auto ts = parser.get_uint64("ts").value_or(0);
-                    auto dur = parser.get_uint64("dur").value_or(0);
-
-                    // Update statistics
-                    output.statistics.update_from_event(name, cat, pid, tid, ts,
-                                                        dur);
-
-                    // Add to bloom filters
-                    if (need_name && !name.empty()) {
-                        output.bloom_filters[DIM_NAME].add(name);
-                    }
-
-                    if (need_cat && !cat.empty()) {
-                        output.bloom_filters[DIM_CAT].add(cat);
-                    }
-
-                    if (need_pid) {
-                        char pid_buf[32];
-                        int n =
-                            std::snprintf(pid_buf, sizeof(pid_buf), "%llu",
-                                          static_cast<unsigned long long>(pid));
-                        output.bloom_filters[DIM_PID].add(
-                            std::string_view(pid_buf, n));
-                    }
-
-                    if (need_tid) {
-                        char tid_buf[32];
-                        int n =
-                            std::snprintf(tid_buf, sizeof(tid_buf), "%llu",
-                                          static_cast<unsigned long long>(tid));
-                        output.bloom_filters[DIM_TID].add(
-                            std::string_view(tid_buf, n));
-                    }
-
-                    // Process args for hash dimensions and extra dimensions
-                    if (need_hhash || need_fhash || need_shash ||
-                        has_extra_dims) {
-                        parser.for_each_field("args", [&](std::string_view key,
-                                                          simdjson::ondemand::
-                                                              value val) {
-                            if (need_hhash && key == "hhash") {
-                                auto s = val.get_string();
-                                if (!s.error() && !s.value().empty()) {
-                                    output.bloom_filters[DIM_HHASH].add(
-                                        s.value());
+                    } else if (need_fhash && key == "fhash") {
+                        auto s = val.get_string();
+                        if (!s.error() && !s.value().empty()) {
+                            output.bloom_filters[DIM_FHASH].add(s.value());
+                        }
+                    } else if (need_shash &&
+                               (key == "cmd_hash" || key == "exec_hash")) {
+                        auto s = val.get_string();
+                        if (!s.error() && !s.value().empty()) {
+                            output.bloom_filters[DIM_SHASH].add(s.value());
+                        }
+                    } else if (has_extra_dims) {
+                        // Check if this key matches any extra dimension
+                        for (const auto& dim : input.config.extra_dimensions) {
+                            // Check for exact match (flat key)
+                            if (key == dim) {
+                                std::string str_val =
+                                    ondemand_value_to_string(val);
+                                if (!str_val.empty()) {
+                                    output.bloom_filters[dim].add(str_val);
                                 }
-                            } else if (need_fhash && key == "fhash") {
-                                auto s = val.get_string();
-                                if (!s.error() && !s.value().empty()) {
-                                    output.bloom_filters[DIM_FHASH].add(
-                                        s.value());
-                                }
-                            } else if (need_shash && (key == "cmd_hash" ||
-                                                      key == "exec_hash")) {
-                                auto s = val.get_string();
-                                if (!s.error() && !s.value().empty()) {
-                                    output.bloom_filters[DIM_SHASH].add(
-                                        s.value());
-                                }
-                            } else if (has_extra_dims) {
-                                // Check if this key matches any extra dimension
-                                for (const auto& dim :
-                                     input.config.extra_dimensions) {
-                                    // Check for exact match (flat key)
-                                    if (key == dim) {
-                                        std::string str_val =
-                                            ondemand_value_to_string(val);
-                                        if (!str_val.empty()) {
-                                            output.bloom_filters[dim].add(
-                                                str_val);
-                                        }
-                                        break;
-                                    }
-                                    // Check for nested key (e.g., "io.size")
-                                    auto dot_pos = dim.find('.');
-                                    if (dot_pos != std::string::npos) {
-                                        std::string_view prefix(dim.data(),
-                                                                dot_pos);
-                                        if (key == prefix) {
-                                            // Navigate into nested object
-                                            std::string_view suffix(
-                                                dim.data() + dot_pos + 1,
-                                                dim.size() - dot_pos - 1);
-                                            auto obj = val.get_object();
-                                            if (!obj.error()) {
-                                                for (auto field : obj.value()) {
-                                                    if (field.error()) continue;
-                                                    auto fkey =
-                                                        field.unescaped_key();
-                                                    if (fkey.error()) continue;
-                                                    if (fkey.value() ==
-                                                        suffix) {
-                                                        auto fval =
-                                                            field.value();
-                                                        if (fval.error())
-                                                            continue;
-                                                        std::string str_val =
-                                                            ondemand_value_to_string(
-                                                                fval.value());
-                                                        if (!str_val.empty()) {
-                                                            output
-                                                                .bloom_filters
-                                                                    [dim]
-                                                                .add(str_val);
-                                                        }
-                                                        break;
-                                                    }
+                                break;
+                            }
+                            // Check for nested key (e.g., "io.size")
+                            auto dot_pos = dim.find('.');
+                            if (dot_pos != std::string::npos) {
+                                std::string_view prefix(dim.data(), dot_pos);
+                                if (key == prefix) {
+                                    // Navigate into nested object
+                                    std::string_view suffix(
+                                        dim.data() + dot_pos + 1,
+                                        dim.size() - dot_pos - 1);
+                                    auto obj = val.get_object();
+                                    if (!obj.error()) {
+                                        for (auto field : obj.value()) {
+                                            if (field.error()) continue;
+                                            auto fkey = field.unescaped_key();
+                                            if (fkey.error()) continue;
+                                            if (fkey.value() == suffix) {
+                                                auto fval = field.value();
+                                                if (fval.error()) continue;
+                                                std::string str_val =
+                                                    ondemand_value_to_string(
+                                                        fval.value());
+                                                if (!str_val.empty()) {
+                                                    output.bloom_filters[dim]
+                                                        .add(str_val);
                                                 }
+                                                break;
                                             }
                                         }
                                     }
                                 }
                             }
-                        });
+                        }
                     }
-
-                    if (collect_manifest) {
-                        event_lines[{std::string(cat), std::string(name)}]
-                            .push_back(line_number);
-                    }
-                    output.events_processed++;
-                }
+                });
             }
 
-            pos = (newline - data) + 1;
-            line_number++;
+            if (collect_manifest) {
+                event_lines[{std::string(cat), std::string(name)}].push_back(
+                    line_number);
+            }
+            output.events_processed++;
         }
-    }
+    });
 
     if (collect_manifest) {
         output.event_line_groups.reserve(event_lines.size());

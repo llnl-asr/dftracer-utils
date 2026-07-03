@@ -2,6 +2,8 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_STREAMING_GZ_LINE_GENERATOR_H
 
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/exception_helpers.h>
 #include <dftracer/utils/core/common/scoped_fd.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/io/io.h>
@@ -26,9 +28,10 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     ssize_t fd_result =
         co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
     if (fd_result < 0) {
-        throw std::runtime_error(
-            "Cannot open compressed file: " + file_path +
-            " (errno=" + std::to_string(static_cast<int>(-fd_result)) + ")");
+        throw DFTUtilsException(
+            ErrorCode::IO,
+            "Cannot open compressed file: " + file_path + " (errno=" +
+                std::to_string(static_cast<int>(-fd_result)) + ")");
     }
     dftracer::utils::ScopedFd fd(static_cast<int>(fd_result));
 
@@ -49,9 +52,10 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
                 fd.get(), read_buffer.data(), READ_BUFFER_SIZE, file_offset);
 
             if (bytes_read < 0) {
-                throw std::runtime_error(
+                throw DFTUtilsException(
+                    ErrorCode::IO,
                     "Read error on compressed file: " + file_path + " (errno=" +
-                    std::to_string(static_cast<int>(-bytes_read)) + ")");
+                        std::to_string(static_cast<int>(-bytes_read)) + ")");
             }
 
             if (bytes_read == 0) {
@@ -110,9 +114,7 @@ inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
         ex = std::current_exception();
     }
 
-    if (ex) {
-        std::rethrow_exception(ex);
-    }
+    if (ex) rethrow_and_clear(ex);
 }
 
 }  // namespace dftracer::utils::utilities::fileio::lines::sources

@@ -4,11 +4,16 @@
 #include <dftracer/utils/core/common/checkpointer.h>
 #include <dftracer/utils/utilities/indexer/internal/checkpoint.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
-#include <dftracer/utils/utilities/reader/internal/error.h>
+#include <dftracer/utils/utilities/reader/error.h>
 #include <dftracer/utils/utilities/reader/internal/inflater.h>
 #include <dftracer/utils/utilities/reader/internal/streams/stream.h>
 #include <fcntl.h>
 #include <unistd.h>
+
+#include <algorithm>
+#include <cinttypes>
+#include <cstring>
+#include <vector>
 
 namespace dftracer::utils::utilities::reader::internal {
 
@@ -31,8 +36,16 @@ class GzipStream : public StreamBase {
     dftracer::utils::utilities::indexer::internal::IndexerCheckpoint
         checkpoint_;
 
+    // Backing buffer and copy-based read cursor, shared by the copy-drain
+    // read_async(char*, size_t) below. Derived classes fill buffer_ via their
+    // zero-copy read_async() override.
+    static constexpr std::size_t DEFAULT_BUFFER_SIZE = 64 * 1024;  // 64KB
+    std::vector<char> buffer_;
+    std::size_t valid_bytes_;
+    std::size_t buffer_pos_;  // Current position in buffer for copy-based reads
+
    public:
-    GzipStream()
+    explicit GzipStream(std::size_t buffer_size = DEFAULT_BUFFER_SIZE)
         : StreamBase(),
           fd_(-1),
           file_offset_(0),
@@ -43,7 +56,10 @@ class GzipStream : public StreamBase {
           is_finished_(false),
           decompression_initialized_(false),
           use_checkpoint_(false),
-          start_bytes_(0) {}
+          start_bytes_(0),
+          buffer_(buffer_size, 0),
+          valid_bytes_(0),
+          buffer_pos_(0) {}
 
     virtual ~GzipStream() { reset(); }
 
@@ -58,8 +74,50 @@ class GzipStream : public StreamBase {
     bool done() const override { return is_finished_; }
 
     coro::CoroTask<std::span<const char>> read_async() override = 0;
-    coro::CoroTask<std::size_t> read_async(
-        char *buffer, std::size_t buffer_size) override = 0;
+
+    // Copy-drain adapter over the zero-copy read_async(): serves the caller's
+    // buffer from buffer_, refilling via the derived read_async() when empty.
+    coro::CoroTask<std::size_t> read_async(char *buffer,
+                                           std::size_t buffer_size) override {
+#ifdef __GNUC__
+        __builtin_prefetch(buffer, 1, 3);
+#endif
+
+        // Check if we have unconsumed data from previous read
+        if (buffer_pos_ < valid_bytes_) {
+            std::size_t remaining = valid_bytes_ - buffer_pos_;
+            std::size_t copy_size = std::min(remaining, buffer_size);
+            std::memcpy(buffer, buffer_.data() + buffer_pos_, copy_size);
+            buffer_pos_ += copy_size;
+
+            DFTRACER_UTILS_LOG_DEBUG(
+                "Copied %zu bytes from existing buffer (pos %zu/%zu)",
+                copy_size, buffer_pos_, valid_bytes_);
+
+            co_return copy_size;
+        }
+
+        // Buffer exhausted, get new chunk via zero-copy read
+        auto span = co_await read_async();
+        if (span.empty()) {
+            co_return 0;
+        }
+
+        // Update our tracking of the buffer state
+        valid_bytes_ = span.size();
+        buffer_pos_ = 0;
+
+        std::size_t copy_size = std::min(valid_bytes_, buffer_size);
+        std::memcpy(buffer, span.data(), copy_size);
+        buffer_pos_ = copy_size;
+
+        DFTRACER_UTILS_LOG_DEBUG(
+            "Got new chunk via zero-copy, copied %zu bytes (total in buffer: "
+            "%zu)",
+            copy_size, valid_bytes_);
+
+        co_return copy_size;
+    }
 
     void reset() override {
         current_gz_path_.clear();
@@ -137,7 +195,8 @@ class GzipStream : public StreamBase {
             if (indexer.find_checkpoint(0, checkpoint_)) {
                 if (inflate_init_from_checkpoint()) {
                     DFTRACER_UTILS_LOG_DEBUG(
-                        "Using first checkpoint at uncompressed offset %zu for "
+                        "Using first checkpoint at uncompressed offset %" PRIu64
+                        " for "
                         "early "
                         "target %zu",
                         checkpoint_.uc_offset, start_bytes);
@@ -148,8 +207,8 @@ class GzipStream : public StreamBase {
             if (indexer.find_checkpoint(start_bytes, checkpoint_)) {
                 if (inflate_init_from_checkpoint()) {
                     DFTRACER_UTILS_LOG_DEBUG(
-                        "Using checkpoint at uncompressed offset %llu for "
-                        "target %zu",
+                        "Using checkpoint at uncompressed offset %" PRIu64
+                        " for target %zu",
                         checkpoint_.uc_offset, start_bytes);
                     return true;
                 }

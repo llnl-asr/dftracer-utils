@@ -2,10 +2,10 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_STREAMING_FILE_MERGER_UTILITY_H
 
 #include <dftracer/utils/core/common/buffer_pool.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/utilities/composites/dft/event_hasher_utility.h>
 #include <dftracer/utils/utilities/composites/dft/event_id_extractor_utility.h>
 #include <dftracer/utils/utilities/composites/file_merger_utility.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
@@ -106,7 +106,6 @@ struct StreamingFileConsumerInput {
  * @brief Output from streaming file consumer.
  */
 struct StreamingFileConsumerOutput {
-    bool success{false};
     std::string output_path;
     std::size_t total_events{0};
     std::size_t output_hash{0};
@@ -127,7 +126,7 @@ class StreamingFileConsumerUtility {
         std::shared_ptr<BufferPool<std::string>> buf_pool)
         : channel_(std::move(channel)), buf_pool_(std::move(buf_pool)) {}
 
-    coro::CoroTask<StreamingFileConsumerOutput> process_async(
+    coro::CoroTask<Result<StreamingFileConsumerOutput>> process_async(
         CoroScope& ctx, const StreamingFileConsumerInput& input);
 };
 

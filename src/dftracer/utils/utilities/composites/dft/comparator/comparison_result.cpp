@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/hash_combine.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_result.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 
@@ -142,10 +143,8 @@ struct WindowKey {
 struct WindowKeyHash {
     std::size_t operator()(const WindowKey& k) const {
         std::size_t h = std::hash<std::string_view>{}(k.cat);
-        h ^= std::hash<std::string_view>{}(k.name) + 0x9e3779b9 + (h << 6) +
-             (h >> 2);
-        h ^= std::hash<std::uint64_t>{}(k.time_bucket) + 0x9e3779b9 + (h << 6) +
-             (h >> 2);
+        hash_combine_value(h, k.name);
+        hash_combine_value(h, k.time_bucket);
         return h;
     }
 };
@@ -386,9 +385,30 @@ using common::arrow::ArrowExportResult;
 using common::arrow::ColumnType;
 using common::arrow::RecordBatchBuilder;
 
-namespace {
+// Metric names that are atomic (not group_prefix + leaf).
+bool is_atomic_metric(const std::string& name) {
+    return name == "count" || name == "transfer_size" || name == "bandwidth" ||
+           name == "files" || name == "processes" || name == "threads" ||
+           name == "total_bytes";
+}
 
-const char* sig_to_str(Significance s) {
+// Extract metric group prefix: "dur_mean" -> "dur", "count" -> ""
+std::string metric_group(const std::string& name) {
+    if (is_atomic_metric(name)) return "";
+    auto pos = name.find('_');
+    if (pos == std::string::npos) return "";
+    return name.substr(0, pos);
+}
+
+// Strip prefix: "dur_mean" -> "mean", "count" -> "count"
+std::string metric_leaf(const std::string& name) {
+    if (is_atomic_metric(name)) return name;
+    auto pos = name.find('_');
+    if (pos == std::string::npos) return name;
+    return name.substr(pos + 1);
+}
+
+const char* significance_to_string(Significance s) {
     switch (s) {
         case Significance::NEGLIGIBLE:
             return "NEGLIGIBLE";
@@ -402,28 +422,7 @@ const char* sig_to_str(Significance s) {
     return "NEGLIGIBLE";
 }
 
-// Metric names that are atomic (not group_prefix + leaf).
-bool is_atomic_metric(const std::string& name) {
-    return name == "count" || name == "transfer_size" || name == "bandwidth" ||
-           name == "files" || name == "processes" || name == "threads" ||
-           name == "total_bytes";
-}
-
-// Extract metric group prefix: "dur_mean" -> "dur", "count" -> ""
-std::string arrow_metric_group(const std::string& name) {
-    if (is_atomic_metric(name)) return "";
-    auto pos = name.find('_');
-    if (pos == std::string::npos) return "";
-    return name.substr(0, pos);
-}
-
-// Strip prefix: "dur_mean" -> "mean", "count" -> "count"
-std::string arrow_metric_leaf(const std::string& name) {
-    if (is_atomic_metric(name)) return name;
-    auto pos = name.find('_');
-    if (pos == std::string::npos) return name;
-    return name.substr(pos + 1);
-}
+namespace {
 
 void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
                   const std::string& parent_path) {
@@ -436,8 +435,8 @@ void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
         for (const auto& mc : metrics) {
             if (mc.baseline_value == 0.0 && mc.variant_value == 0.0) continue;
             builder.append_string(0, sub_path);
-            builder.append_string(1, arrow_metric_group(mc.metric_name));
-            builder.append_string(2, arrow_metric_leaf(mc.metric_name));
+            builder.append_string(1, metric_group(mc.metric_name));
+            builder.append_string(2, metric_leaf(mc.metric_name));
             builder.append_double(3, mc.baseline_value);
             builder.append_double(4, mc.variant_value);
             builder.append_double(5, mc.baseline_stdev);
@@ -445,7 +444,7 @@ void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
             builder.append_double(7, mc.delta);
             builder.append_double(8, mc.pct_change);
             builder.append_double(9, mc.cohens_d);
-            builder.append_string(10, sig_to_str(mc.significance));
+            builder.append_string(10, significance_to_string(mc.significance));
             builder.append_bool(11, mc.is_regression);
             builder.end_row();
         }

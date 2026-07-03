@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_BINARY_FILE_READER_UTILITY_H
 
 #include <dftracer/utils/core/common/byte_view.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/async_generator.h>
 
@@ -30,12 +31,14 @@ namespace dftracer::utils::utilities::fileio {
 inline coro::AsyncGenerator<ByteView> read_binary_file(
     fs::path path, std::size_t chunk_size = 64 * 1024) {
     if (!fs::exists(path)) {
-        throw std::runtime_error("File does not exist: " + path.string());
+        throw DFTUtilsException(ErrorCode::NOT_FOUND,
+                                "File does not exist: " + path.string());
     }
 
     std::ifstream file(path, std::ios::binary);
     if (!file) {
-        throw std::runtime_error("Cannot open file: " + path.string());
+        throw DFTUtilsException(ErrorCode::IO,
+                                "Cannot open file: " + path.string());
     }
 
     std::vector<unsigned char> buffer(chunk_size);
@@ -51,7 +54,8 @@ inline coro::AsyncGenerator<ByteView> read_binary_file(
     }
 
     if (file.bad()) {
-        throw std::runtime_error("Error reading file: " + path.string());
+        throw DFTUtilsException(ErrorCode::IO,
+                                "Error reading file: " + path.string());
     }
 }
 

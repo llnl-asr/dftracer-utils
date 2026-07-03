@@ -6,6 +6,7 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
@@ -279,6 +280,21 @@ const TraceIndex::FileInfo* TraceIndex::find_file(
 const TraceIndex::FileInfo* TraceIndex::file_at(std::size_t index) const {
     if (index >= files_.size()) return nullptr;
     return &files_[index];
+}
+
+std::vector<const TraceIndex::FileInfo*> collect_candidate_files(
+    TraceIndex& index, const QueryParams& params) {
+    std::vector<const TraceIndex::FileInfo*> files;
+    auto file_param = params.get("file");
+    if (!file_param.empty()) {
+        auto* f = index.find_file(std::string(file_param));
+        if (f) files.push_back(f);
+    } else {
+        for (const auto& f : index.files()) {
+            files.push_back(&f);
+        }
+    }
+    return files;
 }
 
 }  // namespace dftracer::utils::server

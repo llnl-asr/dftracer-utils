@@ -98,19 +98,11 @@ static coro::CoroTask<EventCountBatchResult> process_index_group_event_counts(
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_event_count",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<EventCountArgParse>(
+        argc, argv, "dftracer_event_count",
         "Count valid events in DFTracer .pfw or .pfw.gz files using composable "
-        "utilities and pipeline processing");
-
-    EventCountArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    return run_event_count(&cli);
+        "utilities and pipeline processing",
+        [](EventCountArgParse& cli) { return run_event_count(&cli); });
 }
 
 static int run_event_count(const EventCountArgParse* cli) {
@@ -224,42 +216,21 @@ static int run_event_count(const EventCountArgParse* cli) {
                 is_approximate.store(true, std::memory_order_relaxed);
                 co_await ctx.scope([&](CoroScope& scope)
                                        -> coro::CoroTask<void> {
-                    auto file_chan =
-                        coro::make_channel<FileWorkItem>(executor_threads * 2);
-
-                    scope.spawn(
-                        [ch = file_chan->producer(),
-                         items_ptr = &direct_scan_items](
-                            CoroScope&) mutable -> coro::CoroTask<void> {
-                            auto guard = ch.guard();
-                            for (const auto& item : *items_ptr) {
-                                if (!co_await ch.send(item)) {
-                                    co_return;
-                                }
+                    cli::parallel_for_each(
+                        scope, std::move(direct_scan_items), executor_threads,
+                        [total_events_ptr = &total_events,
+                         files_processed_ptr = &files_processed](
+                            const FileWorkItem& item) -> coro::CoroTask<void> {
+                            std::size_t count = 0;
+                            auto gen = async_streaming_gz_lines(item.file_path);
+                            while (co_await gen.next()) {
+                                ++count;
                             }
-                            co_return;
+                            total_events_ptr->fetch_add(
+                                count, std::memory_order_relaxed);
+                            files_processed_ptr->fetch_add(
+                                1, std::memory_order_relaxed);
                         });
-
-                    for (std::size_t w = 0; w < executor_threads; ++w) {
-                        scope.spawn([ch = file_chan->consumer(),
-                                     total_events_ptr = &total_events,
-                                     files_processed_ptr = &files_processed](
-                                        CoroScope&) -> coro::CoroTask<void> {
-                            while (auto item_opt = co_await ch.receive()) {
-                                std::size_t count = 0;
-                                auto gen = async_streaming_gz_lines(
-                                    item_opt->file_path);
-                                while (co_await gen.next()) {
-                                    ++count;
-                                }
-                                total_events_ptr->fetch_add(
-                                    count, std::memory_order_relaxed);
-                                files_processed_ptr->fetch_add(
-                                    1, std::memory_order_relaxed);
-                            }
-                            co_return;
-                        });
-                    }
                     co_return;
                 });
             }

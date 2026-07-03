@@ -53,7 +53,6 @@ class CallTreeArgParse : public cli::ArgParse {
     std::vector<std::string> inputs;
     bool recursive = false;
     std::string output;
-    bool verbose = false;
     bool no_save = false;
     bool gzip = false;
 
@@ -72,7 +71,6 @@ class CallTreeArgParse : public cli::ArgParse {
             .add_argument("-o", "--output")
             .help("Output JSON path (Chrome Tracing)")
             .default_value<std::string>("");
-        parser().add_argument("-v", "--verbose").flag();
         parser().add_argument("--no-save").flag();
         parser()
             .add_argument("--gzip")
@@ -84,18 +82,10 @@ class CallTreeArgParse : public cli::ArgParse {
         inputs = parser().get<std::vector<std::string>>("inputs");
         recursive = parser().get<bool>("--recursive");
         output = parser().get<std::string>("--output");
-        verbose = parser().get<bool>("--verbose");
         no_save = parser().get<bool>("--no-save");
         gzip = parser().get<bool>("--gzip");
     }
 };
-
-bool is_trace_file(const std::string& path) {
-    return (path.size() >= 4 &&
-            path.compare(path.size() - 4, 4, ".pfw") == 0) ||
-           (path.size() >= 7 &&
-            path.compare(path.size() - 7, 7, ".pfw.gz") == 0);
-}
 
 struct RunCtx {
     const CallTreeArgParse* cli = nullptr;
@@ -115,29 +105,10 @@ struct RunCtx {
     double write_ms = 0;
 };
 
-coro::CoroTask<void> task_scan(RunCtx* ctx) {
+coro::CoroTask<void> task_scan(RunCtx* ctx, CoroScope& scope) {
     const auto t0 = std::chrono::steady_clock::now();
-    for (const auto& in : ctx->cli->inputs) {
-        std::error_code ec;
-        if (fs::is_directory(in, ec)) {
-            if (ctx->cli->recursive) {
-                for (const auto& e : fs::recursive_directory_iterator(in, ec)) {
-                    if (e.is_regular_file(ec) &&
-                        is_trace_file(e.path().string()))
-                        ctx->trace_files.push_back(e.path().string());
-                }
-            } else {
-                for (const auto& e : fs::directory_iterator(in, ec)) {
-                    if (e.is_regular_file(ec) &&
-                        is_trace_file(e.path().string()))
-                        ctx->trace_files.push_back(e.path().string());
-                }
-            }
-        } else if (fs::is_regular_file(in, ec)) {
-            ctx->trace_files.push_back(in);
-        }
-    }
-    std::sort(ctx->trace_files.begin(), ctx->trace_files.end());
+    ctx->trace_files = co_await cli::collect_input_trace_files(
+        scope, ctx->cli->inputs, ctx->cli->recursive);
     if (ctx->trace_files.empty()) {
         DFTRACER_UTILS_LOG_ERROR("%s", "no trace files found");
         ctx->failed = true;
@@ -145,10 +116,9 @@ coro::CoroTask<void> task_scan(RunCtx* ctx) {
     ctx->scan_ms = std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t0)
                        .count();
-    if (ctx->cli->verbose && !ctx->failed) {
-        std::printf("[scan] %.2f ms: %zu files\n", ctx->scan_ms,
-                    ctx->trace_files.size());
-        std::fflush(stdout);
+    if (!ctx->failed) {
+        DFTRACER_UTILS_LOG_DEBUG("[scan] %.2f ms: %zu files", ctx->scan_ms,
+                                 ctx->trace_files.size());
     }
     co_return;
 }
@@ -204,11 +174,8 @@ coro::CoroTask<void> task_build(RunCtx* ctx, CoroScope* scope) {
     ctx->build_ms = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - t0)
                         .count();
-    if (ctx->cli->verbose) {
-        std::printf("[build] %.2f ms: %zu events across %zu files\n",
-                    ctx->build_ms, total_events.load(), n);
-        std::fflush(stdout);
-    }
+    DFTRACER_UTILS_LOG_DEBUG("[build] %.2f ms: %zu events across %zu files",
+                             ctx->build_ms, total_events.load(), n);
     co_return;
 }
 
@@ -224,11 +191,8 @@ coro::CoroTask<void> task_merge(RunCtx* ctx) {
     ctx->merge_ms = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - t0)
                         .count();
-    if (ctx->cli->verbose) {
-        std::printf("[merge] %.2f ms: %zu processes\n", ctx->merge_ms,
-                    ctx->process_keys.size());
-        std::fflush(stdout);
-    }
+    DFTRACER_UTILS_LOG_DEBUG("[merge] %.2f ms: %zu processes", ctx->merge_ms,
+                             ctx->process_keys.size());
     co_return;
 }
 
@@ -263,10 +227,7 @@ coro::CoroTask<void> task_hierarchy(RunCtx* ctx, CoroScope* scope) {
     ctx->hier_ms = std::chrono::duration<double, std::milli>(
                        std::chrono::steady_clock::now() - t0)
                        .count();
-    if (ctx->cli->verbose) {
-        std::printf("[hierarchy] %.2f ms\n", ctx->hier_ms);
-        std::fflush(stdout);
-    }
+    DFTRACER_UTILS_LOG_DEBUG("[hierarchy] %.2f ms", ctx->hier_ms);
     co_return;
 }
 
@@ -439,16 +400,13 @@ coro::CoroTask<void> task_write_json(RunCtx* ctx, CoroScope* scope) {
     ctx->write_ms = std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() - t0)
                         .count();
-    if (ctx->cli->verbose) {
-        std::printf("[write] %.2f ms -> %s\n", ctx->write_ms,
-                    ctx->output_path.c_str());
-        std::fflush(stdout);
-    }
+    DFTRACER_UTILS_LOG_DEBUG("[write] %.2f ms -> %s", ctx->write_ms,
+                             ctx->output_path.c_str());
     co_return;
 }
 
 int run(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_call_tree",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -457,8 +415,7 @@ int run(int argc, char** argv) {
         "JSON.");
 
     CallTreeArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     RunCtx ctx;
     ctx.cli = &cli;
@@ -489,8 +446,8 @@ int run(int argc, char** argv) {
 
     RunCtx* ctx_ptr = &ctx;
     auto scan = make_task(
-        [ctx_ptr](CoroScope&) -> coro::CoroTask<void> {
-            co_await task_scan(ctx_ptr);
+        [ctx_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+            co_await task_scan(ctx_ptr, scope);
         },
         "scan");
     auto build = make_task(
@@ -523,10 +480,10 @@ int run(int argc, char** argv) {
     pipeline.set_destination(write);
     pipeline.execute();
 
-    if (cli.verbose && !ctx.failed) {
-        std::printf(
+    if (!ctx.failed) {
+        DFTRACER_UTILS_LOG_DEBUG(
             "[done] scan=%.1fms build=%.1fms merge=%.1fms hierarchy=%.1fms "
-            "write=%.1fms\n",
+            "write=%.1fms",
             ctx.scan_ms, ctx.build_ms, ctx.merge_ms, ctx.hier_ms, ctx.write_ms);
     }
 

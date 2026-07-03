@@ -23,7 +23,6 @@
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 
-#include <atomic>
 #include <cstddef>
 #include <limits>
 #include <mutex>
@@ -68,13 +67,10 @@ static std::string json_escape(const std::string& s) {
     return out;
 }
 
-using dftracer::utils::utilities::common::json::JsonValue;
-
 // Hash metadata types that need smart filtering (FH, HH, SH).
 static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
                                                                     "SH"};
 
-using dftracer::utils::utilities::common::json::JsonDocGuard;
 using dftracer::utils::utilities::common::query::Query;
 
 // --- GET /api/v1/files ---
@@ -236,16 +232,7 @@ static ViewDefinition build_view_from_params(const QueryParams& params) {
 static std::vector<const TraceIndex::FileInfo*> resolve_target_files(
     TraceIndex& index, const QueryParams& params, double ts_min = 0,
     double ts_max = 0) {
-    std::vector<const TraceIndex::FileInfo*> files;
-    auto file_param = params.get("file");
-    if (!file_param.empty()) {
-        auto* f = index.find_file(std::string(file_param));
-        if (f) files.push_back(f);
-    } else {
-        for (const auto& f : index.files()) {
-            files.push_back(&f);
-        }
-    }
+    auto files = collect_candidate_files(index, params);
 
     if (ts_min > 0 || ts_max > 0) {
         std::vector<const TraceIndex::FileInfo*> filtered;
@@ -293,9 +280,9 @@ static coro::AsyncGenerator<StreamChunk> stream_events(
 
         ViewBuilderUtility builder;
         auto build_output = co_await builder.process(builder_input);
-        if (!build_output.success || !build_output.file_may_match) continue;
+        if (!build_output || !build_output->file_may_match) continue;
 
-        for (const auto& candidate : build_output.candidates) {
+        for (const auto& candidate : build_output->candidates) {
             if (limit > 0 && emitted >= limit) break;
 
             ViewReaderInput reader_input;

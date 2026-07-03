@@ -189,146 +189,121 @@ class AggregatorArgParse : public cli::ArgParse {
     }
 };
 
-namespace {
-
-std::vector<std::string> split_csv(const std::string& str) {
-    std::vector<std::string> out;
-    if (str.empty()) return out;
-    std::stringstream ss(str);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-        if (!item.empty()) out.push_back(item);
-    }
-    return out;
-}
-
-}  // namespace
-
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_aggregator",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<AggregatorArgParse>(
+        argc, argv, "dftracer_aggregator",
         "Aggregate DFTracer events into time-series counters using streaming "
-        "coroutine pipeline with minimal memory footprint");
-
-    AggregatorArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    // Resolve enum-like CLI strings.
-    PerfettoEventFormat event_format = PerfettoEventFormat::COUNTER;
-    if (cli.event_format == "async") {
-        event_format = PerfettoEventFormat::ASYNC;
-    } else if (cli.event_format == "regular") {
-        event_format = PerfettoEventFormat::REGULAR;
-    } else if (cli.event_format != "counter") {
-        DFTRACER_UTILS_LOG_ERROR(
-            "Invalid event format: %s (must be 'counter', 'async', or "
-            "'regular')",
-            cli.event_format.c_str());
-        return 1;
-    }
-
-    // Output filename: append extension if missing.
-    std::string output_file = cli.output;
-    if (cli.format == AggregationConfig::FORMAT_ARROW) {
-        constexpr std::string_view ext = ".arrows";
-        if (output_file.size() < ext.size() ||
-            output_file.substr(output_file.size() - ext.size()) != ext) {
-            output_file += ext;
-        }
-    } else if (cli.compress) {
-        if (output_file.size() < 3 ||
-            output_file.substr(output_file.size() - 3) != ".gz") {
-            output_file += ".gz";
-        }
-    }
-
-    // Parse boundary events.
-    std::vector<BoundaryEventConfig> boundary_events;
-    {
-        std::stringstream ss(cli.boundary_events);
-        std::string item;
-        while (std::getline(ss, item, ',')) {
-            std::stringstream item_ss(item);
-            std::string event_name, value_field, output_name;
-            if (std::getline(item_ss, event_name, ':') &&
-                std::getline(item_ss, value_field, ':') &&
-                std::getline(item_ss, output_name, ':')) {
-                BoundaryEventConfig bec;
-                bec.event_name = event_name;
-                bec.value_field = value_field;
-                bec.output_name = output_name;
-                boundary_events.push_back(bec);
-            }
-        }
-    }
-
-    // Parse percentiles.
-    std::vector<double> percentiles;
-    if (cli.compute_percentiles) {
-        for (const auto& p_str : split_csv(cli.percentiles)) {
-            try {
-                double p = std::stod(p_str);
-                if (p < 0.0 || p > 1.0) {
-                    DFTRACER_UTILS_LOG_ERROR(
-                        "Invalid percentile value: %s (must be in [0.0, 1.0])",
-                        p_str.c_str());
-                    return 1;
-                }
-                percentiles.push_back(p);
-            } catch (const std::exception&) {
-                DFTRACER_UTILS_LOG_ERROR("Failed to parse percentile: %s",
-                                         p_str.c_str());
+        "coroutine pipeline with minimal memory footprint",
+        [](AggregatorArgParse& cli) -> int {
+            // Resolve enum-like CLI strings.
+            PerfettoEventFormat event_format = PerfettoEventFormat::COUNTER;
+            if (cli.event_format == "async") {
+                event_format = PerfettoEventFormat::ASYNC;
+            } else if (cli.event_format == "regular") {
+                event_format = PerfettoEventFormat::REGULAR;
+            } else if (cli.event_format != "counter") {
+                DFTRACER_UTILS_LOG_ERROR(
+                    "Invalid event format: %s (must be 'counter', 'async', or "
+                    "'regular')",
+                    cli.event_format.c_str());
                 return 1;
             }
-        }
-        if (percentiles.empty()) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "No valid percentiles specified with --compute-percentiles");
-            return 1;
-        }
-    }
 
-    if (!cli.query_args.query.empty()) {
-        DFTRACER_UTILS_LOG_WARN(
-            "--query is not yet supported in fused mode, ignoring");
-    }
+            // Output filename: append extension if missing.
+            std::string output_file = cli.output;
+            if (cli.format == AggregationConfig::FORMAT_ARROW) {
+                output_file = cli::ensure_suffix(output_file, ".arrows");
+            } else if (cli.compress) {
+                output_file = cli::ensure_suffix(output_file, ".gz");
+            }
 
-    AggregationConfig agg_config;
-    agg_config.time_interval_us =
-        static_cast<std::uint64_t>(cli.time_interval * 1000.0);
-    agg_config.extra_group_keys = split_csv(cli.group_keys);
-    agg_config.custom_metric_fields = split_csv(cli.metric_fields);
-    agg_config.compute_statistics = true;
-    agg_config.compute_percentiles = cli.compute_percentiles;
-    agg_config.sketch_accuracy = cli.relative_accuracy;
-    agg_config.percentiles = percentiles;
-    agg_config.boundary_events = boundary_events;
-    agg_config.track_process_parents = !cli.no_track_parents;
-    agg_config.track_default_args = !cli.no_default_args;
+            // Parse boundary events.
+            std::vector<BoundaryEventConfig> boundary_events;
+            {
+                std::stringstream ss(cli.boundary_events);
+                std::string item;
+                while (std::getline(ss, item, ',')) {
+                    std::stringstream item_ss(item);
+                    std::string event_name, value_field, output_name;
+                    if (std::getline(item_ss, event_name, ':') &&
+                        std::getline(item_ss, value_field, ':') &&
+                        std::getline(item_ss, output_name, ':')) {
+                        BoundaryEventConfig bec;
+                        bec.event_name = event_name;
+                        bec.value_field = value_field;
+                        bec.output_name = output_name;
+                        boundary_events.push_back(bec);
+                    }
+                }
+            }
 
-    Timer stages_storage("dftracer_aggregator");
-    Timer* stages = cli.pipeline.time_profiling ? &stages_storage : nullptr;
+            // Parse percentiles.
+            std::vector<double> percentiles;
+            if (cli.compute_percentiles) {
+                for (const auto& p_str : cli::split_csv(cli.percentiles)) {
+                    try {
+                        double p = std::stod(p_str);
+                        if (p < 0.0 || p > 1.0) {
+                            DFTRACER_UTILS_LOG_ERROR(
+                                "Invalid percentile value: %s (must be in "
+                                "[0.0, 1.0])",
+                                p_str.c_str());
+                            return 1;
+                        }
+                        percentiles.push_back(p);
+                    } catch (const std::exception&) {
+                        DFTRACER_UTILS_LOG_ERROR(
+                            "Failed to parse percentile: %s", p_str.c_str());
+                        return 1;
+                    }
+                }
+                if (percentiles.empty()) {
+                    DFTRACER_UTILS_LOG_ERROR(
+                        "No valid percentiles specified with "
+                        "--compute-percentiles");
+                    return 1;
+                }
+            }
 
-    AggregationRunInput input;
-    input.log_dir = cli.directory.value;
-    input.index_dir = cli.indexing.index_dir;
-    input.agg_config = std::move(agg_config);
-    input.pipeline_config =
-        cli::build_pipeline_config("DFTracer Aggregator", cli.pipeline);
-    input.output_file = std::move(output_file);
-    input.output_format = cli.format;
-    input.event_format = event_format;
-    input.compress_output = cli.compress;
-    input.compression_level = cli.compression_level;
-    input.force_rebuild = cli.indexing.force;
-    input.checkpoint_size = cli.indexing.checkpoint_size;
-    input.stages = stages;
-    input.verbose = true;
+            if (!cli.query_args.query.empty()) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "--query is not yet supported in fused mode, ignoring");
+            }
 
-    auto result = run_aggregation(std::move(input)).get();
-    return result.success ? 0 : 1;
+            AggregationConfig agg_config;
+            agg_config.time_interval_us =
+                static_cast<std::uint64_t>(cli.time_interval * 1000.0);
+            agg_config.extra_group_keys = cli::split_csv(cli.group_keys);
+            agg_config.custom_metric_fields = cli::split_csv(cli.metric_fields);
+            agg_config.compute_statistics = true;
+            agg_config.compute_percentiles = cli.compute_percentiles;
+            agg_config.sketch_accuracy = cli.relative_accuracy;
+            agg_config.percentiles = percentiles;
+            agg_config.boundary_events = boundary_events;
+            agg_config.track_process_parents = !cli.no_track_parents;
+            agg_config.track_default_args = !cli.no_default_args;
+
+            Timer stages_storage("dftracer_aggregator");
+            Timer* stages =
+                cli.pipeline.time_profiling ? &stages_storage : nullptr;
+
+            AggregationRunInput input;
+            input.log_dir = cli.directory.value;
+            input.index_dir = cli.indexing.index_dir;
+            input.agg_config = std::move(agg_config);
+            input.pipeline_config =
+                cli::build_pipeline_config("DFTracer Aggregator", cli.pipeline);
+            input.output_file = std::move(output_file);
+            input.output_format = cli.format;
+            input.event_format = event_format;
+            input.compress_output = cli.compress;
+            input.compression_level = cli.compression_level;
+            input.force_rebuild = cli.indexing.force;
+            input.checkpoint_size = cli.indexing.checkpoint_size;
+            input.stages = stages;
+            input.verbose = true;
+
+            auto result = run_aggregation(std::move(input)).get();
+            return result ? 0 : 1;
+        });
 }

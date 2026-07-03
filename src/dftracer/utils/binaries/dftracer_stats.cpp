@@ -4,7 +4,6 @@
 #include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/core/utils/timer.h>
 #include <dftracer/utils/utilities/common/json/json.h>
@@ -44,7 +43,6 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -57,15 +55,10 @@ using namespace dftracer::utils::utilities::composites::dft::statistics;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
 using common::query::Query;
-using dftracer::utils::utilities::composites::dft::DFTracerEvent;
-using dftracer::utils::utilities::fileio::lines::sources::
-    async_streaming_gz_lines;
 using dftracer::utils::utilities::indexer::ChunkStatistics;
-using dftracer::utils::utilities::indexer::FileRegistryEntry;
 using dftracer::utils::utilities::indexer::has_capability;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::IndexFileEntryCapability;
-using dftracer::utils::utilities::indexer::RootStatisticsResult;
 namespace cli = dftracer::utils::cli;
 
 struct StatsConfig {
@@ -361,34 +354,12 @@ static std::vector<CountPair> sorted_by_count_desc(const Map& counts) {
 
 // Format a byte value for human-readable display
 static std::string format_bytes(double bytes) {
-    char buf[64];
-    if (bytes < 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.0f B", bytes);
-    } else if (bytes < 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB", bytes / 1024.0);
-    } else if (bytes < 1024.0 * 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f MB", bytes / (1024.0 * 1024.0));
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.1f GB",
-                      bytes / (1024.0 * 1024.0 * 1024.0));
-    }
-    return buf;
+    return cli::human_bytes(bytes);
 }
 
 // Format a bandwidth value (bytes/sec) for human-readable display
 static std::string format_bandwidth(double bps) {
-    char buf[64];
-    if (bps < 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f B/s", bps);
-    } else if (bps < 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f KB/s", bps / 1024.0);
-    } else if (bps < 1024.0 * 1024.0 * 1024.0) {
-        std::snprintf(buf, sizeof(buf), "%.1f MB/s", bps / (1024.0 * 1024.0));
-    } else {
-        std::snprintf(buf, sizeof(buf), "%.1f GB/s",
-                      bps / (1024.0 * 1024.0 * 1024.0));
-    }
-    return buf;
+    return cli::human_bytes(bps, "/s");
 }
 
 // Build a DetailedStatistics from TraceStatistics (summary path).
@@ -442,12 +413,12 @@ static std::string resolve_display_key(
     return key;
 }
 
-static void print_text_detailed(
-    const std::string& file_path, const DetailedStatistics& detailed,
-    std::uint64_t total_chunks, std::uint64_t top_n,
-    const std::unordered_map<std::string, std::string>& hash_resolutions,
-    const TraceStatistics* summary = nullptr,
-    std::uint64_t top_n_pid_tid = 10) {
+// Header plus the optional summary sections (time span, categories, PID:TID).
+static void print_detailed_header(const std::string& file_path,
+                                  const DetailedStatistics& detailed,
+                                  std::uint64_t total_chunks,
+                                  const TraceStatistics* summary,
+                                  std::uint64_t top_n_pid_tid) {
     std::printf("========================================\n");
     std::printf("File: %s\n", file_path.c_str());
     std::printf("========================================\n");
@@ -494,8 +465,10 @@ static void print_text_detailed(
                         (unsigned long long)sorted_pid_tids[i].second);
         }
     }
+}
 
-    // Global duration distribution
+// Global (ungrouped) duration distribution and histogram.
+static void print_detailed_global_duration(const DetailedStatistics& detailed) {
     if (detailed.duration.count() > 0) {
         const auto& d = detailed.duration;
         std::printf("\n  Duration (all events):\n");
@@ -520,8 +493,12 @@ static void print_text_detailed(
         std::printf("\n  Duration Histogram:\n");
         std::printf("%s", d.histogram.render_blocks(20, "us").c_str());
     }
+}
 
-    // Per-group duration table, split by category
+// Per-group duration table, split by category.
+static void print_detailed_grouped_duration(
+    const DetailedStatistics& detailed, std::uint64_t top_n,
+    const std::unordered_map<std::string, std::string>& hash_resolutions) {
     if (!detailed.grouped_duration.empty()) {
         using DurPair = std::pair<std::string, const DistributionStats*>;
 
@@ -615,8 +592,12 @@ static void print_text_detailed(
             }
         }
     }
+}
 
-    // Per-group I/O metrics table
+// Per-group I/O metrics table (or simple global I/O stats when ungrouped).
+static void print_detailed_grouped_io(
+    const DetailedStatistics& detailed, std::uint64_t top_n,
+    const std::unordered_map<std::string, std::string>& hash_resolutions) {
     if (!detailed.grouped_io.empty()) {
         // Check if this is the global (no grouping) case
         bool is_global = (detailed.grouped_io.size() == 1 &&
@@ -724,7 +705,19 @@ static void print_text_detailed(
             }
         }
     }
+}
 
+static void print_text_detailed(
+    const std::string& file_path, const DetailedStatistics& detailed,
+    std::uint64_t total_chunks, std::uint64_t top_n,
+    const std::unordered_map<std::string, std::string>& hash_resolutions,
+    const TraceStatistics* summary = nullptr,
+    std::uint64_t top_n_pid_tid = 10) {
+    print_detailed_header(file_path, detailed, total_chunks, summary,
+                          top_n_pid_tid);
+    print_detailed_global_duration(detailed);
+    print_detailed_grouped_duration(detailed, top_n, hash_resolutions);
+    print_detailed_grouped_io(detailed, top_n, hash_resolutions);
     std::printf("\n");
 }
 
@@ -760,8 +753,8 @@ static coro::CoroTask<std::optional<DetailedStatistics>> scan_chunk_detailed(
     ChunkDetailScannerUtility scanner;
     auto scan_output = co_await scanner.process(scan_input);
 
-    if (scan_output.success) {
-        co_return scan_output.stats;
+    if (scan_output) {
+        co_return scan_output->stats;
     }
 
     co_return std::nullopt;
@@ -1057,24 +1050,8 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
             co_return std::vector<std::string>{};
         }
 
-        auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
-        PatternDirectoryScannerUtilityInput scan_input{
-            directory, {".pfw", ".pfw.gz"}, false, false};
-        utilities::behaviors::BehaviorChain<PatternDirectoryScannerUtilityInput,
-                                            std::vector<filesystem::FileEntry>>
-            chain;
-        utilities::behaviors::UtilityExecutor<
-            PatternDirectoryScannerUtilityInput,
-            std::vector<filesystem::FileEntry>, utilities::tags::Parallelizable,
-            utilities::tags::NeedsContext>
-            executor(scanner, std::move(chain));
-        auto matched = co_await executor.execute_with_context(ctx, scan_input);
-
-        std::vector<std::string> files;
-        files.reserve(matched.size());
-        for (const auto& entry : matched) {
-            files.push_back(entry.path.string());
-        }
+        auto files = co_await cli::scan_directory_trace_files(
+            ctx, directory, /*recursive=*/false);
 
         if (files.empty()) {
             DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
@@ -1717,35 +1694,23 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
+    // Guard stays at main() scope so its destructor runs at true process exit.
     struct RocksDbExitGuard {
         ~RocksDbExitGuard() {
             dftracer::utils::rocksdb::mark_process_exiting_for_rocksdb();
         }
     } rocksdb_exit_guard;
 
-    argparse::ArgumentParser program("dftracer_stats",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<StatsArgParse>(
+        argc, argv, "dftracer_stats",
         "Display statistics for DFTracer trace files from pre-built "
         ".dftindex databases. Auto-builds indexes if missing. "
-        "Zero-cost reads from RocksDB metadata, no decompression.");
-
-    StatsArgParse args(program);
-    args.setup();
-    if (!args.parse(argc, argv)) return 1;
-
-    auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Stats Main", args.pipeline);
-    Pipeline pipeline(pipeline_config);
-    auto stats_task = make_task(
-        [&args](CoroScope& ctx) -> coro::CoroTask<int> {
-            co_return co_await run_stats(ctx, &args);
-        },
-        "StatsMain");
-    pipeline.set_source(stats_task);
-    pipeline.set_destination(stats_task);
-    pipeline.execute();
-    return stats_task->get<int>();
+        "Zero-cost reads from RocksDB metadata, no decompression.",
+        [](StatsArgParse& args) {
+            return cli::run_single_task(
+                "DFTracer Stats Main", args.pipeline,
+                [&args](CoroScope& ctx) -> coro::CoroTask<int> {
+                    co_return co_await run_stats(ctx, &args);
+                });
+        });
 }

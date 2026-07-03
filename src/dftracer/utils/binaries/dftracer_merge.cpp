@@ -22,7 +22,6 @@ class MergeArgParse : public cli::ArgParse {
     bool force = false;
     std::string output;
     bool compress = false;
-    bool verbose = false;
     bool gzip_only = false;
     bool verify = false;
     std::size_t channel_capacity = 100;
@@ -47,11 +46,6 @@ class MergeArgParse : public cli::ArgParse {
         parser()
             .add_argument("-c", "--compress")
             .help("Compress output file with gzip")
-            .flag();
-
-        parser()
-            .add_argument("-v", "--verbose")
-            .help("Enable verbose mode")
             .flag();
 
         parser()
@@ -81,7 +75,6 @@ class MergeArgParse : public cli::ArgParse {
         force = parser().get<bool>("--force");
         output = parser().get<std::string>("--output");
         compress = parser().get<bool>("--compress");
-        verbose = parser().get<bool>("--verbose");
         gzip_only = parser().get<bool>("--gzip-only");
         verify = parser().get<bool>("--verify");
         channel_capacity = parser().get<std::size_t>("--channel-capacity");
@@ -92,19 +85,11 @@ class MergeArgParse : public cli::ArgParse {
 static int run_merge(const MergeArgParse& cli);
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_merge",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<MergeArgParse>(
+        argc, argv, "dftracer_merge",
         "Merge DFTracer .pfw or .pfw.gz files into a single JSON array file "
-        "using streaming producer-consumer pattern");
-
-    MergeArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    return run_merge(cli);
+        "using streaming producer-consumer pattern",
+        [](MergeArgParse& cli) { return run_merge(cli); });
 }
 
 static int run_merge(const MergeArgParse& cli) {
@@ -112,7 +97,6 @@ static int run_merge(const MergeArgParse& cli) {
     const auto output_file = fs::absolute(cli.output).string();
     const auto force_override = cli.force;
     const auto compress_output = cli.compress;
-    [[maybe_unused]] const auto verbose = cli.verbose;
     const auto gzip_only = cli.gzip_only;
     const auto verify = cli.verify;
     const auto channel_capacity = cli.channel_capacity;
@@ -195,6 +179,7 @@ static int run_merge(const MergeArgParse& cli) {
     std::vector<StreamingFileProducerOutput> producer_results;
     producer_results.resize(input_files.size());
     StreamingFileConsumerOutput consumer_result;
+    bool consumer_success = false;
 
     auto pipeline_config = cli::build_pipeline_config(
         "DFTracer Merge", cli.pipeline, cli.watchdog);
@@ -227,16 +212,21 @@ static int run_merge(const MergeArgParse& cli) {
     }
 
     auto* consumer_result_ptr = &consumer_result;
+    auto* consumer_success_ptr = &consumer_success;
     auto consumer_task = make_task(
-        [channel, buf_pool, output_file, compress_output,
-         consumer_result_ptr]([[maybe_unused]] CoroScope& ctx)
+        [channel, buf_pool, output_file, compress_output, consumer_result_ptr,
+         consumer_success_ptr]([[maybe_unused]] CoroScope& ctx)
             -> coro::CoroTask<StreamingFileConsumerOutput> {
             StreamingFileConsumerUtility consumer(channel, buf_pool);
 
             auto input = StreamingFileConsumerInput::with_output(output_file)
                              .with_compression(compress_output);
 
-            *consumer_result_ptr = co_await consumer.process_async(ctx, input);
+            auto result = co_await consumer.process_async(ctx, input);
+            if (result) {
+                *consumer_result_ptr = *std::move(result);
+                *consumer_success_ptr = true;
+            }
             co_return *consumer_result_ptr;
         },
         "Consumer");
@@ -289,11 +279,8 @@ static int run_merge(const MergeArgParse& cli) {
         std::printf("    Output hash: 0x%016zx\n", consumer_result.output_hash);
     }
 
-    std::printf("  Status: %s\n",
-                consumer_result.success ? "SUCCESS" : "FAILED");
+    std::printf("  Status: %s\n", consumer_success ? "SUCCESS" : "FAILED");
     std::printf("==========================================\n");
 
-    return (successful_files == input_files.size() && consumer_result.success)
-               ? 0
-               : 1;
+    return (successful_files == input_files.size() && consumer_success) ? 0 : 1;
 }

@@ -200,155 +200,163 @@ const char* model_label(const stats::BestModel& m) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_gen_dlio_config",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<GenDlioConfigArgParse>(
+        argc, argv, "dftracer_gen_dlio_config",
         "Generate a DLIO YAML configuration from raw DFTracer logs. Indexes "
         "and aggregates the input directory automatically; users do not need "
-        "to run dftracer_aggregator separately.");
+        "to run dftracer_aggregator separately.",
+        [](GenDlioConfigArgParse& cli) -> int {
+            // --- Aggregation phase: produce / reuse the AGGREGATION CF
+            // ---------------
+            agg::AggregationConfig agg_config;
+            agg_config.time_interval_us =
+                static_cast<std::uint64_t>(cli.time_interval * 1000.0);
+            agg_config.compute_statistics = true;
+            // DDSketch is required for high-fidelity DLIO config generation.
+            // Force it on so users don't have to remember the flag.
+            agg_config.compute_percentiles = true;
+            agg_config.sketch_accuracy = 0.01;
+            agg_config.percentiles = {0.25, 0.5, 0.75, 0.90};
+            agg_config.track_process_parents = true;
+            agg_config.track_default_args = true;
 
-    GenDlioConfigArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+            agg::AggregationRunInput run_input;
+            run_input.log_dir = cli.directory.value;
+            run_input.index_dir = cli.indexing.index_dir;
+            run_input.agg_config = std::move(agg_config);
+            run_input.pipeline_config = cli::build_pipeline_config(
+                "DLIO Config Generator", cli.pipeline);
+            run_input.output_file =
+                std::nullopt;  // populate AGGREGATION CF only
+            run_input.force_rebuild = cli.indexing.force;
+            run_input.checkpoint_size = cli.indexing.checkpoint_size;
+            run_input.verbose = true;
 
-    // --- Aggregation phase: produce / reuse the AGGREGATION CF ---------------
-    agg::AggregationConfig agg_config;
-    agg_config.time_interval_us =
-        static_cast<std::uint64_t>(cli.time_interval * 1000.0);
-    agg_config.compute_statistics = true;
-    // DDSketch is required for high-fidelity DLIO config generation. Force it
-    // on so users don't have to remember the flag.
-    agg_config.compute_percentiles = true;
-    agg_config.sketch_accuracy = 0.01;
-    agg_config.percentiles = {0.25, 0.5, 0.75, 0.90};
-    agg_config.track_process_parents = true;
-    agg_config.track_default_args = true;
+            auto run_result = agg::run_aggregation(std::move(run_input)).get();
+            if (!run_result || run_result->index_path.empty()) {
+                DFTRACER_UTILS_LOG_ERROR(
+                    "Aggregation failed; cannot generate DLIO config");
+                return 1;
+            }
 
-    agg::AggregationRunInput run_input;
-    run_input.log_dir = cli.directory.value;
-    run_input.index_dir = cli.indexing.index_dir;
-    run_input.agg_config = std::move(agg_config);
-    run_input.pipeline_config =
-        cli::build_pipeline_config("DLIO Config Generator", cli.pipeline);
-    run_input.output_file = std::nullopt;  // populate AGGREGATION CF only
-    run_input.force_rebuild = cli.indexing.force;
-    run_input.checkpoint_size = cli.indexing.checkpoint_size;
-    run_input.verbose = true;
-
-    auto run_result = agg::run_aggregation(std::move(run_input)).get();
-    if (!run_result.success || run_result.index_path.empty()) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "Aggregation failed; cannot generate DLIO config");
-        return 1;
-    }
-
-    // --- Load aggregated traces ---------------------------------------------
-    dlio::TraceLoaderOptions loader_opts;
-    loader_opts.max_samples_per_entry = cli.max_samples_per_entry;
-    loader_opts.seed = cli.seed;
-    dlio::AggregatedTraces traces;
-    try {
-        traces =
-            dlio::load_aggregated_traces(run_result.index_path, loader_opts);
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to load AGGREGATION CF: %s", e.what());
-        return 1;
-    }
-    if (!traces.any_data) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "No DLIO events (fetch.block / preprocess) found in %s",
-            cli.directory.value.c_str());
-        return 1;
-    }
-    std::printf("\n");
-    std::printf("==========================================\n");
-    std::printf("DLIO Config Generation\n");
-    std::printf("==========================================\n");
-    std::printf("  Loaded %d rank(s), %d step(s) from index at %s\n",
-                traces.num_ranks, traces.num_steps,
-                run_result.index_path.c_str());
-    std::printf("  computation_times: %zu samples (min %.6fs, max %.6fs)\n",
+            // --- Load aggregated traces
+            // ---------------------------------------------
+            dlio::TraceLoaderOptions loader_opts;
+            loader_opts.max_samples_per_entry = cli.max_samples_per_entry;
+            loader_opts.seed = cli.seed;
+            dlio::AggregatedTraces traces;
+            try {
+                traces = dlio::load_aggregated_traces(run_result->index_path,
+                                                      loader_opts);
+            } catch (const std::exception& e) {
+                DFTRACER_UTILS_LOG_ERROR("Failed to load AGGREGATION CF: %s",
+                                         e.what());
+                return 1;
+            }
+            if (!traces.any_data) {
+                DFTRACER_UTILS_LOG_ERROR(
+                    "No DLIO events (fetch.block / preprocess) found in %s",
+                    cli.directory.value.c_str());
+                return 1;
+            }
+            std::printf("\n");
+            std::printf("==========================================\n");
+            std::printf("DLIO Config Generation\n");
+            std::printf("==========================================\n");
+            std::printf("  Loaded %d rank(s), %d step(s) from index at %s\n",
+                        traces.num_ranks, traces.num_steps,
+                        run_result->index_path.c_str());
+            std::printf(
+                "  computation_times: %zu samples (min %.6fs, max %.6fs)\n",
                 traces.computation_times.size(), traces.fetch_block_stats.min(),
                 traces.fetch_block_stats.max());
-    std::printf("  preprocess_times:  %zu samples (min %.6fs, max %.6fs)\n",
+            std::printf(
+                "  preprocess_times:  %zu samples (min %.6fs, max %.6fs)\n",
                 traces.preprocess_times.size(), traces.preprocess_stats.min(),
                 traces.preprocess_stats.max());
 
-    // --- Fit distributions ---------------------------------------------------
-    auto comp_model = fit_best_model(traces.computation_times);
-    auto prep_model = fit_best_model(traces.preprocess_times);
-    if (!comp_model) {
-        DFTRACER_UTILS_LOG_ERROR(
-            "Failed to fit a computation_time distribution");
-        return 1;
-    }
-    std::printf("  Best computation_time model: %s\n",
-                model_label(*comp_model));
-    if (prep_model) {
-        std::printf("  Best preprocess_time  model: %s\n",
-                    model_label(*prep_model));
-    } else {
-        std::printf("  No preprocess events; skipping preprocess block\n");
-    }
+            // --- Fit distributions
+            // ---------------------------------------------------
+            auto comp_model = fit_best_model(traces.computation_times);
+            auto prep_model = fit_best_model(traces.preprocess_times);
+            if (!comp_model) {
+                DFTRACER_UTILS_LOG_ERROR(
+                    "Failed to fit a computation_time distribution");
+                return 1;
+            }
+            std::printf("  Best computation_time model: %s\n",
+                        model_label(*comp_model));
+            if (prep_model) {
+                std::printf("  Best preprocess_time  model: %s\n",
+                            model_label(*prep_model));
+            } else {
+                std::printf(
+                    "  No preprocess events; skipping preprocess block\n");
+            }
 
-    // --- Optimize max_bound percentile via simulator -------------------------
-    auto ctx = dlio::make_simulator_context(traces, cli.num_workers,
-                                            cli.prefetch_factor);
+            // --- Optimize max_bound percentile via simulator
+            // -------------------------
+            auto ctx = dlio::make_simulator_context(traces, cli.num_workers,
+                                                    cli.prefetch_factor);
 
-    dlio::OptimizerOptions opts;
-    opts.max_iterations = cli.simulation_iterations;
-    opts.target_e2e_error = cli.target_e2e_error;
-    opts.target_cdf_similarity = cli.target_cdf_similarity;
-    opts.patience = cli.patience;
-    opts.epsilon = cli.epsilon;
-    opts.momentum = cli.momentum;
-    opts.min_percentile = cli.min_percentile;
-    opts.initial_percentile = cli.max_bound_percentile;
-    opts.base_seed = cli.seed;
+            dlio::OptimizerOptions opts;
+            opts.max_iterations = cli.simulation_iterations;
+            opts.target_e2e_error = cli.target_e2e_error;
+            opts.target_cdf_similarity = cli.target_cdf_similarity;
+            opts.patience = cli.patience;
+            opts.epsilon = cli.epsilon;
+            opts.momentum = cli.momentum;
+            opts.min_percentile = cli.min_percentile;
+            opts.initial_percentile = cli.max_bound_percentile;
+            opts.base_seed = cli.seed;
 
-    auto opt = dlio::optimize_max_bound_percentile(
-        ctx, *comp_model, traces.computation_times, opts);
-    std::printf(
-        "  Optimizer: iters=%d, best_percentile=%.2f%%, e2e_error=%.2f%%, "
-        "fetch_block_cdf_similarity=%.4f%s\n",
-        opt.iterations_used, opt.best_percentile, opt.best.e2e_error * 100.0,
-        opt.best.fetch_block_cdf_similarity,
-        opt.converged ? " (converged)" : "");
+            auto opt = dlio::optimize_max_bound_percentile(
+                ctx, *comp_model, traces.computation_times, opts);
+            std::printf(
+                "  Optimizer: iters=%d, best_percentile=%.2f%%, "
+                "e2e_error=%.2f%%, "
+                "fetch_block_cdf_similarity=%.4f%s\n",
+                opt.iterations_used, opt.best_percentile,
+                opt.best.e2e_error * 100.0, opt.best.fetch_block_cdf_similarity,
+                opt.converged ? " (converged)" : "");
 
-    auto comp_sorted = traces.computation_times;
-    std::sort(comp_sorted.begin(), comp_sorted.end());
-    const double comp_max_bound =
-        dlio::percentile(comp_sorted, opt.best_percentile);
+            auto comp_sorted = traces.computation_times;
+            std::sort(comp_sorted.begin(), comp_sorted.end());
+            const double comp_max_bound =
+                dlio::percentile(comp_sorted, opt.best_percentile);
 
-    double prep_max_bound = 0.0;
-    if (prep_model) {
-        auto prep_sorted = traces.preprocess_times;
-        std::sort(prep_sorted.begin(), prep_sorted.end());
-        prep_max_bound = dlio::percentile(prep_sorted, opt.best_percentile);
-    }
+            double prep_max_bound = 0.0;
+            if (prep_model) {
+                auto prep_sorted = traces.preprocess_times;
+                std::sort(prep_sorted.begin(), prep_sorted.end());
+                prep_max_bound =
+                    dlio::percentile(prep_sorted, opt.best_percentile);
+            }
 
-    // --- Emit YAML -----------------------------------------------------------
-    dlio::DlioTimingBlock comp_block{*comp_model, comp_max_bound};
-    std::optional<dlio::DlioTimingBlock> prep_block_storage;
-    const dlio::DlioTimingBlock* prep_block_ptr = nullptr;
-    if (prep_model) {
-        prep_block_storage = dlio::DlioTimingBlock{*prep_model, prep_max_bound};
-        prep_block_ptr = &(*prep_block_storage);
-    }
+            // --- Emit YAML
+            // -----------------------------------------------------------
+            dlio::DlioTimingBlock comp_block{*comp_model, comp_max_bound};
+            std::optional<dlio::DlioTimingBlock> prep_block_storage;
+            const dlio::DlioTimingBlock* prep_block_ptr = nullptr;
+            if (prep_model) {
+                prep_block_storage =
+                    dlio::DlioTimingBlock{*prep_model, prep_max_bound};
+                prep_block_ptr = &(*prep_block_storage);
+            }
 
-    std::ofstream out(cli.output);
-    if (!out) {
-        DFTRACER_UTILS_LOG_ERROR("Cannot open %s for writing",
-                                 cli.output.c_str());
-        return 1;
-    }
-    if (!dlio::write_dlio_yaml(out, &comp_block, prep_block_ptr)) {
-        DFTRACER_UTILS_LOG_ERROR("Failed to write %s", cli.output.c_str());
-        return 1;
-    }
-    std::printf("  Wrote DLIO config: %s\n", cli.output.c_str());
-    std::printf("==========================================\n");
-    return 0;
+            std::ofstream out(cli.output);
+            if (!out) {
+                DFTRACER_UTILS_LOG_ERROR("Cannot open %s for writing",
+                                         cli.output.c_str());
+                return 1;
+            }
+            if (!dlio::write_dlio_yaml(out, &comp_block, prep_block_ptr)) {
+                DFTRACER_UTILS_LOG_ERROR("Failed to write %s",
+                                         cli.output.c_str());
+                return 1;
+            }
+            std::printf("  Wrote DLIO config: %s\n", cli.output.c_str());
+            std::printf("==========================================\n");
+            return 0;
+        });
 }

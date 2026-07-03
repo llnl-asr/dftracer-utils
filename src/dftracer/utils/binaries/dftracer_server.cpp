@@ -131,19 +131,12 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_server",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<ServerArgParse>(
+        argc, argv, "dftracer_server",
         "Serve DFTracer trace data over HTTP. Query, filter, and stream "
-        "trace events via REST API.");
-
-    ServerArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    install_signal_handlers();
-
-    return run_server(&cli).get();
+        "trace events via REST API.",
+        [](ServerArgParse& cli) {
+            install_signal_handlers();
+            return run_server(&cli).get();
+        });
 }

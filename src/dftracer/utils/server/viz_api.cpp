@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/pipeline/executor.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -23,7 +24,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -31,10 +31,6 @@ namespace dftracer::utils::server {
 
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::views;
-
-using dftracer::utils::utilities::common::json::JsonDocGuard;
-using dftracer::utils::utilities::common::json::JsonValue;
-using dftracer::utils::utilities::common::query::Query;
 
 static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
                                                                     "SH"};
@@ -228,6 +224,127 @@ static void apply_filters(std::string& dsl, std::string_view filters_str) {
 }
 
 // --- GET /api/v1/viz/events ---
+// Build the query view (time range + lane/filter/pid/tid/cat predicates) for a
+// viz request from the parsed parameters.
+static ViewDefinition build_viz_view(const QueryParams& params, double begin,
+                                     double end, double min_dur) {
+    ViewDefinition view;
+    view.name = "viz_query";
+    view.description = "Visualization query";
+
+    // Reserve once and append in place: numbers go through to_chars into a
+    // stack buffer (no per-number heap allocation, unlike std::to_string), and
+    // literals/string_views are appended directly (no temporary
+    // concatenations).
+    std::string dsl;
+    dsl.reserve(128);
+    char numbuf[20];  // max digits of a uint64_t
+    auto append_u64 = [&](std::uint64_t v) {
+        dsl.append(numbuf, to_chars_u64(numbuf, numbuf + sizeof(numbuf), v));
+    };
+
+    dsl += "ts >= ";
+    append_u64(static_cast<std::uint64_t>(begin));
+    dsl += " and ts <= ";
+    append_u64(static_cast<std::uint64_t>(end));
+    if (min_dur > 0) {
+        dsl += " and dur >= ";
+        append_u64(static_cast<std::uint64_t>(min_dur));
+    }
+
+    apply_lanes(dsl, params.get("lanes"));
+    apply_filters(dsl, params.get("filters"));
+
+    auto pid = params.get("pid");
+    if (!pid.empty()) {
+        dsl += " and pid == ";
+        dsl += pid;
+    }
+
+    auto tid = params.get("tid");
+    if (!tid.empty()) {
+        dsl += " and tid == ";
+        dsl += tid;
+    }
+
+    auto cat = params.get("cat");
+    if (!cat.empty()) {
+        dsl += " and cat == \"";
+        dsl += cat;
+        dsl += '"';
+    }
+
+    view.with_query(dsl);
+    return view;
+}
+
+// Select the files to scan: the explicit ?file= or all indexed files, then drop
+// files whose cached time bounds don't overlap [begin, end]. Pure/synchronous.
+static std::vector<const TraceIndex::FileInfo*> select_viz_target_files(
+    TraceIndex& index, const QueryParams& params, double begin, double end) {
+    auto target_files = collect_candidate_files(index, params);
+
+    if (begin > 0 || end > 0) {
+        std::vector<const TraceIndex::FileInfo*> filtered;
+        filtered.reserve(target_files.size());
+        for (auto* fi : target_files) {
+            if (fi->min_timestamp_us == 0 && fi->max_timestamp_us == 0) {
+                filtered.push_back(fi);
+                continue;
+            }
+            double fi_min = static_cast<double>(fi->min_timestamp_us);
+            double fi_max = static_cast<double>(fi->max_timestamp_us);
+            if (fi_max < begin || fi_min > end) continue;
+            filtered.push_back(fi);
+        }
+        target_files = std::move(filtered);
+    }
+    return target_files;
+}
+
+// Normalize event timestamps (when global_min > 0) and serialize the collected
+// events plus metadata into the Chrome Trace Event Format body. `global_min` is
+// the de-normalization base (already 0 unless normalization is active);
+// `display_global_min` is the value reported in the metadata. Pure/synchronous.
+static std::string build_viz_events_body(std::vector<std::string>& events,
+                                         std::uint64_t global_min,
+                                         double meta_begin, double meta_end,
+                                         int limit, bool truncated,
+                                         std::uint64_t display_global_min) {
+    if (global_min > 0) {
+        for (auto& event : events) {
+            event = normalize_event_ts(event, global_min);
+        }
+    }
+
+    // Pre-compute size to avoid repeated reallocations.
+    std::size_t body_size = 256;
+    for (const auto& ev : events) body_size += ev.size() + 1;
+    std::string body;
+    body.reserve(body_size);
+    body += "{\"events\":[";
+    for (std::size_t i = 0; i < events.size(); ++i) {
+        if (i > 0) body += ',';
+        body += events[i];  // Already JSON
+    }
+    body += "],\"metadata\":{\"begin\":";
+    body += std::to_string(meta_begin);
+    body += ",\"end\":";
+    body += std::to_string(meta_end);
+    body += ",\"count\":";
+    body += std::to_string(events.size());
+    body += ",\"limit\":";
+    body += std::to_string(limit);
+    body += ",\"truncated\":";
+    body += truncated ? "true" : "false";
+    body += ",\"ts_normalized\":";
+    body += (global_min > 0) ? "true" : "false";
+    body += ",\"global_min_timestamp_us\":";
+    body += std::to_string(display_global_min);
+    body += "}}";
+    return body;
+}
+
 static coro::CoroTask<HttpResponse> handle_viz_events(
     const HttpRequest& /*req*/, const QueryParams& params, TraceIndex& index) {
     // Required: begin, end, summary
@@ -266,71 +383,14 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
     double min_dur =
         duration_threshold(begin, end, static_cast<unsigned>(summary));
 
-    // Build view with time range and optional filters
-    ViewDefinition view;
-    view.name = "viz_query";
-    view.description = "Visualization query";
-
-    std::string dsl;
-    dsl += "ts >= " + std::to_string(static_cast<uint64_t>(begin));
-    dsl += " and ts <= " + std::to_string(static_cast<uint64_t>(end));
-    if (min_dur > 0) {
-        dsl += " and dur >= " + std::to_string(static_cast<uint64_t>(min_dur));
-    }
-
-    apply_lanes(dsl, params.get("lanes"));
-    apply_filters(dsl, params.get("filters"));
-
-    auto pid = params.get("pid");
-    if (!pid.empty()) {
-        dsl += " and pid == " + std::string(pid);
-    }
-
-    auto tid = params.get("tid");
-    if (!tid.empty()) {
-        dsl += " and tid == " + std::string(tid);
-    }
-
-    auto cat = params.get("cat");
-    if (!cat.empty()) {
-        dsl += " and cat == \"" + std::string(cat) + "\"";
-    }
-
-    view.with_query(dsl);
+    ViewDefinition view = build_viz_view(params, begin, end, min_dur);
 
     // Optional limit: 0 (default) means no limit.
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
 
-    // Determine files
-    std::vector<const TraceIndex::FileInfo*> target_files;
-    auto file_param = params.get("file");
-    if (!file_param.empty()) {
-        auto* f = index.find_file(std::string(file_param));
-        if (f) target_files.push_back(f);
-    } else {
-        for (const auto& f : index.files()) {
-            target_files.push_back(&f);
-        }
-    }
-
-    // File-level time range skip: remove files whose cached time
-    // bounds don't overlap the query window [begin, end].
-    if (begin > 0 || end > 0) {
-        std::vector<const TraceIndex::FileInfo*> filtered;
-        filtered.reserve(target_files.size());
-        for (auto* fi : target_files) {
-            if (fi->min_timestamp_us == 0 && fi->max_timestamp_us == 0) {
-                filtered.push_back(fi);
-                continue;
-            }
-            double fi_min = static_cast<double>(fi->min_timestamp_us);
-            double fi_max = static_cast<double>(fi->max_timestamp_us);
-            if (fi_max < begin || fi_min > end) continue;
-            filtered.push_back(fi);
-        }
-        target_files = std::move(filtered);
-    }
+    std::vector<const TraceIndex::FileInfo*> target_files =
+        select_viz_target_files(index, params, begin, end);
 
     std::vector<std::string> collected_events;
 
@@ -359,9 +419,9 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
             ViewBuilderUtility builder;
             auto build_output = co_await builder.process(builder_input);
-            if (!build_output.success || !build_output.file_may_match) continue;
+            if (!build_output || !build_output->file_may_match) continue;
 
-            for (const auto& candidate : build_output.candidates) {
+            for (const auto& candidate : build_output->candidates) {
                 if (limit > 0 &&
                     static_cast<int>(collected_events.size()) >= limit) {
                     truncated = true;
@@ -444,10 +504,10 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
 
                     ViewBuilderUtility builder;
                     auto build_output = co_await builder.process(builder_input);
-                    if (!build_output.success || !build_output.file_may_match)
+                    if (!build_output || !build_output->file_may_match)
                         continue;
 
-                    for (const auto& candidate : build_output.candidates) {
+                    for (const auto& candidate : build_output->candidates) {
                         if (remaining->load(std::memory_order_relaxed) <= 0)
                             break;
 
@@ -486,44 +546,9 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
         }
     }
 
-    // Apply normalization to event timestamps.
-    if (normalize && global_min > 0) {
-        for (auto& event : collected_events) {
-            event = normalize_event_ts(event, global_min);
-        }
-    }
-
-    // Use the original (normalized) begin/end for metadata.
-    double meta_begin = original_begin;
-    double meta_end = original_end;
-
-    // Build response matching the Chrome Trace Event Format.
-    // Pre-compute size to avoid repeated reallocations.
-    std::size_t body_size = 256;
-    for (const auto& ev : collected_events) body_size += ev.size() + 1;
-    std::string body;
-    body.reserve(body_size);
-    body += "{\"events\":[";
-    for (std::size_t i = 0; i < collected_events.size(); ++i) {
-        if (i > 0) body += ',';
-        body += collected_events[i];  // Already JSON
-    }
-    body += "],\"metadata\":{\"begin\":";
-    body += std::to_string(meta_begin);
-    body += ",\"end\":";
-    body += std::to_string(meta_end);
-    body += ",\"count\":";
-    body += std::to_string(collected_events.size());
-    body += ",\"limit\":";
-    body += std::to_string(limit);
-    body += ",\"truncated\":";
-    body += truncated ? "true" : "false";
-    body += ",\"ts_normalized\":";
-    body += (normalize && global_min > 0) ? "true" : "false";
-    body += ",\"global_min_timestamp_us\":";
-    body += std::to_string(index.global_min_timestamp_us());
-    body += "}}";
-
+    std::string body = build_viz_events_body(
+        collected_events, global_min, original_begin, original_end, limit,
+        truncated, index.global_min_timestamp_us());
     co_return HttpResponse::ok(body);
 }
 

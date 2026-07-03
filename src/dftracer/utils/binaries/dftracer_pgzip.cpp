@@ -25,7 +25,6 @@ class PgzipArgParse : public cli::ArgParse {
     cli::PipelineArgs pipeline;
     cli::WatchdogArgs watchdog;
 
-    bool verbose = false;
     int compression_level = Z_DEFAULT_COMPRESSION;
     std::size_t chunk_size = 4 * 1024 * 1024;
 
@@ -35,11 +34,6 @@ class PgzipArgParse : public cli::ArgParse {
 
    protected:
     void register_args() override {
-        parser()
-            .add_argument("-v", "--verbose")
-            .help("Enable verbose output")
-            .flag();
-
         parser()
             .add_argument("-l", "--compression-level")
             .help("Compression level (0-9, default: Z_DEFAULT_COMPRESSION)")
@@ -54,7 +48,6 @@ class PgzipArgParse : public cli::ArgParse {
     }
 
     void post_parse() override {
-        verbose = parser().get<bool>("--verbose");
         compression_level = parser().get<int>("--compression-level");
         chunk_size = parser().get<std::size_t>("--chunk-size");
     }
@@ -270,7 +263,6 @@ static coro::CoroTask<FileResult> compress_file_parallel(
 
 static int run_pgzip(const PgzipArgParse& cli) {
     const auto input_dir = fs::absolute(cli.directory.value).string();
-    const auto verbose = cli.verbose;
     const auto executor_threads = cli.pipeline.executor_threads;
     const auto compression_level = cli.compression_level;
     const auto chunk_size = cli.chunk_size;
@@ -298,7 +290,6 @@ static int run_pgzip(const PgzipArgParse& cli) {
     std::printf("  Compression level: %d\n", compression_level);
     std::printf("  Chunk size: %zu bytes\n", chunk_size);
     std::printf("  Executor threads: %zu\n", executor_threads);
-    std::printf("  Verbose: %s\n", verbose ? "true" : "false");
     std::printf("==========================================\n\n");
 
     auto start_time = std::chrono::high_resolution_clock::now();
@@ -316,13 +307,13 @@ static int run_pgzip(const PgzipArgParse& cli) {
 
     auto compress_task = make_task(
         [files_ptr, results_ptr, mutex_ptr, compression_level, executor_threads,
-         chunk_size, verbose](CoroScope& ctx) -> coro::CoroTask<void> {
+         chunk_size](CoroScope& ctx) -> coro::CoroTask<void> {
             auto file_chan =
                 coro::make_channel<std::size_t>(executor_threads * 2);
 
             co_await ctx.scope([&file_chan, files_ptr, results_ptr, mutex_ptr,
-                                compression_level, executor_threads, chunk_size,
-                                verbose](
+                                compression_level, executor_threads,
+                                chunk_size](
                                    CoroScope& scope) -> coro::CoroTask<void> {
                 scope.spawn(
                     [ch = file_chan->producer(), num_files = files_ptr->size()](
@@ -337,7 +328,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
                 for (std::size_t w = 0; w < executor_threads; ++w) {
                     scope.spawn([ch = file_chan->consumer(), files_ptr,
                                  results_ptr, mutex_ptr, compression_level,
-                                 executor_threads, chunk_size, verbose](
+                                 executor_threads, chunk_size](
                                     CoroScope& wctx) -> coro::CoroTask<void> {
                         while (auto fi_opt = co_await ch.receive()) {
                             const auto& path = (*files_ptr)[*fi_opt];
@@ -346,7 +337,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
                                 wctx, path, compression_level, executor_threads,
                                 chunk_size);
 
-                            if (verbose && result.success) {
+                            if (result.success) {
                                 double ratio =
                                     result.original_size > 0
                                         ? static_cast<double>(
@@ -355,7 +346,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
                                                   result.original_size) *
                                               100.0
                                         : 0.0;
-                                DFTRACER_UTILS_LOG_INFO(
+                                DFTRACER_UTILS_LOG_DEBUG(
                                     "Compressed %s: %zu -> %zu "
                                     "bytes (%.1f%%)",
                                     fs::path(path).filename().c_str(),
@@ -431,18 +422,10 @@ static int run_pgzip(const PgzipArgParse& cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_pgzip",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<PgzipArgParse>(
+        argc, argv, "dftracer_pgzip",
         "Parallel gzip compression for DFTracer .pfw files. "
         "Splits each file into chunks and compresses them in parallel "
-        "as independent gzip members.");
-
-    PgzipArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    return run_pgzip(cli);
+        "as independent gzip members.",
+        [](PgzipArgParse& cli) { return run_pgzip(cli); });
 }

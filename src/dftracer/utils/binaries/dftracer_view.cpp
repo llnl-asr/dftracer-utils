@@ -244,19 +244,19 @@ static coro::CoroTask<void> process_single_file(const std::string& file_path,
     ViewBuilderUtility builder;
     auto build_output = co_await builder.process(builder_input);
 
-    if (!build_output.success) {
+    if (!build_output) {
         DFTRACER_UTILS_LOG_ERROR("ViewBuilder failed for %s",
                                  file_path.c_str());
         co_return;
     }
 
-    (*vctx.total_chunks_skipped) += build_output.skipped_checkpoints;
+    (*vctx.total_chunks_skipped) += build_output->skipped_checkpoints;
 
-    if (!build_output.file_may_match) {
+    if (!build_output->file_may_match) {
         co_return;
     }
 
-    auto& candidates = build_output.candidates;
+    auto& candidates = build_output->candidates;
     co_await fctx.scope([&file_path, &index_path, &vctx, &candidates](
                             CoroScope& chunk_scope) -> coro::CoroTask<void> {
         for (const auto& candidate : candidates) {
@@ -552,23 +552,17 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_view",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<ViewArgParse>(
+        argc, argv, "dftracer_view",
         "Apply filtered views to DFTracer trace files. Uses bloom filter "
         "indices for efficient chunk-skipping. Supports predefined views "
-        "(io, compute, dlio), custom recipes, and inline queries.");
-
-    ViewArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    try {
-        return run_view(&cli).get();
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_ERROR("Fatal: %s", e.what());
-        return 1;
-    }
+        "(io, compute, dlio), custom recipes, and inline queries.",
+        [](ViewArgParse& cli) -> int {
+            try {
+                return run_view(&cli).get();
+            } catch (const std::exception& e) {
+                DFTRACER_UTILS_LOG_ERROR("Fatal: %s", e.what());
+                return 1;
+            }
+        });
 }

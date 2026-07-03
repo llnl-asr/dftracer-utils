@@ -15,7 +15,6 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
-#include <sstream>
 
 #include "common_cli.h"
 
@@ -118,20 +117,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     const auto build_manifest = cli->manifest;
     const auto rebuild_summaries = cli->rebuild_summaries;
 
-    auto split_string = [](const std::string& str) {
-        std::vector<std::string> result;
-        if (str.empty()) return result;
-        std::stringstream ss(str);
-        std::string item;
-        while (std::getline(ss, item, ',')) {
-            if (!item.empty()) {
-                result.push_back(item);
-            }
-        }
-        return result;
-    };
-
-    std::vector<std::string> user_dimensions = split_string(dimensions_str);
+    std::vector<std::string> user_dimensions = cli::split_csv(dimensions_str);
 
     std::vector<std::string> extra_dimensions(
         dftracer::utils::utilities::indexer::DEFAULT_EXTRA_DIMENSIONS.begin(),
@@ -317,18 +303,10 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_index",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<IndexArgParse>(
+        argc, argv, "dftracer_index",
         "Build per-chunk bloom filter indices for DFTracer trace files. "
         "Creates root-local .dftindex databases enabling fast chunk-skipping "
-        "queries.");
-
-    IndexArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    return run_index(&cli).get();
+        "queries.",
+        [](IndexArgParse& cli) { return run_index(&cli).get(); });
 }

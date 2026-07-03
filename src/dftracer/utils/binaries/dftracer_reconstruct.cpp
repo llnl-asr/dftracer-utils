@@ -79,11 +79,11 @@ static coro::CoroTask<int> run_reconstruct(const ReconstructArgParse* cli,
     input.compress = !cli->no_compress;
 
     ReconstructorUtility reconstructor;
-    auto result = co_await scope.spawn(reconstructor, std::move(input));
-
-    if (!result.success) {
-        DFTRACER_UTILS_LOG_ERROR("Reconstruction failed: %s",
-                                 result.error_message.c_str());
+    ReconstructorResult result;
+    try {
+        result = co_await scope.spawn(reconstructor, std::move(input));
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_ERROR("Reconstruction failed: %s", e.what());
         co_return 1;
     }
 
@@ -107,34 +107,17 @@ static coro::CoroTask<int> run_reconstruct(const ReconstructArgParse* cli,
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    return cli::cli_main<ReconstructArgParse>(
+        argc, argv, "dftracer_reconstruct",
+        "Reconstruct original trace files from reorganized output.",
+        [](ReconstructArgParse& cli) {
+            fs::create_directories(cli.output_dir);
 
-    argparse::ArgumentParser program("dftracer_reconstruct",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Reconstruct original trace files from reorganized output.");
-
-    ReconstructArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    fs::create_directories(cli.output_dir);
-
-    auto pipeline_config =
-        cli::build_pipeline_config("Reconstruct", cli.pipeline);
-    Pipeline pipeline(pipeline_config);
-
-    int exit_code = 0;
-    auto* cli_ptr = &cli;
-    auto task = make_task(
-        [cli_ptr, &exit_code](CoroScope& scope) -> coro::CoroTask<void> {
-            exit_code = co_await run_reconstruct(cli_ptr, scope);
-        },
-        "ReconstructMain");
-
-    pipeline.set_source(task);
-    pipeline.set_destination(task);
-    pipeline.execute();
-
-    return exit_code;
+            auto* cli_ptr = &cli;
+            return cli::run_single_task(
+                "Reconstruct", cli.pipeline,
+                [cli_ptr](CoroScope& scope) -> coro::CoroTask<int> {
+                    co_return co_await run_reconstruct(cli_ptr, scope);
+                });
+        });
 }

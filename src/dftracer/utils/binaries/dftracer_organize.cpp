@@ -1,5 +1,6 @@
 #include <concurrentqueue.h>
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/memory_budget.h>
 #include <dftracer/utils/core/coro/channel.h>
@@ -169,7 +170,6 @@ struct OrganizeResult {
     /// striped writer so Phase 4 indexing can slice without re-scanning.
     ChunkLayoutMap chunk_layouts;
     std::unordered_set<std::string> inline_indexed_groups;
-    bool success = false;
 };
 
 struct GroupRuntime {
@@ -191,27 +191,23 @@ static coro::CoroTask<void> run_group_writer_task(
     ChunkLayoutMap* chunk_layouts_ptr, GroupRuntime* runtime_ptr) {
     auto writer_result = co_await run_group_writer(inner_scope, writer_config);
 
-    if (writer_result.success) {
-        total_events_ptr->fetch_add(writer_result.events_written);
-        chunks_ptr->fetch_add(writer_result.chunks_created);
+    if (writer_result) {
+        total_events_ptr->fetch_add(writer_result->events_written);
+        chunks_ptr->fetch_add(writer_result->chunks_created);
         if (runtime_ptr) {
-            runtime_ptr->indexed_inline.store(writer_result.indexed_inline,
+            runtime_ptr->indexed_inline.store(writer_result->indexed_inline,
                                               std::memory_order_release);
         }
 
         std::lock_guard<std::mutex> lock(*output_mutex_ptr);
-        for (const auto& f : writer_result.output_files) {
+        for (const auto& f : writer_result->output_files) {
             output_files_ptr->push_back(f);
         }
         if (chunk_layouts_ptr) {
-            for (auto& cl : writer_result.chunk_layouts) {
+            for (auto& cl : writer_result->chunk_layouts) {
                 (*chunk_layouts_ptr)[cl.path] = std::move(cl.members);
             }
         }
-    } else {
-        DFTRACER_UTILS_LOG_ERROR("GroupWriter failed for %s: %s",
-                                 writer_config.group_name.c_str(),
-                                 writer_result.error_message.c_str());
     }
 }
 
@@ -435,10 +431,10 @@ static coro::CoroTask<void> run_group_indexing(
 static coro::CoroTask<void> run_manifest_extractor_task(
     ManifestExtractorConfig extractor_config) {
     auto extract_result = co_await extract_from_manifest(extractor_config);
-    if (!extract_result.success) {
+    if (!extract_result) {
         DFTRACER_UTILS_LOG_WARN("ManifestExtractor failed for %s: %s",
                                 extractor_config.file_path.c_str(),
-                                extract_result.error_message.c_str());
+                                extract_result.error().message.c_str());
     }
 }
 
@@ -621,6 +617,11 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
     Timer overall(true);
 
     OrganizeResult result;
+    // Success/failure signal shared across the two pipeline tasks. Starts as an
+    // error so any early exit or throw before Phase 3 completes leaves it
+    // failed; set to a value once Phase 3 succeeds.
+    Result<void> organize_status =
+        make_error(ErrorCode::INTERNAL, "organize pipeline did not complete");
 
     auto pipeline_config =
         cli::build_pipeline_config("Organize: Streaming", cli->pipeline);
@@ -630,9 +631,10 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
     auto* cli_ptr = cli;
     auto* groups_ptr = &groups;
     auto* result_ptr = &result;
+    auto* status_ptr = &organize_status;
 
     auto organize_task = make_task(
-        [cli_ptr, groups_ptr, result_ptr, output_dir, index_dir,
+        [cli_ptr, groups_ptr, result_ptr, status_ptr, output_dir, index_dir,
          checkpoint_size, force_rebuild, no_compress, compression_level,
          executor_threads, chunk_size_mb,
          stages](CoroScope& ctx) -> coro::CoroTask<void> {
@@ -656,6 +658,9 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
             if (resolve_result.all_files.empty()) {
                 DFTRACER_UTILS_LOG_ERROR(
                     "%s", "No input files. Use --files or --directory.");
+                *status_ptr =
+                    make_error(ErrorCode::NOT_FOUND,
+                               "No input files. Use --files or --directory.");
                 co_return;
             }
 
@@ -871,7 +876,7 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
             result_ptr->source_files_processed = total_source_files;
             result_ptr->output_files = std::move(all_output_files);
 
-            result_ptr->success = true;
+            *status_ptr = Result<void>{};
             DFTRACER_UTILS_LOG_INFO(
                 "Phase 3 complete: %zu chunks created, %zu events written",
                 result_ptr->chunks_created, result_ptr->total_events_written);
@@ -879,9 +884,10 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
         "OrganizeStreaming");
 
     auto index_task = make_task(
-        [cli_ptr, groups_ptr, result_ptr, output_dir, checkpoint_size,
+        [cli_ptr, groups_ptr, result_ptr, status_ptr, output_dir,
+         checkpoint_size,
          executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
-            if (!result_ptr->success) co_return;
+            if (!*status_ptr) co_return;
 
             AggregationConfig agg_config;
             const AggregationConfig* agg_ptr = nullptr;
@@ -969,7 +975,7 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
     pipeline.set_destination(index_task);
     pipeline.execute();
 
-    if (result.success) {
+    if (organize_status) {
         const std::string manifest_path = output_dir + "/manifest.json";
         std::ofstream manifest_out(manifest_path);
         if (manifest_out.is_open()) {
@@ -1036,7 +1042,7 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
     std::printf("  Input files: %zu\n", result.source_files_processed);
     std::printf("  Events routed: %zu\n", result.total_events_written);
     std::printf("  Chunks created: %zu\n", result.chunks_created);
-    if (result.success) {
+    if (organize_status) {
         std::printf("  Manifest: %s/manifest.json\n", output_dir.c_str());
     }
     std::printf("  Output files:\n");
@@ -1053,23 +1059,15 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
     }
     std::printf("==========================================\n");
 
-    co_return result.success ? 0 : 1;
+    co_return organize_status ? 0 : 1;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_organize",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<OrganizeArgParse>(
+        argc, argv, "dftracer_organize",
         "Reorganize DFTracer trace files by routing events to "
-        "predicate-based groups with chunked output.");
-
-    OrganizeArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    return run_organize(&cli).get();
+        "predicate-based groups with chunked output.",
+        [](OrganizeArgParse& cli) { return run_organize(&cli).get(); });
 }

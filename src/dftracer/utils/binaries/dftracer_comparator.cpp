@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/channel.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
@@ -20,6 +21,7 @@
 #include <atomic>
 #include <chrono>
 #include <ctime>
+#include <optional>
 
 #include "common_cli.h"
 
@@ -299,7 +301,11 @@ static coro::CoroTask<void> run_all_aggregations(
 
 }  // namespace
 
-static int run_comparator(const ComparatorArgParse* cli) {
+// Build the comparison config from CLI args (config file, preset, or
+// baseline/variant), apply CLI overrides, and resolve defaults. Returns
+// nullopt on any user-facing error (already logged).
+static std::optional<ComparisonConfig> build_comparison_config(
+    const ComparatorArgParse* cli) {
     const auto& config_path = cli->config_path;
     const auto& preset = cli->preset;
     const auto& baseline_path = cli->baseline;
@@ -319,21 +325,21 @@ static int run_comparator(const ComparatorArgParse* cli) {
         auto parsed = ComparisonConfig::from_json_file(config_path, error);
         if (!parsed) {
             DFTRACER_UTILS_LOG_ERROR("Config error: %s", error.c_str());
-            return 1;
+            return std::nullopt;
         }
         config = std::move(*parsed);
     } else if (!preset.empty()) {
         if (baseline_path.empty() || variant_path.empty()) {
             DFTRACER_UTILS_LOG_ERROR(
                 "--preset requires both --baseline and --variant");
-            return 1;
+            return std::nullopt;
         }
         auto parsed =
             ComparisonConfig::from_preset(preset, baseline_path, variant_path);
         if (!parsed) {
             DFTRACER_UTILS_LOG_ERROR("Unknown preset: %s. Supported: dlio",
                                      preset.c_str());
-            return 1;
+            return std::nullopt;
         }
         config = std::move(*parsed);
         // AND the user query into every top-level node so --query narrows
@@ -352,7 +358,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
         DFTRACER_UTILS_LOG_ERROR(
             "Must specify --config, --preset, or both --baseline and "
             "--variant");
-        return 1;
+        return std::nullopt;
     }
 
     if (!format.empty()) config.format = format;
@@ -380,8 +386,14 @@ static int run_comparator(const ComparatorArgParse* cli) {
         config.checkpoint_size =
             indexer::internal::Indexer::DEFAULT_CHECKPOINT_SIZE;
     }
+    return config;
+}
 
-    // Precompute aggregation plans from config (needed by both Agg tasks)
+// Precompute the per-node aggregation plans from the resolved config (needed by
+// both the baseline and variant Agg tasks). Returns nullopt on an invalid node
+// query (already logged).
+static std::optional<std::vector<NodeAggPlan>> build_agg_plans(
+    const ComparisonConfig& config) {
     std::vector<NodeAggPlan> agg_plans;
     for (auto& node : config.nodes) {
         NodeAggPlan plan;
@@ -399,7 +411,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
                     DFTRACER_UTILS_LOG_ERROR("Invalid query for node '%s': %s",
                                              visitor->name.c_str(),
                                              result.error().format().c_str());
-                    return 1;
+                    return std::nullopt;
                 }
                 spec.query = std::move(*result);
             }
@@ -418,6 +430,35 @@ static int run_comparator(const ComparatorArgParse* cli) {
         }
         agg_plans.push_back(std::move(plan));
     }
+    return agg_plans;
+}
+
+// Render the assembled comparison output as JSON or a formatted tree table.
+static void render_comparison_output(const ComparisonOutput& output,
+                                     const ComparisonConfig& config) {
+    if (config.format == "json") {
+        TreeTableFormatter formatter;
+        std::printf("%s\n", formatter.render_json(output).c_str());
+    } else {
+        bool is_tty = isatty(fileno(stdout));
+        FormatterOptions fmt_opts;
+        fmt_opts.use_color = is_tty && !config.no_color;
+        fmt_opts.use_unicode = is_tty;
+        fmt_opts.compact = config.compact;
+        TreeTableFormatter formatter(fmt_opts);
+        formatter.render(stdout, output);
+    }
+}
+
+static int run_comparator(const ComparatorArgParse* cli) {
+    auto config_opt = build_comparison_config(cli);
+    if (!config_opt) return 1;
+    ComparisonConfig config = std::move(*config_opt);
+
+    // Precompute aggregation plans from config (needed by both Agg tasks)
+    auto agg_plans_opt = build_agg_plans(config);
+    if (!agg_plans_opt) return 1;
+    std::vector<NodeAggPlan> agg_plans = std::move(*agg_plans_opt);
 
     auto pipeline_config =
         cli::build_pipeline_config("DFTracer Comparator", cli->pipeline);
@@ -630,7 +671,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
 
                 ComparisonUtility cmp;
                 auto cmp_output = co_await cmp.process(cmp_input);
-                output.nodes.push_back(std::move(cmp_output.result));
+                output.nodes.push_back(std::move(cmp_output->result));
             }
 
             auto meta_rows = build_metadata_metrics(output.baseline_meta,
@@ -645,18 +686,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
                 end_time - start_time;
             output.execution_time_ms = duration.count();
 
-            if (config.format == "json") {
-                TreeTableFormatter formatter;
-                std::printf("%s\n", formatter.render_json(output).c_str());
-            } else {
-                bool is_tty = isatty(fileno(stdout));
-                FormatterOptions fmt_opts;
-                fmt_opts.use_color = is_tty && !config.no_color;
-                fmt_opts.use_unicode = is_tty;
-                fmt_opts.compact = config.compact;
-                TreeTableFormatter formatter(fmt_opts);
-                formatter.render(stdout, output);
-            }
+            render_comparison_output(output, config);
 
             co_return;
         },
@@ -686,16 +716,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_comparator",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
-        "Compare DFTracer trace metrics between baseline and variant");
-
-    ComparatorArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    return run_comparator(&cli);
+    return cli::cli_main<ComparatorArgParse>(
+        argc, argv, "dftracer_comparator",
+        "Compare DFTracer trace metrics between baseline and variant",
+        [](ComparatorArgParse& cli) { return run_comparator(&cli); });
 }

@@ -46,6 +46,7 @@
 #include <vector>
 
 #include "common_cli.h"
+#include "common_cli_mpi.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
@@ -1034,7 +1035,7 @@ coro::CoroTask<void> task_merge(RunCtx& ctx) {
 }
 
 int run(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
+    dftracer::utils::logger::init();
 
     argparse::ArgumentParser program("dftracer_aggregator_mpi",
                                      DFTRACER_UTILS_PACKAGE_VERSION);
@@ -1044,49 +1045,16 @@ int run(int argc, char** argv) {
         "write the final gzip JSON output.");
 
     AggregatorMpiArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+    if (!cli::setup_and_parse(cli, argc, argv)) return 1;
 
     RunCtx ctx;
     ctx.cli = &cli;
     MPI_Comm_rank(MPI_COMM_WORLD, &ctx.rank);
     MPI_Comm_size(MPI_COMM_WORLD, &ctx.size);
 
-    // Per-node rank count via a node-local sub-communicator. Used to
-    // divide executor/io threads so N ranks on one node don't each try
-    // to spin up hardware_concurrency() compute threads (total cores)
-    // and oversubscribe by N.
-    MPI_Comm node_comm = MPI_COMM_NULL;
-    MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, ctx.rank,
-                        MPI_INFO_NULL, &node_comm);
-    int ppn = 1;
-    if (node_comm != MPI_COMM_NULL) {
-        MPI_Comm_size(node_comm, &ppn);
-        MPI_Comm_free(&node_comm);
-    }
-    if (ppn > 1) {
-        const auto hw = dftracer_utils_hardware_concurrency();
-        const auto scaled = std::max<std::size_t>(
-            1, static_cast<std::size_t>(hw) / static_cast<std::size_t>(ppn));
-        // Heuristic: the argparse default for these flags is
-        // hardware_concurrency(). If the user didn't pass the flag, the
-        // parsed value equals the node-wide default -- scale it down.
-        // If the user set an explicit value we leave it alone.
-        if (cli.pipeline.executor_threads == static_cast<std::size_t>(hw)) {
-            cli.pipeline.executor_threads = scaled;
-        }
-        if (cli.pipeline.io_threads == static_cast<std::size_t>(hw)) {
-            cli.pipeline.io_threads = scaled;
-        }
-        if (ctx.rank == 0) {
-            std::printf(
-                "[rank 0] detected ppn=%d, executor_threads=%zu "
-                "io_threads=%zu (hw=%zu)\n",
-                ppn, cli.pipeline.executor_threads, cli.pipeline.io_threads,
-                static_cast<std::size_t>(hw));
-            std::fflush(stdout);
-        }
-    }
+    // Divide executor/io threads by per-node rank count to avoid
+    // oversubscription when multiple ranks share a node.
+    cli::scale_threads_for_ppn(cli.pipeline, ctx.rank, /*verbose=*/true);
 
     // Deterministic hash-based intern ids so the same string maps to the
     // same id on every rank, keeping cross-rank aggregation keys identical.
@@ -1103,11 +1071,8 @@ int run(int argc, char** argv) {
                                cli.shared_staging_dir == ctx.staging_root)
                                   ? ctx.staging_root
                                   : cli.shared_staging_dir;
-    ctx.final_output = fs::absolute(cli.output).string();
-    if (ctx.final_output.size() < 3 ||
-        ctx.final_output.substr(ctx.final_output.size() - 3) != ".gz") {
-        ctx.final_output += ".gz";
-    }
+    ctx.final_output =
+        cli::ensure_suffix(fs::absolute(cli.output).string(), ".gz");
     ctx.perfetto_shards_dir =
         (fs::path(ctx.index_dir) / "_perfetto_shards").string();
 
@@ -1183,17 +1148,4 @@ int run(int argc, char** argv) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    int provided = 0;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
-    if (provided < MPI_THREAD_FUNNELED) {
-        std::fprintf(stderr,
-                     "MPI does not support MPI_THREAD_FUNNELED (got %d), "
-                     "aborting\n",
-                     provided);
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
-    const int rc = run(argc, argv);
-    MPI_Finalize();
-    return rc;
-}
+int main(int argc, char** argv) { return cli::mpi_main(argc, argv, run); }

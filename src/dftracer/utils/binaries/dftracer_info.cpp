@@ -19,7 +19,6 @@
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
-#include <iomanip>
 #include <memory>
 #include <mutex>
 
@@ -44,7 +43,6 @@ class InfoArgParse : public cli::ArgParse {
     cli::IndexingArgs indexing;
 
     std::string query_type = "summary";
-    bool verbose = false;
     bool force_rebuild = false;
 
     explicit InfoArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
@@ -64,11 +62,6 @@ class InfoArgParse : public cli::ArgParse {
             .default_value<std::string>("summary");
 
         parser()
-            .add_argument("-v", "--verbose")
-            .help("Show detailed information including index details")
-            .flag();
-
-        parser()
             .add_argument("-f", "--force-rebuild")
             .help("Force rebuild index files")
             .flag();
@@ -76,23 +69,12 @@ class InfoArgParse : public cli::ArgParse {
 
     void post_parse() override {
         query_type = parser().get<std::string>("--query");
-        verbose = parser().get<bool>("--verbose");
         force_rebuild = parser().get<bool>("--force-rebuild");
     }
 };
 
 static std::string format_size(std::uint64_t bytes) {
-    const char* units[] = {"B", "KB", "MB", "GB", "TB"};
-    int unit_index = 0;
-    double size = static_cast<double>(bytes);
-    while (size >= 1024.0 && unit_index < 4) {
-        size /= 1024.0;
-        unit_index++;
-    }
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(2) << size << " "
-        << units[unit_index];
-    return oss.str();
+    return cli::human_bytes(static_cast<double>(bytes), "", 2);
 }
 
 using FileRegistry = std::unordered_map<std::string, FileRegistryEntry>;
@@ -224,7 +206,7 @@ process_index_group_info(std::shared_ptr<std::string> index_path,
 }
 
 static void print_file_info(const MetadataCollectorUtilityOutput& info,
-                            bool verbose) {
+                            bool detailed) {
     std::printf("========================================\n");
     std::printf("File: %s\n", info.file_path.c_str());
     std::printf("========================================\n");
@@ -269,7 +251,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         std::printf("  Checkpoints: %zu\n", info.num_checkpoints);
     }
 
-    if (verbose) {
+    if (detailed) {
         std::printf("\nDetailed Statistics:\n");
         std::printf("  Start Line: %zu\n", info.start_line);
         std::printf("  End Line: %zu\n", info.end_line);
@@ -352,7 +334,6 @@ static coro::CoroTask<void> auto_index_and_resolve(
 static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
     const auto& directory = cli->directory.value;
     const auto& query_type = cli->query_type;
-    const auto verbose = cli->verbose;
     const auto force_rebuild = cli->force_rebuild;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
     const auto& index_dir = cli->indexing.index_dir;
@@ -578,7 +559,7 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
     }
 
     for (const auto& r : all_results) {
-        print_file_info(r, verbose);
+        print_file_info(r, !summary_mode);
     }
 
     if (files.size() > 1) {
@@ -611,30 +592,15 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
 }
 
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_info",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<InfoArgParse>(
+        argc, argv, "dftracer_info",
         "Display metadata and index information for DFTracer compressed files "
-        "using composable utilities and pipeline processing");
-
-    InfoArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
-
-    auto pipeline_config =
-        cli::build_pipeline_config("DFTracer Info", cli.pipeline);
-    Pipeline pipeline(pipeline_config);
-
-    auto info_task = make_task(
-        [&cli](CoroScope& ctx) -> coro::CoroTask<int> {
-            co_return co_await run_info(ctx, &cli);
-        },
-        "InfoMain");
-
-    pipeline.set_source(info_task);
-    pipeline.set_destination(info_task);
-    pipeline.execute();
-    return info_task->get<int>();
+        "using composable utilities and pipeline processing",
+        [](InfoArgParse& cli) {
+            return cli::run_single_task(
+                "DFTracer Info", cli.pipeline,
+                [&cli](CoroScope& ctx) -> coro::CoroTask<int> {
+                    co_return co_await run_info(ctx, &cli);
+                });
+        });
 }

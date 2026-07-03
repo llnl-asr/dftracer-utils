@@ -17,6 +17,7 @@
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
+#include <dftracer/utils/utilities/trace_gen/fake_trace_writer.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -30,200 +31,17 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft;
 using namespace dftracer::utils::utilities::composites::dft::indexing;
-namespace compression = dftracer::utils::utilities::compression;
-namespace util_io = dftracer::utils::utilities::fileio;
 using dftracer::utils::utilities::indexer::IndexBatchBuilderUtility;
 using dftracer::utils::utilities::indexer::IndexBuildBatchConfig;
 using dftracer::utils::utilities::indexer::IndexDatabase;
 using dftracer::utils::utilities::indexer::internal::get_logical_path;
 
-// ---------------------------------------------------------------------------
-// TraceWriter - compresses via ManualStreamingCompressorUtility and writes
-//               via StreamingFileWriterUtility.  Natural deflate blocks
-//               provide block boundaries for the gzip indexer.
-// ---------------------------------------------------------------------------
-class TraceWriter {
-   public:
-    explicit TraceWriter(const std::string& path,
-                         std::size_t flush_threshold = 4 * 1024 * 1024)
-        : writer_(path), flush_threshold_(flush_threshold) {
-        buf_.reserve(flush_threshold * 2);
-    }
-
-    ~TraceWriter() { close(); }
-
-    TraceWriter(const TraceWriter&) = delete;
-    TraceWriter& operator=(const TraceWriter&) = delete;
-
-    void write(const std::string& s) {
-        buf_ += s;
-        if (buf_.size() >= flush_threshold_) {
-            flush();
-        }
-    }
-
-    void flush() {
-        if (buf_.empty()) return;
-        [this]() -> coro::CoroTask<void> {
-            auto gen = compressor_.compress(ByteView(buf_));
-            while (auto chunk = co_await gen.next()) {
-                co_await writer_.process(*chunk);
-            }
-        }()
-                        .get();
-        buf_.clear();
-    }
-
-    void close() {
-        flush();
-        [this]() -> coro::CoroTask<void> {
-            auto gen = compressor_.finalize_stream();
-            while (auto chunk = co_await gen.next()) {
-                co_await writer_.process(*chunk);
-            }
-        }()
-                        .get();
-        writer_.close();
-    }
-
-   private:
-    compression::zlib::ManualStreamingCompressorUtility compressor_;
-    util_io::StreamingFileWriterUtility writer_;
-    std::string buf_;
-    std::size_t flush_threshold_;
-};
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// Deterministic 16-char hex hash using the project's HasherUtility
-static std::string make_hash(const std::string& name) {
-    hash::HasherUtility hasher;
-    hasher.reset();
-    auto h = hasher.process(name).get();
-    char buf[17];
-    std::snprintf(buf, sizeof(buf), "%016llx",
-                  static_cast<unsigned long long>(h.value));
-    return std::string(buf);
-}
-
-// +/-30% random variance around base
-static std::uint64_t jitter(std::mt19937_64& rng, std::uint64_t base) {
-    std::uniform_real_distribution<double> dist(0.7, 1.3);
-    return static_cast<std::uint64_t>(static_cast<double>(base) * dist(rng));
-}
-
-// Escape a JSON string value (no surrounding quotes)
-static void json_escape(std::string& out, const std::string& s) {
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            default:
-                out += c;
-                break;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Event serialisers – build one JSON line and write it
-// ---------------------------------------------------------------------------
-
-// Metadata event: {"name":"HH"/"FH"/"SH","ph":"M",
-//                  "args":{"hhash":"...","name":"...","value":"..."}}
-static void emit_metadata(TraceWriter& w, const std::string& kind,
-                          const std::string& hhash,
-                          const std::string& resolved_name,
-                          const std::string& hash_value) {
-    std::string buf;
-    buf.reserve(256);
-    buf += R"({"name":")";
-    buf += kind;
-    buf += R"(","ph":"M","args":{"hhash":")";
-    json_escape(buf, hhash);
-    buf += R"(","name":")";
-    json_escape(buf, resolved_name);
-    buf += R"(","value":")";
-    json_escape(buf, hash_value);
-    buf += R"("}})";
-    buf += '\n';
-    w.write(buf);
-}
-
-// Regular event (duration, ph=X)
-struct EventArgs {
-    std::uint64_t id = 0;
-    std::uint64_t pid = 0;
-    std::uint64_t tid = 0;
-    std::string name;
-    std::string cat;
-    std::uint64_t ts = 0;
-    std::uint64_t dur = 0;
-    int level = 0;
-    std::string hhash;
-    std::string fhash;
-    std::string cmd_hash;
-    // Optional extra args appended verbatim (no leading comma)
-    std::string extra;
-};
-
-static void emit_event(TraceWriter& w, const EventArgs& a) {
-    char num_buf[128];
-    std::string buf;
-    buf.reserve(512);
-
-    buf += R"({"id":)";
-    std::snprintf(num_buf, sizeof(num_buf), "%llu",
-                  static_cast<unsigned long long>(a.id));
-    buf += num_buf;
-
-    buf += R"(,"name":")";
-    json_escape(buf, a.name);
-    buf += R"(","cat":")";
-    json_escape(buf, a.cat);
-
-    std::snprintf(num_buf, sizeof(num_buf),
-                  R"(","pid":%llu,"tid":%llu,"ts":%llu,"dur":%llu,"ph":"X")",
-                  static_cast<unsigned long long>(a.pid),
-                  static_cast<unsigned long long>(a.tid),
-                  static_cast<unsigned long long>(a.ts),
-                  static_cast<unsigned long long>(a.dur));
-    buf += num_buf;
-
-    buf += R"(,"args":{)";
-
-    buf += R"("hhash":")";
-    json_escape(buf, a.hhash);
-    buf += '"';
-
-    std::snprintf(num_buf, sizeof(num_buf), R"(,"level":%d)", a.level);
-    buf += num_buf;
-
-    if (!a.fhash.empty()) {
-        buf += R"(,"fhash":")";
-        json_escape(buf, a.fhash);
-        buf += '"';
-    }
-    if (!a.cmd_hash.empty()) {
-        buf += R"(,"cmd_hash":")";
-        json_escape(buf, a.cmd_hash);
-        buf += '"';
-    }
-    if (!a.extra.empty()) {
-        buf += ',';
-        buf += a.extra;
-    }
-
-    buf += R"(}})";
-    buf += '\n';
-    w.write(buf);
-}
+using trace_gen::emit_event;
+using trace_gen::emit_metadata;
+using trace_gen::EventArgs;
+using trace_gen::jitter;
+using trace_gen::make_hash;
+using trace_gen::TraceWriter;
 
 // ---------------------------------------------------------------------------
 // Verify: build bloom indices and run queries to prove chunk-skipping works
@@ -577,707 +395,758 @@ class GenFakeTraceArgParse : public cli::ArgParse {
 // main
 // ---------------------------------------------------------------------------
 int main(int argc, char** argv) {
-    DFTRACER_UTILS_LOGGER_INIT();
-
-    argparse::ArgumentParser program("dftracer_gen_fake_trace",
-                                     DFTRACER_UTILS_PACKAGE_VERSION);
-    program.add_description(
+    return cli::cli_main<GenFakeTraceArgParse>(
+        argc, argv, "dftracer_gen_fake_trace",
         "Generate realistic DFTracer traces modeled after UNet3D training. "
         "Produces per-rank .pfw.gz files with known patterns "
-        "suitable for testing bloom-filter indexing.");
+        "suitable for testing bloom-filter indexing.",
+        [](GenFakeTraceArgParse& cli) -> int {
+            const auto& output_dir = cli.output_dir;
+            const int num_ranks = cli.num_ranks;
+            const int num_hosts = cli.num_hosts;
+            const int num_epochs = cli.num_epochs;
+            const int steps_per_epoch = cli.steps_per_epoch;
+            const int checkpoint_every = cli.checkpoint_every;
+            const int validation_every = cli.validation_every;
+            const int num_train_files = cli.num_train_files;
+            const int num_val_files = cli.num_val_files;
+            const int step_dur_ms = cli.step_dur_ms;
+            const std::uint64_t base_seed = cli.base_seed;
+            const bool verify = cli.verify;
+            const std::size_t checkpoint_size = cli.checkpoint_size;
 
-    GenFakeTraceArgParse cli(program);
-    cli.setup();
-    if (!cli.parse(argc, argv)) return 1;
+            // Convert base step duration to microseconds
+            const std::uint64_t step_dur_us =
+                static_cast<std::uint64_t>(step_dur_ms) * 1000ULL;
 
-    const auto& output_dir = cli.output_dir;
-    const int num_ranks = cli.num_ranks;
-    const int num_hosts = cli.num_hosts;
-    const int num_epochs = cli.num_epochs;
-    const int steps_per_epoch = cli.steps_per_epoch;
-    const int checkpoint_every = cli.checkpoint_every;
-    const int validation_every = cli.validation_every;
-    const int num_train_files = cli.num_train_files;
-    const int num_val_files = cli.num_val_files;
-    const int step_dur_ms = cli.step_dur_ms;
-    const std::uint64_t base_seed = cli.base_seed;
-    const bool verify = cli.verify;
-    const std::size_t checkpoint_size = cli.checkpoint_size;
+            // Create output directory
+            fs::create_directories(output_dir);
 
-    // Convert base step duration to microseconds
-    const std::uint64_t step_dur_us =
-        static_cast<std::uint64_t>(step_dur_ms) * 1000ULL;
+            // -----------------------------------------------------------------------
+            // Pre-compute hashes using project HasherUtility
+            // -----------------------------------------------------------------------
+            std::vector<std::string> host_names(num_hosts);
+            std::vector<std::string> host_hashes(num_hosts);
+            for (int h = 0; h < num_hosts; ++h) {
+                host_names[h] = "node-" + std::to_string(h);
+                host_hashes[h] = make_hash(host_names[h]);
+            }
 
-    // Create output directory
-    fs::create_directories(output_dir);
+            std::vector<std::string> train_file_names(num_train_files);
+            std::vector<std::string> train_file_hashes(num_train_files);
+            for (int f = 0; f < num_train_files; ++f) {
+                train_file_names[f] =
+                    "/data/train/shard_" + std::to_string(f) + ".h5";
+                train_file_hashes[f] = make_hash(train_file_names[f]);
+            }
 
-    // -----------------------------------------------------------------------
-    // Pre-compute hashes using project HasherUtility
-    // -----------------------------------------------------------------------
-    std::vector<std::string> host_names(num_hosts);
-    std::vector<std::string> host_hashes(num_hosts);
-    for (int h = 0; h < num_hosts; ++h) {
-        host_names[h] = "node-" + std::to_string(h);
-        host_hashes[h] = make_hash(host_names[h]);
-    }
+            std::vector<std::string> val_file_names(num_val_files);
+            std::vector<std::string> val_file_hashes(num_val_files);
+            for (int f = 0; f < num_val_files; ++f) {
+                val_file_names[f] =
+                    "/data/val/val_" + std::to_string(f) + ".h5";
+                val_file_hashes[f] = make_hash(val_file_names[f]);
+            }
 
-    std::vector<std::string> train_file_names(num_train_files);
-    std::vector<std::string> train_file_hashes(num_train_files);
-    for (int f = 0; f < num_train_files; ++f) {
-        train_file_names[f] = "/data/train/shard_" + std::to_string(f) + ".h5";
-        train_file_hashes[f] = make_hash(train_file_names[f]);
-    }
+            const std::string ckpt_file_name = "/checkpoints/model_ckpt.pt";
+            const std::string ckpt_file_hash = make_hash(ckpt_file_name);
 
-    std::vector<std::string> val_file_names(num_val_files);
-    std::vector<std::string> val_file_hashes(num_val_files);
-    for (int f = 0; f < num_val_files; ++f) {
-        val_file_names[f] = "/data/val/val_" + std::to_string(f) + ".h5";
-        val_file_hashes[f] = make_hash(val_file_names[f]);
-    }
+            const std::string script_name = "python train_unet3d.py";
+            const std::string script_hash = make_hash(script_name);
 
-    const std::string ckpt_file_name = "/checkpoints/model_ckpt.pt";
-    const std::string ckpt_file_hash = make_hash(ckpt_file_name);
+            // -----------------------------------------------------------------------
+            // Banner
+            // -----------------------------------------------------------------------
+            std::printf("==========================================\n");
+            std::printf("DFTracer Fake Trace Generator (UNet3D)\n");
+            std::printf("==========================================\n");
+            std::printf("  Ranks: %d   Hosts: %d\n", num_ranks, num_hosts);
+            std::printf("  Epochs: %d   Steps/epoch: %d\n", num_epochs,
+                        steps_per_epoch);
+            std::printf("  Checkpoint every: %d   Validation every: %d\n",
+                        checkpoint_every, validation_every);
+            std::printf("  Train shards: %d   Val files: %d\n", num_train_files,
+                        num_val_files);
+            std::printf("  Step duration: %d ms   Format: .pfw.gz\n",
+                        step_dur_ms);
+            std::printf("  Seed: %llu   Verify: %s\n",
+                        static_cast<unsigned long long>(base_seed),
+                        verify ? "yes" : "no");
+            std::printf("  Output: %s\n", output_dir.c_str());
+            std::printf("==========================================\n\n");
 
-    const std::string script_name = "python train_unet3d.py";
-    const std::string script_hash = make_hash(script_name);
+            std::vector<std::string> generated_files(num_ranks);
+            std::vector<std::size_t> rank_event_counts(num_ranks, 0);
 
-    // -----------------------------------------------------------------------
-    // Banner
-    // -----------------------------------------------------------------------
-    std::printf("==========================================\n");
-    std::printf("DFTracer Fake Trace Generator (UNet3D)\n");
-    std::printf("==========================================\n");
-    std::printf("  Ranks: %d   Hosts: %d\n", num_ranks, num_hosts);
-    std::printf("  Epochs: %d   Steps/epoch: %d\n", num_epochs,
-                steps_per_epoch);
-    std::printf("  Checkpoint every: %d   Validation every: %d\n",
-                checkpoint_every, validation_every);
-    std::printf("  Train shards: %d   Val files: %d\n", num_train_files,
-                num_val_files);
-    std::printf("  Step duration: %d ms   Format: .pfw.gz\n", step_dur_ms);
-    std::printf("  Seed: %llu   Verify: %s\n",
-                static_cast<unsigned long long>(base_seed),
-                verify ? "yes" : "no");
-    std::printf("  Output: %s\n", output_dir.c_str());
-    std::printf("==========================================\n\n");
-
-    std::vector<std::string> generated_files(num_ranks);
-    std::vector<std::size_t> rank_event_counts(num_ranks, 0);
-
-    for (int rank = 0; rank < num_ranks; ++rank) {
-        generated_files[rank] =
-            output_dir + "/rank_" + std::to_string(rank) + ".pfw.gz";
-    }
-
-    // -----------------------------------------------------------------------
-    // Generate one file per rank (parallel via pipeline)
-    // -----------------------------------------------------------------------
-    auto pipeline_config = cli::build_pipeline_config(
-        "DFTracer Fake Trace Generator", cli.pipeline);
-    Pipeline pipeline(pipeline_config);
-
-    auto* generated_files_ptr = &generated_files;
-    auto* host_hashes_ptr = &host_hashes;
-    auto* host_names_ptr = &host_names;
-    auto* train_file_names_ptr = &train_file_names;
-    auto* train_file_hashes_ptr = &train_file_hashes;
-    auto* val_file_names_ptr = &val_file_names;
-    auto* val_file_hashes_ptr = &val_file_hashes;
-    auto* ckpt_file_name_ptr = &ckpt_file_name;
-    auto* ckref_ptr = &ckpt_file_hash;
-    auto* script_name_ptr = &script_name;
-    auto* sref_ptr = &script_hash;
-    auto* rank_event_counts_ptr = &rank_event_counts;
-    std::vector<std::shared_ptr<Task>> rank_tasks;
-    for (int rank = 0; rank < num_ranks; ++rank) {
-        auto task = make_task(
-            [rank, base_seed, num_ranks, num_hosts, num_train_files,
-             num_val_files, num_epochs, steps_per_epoch, checkpoint_every,
-             validation_every, step_dur_us, generated_files_ptr,
-             host_hashes_ptr, host_names_ptr, train_file_names_ptr,
-             train_file_hashes_ptr, val_file_names_ptr, val_file_hashes_ptr,
-             ckpt_file_name_ptr, ckref_ptr, script_name_ptr, sref_ptr,
-             rank_event_counts_ptr](
-                [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
-                const std::string& path = (*generated_files_ptr)[rank];
-                TraceWriter writer(path);
-                writer.write("[\n");
-                const std::string& sref = *sref_ptr;
-                const std::string& ckref = *ckref_ptr;
-
-                std::mt19937_64 rng(
-                    base_seed + static_cast<std::uint64_t>(rank) * 10000ULL);
-
-                const int host_idx = rank % num_hosts;
-                const std::string& my_hhash = (*host_hashes_ptr)[host_idx];
-                const std::uint64_t pid =
-                    1000 + static_cast<std::uint64_t>(rank);
-                const std::uint64_t tid_main = pid * 10;
-                const std::uint64_t tid_io = pid * 10 + 1;
-
-                // Determine which train shards this rank reads (round-robin)
-                std::vector<int> my_train_shards;
-                for (int f = rank; f < num_train_files; f += num_ranks) {
-                    my_train_shards.push_back(f);
-                }
-                if (my_train_shards.empty()) {
-                    my_train_shards.push_back(rank % num_train_files);
-                }
-
-                // -------------------------------------------------------------------
-                // Metadata header
-                // -------------------------------------------------------------------
-                emit_metadata(writer, "HH", my_hhash,
-                              (*host_names_ptr)[host_idx], my_hhash);
-
-                for (int si : my_train_shards) {
-                    emit_metadata(writer, "FH", my_hhash,
-                                  (*train_file_names_ptr)[si],
-                                  (*train_file_hashes_ptr)[si]);
-                }
-                for (int vi = 0; vi < num_val_files; ++vi) {
-                    emit_metadata(writer, "FH", my_hhash,
-                                  (*val_file_names_ptr)[vi],
-                                  (*val_file_hashes_ptr)[vi]);
-                }
-                emit_metadata(writer, "FH", my_hhash, *ckpt_file_name_ptr,
-                              *ckref_ptr);
-                emit_metadata(writer, "SH", my_hhash, *script_name_ptr,
-                              *sref_ptr);
-
-                std::size_t rank_events = 0;
-                std::uint64_t next_id = 0;
-                std::uint64_t ts = 1000000000ULL;  // 1 second in us
-
-                // Helper: fill common fields and auto-assign id
-                auto make_event =
-                    [&](const std::string& name, const std::string& cat,
-                        std::uint64_t event_tid, std::uint64_t event_ts,
-                        std::uint64_t dur, int level) {
-                        EventArgs a;
-                        a.id = next_id++;
-                        a.pid = pid;
-                        a.tid = event_tid;
-                        a.name = name;
-                        a.cat = cat;
-                        a.ts = event_ts;
-                        a.dur = dur;
-                        a.level = level;
-                        a.hhash = my_hhash;
-                        a.cmd_hash = sref;
-                        return a;
-                    };
-
-                // -------------------------------------------------------------------
-                // Per epoch
-                // -------------------------------------------------------------------
-                for (int epoch = 0; epoch < num_epochs; ++epoch) {
-                    // Training steps
-                    for (int step = 0; step < steps_per_epoch; ++step) {
-                        char extra[256];
-                        std::uint64_t step_start = ts;
-
-                        // -- Data loading I/O (on io thread, level=2) --
-                        std::uint64_t io_start = ts;
-                        int shard_idx =
-                            my_train_shards[step % static_cast<int>(
-                                                       my_train_shards.size())];
-                        const std::string& data_fhash =
-                            (*train_file_hashes_ptr)[shard_idx];
-                        std::uint64_t io_size = jitter(rng, 4096);
-
-                        // open
-                        {
-                            auto a = make_event("open", "POSIX", tid_io, ts,
-                                                jitter(rng, 5), 2);
-                            a.fhash = data_fhash;
-                            std::snprintf(extra, sizeof(extra), R"("ret":3)");
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // pread / read / fread (randomly 3-5 calls)
-                        int num_reads = 3 + static_cast<int>(rng() % 3);
-                        const char* read_ops[] = {"pread", "read", "fread"};
-                        for (int r = 0; r < num_reads; ++r) {
-                            auto a = make_event(read_ops[r % 3], "POSIX",
-                                                tid_io, ts, jitter(rng, 20), 2);
-                            a.fhash = data_fhash;
-                            std::uint64_t offset =
-                                static_cast<std::uint64_t>(r) * io_size;
-                            std::snprintf(
-                                extra, sizeof(extra),
-                                R"("ret":%llu,"count":%llu,"offset":%llu)",
-                                static_cast<unsigned long long>(io_size),
-                                static_cast<unsigned long long>(io_size),
-                                static_cast<unsigned long long>(offset));
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // close
-                        {
-                            auto a = make_event("close", "POSIX", tid_io, ts,
-                                                jitter(rng, 3), 2);
-                            a.fhash = data_fhash;
-                            std::snprintf(extra, sizeof(extra), R"("ret":0)");
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // Emit data_loading wrapper (level=1, spans all I/O)
-                        {
-                            auto a = make_event("data_loading", "IO", tid_io,
-                                                io_start, ts - io_start, 1);
-                            std::snprintf(extra, sizeof(extra),
-                                          R"("epoch":%d,"step":%d)", epoch,
-                                          step);
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ++rank_events;
-                        }
-
-                        // -- Forward pass (5 events on main thread, level=2) --
-                        std::uint64_t fwd_start = ts;
-                        const char* fwd_ops[] = {"conv3d", "batch_norm", "relu",
-                                                 "max_pool", "upsample"};
-                        for (int f = 0; f < 5; ++f) {
-                            auto a =
-                                make_event(fwd_ops[f], "APP", tid_main, ts,
-                                           jitter(rng, step_dur_us / 5), 2);
-                            std::snprintf(extra, sizeof(extra),
-                                          R"("epoch":%d,"step":%d)", epoch,
-                                          step);
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // Emit forward wrapper (level=1)
-                        {
-                            auto a = make_event("forward", "APP", tid_main,
-                                                fwd_start, ts - fwd_start, 1);
-                            std::snprintf(extra, sizeof(extra),
-                                          R"("epoch":%d,"step":%d)", epoch,
-                                          step);
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ++rank_events;
-                        }
-
-                        // -- Loss + backward (3 events, level=2) --
-                        std::uint64_t back_start = ts;
-                        const char* back_ops[] = {"dice_loss", "backward",
-                                                  "allreduce"};
-                        for (int b = 0; b < 3; ++b) {
-                            auto a =
-                                make_event(back_ops[b], "APP", tid_main, ts,
-                                           jitter(rng, step_dur_us / 4), 2);
-                            std::snprintf(extra, sizeof(extra),
-                                          R"("epoch":%d,"step":%d)", epoch,
-                                          step);
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // Emit backward wrapper (level=1)
-                        {
-                            auto a =
-                                make_event("backward_pass", "APP", tid_main,
-                                           back_start, ts - back_start, 1);
-                            std::snprintf(extra, sizeof(extra),
-                                          R"("epoch":%d,"step":%d)", epoch,
-                                          step);
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ++rank_events;
-                        }
-
-                        // -- Optimizer step (1 event, level=1) --
-                        {
-                            auto a =
-                                make_event("optimizer_step", "APP", tid_main,
-                                           ts, jitter(rng, step_dur_us / 8), 1);
-                            std::snprintf(extra, sizeof(extra),
-                                          R"("epoch":%d,"step":%d)", epoch,
-                                          step);
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // Emit train_step wrapper (level=0, spans
-                        // entire step)
-                        {
-                            auto a = make_event("train_step", "APP", tid_main,
-                                                step_start, ts - step_start, 0);
-                            std::snprintf(extra, sizeof(extra),
-                                          R"("epoch":%d,"step":%d)", epoch,
-                                          step);
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ++rank_events;
-                        }
-                    }
-
-                    // Validation (every validation_every epochs)
-                    if (validation_every > 0 &&
-                        (epoch + 1) % validation_every == 0) {
-                        std::uint64_t val_phase_start = ts;
-                        const int val_steps = 10;
-                        for (int vs = 0; vs < val_steps; ++vs) {
-                            char extra[256];
-                            int vf_idx = vs % num_val_files;
-                            const std::string& vf_hash =
-                                (*val_file_hashes_ptr)[vf_idx];
-                            std::uint64_t vio_size = jitter(rng, 4096);
-                            std::uint64_t val_step_start = ts;
-
-                            // open (level=2)
-                            {
-                                auto a = make_event("open", "POSIX", tid_io, ts,
-                                                    jitter(rng, 5), 2);
-                                a.fhash = vf_hash;
-                                std::snprintf(extra, sizeof(extra),
-                                              R"("ret":4)");
-                                a.extra = extra;
-                                emit_event(writer, a);
-                                ts += a.dur;
-                                ++rank_events;
-                            }
-
-                            // read calls (2-3, level=2)
-                            int num_reads = 2 + static_cast<int>(rng() % 2);
-                            const char* read_ops[] = {"pread", "read", "fread"};
-                            for (int r = 0; r < num_reads; ++r) {
-                                auto a =
-                                    make_event(read_ops[r % 3], "POSIX", tid_io,
-                                               ts, jitter(rng, 20), 2);
-                                a.fhash = vf_hash;
-                                std::snprintf(
-                                    extra, sizeof(extra),
-                                    R"("ret":%llu,"count":%llu,"offset":%llu)",
-                                    static_cast<unsigned long long>(vio_size),
-                                    static_cast<unsigned long long>(vio_size),
-                                    static_cast<unsigned long long>(
-                                        static_cast<std::uint64_t>(r) *
-                                        vio_size));
-                                a.extra = extra;
-                                emit_event(writer, a);
-                                ts += a.dur;
-                                ++rank_events;
-                            }
-
-                            // close (level=2)
-                            {
-                                auto a = make_event("close", "POSIX", tid_io,
-                                                    ts, jitter(rng, 3), 2);
-                                a.fhash = vf_hash;
-                                std::snprintf(extra, sizeof(extra),
-                                              R"("ret":0)");
-                                a.extra = extra;
-                                emit_event(writer, a);
-                                ts += a.dur;
-                                ++rank_events;
-                            }
-
-                            // val_forward (level=2)
-                            {
-                                auto a = make_event(
-                                    "val_forward", "APP", tid_main, ts,
-                                    jitter(rng, step_dur_us / 3), 2);
-                                std::snprintf(extra, sizeof(extra),
-                                              R"("epoch":%d,"step":%d)", epoch,
-                                              vs);
-                                a.extra = extra;
-                                emit_event(writer, a);
-                                ts += a.dur;
-                                ++rank_events;
-                            }
-
-                            // val_loss (level=2)
-                            {
-                                auto a =
-                                    make_event("val_loss", "APP", tid_main, ts,
-                                               jitter(rng, step_dur_us / 6), 2);
-                                std::snprintf(extra, sizeof(extra),
-                                              R"("epoch":%d,"step":%d)", epoch,
-                                              vs);
-                                a.extra = extra;
-                                emit_event(writer, a);
-                                ts += a.dur;
-                                ++rank_events;
-                            }
-
-                            // val_step wrapper (level=1)
-                            {
-                                auto a = make_event("val_step", "APP", tid_main,
-                                                    val_step_start,
-                                                    ts - val_step_start, 1);
-                                std::snprintf(extra, sizeof(extra),
-                                              R"("epoch":%d,"step":%d)", epoch,
-                                              vs);
-                                a.extra = extra;
-                                emit_event(writer, a);
-                                ++rank_events;
-                            }
-                        }
-
-                        // validation wrapper (level=0)
-                        {
-                            char extra[256];
-                            auto a = make_event("validation", "APP", tid_main,
-                                                val_phase_start,
-                                                ts - val_phase_start, 0);
-                            std::snprintf(extra, sizeof(extra), R"("epoch":%d)",
-                                          epoch);
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ++rank_events;
-                        }
-                    }
-
-                    // Checkpoint (every checkpoint_every epochs)
-                    if (checkpoint_every > 0 &&
-                        (epoch + 1) % checkpoint_every == 0) {
-                        char extra[256];
-                        std::uint64_t ckpt_start = ts;
-
-                        // open checkpoint file (level=1)
-                        {
-                            auto a = make_event("open", "POSIX", tid_io, ts,
-                                                jitter(rng, 10), 1);
-                            a.fhash = ckref;
-                            std::snprintf(extra, sizeof(extra), R"("ret":5)");
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // pwrite calls (10-20, level=1)
-                        int num_writes = 10 + static_cast<int>(rng() % 11);
-                        for (int wr = 0; wr < num_writes; ++wr) {
-                            auto a = make_event(
-                                (wr % 2 == 0) ? "pwrite" : "write", "POSIX",
-                                tid_io, ts, jitter(rng, 50), 1);
-                            a.fhash = ckref;
-                            std::uint64_t wr_size =
-                                jitter(rng, 1048576);  // ~1 MB
-                            std::snprintf(
-                                extra, sizeof(extra),
-                                R"("ret":%llu,"count":%llu,"offset":%llu)",
-                                static_cast<unsigned long long>(wr_size),
-                                static_cast<unsigned long long>(wr_size),
-                                static_cast<unsigned long long>(
-                                    static_cast<std::uint64_t>(wr) * wr_size));
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // fsync (level=1)
-                        {
-                            auto a = make_event("fsync", "POSIX", tid_io, ts,
-                                                jitter(rng, 200), 1);
-                            a.fhash = ckref;
-                            std::snprintf(extra, sizeof(extra), R"("ret":0)");
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // close (level=1)
-                        {
-                            auto a = make_event("close", "POSIX", tid_io, ts,
-                                                jitter(rng, 3), 1);
-                            a.fhash = ckref;
-                            std::snprintf(extra, sizeof(extra), R"("ret":0)");
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ts += a.dur;
-                            ++rank_events;
-                        }
-
-                        // checkpoint wrapper (level=0)
-                        {
-                            auto a = make_event("checkpoint", "IO", tid_io,
-                                                ckpt_start, ts - ckpt_start, 0);
-                            std::snprintf(extra, sizeof(extra), R"("epoch":%d)",
-                                          epoch);
-                            a.extra = extra;
-                            emit_event(writer, a);
-                            ++rank_events;
-                        }
-                    }
-                }
-
-                writer.write("]\n");
-                writer.close();
-                (*rank_event_counts_ptr)[rank] = rank_events;
-                co_return;
-            },
-            "Rank-" + std::to_string(rank));
-        rank_tasks.push_back(task);
-    }
-
-    // Summary task (prints results after generation)
-    auto* rank_event_counts_for_summary = &rank_event_counts;
-    auto* generated_files_for_summary = &generated_files;
-    auto summary_task = make_task(
-        [num_ranks, checkpoint_every, validation_every,
-         rank_event_counts_for_summary, generated_files_for_summary,
-         val_file_hashes, train_file_hashes, host_hashes,
-         host_names]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
-            std::size_t total_events = 0;
             for (int rank = 0; rank < num_ranks; ++rank) {
-                std::printf("  rank %d: %zu events -> %s\n", rank,
+                generated_files[rank] =
+                    output_dir + "/rank_" + std::to_string(rank) + ".pfw.gz";
+            }
+
+            // -----------------------------------------------------------------------
+            // Generate one file per rank (parallel via pipeline)
+            // -----------------------------------------------------------------------
+            auto pipeline_config = cli::build_pipeline_config(
+                "DFTracer Fake Trace Generator", cli.pipeline);
+            Pipeline pipeline(pipeline_config);
+
+            auto* generated_files_ptr = &generated_files;
+            auto* host_hashes_ptr = &host_hashes;
+            auto* host_names_ptr = &host_names;
+            auto* train_file_names_ptr = &train_file_names;
+            auto* train_file_hashes_ptr = &train_file_hashes;
+            auto* val_file_names_ptr = &val_file_names;
+            auto* val_file_hashes_ptr = &val_file_hashes;
+            auto* ckpt_file_name_ptr = &ckpt_file_name;
+            auto* ckref_ptr = &ckpt_file_hash;
+            auto* script_name_ptr = &script_name;
+            auto* sref_ptr = &script_hash;
+            auto* rank_event_counts_ptr = &rank_event_counts;
+            std::vector<std::shared_ptr<Task>> rank_tasks;
+            for (int rank = 0; rank < num_ranks; ++rank) {
+                auto task = make_task(
+                    [rank, base_seed, num_ranks, num_hosts, num_train_files,
+                     num_val_files, num_epochs, steps_per_epoch,
+                     checkpoint_every, validation_every, step_dur_us,
+                     generated_files_ptr, host_hashes_ptr, host_names_ptr,
+                     train_file_names_ptr, train_file_hashes_ptr,
+                     val_file_names_ptr, val_file_hashes_ptr,
+                     ckpt_file_name_ptr, ckref_ptr, script_name_ptr, sref_ptr,
+                     rank_event_counts_ptr]([[maybe_unused]] CoroScope& ctx)
+                        -> coro::CoroTask<void> {
+                        const std::string& path = (*generated_files_ptr)[rank];
+                        TraceWriter writer(path);
+                        writer.write("[\n");
+                        const std::string& sref = *sref_ptr;
+                        const std::string& ckref = *ckref_ptr;
+
+                        std::mt19937_64 rng(base_seed +
+                                            static_cast<std::uint64_t>(rank) *
+                                                10000ULL);
+
+                        const int host_idx = rank % num_hosts;
+                        const std::string& my_hhash =
+                            (*host_hashes_ptr)[host_idx];
+                        const std::uint64_t pid =
+                            1000 + static_cast<std::uint64_t>(rank);
+                        const std::uint64_t tid_main = pid * 10;
+                        const std::uint64_t tid_io = pid * 10 + 1;
+
+                        // Determine which train shards this rank reads
+                        // (round-robin)
+                        std::vector<int> my_train_shards;
+                        for (int f = rank; f < num_train_files;
+                             f += num_ranks) {
+                            my_train_shards.push_back(f);
+                        }
+                        if (my_train_shards.empty()) {
+                            my_train_shards.push_back(rank % num_train_files);
+                        }
+
+                        // -------------------------------------------------------------------
+                        // Metadata header
+                        // -------------------------------------------------------------------
+                        emit_metadata(writer, "HH", my_hhash,
+                                      (*host_names_ptr)[host_idx], my_hhash);
+
+                        for (int si : my_train_shards) {
+                            emit_metadata(writer, "FH", my_hhash,
+                                          (*train_file_names_ptr)[si],
+                                          (*train_file_hashes_ptr)[si]);
+                        }
+                        for (int vi = 0; vi < num_val_files; ++vi) {
+                            emit_metadata(writer, "FH", my_hhash,
+                                          (*val_file_names_ptr)[vi],
+                                          (*val_file_hashes_ptr)[vi]);
+                        }
+                        emit_metadata(writer, "FH", my_hhash,
+                                      *ckpt_file_name_ptr, *ckref_ptr);
+                        emit_metadata(writer, "SH", my_hhash, *script_name_ptr,
+                                      *sref_ptr);
+
+                        std::size_t rank_events = 0;
+                        std::uint64_t next_id = 0;
+                        std::uint64_t ts = 1000000000ULL;  // 1 second in us
+
+                        // Helper: fill common fields and auto-assign id
+                        auto make_event =
+                            [&](const std::string& name, const std::string& cat,
+                                std::uint64_t event_tid, std::uint64_t event_ts,
+                                std::uint64_t dur, int level) {
+                                EventArgs a;
+                                a.id = next_id++;
+                                a.pid = pid;
+                                a.tid = event_tid;
+                                a.name = name;
+                                a.cat = cat;
+                                a.ts = event_ts;
+                                a.dur = dur;
+                                a.level = level;
+                                a.hhash = my_hhash;
+                                a.cmd_hash = sref;
+                                return a;
+                            };
+
+                        // -------------------------------------------------------------------
+                        // Per epoch
+                        // -------------------------------------------------------------------
+                        for (int epoch = 0; epoch < num_epochs; ++epoch) {
+                            // Training steps
+                            for (int step = 0; step < steps_per_epoch; ++step) {
+                                char extra[256];
+                                std::uint64_t step_start = ts;
+
+                                // -- Data loading I/O (on io thread, level=2)
+                                // --
+                                std::uint64_t io_start = ts;
+                                int shard_idx =
+                                    my_train_shards[step % static_cast<int>(
+                                                               my_train_shards
+                                                                   .size())];
+                                const std::string& data_fhash =
+                                    (*train_file_hashes_ptr)[shard_idx];
+                                std::uint64_t io_size = jitter(rng, 4096);
+
+                                // open
+                                {
+                                    auto a = make_event("open", "POSIX", tid_io,
+                                                        ts, jitter(rng, 5), 2);
+                                    a.fhash = data_fhash;
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("ret":3)");
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // pread / read / fread (randomly 3-5 calls)
+                                int num_reads = 3 + static_cast<int>(rng() % 3);
+                                const char* read_ops[] = {"pread", "read",
+                                                          "fread"};
+                                for (int r = 0; r < num_reads; ++r) {
+                                    auto a = make_event(read_ops[r % 3],
+                                                        "POSIX", tid_io, ts,
+                                                        jitter(rng, 20), 2);
+                                    a.fhash = data_fhash;
+                                    std::uint64_t offset =
+                                        static_cast<std::uint64_t>(r) * io_size;
+                                    std::snprintf(
+                                        extra, sizeof(extra),
+                                        R"("ret":%llu,"count":%llu,"offset":%llu)",
+                                        static_cast<unsigned long long>(
+                                            io_size),
+                                        static_cast<unsigned long long>(
+                                            io_size),
+                                        static_cast<unsigned long long>(
+                                            offset));
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // close
+                                {
+                                    auto a =
+                                        make_event("close", "POSIX", tid_io, ts,
+                                                   jitter(rng, 3), 2);
+                                    a.fhash = data_fhash;
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("ret":0)");
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // Emit data_loading wrapper (level=1, spans all
+                                // I/O)
+                                {
+                                    auto a =
+                                        make_event("data_loading", "IO", tid_io,
+                                                   io_start, ts - io_start, 1);
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("epoch":%d,"step":%d)",
+                                                  epoch, step);
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ++rank_events;
+                                }
+
+                                // -- Forward pass (5 events on main thread,
+                                // level=2) --
+                                std::uint64_t fwd_start = ts;
+                                const char* fwd_ops[] = {"conv3d", "batch_norm",
+                                                         "relu", "max_pool",
+                                                         "upsample"};
+                                for (int f = 0; f < 5; ++f) {
+                                    auto a = make_event(
+                                        fwd_ops[f], "APP", tid_main, ts,
+                                        jitter(rng, step_dur_us / 5), 2);
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("epoch":%d,"step":%d)",
+                                                  epoch, step);
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // Emit forward wrapper (level=1)
+                                {
+                                    auto a = make_event("forward", "APP",
+                                                        tid_main, fwd_start,
+                                                        ts - fwd_start, 1);
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("epoch":%d,"step":%d)",
+                                                  epoch, step);
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ++rank_events;
+                                }
+
+                                // -- Loss + backward (3 events, level=2) --
+                                std::uint64_t back_start = ts;
+                                const char* back_ops[] = {
+                                    "dice_loss", "backward", "allreduce"};
+                                for (int b = 0; b < 3; ++b) {
+                                    auto a = make_event(
+                                        back_ops[b], "APP", tid_main, ts,
+                                        jitter(rng, step_dur_us / 4), 2);
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("epoch":%d,"step":%d)",
+                                                  epoch, step);
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // Emit backward wrapper (level=1)
+                                {
+                                    auto a = make_event("backward_pass", "APP",
+                                                        tid_main, back_start,
+                                                        ts - back_start, 1);
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("epoch":%d,"step":%d)",
+                                                  epoch, step);
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ++rank_events;
+                                }
+
+                                // -- Optimizer step (1 event, level=1) --
+                                {
+                                    auto a = make_event(
+                                        "optimizer_step", "APP", tid_main, ts,
+                                        jitter(rng, step_dur_us / 8), 1);
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("epoch":%d,"step":%d)",
+                                                  epoch, step);
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // Emit train_step wrapper (level=0, spans
+                                // entire step)
+                                {
+                                    auto a = make_event("train_step", "APP",
+                                                        tid_main, step_start,
+                                                        ts - step_start, 0);
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("epoch":%d,"step":%d)",
+                                                  epoch, step);
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ++rank_events;
+                                }
+                            }
+
+                            // Validation (every validation_every epochs)
+                            if (validation_every > 0 &&
+                                (epoch + 1) % validation_every == 0) {
+                                std::uint64_t val_phase_start = ts;
+                                const int val_steps = 10;
+                                for (int vs = 0; vs < val_steps; ++vs) {
+                                    char extra[256];
+                                    int vf_idx = vs % num_val_files;
+                                    const std::string& vf_hash =
+                                        (*val_file_hashes_ptr)[vf_idx];
+                                    std::uint64_t vio_size = jitter(rng, 4096);
+                                    std::uint64_t val_step_start = ts;
+
+                                    // open (level=2)
+                                    {
+                                        auto a =
+                                            make_event("open", "POSIX", tid_io,
+                                                       ts, jitter(rng, 5), 2);
+                                        a.fhash = vf_hash;
+                                        std::snprintf(extra, sizeof(extra),
+                                                      R"("ret":4)");
+                                        a.extra = extra;
+                                        emit_event(writer, a);
+                                        ts += a.dur;
+                                        ++rank_events;
+                                    }
+
+                                    // read calls (2-3, level=2)
+                                    int num_reads =
+                                        2 + static_cast<int>(rng() % 2);
+                                    const char* read_ops[] = {"pread", "read",
+                                                              "fread"};
+                                    for (int r = 0; r < num_reads; ++r) {
+                                        auto a = make_event(read_ops[r % 3],
+                                                            "POSIX", tid_io, ts,
+                                                            jitter(rng, 20), 2);
+                                        a.fhash = vf_hash;
+                                        std::snprintf(
+                                            extra, sizeof(extra),
+                                            R"("ret":%llu,"count":%llu,"offset":%llu)",
+                                            static_cast<unsigned long long>(
+                                                vio_size),
+                                            static_cast<unsigned long long>(
+                                                vio_size),
+                                            static_cast<unsigned long long>(
+                                                static_cast<std::uint64_t>(r) *
+                                                vio_size));
+                                        a.extra = extra;
+                                        emit_event(writer, a);
+                                        ts += a.dur;
+                                        ++rank_events;
+                                    }
+
+                                    // close (level=2)
+                                    {
+                                        auto a =
+                                            make_event("close", "POSIX", tid_io,
+                                                       ts, jitter(rng, 3), 2);
+                                        a.fhash = vf_hash;
+                                        std::snprintf(extra, sizeof(extra),
+                                                      R"("ret":0)");
+                                        a.extra = extra;
+                                        emit_event(writer, a);
+                                        ts += a.dur;
+                                        ++rank_events;
+                                    }
+
+                                    // val_forward (level=2)
+                                    {
+                                        auto a = make_event(
+                                            "val_forward", "APP", tid_main, ts,
+                                            jitter(rng, step_dur_us / 3), 2);
+                                        std::snprintf(extra, sizeof(extra),
+                                                      R"("epoch":%d,"step":%d)",
+                                                      epoch, vs);
+                                        a.extra = extra;
+                                        emit_event(writer, a);
+                                        ts += a.dur;
+                                        ++rank_events;
+                                    }
+
+                                    // val_loss (level=2)
+                                    {
+                                        auto a = make_event(
+                                            "val_loss", "APP", tid_main, ts,
+                                            jitter(rng, step_dur_us / 6), 2);
+                                        std::snprintf(extra, sizeof(extra),
+                                                      R"("epoch":%d,"step":%d)",
+                                                      epoch, vs);
+                                        a.extra = extra;
+                                        emit_event(writer, a);
+                                        ts += a.dur;
+                                        ++rank_events;
+                                    }
+
+                                    // val_step wrapper (level=1)
+                                    {
+                                        auto a =
+                                            make_event("val_step", "APP",
+                                                       tid_main, val_step_start,
+                                                       ts - val_step_start, 1);
+                                        std::snprintf(extra, sizeof(extra),
+                                                      R"("epoch":%d,"step":%d)",
+                                                      epoch, vs);
+                                        a.extra = extra;
+                                        emit_event(writer, a);
+                                        ++rank_events;
+                                    }
+                                }
+
+                                // validation wrapper (level=0)
+                                {
+                                    char extra[256];
+                                    auto a =
+                                        make_event("validation", "APP",
+                                                   tid_main, val_phase_start,
+                                                   ts - val_phase_start, 0);
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("epoch":%d)", epoch);
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ++rank_events;
+                                }
+                            }
+
+                            // Checkpoint (every checkpoint_every epochs)
+                            if (checkpoint_every > 0 &&
+                                (epoch + 1) % checkpoint_every == 0) {
+                                char extra[256];
+                                std::uint64_t ckpt_start = ts;
+
+                                // open checkpoint file (level=1)
+                                {
+                                    auto a = make_event("open", "POSIX", tid_io,
+                                                        ts, jitter(rng, 10), 1);
+                                    a.fhash = ckref;
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("ret":5)");
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // pwrite calls (10-20, level=1)
+                                int num_writes =
+                                    10 + static_cast<int>(rng() % 11);
+                                for (int wr = 0; wr < num_writes; ++wr) {
+                                    auto a = make_event(
+                                        (wr % 2 == 0) ? "pwrite" : "write",
+                                        "POSIX", tid_io, ts, jitter(rng, 50),
+                                        1);
+                                    a.fhash = ckref;
+                                    std::uint64_t wr_size =
+                                        jitter(rng, 1048576);  // ~1 MB
+                                    std::snprintf(
+                                        extra, sizeof(extra),
+                                        R"("ret":%llu,"count":%llu,"offset":%llu)",
+                                        static_cast<unsigned long long>(
+                                            wr_size),
+                                        static_cast<unsigned long long>(
+                                            wr_size),
+                                        static_cast<unsigned long long>(
+                                            static_cast<std::uint64_t>(wr) *
+                                            wr_size));
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // fsync (level=1)
+                                {
+                                    auto a =
+                                        make_event("fsync", "POSIX", tid_io, ts,
+                                                   jitter(rng, 200), 1);
+                                    a.fhash = ckref;
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("ret":0)");
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // close (level=1)
+                                {
+                                    auto a =
+                                        make_event("close", "POSIX", tid_io, ts,
+                                                   jitter(rng, 3), 1);
+                                    a.fhash = ckref;
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("ret":0)");
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ts += a.dur;
+                                    ++rank_events;
+                                }
+
+                                // checkpoint wrapper (level=0)
+                                {
+                                    auto a = make_event("checkpoint", "IO",
+                                                        tid_io, ckpt_start,
+                                                        ts - ckpt_start, 0);
+                                    std::snprintf(extra, sizeof(extra),
+                                                  R"("epoch":%d)", epoch);
+                                    a.extra = extra;
+                                    emit_event(writer, a);
+                                    ++rank_events;
+                                }
+                            }
+                        }
+
+                        writer.write("]\n");
+                        writer.close();
+                        (*rank_event_counts_ptr)[rank] = rank_events;
+                        co_return;
+                    },
+                    "Rank-" + std::to_string(rank));
+                rank_tasks.push_back(task);
+            }
+
+            // Summary task (prints results after generation)
+            auto* rank_event_counts_for_summary = &rank_event_counts;
+            auto* generated_files_for_summary = &generated_files;
+            auto summary_task = make_task(
+                [num_ranks, checkpoint_every, validation_every,
+                 rank_event_counts_for_summary, generated_files_for_summary,
+                 val_file_hashes, train_file_hashes, host_hashes, host_names](
+                    [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+                    std::size_t total_events = 0;
+                    for (int rank = 0; rank < num_ranks; ++rank) {
+                        std::printf(
+                            "  rank %d: %zu events -> %s\n", rank,
                             (*rank_event_counts_for_summary)[rank],
                             (*generated_files_for_summary)[rank].c_str());
-                total_events += (*rank_event_counts_for_summary)[rank];
-            }
+                        total_events += (*rank_event_counts_for_summary)[rank];
+                    }
 
-            std::printf("\n==========================================\n");
-            std::printf("Generation complete\n");
-            std::printf("==========================================\n");
-            std::printf("  Total events: %zu\n", total_events);
-            std::printf("  Total files:  %d\n", num_ranks);
-            std::printf("\nInteresting queries for bloom filter testing:\n");
-            std::printf(
-                "  1. name=pwrite                   (checkpoint I/O, ~%d%% of "
-                "epochs)\n",
-                checkpoint_every > 0 ? 100 / checkpoint_every : 0);
-            std::printf("  2. fhash=%s  (validation data, ~%d%% of epochs)\n",
+                    std::printf(
+                        "\n==========================================\n");
+                    std::printf("Generation complete\n");
+                    std::printf("==========================================\n");
+                    std::printf("  Total events: %zu\n", total_events);
+                    std::printf("  Total files:  %d\n", num_ranks);
+                    std::printf(
+                        "\nInteresting queries for bloom filter testing:\n");
+                    std::printf(
+                        "  1. name=pwrite                   (checkpoint I/O, "
+                        "~%d%% of "
+                        "epochs)\n",
+                        checkpoint_every > 0 ? 100 / checkpoint_every : 0);
+                    std::printf(
+                        "  2. fhash=%s  (validation data, ~%d%% of epochs)\n",
                         val_file_hashes[0].c_str(),
                         validation_every > 0 ? 100 / validation_every : 0);
-            if (!train_file_hashes.empty()) {
-                std::printf("  3. fhash=%s  (rank-specific train shard)\n",
+                    if (!train_file_hashes.empty()) {
+                        std::printf(
+                            "  3. fhash=%s  (rank-specific train shard)\n",
                             train_file_hashes[0].c_str());
+                    }
+                    std::printf("  4. hhash=%s  (host-specific, %s)\n",
+                                host_hashes[0].c_str(), host_names[0].c_str());
+                    std::printf(
+                        "  5. name=allreduce                (every step, "
+                        "dense)\n");
+                    std::printf(
+                        "  6. name=fsync                    (checkpoint only, "
+                        "sparse)\n");
+                    std::printf("==========================================\n");
+                    co_return;
+                },
+                "Summary");
+
+            for (const auto& rt : rank_tasks) {
+                summary_task->depends_on(rt);
             }
-            std::printf("  4. hhash=%s  (host-specific, %s)\n",
-                        host_hashes[0].c_str(), host_names[0].c_str());
-            std::printf(
-                "  5. name=allreduce                (every step, dense)\n");
-            std::printf(
-                "  6. name=fsync                    (checkpoint only, "
-                "sparse)\n");
-            std::printf("==========================================\n");
-            co_return;
-        },
-        "Summary");
 
-    for (const auto& rt : rank_tasks) {
-        summary_task->depends_on(rt);
-    }
+            std::shared_ptr<Task> final_task = summary_task;
+            std::shared_ptr<Task> verify_task;
 
-    std::shared_ptr<Task> final_task = summary_task;
-    std::shared_ptr<Task> verify_task;
+            if (verify) {
+                std::vector<QuerySpec> test_queries;
 
-    if (verify) {
-        std::vector<QuerySpec> test_queries;
+                test_queries.push_back({"name=pwrite (sparse, ckpt only)",
+                                        {{"name", {"pwrite"}}}});
+                test_queries.push_back({"name=allreduce (dense, every step)",
+                                        {{"name", {"allreduce"}}}});
+                test_queries.push_back(
+                    {"name=fsync (sparse, ckpt only)", {{"name", {"fsync"}}}});
+                test_queries.push_back({"name=val_forward (periodic)",
+                                        {{"name", {"val_forward"}}}});
+                test_queries.push_back(
+                    {"cat=POSIX (all I/O events)", {{"cat", {"POSIX"}}}});
+                test_queries.push_back(
+                    {"cat=APP (all compute events)", {{"cat", {"APP"}}}});
 
-        test_queries.push_back(
-            {"name=pwrite (sparse, ckpt only)", {{"name", {"pwrite"}}}});
-        test_queries.push_back(
-            {"name=allreduce (dense, every step)", {{"name", {"allreduce"}}}});
-        test_queries.push_back(
-            {"name=fsync (sparse, ckpt only)", {{"name", {"fsync"}}}});
-        test_queries.push_back(
-            {"name=val_forward (periodic)", {{"name", {"val_forward"}}}});
-        test_queries.push_back(
-            {"cat=POSIX (all I/O events)", {{"cat", {"POSIX"}}}});
-        test_queries.push_back(
-            {"cat=APP (all compute events)", {{"cat", {"APP"}}}});
+                std::string pid0 = std::to_string(1000);
+                test_queries.push_back(
+                    {"pid=" + pid0 + " (rank 0 only)", {{"pid", {pid0}}}});
 
-        std::string pid0 = std::to_string(1000);
-        test_queries.push_back(
-            {"pid=" + pid0 + " (rank 0 only)", {{"pid", {pid0}}}});
+                std::string tid_io_0 = std::to_string(10001);
+                test_queries.push_back(
+                    {"tid=" + tid_io_0 + " (rank 0 io thread)",
+                     {{"tid", {tid_io_0}}}});
 
-        std::string tid_io_0 = std::to_string(10001);
-        test_queries.push_back(
-            {"tid=" + tid_io_0 + " (rank 0 io thread)", {{"tid", {tid_io_0}}}});
+                test_queries.push_back(
+                    {"fhash=" + val_file_names[0] + " (resolved)",
+                     {{"fhash", {val_file_hashes[0]}}}});
+                if (!train_file_hashes.empty()) {
+                    test_queries.push_back(
+                        {"fhash=" + train_file_names[0] + " (resolved)",
+                         {{"fhash", {train_file_hashes[0]}}}});
+                }
+                test_queries.push_back(
+                    {"fhash=ckpt (resolved)", {{"fhash", {ckpt_file_hash}}}});
+                test_queries.push_back(
+                    {"hhash=" + host_names[0] + " (resolved)",
+                     {{"hhash", {host_hashes[0]}}}});
+                test_queries.push_back({"shash=train_unet3d (resolved)",
+                                        {{"shash", {script_hash}}}});
 
-        test_queries.push_back({"fhash=" + val_file_names[0] + " (resolved)",
-                                {{"fhash", {val_file_hashes[0]}}}});
-        if (!train_file_hashes.empty()) {
-            test_queries.push_back(
-                {"fhash=" + train_file_names[0] + " (resolved)",
-                 {{"fhash", {train_file_hashes[0]}}}});
-        }
-        test_queries.push_back(
-            {"fhash=ckpt (resolved)", {{"fhash", {ckpt_file_hash}}}});
-        test_queries.push_back({"hhash=" + host_names[0] + " (resolved)",
-                                {{"hhash", {host_hashes[0]}}}});
-        test_queries.push_back(
-            {"shash=train_unet3d (resolved)", {{"shash", {script_hash}}}});
+                test_queries.push_back(
+                    {"name=pwrite AND cat=POSIX",
+                     {{"name", {"pwrite"}}, {"cat", {"POSIX"}}}});
+                test_queries.push_back(
+                    {"name=fsync AND fhash=ckpt",
+                     {{"name", {"fsync"}}, {"fhash", {ckpt_file_hash}}}});
+                test_queries.push_back(
+                    {"cat=POSIX AND hhash=" + host_names[0],
+                     {{"cat", {"POSIX"}}, {"hhash", {host_hashes[0]}}}});
+                test_queries.push_back({"cat=APP AND pid=" + pid0,
+                                        {{"cat", {"APP"}}, {"pid", {pid0}}}});
 
-        test_queries.push_back({"name=pwrite AND cat=POSIX",
-                                {{"name", {"pwrite"}}, {"cat", {"POSIX"}}}});
-        test_queries.push_back(
-            {"name=fsync AND fhash=ckpt",
-             {{"name", {"fsync"}}, {"fhash", {ckpt_file_hash}}}});
-        test_queries.push_back(
-            {"cat=POSIX AND hhash=" + host_names[0],
-             {{"cat", {"POSIX"}}, {"hhash", {host_hashes[0]}}}});
-        test_queries.push_back(
-            {"cat=APP AND pid=" + pid0, {{"cat", {"APP"}}, {"pid", {pid0}}}});
+                if (!train_file_hashes.empty()) {
+                    test_queries.push_back(
+                        {"name=read AND hhash=" + host_names[0] +
+                             " AND fhash=shard_0",
+                         {{"name", {"read"}},
+                          {"hhash", {host_hashes[0]}},
+                          {"fhash", {train_file_hashes[0]}}}});
+                }
 
-        if (!train_file_hashes.empty()) {
-            test_queries.push_back(
-                {"name=read AND hhash=" + host_names[0] + " AND fhash=shard_0",
-                 {{"name", {"read"}},
-                  {"hhash", {host_hashes[0]}},
-                  {"fhash", {train_file_hashes[0]}}}});
-        }
+                test_queries.push_back({"name=pwrite|write (ckpt writes)",
+                                        {{"name", {"pwrite", "write"}}}});
+                test_queries.push_back({"name=open|close (all open/close)",
+                                        {{"name", {"open", "close"}}}});
+                test_queries.push_back(
+                    {"fhash=any val file (OR)",
+                     {{"fhash",
+                       std::vector<std::string>(val_file_hashes.begin(),
+                                                val_file_hashes.end())}}});
 
-        test_queries.push_back({"name=pwrite|write (ckpt writes)",
-                                {{"name", {"pwrite", "write"}}}});
-        test_queries.push_back({"name=open|close (all open/close)",
-                                {{"name", {"open", "close"}}}});
-        test_queries.push_back(
-            {"fhash=any val file (OR)",
-             {{"fhash", std::vector<std::string>(val_file_hashes.begin(),
-                                                 val_file_hashes.end())}}});
+                test_queries.push_back({"name=NONEXISTENT (expect 0)",
+                                        {{"name", {"NONEXISTENT"}}}});
+                test_queries.push_back(
+                    {"cat=NONEXISTENT (expect 0)", {{"cat", {"NONEXISTENT"}}}});
+                test_queries.push_back(
+                    {"name=pwrite AND cat=APP (impossible)",
+                     {{"name", {"pwrite"}}, {"cat", {"APP"}}}});
 
-        test_queries.push_back(
-            {"name=NONEXISTENT (expect 0)", {{"name", {"NONEXISTENT"}}}});
-        test_queries.push_back(
-            {"cat=NONEXISTENT (expect 0)", {{"cat", {"NONEXISTENT"}}}});
-        test_queries.push_back({"name=pwrite AND cat=APP (impossible)",
-                                {{"name", {"pwrite"}}, {"cat", {"APP"}}}});
+                auto* gf_ptr = &generated_files;
+                verify_task = make_task(
+                    [gf_ptr, test_queries = std::move(test_queries),
+                     checkpoint_size](CoroScope& ctx) -> coro::CoroTask<int> {
+                        co_return co_await run_verify(
+                            ctx, *gf_ptr, test_queries, checkpoint_size);
+                    },
+                    "Verify");
 
-        auto* gf_ptr = &generated_files;
-        verify_task = make_task(
-            [gf_ptr, test_queries = std::move(test_queries),
-             checkpoint_size](CoroScope& ctx) -> coro::CoroTask<int> {
-                co_return co_await run_verify(ctx, *gf_ptr, test_queries,
-                                              checkpoint_size);
-            },
-            "Verify");
+                verify_task->depends_on(summary_task);
+                final_task = verify_task;
+            }
 
-        verify_task->depends_on(summary_task);
-        final_task = verify_task;
-    }
+            pipeline.set_source(rank_tasks);
+            pipeline.set_destination(final_task);
+            pipeline.execute();
 
-    pipeline.set_source(rank_tasks);
-    pipeline.set_destination(final_task);
-    pipeline.execute();
+            if (verify && verify_task) {
+                return verify_task->get<int>();
+            }
 
-    if (verify && verify_task) {
-        return verify_task->get<int>();
-    }
-
-    return 0;
+            return 0;
+        });
 }

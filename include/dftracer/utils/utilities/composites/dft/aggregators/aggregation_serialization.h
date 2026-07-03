@@ -281,9 +281,10 @@ inline bool parse_agg_value_full_view(std::string_view data,
 
     auto read_f64 = [&]() -> double {
         if (p + 8 > end) return 0.0;
+        // Big-endian, matching put_double/put_be64 on the write side.
         std::uint64_t bits = 0;
         for (int i = 0; i < 8; ++i) {
-            bits |= static_cast<std::uint64_t>(*p++) << (i * 8);
+            bits = (bits << 8) | static_cast<std::uint64_t>(*p++);
         }
         double result;
         std::memcpy(&result, &bits, sizeof(result));

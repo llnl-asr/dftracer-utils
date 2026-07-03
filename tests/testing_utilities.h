@@ -11,6 +11,14 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef DFTRACER_UTILS_MPI_ENABLED
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <cstdio>
+#include <cstdlib>
+#endif
 extern "C" {
 #endif
 
@@ -212,6 +220,109 @@ class TestEnvironment {
     std::string create_test_gzip_file_impl();
     std::string create_test_tar_gzip_file_impl();
 };
+
+#ifdef DFTRACER_UTILS_MPI_ENABLED
+// -- Shared helpers for the MPI binary integration tests --
+
+// Run `binary` with `args` (no shell). Returns the exit code, or -1 on failure.
+inline int run_process(const std::string& binary,
+                       const std::vector<std::string>& args) {
+    pid_t pid = ::fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        std::vector<const char*> argv;
+        argv.push_back(binary.c_str());
+        for (const auto& a : args) argv.push_back(a.c_str());
+        argv.push_back(nullptr);
+        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
+        ::_exit(127);
+    }
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+// Locate an MPI launcher: $MPIEXEC_EXECUTABLE if set, else mpiexec/mpirun on
+// PATH. Returns "" if none is found.
+inline std::string find_mpi_launcher() {
+    const char* env_path = std::getenv("MPIEXEC_EXECUTABLE");
+    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
+    for (const auto& name : {"mpiexec", "mpirun"}) {
+        std::string cmd = std::string("command -v ") + name + " 2>/dev/null";
+        FILE* p = ::popen(cmd.c_str(), "r");
+        if (!p) continue;
+        char buf[4096];
+        std::string out;
+        while (std::fgets(buf, sizeof(buf), p)) out += buf;
+        ::pclose(p);
+        while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
+            out.pop_back();
+        if (!out.empty() && ::access(out.c_str(), X_OK) == 0) return out;
+    }
+    return "";
+}
+
+// Launch `binary` under `launcher` with `np` ranks. Returns the exit code.
+// OpenMPI refuses to run as root (common in CI containers); permit it via env
+// vars rather than --allow-run-as-root, which MPICH does not recognize. MPICH
+// ignores unknown env vars, so this is portable across implementations.
+inline int run_mpi(const std::string& launcher, int np,
+                   const std::string& binary,
+                   const std::vector<std::string>& binary_args) {
+    ::setenv("OMPI_ALLOW_RUN_AS_ROOT", "1", 1);
+    ::setenv("OMPI_ALLOW_RUN_AS_ROOT_CONFIRM", "1", 1);
+    std::vector<std::string> args = {"-n", std::to_string(np), binary};
+    for (const auto& a : binary_args) args.push_back(a);
+    return run_process(launcher, args);
+}
+
+// Locate a built binary by name: prefer $env_name (set by CMake), else search
+// the common build-output locations relative to the test's working directory.
+inline std::string find_binary_by_name(const char* env_name,
+                                       const std::string& name) {
+    const char* env_path = std::getenv(env_name);
+    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
+    for (const std::string prefix :
+         {"./", "../", "../../", "../bin/", "../../bin/"}) {
+        const std::string path = prefix + name;
+        if (::access(path.c_str(), X_OK) == 0) return path;
+    }
+    return "";
+}
+
+// Shared setup for the *_mpi binary integration tests: locates the serial and
+// MPI binaries plus an MPI launcher, and records a skip reason if any is
+// missing. Tests derive a small Env from this with their specific names.
+struct MpiTestEnv {
+    std::string serial_bin;
+    std::string mpi_bin;
+    std::string launcher;
+    bool ready = false;
+    std::string skip_reason;
+
+    MpiTestEnv(const std::string& serial_name, const char* serial_env,
+               const std::string& mpi_name, const char* mpi_env) {
+        serial_bin = find_binary_by_name(serial_env, serial_name);
+        mpi_bin = find_binary_by_name(mpi_env, mpi_name);
+        launcher = find_mpi_launcher();
+        if (serial_bin.empty()) {
+            skip_reason = serial_name + " binary not found";
+            return;
+        }
+        if (mpi_bin.empty()) {
+            skip_reason = mpi_name + " binary not found (set " +
+                          std::string(mpi_env) +
+                          " or build with DFTRACER_UTILS_ENABLE_MPI=ON)";
+            return;
+        }
+        if (launcher.empty()) {
+            skip_reason = "no mpiexec/mpirun on PATH";
+            return;
+        }
+        ready = true;
+    }
+};
+#endif  // DFTRACER_UTILS_MPI_ENABLED
 }  // namespace dft_utils_test
 #endif
 

@@ -111,10 +111,11 @@ TEST_SUITE("FileMerger") {
 
             // Process
             FileMergerUtility merger;
-            auto output = merger.process(merger_input).get();
+            auto merge_result = merger.process(merger_input).get();
 
             // Verify
-            CHECK(output.success == true);
+            REQUIRE(merge_result.has_value());
+            auto& output = *merge_result;
             CHECK(output.output_path == final_output);
             CHECK(output.files_combined == 3);
             CHECK(output.total_events == (5 + 7 + 9));  // 5, 7, 9 events
@@ -186,10 +187,11 @@ TEST_SUITE("FileMerger") {
 
             // Process
             FileMergerUtility merger;
-            auto output = merger.process(merger_input).get();
+            auto result = merger.process(merger_input).get();
 
             // Verify
-            CHECK(output.success == true);
+            REQUIRE(result.has_value());
+            auto& output = *result;
             CHECK(output.output_path == (final_output + ".gz"));
             CHECK(output.files_combined == 3);
             CHECK(fs::exists(output.output_path));

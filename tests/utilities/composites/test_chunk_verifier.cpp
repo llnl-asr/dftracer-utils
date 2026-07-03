@@ -7,7 +7,6 @@
 
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/chunk_verifier_utility.h>
 #include <doctest/doctest.h>
@@ -61,11 +60,8 @@ static ChunkVerificationUtilityOutput run_verifier(
             UtilityExecutor<
                 ChunkVerificationUtilityInput<ChunkType, MetadataType>,
                 ChunkVerificationUtilityOutput, tags::NeedsContext>
-                exec(verifier,
-                     BehaviorChain<
-                         ChunkVerificationUtilityInput<ChunkType, MetadataType>,
-                         ChunkVerificationUtilityOutput>{});
-            *out_ptr = co_await exec.execute_with_context(scope, input);
+                exec(verifier);
+            *out_ptr = co_await exec.execute(scope, input);
         });
 
     rt.submit(std::move(task), "chunk-verify").wait();

@@ -3,7 +3,6 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/manifest_queries.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
@@ -17,7 +16,6 @@
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
-using dftracer::utils::utilities::behaviors::BehaviorChain;
 using dftracer::utils::utilities::behaviors::UtilityExecutor;
 using dftracer::utils::utilities::indexer::IndexBuildConfig;
 using dftracer::utils::utilities::indexer::IndexBuilderUtility;
@@ -65,9 +63,8 @@ static IndexBuildResult run_index_build(const IndexBuildConfig& config) {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            *result_ptr = co_await exec.execute_with_context(scope, config);
+                exec(builder);
+            *result_ptr = co_await exec.execute(scope, config);
         });
 
     rt.submit(std::move(task), "index-build").wait();

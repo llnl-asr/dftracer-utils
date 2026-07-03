@@ -146,6 +146,41 @@ TEST_SUITE("AggregationSerialization") {
         CHECK(m2.custom_metrics == nullptr);
     }
 
+    TEST_CASE("value full-view fast path - mean/m2 endianness") {
+        // Regression: parse_agg_value_full_view::read_f64 must decode doubles
+        // big-endian to match put_double on the write side. A little-endian
+        // read byte-swaps mean/m2, corrupting the mean/stddev columns that
+        // iter_aggregation / dfanalyzer emit.
+        AggregationMetrics m;
+        m.count = 100;
+        m.duration.count = 100;
+        m.duration.total = 5000;
+        m.duration.min = 10;
+        m.duration.max = 200;
+        m.duration.mean = 12345.678;
+        m.duration.m2 = 98765.4321;
+        m.size.count = 100;
+        m.size.total = 8000;
+        m.size.mean = 42.5;
+        m.size.m2 = 271828.1828;
+        m.offset.count = 100;
+        m.offset.mean = 3.14159;
+        m.offset.m2 = 161803.398;
+
+        auto data = serialize_agg_value(m);
+
+        AggMetricsFullView fv;
+        REQUIRE(parse_agg_value_full_view(data, fv));
+
+        CHECK(fv.count == 100);
+        CHECK(fv.dur_mean == doctest::Approx(12345.678));
+        CHECK(fv.dur_m2 == doctest::Approx(98765.4321));
+        CHECK(fv.size_mean == doctest::Approx(42.5));
+        CHECK(fv.size_m2 == doctest::Approx(271828.1828));
+        CHECK(fv.offset_mean == doctest::Approx(3.14159));
+        CHECK(fv.offset_m2 == doctest::Approx(161803.398));
+    }
+
     TEST_CASE("value roundtrip - with custom metrics") {
         AggregationMetrics m;
         m.count = 10;

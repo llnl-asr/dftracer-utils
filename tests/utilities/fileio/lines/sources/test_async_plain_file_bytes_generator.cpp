@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_bytes_generator.h>
@@ -429,7 +430,7 @@ TEST_SUITE("AsyncPlainFileBytesGenerator") {
                 co_return;
             }(std::move(gen));
 
-            CHECK_THROWS_AS(task.get(), std::invalid_argument);
+            CHECK_THROWS_AS(task.get(), dftracer::utils::DFTUtilsException);
         }
 
         SUBCASE("Start greater than end throws") {
@@ -440,7 +441,7 @@ TEST_SUITE("AsyncPlainFileBytesGenerator") {
                 co_return;
             }(std::move(gen));
 
-            CHECK_THROWS_AS(task.get(), std::invalid_argument);
+            CHECK_THROWS_AS(task.get(), dftracer::utils::DFTUtilsException);
         }
     }
 

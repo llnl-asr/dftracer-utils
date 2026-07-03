@@ -9,80 +9,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace {
 
-std::string find_binary(const char* env_name,
-                        const std::vector<std::string>& candidates) {
-    const char* env_path = std::getenv(env_name);
-    if (env_path && ::access(env_path, X_OK) == 0) return env_path;
-    for (const auto& p : candidates) {
-        if (::access(p.c_str(), X_OK) == 0) return p;
-    }
-    return "";
-}
-
-std::string find_serial_binary() {
-    return find_binary("DFTRACER_CALL_TREE_PATH",
-                       {"./dftracer_call_tree", "../dftracer_call_tree",
-                        "../../dftracer_call_tree", "../bin/dftracer_call_tree",
-                        "../../bin/dftracer_call_tree"});
-}
-
-std::string find_mpi_binary() {
-    return find_binary(
-        "DFTRACER_CALL_TREE_MPI_PATH",
-        {"./dftracer_call_tree_mpi", "../dftracer_call_tree_mpi",
-         "../../dftracer_call_tree_mpi", "../bin/dftracer_call_tree_mpi",
-         "../../bin/dftracer_call_tree_mpi"});
-}
-
-std::string find_launcher() {
-    const char* env_path = std::getenv("MPIEXEC_EXECUTABLE");
-    if (env_path && ::access(env_path, X_OK) == 0) return env_path;
-    for (const auto& name : {"mpiexec", "mpirun"}) {
-        std::string cmd = std::string("command -v ") + name + " 2>/dev/null";
-        FILE* p = ::popen(cmd.c_str(), "r");
-        if (!p) continue;
-        char buf[4096];
-        std::string out;
-        while (std::fgets(buf, sizeof(buf), p)) out += buf;
-        ::pclose(p);
-        while (!out.empty() && (out.back() == '\n' || out.back() == ' '))
-            out.pop_back();
-        if (!out.empty() && ::access(out.c_str(), X_OK) == 0) return out;
-    }
-    return "";
-}
-
-int run_process(const std::string& binary,
-                const std::vector<std::string>& args) {
-    pid_t pid = ::fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        std::vector<const char*> argv;
-        argv.push_back(binary.c_str());
-        for (const auto& a : args) argv.push_back(a.c_str());
-        argv.push_back(nullptr);
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-}
-
-int run_mpi(const std::string& launcher, int np, const std::string& binary,
-            const std::vector<std::string>& binary_args) {
-    std::vector<std::string> args = {"--allow-run-as-root", "-n",
-                                     std::to_string(np), binary};
-    for (const auto& a : binary_args) args.push_back(a);
-    return run_process(launcher, args);
-}
+// MPI launcher/runner helpers are shared via testing_utilities.h.
+using dft_utils_test::run_mpi;
+using dft_utils_test::run_process;
 
 std::string create_pfw_gz(dft_utils_test::TestEnvironment& env, int num_events,
                           int id) {
@@ -134,29 +69,10 @@ std::vector<std::string> read_event_lines_sorted(const std::string& path) {
     return lines;
 }
 
-struct Env {
-    std::string serial_bin, mpi_bin, launcher;
-    bool ready = false;
-    std::string skip_reason;
-
-    Env() {
-        serial_bin = find_serial_binary();
-        mpi_bin = find_mpi_binary();
-        launcher = find_launcher();
-        if (serial_bin.empty()) {
-            skip_reason = "dftracer_call_tree binary not found";
-            return;
-        }
-        if (mpi_bin.empty()) {
-            skip_reason = "dftracer_call_tree_mpi binary not found";
-            return;
-        }
-        if (launcher.empty()) {
-            skip_reason = "no mpiexec/mpirun on PATH";
-            return;
-        }
-        ready = true;
-    }
+struct Env : dft_utils_test::MpiTestEnv {
+    Env()
+        : MpiTestEnv("dftracer_call_tree", "DFTRACER_CALL_TREE_PATH",
+                     "dftracer_call_tree_mpi", "DFTRACER_CALL_TREE_MPI_PATH") {}
 };
 
 std::pair<std::vector<std::string>, std::vector<std::string>> run_and_compare(

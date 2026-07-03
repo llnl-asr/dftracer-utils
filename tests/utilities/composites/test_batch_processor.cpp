@@ -2,7 +2,6 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/core/utilities/utility_traits.h>
 #include <dftracer/utils/utilities/composites/batch_processor_utility.h>
@@ -17,10 +16,9 @@ using namespace dftracer::utils::utilities::behaviors;
 
 namespace tags = dftracer::utils::utilities::tags;
 
-// Test utility with Parallelizable tag for compile-time checks
+// Test utility: uppercases a string.
 class StringUppercaseUtility
-    : public utilities::Utility<std::string, std::string,
-                                utilities::tags::Parallelizable> {
+    : public utilities::Utility<std::string, std::string> {
    public:
     coro::CoroTask<std::string> process(const std::string& input) override {
         std::string result = input;
@@ -30,8 +28,7 @@ class StringUppercaseUtility
 };
 
 // Test utility that squares integers
-class IntSquareUtility
-    : public utilities::Utility<int, int, utilities::tags::Parallelizable> {
+class IntSquareUtility : public utilities::Utility<int, int> {
    public:
     coro::CoroTask<int> process(const int& input) override {
         co_return input* input;
@@ -52,9 +49,8 @@ static std::vector<ItemOutput> run_batch(
         [batch, inputs, results_ptr](CoroScope& scope) -> coro::CoroTask<void> {
             UtilityExecutor<std::vector<ItemInput>, std::vector<ItemOutput>,
                             tags::NeedsContext>
-                exec(batch, BehaviorChain<std::vector<ItemInput>,
-                                          std::vector<ItemOutput>>{});
-            *results_ptr = co_await exec.execute_with_context(scope, inputs);
+                exec(batch);
+            *results_ptr = co_await exec.execute(scope, inputs);
         });
 
     rt.submit(std::move(task), "batch-run").wait();

@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/plain_file_bytes_iterator.h>
 #include <doctest/doctest.h>
@@ -165,9 +166,9 @@ TEST_SUITE("PlainFileBytesIterator") {
             }
 
             CHECK_THROWS_AS(PlainFileBytesIterator(test_file.string(), 10, 10),
-                            std::invalid_argument);
+                            dftracer::utils::DFTUtilsException);
             CHECK_THROWS_AS(PlainFileBytesIterator(test_file.string(), 10, 5),
-                            std::invalid_argument);
+                            dftracer::utils::DFTUtilsException);
 
             fs::remove(test_file);
         }

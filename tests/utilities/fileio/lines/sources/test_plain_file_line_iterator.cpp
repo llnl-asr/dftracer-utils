@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/plain_file_line_iterator.h>
 #include <doctest/doctest.h>
@@ -158,11 +159,11 @@ TEST_CASE("PlainFileLineIterator - Error Handling") {
 
         // start_line < 1
         CHECK_THROWS_AS(PlainFileLineIterator(test_file.string(), 0, 5),
-                        std::invalid_argument);
+                        dftracer::utils::DFTUtilsException);
 
         // end_line < start_line
         CHECK_THROWS_AS(PlainFileLineIterator(test_file.string(), 5, 2),
-                        std::invalid_argument);
+                        dftracer::utils::DFTUtilsException);
 
         fs::remove(test_file);
     }

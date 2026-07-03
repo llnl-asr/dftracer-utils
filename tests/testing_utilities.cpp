@@ -199,7 +199,7 @@ bool extract_from_tar_gz(const std::string& tar_gz_path,
 TestEnvironment::TestEnvironment(std::size_t lines, Format format)
     : num_lines(lines), format_(format) {
     // @note: enable this for debugging
-    // DFTRACER_UTILS_LOGGER_INIT();
+    // dftracer::utils::logger::init();
     fs::path test_path = make_unique_test_path("dftracer_test");
 
     try {

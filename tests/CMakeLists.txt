@@ -27,6 +27,7 @@ link_zlib(testing_utilities STATIC)
 set(TEST_CPP_SOURCES
     # Core tests
     core/test_runtime.cpp
+    core/test_logging.cpp
     # Pipeline tests
     pipeline/test_pipeline.cpp
 
@@ -55,6 +56,8 @@ set(TEST_CPP_SOURCES
     reader/test_reader_formats.cpp
     reader/test_reader_robustness.cpp
     # reader/test_reader_tar_comprehensive.cpp
+    # Trace generation utility tests
+    utilities/trace_gen/test_fake_trace_writer.cpp
     # Replay tests
     replay/test_replay.cpp
     replay/test_replay_fidelity.cpp
@@ -113,7 +116,9 @@ foreach(test_file ${TEST_CPP_SOURCES})
 
   # These thread-heavy tests contend heavily when run together on low-core CI.
   # Give them extra timeout and serialize via a shared lock.
-  if(bin_exec STREQUAL "pipeline/test_task_scope"
+  if(bin_exec STREQUAL "core/test_runtime"
+     OR bin_exec STREQUAL "pipeline/test_task_scope"
+     OR bin_exec STREQUAL "pipeline/test_pipeline"
      OR bin_exec STREQUAL "coro/test_channel")
     set(heavy_thread_timeout 180)
     if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_ENABLE_COVERAGE
@@ -195,6 +200,7 @@ set(TEST_BINARY_SOURCES
     binaries/test_dftracer_server.cpp
     binaries/test_dftracer_merge.cpp
     binaries/test_dftracer_event_count.cpp
+    binaries/test_dftracer_validate.cpp
     binaries/test_dftracer_split.cpp
     binaries/test_dftracer_pgzip.cpp
     binaries/test_dftracer_gen_fake_trace.cpp

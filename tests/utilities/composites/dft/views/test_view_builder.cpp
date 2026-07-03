@@ -106,16 +106,16 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderUtility builder;
         auto output = builder.process(input).get();
 
-        CHECK(output.success);
-        CHECK(output.file_may_match);
-        CHECK(output.total_checkpoints == 4);
+        CHECK(output);
+        CHECK(output->file_may_match);
+        CHECK(output->total_checkpoints == 4);
         // IO view matches POSIX (checkpoints 0, 1) and names like read/write
         // (0, 1)
-        CHECK(output.candidates.size() >= 2);
-        CHECK(output.skipped_checkpoints >= 2);
+        CHECK(output->candidates.size() >= 2);
+        CHECK(output->skipped_checkpoints >= 2);
 
         // Verify byte ranges are computed
-        for (const auto& c : output.candidates) {
+        for (const auto& c : output->candidates) {
             CHECK(c.end_byte > c.start_byte);
         }
 
@@ -142,12 +142,12 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderUtility builder;
         auto output = builder.process(input).get();
 
-        CHECK(output.success);
-        CHECK(output.file_may_match);
+        CHECK(output);
+        CHECK(output->file_may_match);
         // Compute view: cat={compute, comm, device, ai_framework, ai_root}
         // Matches checkpoints 2 and 3
-        CHECK(output.candidates.size() >= 2);
-        CHECK(output.skipped_checkpoints >= 2);
+        CHECK(output->candidates.size() >= 2);
+        CHECK(output->skipped_checkpoints >= 2);
 
         fs::remove_all(test_dir);
     }
@@ -175,10 +175,10 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderUtility builder;
         auto output = builder.process(input).get();
 
-        CHECK(output.success);
-        CHECK_FALSE(output.file_may_match);
-        CHECK(output.candidates.empty());
-        CHECK(output.skipped_checkpoints == 4);
+        CHECK(output);
+        CHECK_FALSE(output->file_may_match);
+        CHECK(output->candidates.empty());
+        CHECK(output->skipped_checkpoints == 4);
 
         fs::remove_all(test_dir);
     }
@@ -206,10 +206,10 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderUtility builder;
         auto output = builder.process(input).get();
 
-        CHECK(output.success);
-        CHECK(output.file_may_match);
-        CHECK(output.candidates.size() == 4);
-        CHECK(output.skipped_checkpoints == 0);
+        CHECK(output);
+        CHECK(output->file_may_match);
+        CHECK(output->candidates.size() == 4);
+        CHECK(output->skipped_checkpoints == 0);
 
         fs::remove_all(test_dir);
     }
@@ -228,10 +228,10 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderUtility builder;
         auto output = builder.process(input).get();
 
-        CHECK(output.success);
-        CHECK(output.file_may_match);
-        CHECK(output.candidates.size() == 3);
-        CHECK(output.skipped_checkpoints == 0);
+        CHECK(output);
+        CHECK(output->file_may_match);
+        CHECK(output->candidates.size() == 3);
+        CHECK(output->skipped_checkpoints == 0);
     }
 
     TEST_CASE("ViewBuilder - Byte range computation") {
@@ -249,22 +249,22 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderUtility builder;
         auto output = builder.process(input).get();
 
-        CHECK(output.success);
-        REQUIRE(output.candidates.size() == 3);
+        CHECK(output);
+        REQUIRE(output->candidates.size() == 3);
 
         // 12000 / 3 = 4000 bytes per checkpoint
-        CHECK(output.candidates[0].checkpoint_idx == 0);
-        CHECK(output.candidates[0].start_byte == 0);
-        CHECK(output.candidates[0].end_byte == 4000);
+        CHECK(output->candidates[0].checkpoint_idx == 0);
+        CHECK(output->candidates[0].start_byte == 0);
+        CHECK(output->candidates[0].end_byte == 4000);
 
-        CHECK(output.candidates[1].checkpoint_idx == 1);
-        CHECK(output.candidates[1].start_byte == 4000);
-        CHECK(output.candidates[1].end_byte == 8000);
+        CHECK(output->candidates[1].checkpoint_idx == 1);
+        CHECK(output->candidates[1].start_byte == 4000);
+        CHECK(output->candidates[1].end_byte == 8000);
 
         // Last checkpoint covers remainder
-        CHECK(output.candidates[2].checkpoint_idx == 2);
-        CHECK(output.candidates[2].start_byte == 8000);
-        CHECK(output.candidates[2].end_byte == 12000);
+        CHECK(output->candidates[2].checkpoint_idx == 2);
+        CHECK(output->candidates[2].start_byte == 8000);
+        CHECK(output->candidates[2].end_byte == 12000);
     }
 
     TEST_CASE("ViewBuilder - Zero checkpoints defaults to 1") {
@@ -281,11 +281,11 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderUtility builder;
         auto output = builder.process(input).get();
 
-        CHECK(output.success);
-        CHECK(output.total_checkpoints == 1);
-        REQUIRE(output.candidates.size() == 1);
-        CHECK(output.candidates[0].start_byte == 0);
-        CHECK(output.candidates[0].end_byte == 10000);
+        CHECK(output);
+        CHECK(output->total_checkpoints == 1);
+        REQUIRE(output->candidates.size() == 1);
+        CHECK(output->candidates[0].start_byte == 0);
+        CHECK(output->candidates[0].end_byte == 10000);
     }
 
     TEST_CASE("ViewBuilder - Dimension alias resolution") {
@@ -333,9 +333,9 @@ TEST_SUITE("ViewBuilderUtility") {
         ViewBuilderUtility builder;
         auto output = builder.process(input).get();
 
-        CHECK(output.success);
-        CHECK(output.file_may_match);
-        CHECK(output.candidates.size() == 1);
+        CHECK(output);
+        CHECK(output->file_may_match);
+        CHECK(output->candidates.size() == 1);
 
         fs::remove_all(test_dir);
     }

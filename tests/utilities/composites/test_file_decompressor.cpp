@@ -1,9 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/composites/file_compressor_utility.h>
 #include <dftracer/utils/utilities/composites/file_decompressor_utility.h>
 #include <doctest/doctest.h>
 
+#include <cstddef>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -21,6 +24,16 @@ static fs::path create_test_dir() {
     auto dir = fs::temp_directory_path() / "dftracer_test_decompressor";
     fs::create_directories(dir);
     return dir;
+}
+
+// Exercises DFT_TRY: binds the decompression payload on success, or propagates
+// the error to the caller. Proves the macro compiles and is frame-safe inside a
+// coroutine that returns Result<...>.
+static dftracer::utils::coro::CoroTask<dftracer::utils::Result<std::size_t>>
+decompressed_size_via_dft_try(FileDecompressorUtility& decompressor,
+                              const FileDecompressionUtilityInput& input) {
+    DFT_TRY(auto out, co_await decompressor.process(input));
+    co_return out.decompressed_size;
 }
 
 TEST_SUITE("FileDecompressor") {
@@ -48,7 +61,7 @@ TEST_SUITE("FileDecompressor") {
             auto compress_input =
                 FileCompressionUtilityInput::from_file(original_file);
             auto compress_result = compressor.process(compress_input).get();
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(original_file);
 
@@ -58,12 +71,12 @@ TEST_SUITE("FileDecompressor") {
             auto decompress_result =
                 decompressor.process(decompress_input).get();
 
-            CHECK(decompress_result.success == true);
-            CHECK(decompress_result.input_path == compressed_file);
-            CHECK(decompress_result.output_path == decompressed_file);
-            CHECK(decompress_result.compressed_size ==
-                  compress_result.compressed_size);
-            CHECK(decompress_result.decompressed_size ==
+            REQUIRE(decompress_result.has_value());
+            CHECK(decompress_result->input_path == compressed_file);
+            CHECK(decompress_result->output_path == decompressed_file);
+            CHECK(decompress_result->compressed_size ==
+                  compress_result->compressed_size);
+            CHECK(decompress_result->decompressed_size ==
                   original_content.size());
             CHECK(fs::exists(decompressed_file));
 
@@ -94,8 +107,8 @@ TEST_SUITE("FileDecompressor") {
                     .with_output(custom_output);
             auto result = decompressor.process(decompress_input).get();
 
-            CHECK(result.success == true);
-            CHECK(result.output_path == custom_output);
+            REQUIRE(result.has_value());
+            CHECK(result->output_path == custom_output);
             CHECK(fs::exists(custom_output));
         }
     }
@@ -129,7 +142,7 @@ TEST_SUITE("FileDecompressor") {
                     .process(
                         FileCompressionUtilityInput::from_file(original_file))
                     .get();
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(original_file);
 
@@ -139,7 +152,7 @@ TEST_SUITE("FileDecompressor") {
                     .process(FileDecompressionUtilityInput::from_file(
                         compressed_file))
                     .get();
-            REQUIRE(decompress_result.success == true);
+            REQUIRE(decompress_result.has_value());
 
             std::string decompressed_content = read_file_content(original_file);
             CHECK(decompressed_content == original_content);
@@ -169,7 +182,7 @@ TEST_SUITE("FileDecompressor") {
                         FileCompressionUtilityInput::from_file(original_file)
                             .with_chunk_size(1024))
                     .get();
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(original_file);
 
@@ -180,10 +193,10 @@ TEST_SUITE("FileDecompressor") {
                                  compressed_file)
                                  .with_chunk_size(4096))
                     .get();
-            REQUIRE(decompress_result.success == true);
+            REQUIRE(decompress_result.has_value());
 
             CHECK(fs::file_size(original_file) == original_size);
-            CHECK(decompress_result.decompressed_size == original_size);
+            CHECK(decompress_result->decompressed_size == original_size);
         }
     }
 
@@ -199,8 +212,9 @@ TEST_SUITE("FileDecompressor") {
             auto input = FileDecompressionUtilityInput::from_file(non_existent);
             auto result = decompressor.process(input).get();
 
-            CHECK(result.success == false);
-            CHECK(result.error_message.find("does not exist") !=
+            REQUIRE(!result);
+            CHECK(result.error().code == dftracer::utils::ErrorCode::NOT_FOUND);
+            CHECK(result.error().message.find("does not exist") !=
                   std::string::npos);
         }
 
@@ -215,12 +229,14 @@ TEST_SUITE("FileDecompressor") {
             auto input = FileDecompressionUtilityInput::from_file(corrupt_file);
             auto result = decompressor.process(input).get();
 
-            CHECK(result.success == false);
+            REQUIRE(!result);
+            CHECK(result.error().code ==
+                  dftracer::utils::ErrorCode::COMPRESSION);
             bool has_decompression_error =
-                result.error_message.find("Decompression failed") !=
+                result.error().message.find("Decompression failed") !=
                 std::string::npos;
             bool has_header_error =
-                result.error_message.find("incorrect header") !=
+                result.error().message.find("incorrect header") !=
                 std::string::npos;
             CHECK((has_decompression_error || has_header_error));
         }
@@ -237,7 +253,7 @@ TEST_SUITE("FileDecompressor") {
                 compressor
                     .process(FileCompressionUtilityInput::from_file(empty_file))
                     .get();
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(empty_file);
 
@@ -248,8 +264,8 @@ TEST_SUITE("FileDecompressor") {
                         compressed_file))
                     .get();
 
-            CHECK(decompress_result.success == true);
-            CHECK(decompress_result.decompressed_size == 0);
+            REQUIRE(decompress_result.has_value());
+            CHECK(decompress_result->decompressed_size == 0);
             CHECK(fs::exists(empty_file));
             CHECK(fs::file_size(empty_file) == 0);
         }
@@ -281,8 +297,7 @@ TEST_SUITE("FileDecompressor") {
                     .process(
                         FileCompressionUtilityInput::from_file(binary_file))
                     .get();
-            INFO("Compression error: ", compress_result.error_message);
-            REQUIRE(compress_result.success == true);
+            REQUIRE(compress_result.has_value());
 
             fs::remove(binary_file);
 
@@ -292,8 +307,7 @@ TEST_SUITE("FileDecompressor") {
                     .process(FileDecompressionUtilityInput::from_file(
                         compressed_file))
                     .get();
-            INFO("Decompression error: ", decompress_result.error_message);
-            REQUIRE(decompress_result.success == true);
+            REQUIRE(decompress_result.has_value());
 
             std::ifstream ifs(binary_file, std::ios::binary);
             std::vector<unsigned char> decompressed_data(
@@ -302,6 +316,49 @@ TEST_SUITE("FileDecompressor") {
 
             CHECK(decompressed_data.size() == original_data.size());
             CHECK(decompressed_data == original_data);
+        }
+    }
+
+    TEST_CASE("FileDecompressor - DFT_TRY propagation") {
+        auto test_dir = create_test_dir();
+        auto cleanup_dir = std::shared_ptr<void>(
+            nullptr, [&](void*) { fs::remove_all(test_dir); });
+
+        SUBCASE("DFT_TRY binds value on success") {
+            std::string original_file = (test_dir / "dft_try.txt").string();
+            std::string compressed_file = original_file + ".gz";
+            std::string original_content = "DFT_TRY happy path content\n";
+
+            std::ofstream ofs(original_file);
+            ofs << original_content;
+            ofs.close();
+
+            FileCompressorUtility compressor;
+            auto compress_result =
+                compressor
+                    .process(
+                        FileCompressionUtilityInput::from_file(original_file))
+                    .get();
+            REQUIRE(compress_result.has_value());
+            fs::remove(original_file);
+
+            FileDecompressorUtility decompressor;
+            auto input =
+                FileDecompressionUtilityInput::from_file(compressed_file);
+            auto r = decompressed_size_via_dft_try(decompressor, input).get();
+
+            REQUIRE(r.has_value());
+            CHECK(*r == original_content.size());
+        }
+
+        SUBCASE("DFT_TRY propagates error on bad input") {
+            std::string non_existent = (test_dir / "missing.gz").string();
+            FileDecompressorUtility decompressor;
+            auto input = FileDecompressionUtilityInput::from_file(non_existent);
+            auto r = decompressed_size_via_dft_try(decompressor, input).get();
+
+            REQUIRE(!r);
+            CHECK(r.error().code == dftracer::utils::ErrorCode::NOT_FOUND);
         }
     }
 }

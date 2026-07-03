@@ -3,7 +3,6 @@
 #include <dftracer/utils/core/rocksdb/db_manager.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/utilities/behaviors/behavior_chain.h>
 #include <dftracer/utils/core/utilities/utility_executor.h>
 #include <dftracer/utils/utilities/composites/dft/event.h>
 #include <dftracer/utils/utilities/composites/dft/visitors/bloom_visitor.h>
@@ -50,9 +49,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            result = co_await exec.execute_with_context(scope, config);
+                exec(builder);
+            result = co_await exec.execute(scope, config);
         });
 
         CHECK(result.success);
@@ -77,7 +75,7 @@ TEST_SUITE("IndexBuilder") {
         dftracer::utils::utilities::composites::dft::DFTracerEvent ev;
         REQUIRE(decltype(ev)::parse(json, ev));
         dftracer::utils::utilities::composites::dft::EventRecord record{
-            ev, json, json_line, 0, 0};
+            ev, json, json_line, 0, 0, 0};
         visitor.on_event(record);
 
         CHECK(visitor.num_chunks() >= 1);
@@ -114,9 +112,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            result = co_await exec.execute_with_context(scope, config);
+                exec(builder);
+            result = co_await exec.execute(scope, config);
         });
 
         REQUIRE(result.success);
@@ -143,9 +140,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            result = co_await exec.execute_with_context(scope, config);
+                exec(builder);
+            result = co_await exec.execute(scope, config);
         });
 
         REQUIRE(result.success);
@@ -172,9 +168,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            result = co_await exec.execute_with_context(scope, config);
+                exec(builder);
+            result = co_await exec.execute(scope, config);
         });
 
         REQUIRE(result.success);
@@ -203,9 +198,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            first = co_await exec.execute_with_context(scope, config);
+                exec(builder);
+            first = co_await exec.execute(scope, config);
         });
         REQUIRE(first.success);
         CHECK_FALSE(first.was_skipped);
@@ -215,9 +209,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            second = co_await exec.execute_with_context(scope, config);
+                exec(builder);
+            second = co_await exec.execute(scope, config);
         });
         CHECK(second.success);
         CHECK(second.was_skipped);
@@ -234,15 +227,14 @@ TEST_SUITE("IndexBuilder") {
                                  .with_force_rebuild(false);
 
         IndexBuildResult first;
-        run_coro([&config_normal,
-                  &first](CoroScope& scope) -> coro::CoroTask<void> {
-            auto builder = std::make_shared<IndexBuilderUtility>();
-            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
-                            tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            first = co_await exec.execute_with_context(scope, config_normal);
-        });
+        run_coro(
+            [&config_normal, &first](CoroScope& scope) -> coro::CoroTask<void> {
+                auto builder = std::make_shared<IndexBuilderUtility>();
+                UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                                tags::NeedsContext>
+                    exec(builder);
+                first = co_await exec.execute(scope, config_normal);
+            });
         REQUIRE(first.success);
 
         auto config_force = IndexBuildConfig::for_file(gz_file)
@@ -251,15 +243,14 @@ TEST_SUITE("IndexBuilder") {
                                 .with_force_rebuild(true);
 
         IndexBuildResult second;
-        run_coro([&config_force,
-                  &second](CoroScope& scope) -> coro::CoroTask<void> {
-            auto builder = std::make_shared<IndexBuilderUtility>();
-            UtilityExecutor<IndexBuildConfig, IndexBuildResult,
-                            tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            second = co_await exec.execute_with_context(scope, config_force);
-        });
+        run_coro(
+            [&config_force, &second](CoroScope& scope) -> coro::CoroTask<void> {
+                auto builder = std::make_shared<IndexBuilderUtility>();
+                UtilityExecutor<IndexBuildConfig, IndexBuildResult,
+                                tags::NeedsContext>
+                    exec(builder);
+                second = co_await exec.execute(scope, config_force);
+            });
         CHECK(second.success);
         CHECK_FALSE(second.was_skipped);
     }
@@ -276,9 +267,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            result = co_await exec.execute_with_context(scope, config);
+                exec(builder);
+            result = co_await exec.execute(scope, config);
         });
 
         REQUIRE(result.success);
@@ -301,9 +291,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            r1 = co_await exec.execute_with_context(scope, config1);
+                exec(builder);
+            r1 = co_await exec.execute(scope, config1);
         });
         REQUIRE(r1.success);
 
@@ -324,9 +313,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            r2 = co_await exec.execute_with_context(scope, config2);
+                exec(builder);
+            r2 = co_await exec.execute(scope, config2);
         });
         REQUIRE(r2.success);
         CHECK_FALSE(r2.was_skipped);
@@ -355,9 +343,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            r1 = co_await exec.execute_with_context(scope, config1);
+                exec(builder);
+            r1 = co_await exec.execute(scope, config1);
         });
         REQUIRE(r1.success);
         CHECK_FALSE(r1.was_skipped);
@@ -368,9 +355,8 @@ TEST_SUITE("IndexBuilder") {
             auto builder = std::make_shared<IndexBuilderUtility>();
             UtilityExecutor<IndexBuildConfig, IndexBuildResult,
                             tags::NeedsContext>
-                exec(builder,
-                     BehaviorChain<IndexBuildConfig, IndexBuildResult>{});
-            r2 = co_await exec.execute_with_context(scope, config1);
+                exec(builder);
+            r2 = co_await exec.execute(scope, config1);
         });
         REQUIRE(r2.success);
         CHECK(r2.was_skipped);

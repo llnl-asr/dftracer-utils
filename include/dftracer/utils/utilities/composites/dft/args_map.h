@@ -154,7 +154,14 @@ class ArgsValueProxy {
 };
 
 class ArgsMap {
-    using Map = dftracer::utils::StringViewMap<ArgsValue>;
+    // Keys are interned views into the process-lifetime key_intern() pool (see
+    // insert): each interned string lives in a heap node that is never moved or
+    // freed until exit, so the view stays valid for the map's whole life,
+    // including long-lived maps stored in call-tree nodes. Storing the view
+    // (not a copy) is what makes interning actually reduce memory.
+    // INVARIANT: only insert a view from key_intern().intern(); a transient
+    // string_view would dangle.
+    using Map = dftracer::utils::InternedStringViewMap<ArgsValue>;
     Map data_;
     bool valid_ = false;
 
@@ -172,8 +179,8 @@ class ArgsMap {
     void set_valid(bool v) { valid_ = v; }
 
     void insert(std::string_view key, ArgsValue value) {
-        auto interned = std::string(key_intern().intern(key));
-        data_.emplace(std::move(interned), std::move(value));
+        // Store the interned view directly (permanent storage); no key copy.
+        data_.emplace(key_intern().intern(key), std::move(value));
     }
 
     void clear() {

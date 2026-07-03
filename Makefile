@@ -1,5 +1,6 @@
 .PHONY: coverage coverage-clean coverage-view coverage-open test test-coverage test-py build clean format check-format cmake-format lint typecheck help \
-        valgrind valgrind-cpp valgrind-py valgrind-mpi valgrind-build valgrind-shell valgrind-clean
+        valgrind valgrind-cpp valgrind-py valgrind-mpi valgrind-build valgrind-shell valgrind-clean \
+        docker-test-gcc12 docker-test-latest
 
 RUN_TY ?= 0
 
@@ -30,6 +31,8 @@ help:
 	@echo "  valgrind-build  - Build the Valgrind Docker image (macOS only)"
 	@echo "  valgrind-shell  - Open a shell in the Valgrind Docker image"
 	@echo "  valgrind-clean  - Remove Valgrind build/venv/logs"
+	@echo "  docker-test-gcc12  - Build+test under GCC 12 in Docker (incremental build/build-docker-gcc12)"
+	@echo "  docker-test-latest - Build+test under newest GCC (Ubuntu 24.04) in Docker"
 	@echo "  clean           - Clean all build directories"
 	@echo "  help            - Show this help"
 	@echo ""
@@ -46,7 +49,7 @@ coverage-open:
 # Clean coverage build
 coverage-clean:
 	@echo "Cleaning coverage build directory..."
-	@rm -rf build_coverage coverage
+	@rm -rf build_coverage build/build-coverage coverage
 
 # View existing coverage report
 coverage-view:
@@ -62,8 +65,8 @@ test:
 
 # Run tests with coverage (requires coverage build)
 test-coverage:
-	@if [ -d "build_coverage" ]; then \
-		ctest --test-dir build_coverage --output-on-failure; \
+	@if [ -d "build/build-coverage" ]; then \
+		ctest --preset coverage; \
 	else \
 		echo "Coverage build not found. Run 'make coverage' first."; \
 		exit 1; \
@@ -89,6 +92,13 @@ test-py:
 
 # Valgrind tests
 VALGRIND_MAKE = $(MAKE) --no-print-directory -C tests/valgrind
+
+# Build + test in a Linux toolchain container (persistent incremental build dir)
+docker-test-gcc12:
+	@./scripts/docker-test.sh gcc12
+
+docker-test-latest:
+	@./scripts/docker-test.sh latest
 
 valgrind:
 	@$(VALGRIND_MAKE) all

@@ -14,7 +14,6 @@ endif()
 need_rocksdb()
 need_argparse()
 need_ghc_filesystem()
-need_cpplogger()
 need_simdjson()
 need_readerwriterqueue()
 need_concurrentqueue()
@@ -37,7 +36,8 @@ endif()
 
 set(DFTRACER_UTILS_CORE_SOURCES
     # Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/constants.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/logging.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/symbolize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/format_detector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/common/memory_budget.cpp
@@ -60,6 +60,7 @@ set(DFTRACER_UTILS_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_awaitable.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_thread_pool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/thread_pool_file_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/thread_pool_backend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_backend_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/io/io_backend_sync.cpp
@@ -67,6 +68,8 @@ set(DFTRACER_UTILS_CORE_SOURCES
     # Tasks
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/tasks/task_result.cpp
+    # Utilities
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/utilities/monitor.cpp
     # RocksDB
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/database.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/core/rocksdb/filesystem.cpp
@@ -113,7 +116,6 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_collector_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/file_merger_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/streaming_file_merger_utility.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/event_hasher_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/internal/utils.cpp
     # Common utilities (shared across modules)
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/ddsketch.cpp
@@ -138,6 +140,7 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/query/evaluator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/query/query.cpp
     # DFT Aggregators
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregation_drain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregation_runner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.cpp
@@ -153,7 +156,6 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/chunk_mapper_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/association_resolver_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/perfetto_trace_writer_utility.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregator_summary_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/aggregators/aggregator_utility.cpp
 
     # DFT Indexing (bloom filters, statistics, queries)
@@ -199,6 +201,7 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_database.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_database_sst_writer_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_database_writer_context.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_batch_builder_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/index_builder_utility.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/provenance_database.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/visitors/bloom_visitor.cpp
@@ -206,27 +209,30 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/visitors/manifest_visitor.cpp
     # Reader
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_arrow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_prefilter.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/arrow_row_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/chunk_geometry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/json_dict_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_c.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/index_encoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/checkpoint_size.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/error.cpp
     # Indexer factory
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/indexer_factory.cpp
     # GZIP indexer
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/gzip_indexer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/gzip/constants.cpp
     # TAR indexer
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/tar_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/tar_indexer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/indexer/internal/tar/constants.cpp
     # Reader
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_c.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/stream_c.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/gzip_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/tar_reader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/reader_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/error.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/error.cpp
     # Call Tree
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/call_tree/call_tree.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/call_tree/call_tree_internal.cpp
@@ -235,6 +241,8 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/call_tree/json_serializer.cpp
     # Replay
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_executors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_result.cpp
     # Server (HTTP/TCP)
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/cursor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_connection.cpp
@@ -260,6 +268,7 @@ endif()
 if(DFTRACER_UTILS_ENABLE_ARROW)
   list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/arrow/column_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/composites/dft/dfanalyzer/dfanalyzer_scan.cpp
   )
 endif()
 
@@ -286,14 +295,6 @@ if(ZLIB_FOUND AND NOT ZLIB_CPM)
   set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lz")
 else()
   set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -ldftracer_zlib")
-endif()
-
-# Only add cpp-logger to pkg-config requirements if it was found on system
-if(cpp-logger_FOUND AND NOT cpplogger_CPM)
-  set(PKG_CONFIG_REQUIRES "${PKG_CONFIG_REQUIRES} cpp-logger")
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lcpp-logger")
-else()
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lcpp-logger")
 endif()
 
 # Add other dependencies built with CPM
@@ -365,11 +366,18 @@ foreach(variant shared static)
   string(TOUPPER ${variant} VARIANT_UPPER)
   if(TARGET dftracer_utils_core_${variant})
     # Link dependencies using helper functions
-    link_cpp_logger(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_simdjson(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_rocksdb(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_zlib(dftracer_utils_core_${variant} ${VARIANT_UPPER})
     link_unordered_dense(dftracer_utils_core_${variant})
+    link_tl_expected(dftracer_utils_core_${variant})
+
+    # The coroutine monitor (monitor.cpp) calls dladdr() for symbolization.
+    # On older glibc (e.g. manylinux aarch64) dladdr lives in libdl, so the
+    # core library must link it explicitly; CMAKE_DL_LIBS is empty where the
+    # symbol is already in libc (newer glibc) or libSystem (macOS).
+    target_link_libraries(dftracer_utils_core_${variant}
+                          PUBLIC ${CMAKE_DL_LIBS})
 
     # Add stdfs if needed
     add_stdfs_if_needed(dftracer_utils_core_${variant})
@@ -443,6 +451,16 @@ create_library(
     dftracer_utils_core)
 
 # Post-process utilities library targets
+# simdjson (third-party) inlined here trips GCC's optimizer-based
+# -Wstrict-overflow that -isystem cannot suppress; keep =2 for our own code.
+set_source_files_properties(
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_arrow.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/trace_reader_prefilter.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/arrow_row_builder.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/reader/internal/json_dict_builder.cpp
+  PROPERTIES COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-overflow>")
+
 foreach(variant shared static)
   if(TARGET dftracer_utils_utilities_${variant})
     # No need to link dependencies here - they're inherited from core
@@ -832,6 +850,7 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_reader.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_tar.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_event_count.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_validate.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_pgzip.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_merge.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/dftracer_split.cpp
@@ -1001,6 +1020,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
     MODULE
     WITH_SOABI
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/dftracer_utils_ext.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_errors.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_errors.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.cpp

@@ -82,6 +82,16 @@
       }
     },
     {
+      "name": "coverage",
+      "displayName": "Coverage (Debug + gcov/lcov)",
+      "description": "Tests with coverage instrumentation enabled",
+      "inherits": "tests",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "DFTRACER_UTILS_COVERAGE": "ON"
+      }
+    },
+    {
       "name": "asan",
       "displayName": "Address Sanitizer (Debug)",
       "description": "Debug build with Address Sanitizer enabled",
@@ -170,6 +180,12 @@
       "jobs": 0
     },
     {
+      "name": "coverage",
+      "displayName": "Coverage Build",
+      "configurePreset": "coverage",
+      "jobs": 0
+    },
+    {
       "name": "asan",
       "displayName": "ASAN Build",
       "configurePreset": "asan",
@@ -207,6 +223,17 @@
       }
     },
     {
+      "name": "coverage",
+      "displayName": "Run Tests (coverage)",
+      "configurePreset": "coverage",
+      "execution": {
+        "jobs": 0
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
       "name": "asan",
       "displayName": "Run ASAN Tests",
       "configurePreset": "asan",
@@ -221,6 +248,9 @@
       "name": "tsan",
       "displayName": "Run TSAN Tests",
       "configurePreset": "tsan",
+      "environment": {
+        "TSAN_OPTIONS": "suppressions=${sourceDir}/tests/tsan/tsan.supp"
+      },
       "execution": {
         "jobs": 0
       },

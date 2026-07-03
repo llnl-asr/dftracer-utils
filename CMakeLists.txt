@@ -68,6 +68,9 @@ set(DEPENDENCY_LIBRARY_DIRS "")
 option(DFTRACER_UTILS_TESTS "Build tests" OFF)
 option(DFTRACER_UTILS_COVERAGE "Enable coverage reporting" OFF)
 option(DFTRACER_UTILS_DEBUG "Enable debug mode including verbose logging" OFF)
+option(DFTRACER_UTILS_LOGGER_LEVEL_TRACE
+       "Compile in TRACE-level logging and coroutine auto-tracing (still runtime-gated by DFTRACER_UTILS_LOG_LEVEL); OFF strips it for a minimal build"
+       ON)
 option(DFTRACER_UTILS_BUILD_SHARED "Build shared library" ON)
 option(DFTRACER_UTILS_BUILD_STATIC "Build static library" ON)
 option(DFTRACER_UTILS_BUILD_BINARIES "Build command-line binaries" ON)
@@ -93,15 +96,8 @@ if(DFTRACER_UTILS_TESTS)
   set(DFTRACER_UTILS_TESTS
       ON
       CACHE BOOL "" FORCE)
-  if(NOT DFTRACER_UTILS_ENABLE_TSAN)
-    set(DFTRACER_UTILS_COVERAGE
-        ON
-        CACHE BOOL "" FORCE)
-  else()
-    set(DFTRACER_UTILS_COVERAGE
-        OFF
-        CACHE BOOL "" FORCE)
-  endif()
+  # Coverage is opt-in (DFTRACER_UTILS_COVERAGE / the `coverage` preset);
+  # building tests does not imply instrumentation.
   # set(DFTRACER_UTILS_DEBUG
   #     ON
   #     CACHE BOOL "" FORCE)

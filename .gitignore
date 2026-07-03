@@ -72,7 +72,6 @@ temp
 *.gz
 traces
 refs
-dfanalyzer
 *.ipynb
 _version.py
 venv
@@ -94,4 +93,4 @@ PLANS.md
 docs/plans
 
 profiling-results*/
-dfanalyzer/
+/dfanalyzer/

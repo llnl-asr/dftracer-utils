@@ -34,51 +34,77 @@ struct DFTracerEvent {
     bool has_id() const { return id != 0; }
 
     static bool parse(const JsonValue& json, DFTracerEvent& out) {
-        auto ph_val = json["ph"];
-        if (!ph_val.exists()) return false;
+        simdjson::dom::element unused_args{};
+        bool unused_has_args = false;
+        return parse(json, out, unused_args, unused_has_args);
+    }
 
-        out.ph = ph_val.get<std::string_view>();
+    // Single-pass DOM variant: walks the object once (mirroring parse_scalars)
+    // while populating the args map, and returns the located args element so
+    // callers need not look it up again. Field typing matches the original
+    // per-key JsonValue accessors exactly.
+    static bool parse(const JsonValue& json, DFTracerEvent& out,
+                      simdjson::dom::element& out_args, bool& out_has_args) {
+        out_has_args = false;
+        if (!json.is_object()) return false;
 
-        auto id_val = json["id"];
-        if (id_val.exists()) out.id = id_val.get<std::uint64_t>();
+        bool has_ph = false;
+        json.for_each_member([&](std::string_view key, JsonValue v) {
+            switch (key.size()) {
+                case 2:
+                    if (key == "ph") {
+                        out.ph = v.get<std::string_view>();
+                        has_ph = true;
+                    } else if (key == "id") {
+                        out.id = v.get<std::uint64_t>();
+                    } else if (key == "ts") {
+                        out.ts = v.get<std::uint64_t>();
+                    }
+                    break;
+                case 3:
+                    if (key == "pid") {
+                        out.pid = v.get<std::uint64_t>();
+                    } else if (key == "tid") {
+                        out.tid = v.get<std::uint64_t>();
+                    } else if (key == "cat") {
+                        out.cat = v.get<std::string_view>();
+                    } else if (key == "dur") {
+                        out.dur = v.get<std::uint64_t>();
+                    }
+                    break;
+                case 4:
+                    if (key == "name") {
+                        out.name = v.get<std::string_view>();
+                    } else if (key == "args") {
+                        if (v.is_object()) {
+                            out.args.set_valid(true);
+                            v.for_each_member([&](std::string_view k,
+                                                  JsonValue av) {
+                                if (av.is_string()) {
+                                    out.args.insert(
+                                        k, std::string(
+                                               av.get<std::string_view>()));
+                                } else if (av.is_uint()) {
+                                    out.args.insert(k, av.get<std::uint64_t>());
+                                } else if (av.is_int()) {
+                                    out.args.insert(k, av.get<std::int64_t>());
+                                } else if (av.is_number()) {
+                                    out.args.insert(k, av.get<double>());
+                                } else if (av.is_bool()) {
+                                    out.args.insert(k, av.get<bool>());
+                                }
+                            });
+                            out_args = v.raw();
+                            out_has_args = true;
+                        }
+                    }
+                    break;
+                default:
+                    break;
+            }
+        });
 
-        auto name_val = json["name"];
-        if (name_val.exists()) out.name = name_val.get<std::string_view>();
-
-        auto cat_val = json["cat"];
-        if (cat_val.exists()) out.cat = cat_val.get<std::string_view>();
-
-        auto pid_val = json["pid"];
-        if (pid_val.exists()) out.pid = pid_val.get<std::uint64_t>();
-
-        auto tid_val = json["tid"];
-        if (tid_val.exists()) out.tid = tid_val.get<std::uint64_t>();
-
-        auto ts_val = json["ts"];
-        if (ts_val.exists()) out.ts = ts_val.get<std::uint64_t>();
-
-        auto dur_val = json["dur"];
-        if (dur_val.exists()) out.dur = dur_val.get<std::uint64_t>();
-
-        auto args_val = json["args"];
-        if (args_val.exists() && args_val.is_object()) {
-            out.args.set_valid(true);
-            args_val.for_each_member([&](std::string_view k, JsonValue v) {
-                if (v.is_string()) {
-                    out.args.insert(k, std::string(v.get<std::string_view>()));
-                } else if (v.is_uint()) {
-                    out.args.insert(k, v.get<std::uint64_t>());
-                } else if (v.is_int()) {
-                    out.args.insert(k, v.get<std::int64_t>());
-                } else if (v.is_number()) {
-                    out.args.insert(k, v.get<double>());
-                } else if (v.is_bool()) {
-                    out.args.insert(k, v.get<bool>());
-                }
-            });
-        }
-
-        return true;
+        return has_ph;
     }
 
     static bool parse_scalars(simdjson::dom::element root, DFTracerEvent& out,

@@ -98,14 +98,7 @@ class DftEventDispatcher : public indexer::IndexVisitor {
         bool has_args = false;
         bool ok = false;
         if (needs_args_map_) {
-            ok = DFTracerEvent::parse(json, ev);
-            if (ok) {
-                auto args_r = root["args"];
-                if (!args_r.error() && args_r.value_unsafe().is_object()) {
-                    args_dom = args_r.value_unsafe();
-                    has_args = true;
-                }
-            }
+            ok = DFTracerEvent::parse(json, ev, args_dom, has_args);
         } else {
             ok = DFTracerEvent::parse_scalars(root, ev, args_dom, has_args);
         }

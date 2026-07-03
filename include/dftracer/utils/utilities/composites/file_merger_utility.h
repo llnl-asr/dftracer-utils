@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_FILE_MERGER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_FILE_MERGER_UTILITY_H
 
+#include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/coro/task.h>
@@ -131,7 +132,6 @@ struct FileMergerUtilityInput {
  * @brief Output from file merger utility
  */
 struct FileMergerUtilityOutput {
-    bool success{false};
     std::string output_path;
     std::size_t total_events{0};
     std::size_t files_combined{0};
@@ -148,13 +148,14 @@ struct FileMergerUtilityOutput {
  * 3. Optionally compresses the output
  * 4. Cleans up temporary files
  */
-class FileMergerUtility : public utilities::Utility<FileMergerUtilityInput,
-                                                    FileMergerUtilityOutput> {
+class FileMergerUtility
+    : public utilities::Utility<FileMergerUtilityInput,
+                                Result<FileMergerUtilityOutput>> {
    private:
     bool compress_output_file(const std::string& file_path);
 
    public:
-    coro::CoroTask<FileMergerUtilityOutput> process(
+    coro::CoroTask<Result<FileMergerUtilityOutput>> process(
         const FileMergerUtilityInput& input) override;
 };
 

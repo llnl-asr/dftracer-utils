@@ -143,7 +143,7 @@ FileMergeValidatorUtility::process(
 // FileMergerUtility Implementation
 // ============================================================================
 
-coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
+coro::CoroTask<Result<FileMergerUtilityOutput>> FileMergerUtility::process(
     const FileMergerUtilityInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("merge files");
     FileMergerUtilityOutput output;
@@ -252,11 +252,11 @@ coro::CoroTask<FileMergerUtilityOutput> FileMergerUtility::process(
             }
         }
 
-        output.success = true;
-
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Error combining files: %s", e.what());
-        output.success = false;
+        co_return make_error(ErrorCode::IO,
+                             std::string("Error combining files into ") +
+                                 input.output_file + ": " + e.what());
     }
 
     co_return output;

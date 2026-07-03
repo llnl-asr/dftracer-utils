@@ -54,6 +54,13 @@ repeated in each tool's section.
 - ``-d, --directory <path>`` - Directory containing trace files
 - ``--files <files...>`` - Trace files (``.pfw``, ``.pfw.gz``)
 
+**Logging**
+
+- ``--log-level <level>`` - Logging verbosity: ``trace``, ``debug``, ``info``
+  (default), ``warn``, ``error``, or ``off``. Available on every tool; overrides
+  the ``DFTRACER_UTILS_LOG_LEVEL`` environment variable (see
+  :doc:`installation`).
+
 dftracer_reader
 ---------------
 
@@ -109,8 +116,7 @@ dftracer_info
 
 - ``--files <files...>`` - Compressed files to inspect (GZIP, TAR.GZ)
 - ``-d, --directory <path>`` - Directory containing files to inspect
-- ``--query <type>`` - Query type: ``summary`` (aggregate all files, default) or ``detailed`` (per-file output)
-- ``-v, --verbose`` - Show detailed information including index details
+- ``--query <type>`` - Query type: ``summary`` (aggregate all files, default) or ``detailed`` (per-file output including detailed statistics)
 - ``-f, --force-rebuild`` - Force rebuild index files
 - ``-c, --checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
@@ -123,8 +129,8 @@ dftracer_info
    # Show info for files in a directory
    dftracer_info -d ./logs
 
-   # Show info for specific files with verbose output
-   dftracer_info --files trace1.pfw.gz trace2.pfw.gz -v
+   # Show detailed per-file info
+   dftracer_info --files trace1.pfw.gz trace2.pfw.gz --query detailed
 
    # Per-file detailed output
    dftracer_info -d ./traces --query detailed
@@ -149,7 +155,6 @@ dftracer_merge
 - ``-o, --output <path>`` - Output file path (should have .pfw extension) (default: combined.pfw)
 - ``-f, --force`` - Override existing output file and force index recreation
 - ``-c, --compress`` - Compress output file with gzip
-- ``-v, --verbose`` - Enable verbose mode
 - ``-g, --gzip-only`` - Process only .pfw.gz files
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
@@ -165,8 +170,8 @@ dftracer_merge
    # Merge files from specific directory with compression
    dftracer_merge -d ./logs -o output.pfw -c
 
-   # Merge with parallel processing and verbose output
-   dftracer_merge -d ./traces -o combined.pfw --executor-threads 8 -v
+   # Merge with parallel processing
+   dftracer_merge -d ./traces -o combined.pfw --executor-threads 8
 
 dftracer_split
 --------------
@@ -187,7 +192,6 @@ dftracer_split
 - ``-s, --chunk-size <MB>`` - Chunk size in MB (default: 4)
 - ``-f, --force`` - Override existing files and force index recreation
 - ``-c, --compress`` - Compress output files with gzip (default: true)
-- ``-v, --verbose`` - Enable verbose mode
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
@@ -238,6 +242,46 @@ dftracer_event_count
    # Force index rebuild
    dftracer_event_count -d ./logs -f
 
+dftracer_validate
+-----------------
+
+**Description:** Validate DFTracer ``.pfw`` / ``.pfw.gz`` trace files by
+confirming every non-wrapper line is valid JSON. A fast, parallel C++
+equivalent of the ``dftracer_validate`` shell script.
+
+**Usage:**
+
+.. code-block:: bash
+
+   dftracer_validate [OPTIONS]
+
+**Options:**
+
+- ``-d, --directory <path>`` - Directory scanned recursively (and in parallel)
+  for ``.pfw`` / ``.pfw.gz`` files
+- ``--files <files...>`` - Explicit trace files to validate
+- ``--executor-threads <count>`` - Worker threads for parallel validation
+  (default: number of CPU cores)
+
+Provide ``-d`` and/or ``--files`` (at least one is required). Files are
+validated concurrently; a line counts as invalid if it is not well-formed JSON
+(the wrapper ``[`` / ``]`` lines and blanks are skipped). The command exits
+non-zero if any file fails validation or no files are found. See also the
+shared :ref:`cli-shared-flags` (e.g. ``--log-level``).
+
+**Example:**
+
+.. code-block:: bash
+
+   # Validate every trace under a directory (recursive, parallel)
+   dftracer_validate -d ./traces
+
+   # Validate specific files
+   dftracer_validate --files run0.pfw.gz run1.pfw.gz
+
+   # Show per-file detail
+   dftracer_validate -d ./traces --log-level debug
+
 dftracer_pgzip
 --------------
 
@@ -252,7 +296,6 @@ dftracer_pgzip
 **Options:**
 
 - ``-d, --directory <path>`` - Directory containing .pfw files (default: .)
-- ``-v, --verbose`` - Enable verbose output
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 
 **Example:**
@@ -262,8 +305,8 @@ dftracer_pgzip
     # Compress all .pfw files in current directory
     dftracer_pgzip
 
-    # Compress files in specific directory with verbose output
-    dftracer_pgzip -d ./logs -v
+    # Compress files in a specific directory with debug logging
+    dftracer_pgzip -d ./logs --log-level debug
 
     # Compress with 16 threads
     dftracer_pgzip -d ./traces --executor-threads 16
@@ -688,7 +731,6 @@ dftracer_replay
 - ``--dry-run`` - Parse and analyze traces without executing operations
 - ``--dftracer-mode`` - Use DFTracer sleep-based replay (sleep for operation duration instead of doing actual I/O)
 - ``--no-sleep`` - When used with --dftracer-mode, disable sleep calls for maximum speed
-- ``--verbose`` - Enable verbose output and detailed statistics
 - ``-r, --recursive`` - Recursively search directories for trace files
 - ``--use-call-tree`` - Build and use call tree structure for hierarchical replay
 - ``--hierarchical-replay`` - Replay operations respecting parent-child call hierarchy (requires --use-call-tree)
@@ -716,8 +758,8 @@ dftracer_replay
     # Replay with original timing
     dftracer_replay ./traces/rank_0.pfw.gz
 
-    # Dry-run analysis of trace file
-    dftracer_replay ./traces/rank_0.pfw.gz --dry-run --verbose
+    # Dry-run analysis of trace file with debug logging
+    dftracer_replay ./traces/rank_0.pfw.gz --dry-run --log-level debug
 
     # Replay only POSIX read operations
     dftracer_replay -d ./traces -r --filter-category POSIX --filter-function read
@@ -819,7 +861,6 @@ dftracer_call_tree
 - ``--text <path>`` - Export call tree to text file
 - ``--max-depth <n>`` - Maximum depth for tree printing (0=unlimited, default: 0)
 - ``--analyze`` - Perform detailed analysis (call patterns, timing, critical path)
-- ``-v, --verbose`` - Enable verbose output
 - ``--stats-only`` - Only print statistics, skip tree traversal
 - ``--no-save`` - Don't save output files, only print analysis
 
@@ -833,8 +874,8 @@ dftracer_call_tree
     # Export to JSON and text formats
     dftracer_call_tree ./traces --json --text tree.txt
 
-    # Analyze with detailed statistics
-    dftracer_call_tree ./traces --analyze --verbose --max-depth 5
+    # Analyze with detailed statistics and debug logging
+    dftracer_call_tree ./traces --analyze --log-level debug --max-depth 5
 
 dftracer_comparator
 -------------------
@@ -912,7 +953,7 @@ there are no regressions.
 
 **Output columns:**
 
-- **baseline / variant** - Metric values for each side (with ±stdev when multiple time windows)
+- **baseline / variant** - Metric values for each side (with +/-stdev when multiple time windows)
 - **delta** - Absolute difference (variant - baseline)
 - **change** - Percentage change
 - **sig** - Cohen's d significance marker: ``~`` negligible, ``*`` small, ``**`` medium, ``***`` large
@@ -1050,7 +1091,6 @@ Requires ``DFTRACER_UTILS_ENABLE_MPI=ON``.
 - ``--staging-dir <path>`` - Shared-FS staging root for per-rank shards
   (default: ``<output>.shards/``)
 - ``--gzip`` - gzip the merged output (``.gz`` appended if needed)
-- ``-v, --verbose`` - Verbose progress logging
 - ``--keep-staging`` - Keep per-rank shard files after merge
 
 This binary also accepts the shared :ref:`cli-shared-flags` (Pipeline);

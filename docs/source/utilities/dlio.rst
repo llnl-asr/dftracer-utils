@@ -64,16 +64,16 @@ trace_loader
 
 Returns an ``AggregatedTraces`` with:
 
-- ``fetch_block_trace`` / ``fetch_iter_trace`` / ``getitem_trace`` —
+- ``fetch_block_trace`` / ``fetch_iter_trace`` / ``getitem_trace`` -
   per-rank ``std::vector<std::vector<double>>`` of seconds, in pid-ascending
   then time-bucket-ascending order.
-- ``computation_times`` / ``preprocess_times`` — flat sample arrays in seconds
+- ``computation_times`` / ``preprocess_times`` - flat sample arrays in seconds
   (the input to ``fit_all_single_distributions``).
 - ``fetch_block_stats`` / ``fetch_iter_stats`` / ``preprocess_stats`` /
-  ``getitem_stats`` — :doc:`Statistic <common>` objects, with merged DDSketches
+  ``getitem_stats`` - :doc:`Statistic <common>` objects, with merged DDSketches
   attached when available.
 - ``trace_e2e_duration`` and per-component ``ComponentTimeMetrics`` with both
-  ``accumulated_time`` (sum of ``count × mean``) and ``union_time`` (true
+  ``accumulated_time`` (sum of ``count x mean``) and ``union_time`` (true
   wall-clock union via ``sweep_union`` over per-entry ``(ts, te)`` boundaries).
 
 BarrierSimulator
@@ -96,16 +96,16 @@ BarrierSimulator
 
 Free helpers exposed alongside ``BarrierSimulator``:
 
-- ``sweep_union(boundaries)`` — sweep-line interval union, microseconds to
+- ``sweep_union(boundaries)`` - sweep-line interval union, microseconds to
   seconds.
-- ``cdf_similarity(a, b)`` — ``1 − KS`` between two empirical samples.
-- ``variance(values)`` — population variance.
+- ``cdf_similarity(a, b)`` - ``1 - KS`` between two empirical samples.
+- ``variance(values)`` - population variance.
 
 Distribution fitting
 --------------------
 
 Lives under ``common/statistics`` and works on any sample array, not just DLIO
-traces — see :doc:`common` for ``FittedDistribution``, ``FittedMixture``,
+traces - see :doc:`common` for ``FittedDistribution``, ``FittedMixture``,
 ``BestModel`` (the ``std::variant``), ``select_best_model``, ``make_sampler``,
 and free ``pdf`` / ``cdf`` / ``quantile`` overloads.
 

@@ -40,7 +40,12 @@ SEARCH_INCLUDES        = YES
 INCLUDE_PATH           = ../include
 PREDEFINED             = __cplusplus \
                          DFTRACER_UTILS_ENABLE_ARROW \
-                         DFTRACER_UTILS_ENABLE_ARROW_IPC
+                         DFTRACER_UTILS_ENABLE_ARROW_IPC \
+                         __attribute__(x)=
+
+# Hide member default-value initializers: breathe renders them into a doubled
+# "= =" that the Sphinx C++ parser cannot parse. Source links still show them.
+MAX_INITIALIZER_LINES  = 0
 
 # Warnings
 QUIET                  = NO
@@ -58,7 +63,6 @@ REFERENCES_RELATION    = YES
 
 # Alphabetical index
 ALPHABETICAL_INDEX     = YES
-COLS_IN_ALPHA_INDEX    = 5
 
 # Diagrams
 HAVE_DOT               = NO

@@ -1,0 +1,52 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the software and paper below."
+title: "DFTracer Utils"
+contact:
+  - name: "Ray Sinurat"
+    email: "raydreww@gmail.com"
+license: "MIT"
+url: "https://github.com/LLNL/dftracer-utils"
+repository-code: "https://github.com/LLNL/dftracer-utils"
+authors:
+  - family-names: "Sinurat"
+    given-names: "Ray A. O."
+  - family-names: "Nixon"
+    given-names: "William"
+  - family-names: "Gunawi"
+    given-names: "Haryadi S."
+  - family-names: "Dryden"
+    given-names: "Nikoli"
+  - family-names: "Devarajan"
+    given-names: "Hariharan"
+preferred-citation:
+  type: "conference-paper"
+  title: "HORATIO: Bridging Management and Analysis of Traces at Scale"
+  authors:
+    - family-names: "Sinurat"
+      given-names: "Ray A. O."
+    - family-names: "Nixon"
+      given-names: "William"
+    - family-names: "Gunawi"
+      given-names: "Haryadi S."
+    - family-names: "Dryden"
+      given-names: "Nikoli"
+    - family-names: "Devarajan"
+      given-names: "Hariharan"
+  year: 2026
+  month: 8
+  collection-title: "The International Conference on Scalable Scientific Data Management 2026 (SSDBM 2026)"
+  conference:
+    name: "The International Conference on Scalable Scientific Data Management 2026 (SSDBM 2026)"
+    city: "San Diego"
+    region: "California"
+    country: "US"
+    date-start: 2026-08-11
+    date-end: 2026-08-13
+  publisher:
+    name: "Association for Computing Machinery"
+    city: "New York"
+    region: "New York"
+    country: "US"
+  doi: "10.1145/3828820.3828825"
+  isbn: "979-8-4007-2708-5"
+  notes: "LLNL-CONF-2019625"

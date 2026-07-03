@@ -67,6 +67,39 @@ def _install_rtd_extension_stub() -> None:
         """RTD stub for native extension classes."""
         pass
 
+    class DFTUtilsError(RuntimeError):
+        """Base for all dftracer-utils typed errors (derives RuntimeError)."""
+
+    class DFTUtilsValueError(DFTUtilsError):
+        """Invalid argument / value."""
+
+    class DFTUtilsNotFoundError(DFTUtilsError):
+        """A required file or resource was not found."""
+
+    class DFTUtilsIOError(DFTUtilsError):
+        """An I/O operation failed."""
+
+    class DFTUtilsParseError(DFTUtilsError):
+        """Input could not be parsed."""
+
+    class DFTUtilsQueryError(DFTUtilsError):
+        """A query expression was invalid."""
+
+    class DFTUtilsReaderError(DFTUtilsError):
+        """A trace reader operation failed."""
+
+    class DFTUtilsIndexerError(DFTUtilsError):
+        """An indexer operation failed."""
+
+    class DFTUtilsPipelineError(DFTUtilsError):
+        """A pipeline/task execution failed."""
+
+    class DFTUtilsAggregationError(DFTUtilsError):
+        """An aggregation operation failed."""
+
+    class DFTUtilsCompressionError(DFTUtilsError):
+        """A (de)compression operation failed."""
+
     class _ArrowBatchCapsule(_BaseNative):
         """Internal Arrow batch wrapper implementing __arrow_c_array__ protocol."""
 
@@ -527,7 +560,9 @@ def _install_rtd_extension_stub() -> None:
                     If None, uses the default global Runtime.
 
             Raises:
-                RuntimeError: If *file_path* does not exist or cannot be opened.
+                DFTUtilsNotFoundError: If *file_path* does not exist.
+                DFTUtilsIOError: If the file cannot be opened or read.
+                    (Both derive DFTUtilsError, which derives RuntimeError.)
             """
             self._path = path
             self._index_dir = index_dir
@@ -1153,6 +1188,18 @@ def _install_rtd_extension_stub() -> None:
         """Replace or clear the process-wide default runtime."""
         return None
 
+    def set_log_level(level: str) -> None:
+        """Set the C++ logger level ('trace'..'off'). Raises on bad name."""
+        return None
+
+    def get_log_level() -> str:
+        """Return the current C++ logger level name."""
+        return "info"
+
+    def set_log_color(mode: str) -> None:
+        """Set logger color mode ('auto', 'always', 'never'). Raises on bad name."""
+        return None
+
     def read_arrow_files_parallel(
         paths: list[str],
         runtime: Runtime | None = None,
@@ -1285,6 +1332,17 @@ def _install_rtd_extension_stub() -> None:
         "AggregatorUtility",
         "CheckpointIndexer",
         "ComparatorUtility",
+        "DFTUtilsAggregationError",
+        "DFTUtilsCompressionError",
+        "DFTUtilsError",
+        "DFTUtilsIndexerError",
+        "DFTUtilsIOError",
+        "DFTUtilsNotFoundError",
+        "DFTUtilsParseError",
+        "DFTUtilsPipelineError",
+        "DFTUtilsQueryError",
+        "DFTUtilsReaderError",
+        "DFTUtilsValueError",
         "IndexDatabase",
         "Indexer",
         "IndexerCheckpoint",
@@ -1304,6 +1362,7 @@ def _install_rtd_extension_stub() -> None:
         "enable_aggregation_deterministic_ids",
         "enumerate_gzip_members",
         "get_default_runtime",
+        "get_log_level",
         "move_artifacts",
         "plan_lpt_partition",
         "plan_work_units",
@@ -1311,6 +1370,8 @@ def _install_rtd_extension_stub() -> None:
         "scan_aggregation_manifest",
         "scan_files",
         "set_default_runtime",
+        "set_log_color",
+        "set_log_level",
     ]
 
     _local = locals()
@@ -1532,16 +1593,55 @@ project = "dftracer-utils"
 copyright = "%Y, Ray Andrew Sinurat, Hariharan Devarajan"
 author = "Ray Andrew Sinurat, Hariharan Devarajan"
 
-# The version info for the project
-# Try to get version from the package
-try:
-    from importlib.metadata import version
+# The version info for the project. Resolved automatically (git tags via
+# setuptools_scm, then the generated _version.py, then installed metadata) so
+# the docs never drift from a hardcoded number. The full ``release`` keeps the
+# local segment, so dev builds show the distance since the last tag and the
+# commit hash (e.g. "0.1.dev535+g926fc871"); ``version`` is the short "X.Y".
+def _resolve_release() -> str:
+    # 1. Git tags via setuptools_scm - same provider as pyproject.toml, but
+    #    keeping the local (+g<hash>) segment so dev docs show the exact commit.
+    try:
+        from setuptools_scm import get_version
 
-    release = version("dftracer-utils")
-    version = ".".join(release.split(".")[:2])
-except Exception:
-    version = "0.0.10"
-    release = "0.0.10"
+        return get_version(
+            root=str(_docs_dir.parent),
+            relative_to=__file__,
+            version_scheme="post-release",
+        )
+    except Exception:
+        pass
+    # 2. The setuptools_scm-generated _version.py, reattaching the commit id.
+    try:
+        import importlib.util
+
+        vf = _docs_dir.parent / "python" / "dftracer" / "utils" / "_version.py"
+        if vf.exists():
+            spec = importlib.util.spec_from_file_location("_dftracer_version", vf)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            commit = getattr(mod, "commit_id", None)
+            return f"{mod.version}+{commit}" if commit else mod.version
+    except Exception:
+        pass
+    # 3. Installed package metadata (wheel / editable install).
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return _pkg_version("dftracer-utils")
+    except Exception:
+        pass
+    return "0.0.0"
+
+
+release = _resolve_release()
+
+# Collapse the setuptools_scm local segment to just "+g<7-char hash>",
+# dropping the dirty-tree date marker (".dYYYYMMDD") so the version stays short.
+import re
+
+release = re.sub(r"\+g([0-9a-fA-F]+).*$", lambda m: "+g" + m.group(1)[:7], release)
+version = ".".join(release.split(".")[:2])
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -1629,6 +1729,8 @@ html_search_language = "en"
 # Theme options
 html_theme_options = {
     "navigation_with_keys": True,
+    "light_logo": "logo-light.png",
+    "dark_logo": "logo-dark.png",
 }
 
 # -- Options for autodoc -----------------------------------------------------

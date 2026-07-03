@@ -108,6 +108,80 @@ This project uses ``clang-format`` (v19.1.7) for C++ code formatting:
    make format        # auto-fix
    make check-format  # check only (CI uses this)
 
+Conventions beyond formatting (checked in review):
+
+- **C++20**, no compiler extensions. Use ``#ifndef`` header guards, not
+  ``#pragma once``.
+- **Namespaces mirror directories** (``dftracer::utils``,
+  ``dftracer::utils::utilities``, ``...::behaviors``, ``...::tags``).
+- **Constants** are ``UPPER_SNAKE_CASE`` (not ``kCamelCase``); keep
+  module-specific constants with their module, not everything in
+  ``common/constants.h``.
+- **Fixed-width integers** use the ``std::``-qualified types from
+  ``<cstdint>`` / ``<cstddef>`` (``std::int64_t``, ``std::size_t``), not the
+  global unqualified names.
+- **Comments** explain the non-obvious "why"; do not narrate what the code
+  plainly does, and match the surrounding comment density.
+- **Pure ASCII** in code, comments, and docs: write ``-`` (not an em-dash),
+  plain quotes, and ``->`` (not a unicode arrow).
+
+Logging and Tracing
+~~~~~~~~~~~~~~~~~~~~
+
+The library has its own small logger (namespace ``dftracer::utils::logger``).
+Configure it once at startup with functions; emit with macros:
+
+.. code-block:: cpp
+
+   #include <dftracer/utils/core/common/logging.h>
+   namespace logger = dftracer::utils::logger;
+
+   logger::init();  // reads env, defaults to Info + auto color
+   // or: logger::init({.level = logger::Level::Debug,
+   //                   .color = logger::ColorMode::Never});
+
+   DFTRACER_UTILS_LOG_ERROR("cannot open %s: errno=%d", path, e);
+   DFTRACER_UTILS_LOG_INFO("processed %zu files", n);
+   DFTRACER_UTILS_LOG_DEBUG("resolved %d checkpoints", k);
+
+   logger::set_level(logger::Level::Debug);  // change verbosity at runtime
+
+Levels are ``Trace < Debug < Info < Warn < Error < Off``. Each level is
+**compile-gated** by the build (``LOGGER_LEVEL_*``) and **runtime-gated** by the
+current level: a compiled-out level costs nothing, and a compiled-in but
+disabled level costs one predicted branch with its arguments left unevaluated.
+All levels including Trace are compiled in by default; build with
+``-DDFTRACER_UTILS_LOGGER_LEVEL_TRACE=OFF`` to strip every Trace-level construct
+(the scope tracer and coroutine auto-tracing) for a minimal build. Set the
+runtime level without a rebuild via ``DFTRACER_UTILS_LOG_LEVEL`` (see
+:doc:`installation`), and control color with ``ColorMode`` / ``NO_COLOR`` /
+``FORCE_COLOR``.
+
+**Scope tracing.** ``DFTRACER_UTILS_TRACE_SCOPE`` logs ``-> label`` on entry and
+``<- label [ms]`` on exit, only when Trace is enabled. With no argument the label
+is the function name; extra arguments are printf-formatted and appended:
+
+.. code-block:: cpp
+
+   coro::CoroTask<int> read_chunk(std::size_t off, std::size_t len) {
+       DFTRACER_UTILS_TRACE_SCOPE("off=%zu len=%zu", off, len);
+       ...  // "-> read_chunk: off=... len=..." now, "<- ... [x ms]" on return
+   }
+
+**Coroutine auto-tracing.** When Trace is enabled at runtime, every co_awaited
+``CoroTask`` is traced automatically (``-> <function> (file:line)`` on entry,
+``<- <function> [ms]`` on exit) with no annotation needed - the hook lives in the
+task awaiter and the location is the coroutine's definition site. The output is a
+flat stream, not an indented tree: under the multi-threaded executor coroutines
+migrate across threads and interleave, so faithful indentation is impossible. For
+a true nested call tree use the monitor (``DFTRACER_UTILS_MONITOR=tree``); scope
+tracing and auto-tracing are the flat, greppable, per-line view.
+
+Do not put ``DFTRACER_UTILS_LOG_DEBUG`` / ``TRACE`` or ``TRACE_SCOPE`` in a
+genuine per-event/per-byte inner loop: the runtime gate is cheap per operation
+but not free across billions of iterations. For structural coroutine/task
+profiling, prefer the built-in monitor (``DFTRACER_UTILS_MONITOR``) instead.
+
 Git Hooks
 ~~~~~~~~~
 

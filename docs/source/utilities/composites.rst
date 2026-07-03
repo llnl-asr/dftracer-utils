@@ -115,24 +115,37 @@ Compresses files with streaming.
 .. code-block:: cpp
 
    struct FileCompressionUtilityInput {
-       fs::path input_path;
-       fs::path output_path;
-       int compression_level = 6;
+       std::string input_path;
+       std::string output_path;
+       int compression_level;  // default Z_DEFAULT_COMPRESSION
+       std::size_t chunk_size;
+       compression::zlib::CompressionFormat format;  // default AUTO
 
-       static FileCompressionUtilityInput from_file(const fs::path& path);
-       FileCompressionUtilityInput& with_output(const fs::path& path);
-       FileCompressionUtilityInput& with_level(int level);
+       static FileCompressionUtilityInput from_file(
+           const std::string& input_path,
+           int compression_level = Z_DEFAULT_COMPRESSION,
+           std::size_t chunk_size = 64 * 1024);
+       FileCompressionUtilityInput& with_output(const std::string& path);
+       FileCompressionUtilityInput& with_compression_level(int level);
+       FileCompressionUtilityInput& with_chunk_size(std::size_t size);
+       FileCompressionUtilityInput& with_format(
+           compression::zlib::CompressionFormat fmt);
    };
 
 **Output:**
 
+``process()`` returns ``Result<FileCompressionUtilityOutput>``; failures
+are reported through the ``Result``.
+
 .. code-block:: cpp
 
    struct FileCompressionUtilityOutput {
-       bool success;
+       std::string input_path;
+       std::string output_path;
        std::size_t original_size;
        std::size_t compressed_size;
-       double compression_ratio;
+
+       double compression_ratio() const;  // compressed / original
    };
 
 FileDecompressorUtility
@@ -145,12 +158,21 @@ Decompresses files with streaming.
 .. code-block:: cpp
 
    struct FileDecompressionUtilityInput {
-       fs::path input_path;
-       fs::path output_path;
+       std::string input_path;
+       std::string output_path;
+       std::size_t chunk_size;
+       compression::zlib::DecompressionFormat format;  // default AUTO
 
-       static FileDecompressionUtilityInput from_file(const fs::path& path);
-       FileDecompressionUtilityInput& with_output(const fs::path& path);
+       static FileDecompressionUtilityInput from_file(
+           const std::string& input_path, std::size_t chunk_size = 64 * 1024);
+       FileDecompressionUtilityInput& with_output(const std::string& path);
+       FileDecompressionUtilityInput& with_chunk_size(std::size_t size);
+       FileDecompressionUtilityInput& with_format(
+           compression::zlib::DecompressionFormat fmt);
    };
+
+``process()`` returns ``Result<FileDecompressionUtilityOutput>``; failures
+are reported through the ``Result``.
 
 IndexedFileReaderUtility
 ------------------------
@@ -181,7 +203,9 @@ Creates readers for indexed compressed files, handling index creation.
         .with_index("/data/trace.pfw.gz.idx")
         .with_force_rebuild(false);
 
-    std::shared_ptr<Reader> reader = utility.process(input);
+    // process() is a coroutine returning a shared Reader
+    std::shared_ptr<reader::internal::Reader> reader =
+        co_await utility.process(input);
 
 DFTracer-Specific Composites
 ============================
@@ -202,7 +226,7 @@ DDSketch and Log2Histogram
 
 Two probabilistic data structures for efficient, order-independent statistics:
 
-**DDSketch** — Percentile estimation with bounded relative error:
+**DDSketch** - Percentile estimation with bounded relative error:
 
 .. code-block:: cpp
 
@@ -235,7 +259,7 @@ Two probabilistic data structures for efficient, order-independent statistics:
     double max_val = sketch.max();
     std::size_t memory_bytes = sketch.memory_usage();
 
-**Log2Histogram** — Fixed 65-bin logarithmic histogram for size distributions:
+**Log2Histogram** - Fixed 65-bin logarithmic histogram for size distributions:
 
 .. code-block:: cpp
 
@@ -487,7 +511,7 @@ Complete example of gathering statistics from a DFTracer trace file:
     // Prepare input (uses bloom index for chunk skipping)
     StatisticsAggregatorInput input{
         .file_path = "/data/trace.pfw.gz",
-        .idx_path = "/data/trace.pfw.gz.idx",
+        .index_path = "/data/trace.pfw.gz.idx",
         .index_dir = "/data/.indexes"
     };
 
@@ -562,7 +586,7 @@ Supports optional gzip compression and JSON array wrapping.
     config.json_array_wrapper = true;
 
     ChunkWriter writer(config);
-    // Write events — automatically rolls to new chunk file when size exceeded
+    // Write events - automatically rolls to new chunk file when size exceeded
     // Each chunk is a separate .pfw.gz file
 
 EventRouter
@@ -668,8 +692,12 @@ with significance classification.
     input.variant_file_count = 3;
 
     ComparisonUtility cmp;
-    auto output = co_await cmp.process(input);
-    // output.result contains the hierarchical NodeResult tree
+    // process() returns Result<ComparisonUtilityOutput>
+    auto result = co_await cmp.process(input);
+    if (!result) {
+        // handle result.error()
+    }
+    // result.value().result contains the hierarchical NodeResult tree
 
 TreeTableFormatter
 ~~~~~~~~~~~~~~~~~~

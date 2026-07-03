@@ -18,6 +18,19 @@ Lightweight structured concurrency scope using Coro + JoinHandle.
 CoroScope is the primary context type passed to task lambdas. It provides:
 
 - ``spawn()`` returning ``SpawnFuture<T>`` for all coroutines (void and typed). The return value can be ignored for fire-and-forget usage, or ``co_await``'d to wait for that specific coroutine.
+
+.. note::
+
+   Spawns are **structured, not detached**. Every spawned coroutine is tracked
+   by the scope's ``JoinHandle`` and is joined when the scope exits, even when
+   the returned ``SpawnFuture`` is discarded. "Fire-and-forget" means only that
+   you skipped ``co_await`` on the result - the work is still owned and joined
+   by the scope, never leaked. Each spawn runs in its own child scope that
+   shares the parent's cancellation token, so it can safely outlive a
+   ``when_any``-style early completion.
+
+CoroScope also provides:
+
 - Channel operations (send/receive)
 - Producer-consumer patterns with helpers
 - Structured cancellation support
@@ -185,7 +198,111 @@ Custom combiner for typed inputs::
 make_task
 ---------
 
-Create a new Task with a given function.
+Factory that wraps a callable in a ``std::shared_ptr<Task>``:
+
+.. code-block:: cpp
+
+    template <typename Func>
+    std::shared_ptr<Task> make_task(
+        Func&& func, std::string_view name = "",
+        std::source_location loc = std::source_location::current());
+
+The captured function may take ``(CoroScope&)``, ``(CoroScope&, const Input&)``,
+or ``(CoroScope&, const std::any&)`` and must return a ``coro::CoroTask<Output>``
+(``Output`` may be ``void``). Input and output types are deduced and validated
+when edges are created. If ``name`` is empty, the task reports the caller's
+function name from ``source_location``.
+
+.. code-block:: cpp
+
+    auto producer = make_task([](CoroScope& ctx) -> coro::CoroTask<int> {
+        co_return 42;
+    }, "Producer");
+
+Task also carries a few fluent setters beyond ``depends_on`` / ``with_combiner``:
+
+- ``with_name(name)`` - override the display name
+- ``with_input(value)`` - provide a root input without a parent edge
+- ``with_timeout(ms)`` - per-task timeout consumed by the Watchdog
+- ``get<T>()`` / ``wait(timeout)`` / ``when_ready()`` - retrieve results
+
+Composition helpers
+-------------------
+
+Tasks compose into chains without manually calling ``depends_on``.
+
+``then()`` creates a downstream task that consumes this task's output::
+
+    auto task2 = task1->then(
+        [](CoroScope& ctx, int x) -> coro::CoroTask<std::string> {
+            co_return std::to_string(x * 2);
+        }, "Stringify");
+
+``tap()`` inserts a pass-through side effect (logging, metrics). It returns a
+task that produces the *same* value it received::
+
+    auto logged = task1->tap(
+        [](CoroScope& ctx, int x) -> coro::CoroTask<void> {
+            std::cout << "value=" << x << "\n";
+            co_return;
+        }, "Log");
+
+Operator sugar mirrors these:
+
+- ``a > f`` / ``f < a`` - forward/reverse composition (same as ``a->then(f)``)
+- ``a & b`` - parallel AND; result task waits for both and yields a tuple of
+  their outputs
+- ``a ^ tap`` - tee ``a``'s output into ``tap`` as a side effect, continuing
+  with ``a``'s output type
+
+.. code-block:: cpp
+
+    auto pipeline = task1
+        ->tap(log_fn, "log")
+        ->then(double_fn, "double");
+
+    auto combined = task_a & task_b;   // tuple<int, std::string>
+
+TypedTask
+---------
+
+``TypedTask<I, O>`` is a class-based alternative to lambda tasks with
+compile-time input/output types. Subclass it and override ``apply``:
+
+.. code-block:: cpp
+
+    class Doubler : public TypedTask<int, std::string> {
+    public:
+        std::string apply(CoroScope& ctx, const int& input) {
+            return "Result: " + std::to_string(input * 2);
+        }
+    };
+
+    auto task = std::make_shared<Doubler>();
+
+``apply`` has four forms selected by whether ``I`` / ``O`` are ``void``:
+``O apply(CoroScope&, const I&)``, ``void apply(CoroScope&, const I&)``,
+``O apply(CoroScope&)``, and ``void apply(CoroScope&)``. For most cases prefer
+``make_task`` with a lambda; use ``TypedTask`` when you want an explicit,
+reusable, strongly typed node.
+
+TaskHandle / TypedTaskHandle
+----------------------------
+
+Lightweight, non-blocking handles returned by ``Runtime::submit()`` (and
+``Runtime::scope()``). They wrap a ``std::shared_future`` plus the task id and
+name:
+
+- ``TaskHandle`` - for ``void`` tasks; ``wait()``/``get()`` block and re-raise
+  stored exceptions, ``done()`` polls without blocking
+- ``TypedTaskHandle<T>`` - adds ``T get()`` to retrieve the value; ``wait()``
+  blocks and re-raises but discards the value
+
+.. code-block:: cpp
+
+    TypedTaskHandle<int> h = runtime.submit(some_task(), "compute");
+    if (!h.done()) { /* still running */ }
+    int value = h.get();   // blocks until ready, re-raises on error
 
 Migration from Old API
 ----------------------

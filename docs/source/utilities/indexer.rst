@@ -15,11 +15,11 @@ The indexer writes column families into a shared ``.dftindex`` RocksDB store
 (or, for distributed builds, a content-addressed SST staging directory that
 is ingested into the store):
 
-- **Checkpoints** — byte offsets and decompression dictionaries for random access
-- **Bloom filters** — per-chunk bloom filters for fast event filtering (optional)
-- **Chunk statistics** — per-chunk event counts, duration distributions (optional)
-- **Manifest** — per-chunk (cat, name) -> line numbers for sparse query routing (optional)
-- **Aggregation / system metrics** — distributed aggregation CFs populated via
+- **Checkpoints** - byte offsets and decompression dictionaries for random access
+- **Bloom filters** - per-chunk bloom filters for fast event filtering (optional)
+- **Chunk statistics** - per-chunk event counts, duration distributions (optional)
+- **Manifest** - per-chunk (cat, name) -> line numbers for sparse query routing (optional)
+- **Aggregation / system metrics** - distributed aggregation CFs populated via
   ``SstFileWriter::Merge`` operands
 
 SST files staged on disk are **content-addressed** (FNV-1a 64-bit fingerprint
@@ -54,7 +54,7 @@ Single-pass index builder. Decompresses each file once and builds all requested 
 
    // result.success, result.idx_path, result.total_lines, result.chunks_processed
 
-**Incremental builds:** If ``.idx`` already exists with valid checkpoints, requesting bloom or manifest only runs a streaming decompression pass for the new visitors — no checkpoint rebuild.
+**Incremental builds:** If ``.idx`` already exists with valid checkpoints, requesting bloom or manifest only runs a streaming decompression pass for the new visitors - no checkpoint rebuild.
 
 .. code-block:: cpp
 
@@ -121,7 +121,8 @@ demand when ``auto_build_index`` is set. Lives in
 IndexDatabase
 -------------
 
-Manages the unified ``.idx`` SQLite sidecar with additive schema.
+RocksDB-backed index store (part of the ``.dftindex`` root) with an
+additive, idempotent schema across column families.
 
 .. code-block:: cpp
 
@@ -129,11 +130,13 @@ Manages the unified ``.idx`` SQLite sidecar with additive schema.
 
    using namespace dftracer::utils::utilities::indexer;
 
-   IndexDatabase db("trace.pfw.gz.idx");
-   db.init_base_schema();    // checkpoints, files, metadata
-   db.init_bloom_schema();   // bloom filters, statistics, hash resolutions
-   db.init_manifest_schema(); // event ranges, metadata lines
+   IndexDatabase db("trace.pfw.gz.dftindex");
+   db.init_schema();  // idempotent; sets up all column families
 
+   // Writes go through a writer context
+   auto writer = db.begin_write();
+
+   // Read-only queries
    int fid = db.get_file_info_id("trace.pfw.gz");
    bool has_bloom = db.has_bloom_data(fid);
    bool has_manifest = db.has_manifest_data(fid);
@@ -154,7 +157,7 @@ Manages ``.pidx`` files for reorganization provenance tracking.
 
    int fid = pdb.get_or_create_file_info("output.pfw.gz", file_hash);
    pdb.begin_transaction();
-   pdb.insert_info("version", "1.0");
+   pdb.insert_info(fid, "version", "1.0");
    pdb.insert_source(fid, 0, "original.pfw.gz", num_checkpoints);
    pdb.commit_transaction();
 
@@ -165,8 +168,8 @@ Unified reader for all trace file formats. Auto-selects between sequential decom
 
 Two methods cover all reading modes:
 
-- ``read_lines(ReadConfig)`` — returns parsed ``Line`` objects (``string_view``, zero-copy)
-- ``read_raw(ReadConfig)`` — returns raw byte spans (``std::span<const char>``)
+- ``read_lines(ReadConfig)`` - returns parsed ``Line`` objects (``string_view``, zero-copy)
+- ``read_raw(ReadConfig)`` - returns raw byte spans (``std::span<const char>``)
 
 ``ReadConfig`` controls range (line or byte), alignment, and buffering.
 
@@ -190,19 +193,19 @@ Two methods cover all reading modes:
    rc.end_line = 200;
    auto range = reader.read_lines(rc);
 
-   // Raw bytes — line-aligned, multi-line chunks (fastest for bulk processing)
+   // Raw bytes - line-aligned, multi-line chunks (fastest for bulk processing)
    auto raw = reader.read_raw();
    while (auto chunk = co_await raw.next()) {
        // chunk is std::span<const char>
    }
 
-   // Raw bytes — single line per yield
+   // Raw bytes - single line per yield
    ReadConfig single;
    single.line_aligned = true;
    single.multi_line = false;
    auto line_bytes = reader.read_raw(single);
 
-   // Raw bytes — no line awareness
+   // Raw bytes - no line awareness
    ReadConfig raw_cfg;
    raw_cfg.line_aligned = false;
    auto bytes = reader.read_raw(raw_cfg);

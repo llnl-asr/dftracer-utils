@@ -7,7 +7,6 @@ Text processing utilities for splitting and filtering.
 
    #include <dftracer/utils/utilities/text/line_splitter.h>
    #include <dftracer/utils/utilities/text/line_filter.h>
-   #include <dftracer/utils/utilities/text/multi_lines_filter.h>
 
 LineSplitterUtility
 -------------------

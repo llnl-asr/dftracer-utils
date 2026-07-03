@@ -58,13 +58,15 @@ Tasks are created using ``make_task`` and receive a ``CoroScope&`` parameter:
        co_return;
    }, "MyTask");
 
-   // Task that spawns child work (fire-and-forget)
+   // Task that spawns child work. The body does not block on the child
+   // (the returned SpawnFuture is ignored), but the child is tracked by
+   // `scope` and joined before the task completes -- see the note below.
    auto parent = make_task([](CoroScope& scope) -> CoroTask<void> {
        scope.spawn([](CoroScope& child_scope) -> CoroTask<void> {
            // Do work here
            co_return;
        });
-       co_return;
+       co_return;  // body returns immediately; ParentTask is not done yet
    }, "ParentTask");
 
    // Task that awaits a spawned coroutine
@@ -76,6 +78,19 @@ Tasks are created using ``make_task`` and receive a ``CoroScope&`` parameter:
        // Execution continues here only after the spawn finishes
        co_return;
    }, "AwaitingTask");
+
+.. note::
+
+   ``spawn()`` is *structured*, not detached. Ignoring the returned
+   ``SpawnFuture`` (as in ``ParentTask`` above) only means the body does not
+   block on that child inline -- the body runs to ``co_return`` immediately.
+   The child is tracked by the ``CoroScope`` it was spawned into, and the task
+   runner always joins that scope after the body returns
+   (``co_await scope.join()``), so the task does not complete until every
+   spawned child has finished. In other words, the parent finishes *after* its
+   children, and a spawned coroutine cannot outlive the task that spawned it.
+   Use the ``co_await scope.spawn(...)`` form only when you need to block at a
+   specific point; either way the work is joined before the task ends.
 
 Pipeline Configuration and Execution
 -------------------------------------
@@ -378,7 +393,7 @@ For tasks returning different types, use the variadic overload directly:
    });
    auto [num, text] = co_await when_all(std::move(f1), std::move(f2));
 
-    // Heterogeneous when_any — use get<N>() for index-based access
+    // Heterogeneous when_any - use get<N>() for index-based access
     auto f3 = scope.spawn([](CoroScope&) -> CoroTask<int> { co_return 3; });
     auto f4 = scope.spawn([](CoroScope&) -> CoroTask<float> { co_return 4.0f; });
     auto result = co_await when_any(std::move(f3), std::move(f4));
@@ -454,7 +469,7 @@ Lazy Sequences and Async Generators
 Multi-Level Parallelism
 -----------------------
 
-For workflows with hierarchical structure (e.g., files → chunks within each file), use nested scopes to parallelize at multiple levels while protecting shared state.
+For workflows with hierarchical structure (e.g., files -> chunks within each file), use nested scopes to parallelize at multiple levels while protecting shared state.
 
 **Pattern:** Outer ``scope.spawn()`` creates parallel per-file tasks, and within each file task, an inner ``scope.scope()`` creates parallel per-chunk tasks. A shared mutex protects accumulated results:
 
@@ -546,7 +561,7 @@ For workflows with hierarchical structure (e.g., files → chunks within each fi
 
 **When to use:** Multi-level parallelism is essential when:
 
-- Your data has a natural hierarchy (files → chunks, files → ranges)
+- Your data has a natural hierarchy (files -> chunks, files -> ranges)
 - You want to parallelize both levels independently
 - Per-file overhead (index building, metadata collection) justifies spawning per-file tasks
 - A single flat ``spawn()`` loop would create too many fine-grained tasks
@@ -708,6 +723,11 @@ Error Handling
 
 Errors in pipeline tasks propagate to the caller of ``Pipeline::execute()``. Exceptions thrown in task lambdas are captured and re-thrown by the pipeline.
 
+The library throws ``DFTUtilsException`` (and its subsystem subclasses), which
+derive ``std::runtime_error`` and carry an ``ErrorCode`` via ``code()``. Catch
+``DFTUtilsException`` to inspect the category, or ``std::exception`` to handle
+any failure. See :doc:`cpp_api/error_handling`.
+
 **Exception propagation from tasks:**
 
 .. code-block:: cpp
@@ -717,9 +737,8 @@ Errors in pipeline tasks propagate to the caller of ``Pipeline::execute()``. Exc
         auto result = co_await io::open("missing.txt", O_RDONLY);
         if (result < 0) {
             // Negative result indicates OS error; convert to exception
-            throw std::runtime_error(
-                "Failed to open file: " +
-                std::string(std::strerror(-result)));
+            throw DFTUtilsException::cat(ErrorCode::IO, "Failed to open file: ",
+                                         std::strerror(-result));
         }
         co_return;
     });
@@ -741,7 +760,8 @@ Errors in pipeline tasks propagate to the caller of ``Pipeline::execute()``. Exc
             // This might throw
             int result = risky_operation();
             if (result < 0) {
-                throw std::runtime_error("Operation failed");
+                throw DFTUtilsException(ErrorCode::INTERNAL,
+                                        "Operation failed");
             }
             co_return result;
         });

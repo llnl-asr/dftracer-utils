@@ -15,21 +15,19 @@ Executor classes for running pipeline tasks.
        Workers["Worker Threads<br/>(N threads)"]
        RunQueue["ConcurrentQueue<br/>(coroutine handles)"]
        IoBack["IoBackend"]
-       SqlPool["SQLite ThreadPool"]
        Timer["TimerService"]
 
        Executor --> Workers
        Executor --> RunQueue
        Executor --> IoBack
-       Executor --> SqlPool
        Executor --> Timer
        Workers --> |dequeue + resume| RunQueue
 
 Executor
 --------
 
-The executor owns worker threads, I/O backends, a SQLite thread pool, and a
-timer service. It is the runtime engine that pulls coroutine handles from a
+The executor owns worker threads, an I/O backend, and a timer service. It is
+the runtime engine that pulls coroutine handles from a
 lock-free queue and resumes them on its thread pool. An ``Executor`` is created
 automatically by ``Pipeline``, but can also be instantiated directly for testing
 or embedding.
@@ -62,7 +60,9 @@ coroutines:
    // Tracked: enqueue a Coro with progress tracking
    TaskIndex id = executor->enqueue_tracked(std::move(my_coro), "parse_file");
 
-   // DAG task: submit a Task with input and parent tracking
+   // DAG task: submit a Task with input and parent tracking.
+   // input is a std::shared_ptr<std::any>; parent_task_id defaults to -1 (root).
+   auto input = std::make_shared<std::any>(42);
    executor->submit_task(task, input, parent_task_id);
 
 **Thread-local access:**
@@ -98,7 +98,7 @@ timeout thresholds. All fields have sensible defaults.
        std::size_t num_threads = 0;        // 0 = hardware_concurrency
        std::chrono::seconds idle_timeout{5};
        std::chrono::seconds deadlock_timeout{10};
-       std::size_t io_pool_size = 4;
+       std::size_t io_pool_size = 0;      // 0 = hardware_concurrency
        io::IoBackendType io_backend_type = io::IoBackendType::AUTO;
        unsigned io_batch_threshold = 16;
    };
@@ -112,7 +112,8 @@ timeout thresholds. All fields have sensible defaults.
 - ``io_pool_size`` -- Size of the dedicated I/O thread pool backing the
   ``IoBackend``.
 - ``io_backend_type`` -- Selects the async I/O implementation
-  (``AUTO``, ``IO_URING``, ``THREAD_POOL``).
+  (``AUTO``, ``IO_URING``, ``EPOLL_THREADPOOL``, ``KQUEUE_THREADPOOL``,
+  ``THREADPOOL``).
 - ``io_batch_threshold`` -- Minimum number of I/O operations to batch before
   submitting to the backend.
 

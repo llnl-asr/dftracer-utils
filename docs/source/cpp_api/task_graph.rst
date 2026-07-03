@@ -501,3 +501,118 @@ Configuration for ``concat_partitions()`` operations.
    For complete struct definitions including default values, see the
    :doc:`API Reference <api/task_graph>`.
 
+Graph Entry Points
+------------------
+
+Every graph starts from one of these builder methods, which register a task
+with the graph so it can be reached from ``first_task()``:
+
+- ``TaskGraph::builder(TaskGraphConfig)`` - create a builder
+- ``source<T>(func, opts)`` - one root task producing ``T``
+- ``wrap<T>(external_task)`` - adopt a pre-built ``std::shared_ptr<Task>`` as a
+  typed entry point (the task stays externally managed)
+- ``add(task)`` - track an externally created task in the graph without wrapping
+- ``first_task()`` / ``last_task()`` / ``tasks()`` - access registered tasks
+  (use ``first_task()`` for ``Pipeline::set_source``)
+
+.. code-block:: cpp
+
+    auto graph = TaskGraph::builder({.name = "G", .max_concurrency = 64});
+
+    auto src = graph.source<int>(
+        [](CoroScope& s) -> coro::CoroTask<int> { co_return 10; },
+        {.name = "Seed"});
+
+    // Adopt a task built elsewhere and continue the graph from it
+    auto adopted = graph.wrap<int>(existing_task);
+
+TaskGroup
+---------
+
+Operations return ``TaskGroup<T>``, a typed handle over one or more tasks that
+produce ``T``. It is how outputs of one operation feed the next (``map``,
+``reduce``, ``fan_in``, ...). Key members:
+
+- ``tasks()`` - the underlying ``std::vector<std::shared_ptr<Task>>``
+- ``task()`` - the single task (throws if the group does not hold exactly one)
+- ``at(i)`` / ``operator[](i)`` - indexed access (``at`` is bounds-checked)
+- ``size()`` / ``empty()`` - queries; also range-based ``begin()``/``end()``
+
+.. code-block:: cpp
+
+    auto results = graph.parallel<int>(8, worker, {.name = "W"});
+    std::shared_ptr<Task> first = results[0];
+    auto reduced = graph.reduce<int>(results, split_every{2}, sum_fn);
+    std::shared_ptr<Task> final_task = reduced.task();
+
+Strong Types
+------------
+
+Reduction and fan-out sizes are named types (``core/task_graph/types.h``) to
+prevent argument-order mistakes:
+
+- ``split_every{n}`` - combine every ``n`` inputs at each reduction level
+  (Dask ``split_every`` semantics; used by ``reduce``, ``fold``, ``fan_in``,
+  ``concat_partitions``)
+- ``num_outputs{n}`` - number of downstream tasks a ``fan_out`` produces
+- ``num_partitions{n}`` - number of contiguous chunks ``partition`` splits into
+
+.. code-block:: cpp
+
+    graph.fan_out<Shard>(src, num_outputs{4}, shard_fn);
+    graph.reduce<Sum>(group, split_every{2}, reduce_fn);
+    graph.partition<int>(data, num_partitions{4});
+
+Reduction Helpers
+-----------------
+
+Free functions in ``core/task_graph/reduction.h`` back the tree operations and
+are useful on their own for planning:
+
+- ``partition_all(n, items)`` - split a vector into groups of ``n`` (last group
+  may be smaller); ``partition_all_move(n, items)`` for move-only elements
+- ``tree_reduction_depth(num_items, split_size)`` - number of reduction levels
+- ``tree_reduction_levels(num_items, split_size)`` - task count per level
+- ``build_tree_indices(num_items, split_size)`` - per-level index groups showing
+  which inputs combine at each step
+
+.. code-block:: cpp
+
+    auto groups = partition_all(2, std::vector<int>{0, 1, 2, 3, 4, 5, 6});
+    // groups == {{0,1},{2,3},{4,5},{6}}
+    std::size_t depth = tree_reduction_depth(7, 2);   // 3
+
+Free Factory Functions
+----------------------
+
+For building DAGs without the ``TaskGraph`` builder,
+``core/task_graph/task_graph.h`` also exposes standalone factories that operate
+directly on ``std::shared_ptr<Task>``:
+
+- ``make_fan_out(source, num_outputs{n}, mapper, name_prefix)`` -> vector of tasks
+- ``make_fan_in(sources, combiner, name)`` -> single combined task
+- ``make_tree_reduce(sources, split_every{n}, reducer, name_prefix)`` -> final
+  reduced task (throws if ``sources`` is empty or ``split_every < 2``)
+
+.. code-block:: cpp
+
+    auto outs = make_fan_out(src, num_outputs{4}, shard_fn, "Shard");
+    auto merged = make_fan_in(outs, combine_fn, "Merge");
+
+TaskResult
+----------
+
+``task_graph::TaskResult<T>`` (distinct from the runtime ``dftracer::utils::TaskResult``)
+is a shared-storage container for task outputs, enabling zero-copy passing
+between tasks:
+
+- ``TaskResult<T>::make(value)`` / ``from_shared(ptr)`` - construct
+- ``get()`` - const reference (zero-copy); ``copy()`` - owned mutable copy
+- ``share()`` - shared ownership; ``size_bytes()`` - estimated footprint
+- ``is_ready()`` / ``empty()`` / ``operator bool()`` - state queries
+
+.. code-block:: cpp
+
+    auto r = task_graph::TaskResult<std::vector<int>>::make({1, 2, 3});
+    const auto& ref = r.get();        // no copy
+    auto owned = r.copy();            // mutable copy

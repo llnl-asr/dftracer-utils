@@ -94,3 +94,5 @@ docs/plans
 
 profiling-results*/
 /dfanalyzer/
+
+.DS_Store

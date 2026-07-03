@@ -102,7 +102,7 @@ def is_inner_type(name: str, all_names: set[str]) -> bool:
 @dataclass
 class APIItem:
     name: str
-    kind: str  # class, struct
+    kind: str  # class, struct, function
     refid: str
     file: str = ""
     brief: str = ""
@@ -111,6 +111,10 @@ class APIItem:
     bodyfile: str = ""
     bodystart: int | None = None
     bodyend: int | None = None
+    # Free-function fields (kind == "function")
+    ns_suffix: str | None = None  # enclosing namespace suffix, dotted (e.g. "io")
+    arg_types: str = ""  # "(type1, type2)" for overload disambiguation
+    overloaded: bool = False  # the qualified name has more than one overload
 
 
 @dataclass
@@ -170,7 +174,10 @@ def parse_doxygen_xml(xml_dir: Path) -> list[APIItem]:
             try:
                 dtree = ET.parse(detail_xml)
                 droot = dtree.getroot()
-                loc = droot.find(".//location")
+                # Use the compound's OWN location (direct child of
+                # compounddef). ".//location" would return the first member's
+                # location, pointing source links inside the class.
+                loc = droot.find("compounddef/location")
                 if loc is not None:
                     file_path = loc.get("file", "")
                     bodyfile = loc.get("bodyfile", "")
@@ -236,6 +243,114 @@ def parse_doxygen_xml(xml_dir: Path) -> list[APIItem]:
     return items
 
 
+def _ns_suffix_from_full(ns_full: str) -> str:
+    """Namespace suffix after ROOT_NS, dotted. ``dftracer::utils::io`` -> ``io``."""
+    if ns_full == ROOT_NS:
+        return ""
+    suffix = ns_full[len(ROOT_NS) :]
+    if suffix.startswith("::"):
+        suffix = suffix[2:]
+    return suffix.replace("::", ".")
+
+
+def parse_namespace_functions(xml_dir: Path) -> list[APIItem]:
+    """Parse free (namespace-level) functions from Doxygen XML.
+
+    Complements parse_doxygen_xml (classes/structs only). Operators are
+    skipped; overloaded names are flagged so the emitter can disambiguate
+    with a parameter-type signature.
+    """
+    index_path = xml_dir / "index.xml"
+    tree = ET.parse(index_path)
+    root = tree.getroot()
+
+    raw: list[APIItem] = []
+    for compound in root.findall("compound"):
+        if compound.get("kind") != "namespace":
+            continue
+        ns_name = compound.findtext("name", "")
+        if not ns_name.startswith(ROOT_NS):
+            continue
+        if any(p in SKIP_SEGMENTS for p in ns_name.split("::")):
+            continue
+
+        detail_xml = xml_dir / f"{compound.get('refid', '')}.xml"
+        if not detail_xml.exists():
+            continue
+        try:
+            droot = ET.parse(detail_xml).getroot()
+        except ET.ParseError:
+            continue
+
+        for md in droot.findall('.//sectiondef[@kind="func"]/memberdef[@kind="function"]'):
+            fname = (md.findtext("name") or "").strip()
+            if not fname or fname.startswith("operator"):
+                continue
+            # Skip member-template specializations that doxygen lists under
+            # the namespace (e.g. "Env::get< std::string_view >"); "::" or "<"
+            # in the unqualified name means it is not a plain free function.
+            if "::" in fname or "<" in fname:
+                continue
+
+            loc = md.find("location")
+            file_path = loc.get("file", "") if loc is not None else ""
+            if file_path:
+                if INCLUDE_ROOT not in file_path:
+                    continue
+                if any(skip in file_path for skip in SKIP_PATHS):
+                    continue
+
+            line = bodystart = bodyend = None
+            bodyfile = ""
+            if loc is not None:
+                la, bsa, bea = loc.get("line"), loc.get("bodystart"), loc.get("bodyend")
+                bodyfile = loc.get("bodyfile", "")
+                line = int(la) if la and la.isdigit() else None
+                bodystart = int(bsa) if bsa and bsa.isdigit() else None
+                bodyend = int(bea) if bea and bea.isdigit() else None
+
+            ptypes: list[str] = []
+            for p in md.findall("param"):
+                t = p.find("type")
+                if t is not None:
+                    ptypes.append(" ".join("".join(t.itertext()).split()))
+            arg_types = "(" + ", ".join(ptypes) + ")"
+
+            brief_el = md.find("briefdescription/para")
+            brief = "".join(brief_el.itertext()).strip() if brief_el is not None else ""
+
+            raw.append(
+                APIItem(
+                    name=f"{ns_name}::{fname}",
+                    kind="function",
+                    refid=md.get("id", ""),
+                    file=file_path,
+                    brief=brief,
+                    line=line,
+                    bodyfile=bodyfile,
+                    bodystart=bodystart,
+                    bodyend=bodyend,
+                    ns_suffix=_ns_suffix_from_full(ns_name),
+                    arg_types=arg_types,
+                )
+            )
+
+    # Flag overloads (same qualified name appears more than once).
+    counts: dict[str, int] = defaultdict(int)
+    for i in raw:
+        counts[i.name] += 1
+    seen: set[tuple[str, str]] = set()
+    out: list[APIItem] = []
+    for i in raw:
+        i.overloaded = counts[i.name] > 1
+        key = (i.name, i.arg_types)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(i)
+    return out
+
+
 # Minimum items for a module to get its own page. Smaller modules are
 # merged into their parent namespace.
 MIN_MODULE_SIZE = 3
@@ -250,6 +365,12 @@ def discover_modules(items: list[APIItem]) -> list[Module]:
     ns_items: dict[str, list[APIItem]] = defaultdict(list)
 
     for item in items:
+        # Free functions carry their enclosing namespace directly; the
+        # uppercase-terminated heuristic below only works for type names.
+        if item.kind == "function":
+            ns_items[item.ns_suffix or ""].append(item)
+            continue
+
         suffix = item.name[len(ROOT_NS) :]
         if suffix.startswith("::"):
             suffix = suffix[2:]
@@ -440,7 +561,9 @@ def generate_module_rst(
         lines.append(f"For usage guide and examples, see :doc:`/cpp_api/{mod.guide_page}`.")
         lines.append("")
 
-    top_level = [i for i in mod.items if not i.is_inner]
+    top_level = [
+        i for i in mod.items if not i.is_inner and i.kind in ("class", "struct")
+    ]
 
     for item in top_level:
         directive = "doxygenclass" if item.kind == "class" else "doxygenstruct"
@@ -455,6 +578,26 @@ def generate_module_rst(
         lines.append("   :members:")
         lines.append("   :undoc-members:")
         lines.append("")
+
+    functions = sorted(
+        (i for i in mod.items if i.kind == "function"), key=lambda x: x.name
+    )
+    if functions:
+        lines.append("Free Functions")
+        lines.append("-" * len("Free Functions"))
+        lines.append("")
+        for item in functions:
+            # Overloaded names need a parameter-type signature to resolve.
+            target = item.name + (item.arg_types if item.overloaded else "")
+            link = source_link(repo_root, repo_url, source_ref, item)
+            if link:
+                lines.append(f".. rst-class:: api-source-link")
+                lines.append("")
+                lines.append(f"   `source <{link}>`_")
+                lines.append("")
+            lines.append(f".. doxygenfunction:: {target}")
+            lines.append("   :project: dftracer-utils")
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -639,7 +782,12 @@ def generate(xml_dir: Path, output_dir: Path) -> None:
     repo_url = detect_repo_url(repo_root)
     source_ref = detect_source_ref(repo_root)
     items = parse_doxygen_xml(xml_dir)
-    print(f"  Found {len(items)} public API items")
+    functions = parse_namespace_functions(xml_dir)
+    items.extend(functions)
+    print(
+        f"  Found {len(items)} public API items "
+        f"({len(items) - len(functions)} classes/structs, {len(functions)} functions)"
+    )
 
     modules = discover_modules(items)
 

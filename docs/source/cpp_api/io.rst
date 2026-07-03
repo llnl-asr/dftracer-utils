@@ -34,6 +34,23 @@ Platform Support
 - **THREADPOOL**: All platforms. Pure thread pool backend; always available as fallback.
 - **AUTO**: Runtime detection. Tries io_uring first, falls back to platform-specific epoll/kqueue, finally to thread pool.
 
+The ``IoBackendType`` enum (``io_backend.h``) is the value you pass through
+configuration to force a backend; ``AUTO`` is the default.
+
+IoBackend
+~~~~~~~~~
+
+``IoBackend`` is the abstract base every concrete backend implements. It is
+owned by the ``Executor`` and is never handled directly by application code -
+you submit work through the free functions (``io::read``, ``io::write``, ...)
+and the executor routes them to its backend. The interface declares one
+``submit_*`` method per operation (``submit_read``, ``submit_pwrite``,
+``submit_open``, ``submit_sendfile``, ``submit_accept``, ...), each returning an
+``IoAwaitable``, plus lifecycle (``start`` / ``stop``), completion draining
+(``poll`` / ``flush``), synchronous fallbacks (``submit_read_sync`` and friends),
+and ``name()`` for logging. Concrete implementations (io_uring, epoll, kqueue,
+thread pool) live entirely in ``src/`` and are not exposed as public types.
+
 .. mermaid::
 
    graph TB
@@ -203,23 +220,48 @@ Parallel File Writers
 
 The ``dftracer/utils/utilities/fileio/parallel/`` module provides
 high-throughput multi-stream file writers used by the reorganization and
-aggregation pipelines. The unified ``ParallelWriter`` class implements
-three on-disk layouts (selected via ``FileLayout`` in
-``parallel/layout.h``):
+aggregation pipelines. ``ParallelWriter`` is an abstract interface; concrete
+writers are created via factory functions. The ``FileLayout`` enum
+(``parallel/layout.h``) has two values, ``STRIPED`` and ``SHARDED``:
 
-- **Striped** -- one output file split into Lustre-friendly stripes,
-  each fed by an independent producer coroutine.
-- **Padded striped** -- striped layout with per-stripe alignment padding
-  for filesystems that prefer aligned writes.
-- **Sharded** -- one output file per shard, used when downstream
+- **Striped** -- one output file written via atomic-offset ``pwrite``,
+  each stripe fed by an independent producer coroutine. Used on local and
+  parallel filesystems.
+- **Sharded** -- one output file per shard, used on NFS when downstream
   consumers want independent shards rather than a single concatenated
   file.
+- **Padded striped** -- a striped variant with per-stripe alignment
+  padding. It is not a ``FileLayout`` value; it is selected by passing a
+  non-zero ``stripe_size`` (via ``make_padded_striped_writer``).
 
 Sizing is Lustre-aware: ``LayoutInfo`` and ``WriterSizing`` derive stripe
 size and per-stripe buffer counts from the detected ``FilesystemKind``
 (Lustre vs generic POSIX). Internally, writes are coalesced via
 ``coro::Channel``-based queues so that producer coroutines can submit
 small line-sized payloads without per-write ``write()`` syscalls.
+
+``WriterConfig`` has three fields:
+
+- ``layout`` (``FileLayout``, default ``STRIPED``) - ``STRIPED`` (single file,
+  atomic-offset ``pwrite``) or ``SHARDED`` (one file per shard).
+- ``stripe_size`` (``std::size_t``, default 0) - PFS stripe size. A non-zero
+  value selects the padded-striped variant; 0 disables padding.
+- ``gzip`` (``bool``, default false) - emit standalone gzip members per chunk so
+  each chunk stays independently decompressable at any offset.
+
+Writers are created via factory functions returning
+``std::unique_ptr<ParallelWriter>``:
+
+.. code-block:: cpp
+
+    std::unique_ptr<ParallelWriter> make_writer(const WriterConfig& cfg);
+    std::unique_ptr<ParallelWriter> make_striped_writer();
+    std::unique_ptr<ParallelWriter> make_sharded_writer();
+    std::unique_ptr<ParallelWriter> make_padded_striped_writer(
+        std::size_t stripe_size);
+
+``make_writer`` dispatches on the config; the other three construct a specific
+layout directly. Usage:
 
 .. code-block:: cpp
 
@@ -228,8 +270,24 @@ small line-sized payloads without per-write ``write()`` syscalls.
 
     WriterConfig cfg;
     cfg.layout = FileLayout::STRIPED;
-    cfg.output_path = "merged.pfw";
-    ParallelWriter writer(cfg);
+    cfg.gzip = false;
+    auto writer = make_writer(cfg);  // or make_striped_writer(), etc.
+
+    // The output path is passed to open(), not to the config. `scope` may be
+    // null for layouts that spawn no internal coroutines; padded-striped
+    // requires a non-null scope that outlives close().
+    co_await writer->open("merged.pfw", num_workers, /*gzip_extension=*/false,
+                          scope);
+    co_await writer->write_header(header_bytes);
+    co_await writer->write_chunk(worker_idx, chunk_bytes);
+    co_await writer->write_footer(footer_bytes);
+    co_await writer->close();
+    auto paths = writer->output_paths();  // 1 entry striped, N entries sharded
+
+Layout detection is available via ``detect_layout(path)`` (returns a
+``LayoutInfo`` with the detected ``FilesystemKind``); ``compute_writer_sizing``
+derives worker count and buffer sizes from it. NFS paths map to ``SHARDED``,
+everything else to ``STRIPED``.
 
 Sync Fallback Behavior
 ~~~~~~~~~~~~~~~~~~~~~~

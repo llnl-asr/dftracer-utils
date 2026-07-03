@@ -56,7 +56,7 @@ Creates readers with automatic format detection.
 
 .. code-block:: cpp
 
-   using namespace dftracer::utils::utilities::reader;
+   using namespace dftracer::utils::utilities::reader::internal;
 
    auto reader = ReaderFactory::create(
        "trace.pfw.gz",       // Compressed file
@@ -73,11 +73,11 @@ Stream Types
 .. code-block:: cpp
 
    enum class StreamType {
-       RAW,         // Raw compressed bytes
-       BYTES,       // Decompressed bytes (no line splitting)
-       LINE,        // One complete line per read()
-       LINE_BYTES,  // Lines within a byte range
-       LINES        // Multiple lines per read()
+       BYTES,              // Raw bytes, no line awareness
+       LINE_BYTES,         // Line-boundary-aligned bytes (one line at a time)
+       MULTI_LINES_BYTES,  // Line-boundary-aligned bytes (multiple lines)
+       LINE,               // Single parsed line per read()
+       MULTI_LINES         // Multiple parsed lines per read()
    };
 
    enum class RangeType {
@@ -183,7 +183,7 @@ Opaque handle-based interface for C interoperability:
 
 .. code-block:: c
 
-   #include <dftracer/utils/utilities/reader/reader.h>
+   #include <dftracer/utils/utilities/reader/internal/reader.h>
 
    /* Create reader */
    dft_reader_handle_t reader = dft_reader_create(

@@ -13,6 +13,7 @@ This section contains the Python API documentation for dftracer utilities.
    reader
    indexer
    dfanalyzer
+   query
 
 Module Overview
 ---------------

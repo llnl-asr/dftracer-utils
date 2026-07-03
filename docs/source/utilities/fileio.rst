@@ -7,9 +7,9 @@ Synchronous I/O:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/fileio/file_reader.h>
-   #include <dftracer/utils/utilities/fileio/streaming_file_reader.h>
-   #include <dftracer/utils/utilities/fileio/streaming_file_writer.h>
+   #include <dftracer/utils/utilities/fileio/file_reader_utility.h>
+   #include <dftracer/utils/utilities/fileio/streaming_file_reader_utility.h>
+   #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
    #include <dftracer/utils/utilities/fileio/lines/streaming_line_reader.h>
 
 Asynchronous Generators:
@@ -255,13 +255,13 @@ Layout-aware parallel writers for multi-worker output. The ``ParallelWriter``
 interface is implemented by three concrete layouts under
 ``fileio/parallel/``:
 
-- **StripedWriter** — single output file, atomic-offset ``pwrite`` per
+- **StripedWriter** - single output file, atomic-offset ``pwrite`` per
   worker. Used on local FS and PFS without padded stripes.
-- **PaddedStripedWriter** — single output file where each worker chunk is
+- **PaddedStripedWriter** - single output file where each worker chunk is
   padded to a full PFS stripe so per-stripe writes never cross workers.
   Recommended for Lustre/GPFS when the stripe size is at least
   ``MIN_PADDED_STRIPE_BYTES`` (1 MiB).
-- **ShardedWriter** — N output files, one per worker, glob-named by
+- **ShardedWriter** - N output files, one per worker, glob-named by
   ordinal. Used on NFS where atomic-offset ``pwrite`` is not reliable.
 
 .. code-block:: cpp

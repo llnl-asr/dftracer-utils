@@ -12,6 +12,7 @@ This section contains the C++ API documentation for dftracer utilities.
     :caption: C++ Components:
 
     core_infrastructure
+    error_handling
     rocksdb
     reader
     indexer
@@ -31,10 +32,9 @@ Overview
 
 The dftracer utilities C++ library is organized into several namespaces:
 
-- ``dftracer::utils::core`` - Core utilities and data structures
-- ``dftracer::utils::reader`` - Trace file reading
-- ``dftracer::utils::indexer`` - Indexing capabilities
-- ``dftracer::utils::pipeline`` - Processing pipelines
+- ``dftracer::utils`` - Core runtime (Pipeline, Executor, Scheduler) and data structures
+- ``dftracer::utils::utilities::reader`` - Trace file reading
+- ``dftracer::utils::utilities::indexer`` - Indexing capabilities
 - ``dftracer::utils::coro`` - C++20 coroutine primitives
 - ``dftracer::utils::task_graph`` - DAG-based task graph builder
 - ``dftracer::utils::utilities`` - Composable processing utilities

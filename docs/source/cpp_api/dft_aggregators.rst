@@ -43,7 +43,7 @@ boundary event association, and Perfetto trace output.
        end
 
        subgraph Mapping["Chunk Mapping"]
-           CM["ChunkMapperUtility"]
+           CM["FileChunkMapperUtility"]
        end
 
        subgraph Parallel["Parallel Aggregation"]
@@ -58,7 +58,6 @@ boundary event association, and Perfetto trace output.
        end
 
        subgraph Output
-           Summary["AggregatorSummaryUtility"]
            Perfetto["PerfettoTraceWriterUtility"]
        end
 
@@ -70,7 +69,6 @@ boundary event association, and Perfetto trace output.
        CA2 --> EA
        CAN --> EA
        EA --> AR
-       AR --> Summary
        AR --> Perfetto
 
 Configuration
@@ -81,8 +79,8 @@ AggregationConfig
 
 Main configuration for the aggregation pipeline.
 
-Controls time bucketing, event filtering, statistical computation,
-boundary event tracking, and output format.
+Controls time bucketing, grouping and metric fields, statistical
+computation, boundary event tracking, and output format.
 
 .. code-block:: cpp
 
@@ -93,9 +91,11 @@ boundary event tracking, and output format.
     config.compute_percentiles = true;
     config.percentiles = {0.25, 0.5, 0.75, 0.90, 0.99};
 
-    // Filter events
-    config.include_categories = {"POSIX", "STDIO"};
-    config.exclude_names = {"metadata"};
+    // Extra JSON fields to add to the grouping key
+    config.extra_group_keys = {"args.filename"};
+
+    // Extra numeric JSON fields to accumulate metrics for
+    config.custom_metric_fields = {"args.size"};
 
     // Track boundary events (e.g., epoch boundaries)
     config.boundary_events.push_back({
@@ -157,28 +157,94 @@ The DDSketch uses a collapsing dense store with 128 fixed bins (``uint16_t``
 counters), giving ~256 bytes per sketch. When the bin range exceeds
 ``MAX_BINS``, the oldest bins are collapsed into bin[0].
 
+System Metrics
+--------------
+
+Separate metric types for system-level counters (CPU, memory, ...) that are
+aggregated as per-bucket means rather than as event durations. Defined in
+``aggregators/system_metrics.h``.
+
+FloatMetricStats
+~~~~~~~~~~~~~~~~
+
+Single floating-point metric aggregated with Welford's online mean/variance
+plus an optional DDSketch for percentiles.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/composites/dft/aggregators/system_metrics.h>
+
+    FloatMetricStats stats(0.01);            // relative sketch accuracy
+    stats.update(3.5, /*compute_percentiles=*/true);
+    stats.update(4.0, true);
+    double sd = stats.get_stddev();          // sample stddev (count-1 divisor)
+
+    FloatMetricStats other(0.01);
+    other.update(5.0);
+    stats.merge_from(other);                 // combine across chunks
+
+SystemAggregationMetrics
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A bucket of named ``FloatMetricStats`` plus a timestamp span (``ts``/``te``).
+Backs the ``SYSTEM`` aggregation map. ``update_metric`` lazily creates the
+per-name entry; ``merge_from`` combines buckets.
+
+.. code-block:: cpp
+
+    SystemAggregationMetrics bucket(0.01);
+    bucket.update_metric("cpu_percent", 42.0);
+    bucket.update_metric("mem_rss_mb", 1024.0);
+    bucket.update_timestamp(event_ts);
+
 Pipeline Stages
 ---------------
 
-ChunkMapperUtility
-~~~~~~~~~~~~~~~~~~
+FileChunkMapperUtility
+~~~~~~~~~~~~~~~~~~~~~~~
 
-Maps trace files to parallel chunk work items.
+Maps a trace file to parallel chunk work items.
 
-Takes file metadata (from ``MetadataCollectorUtility``) and splits each file
+Takes file metadata (from ``MetadataCollectorUtility``) and splits the file
 into chunks based on checkpoint boundaries. Each chunk becomes a
 ``ChunkAggregatorInput`` for parallel processing.
+
+.. code-block:: cpp
+
+    // FileChunkMapperOutput is std::vector<ChunkAggregatorInput>
+    coro::CoroTask<FileChunkMapperOutput> process(const FileChunkMapperInput&);
+
+    FileChunkMapperUtility mapper;
+    auto input = FileChunkMapperInput::from_metadata(meta)
+                     .with_config(config)
+                     .with_checkpoint_size(checkpoint_size)
+                     .with_target_chunk_size(4);  // MB per chunk
+    FileChunkMapperOutput chunks = co_await mapper.process(input);
 
 ChunkAggregatorUtility
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Per-chunk event aggregation (parallelizable).
+Per-chunk event aggregation.
 
 Reads events from a byte range within a trace file, applies filters,
 computes aggregation keys, and accumulates metrics. Uses bloom filter
-predicates for early chunk skipping when available.
+predicates for early chunk skipping when available. Multiple instances run
+concurrently across chunks.
 
-Tagged ``Parallelizable`` — multiple instances run concurrently across chunks.
+.. code-block:: cpp
+
+    coro::CoroTask<ChunkAggregationOutput> process(const ChunkAggregatorInput&);
+
+    ChunkAggregatorUtility agg;
+    auto input = ChunkAggregatorInput()
+                     .with_file_path("trace.pfw.gz")
+                     .with_index_path("./traces/.dftindex")
+                     .with_byte_range(start, end)
+                     .with_config(config)
+                     .with_chunk_index(0);
+    ChunkAggregationOutput out = co_await agg.process(input);
+    // out.aggregations, out.profile_aggregations, out.system_aggregations
+    // are AggregationMap instances keyed by AggregationKey.
 
 EventAggregator
 ~~~~~~~~~~~~~~~
@@ -188,6 +254,14 @@ internal ``RocksDbAggregator``, now merged into one class). Holds a
 ``RocksDatabase`` handle and merges per-chunk aggregation results into a
 unified output, deduplicating file counts and collecting association
 trackers for downstream resolution.
+
+.. code-block:: cpp
+
+    auto db = EventAggregator::open_with_merge_operator(index_path);
+    EventAggregator agg(db, config.compute_hash());
+    agg.merge_chunk(std::move(chunk_output));   // repeat per chunk
+    EventAggregatorOutput result = agg.finalize();
+    auto tracker = agg.build_global_tracker();  // merged AssociationTracker
 
 AggregationVisitor
 ~~~~~~~~~~~~~~~~~~
@@ -263,20 +337,115 @@ Yields ``AggregationBatch`` objects that can be converted to Arrow via
 Output Utilities
 ----------------
 
-AggregatorSummaryUtility
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-Outputs a human-readable summary of aggregation results to stdout.
-
 PerfettoTraceWriterUtility
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Writes aggregated results in Perfetto trace format for visualization
 in the Perfetto UI (https://ui.perfetto.dev).
 
-Supports three event formats:
+Supports three event formats (``PerfettoEventFormat``):
 
-- ``COUNTER`` — Counter track events (default, best for time-series metrics)
-- ``ASYNC`` — Async slice events (shows duration spans)
-- ``REGULAR`` — Regular slice events
+- ``COUNTER`` - Counter track events (default, best for time-series metrics)
+- ``ASYNC`` - Async slice events (shows duration spans)
+- ``REGULAR`` - Regular slice events
+
+.. code-block:: cpp
+
+    // process() returns coro::CoroTask<bool>; needs a CoroScope context.
+    PerfettoTraceWriterInput input;
+    input.output_path = "out.pftrace";
+    input.aggregator = &aggregator;      // populated EventAggregator
+    input.agg_config = &config;
+    input.format = PerfettoEventFormat::COUNTER;
+    input.compress = true;
+
+    PerfettoTraceWriterUtility writer;
+    bool ok = co_await writer.process(input);
+
+Serialization
+-------------
+
+RocksDB key/value codecs for the ``AGGREGATION`` column family. Aggregation
+keys are packed as a 2-byte shard prefix, a 1-byte ``AggMapType``, and LEB128
+varint intern IDs; values are varint-packed metrics with three format tiers
+(``METRIC_FMT_COMPACT``, ``METRIC_FMT_FULL``, ``METRIC_FMT_FULL_WITH_SKETCH``).
+Defined in ``aggregators/aggregation_serialization.h``.
+
+String fields are interned; the intern dictionary is persisted under the
+``0xFFFD`` key prefix, global config under ``0xFFFE``, and per-file
+"aggregated" markers under ``0xFFFF``.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
+
+    std::string key = serialize_agg_key(config_hash, AggMapType::EVENT, agg_key);
+    std::string val = serialize_agg_value(metrics);
+
+    DeserializedAggKey dk = deserialize_agg_key(key);
+    AggregationMetrics m = deserialize_agg_value(val);
+
+    // Zero-copy views for Arrow export (skip mean/m2/sketch):
+    AggKeyView kv;
+    AggMetricsView mv;
+    if (parse_agg_key_view(key, kv) && parse_agg_value_view(val, mv)) {
+        // kv.cat, kv.name, kv.time_bucket; mv.count, mv.dur_total, ...
+    }
+
+    // Intern dictionary lifecycle against a live DB:
+    load_intern_dictionary(db);
+    // ... encode keys ...
+    flush_intern_dictionary(db, batch);
+
+Merge Operators
+---------------
+
+RocksDB merge operators that combine partial aggregation values written
+concurrently by parallel chunk workers, so no read-modify-write is needed on
+the hot path.
+
+AggregationMergeOperator
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Merges event/profile ``AggregationMetrics`` values (defined in
+``aggregators/aggregation_merge_operator.h``). Installed via
+``EventAggregator::open_with_merge_operator``.
+
+SystemMetricsMergeOperator
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Merges ``SystemAggregationMetrics`` values in the ``SYSTEM_METRICS`` column
+family (defined in ``aggregators/system_metrics_merge_operator.h``).
+
+.. code-block:: cpp
+
+    // Both derive from rocksdb::MergeOperator and are set on the CF options:
+    cf_options.merge_operator =
+        std::make_shared<AggregationMergeOperator>();
+
+Running the Full Pipeline
+-------------------------
+
+``run_aggregation`` (in ``aggregators/aggregation_runner.h``) is the one-call
+entry point used by the CLI binaries: it scans the log directory, indexes any
+files that need it, runs the aggregation visitor pipeline, and optionally emits
+a Perfetto JSON / Arrow IPC file. When ``output_file`` is unset it only
+populates the ``AGGREGATION`` column family for downstream consumers.
+
+.. code-block:: cpp
+
+    #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_runner.h>
+
+    AggregationRunInput input;
+    input.log_dir = "./traces";
+    input.index_dir = "./traces/.dftindex";
+    input.agg_config.time_interval_us = 1000000;
+    input.output_file = "out.pftrace";              // omit to only fill the CF
+    input.event_format = PerfettoEventFormat::COUNTER;
+
+    Result<AggregationRunResult> result = co_await run_aggregation(input);
+    if (result) {
+        const auto& r = *result;
+        // r.index_path, r.total_keys, r.processed_file_count, r.elapsed_ms
+    }
 

@@ -40,7 +40,7 @@ Prerequisites
 
 Before building dftracer utilities, ensure you have:
 
-- CMake 3.5 or higher
+- CMake 3.20 or higher
 - C++20 compatible compiler (GCC 11+, Clang 14+)
 - zlib development library
 - pkg-config
@@ -91,6 +91,10 @@ options default to ``ON`` unless noted otherwise:
 - ``DFTRACER_UTILS_COVERAGE`` (default ``OFF``) - Enable coverage reporting.
 - ``DFTRACER_UTILS_DEBUG`` (default ``OFF``) - Enable debug mode with verbose
   logging.
+- ``DFTRACER_UTILS_LOGGER_LEVEL_TRACE`` (default ``ON``) - Compile in
+  Trace-level logging and coroutine auto-tracing. Still runtime-gated by
+  ``DFTRACER_UTILS_LOG_LEVEL``; set ``OFF`` to strip all Trace code for a
+  minimal build.
 - ``DFTRACER_UTILS_BUILD_SHARED`` (default ``ON``) - Build the shared library.
 - ``DFTRACER_UTILS_BUILD_STATIC`` (default ``ON``) - Build the static library.
 - ``DFTRACER_UTILS_BUILD_BINARIES`` (default ``ON``) - Build command-line
@@ -126,6 +130,62 @@ Example:
        -DDFTRACER_UTILS_ENABLE_ARROW_IPC=ON \
        -DDFTRACER_USE_ZLIB_NG=ON
 
+Runtime Environment Variables
+-----------------------------
+
+These variables tune behavior at run time (they apply to the CLI tools, the
+C++ library, and the Python bindings alike):
+
+Threading
+~~~~~~~~~
+
+- ``DFTRACER_UTILS_THREADS`` - Number of executor worker threads. Overrides
+  the count requested in code and the ``--executor-threads`` CLI flag. ``0``
+  (or unset) uses ``std::thread::hardware_concurrency()``.
+
+Logging
+~~~~~~~
+
+These override the programmatic logger configuration (so an operator can
+control logging regardless of what the program passes to ``logger::init()``):
+
+- ``DFTRACER_UTILS_LOG_LEVEL`` - Minimum level to emit:
+  ``trace``, ``debug``, ``info`` (default), ``warn``, ``error``, or ``off``.
+  ``trace`` additionally auto-traces every co_awaited coroutine (flat
+  ``-> name`` / ``<- name [ms]``). All levels are compiled in by default; only a
+  build with ``-DDFTRACER_UTILS_LOGGER_LEVEL_TRACE=OFF`` makes ``trace``
+  unavailable (see :doc:`developers`).
+- ``DFTRACER_UTILS_LOG_COLOR`` - ``auto`` (default; color only when the sink is
+  a TTY), ``always``, or ``never``. The ``NO_COLOR`` / ``FORCE_COLOR`` /
+  ``CLICOLOR_FORCE`` conventions are also honored.
+- ``DFTRACER_UTILS_LOG_FILE`` - Append log output to this file instead of
+  ``stderr``.
+
+Profiling / monitoring
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The built-in coroutine monitor is off unless one of these is set:
+
+- ``DFTRACER_UTILS_MONITOR`` - Enable monitoring and pick the report:
+
+  - ``1`` or ``summary`` - aggregate table at exit (per-coroutine time).
+  - ``tree`` - call tree at exit.
+  - ``deep`` - call tree including synchronous ``co_await``-ed coroutines
+    (more detail, higher overhead).
+  - ``trace`` - streaming trace output.
+  - ``0`` / ``false`` - off (the default).
+
+- ``DFTRACER_UTILS_MONITOR_FILE`` - Write monitoring output to this path as
+  CSV (``id,parent,coroutine,micros``). Setting it also enables monitoring.
+- ``DFTRACER_UTILS_MONITOR_MIN_US`` - In ``tree`` / ``deep`` mode, hide
+  coroutines whose wall time is below this many microseconds (cuts noise).
+
+Testing
+~~~~~~~
+
+- ``DFTRACER_UTILS_VALGRIND_MODE`` - Set by the Valgrind build to disable
+  io_uring (works around a Valgrind < 3.23.0 bug). Not needed for normal runs.
+
 Verifying Installation
 ----------------------
 
@@ -153,7 +213,11 @@ opens a trace through the public ``TraceReader`` API:
    int main() {
        using dftracer::utils::utilities::reader::TraceReader;
 
-       TraceReader reader("test.pfw.gz");
+       using dftracer::utils::utilities::reader::TraceReaderConfig;
+
+       TraceReaderConfig config;
+       config.file_path = "test.pfw.gz";
+       TraceReader reader(config);
        std::cout << "Library installed successfully!" << std::endl;
        std::cout << "Has index: " << std::boolalpha
                  << reader.has_index() << std::endl;

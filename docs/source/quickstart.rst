@@ -131,6 +131,9 @@ Error handling:
    for h in rt.get_failed():
        print(f"{h.name}: {h.exception}")
 
+Failures raised by library operations are typed (``DFTUtilsError`` and its
+subclasses); see `Error Handling`_ below.
+
 Arrow Data Interchange
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -249,21 +252,77 @@ Create and use indexes for faster access:
 
    from dftracer.utils import Indexer
 
-   # Create an indexer
-   indexer = Indexer("trace.pfw.gz")
+   # Create an indexer over a directory of traces (or pass files=[...])
+   indexer = Indexer("/path/to/traces")
 
-   # Build the index if needed
-   if indexer.need_rebuild():
-       indexer.build()
+   # Resolve what is already indexed vs. what needs work
+   status = indexer.resolve()
+   print(f"Total files: {status.total_files}")
+   print(f"Ready: {len(status.ready)}, Needs work: {len(status.needs_work)}")
 
-   # Get index information
-   print(f"Max bytes: {indexer.get_max_bytes()}")
-   print(f"Num lines: {indexer.get_num_lines()}")
+   # Build any missing tiers (resolve + build in one call)
+   status = indexer.ensure_indexed()
 
-   # Get checkpoints
-   checkpoints = indexer.get_checkpoints()
-   for cp in checkpoints:
+   # Get a checkpoint indexer for a single file
+   ci = indexer.get_checkpoint_indexer("/path/to/traces/trace.pfw.gz")
+   print(f"Max bytes: {ci.get_max_bytes()}")
+   print(f"Num lines: {ci.get_num_lines()}")
+   for cp in ci.get_checkpoints():
        print(f"Checkpoint {cp.checkpoint_idx}: {cp.num_lines} lines")
+
+Error Handling
+~~~~~~~~~~~~~~
+
+Operations raise typed exceptions so failures can be caught by category. Every
+exception derives ``DFTUtilsError``, which derives the built-in ``RuntimeError``
+(so ``except RuntimeError`` still catches everything):
+
+.. code-block:: python
+
+   from dftracer.utils import (
+       TraceReader,
+       DFTUtilsError,        # base of all library exceptions
+       DFTUtilsIOError,      # bad I/O / missing file
+       DFTUtilsNotFoundError,
+       DFTUtilsParseError,
+       DFTUtilsQueryError,
+   )
+
+   try:
+       reader = TraceReader("missing.pfw.gz")
+       for line in reader.read_lines():
+           process(line)
+   except DFTUtilsIOError as e:
+       print(f"I/O failed: {e}")
+   except DFTUtilsError as e:
+       # Catches any other library error (parse, query, indexer, ...)
+       print(f"dftracer error: {e}")
+
+The full set is ``DFTUtilsError`` (base) plus ``DFTUtilsValueError``,
+``DFTUtilsNotFoundError``, ``DFTUtilsIOError``, ``DFTUtilsParseError``,
+``DFTUtilsCompressionError``, ``DFTUtilsQueryError``, ``DFTUtilsReaderError``,
+``DFTUtilsIndexerError``, ``DFTUtilsPipelineError``, and
+``DFTUtilsAggregationError``. See :doc:`cpp_api/error_handling` for the
+underlying C++ model.
+
+Controlling Log Output
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The C++ logger is initialized when ``dftracer.utils`` is imported. Change the
+verbosity from Python at any time, or set the ``DFTRACER_UTILS_LOG_LEVEL``
+environment variable before running (see :doc:`installation`):
+
+.. code-block:: python
+
+   import dftracer.utils as du
+
+   du.set_log_level("debug")   # trace, debug, info (default), warn, error, off
+   print(du.get_log_level())   # -> "debug"
+   du.set_log_color("never")   # auto (default), always, never
+
+The levels and color modes mirror the CLI ``--log-level`` flag and the
+``DFTRACER_UTILS_LOG_*`` environment variables. An unknown level or color name
+raises ``ValueError``.
 
 C++ Quick Start
 ---------------
@@ -359,24 +418,28 @@ Spawn multiple tasks to run in parallel:
 Creating a Reader (Legacy)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use the factory pattern to create a reader:
+Use the factory pattern to create a reader. These factories now live under
+``internal/`` and are not part of the public API; prefer ``TraceReader``.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/reader/reader_factory.h>
-   #include <dftracer/utils/indexer/indexer_factory.h>
+   #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+   #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
    #include <iostream>
    #include <memory>
 
    int main() {
+       using dftracer::utils::utilities::indexer::internal::IndexerFactory;
+       using dftracer::utils::utilities::reader::internal::ReaderFactory;
+
        // Create indexer first
-       auto indexer = dftracer::utils::IndexerFactory::create(
+       auto indexer = IndexerFactory::create(
            "trace.pfw.gz",
            "trace.pfw.gz.idx"
        );
 
        // Create reader with indexer (transfers ownership)
-       auto reader = dftracer::utils::ReaderFactory::create(indexer.release());
+       auto reader = ReaderFactory::create(indexer.release());
 
        // Simple: Read lines by line range (returns string with all lines)
        std::string lines = reader->read_lines(1, 100);  // Lines 1-100
@@ -436,16 +499,20 @@ Process data lazily without materializing everything in memory:
 Reading with Line Processor (Legacy)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use a custom line processor for efficient line-by-line processing:
+Use a custom line processor for efficient line-by-line processing. These
+types now live under ``internal/`` and are not part of the public API.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/reader/reader_factory.h>
-   #include <dftracer/utils/reader/line_processor.h>
+   #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
+   #include <dftracer/utils/utilities/reader/internal/line_processor.h>
    #include <iostream>
 
+   namespace reader = dftracer::utils::utilities::reader::internal;
+   namespace indexer = dftracer::utils::utilities::indexer::internal;
+
    // Custom line processor
-   class MyLineProcessor : public dftracer::utils::LineProcessor {
+   class MyLineProcessor : public reader::LineProcessor {
    public:
        void process_line(const char* line, size_t length) override {
            // Process each line
@@ -454,15 +521,15 @@ Use a custom line processor for efficient line-by-line processing:
    };
 
    int main() {
-       auto indexer = dftracer::utils::IndexerFactory::create(
+       auto idx = indexer::IndexerFactory::create(
            "trace.pfw.gz", "trace.pfw.gz.idx"
        );
-       auto reader = dftracer::utils::ReaderFactory::create(indexer.release());
+       auto reader_ptr = reader::ReaderFactory::create(idx.release());
 
        MyLineProcessor processor;
 
        // Process lines 1-1000 with custom processor
-       reader->read_lines_with_processor(1, 1000, processor);
+       reader_ptr->read_lines_with_processor(1, 1000, processor);
 
        return 0;
    }
@@ -470,15 +537,18 @@ Use a custom line processor for efficient line-by-line processing:
 Working with Indexer (Legacy)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use the factory pattern to create an indexer:
+Use the factory pattern to create an indexer. This factory now lives under
+``internal/`` and is not part of the public API.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/indexer/indexer_factory.h>
+   #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 
    int main() {
+       using dftracer::utils::utilities::indexer::internal::IndexerFactory;
+
        // Create an indexer using the factory
-       auto indexer = dftracer::utils::IndexerFactory::create(
+       auto indexer = IndexerFactory::create(
            "trace.pfw.gz",           // Archive path
            "trace.pfw.gz.idx",       // Index path
            true                       // Force rebuild
@@ -500,11 +570,12 @@ C Quick Start
 Reading Trace Files
 ~~~~~~~~~~~~~~~~~~~
 
-Using the C API for reading trace files:
+Using the C API for reading trace files. This header now lives under
+``internal/`` and is not part of the public API.
 
 .. code-block:: c
 
-   #include <dftracer/utils/reader/reader.h>
+   #include <dftracer/utils/utilities/reader/internal/reader.h>
    #include <stdio.h>
    #include <stdlib.h>
 
@@ -541,11 +612,12 @@ Using the C API for reading trace files:
 Working with Indexer
 ~~~~~~~~~~~~~~~~~~~~
 
-Creating and using an indexer:
+Creating and using an indexer. This header now lives under ``internal/``
+and is not part of the public API.
 
 .. code-block:: c
 
-   #include <dftracer/utils/indexer/indexer.h>
+   #include <dftracer/utils/utilities/indexer/internal/indexer.h>
    #include <stdio.h>
 
    int main() {
@@ -564,12 +636,11 @@ Creating and using an indexer:
        }
 
        // Get index information
-       size_t max_bytes, num_lines;
-       dft_indexer_get_max_bytes(indexer, &max_bytes);
-       dft_indexer_get_num_lines(indexer, &num_lines);
+       uint64_t max_bytes = dft_indexer_get_max_bytes(indexer);
+       uint64_t num_lines = dft_indexer_get_num_lines(indexer);
 
-       printf("Max bytes: %zu\n", max_bytes);
-       printf("Num lines: %zu\n", num_lines);
+       printf("Max bytes: %llu\n", (unsigned long long)max_bytes);
+       printf("Num lines: %llu\n", (unsigned long long)num_lines);
 
        // Cleanup
        dft_indexer_destroy(indexer);

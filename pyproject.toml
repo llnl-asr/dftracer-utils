@@ -140,5 +140,6 @@ unresolved-attribute = "ignore"
 unused-ignore-comment = "ignore"
 
 [tool.setuptools_scm]
+version_scheme = "post-release"
 local_scheme = "no-local-version"
 version_file = "python/dftracer/utils/_version.py"

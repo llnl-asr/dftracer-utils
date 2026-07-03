@@ -12,10 +12,40 @@ interface used for checkpoint-level operations.
 Indexer Class
 -------------
 
-.. autoclass:: dftracer.utils.Indexer(directory: str = '', files: list[str] | None = None, index_dir: str = '', require_checkpoint: bool = True, require_bloom: bool = True, require_manifest: bool = True, require_aggregation: bool = False, time_interval_ms: float = 5000.0, group_keys: list[str] | None = None, custom_metric_fields: list[str] | None = None, compute_percentiles: bool = False, checkpoint_size: int = 33554432, parallelism: int = 0, force_rebuild: bool = False, runtime: Runtime | None = None)
+.. autoclass:: dftracer.utils.Indexer(directory: str = '', files: list[str] | None = None, index_dir: str = '', require_checkpoint: bool = True, require_bloom: bool = True, require_manifest: bool = True, require_aggregation: bool | AggregationConfig | None = None, checkpoint_size: int = 33554432, parallelism: int = 0, force_rebuild: bool = False, runtime: Runtime | None = None)
    :members: resolve, build, ensure_indexed, get_checkpoint_indexer, get_hash_table, query_file_pids, query_all_file_pids, query_file_info, iter_aggregation, iter_arrow_dfanalyzer, iter_arrow_dfanalyzer_all
    :undoc-members:
    :show-inheritance:
+
+Aggregation is enabled by passing ``require_aggregation=True`` (defaults) or
+``require_aggregation=AggregationConfig(...)``. The aggregation knobs
+(``time_interval_ms``, ``group_keys``, ``custom_metric_fields``,
+``compute_percentiles``) are fields of :class:`~dftracer.utils.AggregationConfig`,
+not direct ``Indexer`` arguments.
+
+AggregationConfig
+-----------------
+
+Configuration for the aggregation tier, passed via
+``require_aggregation=AggregationConfig(...)``. Exported from
+``dftracer.utils``.
+
+.. autoclass:: dftracer.utils.AggregationConfig
+   :members:
+   :no-index:
+   :undoc-members:
+
+IndexStatus
+-----------
+
+Result of :meth:`~dftracer.utils.Indexer.resolve` /
+:meth:`~dftracer.utils.Indexer.ensure_indexed`. Exported from
+``dftracer.utils``.
+
+.. autoclass:: dftracer.utils.IndexStatus
+   :members:
+   :no-index:
+   :undoc-members:
 
 CheckpointIndexer Class
 -----------------------

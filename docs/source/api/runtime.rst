@@ -129,6 +129,11 @@ Batch error handling with ``wait_all()``:
    # Strict mode: raise after all tasks complete
    rt.wait_all(raise_on_error=True)  # RuntimeError: 1 task(s) failed: ...
 
+``wait_all(raise_on_error=True)`` raises a summary ``RuntimeError``, but each
+individual failure (``h.exception``, and what ``.get()`` re-raises) is the
+task's original typed exception - ``DFTUtilsError`` or a subclass such as
+``DFTUtilsIOError``. See the error-handling section of :doc:`../quickstart`.
+
 Error callbacks for async notification:
 
 .. code-block:: python
@@ -178,3 +183,22 @@ a per-worker Runtime:
 
 Dask is an optional dependency -- the plugin module is only importable
 when ``dask.distributed`` is installed.
+
+Logging
+-------
+
+Control the native C++ logger from Python. These are process-global.
+
+.. code-block:: python
+
+   from dftracer.utils import set_log_level, get_log_level, set_log_color
+
+   set_log_level("debug")   # trace | debug | info | warn | error | off
+   set_log_color("never")   # auto | always | never
+   level = get_log_level()  # current level as a string
+
+.. autofunction:: dftracer.utils.set_log_level
+
+.. autofunction:: dftracer.utils.get_log_level
+
+.. autofunction:: dftracer.utils.set_log_color

@@ -509,7 +509,7 @@ def generate_utility_hierarchy_mermaid(
 
     # Tags note
     lines.append(
-        '    Tags["<b>Tags</b><br/>NeedsContext<br/>Parallelizable<br/>Cacheable<br/>Retryable"]'
+        '    Tags["<b>Tags</b><br/>NeedsContext"]'
     )
     lines.append("    Utility -.- Tags")
 

@@ -224,10 +224,10 @@ AST Types
 
 The query AST uses ``std::variant``-based nodes:
 
-- ``CompareNode`` — field comparison (``==``, ``!=``, ``>``, ``<``, ``>=``, ``<=``)
-- ``InNode`` / ``NotInNode`` — set membership
-- ``AndNode`` / ``OrNode`` — logical connectives
-- ``NotNode`` — logical negation
+- ``CompareNode`` - field comparison (``==``, ``!=``, ``>``, ``<``, ``>=``, ``<=``)
+- ``InNode`` / ``NotInNode`` - set membership
+- ``AndNode`` / ``OrNode`` - logical connectives
+- ``NotNode`` - logical negation
 
 .. code-block:: cpp
 
@@ -464,15 +464,15 @@ RecordBatchBuilder
 
 Type-safe columnar builder with two modes:
 
-- **Static schema** — ``declare_schema()`` upfront, direct index append.
+- **Static schema** - ``declare_schema()`` upfront, direct index append.
   Best for utility ``to_arrow()`` methods with known column layouts.
-- **Dynamic schema** — ``add_or_get_column()`` discovers columns from data,
+- **Dynamic schema** - ``add_or_get_column()`` discovers columns from data,
   ``end_row()`` backfills nulls. Best for arbitrary JSON (e.g.,
   ``TraceReader.iter_arrow()``).
 
 Column types: ``INT64``, ``UINT64``, ``DOUBLE``, ``STRING``, ``BOOL``.
 
-String columns store ``string_view`` into source data — zero copies during
+String columns store ``string_view`` into source data - zero copies during
 build, bulk copy only at ``finish()``. Caller must keep source data alive
 until ``finish()`` returns.
 
@@ -510,7 +510,7 @@ until ``finish()`` returns.
    builder.end_row();  // row 0: x=1
 
    auto col_y = builder.add_or_get_column("y", ColumnType::STRING);
-   // col_y is new — backfills null for row 0
+   // col_y is new - backfills null for row 0
    builder.append_int64(col_x, 2);
    builder.append_string(col_y, "hello");
    builder.end_row();  // row 1: x=2, y="hello"
@@ -556,7 +556,7 @@ Guarded by ``DFTRACER_UTILS_ENABLE_ARROW_IPC``.
    IpcWriter writer;
    writer.open("output.arrows");
 
-   // Stream batches — schema written on first write_batch()
+   // Stream batches - schema written on first write_batch()
    for (auto& batch : batches) {
        auto arrow = batch.to_arrow();
        writer.write_batch(arrow);

@@ -5,8 +5,8 @@ Directory scanning and file enumeration utilities.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/filesystem/directory_scanner.h>
-   #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner.h>
+   #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
+   #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 DirectoryScannerUtility
 -----------------------

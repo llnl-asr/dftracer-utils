@@ -246,6 +246,44 @@ Usage example:
         });
     }
 
+ChannelProducer / ChannelConsumer
+---------------------------------
+
+``ChannelProducer<T>`` and ``ChannelConsumer<T>`` are lightweight capture-safe
+handles obtained from ``channel->producer()`` and ``channel->consumer()``. They
+are the idiomatic way to hand a channel to a coroutine lambda: the handle can be
+captured by value into a ``spawn``/``make_task`` closure and (for shared_ptr
+channels) keeps the channel alive for as long as the coroutine runs.
+
+``ChannelProducer`` increments the producer count eagerly in its constructor, so
+the channel never transiently observes zero producers while coroutines are still
+being scheduled. Inside the coroutine body, call ``guard()`` once to adopt the
+pre-registered slot as a ``ProducerGuard`` (RAII); the channel closes when the
+last producer's guard is destroyed. ``send(item)`` forwards to the channel.
+
+``ChannelConsumer`` is copyable and exposes ``receive()`` (an awaitable that
+yields ``std::optional<T>``, empty once the channel is closed and drained).
+
+.. code-block:: cpp
+
+    auto channel = make_channel<Chunk>(0);
+
+    // Producer side: capture the handle, adopt the guard, send, then exit.
+    scope.spawn([ch = channel->producer()](CoroScope& s) mutable
+                    -> CoroTask<void> {
+        auto guard = ch.guard();
+        for (auto chunk : read_chunks()) {
+            co_await ch.send(std::move(chunk));
+        }
+    });  // ~ProducerGuard releases the slot
+
+    // Consumer side: receive until the channel closes.
+    scope.spawn([ch = channel->consumer()](CoroScope& s) -> CoroTask<void> {
+        while (auto item = co_await ch.receive()) {
+            process(*item);  // item is std::optional<Chunk>
+        }
+    });
+
 Generator
 ---------
 
@@ -407,7 +445,7 @@ result. ``void`` results map to ``std::monostate`` in both cases.
         co_return std::string("hello");
     });
 
-    // Returns WhenAnyTupleResult — use get<N>() for index-based access
+    // Returns WhenAnyTupleResult - use get<N>() for index-based access
     auto result = co_await when_any(std::move(f_int), std::move(f_str));
 
     // result.index tells which awaitable completed first (0-based).
@@ -423,9 +461,9 @@ result. ``void`` results map to ``std::monostate`` in both cases.
 
 The correct overload is selected automatically via ``requires`` constraints:
 
-- All arguments share the same type → homogeneous (vector-based) overload,
+- All arguments share the same type -> homogeneous (vector-based) overload,
   returning ``std::vector<T>`` or ``WhenAnyResult<T>``.
-- Arguments have different types → heterogeneous overload,
+- Arguments have different types -> heterogeneous overload,
   returning ``std::tuple<...>`` or ``WhenAnyTupleResult<...>`` (with ``get<N>()`` access).
 
 No explicit template arguments are needed; the compiler resolves the overload
@@ -434,7 +472,7 @@ based on the argument types.
 AsyncMutex
 ----------
 
-Lock-free async mutex for coroutines. Ownership is not tied to any thread —
+Lock-free async mutex for coroutines. Ownership is not tied to any thread -
 a coroutine holding the lock can migrate freely. Waiting coroutines suspend
 without blocking the OS thread and are resumed in approximate FIFO order.
 
@@ -452,17 +490,30 @@ Used by the reorganization pipeline for serializing writes to shared
     co_await writer.write_line(data);
     mutex.unlock();
 
-    // RAII scoped lock (recommended)
+    // RAII release via AsyncMutexGuard (recommended). Acquire the lock,
+    // then adopt the AsyncMutex into a guard that unlocks on scope exit.
     {
-        auto guard = co_await mutex.scoped_lock();
+        co_await mutex.lock();
+        AsyncMutexGuard guard(mutex);
         co_await writer.write_line(data);
-    }  // automatically unlocks
+    }  // ~AsyncMutexGuard calls mutex.unlock()
 
     // Non-blocking try_lock
     if (mutex.try_lock()) {
         // acquired
         mutex.unlock();
     }
+
+**API surface:**
+
+- ``lock()`` - returns ``AsyncMutexLockOperation`` (awaitable); acquires without
+  suspending when uncontended, otherwise suspends until the lock is free.
+- ``unlock()`` - release the lock and resume the next waiter (approx. FIFO).
+- ``try_lock()`` - non-blocking attempt; returns ``true`` on acquisition.
+
+``AsyncMutexGuard`` is a move-only RAII wrapper (constructed from an already
+locked ``AsyncMutex&``) whose destructor calls ``unlock()``. It does not acquire
+the lock itself - ``co_await mutex.lock()`` first.
 
 TimeoutAwaitable
 ----------------
@@ -488,3 +539,85 @@ Usage example:
     } else {
         process(result.result);
     }
+
+Promise Types
+-------------
+
+The framework defines the coroutine promise types directly; users rarely name
+them, but they are the machinery behind the awaitable types above. Every promise
+routes its frame allocation through ``ObjectPool`` to avoid per-coroutine
+``operator new`` calls.
+
+``PromiseBase`` (``task.h``) is the shared base of the ``CoroTask<T>`` promise.
+It holds the continuation handle, the owning ``Executor`` / ``Scheduler``, an
+optional cancellation token, and a pointer to the root promise used for
+task-graph accounting. ``CoroTask``'s promise adds typed result storage on top
+(via ``return_value`` / ``return_void``).
+
+``CoroPromise`` (``coro.h``) is the promise type for ``Coro`` (fire-and-forget).
+It carries the join-group counter and continuation pointers used by
+``JoinHandle``, the owning ``Executor``, a ``TaskIndex``, and a ``released``
+flag that tells the final-suspend awaiter to schedule deferred frame
+destruction. It has no result slot - ``Coro`` communicates through channels.
+
+.. code-block:: cpp
+
+    // You write ordinary coroutine functions; the compiler picks the promise:
+    CoroTask<int> typed();   // promise derives from PromiseBase, stores int
+    Coro          fire();    // promise is CoroPromise, no return value
+
+FireAndForget
+-------------
+
+Minimal self-destroying coroutine type used internally by the ``when_all`` /
+``when_any`` wrappers. Its promise never suspends (``std::suspend_never`` at both
+initial and final suspend), returns void, and calls ``std::terminate()`` on an
+unhandled exception (wrappers are written to never throw). Like the other
+promises, its frame is allocated from ``ObjectPool``.
+
+It has no user-facing awaitable interface; it exists so a wrapper coroutine can
+run to completion and free its own frame without anyone awaiting it. Prefer
+``Coro`` or ``SpawnFuture`` for application-level fire-and-forget work.
+
+CompletionLatch
+---------------
+
+Single-word atomic that resolves the suspend-vs-complete race for a group
+awaitable: the awaiter setting its "suspended" bit and a child setting the
+"completed" bit both ``fetch_or`` into one atomic, and whichever side observes
+the other's bit already set is the one that resumes the awaiting coroutine.
+Because both operate on a single modification order, there is no lost or double
+wakeup.
+
+Two members return ``true`` when this side won the race and must resume the
+continuation:
+
+.. code-block:: cpp
+
+    bool on_suspended() noexcept;   // awaiter has suspended
+    bool on_completed() noexcept;   // a child has completed
+
+The free function ``resume_continuation(Executor*, std::coroutine_handle<>)``
+resumes the continuation through the executor when present (else inline),
+guarding a null or already-done handle. This is an internal building block for
+``when_all`` / ``when_any``; application code does not use it directly.
+
+CompletionState
+---------------
+
+Reusable base bundling the state that ``when_all`` and ``when_any`` share: the
+awaiting coroutine handle, its ``Executor``, and a ``CompletionLatch``. Its
+``mark_suspended_and_check_completion()`` is called from ``await_suspend`` after
+deciding to suspend; if the latch reports completion already happened, it
+resumes the continuation.
+
+Two derived states implement the two combinators:
+
+- ``WhenAllCompletionState`` - all-of accounting; resumes only after every child
+  completes, recording the first exception observed (``on_one_complete()`` /
+  ``on_exception()``).
+- ``WhenAnyCompletionState`` - first-of accounting; resumes on the first child to
+  complete (``on_first_complete()``).
+
+These are internal to the ``when_all`` / ``when_any`` implementations; use the
+combinators, not these states, from application code.

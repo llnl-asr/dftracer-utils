@@ -15,9 +15,9 @@ Overview
 --------
 
 The reader module provides streaming access to compressed trace files,
-supporting both sequential and indexed random access modes. When an ``.idx``
-sidecar file exists, the reader automatically uses checkpoint-based random
-access for line and byte ranges. Otherwise it falls back to sequential
+supporting both sequential and indexed random access modes. When a
+``.dftindex`` store exists, the reader automatically uses checkpoint-based
+random access for line and byte ranges. Otherwise it falls back to sequential
 decompression.
 
 The reader also supports query-based event filtering: when a query string is
@@ -120,10 +120,9 @@ TraceReaderConfig
 File-level configuration for constructing a ``TraceReader``. Fields:
 
 - ``file_path`` -- path to the trace file (``.pfw.gz`` or plain text)
-- ``index_dir`` -- directory where ``.idx`` sidecar files are stored
+- ``index_dir`` -- directory containing ``.dftindex`` index roots
 - ``checkpoint_size`` -- checkpoint interval for index building (default 32 MB)
 - ``auto_build_index`` -- automatically build an index if one is missing (default false)
-- ``index_threshold`` -- minimum file size before auto-indexing kicks in
 
 ReadConfig
 ----------
@@ -153,7 +152,7 @@ TraceReader
 -----------
 
 High-level reader with automatic format detection and index support.
-Constructed from a ``TraceReaderConfig``, it probes for an ``.idx`` sidecar
+Constructed from a ``TraceReaderConfig``, it probes for a ``.dftindex`` store
 at construction time and selects the optimal read strategy (sequential or
 indexed) based on whether an index exists and what range the caller requests.
 
@@ -166,7 +165,7 @@ indexed) based on whether an index exists and what range the caller requests.
 
 **Metadata queries:**
 
-- ``has_index()`` -- true if an ``.idx`` sidecar was found
+- ``has_index()`` -- true if a ``.dftindex`` store was found
 - ``get_max_bytes()`` -- decompressed size (0 if no index for compressed files)
 - ``get_num_lines()`` -- total line count (0 if no index)
 
@@ -184,3 +183,45 @@ indexed) based on whether an index exists and what range the caller requests.
     while (auto line = co_await gen.next()) {
         process(line->content);
     }
+
+The yielded ``Line`` (``fileio::lines::Line``) holds a ``std::string_view
+content`` and a 1-based ``std::size_t line_number``; the view is zero-copy and
+valid only until the next ``next()`` call. ``read_json()`` instead yields
+``JsonLine`` (``content`` + ``line_number`` + a ``JsonParser*`` already parsed
+with simdjson), so callers that need the parsed document avoid re-parsing.
+
+Internal Building Blocks
+------------------------
+
+``TraceReader`` is the public entry point. The lower-level pieces below live in
+the ``dftracer::utils::utilities::reader::internal`` namespace; application code
+rarely uses them directly, but they define the streaming model ``TraceReader``
+is built on.
+
+**StreamType** (``internal/stream_type.h``) selects how a stream surfaces data:
+
+- ``BYTES`` -- raw bytes, no line awareness
+- ``LINE_BYTES`` -- line-boundary-aligned bytes, one line per read
+- ``MULTI_LINES_BYTES`` -- line-boundary-aligned bytes, multiple lines per read
+- ``LINE`` -- a single parsed line per read
+- ``MULTI_LINES`` -- multiple parsed lines per read
+
+**RangeType** is ``BYTE_RANGE`` or ``LINE_RANGE`` (line numbers are 1-based) and
+decides how a stream's start/end bounds are interpreted.
+
+**StreamConfig** (``internal/stream_config.h``) is a fluent config carrying the
+stream type, range type, ``from()``/``to()`` bounds, and ``buffer_size()``
+(default 4 MB). It converts to/from the ``dft_stream_config_t`` C struct.
+
+**internal::Reader** (``internal/reader.h``) is the abstract archive reader
+(gzip, tar.gz). It exposes ``get_max_bytes()`` / ``get_num_lines()``, async
+range reads (``read_lines_async``, ``read_line_bytes_async``, ``read_async``),
+and ``stream(StreamConfig)`` for incremental zero-copy reads. Instances are
+produced by ``ReaderFactory::create()`` (``internal/reader_factory.h``), which
+picks the implementation from the detected ``ArchiveFormat``.
+
+**LineProcessor** (``internal/line_processor.h``) is the zero-copy line callback
+interface used by the processor-style read paths: implement
+``process(const char* data, std::size_t length)`` returning
+``CoroTask<bool>`` (return false to stop early), with optional ``begin()`` /
+``end()`` hooks.

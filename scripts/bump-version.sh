@@ -48,9 +48,10 @@ read_tag_version() {
 
 # Extract a single VERSION component from CMakeLists.txt. Tolerant of any
 # whitespace before the number. Prints nothing (exit 0) if not found, so the
-# caller can emit a clear error instead of `set -e` aborting silently.
+# caller can emit a clear error instead of `set -e` aborting silently. Uses
+# sed rather than `grep -oP`, whose PCRE mode is absent on BSD/macOS grep.
 read_cmake_component() {
-  grep -oP "set\(DFTRACER_UTILS_VERSION_$1[[:space:]]+\K[0-9]+" "$CMAKE_FILE" || true
+  { sed -nE "s/.*set\(DFTRACER_UTILS_VERSION_$1[[:space:]]+([0-9]+).*/\1/p" "$CMAKE_FILE" | head -n1; } || true
 }
 
 # Version embedded in CMakeLists.txt.

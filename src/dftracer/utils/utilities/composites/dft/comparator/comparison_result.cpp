@@ -18,11 +18,16 @@ namespace dftracer::utils::utilities::composites::dft::comparator {
 TraceMetadata extract_metadata(const AggregationMap& aggregations,
                                std::size_t file_count) {
     TraceMetadata meta;
-    meta.file_count = file_count;
 
     std::unordered_set<std::uint64_t> pids;
     // Use pid+tid combined as unique thread identifier
     std::unordered_set<std::uint64_t> tids;
+    // Distinct data files (fhash_id) and per-process accesses (pid | fhash_id).
+    std::unordered_set<std::uint32_t> fhashes;
+    std::unordered_set<std::uint64_t> pid_fhashes;
+    // Bounded by the number of aggregation keys; reserve to avoid rehashing.
+    fhashes.reserve(aggregations.size());
+    pid_fhashes.reserve(aggregations.size());
     std::uint64_t earliest_ts = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t latest_te = 0;
 
@@ -31,6 +36,13 @@ TraceMetadata extract_metadata(const AggregationMap& aggregations,
         // Combine pid+tid for unique thread counting
         std::uint64_t ptid = (key.pid << 32) | (key.tid & 0xFFFFFFFF);
         tids.insert(ptid);
+
+        // fhash_id == 0 means no associated file (e.g. metadata events).
+        if (key.fhash_id != 0) {
+            fhashes.insert(key.fhash_id);
+            pid_fhashes.insert((static_cast<std::uint64_t>(key.pid) << 32) |
+                               static_cast<std::uint64_t>(key.fhash_id));
+        }
 
         meta.total_io_time_us += static_cast<double>(metrics.duration.total);
 
@@ -41,6 +53,11 @@ TraceMetadata extract_metadata(const AggregationMap& aggregations,
         if (metrics.ts < earliest_ts) earliest_ts = metrics.ts;
         if (metrics.te > latest_te) latest_te = metrics.te;
     }
+
+    // Both fall back to trace-file count when the trace carries no fhash.
+    meta.file_count = fhashes.empty() ? file_count : fhashes.size();
+    meta.proc_file_count =
+        pid_fhashes.empty() ? meta.file_count : pid_fhashes.size();
 
     meta.process_count = pids.size();
     meta.thread_count = tids.size();
@@ -69,8 +86,11 @@ std::vector<MetricComparison> build_metadata_metrics(
         return mc;
     };
 
-    out.push_back(make("files", static_cast<double>(baseline.file_count),
+    out.push_back(make("unique_files", static_cast<double>(baseline.file_count),
                        static_cast<double>(variant.file_count)));
+    out.push_back(make("proc_files",
+                       static_cast<double>(baseline.proc_file_count),
+                       static_cast<double>(variant.proc_file_count)));
     out.push_back(make("processes", static_cast<double>(baseline.process_count),
                        static_cast<double>(variant.process_count)));
     out.push_back(make("threads", static_cast<double>(baseline.thread_count),
@@ -388,8 +408,8 @@ using common::arrow::RecordBatchBuilder;
 // Metric names that are atomic (not group_prefix + leaf).
 bool is_atomic_metric(const std::string& name) {
     return name == "count" || name == "transfer_size" || name == "bandwidth" ||
-           name == "files" || name == "processes" || name == "threads" ||
-           name == "total_bytes";
+           name == "unique_files" || name == "proc_files" ||
+           name == "processes" || name == "threads" || name == "total_bytes";
 }
 
 // Extract metric group prefix: "dur_mean" -> "dur", "count" -> ""

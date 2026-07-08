@@ -329,7 +329,8 @@ std::string TreeTableFormatter::format_value(double v,
     if (grp == "time") return fmt_duration(v);
     if (m == "transfer_size" || m == "total_bytes") return fmt_size(v);
     if (m == "bandwidth") return fmt_bandwidth(v);
-    if (m == "count" || m == "files" || m == "processes" || m == "threads")
+    if (m == "count" || m == "unique_files" || m == "proc_files" ||
+        m == "processes" || m == "threads")
         return fmt_with_commas(v);
     return fmt_generic(v);
 }
@@ -346,8 +347,8 @@ std::string TreeTableFormatter::format_delta(double d,
         base = fmt_size(std::abs(d));
     } else if (m == "bandwidth") {
         base = fmt_bandwidth(std::abs(d));
-    } else if (m == "count" || m == "files" || m == "processes" ||
-               m == "threads") {
+    } else if (m == "count" || m == "unique_files" || m == "proc_files" ||
+               m == "processes" || m == "threads") {
         base = fmt_with_commas(std::abs(d));
     } else {
         base = fmt_generic(std::abs(d));

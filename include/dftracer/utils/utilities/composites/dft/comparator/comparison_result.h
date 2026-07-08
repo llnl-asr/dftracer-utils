@@ -99,8 +99,12 @@ struct NodeResult {
 
 /// Metadata extracted from a trace run (baseline or variant).
 struct TraceMetadata {
-    /// Number of trace files.
+    /// Distinct data files accessed (unique fhash); falls back to trace-file
+    /// count when no fhash is present.
     std::size_t file_count = 0;
+    /// Per-process file accesses (distinct pid + fhash). Equals file_count for
+    /// file-per-process workloads; larger when processes share files.
+    std::size_t proc_file_count = 0;
     /// Number of unique process IDs.
     std::size_t process_count = 0;
     /// Number of unique thread IDs.

@@ -745,6 +745,9 @@ def distributed_hlm(
         )
         partial_futures.append(fut)
 
-    partial_delayed = [dask.delayed(f) for f in partial_futures]
     meta = make_empty_hlm(hlm_groupby, hlm_agg, bin_cols, int_index_cols, float_metric_cols)
-    return dd.from_delayed(partial_delayed, meta=meta)
+    parts = dask_client.gather(partial_futures)
+    parts = [p for p in parts if p is not None and not getattr(p, "empty", False)]
+    if not parts:
+        parts = [meta]
+    return dd.from_delayed([dask.delayed(p) for p in parts], meta=meta)

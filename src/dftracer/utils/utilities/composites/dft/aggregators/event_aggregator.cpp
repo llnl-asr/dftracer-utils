@@ -181,8 +181,9 @@ std::size_t EventAggregator::scan_shard_range_raw_fn(std::uint16_t shard_begin,
     for (it->Seek({begin_key, 2}); it->Valid(); it->Next()) {
         auto key_slice = it->key();
         if (key_slice.size() < 3) continue;
-        std::uint16_t shard = (static_cast<std::uint8_t>(key_slice[0]) << 8) |
-                              static_cast<std::uint8_t>(key_slice[1]);
+        std::uint16_t shard = static_cast<std::uint16_t>(
+            (static_cast<std::uint8_t>(key_slice[0]) << 8) |
+            static_cast<std::uint8_t>(key_slice[1]));
         if (shard >= AGG_KEY_NUM_SHARDS) break;
         if (shard >= shard_end) break;
 
@@ -230,8 +231,9 @@ std::size_t EventAggregator::scan_shard_range(std::uint16_t shard_begin,
     for (it->Seek({begin_key, 2}); it->Valid(); it->Next()) {
         auto key_slice = it->key();
         if (key_slice.size() < 3) continue;
-        std::uint16_t shard = (static_cast<std::uint8_t>(key_slice[0]) << 8) |
-                              static_cast<std::uint8_t>(key_slice[1]);
+        std::uint16_t shard = static_cast<std::uint16_t>(
+            (static_cast<std::uint8_t>(key_slice[0]) << 8) |
+            static_cast<std::uint8_t>(key_slice[1]));
         if (shard >= AGG_KEY_NUM_SHARDS) break;
         if (shard >= shard_end) break;
 

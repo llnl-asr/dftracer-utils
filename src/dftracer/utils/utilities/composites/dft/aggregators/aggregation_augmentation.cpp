@@ -162,7 +162,8 @@ AggregationBatch expand_batch(const AggregationBatch& input,
 
             if (overlap_start < overlap_end) {
                 double weight =
-                    static_cast<double>(overlap_end - overlap_start) / span;
+                    static_cast<double>(overlap_end - overlap_start) /
+                    static_cast<double>(span);
                 bucket_weights.emplace_back(tb, weight);
                 total_weight += weight;
             }
@@ -205,13 +206,14 @@ AggregationBatch expand_batch(const AggregationBatch& input,
             new_entry.metrics.count = sub_count_int;
 
             // Scale duration total by weight
-            new_entry.metrics.duration.total = static_cast<std::uint64_t>(
-                std::round(metrics.duration.total * weight));
+            new_entry.metrics.duration.total =
+                static_cast<std::uint64_t>(std::round(
+                    static_cast<double>(metrics.duration.total) * weight));
             new_entry.metrics.duration.count = sub_count_int;
 
             // Scale size total by weight
             new_entry.metrics.size.total = static_cast<std::uint64_t>(
-                std::round(metrics.size.total * weight));
+                std::round(static_cast<double>(metrics.size.total) * weight));
             new_entry.metrics.size.count = sub_count_int;
 
             // Keep min/max conservative (can't know which sub-bucket had them)
@@ -225,7 +227,7 @@ AggregationBatch expand_batch(const AggregationBatch& input,
             if (new_entry.metrics.custom_metrics) {
                 for (auto& [name, stat] : *new_entry.metrics.custom_metrics) {
                     stat.total = static_cast<std::uint64_t>(
-                        std::round(stat.total * weight));
+                        std::round(static_cast<double>(stat.total) * weight));
                     stat.count = sub_count_int;
                 }
             }

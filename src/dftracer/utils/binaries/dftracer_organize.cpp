@@ -825,8 +825,10 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
                 std::printf(
                     "  Memory budget: %.2f GB; per-file peak estimate: %.2f "
                     "GB; flush_every: %zu files\n",
-                    memory_budget / (1024.0 * 1024.0 * 1024.0),
-                    per_file_bytes / (1024.0 * 1024.0 * 1024.0),
+                    static_cast<double>(memory_budget) /
+                        (1024.0 * 1024.0 * 1024.0),
+                    static_cast<double>(per_file_bytes) /
+                        (1024.0 * 1024.0 * 1024.0),
                     phase3_flush_every);
                 producer_input->groups = *groups_ptr;
                 producer_input->group_channels = group_channels;
@@ -955,7 +957,9 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
                     "  %s: %zu chunks; per-file peak: %.2f GB; "
                     "flush_every: %zu chunks\n",
                     group.name.c_str(), chunk_files.size(),
-                    per_file_bytes / (1024.0 * 1024.0 * 1024.0), flush_every);
+                    static_cast<double>(per_file_bytes) /
+                        (1024.0 * 1024.0 * 1024.0),
+                    flush_every);
                 DFTRACER_UTILS_LOG_INFO(
                     "Phase 4: indexing group '%s' (%zu chunks)",
                     group.name.c_str(), chunk_files.size());

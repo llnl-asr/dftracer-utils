@@ -13,6 +13,7 @@ class Timer {
     Timer(bool autostart = false, bool verbose = false);
     Timer(const std::string& name, bool autostart = false,
           bool verbose = false);
+    Timer(const char* name, bool autostart = false, bool verbose = false);
     ~Timer();
     void start();
     void stop();

@@ -23,6 +23,9 @@ Timer::Timer(const std::string& name, bool autostart, bool verbose)
     }
 }
 
+Timer::Timer(const char* name, bool autostart, bool verbose)
+    : Timer(std::string(name), autostart, verbose) {}
+
 Timer::~Timer() {
     stop();
     if (verbose_) {
@@ -89,7 +92,9 @@ void Timer::print_stages(const std::string& prefix) const {
         const auto& [key, ns] = sorted[i];
         bool last = (i + 1 == sorted.size());
         double ms = static_cast<double>(ns) / 1e6;
-        double pct = total_ns > 0 ? 100.0 * ns / total_ns : 0.0;
+        double pct = total_ns > 0 ? 100.0 * static_cast<double>(ns) /
+                                        static_cast<double>(total_ns)
+                                  : 0.0;
         std::printf("%s%s %-28s %8.2f ms  (%5.1f%%)\n", prefix.c_str(),
                     last ? "\\-- " : "|-- ", key.c_str(), ms, pct);
     }

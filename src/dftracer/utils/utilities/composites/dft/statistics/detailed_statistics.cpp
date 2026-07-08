@@ -94,7 +94,7 @@ void write_distribution_json(std::ostringstream& ss,
         ss << '}';
     }
 
-    ss << ",\"histogram\":" << dist.histogram.to_json();
+    ss << ",\"histogram\":" << dist.histogram.to_json_detailed();
     ss << '}';
 }
 

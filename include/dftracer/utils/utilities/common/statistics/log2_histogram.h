@@ -30,6 +30,7 @@ class Log2Histogram {
     std::string render_blocks(std::size_t max_width, const std::string& unit,
                               const std::string& indent = "      ") const;
     std::string to_json() const;
+    std::string to_json_detailed() const;
     static Log2Histogram from_json(const std::string& json);
 
     std::uint64_t total_count() const { return total_count_; }

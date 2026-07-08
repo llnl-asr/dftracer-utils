@@ -45,7 +45,8 @@ std::vector<double> initial_means(const std::vector<double>& sorted, int K) {
         const double q =
             (static_cast<double>(k) + 0.5) / static_cast<double>(K);
         const std::size_t idx = std::min<std::size_t>(
-            sorted.size() - 1, static_cast<std::size_t>(q * sorted.size()));
+            sorted.size() - 1,
+            static_cast<std::size_t>(q * static_cast<double>(sorted.size())));
         means.push_back(sorted[idx]);
     }
     return means;

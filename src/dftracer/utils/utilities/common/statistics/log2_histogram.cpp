@@ -211,6 +211,27 @@ std::string Log2Histogram::to_json() const {
     return ss.str();
 }
 
+std::string Log2Histogram::to_json_detailed() const {
+    std::ostringstream ss;
+    ss << '[';
+    bool first = true;
+    for (std::size_t i = 0; i < NUM_BINS; ++i) {
+        if (bins_[i] == 0) continue;
+        if (!first) ss << ',';
+        first = false;
+        ss << "{\"bin\":" << i << ",\"lo\":" << bin_lower(i) << ",\"hi\":";
+        // Top bin is unbounded (bin_upper is UINT64_MAX); emit null instead.
+        if (i >= 64) {
+            ss << "null";
+        } else {
+            ss << bin_upper(i);
+        }
+        ss << ",\"count\":" << bins_[i] << '}';
+    }
+    ss << ']';
+    return ss.str();
+}
+
 Log2Histogram Log2Histogram::from_json(const std::string& json) {
     Log2Histogram hist;
 

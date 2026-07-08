@@ -156,14 +156,15 @@ void check_fidelity(const FidelityStats& s, const char* label) {
     }
 
     const std::int64_t low = static_cast<std::int64_t>(
-        s.expected_trace_span_us * (1.0 - t.wall_span));
+        static_cast<double>(s.expected_trace_span_us) * (1.0 - t.wall_span));
     WARN_MESSAGE(
         s.total_wall_span_us >= low,
         "The wall span is below the tolerance in local testing environment");
 
     if (!is_ci_env()) {
         const std::int64_t high = static_cast<std::int64_t>(
-            s.expected_trace_span_us * (1.0 + t.wall_span));
+            static_cast<double>(s.expected_trace_span_us) *
+            (1.0 + t.wall_span));
         WARN_MESSAGE(
             s.total_wall_span_us <= high,
             "The wall span exceeds the tolerance in local testing environment");

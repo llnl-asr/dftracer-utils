@@ -17,6 +17,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Select newer Xcode (macOS)
         if: runner.os == 'macOS'
@@ -24,12 +26,42 @@ jobs:
         with:
           xcode-version: "16.2"
 
+      - name: Prepare ccache dir
+        run: mkdir -p "${{ github.workspace }}/.ccache"
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: .ccache
+          key: ccache-wheel-v2-${{ matrix.os }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-wheel-v2-${{ matrix.os }}-
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: .cpmsource
+          key: cpmsource-full-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-full-v1-
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3.0
         env:
           CIBW_BUILD: cp38-* cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*
           CIBW_SKIP: "*-win32 *-manylinux_i686 *-musllinux_* *-manylinux_ppc64le *-manylinux_s390x"
           CIBW_CONFIG_SETTINGS: "cmake.define.DFTRACER_UTILS_LOCAL_PACKAGES=OFF"
+          CIBW_BEFORE_ALL_LINUX: "yum install -y epel-release ccache || dnf install -y epel-release ccache || true"
+          CIBW_BEFORE_ALL_MACOS: "brew install ccache || true"
+          CIBW_CONTAINER_ENGINE: "docker; create_args: --volume=${{ github.workspace }}/.ccache:/ccache"
+          CIBW_ENVIRONMENT_LINUX: >-
+            CCACHE_DIR=/ccache CCACHE_BASEDIR=/project
+            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=900M
+            CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
+          CIBW_ENVIRONMENT_MACOS: >-
+            CCACHE_DIR=$GITHUB_WORKSPACE/.ccache CCACHE_BASEDIR=$GITHUB_WORKSPACE
+            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=900M
+            CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
 
       - uses: actions/upload-artifact@v6.0.0
         with:

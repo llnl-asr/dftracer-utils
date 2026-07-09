@@ -88,7 +88,8 @@
       "inherits": "tests",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "DFTRACER_UTILS_COVERAGE": "ON"
+        "DFTRACER_UTILS_COVERAGE": "ON",
+        "DFTRACER_UTILS_BUILD_STATIC": "OFF"
       }
     },
     {
@@ -111,8 +112,8 @@
         "DFTRACER_UTILS_ENABLE_TSAN": "ON",
         "DFTRACER_UTILS_COVERAGE": "OFF"
       }
-    }
-    ,{
+    },
+    {
       "name": "ubsan",
       "displayName": "UndefinedBehavior Sanitizer (Debug)",
       "description": "Debug build with UndefinedBehavior Sanitizer enabled",
@@ -196,8 +197,8 @@
       "displayName": "TSAN Build",
       "configurePreset": "tsan",
       "jobs": 0
-    }
-    ,{
+    },
+    {
       "name": "ubsan",
       "displayName": "UBSAN Build",
       "configurePreset": "ubsan",
@@ -257,8 +258,8 @@
       "output": {
         "outputOnFailure": true
       }
-    }
-    ,{
+    },
+    {
       "name": "ubsan",
       "displayName": "Run UBSAN Tests",
       "configurePreset": "ubsan",

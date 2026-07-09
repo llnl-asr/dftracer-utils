@@ -370,7 +370,8 @@ endif()
 # Use a local install directory for testing to avoid permission issues
 set(TEST_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/test_install")
 
-if(NOT CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+option(DFTRACER_UTILS_PACKAGE_TESTS "Run installed-package discovery tests" ON)
+if(DFTRACER_UTILS_PACKAGE_TESTS)
   add_test(
     NAME install_package
     COMMAND
@@ -448,76 +449,53 @@ if(NOT CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   # Target alias tests
   # ==========================================================================
 
-  # Test core library target aliases
-  foreach(TARGET_ALIAS "dftracer_utils_core::shared" "dftracer_utils_core::static")
-    string(REPLACE "::" "_" TEST_NAME_SUFFIX ${TARGET_ALIAS})
-    add_test(
-      NAME test_target_${TEST_NAME_SUFFIX}
-      COMMAND
-        ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
-        -DTARGET_ALIAS=${TARGET_ALIAS} -DTEST_TYPE=target -P
-        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
-  endforeach()
+  set(PACKAGE_TEST_VARIANTS "")
+  if(DFTRACER_UTILS_BUILD_SHARED)
+    list(APPEND PACKAGE_TEST_VARIANTS shared)
+  endif()
+  if(DFTRACER_UTILS_BUILD_STATIC)
+    list(APPEND PACKAGE_TEST_VARIANTS static)
+  endif()
 
-  # Test utilities library target aliases
-  foreach(TARGET_ALIAS "dftracer_utils_utilities::shared" "dftracer_utils_utilities::static")
-    string(REPLACE "::" "_" TEST_NAME_SUFFIX ${TARGET_ALIAS})
-    add_test(
-      NAME test_target_${TEST_NAME_SUFFIX}
-      COMMAND
-        ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
-        -DTARGET_ALIAS=${TARGET_ALIAS} -DTEST_TYPE=target -P
-        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
-  endforeach()
+  set(PACKAGE_DISCOVERY_TESTS
+      test_pkgconfig_discovery_core
+      test_pkgconfig_discovery_utilities
+      test_pkgconfig_discovery_unified
+      test_cmake_discovery_core
+      test_cmake_discovery_utilities
+      test_cmake_discovery_unified)
 
-  # Test unified library target aliases (namespaced versions)
-  foreach(
-    TARGET_ALIAS
-    "dftracer_utils"
-    "dftracer_utils::static" "dftracer_utils::shared")
-    string(REPLACE "::" "_" TEST_NAME_SUFFIX ${TARGET_ALIAS})
+  function(add_target_alias_test TEST_NAME TARGET_ALIAS)
     add_test(
-      NAME test_target_${TEST_NAME_SUFFIX}
+      NAME ${TEST_NAME}
       COMMAND
         ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
         -DTARGET_ALIAS=${TARGET_ALIAS} -DTEST_TYPE=target -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
-  endforeach()
+  endfunction()
 
-  # Test unified library target aliases (non-namespaced versions)
-  foreach(TARGET_ALIAS "dftracer_utils_static" "dftracer_utils_shared")
-    add_test(
-      NAME test_target_${TARGET_ALIAS}_no_namespace
-      COMMAND
-        ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
-        -DTARGET_ALIAS=${TARGET_ALIAS} -DTEST_TYPE=target -P
-        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+  add_target_alias_test(test_target_dftracer_utils "dftracer_utils")
+  list(APPEND PACKAGE_DISCOVERY_TESTS test_target_dftracer_utils)
+
+  foreach(VARIANT IN LISTS PACKAGE_TEST_VARIANTS)
+    foreach(LIBRARY dftracer_utils_core dftracer_utils_utilities)
+      add_target_alias_test(test_target_${LIBRARY}_${VARIANT}
+                            "${LIBRARY}::${VARIANT}")
+      list(APPEND PACKAGE_DISCOVERY_TESTS test_target_${LIBRARY}_${VARIANT})
+    endforeach()
+
+    add_target_alias_test(test_target_dftracer_utils_${VARIANT}
+                          "dftracer_utils::${VARIANT}")
+    add_target_alias_test(test_target_dftracer_utils_${VARIANT}_no_namespace
+                          "dftracer_utils_${VARIANT}")
+    list(APPEND PACKAGE_DISCOVERY_TESTS
+         test_target_dftracer_utils_${VARIANT}
+         test_target_dftracer_utils_${VARIANT}_no_namespace)
   endforeach()
 
   # ==========================================================================
   # Set test dependencies - all discovery tests should run after installation
   # ==========================================================================
-  set_tests_properties(
-    # pkg-config tests
-    test_pkgconfig_discovery_core
-    test_pkgconfig_discovery_utilities
-    test_pkgconfig_discovery_unified
-    # CMake discovery tests
-    test_cmake_discovery_core
-    test_cmake_discovery_utilities
-    test_cmake_discovery_unified
-    # Core target tests
-    test_target_dftracer_utils_core_shared
-    test_target_dftracer_utils_core_static
-    # Utilities target tests
-    test_target_dftracer_utils_utilities_shared
-    test_target_dftracer_utils_utilities_static
-    # Unified target tests (namespaced)
-    test_target_dftracer_utils
-    test_target_dftracer_utils_static
-    test_target_dftracer_utils_shared
-    # Unified target tests (non-namespaced)
-    test_target_dftracer_utils_static_no_namespace
-    test_target_dftracer_utils_shared_no_namespace
-    PROPERTIES FIXTURES_REQUIRED "installed_package")
+  set_tests_properties(${PACKAGE_DISCOVERY_TESTS} PROPERTIES FIXTURES_REQUIRED
+                                                             "installed_package")
 endif()

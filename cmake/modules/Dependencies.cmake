@@ -540,18 +540,62 @@ endfunction()
 # RocksDB
 # ==============================================================================
 
+set(DFTRACER_UTILS_ROCKSDB_VERSION
+    "10.10.1"
+    CACHE STRING "RocksDB version to find or build")
+set(DFTRACER_UTILS_ROCKSDB_PREFIX
+    "$ENV{DFTRACER_UTILS_ROCKSDB_PREFIX}"
+    CACHE PATH "Install prefix of a prebuilt RocksDB to use instead of source")
+
+# Consume a RocksDB install tree built by scripts/ci/build_rocksdb.sh.
+function(_use_prebuilt_rocksdb PREFIX)
+  find_package(RocksDB ${DFTRACER_UTILS_ROCKSDB_VERSION} REQUIRED CONFIG
+               PATHS "${PREFIX}" NO_DEFAULT_PATH)
+  dftracer_utils_ok("Using prebuilt RocksDB from ${PREFIX}")
+
+  foreach(tool ldb sst_dump)
+    if(EXISTS "${PREFIX}/bin/${tool}")
+      file(COPY "${PREFIX}/bin/${tool}"
+           DESTINATION "${CMAKE_BINARY_DIR}/bin"
+           FILE_PERMISSIONS
+             OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
+             WORLD_READ WORLD_EXECUTE)
+      install(PROGRAMS "${PREFIX}/bin/${tool}"
+              DESTINATION ${CMAKE_INSTALL_BINDIR})
+      if(SKBUILD)
+        create_python_wrapper(${tool})
+      endif()
+    else()
+      message(WARNING "Prebuilt RocksDB at ${PREFIX} has no bin/${tool}")
+    endif()
+  endforeach()
+endfunction()
+
 # Function to find or build RocksDB
 function(need_rocksdb)
+  # TSan needs RocksDB instrumented too, so an uninstrumented prebuilt tree
+  # would report false positives; build from source instead.
+  if(DFTRACER_UTILS_ROCKSDB_PREFIX AND DFTRACER_UTILS_ENABLE_TSAN)
+    dftracer_utils_warn(
+      "Ignoring DFTRACER_UTILS_ROCKSDB_PREFIX: TSan requires a source build")
+  elseif(DFTRACER_UTILS_ROCKSDB_PREFIX)
+    _use_prebuilt_rocksdb("${DFTRACER_UTILS_ROCKSDB_PREFIX}")
+    set(RocksDB_FOUND TRUE PARENT_SCOPE)
+    set(RocksDB_CPM FALSE PARENT_SCOPE)
+    set(ROCKSDB_IS_STATIC TRUE PARENT_SCOPE)
+    return()
+  endif()
+
   if(DFTRACER_UTILS_LOCAL_PACKAGES)
-    find_package(RocksDB 10.10.1 QUIET CONFIG)
+    find_package(RocksDB ${DFTRACER_UTILS_ROCKSDB_VERSION} QUIET CONFIG)
     if(NOT RocksDB_FOUND)
-      find_package(rocksdb 10.10.1 QUIET CONFIG)
+      find_package(rocksdb ${DFTRACER_UTILS_ROCKSDB_VERSION} QUIET CONFIG)
     endif()
     if(NOT RocksDB_FOUND AND rocksdb_FOUND)
       set(RocksDB_FOUND TRUE)
     endif()
     if(NOT RocksDB_FOUND)
-      find_package(RocksDB 10.10.1 QUIET)
+      find_package(RocksDB ${DFTRACER_UTILS_ROCKSDB_VERSION} QUIET)
     endif()
   endif()
 
@@ -602,15 +646,16 @@ function(need_rocksdb)
         GITHUB_REPOSITORY
         facebook/rocksdb
         VERSION
-        10.10.1
+        ${DFTRACER_UTILS_ROCKSDB_VERSION}
         GIT_TAG
-        v10.10.1
+        v${DFTRACER_UTILS_ROCKSDB_VERSION}
         OPTIONS
-        "ROCKSDB_BUILD_SHARED ${DFTRACER_UTILS_BUILD_SHARED}"
+        "ROCKSDB_BUILD_SHARED OFF"
         "PORTABLE 1"
         "WITH_TESTS OFF"
         "WITH_TOOLS OFF"
         "WITH_CORE_TOOLS ON"
+        "WITH_TRACE_TOOLS OFF"
         "WITH_BENCHMARK_TOOLS OFF"
         "WITH_GFLAGS OFF"
         "WITH_SNAPPY OFF"
@@ -721,6 +766,9 @@ function(need_rocksdb)
           TRUE
           PARENT_SCOPE)
       set(RocksDB_CPM
+          TRUE
+          PARENT_SCOPE)
+      set(ROCKSDB_IS_STATIC
           TRUE
           PARENT_SCOPE)
     endif()

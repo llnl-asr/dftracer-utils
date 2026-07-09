@@ -12,6 +12,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Must match the default in scripts/ci/build_rocksdb.sh.
+  ROCKSDB_VERSION: "10.10.1"
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -38,15 +42,67 @@ jobs:
             coverage:
               - 'scripts/coverage.sh'
 
-  test:
+  # Build RocksDB once per platform. The prefix is absolute and identical in
+  # every consumer: the PCH embeds <rocksdb/*.h>, so a differing -I path would
+  # invalidate ccache for the whole project.
+  rocksdb:
     needs: changes
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
+    name: RocksDB prebuild (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-22.04-arm, ubuntu-24.04, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Compiler fingerprint
+        id: fp
+        run: echo "cc=$(c++ --version | head -1 | tr -c '[:alnum:].' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore RocksDB
+        id: cache
+        uses: actions/cache/restore@v5
+        with:
+          path: /opt/dftracer-deps
+          key: rocksdb-v1-${{ matrix.os }}-${{ env.ROCKSDB_VERSION }}-${{ steps.fp.outputs.cc }}-${{ hashFiles('scripts/ci/build_rocksdb.sh') }}
+
+      - name: Install build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y build-essential cmake ninja-build zlib1g-dev libzstd-dev
+          else
+            brew install ninja zstd || true
+          fi
+
+      - name: Build RocksDB
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: ./scripts/ci/build_rocksdb.sh
+
+      - name: Save RocksDB
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: /opt/dftracer-deps
+          key: rocksdb-v1-${{ matrix.os }}-${{ env.ROCKSDB_VERSION }}-${{ steps.fp.outputs.cc }}-${{ hashFiles('scripts/ci/build_rocksdb.sh') }}
+
+  test:
+    needs: [changes, rocksdb]
     if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
     env:
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 2G
+      CCACHE_MAXSIZE: 700M
       CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
       CCACHE_NOHASHDIR: "true"
 
@@ -68,21 +124,45 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Cache ccache
-        uses: actions/cache@v5
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Compiler fingerprint
+        id: fp
+        run: echo "cc=$(c++ --version | head -1 | tr -c '[:alnum:].' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore RocksDB
+        uses: actions/cache/restore@v5
+        with:
+          path: /opt/dftracer-deps
+          key: rocksdb-v1-${{ matrix.os }}-${{ env.ROCKSDB_VERSION }}-${{ steps.fp.outputs.cc }}-${{ hashFiles('scripts/ci/build_rocksdb.sh') }}
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-v3-${{ matrix.os }}-${{ github.run_id }}
+          key: ccache-v4-${{ matrix.os }}-${{ github.run_id }}
           restore-keys: |
-            ccache-v3-${{ matrix.os }}-
+            ccache-v4-${{ matrix.os }}-
 
       - name: Cache CPM dependency sources
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/.cpmsource
-          key: cpmsource-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
           restore-keys: |
-            cpmsource-v1-
+            cpmsource-lite-v1-
 
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -93,7 +173,6 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew update
           for f in cmake ccache lcov zlib sqlite pkg-config ninja; do
             if brew list --versions "$f" >/dev/null; then
               echo "$f already installed"
@@ -147,6 +226,13 @@ jobs:
         if: always()
         run: ccache -s || echo "ccache not available"
 
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-v4-${{ matrix.os }}-${{ github.run_id }}
+
   coverage-finish:
     needs: test
     if: always()
@@ -161,7 +247,7 @@ jobs:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
   valgrind-cpp:
-    needs: changes
+    needs: [changes, rocksdb]
     if: needs.changes.outputs.code == 'true'
     name: Valgrind (C++ and MPI)
     runs-on: ubuntu-24.04
@@ -171,7 +257,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 2G
+      CCACHE_MAXSIZE: 700M
       CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
       CCACHE_NOHASHDIR: "true"
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
@@ -180,23 +266,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Cache ccache
-        uses: actions/cache@v5
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Compiler fingerprint
+        id: fp
+        run: echo "cc=$(c++ --version | head -1 | tr -c '[:alnum:].' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore RocksDB
+        uses: actions/cache/restore@v5
+        with:
+          path: /opt/dftracer-deps
+          key: rocksdb-v1-ubuntu-24.04-${{ env.ROCKSDB_VERSION }}-${{ steps.fp.outputs.cc }}-${{ hashFiles('scripts/ci/build_rocksdb.sh') }}
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-valgrind-cpp-${{ github.run_id }}
           restore-keys: |
             ccache-valgrind-cpp-
             ccache-valgrind-
-            ccache-v3-ubuntu-24.04-
+            ccache-v4-ubuntu-24.04-
 
       - name: Cache CPM dependency sources
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/.cpmsource
-          key: cpmsource-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
           restore-keys: |
-            cpmsource-v1-
+            cpmsource-lite-v1-
 
       - name: Install dependencies
         run: |
@@ -207,7 +317,6 @@ jobs:
       - name: ccache stats (reset)
         run: ccache -z || true
 
-      # Native Valgrind (valgrind on PATH -> the Makefile targets skip Docker).
       - name: C++ tests under Valgrind
         run: make valgrind-cpp
 
@@ -218,6 +327,13 @@ jobs:
         if: always()
         run: ccache -s || true
 
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-valgrind-cpp-${{ github.run_id }}
+
       - name: Upload Valgrind logs
         if: failure()
         uses: actions/upload-artifact@v4
@@ -227,7 +343,7 @@ jobs:
           if-no-files-found: ignore
 
   valgrind-python:
-    needs: changes
+    needs: [changes, rocksdb]
     if: needs.changes.outputs.code == 'true'
     name: Valgrind (Python, full suite incl. dask)
     runs-on: ubuntu-24.04
@@ -237,7 +353,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
-      CCACHE_MAXSIZE: 2G
+      CCACHE_MAXSIZE: 700M
       CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
       CCACHE_NOHASHDIR: "true"
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
@@ -254,23 +370,47 @@ jobs:
           cache: "pip"
           cache-dependency-path: "pyproject.toml"
 
-      - name: Cache ccache
-        uses: actions/cache@v5
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Compiler fingerprint
+        id: fp
+        run: echo "cc=$(c++ --version | head -1 | tr -c '[:alnum:].' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore RocksDB
+        uses: actions/cache/restore@v5
+        with:
+          path: /opt/dftracer-deps
+          key: rocksdb-v1-ubuntu-24.04-${{ env.ROCKSDB_VERSION }}-${{ steps.fp.outputs.cc }}-${{ hashFiles('scripts/ci/build_rocksdb.sh') }}
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
         with:
           path: ${{ github.workspace }}/.ccache
           key: ccache-valgrind-py-${{ github.run_id }}
           restore-keys: |
             ccache-valgrind-py-
             ccache-valgrind-
-            ccache-v3-ubuntu-24.04-
+            ccache-v4-ubuntu-24.04-
 
       - name: Cache CPM dependency sources
         uses: actions/cache@v5
         with:
           path: ${{ github.workspace }}/.cpmsource
-          key: cpmsource-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
           restore-keys: |
-            cpmsource-v1-
+            cpmsource-lite-v1-
 
       - name: Install dependencies
         run: |
@@ -287,6 +427,13 @@ jobs:
       - name: ccache stats (show)
         if: always()
         run: ccache -s || true
+
+      - name: Save ccache
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-valgrind-py-${{ github.run_id }}
 
       - name: Upload Valgrind logs
         if: failure()
@@ -307,6 +454,8 @@ jobs:
         os: [ubuntu-22.04, ubuntu-22.04-arm, macos-14]
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Select newer Xcode (macOS)
         if: runner.os == 'macOS'
@@ -314,21 +463,24 @@ jobs:
         with:
           xcode-version: "16.2"
 
-      - name: Cache ccache (wheel)
-        uses: actions/cache@v5
+      - name: Prepare ccache dir
+        run: mkdir -p "${{ github.workspace }}/.ccache"
+
+      - name: Restore ccache (wheel)
+        uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ccache-wheel-v1-${{ matrix.os }}-${{ github.run_id }}
+          key: ccache-wheel-v2-${{ matrix.os }}-${{ github.run_id }}
           restore-keys: |
-            ccache-wheel-v1-${{ matrix.os }}-
+            ccache-wheel-v2-${{ matrix.os }}-
 
       - name: Cache CPM dependency sources
         uses: actions/cache@v5
         with:
           path: .cpmsource
-          key: cpmsource-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          key: cpmsource-full-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
           restore-keys: |
-            cpmsource-v1-
+            cpmsource-full-v1-
 
       - name: Build and test wheel
         uses: pypa/cibuildwheel@v3.3.0
@@ -339,15 +491,27 @@ jobs:
           CIBW_BEFORE_ALL_LINUX: "yum install -y epel-release ccache || dnf install -y epel-release ccache || true"
           CIBW_BEFORE_ALL_MACOS: "brew install ccache || true"
           CIBW_BEFORE_BUILD: "ccache -s || echo 'WARNING: ccache unavailable - build is uncached'"
+          CIBW_CONTAINER_ENGINE: "docker; create_args: --volume=${{ github.workspace }}/.ccache:/ccache"
           CIBW_ENVIRONMENT_LINUX: >-
-            CCACHE_DIR=/project/.ccache CCACHE_BASEDIR=/project
-            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=2G
+            CCACHE_DIR=/ccache CCACHE_BASEDIR=/project
+            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=900M
             CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
           CIBW_ENVIRONMENT_MACOS: >-
             CCACHE_DIR=$GITHUB_WORKSPACE/.ccache CCACHE_BASEDIR=$GITHUB_WORKSPACE
-            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=2G
+            CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=900M
             CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
+
+      - name: Reclaim ccache ownership
+        if: always() && runner.os == 'Linux'
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/.ccache" || true
 
       - name: Report ccache size
         if: always()
         run: du -sh .ccache 2>/dev/null || echo "no .ccache dir (uncached)"
+
+      - name: Save ccache (wheel)
+        if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/cache/save@v5
+        with:
+          path: .ccache
+          key: ccache-wheel-v2-${{ matrix.os }}-${{ github.run_id }}

@@ -372,6 +372,17 @@ foreach(variant shared static)
     link_unordered_dense(dftracer_utils_core_${variant})
     link_tl_expected(dftracer_utils_core_${variant})
 
+    # RocksDB is a static archive linked into this .so. Without this its
+    # symbols are re-exported into ELF's flat namespace, where they can bind
+    # against a different RocksDB loaded in the same process.
+    if(variant STREQUAL "shared"
+       AND ROCKSDB_IS_STATIC
+       AND NOT APPLE
+       AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+      target_link_options(dftracer_utils_core_shared PRIVATE
+                          "LINKER:--exclude-libs,librocksdb.a")
+    endif()
+
     # The coroutine monitor (monitor.cpp) calls dladdr() for symbolization.
     # On older glibc (e.g. manylinux aarch64) dladdr lives in libdl, so the
     # core library must link it explicitly; CMAKE_DL_LIBS is empty where the

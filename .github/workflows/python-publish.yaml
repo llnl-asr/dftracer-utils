@@ -63,6 +63,12 @@ jobs:
             CCACHE_COMPILERCHECK=content CCACHE_NOHASHDIR=true CCACHE_MAXSIZE=900M
             CCACHE_SLOPPINESS=time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
 
+      - name: Check wheel payload
+        run: |
+          python3 -m venv /tmp/wheelcheck
+          /tmp/wheelcheck/bin/pip install --quiet pytest
+          /tmp/wheelcheck/bin/pytest tests/python/test_wheel_contents.py -q
+
       - uses: actions/upload-artifact@v6.0.0
         with:
           name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}

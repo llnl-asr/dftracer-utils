@@ -61,6 +61,14 @@ build-dir = "build/{wheel_tag}"
 
 # Package discovery
 wheel.packages = ["python/dftracer"]
+
+wheel.exclude = [
+  "dftracer/include/**",
+  "dftracer/lib/cmake/**",
+  "dftracer/lib/pkgconfig/**",
+  "dftracer/lib/*.a",
+  "share/**",
+]
 sdist.include = [
   "python/dftracer/utils/_version.py",
   "python/dftracer/utils/py.typed",
@@ -143,4 +151,4 @@ unused-ignore-comment = "ignore"
 version_scheme = "post-release"
 local_scheme = "no-local-version"
 version_file = "python/dftracer/utils/_version.py"
-fallback_version = "0.0.0.dev0+unknown"
+fallback_version = "0.0.0"

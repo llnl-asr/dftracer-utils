@@ -505,6 +505,12 @@ jobs:
         if: always() && runner.os == 'Linux'
         run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/.ccache" || true
 
+      - name: Check wheel payload
+        run: |
+          python3 -m venv /tmp/wheelcheck
+          /tmp/wheelcheck/bin/pip install --quiet pytest
+          /tmp/wheelcheck/bin/pytest tests/python/test_wheel_contents.py -q
+
       - name: Report ccache size
         if: always()
         run: du -sh .ccache 2>/dev/null || echo "no .ccache dir (uncached)"

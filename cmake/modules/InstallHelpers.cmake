@@ -277,33 +277,6 @@ else()
     endif()
 endif()
 
-# CPP-LOGGER dependency
-find_library(CPP_LOGGER_LIBRARY_BUNDLED
-    NAMES cpp-logger libcpp-logger
-    PATHS \${_IMPORT_PREFIX}/lib
-    NO_DEFAULT_PATH
-)
-
-if(CPP_LOGGER_LIBRARY_BUNDLED)
-    # Found cpp-logger that was built with this package
-    find_path(CPP_LOGGER_INCLUDE_DIR_BUNDLED
-        NAMES cpp-logger/Logger.h
-        PATHS \${_IMPORT_PREFIX}/include
-        NO_DEFAULT_PATH
-    )
-
-    if(CPP_LOGGER_INCLUDE_DIR_BUNDLED AND NOT TARGET cpp-logger)
-        add_library(cpp-logger UNKNOWN IMPORTED)
-        set_target_properties(cpp-logger PROPERTIES
-            IMPORTED_LOCATION \"\${CPP_LOGGER_LIBRARY_BUNDLED}\"
-            INTERFACE_INCLUDE_DIRECTORIES \"\${CPP_LOGGER_INCLUDE_DIR_BUNDLED}\"
-        )
-    endif()
-else()
-    # Try to find system cpp-logger
-    find_dependency(cpp-logger QUIET)
-endif()
-
 # LZ4 dependency (used by RocksDB)
 find_library(LZ4_LIBRARY_BUNDLED
     NAMES lz4 liblz4

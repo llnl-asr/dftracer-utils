@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      coverage: ${{ steps.filter.outputs.coverage }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3.0.2
@@ -34,10 +35,12 @@ jobs:
               - 'pyproject.toml'
               - 'Makefile'
               - '.github/workflows/ci.yml'
+            coverage:
+              - 'scripts/coverage.sh'
 
   test:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' || needs.changes.outputs.coverage == 'true'
     env:
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
       CCACHE_DIR: ${{ github.workspace }}/.ccache

@@ -242,6 +242,15 @@ generate_coverage_report() {
 		lcov_flags=(--rc lcov_branch_coverage=1)
 	fi
 
+	# lcov >= 2.5 appends --no-strip-underscores (a GNU c++filt flag) to the
+	# demangler on macOS, where Xcode's llvm-cxxfilt only knows the singular
+	# form and exits non-zero, leaving genhtml with an empty tracefile.
+	if printf '_Z1fv\n' | c++filt --no-strip-underscores >/dev/null 2>&1; then
+		genhtml_flags+=(--demangle-cpp)
+	else
+		log_warning "c++filt lacks --no-strip-underscores; disabling --demangle-cpp"
+	fi
+
 	# Capture coverage data
 	lcov --capture \
 		--directory "$BUILD_DIR" \
@@ -264,15 +273,14 @@ generate_coverage_report() {
 		"${lcov_flags[@]}"
 
 	# Generate HTML report
+	# No --sort: lcov 2.4 renamed it to --sort-tables, and sorting is on by default.
 	genhtml "$COVERAGE_DIR/coverage_filtered.info" \
 		--output-directory "$COVERAGE_DIR/html" \
 		--title "dftracer-utils Coverage Report" \
 		--num-spaces 4 \
-		--sort \
 		--function-coverage \
 		--branch-coverage \
 		--legend \
-		--demangle-cpp \
 		"${genhtml_flags[@]}"
 
 	log_success "Coverage report generated in $COVERAGE_DIR/html/"

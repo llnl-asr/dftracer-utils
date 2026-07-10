@@ -12,20 +12,37 @@ Basic startup:
 
     dftracer_server -d /path/to/traces
 
-The server scans the trace directory on startup, loads or builds bloom/checkpoint sidecar indexes (``.idx`` files), and begins listening for HTTP requests on ``0.0.0.0:8080``.
+The server scans the trace directory on startup, loads or builds bloom/checkpoint sidecar indexes (``.idx`` files), and begins listening for HTTP requests on ``127.0.0.1:8080``. It also serves the interactive :doc:`trace-viewer` web UI at ``/`` and ``/index.html``.
 
 Custom Configuration:
 
 .. code-block:: bash
 
-    # Listen on localhost only, port 9000
-    dftracer_server -b 127.0.0.1 -p 9000 -d /path/to/traces
+    # Expose on all interfaces (see Security below), port 9000
+    dftracer_server -b 0.0.0.0 -p 9000 -d /path/to/traces
 
     # Use separate index directory (useful for NFS or slow disks)
     dftracer_server -d /path/to/traces --index-dir /var/cache/dftracer_indexes
 
     # Use 16 worker threads for concurrent request handling
     dftracer_server -d /path/to/traces --executor-threads 16
+
+Security
+--------
+
+The server binds to loopback (``127.0.0.1``) by default, so it is not reachable
+from other hosts unless you explicitly pass ``-b 0.0.0.0`` (or another
+address). When exposing it beyond localhost, set an access token:
+
+.. code-block:: bash
+
+    dftracer_server -d /path/to/traces -b 0.0.0.0 --token "$(openssl rand -hex 16)"
+
+With ``--token`` set, every request must present the token, either as a
+``?token=<TOKEN>`` query parameter or an ``Authorization: Bearer <TOKEN>``
+header; otherwise the server responds ``401 Unauthorized``. Responses carry an
+open CORS header (``Access-Control-Allow-Origin: *``) so browser and editor
+webview clients can query the API cross-origin.
 
 REST API
 --------
@@ -327,6 +344,142 @@ Supported operators: ``=``, ``>=``, ``<=``, ``>``, ``<``
 
     # Same query with raw timestamps and PID filter
     curl "http://localhost:8080/api/v1/viz/events?begin=1000000&end=2000000&summary=1&ts_normalize=0&pid=1"
+
+GET /api/v1/viz/density
++++++++++++++++++++++++
+
+Like ``/api/v1/viz/events``, but instead of dropping sub-pixel events it buckets
+them per ``(pid, tid, pixel-column)`` into aggregated *density* blocks, so
+zoomed-out views still show where activity is. Returns full-size events (with
+``args``, for the detail panel) plus a ``density`` array of blocks. Same
+``begin``/``end``/``summary`` parameters as ``/api/v1/viz/events``.
+
+.. code-block:: bash
+
+    curl "http://localhost:8080/api/v1/viz/density?begin=0&end=999999999&summary=2"
+
+.. code-block:: json
+
+    {
+      "events": [],
+      "density": [
+        {"pid": 100, "tid": 100, "ts": 0, "dur": 24457,
+         "count": 910, "total": 22044, "depth": 0}
+      ]
+    }
+
+GET /api/v1/viz/counters
+++++++++++++++++++++++++
+
+Per-bucket read/write bytes and I/O operation counts over a time range, for the
+bandwidth / IOPS tracks. Parameters ``begin``, ``end``, ``summary``; returns a
+``buckets`` array. Aggregated server-side in parallel.
+
+.. code-block:: bash
+
+    curl "http://localhost:8080/api/v1/viz/counters?begin=0&end=999999999&summary=1"
+
+.. code-block:: json
+
+    {"buckets": [{"ts": 0, "read_bytes": 4096, "write_bytes": 0,
+                  "read_ops": 1, "write_ops": 0}]}
+
+GET /api/v1/viz/stats
++++++++++++++++++++++
+
+Server-side per-name aggregation over a time range (the Analyze panel). Returns
+a ``names`` table with ``count``, ``total``, ``avg``, ``min``, ``max`` per
+operation name. Parameters ``begin``, ``end``, ``summary``; whole-trace,
+unfiltered queries are answered from a prebuilt summary.
+
+.. code-block:: bash
+
+    curl "http://localhost:8080/api/v1/viz/stats?begin=0&end=999999999&summary=1"
+
+.. code-block:: json
+
+    {
+      "count": 100, "total_dur": 5000,
+      "names": [{"name": "read", "count": 50, "total": 2500,
+                 "avg": 50, "min": 10, "max": 90}]
+    }
+
+GET /api/v1/viz/histogram
++++++++++++++++++++++++++
+
+Distribution of event durations matching the query in ``[begin, end]``: exact
+percentiles (``p50``, ``p99``, ...) plus a log-spaced ``buckets`` histogram of
+the shape. Narrow to one operation by folding ``name == "..."`` into the query.
+
+.. code-block:: bash
+
+    curl "http://localhost:8080/api/v1/viz/histogram?begin=0&end=999999999&summary=1"
+
+.. code-block:: json
+
+    {"min": 10, "max": 900, "p50": 150, "p99": 880, "buckets": []}
+
+GET /api/v1/viz/proctree
+++++++++++++++++++++++++
+
+Infers the process fork hierarchy and returns a ``nodes`` array (one per
+process) with parent links, spawn/first timestamps, resolved ``host``, ``rank``
+(from ``PR`` metadata), and per-process ``bytes`` / ``io_ops`` / ``io_busy``.
+Drives lane ordering and grouping in the viewer. Respects ``?file=`` for
+per-node trees on multi-node traces.
+
+.. code-block:: bash
+
+    curl "http://localhost:8080/api/v1/viz/proctree"
+
+.. code-block:: json
+
+    {"nodes": [{"pid": 100, "parent": -1, "host": "node01", "rank": "0",
+                "bytes": 16384, "io_ops": 4, "io_busy": 600.0}]}
+
+GET /api/v1/viz/calltree
+++++++++++++++++++++++++
+
+Merges events into a flamegraph tree from ``ts``/``dur`` containment; identical
+name-paths fold together. Each node carries inclusive ``total``, exclusive
+``self``, ``count``, and ``children``. Parameters ``begin``, ``end``,
+``summary``; ``group=pid`` keeps each process's tree separate.
+
+.. code-block:: bash
+
+    curl "http://localhost:8080/api/v1/viz/calltree?begin=0&end=999999999&summary=1"
+
+.. code-block:: json
+
+    {
+      "name": "root", "total": 5000, "self": 0, "count": 0,
+      "children": [{"name": "read", "total": 2500, "self": 2500, "count": 50}]
+    }
+
+GET /api/v1/viz/layers
+++++++++++++++++++++++
+
+Whole-trace reference data: the operation-name to category ``layers`` map (a
+property of the name, so fetched once), plus ``total_files`` (declared via
+``FH`` metadata) and ``io_files`` (those an I/O event actually touched).
+
+.. code-block:: bash
+
+    curl "http://localhost:8080/api/v1/viz/layers"
+
+.. code-block:: json
+
+    {"layers": {"read": "POSIX", "write": "POSIX"},
+     "total_files": 2, "io_files": 2}
+
+GET / , /api, and /api/openapi.json
++++++++++++++++++++++++++++++++++++
+
+``GET /`` (and ``/index.html``) serve the embedded :doc:`trace-viewer` web UI.
+``GET /api`` serves the interactive API explorer page, and ``GET
+/api/openapi.json`` returns the OpenAPI 3.1 specification for every endpoint
+above (generated from the server's own route table), so external tools can
+consume it too. None of these pages contain trace data; they query the API.
 
 Event Filtering
 ---------------

@@ -114,6 +114,39 @@ Install the project's pre-commit hooks:
 The pre-commit hook runs:
 - **C/C++**: `clang-format` on staged `.c/.cpp/.h/.hpp` files
 - **Python**: `ruff check`, `ruff format --check`, and `ty check` on staged `.py/.pyi` files (requires `uvx` or `ruff` in PATH; skipped gracefully if not available)
+- **Web UI**: `prettier`, `eslint`, and `tsc` type-check when `web/` files are staged (requires Node/`npm` and `web/node_modules`; skipped gracefully if either is missing)
+
+## Web UI
+
+The trace viewer web UI lives in `web/` (SolidJS + Vite). It is built into two
+self-contained pages that are embedded into the `dftracer_server` binary at
+compile time: `dist/index.html` (the timeline viewer, served at `/`) and
+`dist/api.html` (the API explorer, served at `/api`).
+
+```bash
+cd web
+npm ci
+npm run build         # -> web/dist/index.html and web/dist/api.html
+```
+
+`web/dist/` is git-ignored. The C++ build embeds whatever is in `web/dist/` via
+`cmake/scripts/embed_asset.cmake`; if it is absent, a placeholder page is
+embedded instead (the `/api/v1` REST API works regardless), so **the C++ build
+never requires Node**. Rebuild the pages after changing the UI, then rebuild the
+server. To have CMake build the UI for you, configure with
+`-DDFTRACER_UTILS_BUILD_WEB_UI=ON` (needs `npm`) or run the `web-ui` target.
+
+Development and checks:
+
+```bash
+npm run dev           # Vite dev server, proxies /api to http://localhost:8080
+npm run typecheck     # tsc --noEmit
+npm run lint          # eslint
+npm run format        # prettier --write .
+npm run format:check  # prettier --check .
+```
+
+These same checks run in the pre-commit hook (above) and in CI.
 
 ## Make Targets
 

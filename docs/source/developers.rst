@@ -195,8 +195,34 @@ The pre-commit hook runs:
 
 - **C/C++**: ``clang-format`` on staged ``.c/.cpp/.h/.hpp`` files
 - **Python**: ``ruff check``, ``ruff format --check``, and ``ty check`` on staged ``.py/.pyi`` files
+- **Web UI**: ``prettier``, ``eslint``, and ``tsc`` type-check when ``web/`` files are staged
 
-Python checks require ``uvx`` or ``ruff`` in PATH; they are skipped gracefully if not available.
+Python checks require ``uvx`` or ``ruff`` in PATH; web checks require Node/``npm``
+and ``web/node_modules``. Both are skipped gracefully if their tools are not
+available, so the C++ workflow is unaffected.
+
+Web UI
+~~~~~~
+
+The trace viewer web UI lives in ``web/`` (SolidJS + Vite) and is built into two
+self-contained pages that are embedded into ``dftracer_server`` at compile time:
+``dist/index.html`` (the timeline viewer at ``/``) and ``dist/api.html`` (the API
+explorer at ``/api``). See :doc:`trace-viewer`.
+
+.. code-block:: bash
+
+   cd web
+   npm ci
+   npm run build         # -> web/dist/index.html and web/dist/api.html
+
+   npm run dev           # Vite dev server, proxies /api to :8080
+   npm run typecheck     # tsc --noEmit
+   npm run lint          # eslint
+   npm run format        # prettier --write .
+
+``web/dist/`` is git-ignored; the C++ build embeds whatever is present (or a
+placeholder if absent), so the C++ build never requires Node. Configure with
+``-DDFTRACER_UTILS_BUILD_WEB_UI=ON`` to have CMake build the UI (needs ``npm``).
 
 Contributing
 ------------

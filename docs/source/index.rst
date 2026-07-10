@@ -29,6 +29,7 @@ Features
     pipeline
     cli
     server
+    trace-viewer
     utilities
     api/index
     cpp_api/index

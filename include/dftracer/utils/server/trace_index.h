@@ -3,11 +3,14 @@
 
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/server/viz_summary.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -60,6 +63,24 @@ class TraceIndex {
     std::uint64_t global_min_timestamp_us() const { return global_min_ts_; }
     std::uint64_t global_max_timestamp_us() const { return global_max_ts_; }
 
+    // Lazily-built activity summary. Returns nullptr until the build finishes;
+    // callers fall back to a live scan meanwhile.
+    const VizSummary* viz_summary() const {
+        return viz_summary_state_.load(std::memory_order_acquire) == 2
+                   ? viz_summary_.get()
+                   : nullptr;
+    }
+    // Claim the right to build the summary; only the first caller gets true.
+    bool try_begin_summary_build() {
+        int expected = 0;
+        return viz_summary_state_.compare_exchange_strong(
+            expected, 1, std::memory_order_acq_rel);
+    }
+    void set_viz_summary(std::unique_ptr<VizSummary> summary) {
+        viz_summary_ = std::move(summary);
+        viz_summary_state_.store(2, std::memory_order_release);
+    }
+
    private:
     std::string directory_;
     std::string index_dir_;
@@ -69,6 +90,9 @@ class TraceIndex {
     std::uint64_t global_max_ts_ = 0;
     std::size_t max_concurrent_;
     BloomCache bloom_cache_;
+
+    std::unique_ptr<VizSummary> viz_summary_;
+    std::atomic<int> viz_summary_state_{0};  // 0 not built, 1 building, 2 ready
 };
 
 class QueryParams;

@@ -11,6 +11,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <exception>
 
 namespace dftracer::utils::server {
 
@@ -105,19 +106,49 @@ coro::CoroTask<void> TcpListener::accept_loop(CoroScope& scope,
         if (fl >= 0) ::fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
 
         struct sockaddr_in addr_copy = client_addr;
-        scope.spawn([fd, addr_copy, handler_ptr](
+        track_active(fd);
+        scope.spawn([this, fd, addr_copy, handler_ptr](
                         CoroScope& /*child*/) -> coro::CoroTask<void> {
-            co_await (*handler_ptr)(fd, addr_copy);
-            // Close the client socket when the handler returns.
+            // The close must be awaited, so this cannot be an RAII guard.
+            std::exception_ptr err;
+            try {
+                co_await (*handler_ptr)(fd, addr_copy);
+            } catch (...) {
+                err = std::current_exception();
+            }
             co_await io::close(fd);
+            untrack_active(fd);
+            if (err) std::rethrow_exception(err);
         });
     }
+
+    // Shutdown requested: unblock any handler parked in recv on a keep-alive
+    // connection so the spawned coroutines return and the scope can join.
+    shutdown_active();
 
     // The signal handler may have already closed listen_fd_ via
     // g_listen_fd.  Mark it as -1 to prevent a double-close in the
     // destructor or stop().
     if (g_listen_fd.load(std::memory_order_acquire) < 0) {
         listen_fd_ = -1;
+    }
+}
+
+void TcpListener::track_active(int fd) {
+    std::lock_guard<std::mutex> lock(active_mu_);
+    active_fds_.insert(fd);
+}
+
+void TcpListener::untrack_active(int fd) {
+    std::lock_guard<std::mutex> lock(active_mu_);
+    active_fds_.erase(fd);
+}
+
+void TcpListener::shutdown_active() {
+    std::lock_guard<std::mutex> lock(active_mu_);
+    for (int fd : active_fds_) {
+        // Wakes a blocked recv/send in the handler; the handler then closes fd.
+        ::shutdown(fd, SHUT_RDWR);
     }
 }
 

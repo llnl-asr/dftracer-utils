@@ -13,10 +13,14 @@
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
+#include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 
 #include <cinttypes>
 #include <limits>
+#include <memory>
+#include <unordered_map>
+#include <vector>
 
 namespace dftracer::utils::server {
 
@@ -99,6 +103,44 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     DFTRACER_UTILS_LOG_INFO(
                         "TraceIndex: building index for %zu file(s) ...",
                         needs_build_ptr->size());
+
+                    // Assign file identities up front, single-threaded, so the
+                    // concurrent builders below don't race the shared next-id
+                    // counter and collide two files onto one id. Hold each
+                    // read-write handle open across the build so builders reuse
+                    // it instead of hitting a read-only -> read-write upgrade.
+                    std::vector<std::unique_ptr<indexer::IndexDatabase>>
+                        held_dbs;
+                    {
+                        std::unordered_map<std::string,
+                                           std::vector<std::size_t>>
+                            by_index;
+                        for (auto idx : *needs_build_ptr)
+                            by_index[(*files_ptr)[idx].index_path].push_back(
+                                idx);
+                        for (auto& [ipath, idxs] : by_index) {
+                            try {
+                                auto db =
+                                    std::make_unique<indexer::IndexDatabase>(
+                                        ipath);
+                                auto w = db->begin_write();
+                                for (auto idx : idxs) {
+                                    const auto& p = (*files_ptr)[idx].path;
+                                    w->get_or_create_file_info(
+                                        indexer::internal::get_logical_path(p),
+                                        indexer::internal::calculate_file_hash(
+                                            p));
+                                }
+                                w->commit();
+                                held_dbs.push_back(std::move(db));
+                            } catch (const std::exception& e) {
+                                DFTRACER_UTILS_LOG_WARN(
+                                    "TraceIndex: file-id pre-assign failed for "
+                                    "%s: %s",
+                                    ipath.c_str(), e.what());
+                            }
+                        }
+                    }
 
                     auto file_chan =
                         coro::make_channel<std::size_t>(max_concurrent * 2);

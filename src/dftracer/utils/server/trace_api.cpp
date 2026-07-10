@@ -7,6 +7,7 @@
 #include <dftracer/utils/server/cursor.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
+#include <dftracer/utils/server/json_builder.h>
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_api.h>
 #include <dftracer/utils/server/trace_index.h>
@@ -22,6 +23,7 @@
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <simdjson.h>
 
 #include <cstddef>
 #include <limits>
@@ -38,35 +40,6 @@ using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
 using namespace dftracer::utils::utilities::composites::dft::views;
 
-// JSON-escape a string value (minimal: quotes, backslash, control chars).
-static std::string json_escape(const std::string& s) {
-    std::string out;
-    out.reserve(s.size() + 2);
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            case '\n':
-                out += "\\n";
-                break;
-            case '\r':
-                out += "\\r";
-                break;
-            case '\t':
-                out += "\\t";
-                break;
-            default:
-                out += c;
-                break;
-        }
-    }
-    return out;
-}
-
 // Hash metadata types that need smart filtering (FH, HH, SH).
 static const std::unordered_set<std::string> HASH_METADATA_NAMES = {"FH", "HH",
                                                                     "SH"};
@@ -77,25 +50,28 @@ using dftracer::utils::utilities::common::query::Query;
 static coro::CoroTask<HttpResponse> handle_files(const HttpRequest& /*req*/,
                                                  const QueryParams& /*params*/,
                                                  TraceIndex& index) {
-    std::string body;
-    body.reserve(128 * index.file_count() + 32);
-    body += "{\"files\":[";
+    auto& b = scratch_json_builder();
+    b.start_object();
+    b.escape_and_append_with_quotes("files");
+    b.append_colon();
+    b.start_array();
     bool first = true;
     for (const auto& f : index.files()) {
-        if (!first) body += ',';
+        if (!first) b.append_comma();
         first = false;
-        body += "{\"path\":\"";
-        body += json_escape(f.path);
-        body += "\",\"has_bloom_data\":";
-        body += f.has_bloom_data ? "true" : "false";
-        body += ",\"has_checkpoint_index\":";
-        body += f.has_checkpoint_index ? "true" : "false";
-        body += '}';
+        b.start_object();
+        b.append_key_value("path", f.path);
+        b.append_comma();
+        b.append_key_value("has_bloom_data", f.has_bloom_data);
+        b.append_comma();
+        b.append_key_value("has_checkpoint_index", f.has_checkpoint_index);
+        b.end_object();
     }
-    body += "],\"count\":";
-    body += std::to_string(index.file_count());
-    body += '}';
-    co_return HttpResponse::ok(body);
+    b.end_array();
+    b.append_comma();
+    b.append_key_value("count", static_cast<std::int64_t>(index.file_count()));
+    b.end_object();
+    co_return HttpResponse::ok(std::string(b));
 }
 
 // --- GET /api/v1/files/info ---
@@ -113,27 +89,28 @@ static coro::CoroTask<HttpResponse> handle_file_info(const HttpRequest& /*req*/,
         co_return HttpResponse::not_found();
     }
 
-    std::string body;
-    body.reserve(512);
-    body += "{\"path\":\"";
-    body += json_escape(info->path);
-    body += "\",\"has_bloom_data\":";
-    body += info->has_bloom_data ? "true" : "false";
-    body += ",\"has_checkpoint_index\":";
-    body += info->has_checkpoint_index ? "true" : "false";
-    body += ",\"size_mb\":";
-    body += std::to_string(info->size_mb);
-    body += ",\"compressed_size\":";
-    body += std::to_string(info->compressed_size);
-    body += ",\"num_lines\":";
-    body += std::to_string(info->num_lines);
-    body += ",\"num_checkpoints\":";
-    body += std::to_string(info->num_checkpoints);
-    body += ",\"uncompressed_size\":";
-    body += std::to_string(info->uncompressed_size);
-
-    body += '}';
-    co_return HttpResponse::ok(body);
+    auto& b = scratch_json_builder();
+    b.start_object();
+    b.append_key_value("path", info->path);
+    b.append_comma();
+    b.append_key_value("has_bloom_data", info->has_bloom_data);
+    b.append_comma();
+    b.append_key_value("has_checkpoint_index", info->has_checkpoint_index);
+    b.append_comma();
+    b.append_key_value("size_mb", info->size_mb);
+    b.append_comma();
+    b.append_key_value("compressed_size",
+                       static_cast<std::int64_t>(info->compressed_size));
+    b.append_comma();
+    b.append_key_value("num_lines", static_cast<std::int64_t>(info->num_lines));
+    b.append_comma();
+    b.append_key_value("num_checkpoints",
+                       static_cast<std::int64_t>(info->num_checkpoints));
+    b.append_comma();
+    b.append_key_value("uncompressed_size",
+                       static_cast<std::int64_t>(info->uncompressed_size));
+    b.end_object();
+    co_return HttpResponse::ok(std::string(b));
 }
 
 static std::vector<std::string> split_csv(std::string_view s) {
@@ -428,18 +405,23 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& req,
         total_events += s.total_events();
     }
 
-    std::string body;
-    body.reserve(256 * all_stats.size() + 64);
-    body += "{\"file_count\":";
-    body += std::to_string(file_count);
-    body += ",\"total_events\":";
-    body += std::to_string(total_events);
-    body += ",\"files\":[";
+    auto& sb = scratch_json_builder();
+    sb.start_object();
+    sb.append_key_value("file_count", static_cast<std::int64_t>(file_count));
+    sb.append_comma();
+    sb.append_key_value("total_events",
+                        static_cast<std::int64_t>(total_events));
+    sb.append_comma();
+    sb.escape_and_append_with_quotes("files");
+    sb.append_colon();
+    sb.start_array();
     for (std::size_t i = 0; i < all_stats.size(); ++i) {
-        if (i > 0) body += ',';
-        body += all_stats[i].to_json();
+        if (i > 0) sb.append_comma();
+        sb.append_raw(all_stats[i].to_json());  // already JSON
     }
-    body += "]}";
+    sb.end_array();
+    sb.end_object();
+    std::string body(sb);
 
     {
         std::lock_guard<std::mutex> lock(cache_mutex);
@@ -458,40 +440,51 @@ static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
         global_max > 0 &&
         global_min != std::numeric_limits<std::uint64_t>::max();
 
-    std::string body;
-    body.reserve(256 * index.file_count() + 128);
-    body += "{\"file_count\":";
-    body += std::to_string(index.file_count());
+    auto& b = scratch_json_builder();
+    b.start_object();
+    b.append_key_value("file_count",
+                       static_cast<std::int64_t>(index.file_count()));
 
     if (has_time_range) {
-        body += ",\"time_range\":{\"min_timestamp_us\":";
-        body += std::to_string(global_min);
-        body += ",\"max_timestamp_us\":";
-        body += std::to_string(global_max);
-        body += "}";
+        b.append_comma();
+        b.escape_and_append_with_quotes("time_range");
+        b.append_colon();
+        b.start_object();
+        b.append_key_value("min_timestamp_us",
+                           static_cast<std::int64_t>(global_min));
+        b.append_comma();
+        b.append_key_value("max_timestamp_us",
+                           static_cast<std::int64_t>(global_max));
+        b.end_object();
     }
 
-    body += ",\"files\":[";
+    b.append_comma();
+    b.escape_and_append_with_quotes("files");
+    b.append_colon();
+    b.start_array();
     bool first = true;
     for (const auto& f : index.files()) {
-        if (!first) body += ',';
+        if (!first) b.append_comma();
         first = false;
-        body += "{\"path\":\"";
-        body += json_escape(f.path);
-        body += "\",\"has_bloom_data\":";
-        body += f.has_bloom_data ? "true" : "false";
-        body += ",\"has_checkpoint_index\":";
-        body += f.has_checkpoint_index ? "true" : "false";
+        b.start_object();
+        b.append_key_value("path", f.path);
+        b.append_comma();
+        b.append_key_value("has_bloom_data", f.has_bloom_data);
+        b.append_comma();
+        b.append_key_value("has_checkpoint_index", f.has_checkpoint_index);
         if (f.min_timestamp_us > 0 || f.max_timestamp_us > 0) {
-            body += ",\"min_timestamp_us\":";
-            body += std::to_string(f.min_timestamp_us);
-            body += ",\"max_timestamp_us\":";
-            body += std::to_string(f.max_timestamp_us);
+            b.append_comma();
+            b.append_key_value("min_timestamp_us",
+                               static_cast<std::int64_t>(f.min_timestamp_us));
+            b.append_comma();
+            b.append_key_value("max_timestamp_us",
+                               static_cast<std::int64_t>(f.max_timestamp_us));
         }
-        body += '}';
+        b.end_object();
     }
-    body += "]}";
-    co_return HttpResponse::ok(body);
+    b.end_array();
+    b.end_object();
+    co_return HttpResponse::ok(std::string(b));
 }
 
 void register_trace_api(Router& router, TraceIndex& index) {
@@ -502,42 +495,70 @@ void register_trace_api(Router& router, TraceIndex& index) {
         [index_ptr](const HttpRequest& req,
                     const QueryParams& params) -> coro::CoroTask<HttpResponse> {
             co_return co_await handle_files(req, params, *index_ptr);
-        });
+        },
+        RouteDoc{
+            "List the indexed trace files.",
+            "Trace data",
+            {},
+            R"({"files":[{"path":"trace-0.pfw.gz","has_bloom_data":true}],)"
+            R"("count":1})"});
 
     router.get(
         "/api/v1/files/info",
         [index_ptr](const HttpRequest& req,
                     const QueryParams& params) -> coro::CoroTask<HttpResponse> {
             co_return co_await handle_file_info(req, params, *index_ptr);
-        });
+        },
+        RouteDoc{"Metadata for one trace file.",
+                 "Trace data",
+                 {{"file", "Trace file path", true, ""}},
+                 R"({"path":"trace-0.pfw.gz","has_bloom_data":true})"});
 
     router.get(
         "/api/v1/events",
         [index_ptr](const HttpRequest& req,
                     const QueryParams& params) -> coro::CoroTask<HttpResponse> {
             co_return co_await handle_events(req, params, *index_ptr);
-        });
+        },
+        RouteDoc{"Query raw events as NDJSON (filtered, limited).",
+                 "Trace data",
+                 {{"file", "Trace file path", false, ""},
+                  {"name", "Filter by operation name", false, "read"},
+                  {"dur_min", "Minimum duration (us)", false, ""},
+                  {"limit", "Max events (0 = all)", false, "20"}},
+                 R"({"id":1,"name":"read","cat":"POSIX","pid":100,"tid":100,)"
+                 R"("ts":1000,"dur":150,"args":{"ret":4096}})"});
 
     router.get(
         "/api/v1/events/stream",
         [index_ptr](const HttpRequest& req,
                     const QueryParams& params) -> coro::CoroTask<HttpResponse> {
             co_return co_await handle_events_stream(req, params, *index_ptr);
-        });
+        },
+        RouteDoc{"Stream all matching events as NDJSON (no limit).",
+                 "Trace data",
+                 {{"name", "Filter by operation name", false, ""}},
+                 ""});
 
     router.get(
         "/api/v1/stats",
         [index_ptr](const HttpRequest& req,
                     const QueryParams& params) -> coro::CoroTask<HttpResponse> {
             co_return co_await handle_stats(req, params, *index_ptr);
-        });
+        },
+        RouteDoc{"Aggregate statistics over the index.", "Trace data", {}, ""});
 
     router.get(
         "/api/v1/info",
         [index_ptr](const HttpRequest& req,
                     const QueryParams& params) -> coro::CoroTask<HttpResponse> {
             co_return co_await handle_info(req, params, *index_ptr);
-        });
+        },
+        RouteDoc{"Global summary: file count and time bounds.",
+                 "Trace data",
+                 {},
+                 R"({"file_count":2,"global_min_timestamp_us":1000000,)"
+                 R"("global_max_timestamp_us":6999732})"});
 }
 
 }  // namespace dftracer::utils::server

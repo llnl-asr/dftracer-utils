@@ -216,6 +216,17 @@ bool range_may_match(const ChunkMeta& meta, const std::string& dim,
     const auto& ds = it->second;
     if (ds.min_value.empty() && ds.max_value.empty()) return true;
 
+    // Some chunk stats can be corrupt (min > max). Never prune on stats we
+    // cannot trust; a false negative would silently drop matching events.
+    if (is_numeric_type(ds.value_type) && !ds.min_value.empty() &&
+        !ds.max_value.empty()) {
+        try {
+            if (std::stod(ds.min_value) > std::stod(ds.max_value)) return true;
+        } catch (...) {
+            return true;
+        }
+    }
+
     switch (op) {
         case query_ns::CompareOp::GT:
             return compare_values(ds.max_value, val, ds.value_type) > 0;

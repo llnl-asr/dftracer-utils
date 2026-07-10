@@ -11,6 +11,7 @@
 #include <dftracer/utils/server/trace_api.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/server/viz_api.h>
+#include <dftracer/utils/server/viz_ui.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -27,7 +28,8 @@ class ServerArgParse : public cli::ArgParse {
     cli::PipelineArgs pipeline;
 
     std::string index_dir;
-    std::string bind_addr = "0.0.0.0";
+    std::string bind_addr = "127.0.0.1";
+    std::string auth_token;
     uint16_t port = 8080;
 
     explicit ServerArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
@@ -45,19 +47,27 @@ class ServerArgParse : public cli::ArgParse {
 
         parser()
             .add_argument("-b", "--bind")
-            .help("Bind address")
-            .default_value<std::string>("0.0.0.0");
+            .help("Bind address (use 0.0.0.0 to expose on all interfaces)")
+            .default_value<std::string>("127.0.0.1");
 
         parser()
             .add_argument("-p", "--port")
             .help("Listen port")
             .scan<'d', uint16_t>()
             .default_value(static_cast<uint16_t>(8080));
+
+        parser()
+            .add_argument("--token")
+            .help(
+                "Optional access token; when set, every request must supply it "
+                "via ?token= or an 'Authorization: Bearer <token>' header")
+            .default_value<std::string>("");
     }
 
     void post_parse() override {
         index_dir = parser().get<std::string>("--index-dir");
         bind_addr = parser().get<std::string>("--bind");
+        auth_token = parser().get<std::string>("--token");
         port = parser().get<uint16_t>("--port");
     }
 };
@@ -91,8 +101,10 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
     co_await trace_index.initialize();
 
     Router router;
+    router.set_auth_token(cli->auth_token);
     register_trace_api(router, trace_index);
     register_viz_api(router, trace_index);
+    register_viz_ui(router);
 
     TcpListener listener(bind_addr, port);
     if (!listener.start()) {
@@ -103,6 +115,8 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
 
     std::fprintf(stderr, "DFTracer server listening on %s:%u\n",
                  bind_addr.c_str(), port);
+    std::fprintf(stderr, "Trace viewer UI: http://%s:%u/\n", bind_addr.c_str(),
+                 port);
     std::fprintf(stderr, "Serving %zu trace files from %s\n",
                  trace_index.file_count(), dir.c_str());
 

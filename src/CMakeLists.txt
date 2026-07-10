@@ -923,6 +923,83 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
     endif()
   endforeach()
 
+  # ----------------------------------------------------------------------------
+  # Embed the single-file web UI into dftracer_server.
+  #
+  # The C++ build never requires Node. web/dist/ is git-ignored, so unless it
+  # was built locally the embed step falls back to a placeholder page (the
+  # /api/v1 REST API works either way). The full standalone UI comes from a
+  # prior `npm run build`, the `web-ui` target, or DFTRACER_UTILS_BUILD_WEB_UI=ON
+  # (needs npm). The VS Code extension bundles its own copy for portability.
+  # ----------------------------------------------------------------------------
+  if(TARGET dftracer_server)
+    set(DFTRACER_WEB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../web)
+    set(DFTRACER_WEB_DIST ${DFTRACER_WEB_DIR}/dist/index.html)
+    set(DFTRACER_WEB_GENERATED
+        ${CMAKE_BINARY_DIR}/generated/dftracer_web_assets.cpp)
+    set(DFTRACER_API_DIST ${DFTRACER_WEB_DIR}/dist/api.html)
+    set(DFTRACER_API_GENERATED
+        ${CMAKE_BINARY_DIR}/generated/dftracer_api_assets.cpp)
+    set(DFTRACER_EMBED_SCRIPT
+        ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/scripts/embed_asset.cmake)
+
+    find_program(NPM_EXECUTABLE npm)
+    option(DFTRACER_UTILS_BUILD_WEB_UI
+           "Rebuild the web UI with npm during the build (needs Node/npm)" OFF)
+
+    if(NPM_EXECUTABLE)
+      add_custom_target(
+        web-ui
+        COMMAND ${NPM_EXECUTABLE} install
+        COMMAND ${NPM_EXECUTABLE} run build
+        WORKING_DIRECTORY ${DFTRACER_WEB_DIR}
+        COMMENT "Building DFTracer web UI (web/dist/index.html)"
+        VERBATIM)
+    endif()
+
+    set(_embed_deps ${DFTRACER_EMBED_SCRIPT})
+    if(DFTRACER_UTILS_BUILD_WEB_UI AND NPM_EXECUTABLE)
+      add_custom_command(
+        OUTPUT ${DFTRACER_WEB_DIST}
+        COMMAND ${NPM_EXECUTABLE} install
+        COMMAND ${NPM_EXECUTABLE} run build
+        WORKING_DIRECTORY ${DFTRACER_WEB_DIR}
+        COMMENT "Building DFTracer web UI (web/dist/index.html)"
+        VERBATIM)
+      list(APPEND _embed_deps ${DFTRACER_WEB_DIST})
+    elseif(EXISTS ${DFTRACER_WEB_DIST})
+      list(APPEND _embed_deps ${DFTRACER_WEB_DIST})
+    endif()
+
+    add_custom_command(
+      OUTPUT ${DFTRACER_WEB_GENERATED}
+      COMMAND
+        ${CMAKE_COMMAND} -DINPUT=${DFTRACER_WEB_DIST}
+        -DOUTPUT=${DFTRACER_WEB_GENERATED} -P ${DFTRACER_EMBED_SCRIPT}
+      DEPENDS ${_embed_deps}
+      COMMENT "Embedding web UI into dftracer_server"
+      VERBATIM)
+
+    set(_api_embed_deps ${DFTRACER_EMBED_SCRIPT})
+    if(EXISTS ${DFTRACER_API_DIST})
+      list(APPEND _api_embed_deps ${DFTRACER_API_DIST})
+    endif()
+    add_custom_command(
+      OUTPUT ${DFTRACER_API_GENERATED}
+      COMMAND
+        ${CMAKE_COMMAND} -DINPUT=${DFTRACER_API_DIST}
+        -DOUTPUT=${DFTRACER_API_GENERATED} -DFUNC=viz_api_page_html
+        -DVAR=VIZ_API_PAGE_HTML -P ${DFTRACER_EMBED_SCRIPT}
+      DEPENDS ${_api_embed_deps}
+      COMMENT "Embedding API explorer page into dftracer_server"
+      VERBATIM)
+
+    target_sources(
+      dftracer_server
+      PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/viz_ui.cpp
+              ${DFTRACER_WEB_GENERATED} ${DFTRACER_API_GENERATED})
+  endif()
+
   foreach(bin ${DFTRACER_MPI_BINARIES})
     string(REPLACE ".cpp" "" bin_exec ${bin})
     string(REPLACE "${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/binaries/" ""

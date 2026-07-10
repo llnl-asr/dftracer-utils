@@ -8,7 +8,9 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
+#include <unordered_set>
 
 namespace dftracer::utils {
 class CoroScope;
@@ -45,10 +47,19 @@ class TcpListener {
     uint16_t port() const { return port_; }
 
    private:
+    // Track live client fds so shutdown can interrupt handlers parked in recv
+    // on keep-alive connections (otherwise the accept loop breaks but the
+    // spawned handlers never return and the scope never joins).
+    void track_active(int fd);
+    void untrack_active(int fd);
+    void shutdown_active();
+
     std::string bind_addr_;
     uint16_t port_;
     int listen_fd_ = -1;
     std::atomic<bool> stopped_{false};
+    std::mutex active_mu_;
+    std::unordered_set<int> active_fds_;
 };
 
 }  // namespace dftracer::utils::server

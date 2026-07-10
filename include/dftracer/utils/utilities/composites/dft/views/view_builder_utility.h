@@ -23,6 +23,10 @@ struct ViewBuilderInput {
     std::size_t num_checkpoints = 0;
     indexing::BloomFilterCache* bloom_cache = nullptr;
     std::optional<std::pair<double, double>> time_range;  // {begin, end}
+    // Emit every checkpoint (real byte offsets, still parallel) and skip
+    // time-based pruning. For when chunk timestamp stats can't be trusted (e.g.
+    // multi-node clock skew); the reader still filters events by the query.
+    bool scan_all_chunks = false;
 
     // Fluent builders
     ViewBuilderInput& with_view(const ViewDefinition& v);
@@ -32,6 +36,7 @@ struct ViewBuilderInput {
     ViewBuilderInput& with_num_checkpoints(std::size_t n);
     ViewBuilderInput& with_bloom_cache(indexing::BloomFilterCache* c);
     ViewBuilderInput& with_time_range(double begin, double end);
+    ViewBuilderInput& with_scan_all_chunks(bool v);
 };
 
 struct ViewChunkCandidate {

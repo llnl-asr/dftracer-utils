@@ -34,6 +34,11 @@ std::string HttpResponse::serialize_headers() const {
     out += status_text;
     out += "\r\n";
 
+    // Loopback-bound (and optionally token-gated), so allow any origin: this
+    // lets the VS Code webview, hosted at a vscode-webview:// origin, read the
+    // API cross-origin.
+    out += "Access-Control-Allow-Origin: *\r\n";
+
     for (const auto &[name, value] : headers) {
         out += name;
         out += ": ";

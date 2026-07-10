@@ -52,6 +52,11 @@ ViewBuilderInput& ViewBuilderInput::with_time_range(double b, double e) {
     return *this;
 }
 
+ViewBuilderInput& ViewBuilderInput::with_scan_all_chunks(bool v) {
+    scan_all_chunks = v;
+    return *this;
+}
+
 coro::CoroTask<Result<ViewBuilderOutput>> ViewBuilderUtility::process(
     const ViewBuilderInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("build view");
@@ -63,7 +68,9 @@ coro::CoroTask<Result<ViewBuilderOutput>> ViewBuilderUtility::process(
 
     std::vector<std::uint64_t> candidate_checkpoints;
 
-    if (input.view.query && !input.index_path.empty()) {
+    if (input.scan_all_chunks) {
+        // Candidates are filled below once the real checkpoint count is known.
+    } else if (input.view.query && !input.index_path.empty()) {
         indexing::ChunkPrunerInput pruner_input{
             input.index_path, input.file_path, *input.view.query,
             input.bloom_cache};
@@ -94,61 +101,103 @@ coro::CoroTask<Result<ViewBuilderOutput>> ViewBuilderUtility::process(
         }
     }
 
-    // Chunk-level time range skip: query per-chunk time bounds from
-    // the bloom index and remove chunks that don't overlap the query.
-    if (input.time_range && !input.index_path.empty() &&
-        !candidate_checkpoints.empty()) {
-        auto [t_begin, t_end] = *input.time_range;
-        if (t_begin > 0 || t_end > 0) {
-            try {
-                IndexDatabase idx_db(input.index_path);
-                int fid =
-                    idx_db.get_file_info_id(get_logical_path(input.file_path));
-                if (fid >= 0) {
-                    auto chunk_stats = idx_db.query_chunk_statistics(fid);
+    // Real per-checkpoint offsets are required: gz checkpoints are
+    // non-uniformly spaced, so a uniform ckpt_idx*bytes_per estimate decodes
+    // the wrong bytes. Chunk N spans uncompressed [offset(N-1), offset(N)),
+    // where IndexerCheckpoint N is the boundary at the end of chunk N; the last
+    // chunk has no recorded checkpoint and ends at the file end.
+    std::unordered_map<std::uint64_t, std::uint64_t> ckpt_uc_offset;
+    if (!input.index_path.empty() &&
+        (!candidate_checkpoints.empty() || input.scan_all_chunks)) {
+        try {
+            // Read-only: TraceIndex already holds the shared index open
+            // read-only; a read-write open would fail to upgrade.
+            IndexDatabase idx_db(
+                input.index_path,
+                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+            int fid =
+                idx_db.get_file_info_id(get_logical_path(input.file_path));
+            if (fid >= 0) {
+                for (const auto& cp : idx_db.query_checkpoints(fid))
+                    ckpt_uc_offset[cp.checkpoint_idx] = cp.uc_offset;
 
-                    std::unordered_map<std::uint64_t,
-                                       std::pair<std::uint64_t, std::uint64_t>>
-                        chunk_time_bounds;
-                    chunk_time_bounds.reserve(chunk_stats.size());
-                    for (const auto& cs : chunk_stats) {
-                        chunk_time_bounds[cs.checkpoint_idx] = {
-                            cs.stats.min_timestamp_us,
-                            cs.stats.max_timestamp_us};
-                    }
+                if (input.scan_all_chunks) {
+                    // Every chunk: N checkpoints bound N+1 chunks (0..N).
+                    std::uint64_t n =
+                        static_cast<std::uint64_t>(ckpt_uc_offset.size());
+                    for (std::uint64_t i = 0; i <= n; ++i)
+                        candidate_checkpoints.push_back(i);
+                } else if (input.time_range) {
+                    auto [t_begin, t_end] = *input.time_range;
+                    if (t_begin > 0 || t_end > 0) {
+                        std::unordered_map<
+                            std::uint64_t,
+                            std::pair<std::uint64_t, std::uint64_t>>
+                            chunk_time_bounds;
+                        for (const auto& cs :
+                             idx_db.query_chunk_statistics(fid))
+                            chunk_time_bounds[cs.checkpoint_idx] = {
+                                cs.stats.min_timestamp_us,
+                                cs.stats.max_timestamp_us};
 
-                    std::vector<std::uint64_t> time_filtered;
-                    time_filtered.reserve(candidate_checkpoints.size());
-                    for (auto ckpt : candidate_checkpoints) {
-                        auto it = chunk_time_bounds.find(ckpt);
-                        if (it == chunk_time_bounds.end()) {
+                        std::vector<std::uint64_t> time_filtered;
+                        time_filtered.reserve(candidate_checkpoints.size());
+                        for (auto ckpt : candidate_checkpoints) {
+                            auto it = chunk_time_bounds.find(ckpt);
+                            if (it == chunk_time_bounds.end()) {
+                                time_filtered.push_back(ckpt);
+                                continue;
+                            }
+                            double c_min =
+                                static_cast<double>(it->second.first);
+                            double c_max =
+                                static_cast<double>(it->second.second);
+                            // Corrupt bounds (min > max) can't be trusted; keep
+                            // the chunk rather than risk dropping its events.
+                            if (c_min > c_max) {
+                                time_filtered.push_back(ckpt);
+                                continue;
+                            }
+                            if (c_max < t_begin || (t_end > 0 && c_min > t_end))
+                                continue;
                             time_filtered.push_back(ckpt);
-                            continue;
                         }
-                        double c_min = static_cast<double>(it->second.first);
-                        double c_max = static_cast<double>(it->second.second);
-                        if (c_max < t_begin || (t_end > 0 && c_min > t_end)) {
-                            continue;
-                        }
-                        time_filtered.push_back(ckpt);
+                        candidate_checkpoints = std::move(time_filtered);
                     }
-                    candidate_checkpoints = std::move(time_filtered);
                 }
-            } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_WARN(
-                    "ViewBuilder: chunk time filter failed for %s: %s",
-                    input.file_path.c_str(), e.what());
-                // Keep all candidates on failure
             }
+        } catch (const std::exception& e) {
+            DFTRACER_UTILS_LOG_WARN("ViewBuilder: index read failed for %s: %s",
+                                    input.file_path.c_str(), e.what());
         }
     }
 
-    // Compute byte ranges for each candidate checkpoint
+    // scan_all_chunks with no usable checkpoint index: cover the whole file via
+    // uniform chunks so the union still spans it.
+    if (input.scan_all_chunks && candidate_checkpoints.empty()) {
+        for (std::uint64_t i = 0; i < total_checkpoints; ++i)
+            candidate_checkpoints.push_back(i);
+    }
+
+    // Compute byte ranges from real checkpoint offsets; fall back to a uniform
+    // estimate only when checkpoint offsets are unavailable.
     for (auto ckpt_idx : candidate_checkpoints) {
         ViewChunkCandidate candidate;
         candidate.checkpoint_idx = ckpt_idx;
 
-        if (input.num_checkpoints > 0) {
+        if (!ckpt_uc_offset.empty()) {
+            if (ckpt_idx == 0) {
+                candidate.start_byte = 0;
+            } else {
+                auto sit = ckpt_uc_offset.find(ckpt_idx - 1);
+                candidate.start_byte =
+                    sit != ckpt_uc_offset.end() ? sit->second : 0;
+            }
+            auto eit = ckpt_uc_offset.find(ckpt_idx);
+            candidate.end_byte = eit != ckpt_uc_offset.end()
+                                     ? eit->second
+                                     : input.uncompressed_size;
+        } else if (input.num_checkpoints > 0) {
             std::size_t bytes_per =
                 input.uncompressed_size / input.num_checkpoints;
             candidate.start_byte = ckpt_idx * bytes_per;

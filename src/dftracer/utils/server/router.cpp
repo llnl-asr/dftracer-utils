@@ -3,6 +3,7 @@
 #include <dftracer/utils/server/router.h>
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cstdlib>
 
@@ -94,12 +95,37 @@ double QueryParams::get_double(std::string_view key,
 // ============================================================================
 
 void Router::get(const std::string& path, RouteHandler handler) {
-    routes_.push_back(Route{"GET", path, std::move(handler)});
+    routes_.push_back(Route{"GET", path, std::move(handler), {}});
+}
+
+void Router::get(const std::string& path, RouteHandler handler, RouteDoc doc) {
+    routes_.push_back(Route{"GET", path, std::move(handler), std::move(doc)});
 }
 
 void Router::post(const std::string& path, RouteHandler handler) {
-    routes_.push_back(Route{"POST", path, std::move(handler)});
+    routes_.push_back(Route{"POST", path, std::move(handler), {}});
 }
+
+void Router::post(const std::string& path, RouteHandler handler, RouteDoc doc) {
+    routes_.push_back(Route{"POST", path, std::move(handler), std::move(doc)});
+}
+
+namespace {
+
+// RFC 6750: the auth scheme name is case-insensitive.
+bool strip_bearer_prefix(std::string_view h, std::string_view& token) {
+    constexpr std::string_view BEARER = "Bearer ";
+    if (h.size() <= BEARER.size()) return false;
+    for (std::size_t i = 0; i < BEARER.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(h[i])) !=
+            std::tolower(static_cast<unsigned char>(BEARER[i])))
+            return false;
+    }
+    token = h.substr(BEARER.size());
+    return true;
+}
+
+}  // namespace
 
 coro::CoroTask<HttpResponse> Router::handle(const HttpRequest& req) {
     // Split path and query string.
@@ -112,6 +138,35 @@ coro::CoroTask<HttpResponse> Router::handle(const HttpRequest& req) {
     }
 
     auto params = QueryParams::parse(query_str);
+
+    // Before the token check: browsers omit Authorization from the preflight.
+    if (req.method == "OPTIONS") {
+        co_return HttpResponse{
+            .status_code = 204,
+            .status_text = "No Content",
+            .headers = {{"Access-Control-Allow-Methods", "GET, POST, OPTIONS"},
+                        {"Access-Control-Allow-Headers",
+                         "Authorization, "
+                         "Content-Type"},
+                        {"Access-Control-Max-Age", "86400"}},
+            .body = ""};
+    }
+
+    // Optional access token: accept ?token= or "Authorization: Bearer <token>".
+    if (!auth_token_.empty()) {
+        bool ok = params.get("token") == auth_token_;
+        if (!ok) {
+            std::string_view token;
+            if (strip_bearer_prefix(req.header("Authorization"), token))
+                ok = token == auth_token_;
+        }
+        if (!ok) {
+            co_return HttpResponse{.status_code = 401,
+                                   .status_text = "Unauthorized",
+                                   .headers = {{"Content-Type", "text/plain"}},
+                                   .body = "Unauthorized"};
+        }
+    }
 
     // Match routes (exact prefix match).
     for (const auto& route : routes_) {

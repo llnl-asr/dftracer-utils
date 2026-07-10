@@ -22,6 +22,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       coverage: ${{ steps.filter.outputs.coverage }}
+      web: ${{ steps.filter.outputs.web }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3.0.2
@@ -41,6 +42,9 @@ jobs:
               - '.github/workflows/ci.yml'
             coverage:
               - 'scripts/coverage.sh'
+            web:
+              - 'web/**'
+              - '.github/workflows/ci.yml'
 
   # Build RocksDB once per platform. The prefix is absolute and identical in
   # every consumer: the PCH embeds <rocksdb/*.h>, so a differing -I path would
@@ -245,6 +249,32 @@ jobs:
           parallel-finished: true
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    name: Web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web UI (embedded in dftracer_server)
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload web bundle
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: web-dist
+          path: web/dist/index.html
 
   valgrind-cpp:
     needs: [changes, rocksdb]

@@ -73,6 +73,8 @@ sdist.include = [
   "python/dftracer/utils/_version.py",
   "python/dftracer/utils/py.typed",
   "cmake/tests",
+  "web/dist/index.html",
+  "web/dist/api.html",
 ]
 sdist.exclude = [
   "tests/**",

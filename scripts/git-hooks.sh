@@ -93,6 +93,7 @@ uninstall_hooks() {
 run_pre_commit() {
   run_pre_commit_cpp
   run_pre_commit_python
+  run_pre_commit_web
 }
 
 run_pre_commit_cpp() {
@@ -161,6 +162,34 @@ run_pre_commit_python() {
   else
     echo "[pre-commit] ruff/uvx not found, skipping Python checks"
   fi
+}
+
+# Web UI checks (format + lint + typecheck). Best-effort: skipped when Node is
+# absent or web deps are not installed, so the C++/Python workflow is unaffected.
+run_pre_commit_web() {
+  local staged_web
+  staged_web="$(git -C "$REPO_ROOT" diff --cached --name-only --diff-filter=ACMR -- web |
+    grep -E '\.(ts|tsx|js|mjs|json|css|html)$' | grep -v '^web/dist/' || true)"
+
+  if [ -z "$staged_web" ]; then
+    echo "[pre-commit] no web files staged, skipping web checks"
+    return 0
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "[pre-commit] npm not found, skipping web checks"
+    return 0
+  fi
+  if [ ! -d "$REPO_ROOT/web/node_modules" ]; then
+    echo "[pre-commit] web/node_modules missing (run 'npm ci' in web/), skipping web checks"
+    return 0
+  fi
+
+  echo "[pre-commit] web: prettier"
+  npm --prefix "$REPO_ROOT/web" run --silent format:check
+  echo "[pre-commit] web: eslint"
+  npm --prefix "$REPO_ROOT/web" run --silent lint
+  echo "[pre-commit] web: typecheck"
+  npm --prefix "$REPO_ROOT/web" run --silent typecheck
 }
 
 run_commit_msg() {

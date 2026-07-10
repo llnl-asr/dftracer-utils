@@ -45,6 +45,20 @@ jobs:
           restore-keys: |
             cpmsource-full-v1-
 
+      # Build the web UI on the host (needs Node) so cibuildwheel's CMake embed
+      # step bakes the real page into dftracer_server instead of a placeholder.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3.0
         env:
@@ -86,6 +100,20 @@ jobs:
         uses: actions/setup-python@v6.1.0
         with:
           python-version: "3.12"
+
+      # Ship the built UI in the sdist too, so source installs embed the real
+      # page (sdist.include forces web/dist/index.html in).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
 
       - name: Install dependencies
         run: |

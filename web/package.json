@@ -1,0 +1,36 @@
+{
+  "name": "dftracer-trace-viewer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-contained Perfetto-style trace timeline for dftracer_server",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && DFT_PAGE=api vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "solid-js": "^1.9.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@types/node": "^20.16.0",
+    "eslint": "^9.13.0",
+    "eslint-plugin-solid": "^0.14.5",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.11.0",
+    "vite": "^5.4.10",
+    "vite-plugin-solid": "^2.11.0",
+    "vite-plugin-singlefile": "^2.1.0"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true,
+    "fsevents@2.3.3": true
+  }
+}

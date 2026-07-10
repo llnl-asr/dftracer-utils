@@ -9,9 +9,33 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
+#include <climits>
 
 namespace dftracer::utils::io {
+
+namespace {
+
+// Max iovec entries writev(2) accepts. glibc only exposes IOV_MAX under XOPEN
+// feature macros and spells it UIO_MAXIOV; sysconf is the portable query.
+// io_uring's IORING_OP_WRITEV is bounded by the same limit.
+int iov_max_entries() noexcept {
+    static const int value = [] {
+        long n = ::sysconf(_SC_IOV_MAX);
+        if (n > 0) return static_cast<int>(n);
+#if defined(IOV_MAX)
+        return static_cast<int>(IOV_MAX);
+#elif defined(UIO_MAXIOV)
+        return static_cast<int>(UIO_MAXIOV);
+#else
+        return 1024;
+#endif
+    }();
+    return value;
+}
+
+}  // namespace
 
 IoAwaitable read(int fd, void* buf, std::size_t len) noexcept {
     auto* exec = Executor::current();
@@ -154,6 +178,31 @@ IoAwaitable writev(int fd, const struct iovec* iov, int iovcnt) noexcept {
     ssize_t result = ::writev(fd, iov, iovcnt);
     if (result < 0) result = -errno;
     return IoAwaitable::ready(result);
+}
+
+coro::CoroTask<ssize_t> writev_all(int fd, struct iovec* iov, int iovcnt) {
+    ssize_t total = 0;
+    int i = 0;
+    while (i < iovcnt) {
+        int n = std::min(iovcnt - i, iov_max_entries());
+        ssize_t rc = co_await io::writev(fd, iov + i, n);
+        if (rc < 0) co_return rc;
+        if (rc == 0) co_return -EIO;  // no progress; avoid spinning
+        total += rc;
+
+        auto written = static_cast<std::size_t>(rc);
+        while (i < iovcnt && written > 0) {
+            if (written >= iov[i].iov_len) {
+                written -= iov[i].iov_len;
+                ++i;
+            } else {
+                iov[i].iov_base = static_cast<char*>(iov[i].iov_base) + written;
+                iov[i].iov_len -= written;
+                written = 0;
+            }
+        }
+    }
+    co_return total;
 }
 
 IoAwaitable preadv(int fd, const struct iovec* iov, int iovcnt,

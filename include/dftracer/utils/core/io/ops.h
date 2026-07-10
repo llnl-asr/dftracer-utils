@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_IO_OPS_H
 #define DFTRACER_UTILS_CORE_IO_OPS_H
 
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/awaitable.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -57,8 +58,15 @@ IoAwaitable send(int fd, const void* buf, std::size_t len,
 /// Scatter-gather sequential read. Works on any fd type.
 IoAwaitable readv(int fd, const struct iovec* iov, int iovcnt) noexcept;
 
-/// Scatter-gather sequential write. Works on any fd type.
+/// Scatter-gather sequential write. Works on any fd type. Like writev(2), it
+/// accepts at most IOV_MAX entries and may write fewer bytes than requested;
+/// use writev_all() unless you handle both.
 IoAwaitable writev(int fd, const struct iovec* iov, int iovcnt) noexcept;
+
+/// writev() until every byte is sent: splits runs longer than IOV_MAX and
+/// resumes after short writes. `iov` is mutated as entries are consumed.
+/// Returns the bytes written, or a negative errno on failure.
+coro::CoroTask<ssize_t> writev_all(int fd, struct iovec* iov, int iovcnt);
 
 /// Scatter-gather positional read. Only works on seekable fds.
 IoAwaitable preadv(int fd, const struct iovec* iov, int iovcnt,

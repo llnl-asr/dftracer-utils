@@ -7,6 +7,7 @@
 #include <sys/uio.h>
 
 #include <cstring>
+#include <vector>
 
 #ifdef __linux__
 #include <malloc.h>  // malloc_trim
@@ -95,9 +96,13 @@ coro::CoroTask<void> handle_connection(int client_fd,
                     }
                     iovs.push_back({const_cast<char*>(crlf), 2});
 
-                    auto rc = co_await io::writev(
+                    auto rc = co_await io::writev_all(
                         client_fd, iovs.data(), static_cast<int>(iovs.size()));
-                    if (rc < 0) break;
+                    if (rc < 0) {
+                        DFTRACER_UTILS_LOG_ERROR(
+                            "Streaming write failed; closing connection");
+                        goto stream_done;
+                    }
                 }
             }
             co_await io::send(client_fd, "0\r\n\r\n", 5, 0);

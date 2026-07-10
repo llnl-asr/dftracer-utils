@@ -770,3 +770,41 @@ TEST_CASE("DFTracer Server - graceful shutdown via SIGTERM") {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     CHECK_FALSE(port_is_listening(port));
 }
+
+// A chunk carries two iovec entries per event, so past ~511 events a single
+// writev exceeds IOV_MAX and used to fail, yielding 200 with an empty body.
+TEST_CASE("DFTracer Server - streams chunks larger than IOV_MAX") {
+    auto binary = find_server_binary();
+    if (binary.empty()) {
+        MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
+        return;
+    }
+
+    constexpr int NUM_EVENTS = 2000;
+    dft_utils_test::TestEnvironment env(100);
+    REQUIRE(env.is_valid());
+    auto file = create_pfw_gz(env, NUM_EVENTS, 1);
+    REQUIRE(!file.empty());
+
+    int port = pick_port();
+    ServerProcess server;
+    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(wait_for_http(port));
+
+    auto resp = http_request(port,
+                             "GET /api/v1/events/stream HTTP/1.1\r\n"
+                             "Host: localhost\r\nConnection: close\r\n\r\n");
+    REQUIRE(!resp.empty());
+    CHECK(extract_status_code(resp) == 200);
+
+    auto body = extract_body(resp);
+    CHECK(!body.empty());
+    std::size_t lines = 0;
+    for (char c : body)
+        if (c == '\n') ++lines;
+    CHECK(lines >= static_cast<std::size_t>(NUM_EVENTS));
+}

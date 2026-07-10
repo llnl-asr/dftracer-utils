@@ -251,7 +251,9 @@ struct ServerProcess {
             ::_exit(127);
         }
 
-        return wait_for_port(port, 15) && wait_for_http(port, 30);
+        // The server indexes its trace directory before binding, which has
+        // taken ~17s on a loaded arm64 runner.
+        return wait_for_port(port, 60) && wait_for_http(port, 30);
     }
 
     void stop() {

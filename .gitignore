@@ -96,3 +96,6 @@ profiling-results*/
 /dfanalyzer/
 
 .DS_Store
+
+# ccache dir created by CI and the valgrind docker runner
+.ccache/

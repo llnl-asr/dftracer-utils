@@ -249,10 +249,15 @@ jobs:
   valgrind-cpp:
     needs: [changes, rocksdb]
     if: needs.changes.outputs.code == 'true'
-    name: Valgrind (C++ and MPI)
+    name: Valgrind (C++ ${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
+      VALGRIND_SHARD: ${{ matrix.shard }}/4
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -320,6 +325,96 @@ jobs:
       - name: C++ tests under Valgrind
         run: make valgrind-cpp
 
+      - name: ccache stats (show)
+        if: always()
+        run: ccache -s || true
+
+      - name: Save ccache
+        if: matrix.shard == 1 && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-valgrind-cpp-${{ github.run_id }}
+
+      - name: Upload Valgrind logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: valgrind-cpp-logs-${{ matrix.shard }}
+          path: build/valgrind-logs/
+          if-no-files-found: ignore
+
+  valgrind-mpi:
+    needs: [changes, rocksdb]
+    if: needs.changes.outputs.code == 'true'
+    name: Valgrind (MPI)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 700M
+      CCACHE_SLOPPINESS: time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
+      CCACHE_NOHASHDIR: "true"
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpmsource
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Compiler fingerprint
+        id: fp
+        run: echo "cc=$(c++ --version | head -1 | tr -c '[:alnum:].' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore RocksDB
+        uses: actions/cache/restore@v5
+        with:
+          path: /opt/dftracer-deps
+          key: rocksdb-v1-ubuntu-24.04-${{ env.ROCKSDB_VERSION }}-${{ steps.fp.outputs.cc }}-${{ hashFiles('scripts/ci/build_rocksdb.sh') }}
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-valgrind-mpi-${{ github.run_id }}
+          restore-keys: |
+            ccache-valgrind-mpi-
+            ccache-valgrind-
+            ccache-v4-ubuntu-24.04-
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build ccache valgrind gdb \
+            zlib1g-dev libsqlite3-dev pkg-config libopenmpi-dev openmpi-bin
+
+      - name: ccache stats (reset)
+        run: ccache -z || true
+
       - name: MPI tests under Valgrind
         run: make valgrind-mpi
 
@@ -332,13 +427,13 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: ${{ github.workspace }}/.ccache
-          key: ccache-valgrind-cpp-${{ github.run_id }}
+          key: ccache-valgrind-mpi-${{ github.run_id }}
 
       - name: Upload Valgrind logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: valgrind-cpp-logs
+          name: valgrind-mpi-logs
           path: build/valgrind-logs/
           if-no-files-found: ignore
 

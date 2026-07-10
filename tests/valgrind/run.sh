@@ -50,6 +50,17 @@ DEFAULT_PYTEST_FILES=(tests/python)
 log() { printf '\033[1;34m[valgrind]\033[0m %s\n' "$*"; }
 err() { printf '\033[1;31m[valgrind]\033[0m %s\n' "$*" >&2; }
 
+# Seconds since the epoch, sub-second where available. BSD date has no %N.
+now_s() {
+  local t
+  t="$(date +%s.%N 2>/dev/null || true)"
+  if [[ "$t" =~ ^[0-9]+\.[0-9]+$ ]]; then
+    printf '%s' "$t"
+  else
+    python3 -c 'import time; print(time.time())'
+  fi
+}
+
 # Override with VALGRIND_BUILD_JOBS.
 build_jobs() {
   if [[ -n "${VALGRIND_BUILD_JOBS:-}" ]]; then
@@ -98,22 +109,33 @@ run_cpp() {
 
   local selector
   selector="$(
-    python3 - "$BUILD_DIR" "${VALGRIND_CTEST_FILTER:-}" "$exclude_pat" <<'PY'
+    python3 - "$BUILD_DIR" "${VALGRIND_CTEST_FILTER:-}" "$exclude_pat" \
+             "${VALGRIND_SHARD:-1/1}" "$SUPP_DIR/durations.tsv" <<'PY'
 import base64, json, os, re, subprocess, sys
 build_dir, name_filter, exclude = sys.argv[1], sys.argv[2], sys.argv[3]
+shard_spec, durations_path = sys.argv[4], sys.argv[5]
+
+shard_index, shard_count = (int(x) for x in shard_spec.split("/", 1))
+if not 1 <= shard_index <= shard_count:
+    sys.exit(f"VALGRIND_SHARD={shard_spec} is out of range")
+
 inc = re.compile(name_filter) if name_filter else None
 exc = re.compile(exclude) if exclude else None
 out = subprocess.check_output(
     ["ctest", "--test-dir", build_dir, "--show-only=json-v1"])
 data = json.loads(out)
+
+selected = []
+known = set()                    # every test ctest knows about, before filtering
 for t in data.get("tests", []):
+    name = t.get("name", "")
+    known.add(name)
     cmd = t.get("command") or []
     if len(cmd) != 1:            # skip multi-arg tests (discovery / CLI)
         continue
     exe = cmd[0]
     if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
         continue
-    name = t.get("name", "")
     if inc and not inc.search(name):
         continue
     if exc and exc.search(name):
@@ -130,6 +152,50 @@ for t in data.get("tests", []):
             env.extend(v if isinstance(v, list) else [v] if v else [])
     # base64 so VAR=value entries survive the tab-delimited line intact.
     env_b64 = base64.b64encode("\n".join(env).encode()).decode() if env else ""
+    selected.append((name, wd, exe, env_b64))
+
+# Durations are a hint for shard balancing only: a stale or missing entry costs
+# balance, never correctness.
+hints = {}
+try:
+    with open(durations_path) as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.rstrip("\n")
+            if line.startswith("#") or not line.strip():
+                continue
+            test_name, _, seconds = line.partition("\t")
+            try:
+                hints[test_name] = float(seconds)
+            except ValueError:
+                print(f"durations.tsv:{lineno}: malformed line, ignoring",
+                      file=sys.stderr)
+except OSError:
+    pass
+
+if hints:
+    # `missing` is over the tests about to run; `stale` is over everything ctest
+    # knows about, so a filter or an exclusion cannot fake a stale entry.
+    missing = sum(1 for e in selected if e[0] not in hints)
+    stale = sum(1 for name in hints if name not in known)
+    if missing or stale:
+        print(f"HINTS\t{missing}\t{stale}")
+
+if shard_count > 1:
+    default = sorted(hints.values())[len(hints) // 2] if hints else 1.0
+    # No hints: every weight is 1.0 and the stable sort preserves the ctest
+    # order, degrading to round-robin. The partition is over the discovered
+    # tests, so every test lands in exactly one shard either way.
+    bins = [[] for _ in range(shard_count)]
+    loads = [0.0] * shard_count
+    for entry in sorted(selected, key=lambda e: -hints.get(e[0], default)):
+        i = loads.index(min(loads))
+        bins[i].append(entry)
+        loads[i] += hints.get(entry[0], default)
+    selected = bins[shard_index - 1]
+    estimate = f"{loads[shard_index - 1]:.0f}" if hints else "-1"
+    print(f"SHARD\t{shard_index}/{shard_count}\t{len(selected)}\t{estimate}")
+
+for name, wd, exe, env_b64 in selected:
     print(f"RUN\t{name}\t{wd}\t{exe}\t{env_b64}")
 PY
   )"
@@ -162,11 +228,50 @@ PY
       skipped_names+=("$name")
       continue
     fi
+    if [[ "$tag" == "HINTS" ]]; then
+      # name=<tests with no hint> wd=<hints for tests that no longer exist>
+      if ((name > 0)); then
+        err "durations.tsv: $name test(s) have no entry"
+      fi
+      if ((wd > 0)); then
+        err "durations.tsv: $wd stale entry(ies) for tests that no longer exist"
+      fi
+      err "Regenerate with: VALGRIND_EMIT_DURATIONS=1 make valgrind-cpp"
+      continue
+    fi
+    if [[ "$tag" == "SHARD" ]]; then
+      # name=<i/N> wd=<test count> exe=<estimated seconds, -1 if unknown>
+      if [[ "$exe" == "-1" ]]; then
+        log "Shard $name: $wd test(s), no duration hints (balanced by count)"
+      else
+        log "Shard $name: $wd test(s), ~${exe}s estimated"
+      fi
+      continue
+    fi
     total=$((total + 1))
     while (($(jobs -rp | wc -l) >= max_jobs)); do wait -n || true; done
     run_cpp_one "$name" "$wd" "$exe" "$results_dir" "$test_timeout" "$env_b64" &
   done <<<"$selector"
   wait || true
+
+  if [[ "${VALGRIND_EMIT_DURATIONS:-0}" == "1" ]]; then
+    local out="$SUPP_DIR/durations.tsv"
+    if [[ "${VALGRIND_SHARD:-1/1}" != "1/1" ]]; then
+      out="$LOG_DIR/cpp/durations-shard.tsv"
+      err "Sharded run: writing partial durations to $out (run unsharded for a full manifest)"
+    fi
+    local dur_files=("$results_dir"/*.dur)
+    {
+      echo "# Valgrind wall time per C++ test, seconds. A hint for shard balancing"
+      echo "# only (VALGRIND_SHARD); a stale or missing entry costs balance, never"
+      echo "# correctness. run.sh warns when this file drifts from the test list."
+      echo "# Regenerate: VALGRIND_EMIT_DURATIONS=1 make valgrind-cpp"
+      if [[ -e "${dur_files[0]}" ]]; then
+        cat "${dur_files[@]}" | sort -t"$(printf '\t')" -k2 -rn
+      fi
+    } >"$out"
+    log "Wrote $out"
+  fi
 
   local failed=0 failed_names=()
   local f rc rname
@@ -220,6 +325,8 @@ run_cpp_one() {
   local name="$1" wd="$2" exe="$3" rdir="$4" tmo="$5" env_b64="${6:-}"
   local logf="$LOG_DIR/cpp/${name//\//_}.log"
   local rc=0
+  local start_ts
+  start_ts="$(now_s)"
 
   # Apply the test's ctest ENVIRONMENT
   local -a test_env=()
@@ -262,6 +369,9 @@ run_cpp_one() {
     --log-file="$logf" \
     "$exe" "${doctest_args[@]}" >/dev/null 2>&1) || rc=$?
   printf '%s\t%s\n' "$rc" "$name" >"$rdir/${name//\//_}.rc"
+  printf '%s\t%s\n' "$name" \
+    "$(awk -v a="$start_ts" -v b="$(now_s)" 'BEGIN { printf "%.1f", b - a }')" \
+    >"$rdir/${name//\//_}.dur"
   if ((rc == 0)); then
     log "C++  ✓ $name"
   elif ((rc == 124)); then

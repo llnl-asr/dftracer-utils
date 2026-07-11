@@ -78,7 +78,8 @@ static void collect_referenced_hashes_batch(
     auto args = json["args"];
     if (!args.exists()) return;
 
-    static const char* hash_fields[] = {"hhash", "fhash", "shash"};
+    static const char* hash_fields[] = {"hhash",     "fhash",    "shash",
+                                        "exec_hash", "cmd_hash", "cwd"};
     for (const char* field : hash_fields) {
         auto val = args[field];
         if (!val.exists()) continue;

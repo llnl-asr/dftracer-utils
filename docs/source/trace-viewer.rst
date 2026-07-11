@@ -22,9 +22,13 @@ The server also serves:
 - ``/api`` - an interactive :ref:`API explorer <api-explorer>`.
 - ``/api/openapi.json`` - the OpenAPI 3.1 spec (see :doc:`server`).
 
-From VS Code, the `DFTracer Viewer
-<https://github.com/rayandrew/vscode-dftracer-viewer>`_ extension embeds the
-same UI and launches the server for you.
+From VS Code, install the `DFTracer Viewer
+<https://marketplace.visualstudio.com/items?itemName=rayandrew.dftracer-viewer>`_
+extension (`source <https://github.com/rayandrew/vscode-dftracer-viewer>`_): it
+embeds the same UI, downloads a prebuilt server from `dftracer-utils-prebuilds
+<https://github.com/rayandrew/dftracer-utils-prebuilds>`_ for you, and opens a
+trace when you click a ``.pfw`` / ``.pfw.gz`` file. It also works over
+Remote-SSH, running the server on the remote host.
 
 The timeline
 ------------
@@ -35,8 +39,10 @@ The timeline
 
 The main view is a Perfetto-style timeline:
 
-- **Lanes** are grouped by host, or ordered flat by rank when the trace carries
-  ``PR`` (rank) metadata. Each process expands into its threads.
+- **Lanes** are grouped by node/host. When the trace carries ``PR`` (rank)
+  metadata, nodes are ordered by their lowest rank and the ranks sort within
+  each node; otherwise nodes order by first activity. Each process expands into
+  its threads.
 - **Density level-of-detail**: zoomed out, sub-pixel events are aggregated into
   density blocks so activity is still visible; zoom in and individual event
   slices load. Depth (call nesting) is stable across zoom.

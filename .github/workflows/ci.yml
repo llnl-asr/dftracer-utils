@@ -270,6 +270,13 @@ jobs:
           npm ci
           npm run build
 
+      - name: Check web UI (typecheck, lint, test)
+        working-directory: web
+        run: |
+          npm run typecheck
+          npm run lint
+          npm test
+
       - name: Upload web bundle
         uses: actions/upload-artifact@v6.0.0
         with:

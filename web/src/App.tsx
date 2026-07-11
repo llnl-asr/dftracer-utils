@@ -7,6 +7,7 @@ import {
   fetchProcTree,
   fetchViz,
   fetchVizCounters,
+  fetchVizBreaks,
   fetchVizDensity,
   fetchVizStats,
   SINGLE_FILE,
@@ -227,6 +228,8 @@ export default function App() {
   const [matchPos, setMatchPos] = createSignal(0);
   const [showHelp, setShowHelp] = createSignal(false);
   const [showGaps, setShowGaps] = createSignal(false);
+  const [multiRun, setMultiRun] = createSignal(false);
+  const [timelapse, setTimelapse] = createSignal(false);
   const [gaps, setGaps] = createSignal<Gap[]>([]);
   const [sidebarOpen, setSidebarOpen] = createSignal(false);
   const [analyzeTab, setAnalyzeTab] = createSignal<"name" | "file" | "pid" | "cat">("name");
@@ -903,6 +906,13 @@ export default function App() {
       if (span > 0) {
         totalSpan = span;
         timeline.setTotalSpan(span);
+        fetchVizBreaks()
+          .then((br) => {
+            setMultiRun(br.multi_run);
+            setTimelapse(br.multi_run);
+            timeline?.setBreaks(br.gaps, br.multi_run);
+          })
+          .catch(() => {});
         loadOverview();
       } else {
         setError("No indexed events with a valid time range were found.");
@@ -1123,6 +1133,21 @@ export default function App() {
             >
               Gaps
             </button>
+            <Show when={multiRun()}>
+              <button
+                type="button"
+                class="ghost"
+                classList={{ active: timelapse() }}
+                title="Compress the dead time between separate runs"
+                onClick={() => {
+                  const v = !timelapse();
+                  setTimelapse(v);
+                  timeline?.setTimelapse(v);
+                }}
+              >
+                Timelapse
+              </button>
+            </Show>
           </Show>
           <Show when={view() === "flamegraph"}>
             <button

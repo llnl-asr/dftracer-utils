@@ -36,6 +36,33 @@ static std::string create_pfw_gz(TestEnvironment& env, int n) {
     return gz;
 }
 
+// A trace with hash metadata plus a dftracer "start" event that references the
+// SH/FH entries through non-standard field names (exec_hash/cmd_hash/cwd), and
+// one SH nothing references.
+static std::string create_metadata_pfw_gz(TestEnvironment& env) {
+    std::string pfw = env.get_dir() + "/meta.pfw";
+    std::ofstream ofs(pfw);
+    ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"host1","value":"H1"}})"
+        << "\n"
+        << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"myapp","value":"EX01"}})"
+        << "\n"
+        << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"mycmd","value":"CM01"}})"
+        << "\n"
+        << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"/my/cwd","value":"CW01"}})"
+        << "\n"
+        << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"unused","value":"UNUSED01"}})"
+        << "\n"
+        << R"({"name":"start","cat":"dftracer","pid":1,"tid":1,"ts":1000,"dur":0,"ph":"X","args":{"hhash":"H1","exec_hash":"EX01","cmd_hash":"CM01","cwd":"CW01","ppid":9}})"
+        << "\n"
+        << R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":10,"args":{"hhash":"H1"}})"
+        << "\n";
+    ofs.close();
+    std::string gz = pfw + ".gz";
+    compress_file_to_gzip(pfw, gz);
+    fs::remove(pfw);
+    return gz;
+}
+
 struct CollectedViewOutput {
     std::vector<std::string> events;
     std::uint64_t events_matched = 0;
@@ -126,5 +153,41 @@ TEST_SUITE("ViewReader") {
         auto output = collect_view_output(reader, input);
 
         CHECK(output.events_matched == 0);
+    }
+
+    TEST_CASE(
+        "ViewReader - re-emits SH/FH referenced by exec_hash/cmd_hash/cwd") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_metadata_pfw_gz(env);
+        std::string db_root = determine_index_path(gz, "");
+
+        ViewReaderInput input;
+        input.with_file_path(gz)
+            .with_index_path(db_root)
+            .with_checkpoint_size(1024)
+            .with_byte_range(0, std::numeric_limits<std::size_t>::max());
+        input.view.with_include_metadata(true);
+
+        auto q = Query::from_string(R"(name == "start")");
+        REQUIRE(q.has_value());
+        input.query = std::move(*q);
+
+        ViewReaderUtility reader;
+        auto output = collect_view_output(reader, input);
+
+        auto has = [&](const std::string& needle) {
+            for (const auto& e : output.events)
+                if (e.find(needle) != std::string::npos) return true;
+            return false;
+        };
+        // The start event points at SH via exec_hash/cmd_hash and FH via cwd;
+        // all three must be flushed despite the non-standard field names.
+        CHECK(has(R"("value":"EX01")"));
+        CHECK(has(R"("value":"CM01")"));
+        CHECK(has(R"("value":"CW01")"));
+        // Metadata nothing references is still pruned.
+        CHECK_FALSE(has(R"("value":"UNUSED01")"));
+        CHECK(has(R"("name":"start")"));
     }
 }

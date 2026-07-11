@@ -534,6 +534,23 @@ TEST_CASE("DFTracer Server - start and respond to endpoints") {
         CHECK(body.find("\"files\"") != std::string::npos);
     }
 
+    // -- GET /api/v1/viz/breaks reports idle gaps + multi-run detection --
+    {
+        auto resp = http_request(port,
+                                 "GET /api/v1/viz/breaks HTTP/1.1\r\n"
+                                 "Host: localhost\r\n"
+                                 "Connection: close\r\n"
+                                 "\r\n");
+
+        REQUIRE(!resp.empty());
+        CHECK(extract_status_code(resp) == 200);
+
+        auto body = extract_body(resp);
+        CHECK(body.front() == '{');
+        CHECK(body.find("\"gaps\"") != std::string::npos);
+        CHECK(body.find("\"multi_run\"") != std::string::npos);
+    }
+
     // -- GET /api/v1/viz/events returns normalized ts by default --
     {
         auto resp = http_request(

@@ -78,6 +78,10 @@ struct VizSummary {
     };
     std::vector<AppSpan> app_spans;
 
+    // Absolute-us spans between runs (no lane active, no process alive). Any
+    // present means a multi-run trace the viewer can timelapse-compress.
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> idle_gaps;
+
     std::int64_t bucket_of(double abs_ts) const {
         if (bucket_us <= 0) return -1;
         double rel = abs_ts - static_cast<double>(t_begin);

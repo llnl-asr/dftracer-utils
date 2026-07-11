@@ -84,6 +84,16 @@ export function fetchVizDensity(q: VizQuery, signal?: AbortSignal): Promise<VizD
   return getJson<VizDensityResponse>(`/api/v1/viz/density?${withFile(params).toString()}`, signal);
 }
 
+export interface VizBreaks {
+  gaps: { begin: number; end: number }[];
+  multi_run: boolean;
+}
+
+export function fetchVizBreaks(signal?: AbortSignal): Promise<VizBreaks> {
+  const params = new URLSearchParams();
+  return getJson<VizBreaks>(`/api/v1/viz/breaks?${withFile(params).toString()}`, signal);
+}
+
 export function fetchVizCounters(
   begin: number,
   end: number,

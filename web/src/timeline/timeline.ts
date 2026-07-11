@@ -8,6 +8,7 @@ import {
   formatTime,
   niceStep,
 } from "./format";
+import { buildTimeAxis, type TimeAxis } from "./timeaxis";
 import { vizTheme, type ThemeMode, type VizTheme } from "./theme";
 
 export interface Viewport {
@@ -164,6 +165,14 @@ export class Timeline {
   private hoveredGap: Gap | null = null;
   private selectedGap: Gap | null = null;
 
+  // Timelapse axis: between-run idle spans (real us) compressed to a fixed
+  // display width so active periods sit together. Viewport math runs in the
+  // compressed (display) space; events carry real ts mapped through the knots.
+  private runGaps: { begin: number; end: number }[] = [];
+  private timelapse = false;
+  private realTotal = 1;
+  private axis: TimeAxis = buildTimeAxis([], 1, false);
+
   private selected: TraceEvent | null = null;
   private hovered: Slice | null = null;
 
@@ -240,11 +249,52 @@ export class Timeline {
   }
 
   setTotalSpan(span: number): void {
-    this.totalSpan = Math.max(span, MIN_SPAN);
+    this.realTotal = Math.max(span, MIN_SPAN);
+    this.rebuildAxis();
+    this.totalSpan = Math.max(this.toDisplay(this.realTotal), MIN_SPAN);
     this.target = { begin: 0, end: this.totalSpan };
     this.live = { begin: 0, end: this.totalSpan };
     this.invalidate();
     this.emitRange(true);
+  }
+
+  // Between-run idle spans (real us) plus whether to auto-enable compression.
+  setBreaks(gaps: { begin: number; end: number }[], enable: boolean): void {
+    this.runGaps = [...gaps].sort((a, b) => a.begin - b.begin);
+    this.timelapse = enable && this.runGaps.length > 0;
+    this.setTotalSpan(this.realTotal);
+  }
+
+  hasBreaks(): boolean {
+    return this.runGaps.length > 0;
+  }
+
+  isTimelapse(): boolean {
+    return this.timelapse;
+  }
+
+  setTimelapse(on: boolean): void {
+    this.timelapse = on && this.runGaps.length > 0;
+    this.setTotalSpan(this.realTotal);
+    this.resetView();
+  }
+
+  private rebuildAxis(): void {
+    this.axis = buildTimeAxis(this.runGaps, this.realTotal, this.timelapse);
+  }
+
+  private toDisplay(r: number): number {
+    return this.axis.toDisplay(r);
+  }
+
+  private toReal(dv: number): number {
+    return this.axis.toReal(dv);
+  }
+
+  // Display us -> screen x (viewport-space, no gap remap).
+  private xdOf(d: number): number {
+    const span = this.live.end - this.live.begin;
+    return GUTTER + ((d - this.live.begin) / span) * this.plotW();
   }
 
   resetView(): void {
@@ -255,7 +305,7 @@ export class Timeline {
   }
 
   getViewport(): Viewport {
-    return { ...this.target };
+    return { begin: this.toReal(this.target.begin), end: this.toReal(this.target.end) };
   }
 
   setSelected(ev: TraceEvent | null): void {
@@ -410,16 +460,14 @@ export class Timeline {
 
   private renderGaps(ctx: CanvasRenderingContext2D): void {
     if (!this.showGaps) return;
-    const span = this.live.end - this.live.begin;
-    const pw = this.plotW();
     ctx.save();
     ctx.beginPath();
     ctx.rect(GUTTER, RULER_H, this.cssW - GUTTER, this.cssH - RULER_H);
     ctx.clip();
     const active = this.selectedGap ?? this.hoveredGap;
     for (const g of this.gaps) {
-      const x0 = GUTTER + ((g.t0 - this.live.begin) / span) * pw;
-      const x1 = GUTTER + ((g.t1 - this.live.begin) / span) * pw;
+      const x0 = this.xOf(g.t0);
+      const x1 = this.xOf(g.t1);
       if (x1 - x0 < 3) continue; // skip sub-few-pixel gaps
       if (x1 < GUTTER || x0 > this.cssW) continue;
       const lane = this.lanes[g.laneIdx];
@@ -499,7 +547,7 @@ export class Timeline {
     if (n === 0) return 0;
     this.searchIdx = (this.searchIdx + dir + n) % n;
     const s = this.searchMatches[this.searchIdx];
-    const center = s.ts + s.dur / 2;
+    const center = this.toDisplay(s.ts + s.dur / 2);
     const span = this.target.end - this.target.begin;
     const begin = clamp(center - span / 2, 0, Math.max(0, this.totalSpan - span));
     this.target = { begin, end: begin + span };
@@ -805,8 +853,7 @@ export class Timeline {
   }
 
   private xOf(ts: number): number {
-    const span = this.live.end - this.live.begin;
-    return GUTTER + ((ts - this.live.begin) / span) * this.plotW();
+    return this.xdOf(this.toDisplay(ts));
   }
 
   private timeOf(x: number): number {
@@ -1008,7 +1055,7 @@ export class Timeline {
       const sel = this.selection;
       const span = this.live.end - this.live.begin;
       if (sel && sel.t1 - sel.t0 > span * 0.002) {
-        this.cb.onSelectRange?.(sel.t0, sel.t1);
+        this.cb.onSelectRange?.(this.toReal(sel.t0), this.toReal(sel.t1));
       } else {
         this.selection = null;
         this.cb.onSelectRangeClear?.();
@@ -1065,7 +1112,7 @@ export class Timeline {
     let best: Slice | null = null;
     for (const s of this.slices) {
       const sx = this.xOf(s.ts);
-      const sw = Math.max((s.dur / (this.live.end - this.live.begin)) * this.plotW(), 1);
+      const sw = Math.max(this.xOf(s.ts + s.dur) - sx, 1);
       if (x < sx || x > sx + sw) continue;
       const lane = this.lanes[s.laneIdx];
       const sy = RULER_H - this.scrollY + lane.y + s.depth * ROW_H;
@@ -1078,12 +1125,10 @@ export class Timeline {
   // Topmost visible gap under the cursor (only when gaps are shown).
   private gapAt(x: number, y: number): Gap | null {
     if (!this.showGaps || x < GUTTER || y < RULER_H) return null;
-    const span = this.live.end - this.live.begin;
-    const pw = this.plotW();
     let best: Gap | null = null;
     for (const g of this.gaps) {
-      const x0 = GUTTER + ((g.t0 - this.live.begin) / span) * pw;
-      const x1 = GUTTER + ((g.t1 - this.live.begin) / span) * pw;
+      const x0 = this.xOf(g.t0);
+      const x1 = this.xOf(g.t1);
       if (x1 - x0 < 3 || x < x0 || x > x1) continue;
       const lane = this.lanes[g.laneIdx];
       const gy = RULER_H - this.scrollY + lane.y;
@@ -1102,7 +1147,8 @@ export class Timeline {
 
   private emitRange(immediate: boolean): void {
     if (this.rangeTimer) clearTimeout(this.rangeTimer);
-    const fire = () => this.cb.onRangeChange?.(this.target.begin, this.target.end);
+    const fire = () =>
+      this.cb.onRangeChange?.(this.toReal(this.target.begin), this.toReal(this.target.end));
     if (immediate) {
       fire();
     } else {
@@ -1404,7 +1450,6 @@ export class Timeline {
 
     const d = this.counters;
     const span = this.live.end - this.live.begin;
-    const pw = this.plotW();
     if (d && d.bucketUs > 0 && span > 0) {
       const perSec = 1e6 / d.bucketUs;
       const plotH = h - 4;
@@ -1417,7 +1462,7 @@ export class Timeline {
       const pts: { x: number; rt: number; tt: number }[] = [];
       for (let i = 0; i < d.read.length; i++) {
         const tc = d.begin + (i + 0.5) * d.bucketUs;
-        const x = GUTTER + ((tc - this.live.begin) / span) * pw;
+        const x = this.xOf(tc);
         if (x < GUTTER - 4 || x > this.counterW + 4) continue;
         const rh = ((d.read[i] * perSec) / this.counterPeak) * plotH;
         const wh = ((d.write[i] * perSec) / this.counterPeak) * plotH;
@@ -1542,6 +1587,7 @@ export class Timeline {
     this.renderSlices(ctx);
     this.renderSpawnArrows(ctx);
     this.renderGaps(ctx);
+    this.renderBreaks(ctx);
     this.renderSelection(ctx);
     this.renderRuler(ctx);
     this.renderGutter(ctx);
@@ -1619,7 +1665,7 @@ export class Timeline {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    const label = formatTime(this.timeOf(this.mouseX));
+    const label = formatTime(this.toReal(this.timeOf(this.mouseX)));
     ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
     const tw = ctx.measureText(label).width + 8;
     const lx = clamp(this.mouseX - tw / 2, GUTTER, this.cssW - tw);
@@ -1628,6 +1674,55 @@ export class Timeline {
     ctx.fillStyle = this.th.plotBg;
     ctx.textBaseline = "middle";
     ctx.fillText(label, lx + 4, RULER_H - 8);
+  }
+
+  // Hatched markers at each compressed idle gap, labeled with the real time
+  // skipped, so the discontinuous axis is never silent.
+  private renderBreaks(ctx: CanvasRenderingContext2D): void {
+    if (!this.timelapse) return;
+    for (const g of this.runGaps) {
+      const x0 = this.xdOf(this.toDisplay(g.begin));
+      const x1 = this.xdOf(this.toDisplay(g.end));
+      if (x1 < GUTTER || x0 > this.cssW) continue;
+      const cx0 = Math.max(GUTTER, x0);
+      const cx1 = Math.min(this.cssW, x1);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(cx0, RULER_H, Math.max(1, cx1 - cx0), this.cssH - RULER_H);
+      ctx.clip();
+      ctx.strokeStyle = this.th.grid;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = cx0 - this.cssH; x < cx1 + this.cssH; x += 6) {
+        ctx.moveTo(x, this.cssH);
+        ctx.lineTo(x + this.cssH, RULER_H);
+      }
+      ctx.stroke();
+      ctx.restore();
+      ctx.strokeStyle = this.th.accent;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(cx0 + 0.5, RULER_H);
+      ctx.lineTo(cx0 + 0.5, this.cssH);
+      ctx.moveTo(cx1 - 0.5, RULER_H);
+      ctx.lineTo(cx1 - 0.5, this.cssH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const label = `skip ${formatTime(g.end - g.begin)}`;
+      ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
+      ctx.textBaseline = "middle";
+      const tw = ctx.measureText(label).width + 8;
+      const mid = clamp((cx0 + cx1) / 2, GUTTER + tw / 2, this.cssW - tw / 2);
+      ctx.fillStyle = this.th.plotBg;
+      ctx.fillRect(mid - tw / 2, RULER_H + 2, tw, 13);
+      ctx.strokeStyle = this.th.accent;
+      ctx.strokeRect(mid - tw / 2 + 0.5, RULER_H + 2.5, tw - 1, 12);
+      ctx.fillStyle = this.th.accent;
+      ctx.textAlign = "center";
+      ctx.fillText(label, mid, RULER_H + 9);
+      ctx.textAlign = "left";
+    }
   }
 
   // Tick positions shared by the gridlines and the ruler labels.
@@ -1680,11 +1775,11 @@ export class Timeline {
     ctx.lineTo(x1 - 0.5, this.cssH);
     ctx.stroke();
 
-    const dur = this.selection.t1 - this.selection.t0;
-    const bw = this.selBandwidth(this.selection.t0, this.selection.t1);
-    const main =
-      `${formatTime(this.selection.t0)} → ${formatTime(this.selection.t1)}` +
-      `   ·   Δ ${formatTime(dur)}`;
+    const rt0 = this.toReal(this.selection.t0);
+    const rt1 = this.toReal(this.selection.t1);
+    const dur = rt1 - rt0;
+    const bw = this.selBandwidth(rt0, rt1);
+    const main = `${formatTime(rt0)} → ${formatTime(rt1)}` + `   ·   Δ ${formatTime(dur)}`;
     const bwStr = bw > 0 ? `   ·   ${formatBytesPerSec(bw)}` : "";
     ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline = "middle";
@@ -1738,14 +1833,12 @@ export class Timeline {
     ctx.rect(GUTTER, RULER_H, this.cssW - GUTTER, this.cssH - RULER_H);
     ctx.clip();
 
-    const span = this.live.end - this.live.begin;
-    const pw = this.plotW();
     ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline = "middle";
 
     for (const s of this.slices) {
-      const sx = GUTTER + ((s.ts - this.live.begin) / span) * pw;
-      const sw = Math.max((s.dur / span) * pw, 1);
+      const sx = this.xOf(s.ts);
+      const sw = Math.max(this.xOf(s.ts + s.dur) - sx, 1);
       if (sx + sw < GUTTER || sx > this.cssW) continue;
       const lane = this.lanes[s.laneIdx];
       const sy = RULER_H - this.scrollY + lane.y + s.depth * ROW_H;
@@ -1832,7 +1925,7 @@ export class Timeline {
       ctx.moveTo(x + 0.5, RULER_H - 6);
       ctx.lineTo(x + 0.5, RULER_H);
       ctx.stroke();
-      ctx.fillText(formatTick(t, step), x + 3, RULER_H / 2);
+      ctx.fillText(formatTick(this.toReal(t), step), x + 3, RULER_H / 2);
     }
   }
 

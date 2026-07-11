@@ -488,6 +488,11 @@ static coro::CoroTask<bool> scan_view_events(
     co_return produced.load(std::memory_order_relaxed) >= cap;
 }
 
+static coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
+                                             TraceIndex& index, double begin,
+                                             double end,
+                                             const QueryParams& params);
+
 static coro::CoroTask<HttpResponse> handle_viz_events(
     const HttpRequest& /*req*/, const QueryParams& params, TraceIndex& index) {
     // Required: begin, end, summary
@@ -574,6 +579,8 @@ static coro::CoroTask<HttpResponse> handle_viz_events(
         collected_events.resize(static_cast<std::size_t>(limit));
         truncated = true;
     }
+
+    co_await append_app_spans(collected_events, index, begin, end, params);
 
     std::string body = build_viz_events_body(
         collected_events, global_min, original_begin, original_end, limit,
@@ -1034,6 +1041,10 @@ struct SumBuild {
     // client.
     std::vector<dftracer::utils::StringViewMap<std::string>> fh_parts;
 
+    std::vector<dftracer::utils::StringViewMap<std::string>> sh_parts;
+    std::vector<ankerl::unordered_dense::map<std::int64_t, std::string>>
+        app_start, app_end;
+
     // Per-worker operation-name -> category (first seen); merged after the scan
     // into VizSummary::name_cats for real layer labels.
     std::vector<dftracer::utils::StringViewMap<std::string>> name_cat;
@@ -1120,25 +1131,40 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     auto root = res.value_unsafe();
     if (!root.is_object()) return;
 
-    auto dr = root["dur"];
-    if (dr.error()) {
-        // FH metadata record: file-hash -> path. Kept for "By file" resolution.
-        auto nm = root["name"];
-        if (!nm.error() && nm.is_string() &&
-            nm.get_string().value_unsafe() == "FH") {
-            auto args = root["args"];
-            if (!args.error() && args.is_object()) {
-                auto v = args["value"];
-                auto n = args["name"];
-                if (!v.error() && v.is_string() && !n.error() && n.is_string())
-                    b.fh_parts[w].emplace(
-                        std::string(v.get_string().value_unsafe()),
-                        std::string(n.get_string().value_unsafe()));
+    std::string_view name0;
+    {
+        auto nr = root["name"];
+        if (!nr.error() && nr.is_string())
+            name0 = nr.get_string().value_unsafe();
+    }
+    if (name0 == "FH" || name0 == "SH") {
+        auto args = root["args"];
+        if (!args.error() && args.is_object()) {
+            auto v = args["value"];
+            auto n = args["name"];
+            if (!v.error() && v.is_string() && !n.error() && n.is_string()) {
+                auto& tbl = name0 == "FH" ? b.fh_parts[w] : b.sh_parts[w];
+                tbl.emplace(std::string(v.get_string().value_unsafe()),
+                            std::string(n.get_string().value_unsafe()));
             }
         }
-        return;  // metadata/instant events carry no duration
+        return;
     }
+
+    auto dr = root["dur"];
+    if (dr.error()) return;
     double dur = json_number(dr.value_unsafe());
+
+    if (name0 == "start" || name0 == "end") {
+        auto cr = root["cat"];
+        auto pp = root["pid"];
+        if (!cr.error() && cr.is_string() &&
+            cr.get_string().value_unsafe() == "dftracer" && !pp.error()) {
+            auto p = static_cast<std::int64_t>(json_number(pp.value_unsafe()));
+            (name0 == "start" ? b.app_start[w] : b.app_end[w])
+                .emplace(p, std::string(event));
+        }
+    }
 
     std::int64_t pid = 0, tid = 0;
     auto pr = root["pid"];
@@ -1266,15 +1292,15 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     b.g_pid.resize(slots);
     b.g_fhash.resize(slots);
     b.fh_parts.resize(slots);
+    b.sh_parts.resize(slots);
+    b.app_start.resize(slots);
+    b.app_end.resize(slots);
     b.name_cat.resize(slots);
     b.io_fh.resize(slots);
 
     ViewDefinition view;
     view.name = "viz_summary";
     view.description = "Activity summary build";
-    view.with_query("ts >= " + std::to_string(gmin) +
-                    " and ts <= " + std::to_string(gmax));
-
     std::vector<const TraceIndex::FileInfo*> files;
     files.reserve(index.files().size());
     for (const auto& f : index.files()) files.push_back(&f);
@@ -1354,6 +1380,104 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         if (it != fh.end()) r.key = it->second;
     }
     summary->total_files = fh.size();
+
+    {
+        dftracer::utils::StringViewMap<std::string> sh;
+        for (auto& part : b.sh_parts)
+            for (auto& kv : part) sh.emplace(kv.first, kv.second);
+        ankerl::unordered_dense::map<std::int64_t, std::string> starts, ends;
+        for (auto& part : b.app_start)
+            for (auto& kv : part) starts.emplace(kv.first, kv.second);
+        for (auto& part : b.app_end)
+            for (auto& kv : part) ends.emplace(kv.first, kv.second);
+
+        auto resolve = [](dftracer::utils::StringViewMap<std::string>& tbl,
+                          const std::string& h) -> std::string {
+            auto it = tbl.find(h);
+            return it != tbl.end() ? it->second : h;
+        };
+        simdjson::dom::parser sp, ep;
+        for (auto& [pid, sjson] : starts) {
+            auto eit = ends.find(pid);
+            if (eit == ends.end()) continue;
+            std::string sbuf(sjson), ebuf(eit->second);
+            auto sr = sp.parse(sbuf);
+            auto er = ep.parse(ebuf);
+            if (sr.error() || er.error()) continue;
+            auto se = sr.value_unsafe();
+            auto ee = er.value_unsafe();
+
+            auto num = [](simdjson::dom::element r, const char* k) -> double {
+                auto v = r[k];
+                return v.error() ? 0.0 : json_number(v.value_unsafe());
+            };
+            auto sarg = [](simdjson::dom::element r,
+                           const char* k) -> std::string {
+                auto a = r["args"];
+                if (a.error()) return "";
+                auto v = a[k];
+                return (!v.error() && v.is_string())
+                           ? std::string(v.get_string().value_unsafe())
+                           : "";
+            };
+            auto narg = [](simdjson::dom::element r, const char* k) -> double {
+                auto a = r["args"];
+                if (a.error()) return 0.0;
+                auto v = a[k];
+                return v.error() ? 0.0 : json_number(v.value_unsafe());
+            };
+
+            auto start_ts = static_cast<std::uint64_t>(num(se, "ts"));
+            auto end_ts = static_cast<std::uint64_t>(num(ee, "ts"));
+            if (end_ts <= start_ts) continue;
+            auto tid = static_cast<std::int64_t>(num(se, "tid"));
+            std::string app = resolve(sh, sarg(se, "exec_hash"));
+            std::string cmd = resolve(sh, sarg(se, "cmd_hash"));
+            std::string cwd = resolve(fh, sarg(se, "cwd"));
+            std::string version = sarg(se, "version");
+            std::string date = sarg(se, "date");
+            auto ppid = static_cast<std::int64_t>(narg(se, "ppid"));
+            auto num_events = static_cast<std::int64_t>(narg(ee, "num_events"));
+            if (app.empty()) app = "app " + std::to_string(pid);
+
+            auto& jb = scratch_json_builder();
+            jb.start_object();
+            jb.append_key_value("name", app);
+            jb.append_comma();
+            jb.append_key_value("cat", "dftracer");
+            jb.append_comma();
+            jb.append_key_value("pid", pid);
+            jb.append_comma();
+            jb.append_key_value("tid", tid);
+            jb.append_comma();
+            jb.append_key_value("ts", start_ts);
+            jb.append_comma();
+            jb.append_key_value("dur", end_ts - start_ts);
+            jb.append_comma();
+            jb.append_key_value("ph", "X");
+            jb.append_comma();
+            jb.escape_and_append_with_quotes("args");
+            jb.append_colon();
+            jb.start_object();
+            jb.append_key_value("app", app);
+            jb.append_comma();
+            jb.append_key_value("cmd", cmd);
+            jb.append_comma();
+            jb.append_key_value("cwd", cwd);
+            jb.append_comma();
+            jb.append_key_value("ppid", ppid);
+            jb.append_comma();
+            jb.append_key_value("version", version);
+            jb.append_comma();
+            jb.append_key_value("date", date);
+            jb.append_comma();
+            jb.append_key_value("num_events", num_events);
+            jb.end_object();
+            jb.end_object();
+            summary->app_spans.push_back(
+                {start_ts, end_ts, pid, tid, std::string(jb)});
+        }
+    }
 
     dftracer::utils::StringViewSet io_fh;
     for (auto& part : b.io_fh)
@@ -2115,6 +2239,30 @@ static bool viz_summary_eligible(const QueryParams& params) {
            params.get("file").empty();
 }
 
+static coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
+                                             TraceIndex& index, double begin,
+                                             double end,
+                                             const QueryParams& params) {
+    if (!viz_summary_eligible(params)) co_return;
+    const VizSummary* s = co_await ensure_viz_summary(index);
+    if (!s) co_return;
+    auto pid_s = params.get("pid");
+    auto tid_s = params.get("tid");
+    bool has_pid = !pid_s.empty();
+    bool has_tid = !tid_s.empty();
+    std::int64_t want_pid =
+        has_pid ? std::strtoll(pid_s.data(), nullptr, 10) : 0;
+    std::int64_t want_tid =
+        has_tid ? std::strtoll(tid_s.data(), nullptr, 10) : 0;
+    for (const auto& sp : s->app_spans) {
+        if (has_pid && sp.pid != want_pid) continue;
+        if (has_tid && sp.tid != want_tid) continue;
+        if (static_cast<double>(sp.end) > begin &&
+            static_cast<double>(sp.begin) < end)
+            out.push_back(sp.json);
+    }
+}
+
 // Re-aggregate the summary's finest per-lane buckets over [begin_abs, end_abs]
 // into pixel-column density blocks. `begin_abs`/`end_abs` are absolute us.
 static std::string serve_density_from_summary(
@@ -2158,9 +2306,30 @@ static std::string serve_density_from_summary(
         }
     }
 
-    return serialize_density_body(
-        {}, dens, original_begin, original_end, threshold, 0, false,
-        ts_normalized, display_global_min, static_cast<double>(s.max_dur));
+    std::vector<std::string> spans;
+    ankerl::unordered_dense::set<std::int64_t> span_lanes;
+    for (const auto& sp : s.app_spans) {
+        if (has_pid && sp.pid != want_pid) continue;
+        if (has_tid && sp.tid != want_tid) continue;
+        if (static_cast<double>(sp.end) <= begin_abs ||
+            static_cast<double>(sp.begin) >= end_abs)
+            continue;
+        span_lanes.insert((sp.pid << 20) ^ sp.tid);
+        spans.push_back(ts_normalized && display_global_min > 0
+                            ? normalize_event_ts(sp.json, display_global_min)
+                            : sp.json);
+    }
+    // Folded child activity sits one row below its app span, matching the
+    // containment nesting the live path computes.
+    if (!span_lanes.empty())
+        for (auto& [k, a] : dens)
+            if (span_lanes.count((k.pid << 20) ^ k.tid)) a.depth = 1;
+
+    std::vector<std::uint32_t> span_depth(spans.size(), 0);
+    return serialize_density_body(spans, dens, original_begin, original_end,
+                                  threshold, 0, false, ts_normalized,
+                                  display_global_min,
+                                  static_cast<double>(s.max_dur), &span_depth);
 }
 
 // GET /api/v1/viz/density: like /viz/events, but instead of dropping sub-pixel
@@ -2329,6 +2498,8 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
         big.swap(kept);
         truncated = true;
     }
+
+    co_await append_app_spans(big, index, begin, end, params);
 
     // Stable per-event/-block depth (computed in absolute space, before ts
     // normalization rewrites the big strings; order is preserved in place).

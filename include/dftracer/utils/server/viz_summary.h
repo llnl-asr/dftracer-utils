@@ -69,6 +69,15 @@ struct VizSummary {
     std::size_t total_files = 0;  // distinct files declared by FH metadata
     std::size_t io_files = 0;     // subset actually read from or written to
 
+    struct AppSpan {
+        std::uint64_t begin = 0;
+        std::uint64_t end = 0;
+        std::int64_t pid = 0;
+        std::int64_t tid = 0;
+        std::string json;  // absolute ts; normalized per request
+    };
+    std::vector<AppSpan> app_spans;
+
     std::int64_t bucket_of(double abs_ts) const {
         if (bucket_us <= 0) return -1;
         double rel = abs_ts - static_cast<double>(t_begin);

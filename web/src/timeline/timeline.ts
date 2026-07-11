@@ -358,6 +358,9 @@ export class Timeline {
       const label = this.processLabels.get(lane.pid) ?? lane.key;
       const busy: Array<[number, number]> = [];
       for (const s of arr) {
+        // The synthetic app span covers the whole process lifetime; it is a
+        // container, not activity, so it must not mask a lane's idle periods.
+        if (s.ev.cat === "dftracer") continue;
         const full = Math.max(s.dur, 0);
         if (s.density && (full <= 0 || Math.min(s.total, full) / full < IDLE_FRAC)) continue;
         busy.push([s.ts, s.ts + full]);

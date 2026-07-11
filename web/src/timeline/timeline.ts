@@ -292,8 +292,8 @@ export class Timeline {
     }
     const firstTs = new Map(nodes.map((n) => [n.pid, n.first_ts]));
     const byFirst = (a: number, b: number) => (firstTs.get(a) ?? 0) - (firstTs.get(b) ?? 0);
-    // When PR metadata gives ranks, order roots by rank (0, 1, 2, ...) so the
-    // timeline reads rank-first instead of grouped by host.
+    // Rank-order the roots so procOrder reflects rank; layoutLanes then groups
+    // lanes by node and orders nodes by their lowest rank.
     const rankOf = new Map<number, number>();
     for (const n of nodes) {
       const r = n.rank != null && n.rank !== "" ? Number(n.rank) : NaN;
@@ -598,10 +598,9 @@ export class Timeline {
   // shows. Assigns each slice a target lane + stack depth and flows y.
   private layoutLanes(): void {
     const orderOf = (pid: number) => this.procOrder.get(pid) ?? 1e9 + pid;
-    // With ranks, order lanes flat by rank (procOrder is rank-ordered) rather
-    // than banding by host; the host rides on the rank label instead.
-    const hostOf = (pid: number) =>
-      this.hasRanks ? "unknown" : (this.hostByPid.get(pid) ?? "unknown");
+    // Band by node/host. procOrder is rank-ordered, so bands sort by their
+    // lowest rank (below) and lanes within a band sort by rank.
+    const hostOf = (pid: number) => this.hostByPid.get(pid) ?? "unknown";
     const parentOf = (pid: number) => this.procParent.get(pid);
 
     const pids = new Set<number>();
@@ -1889,15 +1888,6 @@ export class Timeline {
         ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
       }
       ctx.fillText(lane.label, labelX, cy);
-      if (this.hasRanks && lane.kind === "proc") {
-        const host = this.hostByPid.get(Number(lane.pid));
-        if (host && host !== "unknown") {
-          const w = ctx.measureText(lane.label).width;
-          ctx.fillStyle = this.th.numText;
-          ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
-          ctx.fillText(host, labelX + w + 8, cy);
-        }
-      }
       ctx.restore();
 
       if (lane.kind !== "thread") this.renderLaneColumns(ctx, lane, cy);

@@ -143,6 +143,9 @@ std::vector<PreparedFile> prepare_file_identities(
         pf.logical_path = internal::get_logical_path(file_paths[i]);
         pf.index_path = index_path;
         pf.file_hash = internal::calculate_file_hash(file_paths[i]);
+        const auto file_mtime = static_cast<std::uint64_t>(
+            internal::get_file_modification_time(file_paths[i]));
+        const auto file_size = internal::file_size_bytes(file_paths[i]);
         IndexFileEntryCapability caps =
             IndexFileEntryCapability::BLOOM |
             IndexFileEntryCapability::CHECKPOINTS |
@@ -151,8 +154,8 @@ std::vector<PreparedFile> prepare_file_identities(
         if (build_manifest) {
             caps |= IndexFileEntryCapability::MANIFEST;
         }
-        pf.file_id = writer->get_or_create_file_info(pf.logical_path,
-                                                     pf.file_hash, caps);
+        pf.file_id = writer->get_or_create_file_info(
+            pf.logical_path, pf.file_hash, caps, file_mtime, file_size);
         prepared.push_back(std::move(pf));
     }
     writer->commit();

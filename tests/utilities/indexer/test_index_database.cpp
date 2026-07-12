@@ -1,10 +1,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/rocksdb/key_codec.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
+#include <chrono>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -303,5 +306,132 @@ TEST_SUITE("IndexDatabase") {
         }
 
         CHECK(db.query_file_pids(file_id).empty());
+    }
+}
+
+namespace {
+
+std::string write_file(const fs::path& path, std::string_view contents) {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+    out.close();
+    return path.string();
+}
+
+}  // namespace
+
+TEST_SUITE("IndexDatabase staleness") {
+    TEST_CASE("get_file_stat round-trips stored mtime and size") {
+        auto root = dft_utils_test::make_unique_test_path("stale_stat");
+        fs::create_directories(root);
+        auto a = write_file(root / "a.pfw", "hello world");
+
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        db.register_files({a}, /*build_manifest=*/false);
+
+        auto stat = db.get_file_stat("a.pfw");
+        REQUIRE(stat.has_value());
+        CHECK(stat->size == fs::file_size(a));
+        CHECK(stat->mtime != 0);
+    }
+
+    TEST_CASE("fresh index reports nothing stale") {
+        auto root = dft_utils_test::make_unique_test_path("stale_fresh");
+        fs::create_directories(root);
+        auto a = write_file(root / "a.pfw", "aaa");
+        auto b = write_file(root / "b.pfw", "bbbbb");
+
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        db.register_files({a, b}, false);
+
+        auto result = db.find_stale_files({a, b});
+        CHECK_FALSE(result.stale());
+        CHECK(result.changed.empty());
+        CHECK(result.added.empty());
+        CHECK(result.removed.empty());
+    }
+
+    TEST_CASE("size change is detected as changed") {
+        auto root = dft_utils_test::make_unique_test_path("stale_size");
+        fs::create_directories(root);
+        auto a = write_file(root / "a.pfw", "original");
+
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        db.register_files({a}, false);
+
+        write_file(root / "a.pfw", "original plus more bytes");
+
+        auto result = db.find_stale_files({a});
+        CHECK(result.stale());
+        REQUIRE(result.changed.size() == 1);
+        CHECK(result.changed[0] == a);
+    }
+
+    TEST_CASE("mtime change with same size is detected as changed") {
+        auto root = dft_utils_test::make_unique_test_path("stale_mtime");
+        fs::create_directories(root);
+        auto a = write_file(root / "a.pfw", "same-size-content");
+
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        db.register_files({a}, false);
+
+        auto bumped = fs::last_write_time(a) + std::chrono::hours(48);
+        fs::last_write_time(a, bumped);
+
+        auto result = db.find_stale_files({a});
+        REQUIRE(result.changed.size() == 1);
+        CHECK(result.changed[0] == a);
+    }
+
+    TEST_CASE("newly added file is reported as added") {
+        auto root = dft_utils_test::make_unique_test_path("stale_added");
+        fs::create_directories(root);
+        auto a = write_file(root / "a.pfw", "aaa");
+
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        db.register_files({a}, false);
+
+        auto b = write_file(root / "b.pfw", "bbb");
+        auto result = db.find_stale_files({a, b});
+        CHECK(result.changed.empty());
+        REQUIRE(result.added.size() == 1);
+        CHECK(result.added[0] == b);
+    }
+
+    TEST_CASE("file removed from disk is reported as removed") {
+        auto root = dft_utils_test::make_unique_test_path("stale_removed");
+        fs::create_directories(root);
+        auto a = write_file(root / "a.pfw", "aaa");
+        auto b = write_file(root / "b.pfw", "bbb");
+
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        db.register_files({a, b}, false);
+
+        auto result = db.find_stale_files({a});
+        REQUIRE(result.removed.size() == 1);
+        CHECK(result.removed[0] == "b.pfw");
+    }
+
+    TEST_CASE("outdated schema forces a full rebuild") {
+        auto root = dft_utils_test::make_unique_test_path("stale_schema");
+        fs::create_directories(root);
+        auto a = write_file(root / "a.pfw", "aaa");
+
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        db.register_files({a}, false);
+
+        db.db()->put("_schema_version",
+                     dftracer::utils::rocksdb::KeyCodec::encode_be32(1));
+
+        auto result = db.find_stale_files({a});
+        CHECK(result.schema_outdated);
+        CHECK(result.stale());
     }
 }

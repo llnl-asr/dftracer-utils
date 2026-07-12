@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -71,6 +72,24 @@ inline std::uint64_t decode_file_hash(std::string_view record) {
     }
     return dftracer::utils::rocksdb::KeyCodec::decode_be64(
         record.substr(20, 8));
+}
+
+// mtime/size added in schema v2 (record grew 28 -> 36 bytes); nullopt for
+// pre-v2 records so callers rebuild rather than trust absent fields.
+inline std::optional<std::uint64_t> decode_file_mtime(std::string_view record) {
+    if (record.size() < 36) {
+        return std::nullopt;
+    }
+    return dftracer::utils::rocksdb::KeyCodec::decode_be64(
+        record.substr(12, 8));
+}
+
+inline std::optional<std::uint64_t> decode_file_size(std::string_view record) {
+    if (record.size() < 36) {
+        return std::nullopt;
+    }
+    return dftracer::utils::rocksdb::KeyCodec::decode_be64(
+        record.substr(28, 8));
 }
 
 inline std::array<std::uint64_t, 3> decode_metadata_record(

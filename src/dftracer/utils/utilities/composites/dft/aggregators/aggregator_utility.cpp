@@ -476,18 +476,37 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     }
 
     // Resolve files and index path with aggregation cache check
-    indexing::IndexResolverUtility resolver;
-    indexing::ResolverInput resolver_input;
-    resolver_input.directory = input.directory;
-    resolver_input.index_dir = input.index_dir;
-    resolver_input.require_aggregation = !input.force_rebuild;
-    resolver_input.aggregation_config = input.config;
-    auto scan_result = co_await scope.spawn(resolver, resolver_input);
+    bool force_rebuild = input.force_rebuild;
+    auto resolve = [&](bool force) -> coro::CoroTask<indexing::ResolverResult> {
+        indexing::IndexResolverUtility resolver;
+        indexing::ResolverInput resolver_input;
+        resolver_input.directory = input.directory;
+        resolver_input.index_dir = input.index_dir;
+        resolver_input.require_aggregation = !force;
+        resolver_input.aggregation_config = input.config;
+        co_return co_await scope.spawn(resolver, resolver_input);
+    };
+
+    auto scan_result = co_await resolve(force_rebuild);
 
     if (scan_result.all_files.empty()) {
         DFTRACER_UTILS_LOG_WARN("No .pfw or .pfw.gz files found in: %s",
                                 input.directory.c_str());
         co_return;
+    }
+
+    // A changed source pollutes the merged aggregation, which cannot be
+    // partially invalidated. Force a full rebuild: wipe the store and
+    // re-resolve so every file is re-indexed and re-aggregated from scratch.
+    if (scan_result.stale_detected && !force_rebuild) {
+        DFTRACER_UTILS_LOG_WARN(
+            "Stale index detected; forcing a full rebuild of %s",
+            scan_result.index_path.c_str());
+        if (fs::exists(scan_result.index_path)) {
+            fs::remove_all(scan_result.index_path);
+        }
+        force_rebuild = true;
+        scan_result = co_await resolve(force_rebuild);
     }
 
     DFTRACER_UTILS_LOG_INFO(
@@ -499,7 +518,7 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     const auto& shared_index_path = scan_result.index_path;
 
     // Force rebuild: clear existing index
-    if (input.force_rebuild && fs::exists(shared_index_path)) {
+    if (force_rebuild && fs::exists(shared_index_path)) {
         DFTRACER_UTILS_LOG_INFO("Clearing shared index store: %s",
                                 shared_index_path.c_str());
         fs::remove_all(shared_index_path);

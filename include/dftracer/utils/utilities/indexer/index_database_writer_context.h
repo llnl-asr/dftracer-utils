@@ -60,7 +60,8 @@ class IndexDatabaseWriterContext : public IndexBatchSink {
     // Registry/capability writes
     int get_or_create_file_info(
         std::string_view path, std::uint64_t file_hash,
-        IndexFileEntryCapability caps = IndexFileEntryCapability::NONE);
+        IndexFileEntryCapability caps = IndexFileEntryCapability::NONE,
+        std::uint64_t file_mtime = 0, std::uint64_t file_size = 0);
     void set_file_capabilities(int file_id, IndexFileEntryCapability caps);
     void set_file_capabilities_by_path(std::string_view logical_path,
                                        IndexFileEntryCapability caps);

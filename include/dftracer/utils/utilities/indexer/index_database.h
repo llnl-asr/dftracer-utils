@@ -110,6 +110,37 @@ class IndexDatabase {
 
     int get_file_info_id(std::string_view path) const;
     std::optional<std::uint64_t> get_file_hash(std::string_view path) const;
+
+    struct FileStat {
+        std::uint64_t mtime;
+        std::uint64_t size;
+    };
+    /// Stored mtime/size for `path` (matched by basename). nullopt if not
+    /// registered or the record predates schema v2.
+    std::optional<FileStat> get_file_stat(std::string_view path) const;
+
+    /// Stored schema version, 0 if unset.
+    std::uint32_t get_schema_version() const;
+
+    /// True if the stored schema predates the current build's layout.
+    bool schema_outdated() const;
+
+    struct StaleCheckResult {
+        std::vector<std::string> changed;
+        std::vector<std::string> added;
+        std::vector<std::string> removed;
+        bool schema_outdated = false;
+        bool stale() const {
+            return schema_outdated || !changed.empty() || !added.empty() ||
+                   !removed.empty();
+        }
+    };
+    /// Stat-only (mtime + size) comparison of on-disk trace files against the
+    /// index. If the stored schema predates mtime/size, all inputs are reported
+    /// as `changed` and `schema_outdated` is set.
+    StaleCheckResult find_stale_files(
+        const std::vector<std::string>& current_paths) const;
+
     std::unordered_map<std::string, int> query_all_file_info_ids() const;
     std::unordered_map<std::string, FileRegistryEntry> query_all_file_registry()
         const;

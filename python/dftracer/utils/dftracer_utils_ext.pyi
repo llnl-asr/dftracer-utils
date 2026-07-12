@@ -978,6 +978,12 @@ class IndexDatabase:
         with matching hash."""
         ...
 
+    def find_stale_files(self, paths: List[str]) -> dict:
+        """Stat-only (mtime + size) staleness check of `paths` against the
+        index. Returns a dict with keys `changed`, `added`, `removed`
+        (lists of paths), `schema_outdated` (bool) and `stale` (bool)."""
+        ...
+
     def reserve_file_id_range(self, count: int) -> int:
         """Atomically reserve `count` contiguous file_ids; return first."""
         ...

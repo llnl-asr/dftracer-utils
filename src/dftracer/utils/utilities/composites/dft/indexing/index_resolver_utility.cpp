@@ -30,6 +30,8 @@ struct PendingFile {
     std::size_t file_index;
     std::string file_path;
     std::string logical_path;
+    std::uint64_t mtime;
+    std::uint64_t size;
 };
 
 struct ResolveGroupInput {
@@ -52,6 +54,7 @@ struct ResolveGroupOutput {
     // Aggregation augmentation info
     bool needs_augmentation = false;
     std::uint64_t stored_time_interval_us = 0;
+    bool stale_detected = false;
 };
 
 ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
@@ -142,6 +145,24 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
             }
 
             const auto& reg = reg_it->second;
+
+            // Stat-only staleness using mtime/size captured during the scan
+            // (no extra metadata op). Rebuild if the source changed since it
+            // was indexed, or the record predates mtime/size tracking.
+            auto stored_stat = db.get_file_stat(f.logical_path);
+            bool stale = !stored_stat || stored_stat->mtime != f.mtime ||
+                         stored_stat->size != f.size;
+            if (stale) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "Index stale for %s (source changed since indexing); "
+                    "rebuilding",
+                    f.file_path.c_str());
+                result.stale_detected = true;
+                result.needs_checkpoint.push_back(FileWorkItem{
+                    f.file_index, std::move(f.file_path), reg.file_id});
+                continue;
+            }
+
             auto caps = reg.capabilities;
             bool has_checkpoints =
                 has_capability(caps, IndexFileEntryCapability::CHECKPOINTS) ||
@@ -211,17 +232,22 @@ coro::CoroTask<ResolverResult> IndexResolverUtility::process(
         }
         result.all_files.reserve(matched.size());
         result.all_file_sizes.reserve(matched.size());
+        result.all_file_mtimes.reserve(matched.size());
         for (const auto& entry : matched) {
             result.all_files.push_back(entry.path.string());
             result.all_file_sizes.push_back(entry.size);
+            result.all_file_mtimes.push_back(entry.mtime);
         }
     } else {
         result.all_files = input.files;
         result.all_file_sizes.assign(input.files.size(), 0);
+        result.all_file_mtimes.assign(input.files.size(), 0);
         for (std::size_t i = 0; i < input.files.size(); ++i) {
             std::error_code ec;
             auto sz = fs::file_size(input.files[i], ec);
             if (!ec) result.all_file_sizes[i] = static_cast<std::size_t>(sz);
+            result.all_file_mtimes[i] = static_cast<std::uint64_t>(
+                indexer::internal::get_file_modification_time(input.files[i]));
         }
     }
 
@@ -239,8 +265,9 @@ coro::CoroTask<ResolverResult> IndexResolverUtility::process(
         auto idx_path =
             internal::determine_index_path(file_path, input.index_dir);
         auto logical = indexer::internal::get_logical_path(file_path);
-        groups[idx_path].push_back(
-            PendingFile{i, file_path, std::move(logical)});
+        groups[idx_path].push_back(PendingFile{i, file_path, std::move(logical),
+                                               result.all_file_mtimes[i],
+                                               result.all_file_sizes[i]});
     }
 
     std::vector<ResolveGroupOutput> outputs;
@@ -308,6 +335,9 @@ coro::CoroTask<ResolverResult> IndexResolverUtility::process(
         }
         if (out.stored_time_interval_us != 0) {
             result.stored_time_interval_us = out.stored_time_interval_us;
+        }
+        if (out.stale_detected) {
+            result.stale_detected = true;
         }
     }
 

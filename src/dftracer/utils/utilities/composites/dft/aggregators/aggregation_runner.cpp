@@ -184,8 +184,7 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
     ::dftracer::utils::Timer* stages = input.stages;
     ::dftracer::utils::Timer overall(true);
 
-    auto scan_result = std::make_unique<idx::ResolverResult>();
-    {
+    auto resolve = [&]() -> coro::CoroTask<idx::ResolverResult> {
         ::dftracer::utils::ScopedTimer _t(stages, "scan_and_resolve");
         idx::IndexResolverUtility resolver;
         idx::ResolverInput resolver_input;
@@ -193,7 +192,24 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
         resolver_input.index_dir = input.index_dir;
         resolver_input.require_aggregation = !input.force_rebuild;
         resolver_input.aggregation_config = input.agg_config;
-        *scan_result = co_await resolver.process(resolver_input);
+        co_return co_await resolver.process(resolver_input);
+    };
+
+    auto scan_result = std::make_unique<idx::ResolverResult>();
+    *scan_result = co_await resolve();
+
+    // A changed source pollutes the merged aggregation, which cannot be
+    // partially invalidated. Force a full rebuild: wipe the store and
+    // re-resolve so every file is re-indexed and re-aggregated from scratch.
+    if (scan_result->stale_detected && !input.force_rebuild) {
+        DFTRACER_UTILS_LOG_WARN(
+            "Stale index detected; forcing a full rebuild of %s",
+            scan_result->index_path.c_str());
+        if (fs::exists(scan_result->index_path)) {
+            fs::remove_all(scan_result->index_path);
+        }
+        input.force_rebuild = true;
+        *scan_result = co_await resolve();
     }
 
     auto& input_files = scan_result->all_files;

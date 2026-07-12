@@ -37,7 +37,8 @@ using namespace internal;
 
 namespace {
 
-constexpr std::uint32_t SCHEMA_VERSION = 1;
+// v2 added per-file mtime/size to the registry record for staleness detection.
+constexpr std::uint32_t SCHEMA_VERSION = 2;
 
 using encoding::prefix_for_file;
 
@@ -552,8 +553,11 @@ std::vector<int> IndexDatabase::register_files(
     for (const auto& path : file_paths) {
         const auto logical = internal::get_logical_path(path);
         const auto file_hash = internal::calculate_file_hash(path);
-        ids.push_back(
-            writer->get_or_create_file_info(logical, file_hash, caps));
+        const auto file_mtime = static_cast<std::uint64_t>(
+            internal::get_file_modification_time(path));
+        const auto file_size = internal::file_size_bytes(path);
+        ids.push_back(writer->get_or_create_file_info(logical, file_hash, caps,
+                                                      file_mtime, file_size));
     }
     writer->commit();
     return ids;
@@ -663,6 +667,75 @@ std::optional<std::uint64_t> IndexDatabase::get_file_hash(
         throw_db_error("Failed to look up file hash", status);
     }
     return decode_file_hash(value);
+}
+
+std::optional<IndexDatabase::FileStat> IndexDatabase::get_file_stat(
+    std::string_view path) const {
+    std::string value;
+    auto status = db_->get(file_lookup_key(path), &value);
+    if (status.IsNotFound()) {
+        return std::nullopt;
+    }
+    if (!status.ok()) {
+        throw_db_error("Failed to look up file stat", status);
+    }
+    auto mtime = internal::decode_file_mtime(value);
+    auto size = internal::decode_file_size(value);
+    if (!mtime || !size) {
+        return std::nullopt;  // pre-v2 record
+    }
+    return FileStat{*mtime, *size};
+}
+
+std::uint32_t IndexDatabase::get_schema_version() const {
+    std::string value;
+    auto status = db_->get(schema_version_key(), &value);
+    if (status.IsNotFound()) {
+        return 0;
+    }
+    if (!status.ok()) {
+        throw_db_error("Failed to read schema version", status);
+    }
+    return rocks::KeyCodec::decode_be32(value);
+}
+
+bool IndexDatabase::schema_outdated() const {
+    return get_schema_version() < SCHEMA_VERSION;
+}
+
+IndexDatabase::StaleCheckResult IndexDatabase::find_stale_files(
+    const std::vector<std::string>& current_paths) const {
+    StaleCheckResult result;
+    result.schema_outdated = schema_outdated();
+
+    std::unordered_set<std::string> seen_logical;
+    seen_logical.reserve(current_paths.size());
+    for (const auto& path : current_paths) {
+        const auto logical = internal::get_logical_path(path);
+        seen_logical.insert(logical);
+        auto stored = get_file_stat(logical);
+        if (!stored) {
+            if (get_file_info_id(logical) >= 0) {
+                result.changed.push_back(path);
+            } else {
+                result.added.push_back(path);
+            }
+            continue;
+        }
+        const auto current_mtime = static_cast<std::uint64_t>(
+            internal::get_file_modification_time(path));
+        const auto current_size = internal::file_size_bytes(path);
+        if (stored->mtime != current_mtime || stored->size != current_size) {
+            result.changed.push_back(path);
+        }
+    }
+
+    for (const auto& [logical, _] : query_all_file_info_ids()) {
+        if (seen_logical.find(logical) == seen_logical.end()) {
+            result.removed.push_back(logical);
+        }
+    }
+    return result;
 }
 
 std::unordered_map<std::string, int> IndexDatabase::query_all_file_info_ids()

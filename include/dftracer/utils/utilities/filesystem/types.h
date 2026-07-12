@@ -3,6 +3,8 @@
 
 #include <dftracer/utils/core/common/filesystem.h>
 
+#include <cstdint>
+
 namespace dftracer::utils::utilities::filesystem {
 
 /**
@@ -11,6 +13,9 @@ namespace dftracer::utils::utilities::filesystem {
 struct FileEntry {
     fs::path path;
     std::size_t size = 0;
+    // Unix seconds; piggybacks on the size stat so staleness checks need no
+    // extra metadata op. 0 when not populated.
+    std::uint64_t mtime = 0;
     bool is_directory = false;
     bool is_regular_file = false;
 
@@ -23,6 +28,9 @@ struct FileEntry {
             is_regular_file = fs::is_regular_file(p);
             if (populate_size && is_regular_file) {
                 size = fs::file_size(p);
+                mtime = static_cast<std::uint64_t>(
+                    dftracer::utils::file_mtime_seconds(
+                        fs::last_write_time(p)));
             }
         }
     }
@@ -37,6 +45,8 @@ struct FileEntry {
         is_regular_file = entry.is_regular_file();
         if (populate_size && is_regular_file) {
             size = static_cast<std::size_t>(entry.file_size());
+            mtime = static_cast<std::uint64_t>(
+                dftracer::utils::file_mtime_seconds(entry.last_write_time()));
         }
     }
 };

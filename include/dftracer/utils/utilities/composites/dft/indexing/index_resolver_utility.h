@@ -47,6 +47,7 @@ struct ResolverInput {
 struct ResolverResult {
     std::vector<std::string> all_files;
     std::vector<std::size_t> all_file_sizes;
+    std::vector<std::uint64_t> all_file_mtimes;
     std::string index_path;
 
     std::vector<FileWorkItem> needs_checkpoint;
@@ -60,6 +61,9 @@ struct ResolverResult {
     // different time_interval)
     bool needs_augmentation = false;
     std::uint64_t stored_time_interval_us = 0;  // Time interval in cached data
+
+    // A registered file's source changed since indexing (mtime/size mismatch).
+    bool stale_detected = false;
 
     std::size_t total_needs_work() const {
         return needs_checkpoint.size() + needs_bloom.size() +

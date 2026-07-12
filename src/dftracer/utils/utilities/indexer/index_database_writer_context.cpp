@@ -65,7 +65,7 @@ using encoding::manifest_metadata_key;
 using encoding::metadata_key;
 using encoding::prefix_for_file;
 
-constexpr std::uint32_t SCHEMA_VERSION = 1;
+constexpr std::uint32_t SCHEMA_VERSION = 2;
 
 std::string next_file_id_key() {
     return std::string(encoding::NEXT_FILE_ID_KEY);
@@ -73,13 +73,15 @@ std::string next_file_id_key() {
 
 std::string encode_file_record(
     int file_id, std::uint64_t file_hash,
-    IndexFileEntryCapability caps = IndexFileEntryCapability::NONE) {
+    IndexFileEntryCapability caps = IndexFileEntryCapability::NONE,
+    std::uint64_t file_mtime = 0, std::uint64_t file_size = 0) {
     std::string value;
     rocks::KeyCodec::append_be32(value, static_cast<std::uint32_t>(file_id));
     value.push_back(static_cast<char>(static_cast<std::uint8_t>(caps)));
     value.append(7, '\0');
-    append_u64(value, 0);
+    append_u64(value, file_mtime);
     append_u64(value, file_hash);
+    append_u64(value, file_size);
     return value;
 }
 
@@ -369,7 +371,8 @@ void IndexDatabaseWriterContext::add_file_capability(
 
 int IndexDatabaseWriterContext::get_or_create_file_info(
     std::string_view path, std::uint64_t file_hash,
-    IndexFileEntryCapability caps) {
+    IndexFileEntryCapability caps, std::uint64_t file_mtime,
+    std::uint64_t file_size) {
     const auto logical_name = std::string(path);
     const auto lookup = file_lookup_key(logical_name);
     std::string existing;
@@ -377,11 +380,16 @@ int IndexDatabaseWriterContext::get_or_create_file_info(
     if (status.ok()) {
         const auto file_id = decode_file_id(existing);
         if (decode_file_hash(existing) == file_hash) {
-            if (caps != IndexFileEntryCapability::NONE &&
-                decode_file_capabilities(existing) != caps) {
-                existing[4] =
-                    static_cast<char>(static_cast<std::uint8_t>(caps));
-                db_->put(batch_, cf::DEFAULT, lookup, existing);
+            // Content unchanged: keep the record but refresh the stored
+            // mtime/size so a subsequent stat-only staleness check does not
+            // report a false positive after a metadata-only touch.
+            const auto merged_caps = caps == IndexFileEntryCapability::NONE
+                                         ? decode_file_capabilities(existing)
+                                         : caps;
+            auto refreshed = encode_file_record(file_id, file_hash, merged_caps,
+                                                file_mtime, file_size);
+            if (refreshed != existing) {
+                db_->put(batch_, cf::DEFAULT, lookup, refreshed);
             }
             return file_id;
         }
@@ -413,7 +421,8 @@ int IndexDatabaseWriterContext::get_or_create_file_info(
             delete_prefix_fn(cf::ROOT_PID_TID_COUNTS,
                              root_pid_tid_counts_key());
         }
-        auto registry = encode_file_record(file_id, file_hash, caps);
+        auto registry =
+            encode_file_record(file_id, file_hash, caps, file_mtime, file_size);
         status = db_->put(batch_, cf::DEFAULT, lookup, registry);
         if (!status.ok()) {
             throw_db_error("Failed to update file registry", status);
@@ -445,7 +454,8 @@ int IndexDatabaseWriterContext::get_or_create_file_info(
     cached_next_file_id_ = static_cast<std::int64_t>(next_id + 1);
 
     const auto file_id = static_cast<int>(next_id);
-    const auto new_registry = encode_file_record(file_id, file_hash, caps);
+    const auto new_registry =
+        encode_file_record(file_id, file_hash, caps, file_mtime, file_size);
     const auto next_registry = rocks::KeyCodec::encode_be32(next_id + 1);
 
     status = db_->put(batch_, cf::DEFAULT, lookup, new_registry);

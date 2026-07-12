@@ -725,7 +725,9 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
         determine_checkpoint_size(ckpt_size, gz_path);
     const std::string logical = gz_path_logical_path;
     auto writer = db.begin_write();
-    const int file_id = writer->get_or_create_file_info(logical, hash);
+    const int file_id = writer->get_or_create_file_info(
+        logical, hash, IndexFileEntryCapability::NONE,
+        static_cast<std::uint64_t>(mtime), bytes);
     writer->commit();
 
     auto artifacts = co_await build_gzip_index_artifacts(

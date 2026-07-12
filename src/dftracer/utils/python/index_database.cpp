@@ -228,6 +228,65 @@ static PyObject *IndexDatabase_rebuild_root_summaries(IndexDatabaseObject *self,
     Py_RETURN_NONE;
 }
 
+static PyObject *build_str_list(const std::vector<std::string> &v) {
+    PyObject *lst = PyList_New(static_cast<Py_ssize_t>(v.size()));
+    if (!lst) return NULL;
+    for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(v.size()); ++i) {
+        PyObject *s =
+            PyUnicode_FromString(v[static_cast<std::size_t>(i)].c_str());
+        if (!s) {
+            Py_DECREF(lst);
+            return NULL;
+        }
+        PyList_SET_ITEM(lst, i, s);
+    }
+    return lst;
+}
+
+static PyObject *IndexDatabase_find_stale_files(IndexDatabaseObject *self,
+                                                PyObject *args,
+                                                PyObject *kwds) {
+    static const char *kwlist[] = {"paths", NULL};
+    PyObject *paths_obj;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", (char **)kwlist,
+                                     &paths_obj)) {
+        return NULL;
+    }
+    std::vector<std::string> paths;
+    if (!parse_str_list(paths_obj, "paths", paths)) return NULL;
+
+    IndexDatabase::StaleCheckResult result;
+    if (!run_blocking_r([&] { return self->db->find_stale_files(paths); },
+                        result)) {
+        return NULL;
+    }
+
+    PyObject *changed = build_str_list(result.changed);
+    PyObject *added = build_str_list(result.added);
+    PyObject *removed = build_str_list(result.removed);
+    PyObject *d = PyDict_New();
+    if (!changed || !added || !removed || !d) {
+        Py_XDECREF(changed);
+        Py_XDECREF(added);
+        Py_XDECREF(removed);
+        Py_XDECREF(d);
+        return NULL;
+    }
+    PyObject *so = PyBool_FromLong(result.schema_outdated);
+    PyObject *st = PyBool_FromLong(result.stale());
+    PyDict_SetItemString(d, "changed", changed);
+    PyDict_SetItemString(d, "added", added);
+    PyDict_SetItemString(d, "removed", removed);
+    PyDict_SetItemString(d, "schema_outdated", so);
+    PyDict_SetItemString(d, "stale", st);
+    Py_DECREF(changed);
+    Py_DECREF(added);
+    Py_DECREF(removed);
+    Py_DECREF(so);
+    Py_DECREF(st);
+    return d;
+}
+
 static PyMethodDef IndexDatabase_methods[] = {
     {"init_schema", (PyCFunction)IndexDatabase_init_schema, METH_NOARGS,
      "Idempotently initialise the schema version key."},
@@ -236,6 +295,12 @@ static PyMethodDef IndexDatabase_methods[] = {
      "register_files(paths, build_manifest=False) -> list[int]\n"
      "Register each path in the DEFAULT-CF file registry and return the "
      "assigned file_ids. Idempotent for files with matching hash."},
+    {"find_stale_files", (PyCFunction)IndexDatabase_find_stale_files,
+     METH_VARARGS | METH_KEYWORDS,
+     "find_stale_files(paths) -> dict\n"
+     "Stat-only (mtime + size) staleness check of the given trace paths "
+     "against the index. Returns {changed, added, removed, schema_outdated, "
+     "stale}."},
     {"reserve_file_id_range", (PyCFunction)IndexDatabase_reserve_file_id_range,
      METH_VARARGS,
      "reserve_file_id_range(count) -> int\n"

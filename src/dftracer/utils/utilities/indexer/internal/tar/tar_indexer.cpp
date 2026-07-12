@@ -191,8 +191,12 @@ dftracer::utils::coro::CoroTask<void> TarIndexer::build_async() const {
     IndexDatabase db(index_path);
     auto writer = db.begin_write();
     const auto hash = calculate_file_hash(tar_gz_path);
+    const auto mtime =
+        static_cast<std::uint64_t>(get_file_modification_time(tar_gz_path));
+    const auto bytes = file_size_bytes(tar_gz_path);
     const std::string logical = tar_gz_path_logical_path;
-    const int file_id = writer->get_or_create_file_info(logical, hash);
+    const int file_id = writer->get_or_create_file_info(
+        logical, hash, IndexFileEntryCapability::NONE, mtime, bytes);
 
     if (!(co_await build_tar_index(*writer, file_id, tar_gz_path, ckpt_size))) {
         throw IndexerError(IndexerError::Type::BUILD_ERROR,

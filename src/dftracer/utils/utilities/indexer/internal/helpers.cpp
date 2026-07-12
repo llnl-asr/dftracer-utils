@@ -39,28 +39,10 @@ std::string normalize_index_root(std::string_view path) {
 }
 
 time_t get_file_modification_time(const std::string &file_path) {
-#if defined(DFTRACER_UTILS_USE_STD_FS)
-    auto ftime = fs::last_write_time(file_path);
-    auto sctp =
-        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-            ftime - fs::file_time_type::clock::now() +
-            std::chrono::system_clock::now());
-    return std::chrono::system_clock::to_time_t(sctp);
-#else
-    // Fallback to platform-specific stat
-#ifdef _WIN32
-    struct _stat64 st;
-    if (_stat64(file_path.c_str(), &st) == 0) {
-        return st.st_mtime;
-    }
-#else
-    struct stat st;
-    if (stat(file_path.c_str(), &st) == 0) {
-        return st.st_mtime;
-    }
-#endif
-    return 0;
-#endif
+    std::error_code ec;
+    auto ftime = fs::last_write_time(file_path, ec);
+    if (ec) return 0;
+    return dftracer::utils::file_mtime_seconds(ftime);
 }
 
 std::uint64_t calculate_file_hash(const std::string &file_path) {

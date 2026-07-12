@@ -51,20 +51,22 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         co_return result;
     }
 
-    // A cached aggregation tier at a different interval can't be refined in
-    // place; discard every affected index root and rebuild.
-    if (result.needs_augmentation && !input.force_rebuild) {
+    // Neither a cached aggregation tier at a different interval nor a merged
+    // aggregation polluted by a changed source can be refined in place; discard
+    // every affected index root and rebuild from scratch.
+    if ((result.needs_augmentation || result.stale_detected) &&
+        !input.force_rebuild) {
         std::set<std::string> index_roots;
         for (const auto& file : result.all_files) {
             index_roots.insert(
                 internal::determine_index_path(file, input.index_dir));
         }
         for (const auto& root : index_roots) {
-            DFTRACER_UTILS_LOG_INFO(
-                "Aggregation interval changed (index built at %llu us); "
-                "rebuilding %s",
-                static_cast<unsigned long long>(result.stored_time_interval_us),
-                root.c_str());
+            DFTRACER_UTILS_LOG_WARN("%s; rebuilding %s",
+                                    result.stale_detected
+                                        ? "Source changed since indexing"
+                                        : "Aggregation interval changed",
+                                    root.c_str());
             std::error_code ec;
             fs::remove_all(root, ec);
             if (ec) {

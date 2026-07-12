@@ -214,6 +214,9 @@ static coro::CoroTask<IndexBuildResult> run_index_build(
                 auto logical = internal::get_logical_path(config.file_path);
                 const auto hash =
                     internal::calculate_file_hash(config.file_path);
+                const auto mtime = static_cast<std::uint64_t>(
+                    internal::get_file_modification_time(config.file_path));
+                const auto bytes = internal::file_size_bytes(config.file_path);
 
                 IndexFileEntryCapability caps =
                     IndexFileEntryCapability::INDEXING_COMPLETE |
@@ -224,7 +227,8 @@ static coro::CoroTask<IndexBuildResult> run_index_build(
                     caps |= IndexFileEntryCapability::MANIFEST;
                 }
                 auto writer = db.begin_write();
-                int fid = writer->get_or_create_file_info(logical, hash, caps);
+                int fid = writer->get_or_create_file_info(logical, hash, caps,
+                                                          mtime, bytes);
                 writer->delete_chunk_statistics(fid);
                 bloom_visitor.finalize(*writer, fid);
                 hash_table_visitor.finalize(*writer, fid);

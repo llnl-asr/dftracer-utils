@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <thread>
@@ -211,6 +212,12 @@ class TestEnvironment {
     // DFTracer-specific test file creation
     std::string create_dft_test_file(int num_events = 100);
     std::string create_dft_test_gzip_file(int num_events = 100);
+
+    // Multi-run trace: `num_runs` app spans (one pid each), separated by
+    // `gap_us` idle time. Returns the .pfw.gz path.
+    std::string create_dft_multirun_gzip_file(int num_runs,
+                                              std::uint64_t run_us = 10000,
+                                              std::uint64_t gap_us = 5000);
 
    private:
     std::size_t num_lines;

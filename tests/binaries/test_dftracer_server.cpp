@@ -825,3 +825,98 @@ TEST_CASE("DFTracer Server - streams chunks larger than IOV_MAX") {
         if (c == '\n') ++lines;
     CHECK(lines >= static_cast<std::size_t>(NUM_EVENTS));
 }
+
+// Inter-run gaps must break at exact app-span boundaries even when far smaller
+// than the old 2%-of-span threshold that used to drop them.
+TEST_CASE("DFTracer Server - multi-run break detection") {
+    auto binary = find_server_binary();
+    if (binary.empty()) {
+        MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
+        return;
+    }
+
+    dft_utils_test::TestEnvironment env(1);
+    REQUIRE(env.is_valid());
+    // 3 runs of 1s, 10ms idle between: gap is ~0.33% of the span (under old
+    // 2%).
+    auto raw = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
+    REQUIRE(!raw.empty());
+    std::string pfw = env.get_dir() + "/multirun.pfw.gz";
+    fs::rename(raw, pfw);
+
+    int port = pick_port();
+    ServerProcess server;
+    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(wait_for_http(port));
+
+    auto resp = http_request(port,
+                             "GET /api/v1/viz/breaks HTTP/1.1\r\n"
+                             "Host: localhost\r\nConnection: close\r\n\r\n");
+    REQUIRE(!resp.empty());
+    CHECK(extract_status_code(resp) == 200);
+
+    auto body = extract_body(resp);
+    CHECK(body.find("\"multi_run\":true") != std::string::npos);
+    // Two gaps, normalized to the global min timestamp.
+    CHECK(body.find("\"begin\":1000000,\"end\":1010000") != std::string::npos);
+    CHECK(body.find("\"begin\":2010000,\"end\":2020000") != std::string::npos);
+}
+
+// A changed source under an existing index must be re-indexed on startup, not
+// served stale. The extra run (extra gap) after the change proves the rebuild.
+TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
+    auto binary = find_server_binary();
+    if (binary.empty()) {
+        MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
+        return;
+    }
+
+    dft_utils_test::TestEnvironment env(1);
+    REQUIRE(env.is_valid());
+    std::string pfw = env.get_dir() + "/mr.pfw.gz";
+
+    auto v1 = env.create_dft_multirun_gzip_file(2, 1000000, 10000);
+    REQUIRE(!v1.empty());
+    fs::rename(v1, pfw);
+    {
+        int port = pick_port();
+        ServerProcess server;
+        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(wait_for_http(port));
+        auto body = extract_body(
+            http_request(port,
+                         "GET /api/v1/viz/breaks HTTP/1.1\r\n"
+                         "Host: localhost\r\nConnection: close\r\n\r\n"));
+        CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
+              std::string::npos);
+        CHECK(body.find("\"begin\":2010000") == std::string::npos);
+    }
+
+    // Third run added; the on-disk index is now stale.
+    auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
+    REQUIRE(!v2.empty());
+    fs::remove(pfw);
+    fs::rename(v2, pfw);
+    {
+        int port = pick_port() + 1;
+        ServerProcess server;
+        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(wait_for_http(port));
+        auto body = extract_body(
+            http_request(port,
+                         "GET /api/v1/viz/breaks HTTP/1.1\r\n"
+                         "Host: localhost\r\nConnection: close\r\n\r\n"));
+        CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
+              std::string::npos);
+        CHECK(body.find("\"begin\":2010000,\"end\":2020000") !=
+              std::string::npos);
+    }
+}

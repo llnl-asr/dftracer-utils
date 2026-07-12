@@ -375,6 +375,50 @@ std::string TestEnvironment::create_dft_test_file(int num_events) {
     return file_path;
 }
 
+std::string TestEnvironment::create_dft_multirun_gzip_file(
+    int num_runs, std::uint64_t run_us, std::uint64_t gap_us) {
+    static std::size_t multirun_counter = 0;
+    std::string plain_file = test_dir + "/dft_multirun_" +
+                             std::to_string(multirun_counter++) + ".trace";
+    std::ofstream ofs(plain_file);
+    if (!ofs.is_open()) return "";
+
+    const std::uint64_t base = 1000000000ULL;
+    ofs << "[\n";
+    for (int r = 0; r < num_runs; ++r) {
+        const std::int64_t pid = 100 + r;
+        const std::uint64_t start =
+            base + static_cast<std::uint64_t>(r) * (run_us + gap_us);
+        const std::uint64_t end = start + run_us;
+        auto emit = [&](const char* name, const char* cat, std::uint64_t ts,
+                        const std::string& extra) {
+            ofs << R"({"id":1,"pid":)" << pid << R"(,"tid":)" << (pid * 10)
+                << R"(,"name":")" << name << R"(","cat":")" << cat
+                << R"(","ph":"X","ts":)" << ts << R"(,"dur":1,"args":{)"
+                << extra << R"(}})" << "\n";
+        };
+        emit("start", "dftracer", start,
+             R"("hhash":"abc123","exec_hash":"app","cmd_hash":"cmd","ppid":1)");
+        for (int i = 0; i < 3; ++i)
+            ofs << R"({"id":1,"pid":)" << pid << R"(,"tid":)" << (pid * 10)
+                << R"(,"name":"read","cat":"POSIX","ph":"X","ts":)"
+                << (start + static_cast<std::uint64_t>(i) * (run_us / 4))
+                << R"(,"dur":100,"args":{"hhash":"abc123","ret":1024}})"
+                << "\n";
+        emit("end", "dftracer", end, R"("hhash":"abc123","num_events":3)");
+    }
+    ofs << "]\n";
+    ofs.close();
+
+    std::string gz_file = plain_file + ".gz";
+    if (!compress_file_to_gzip(plain_file, gz_file)) {
+        fs::remove(plain_file);
+        return "";
+    }
+    fs::remove(plain_file);
+    return gz_file;
+}
+
 std::string TestEnvironment::create_dft_test_gzip_file(int num_events) {
     // First create a plain DFTracer trace file
     std::string plain_file = create_dft_test_file(num_events);

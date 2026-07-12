@@ -1491,22 +1491,35 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     summary->name_cats.reserve(nc.size());
     for (auto& kv : nc) summary->name_cats.emplace_back(kv.first, kv.second);
 
-    if (nb > 0 && summary->bucket_us > 0) {
+    if (!summary->app_spans.empty()) {
+        // Break = dead time between runs: merge app-spans into run clusters and
+        // emit every gap between them, no size threshold.
+        std::vector<const VizSummary::AppSpan*> spans;
+        spans.reserve(summary->app_spans.size());
+        for (const auto& sp : summary->app_spans) spans.push_back(&sp);
+        std::sort(spans.begin(), spans.end(),
+                  [](const auto* lhs, const auto* rhs) {
+                      return lhs->begin < rhs->begin;
+                  });
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> runs;
+        for (const auto* sp : spans) {
+            if (!runs.empty() && sp->begin <= runs.back().second)
+                runs.back().second = std::max(runs.back().second, sp->end);
+            else
+                runs.emplace_back(sp->begin, sp->end);
+        }
+        for (std::size_t i = 1; i < runs.size(); ++i)
+            if (runs[i].first > runs[i - 1].second)
+                summary->idle_gaps.emplace_back(runs[i - 1].second,
+                                                runs[i].first);
+    } else if (nb > 0 && summary->bucket_us > 0) {
+        // No app-spans (malformed trace): fall back to a lane-activity scan,
+        // requiring a gap to be a fraction of active (not total) time.
         std::vector<bool> active(nb, false);
         for (const auto& lane : summary->lanes)
             for (std::size_t i = 0; i < nb; ++i)
                 if (lane.cells[i].count) active[i] = true;
-        // A live process counts as active for its whole span, so within-run
-        // compute gaps are not compressed, only between-run dead time.
-        for (const auto& sp : summary->app_spans) {
-            std::int64_t a = summary->bucket_of(static_cast<double>(sp.begin));
-            std::int64_t z = summary->bucket_of(static_cast<double>(sp.end));
-            if (a < 0) a = 0;
-            if (z < 0) continue;
-            for (std::int64_t i = a; i <= z; ++i)
-                active[static_cast<std::size_t>(i)] = true;
-        }
-        std::size_t first = 0, last = 0;
+        std::size_t first = 0, last = 0, active_count = 0;
         bool any = false;
         for (std::size_t i = 0; i < nb; ++i)
             if (active[i]) {
@@ -1515,11 +1528,13 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                     any = true;
                 }
                 last = i;
+                ++active_count;
             }
         if (any) {
-            const double span_us = static_cast<double>(nb) * summary->bucket_us;
+            const double active_us =
+                static_cast<double>(active_count) * summary->bucket_us;
             const double min_gap_us =
-                std::max(3.0 * summary->bucket_us, 0.02 * span_us);
+                std::max(3.0 * summary->bucket_us, 0.05 * active_us);
             for (std::size_t i = first; i <= last;) {
                 if (active[i]) {
                     ++i;

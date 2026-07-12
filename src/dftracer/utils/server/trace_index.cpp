@@ -51,6 +51,37 @@ coro::CoroTask<void> TraceIndex::initialize() {
     std::vector<std::size_t> needs_build;
     std::vector<std::size_t> large_files;
 
+    // The reuse decision below is existence-only, so a changed .pfw would be
+    // served from a stale index. Drop any (shared) index root whose sources
+    // changed since indexing; the loop then rebuilds it as if absent.
+    {
+        std::unordered_map<std::string, std::vector<std::string>> by_root;
+        for (const auto& entry : entries)
+            by_root[internal::determine_index_path(entry.path.string(),
+                                                   index_dir_)]
+                .push_back(entry.path.string());
+        for (auto& [root, paths] : by_root) {
+            if (!fs::exists(root)) continue;
+            bool stale = false;
+            try {
+                indexer::IndexDatabase db(root);
+                stale = db.find_stale_files(paths).stale();
+            } catch (const std::exception& e) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "TraceIndex: stale check failed for %s: %s; rebuilding",
+                    root.c_str(), e.what());
+                stale = true;
+            }
+            if (stale) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "TraceIndex: source changed since indexing; rebuilding %s",
+                    root.c_str());
+                std::error_code ec;
+                fs::remove_all(root, ec);
+            }
+        }
+    }
+
     for (const auto& entry : entries) {
         FileInfo info;
         info.path = entry.path.string();

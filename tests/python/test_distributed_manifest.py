@@ -203,3 +203,52 @@ class TestDistributedWithDask:
                 assert result["total_files"] == len(files)
                 assert result["artifact_batches"] > 0
                 assert not os.path.exists(os.path.join(index_path, "agg_manifest.json"))
+
+
+@pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
+class TestDistributedIndexIdempotent:
+    """distributed_index skips the parse fan-out for already-indexed files."""
+
+    def _run(self, files, index_path, staging, **kw):
+        return distributed_index(
+            files=files,
+            index_path=index_path,
+            local_staging=staging,
+            shared_staging=staging,
+            client=None,
+            aggregation_config=AGG_CFG,
+            **kw,
+        )
+
+    def _setup(self, env, pids):
+        files = [env.create_dft_trace_file_with_pid(f"t{p}.pfw.gz", p, 100) for p in pids]
+        index_path = os.path.join(env.temp_dir, ".dftindex")
+        staging = os.path.join(env.temp_dir, "stage")
+        os.makedirs(staging, exist_ok=True)
+        return files, index_path, staging
+
+    def test_warm_call_skips_reparse(self):
+        with Environment(lines=50) as env:
+            files, index_path, staging = self._setup(env, [1, 2])
+            cold = self._run(files, index_path, staging)
+            assert cold["artifact_batches"] > 0
+            warm = self._run(files, index_path, staging)
+            assert warm["artifact_batches"] == 0
+            assert warm["per_worker"] == []
+            assert warm["total_files"] == 2
+
+    def test_partial_builds_only_new_file(self):
+        with Environment(lines=50) as env:
+            files, index_path, staging = self._setup(env, [1, 2])
+            self._run(files, index_path, staging)
+            files.append(env.create_dft_trace_file_with_pid("t3.pfw.gz", 3, 100))
+            part = self._run(files, index_path, staging)
+            assert part["total_files"] == 3
+            assert sum(part["per_worker"]) == 1
+
+    def test_force_rebuild_reparses_all(self):
+        with Environment(lines=50) as env:
+            files, index_path, staging = self._setup(env, [1, 2])
+            self._run(files, index_path, staging)
+            forced = self._run(files, index_path, staging, force_rebuild=True)
+            assert sum(forced["per_worker"]) == 2

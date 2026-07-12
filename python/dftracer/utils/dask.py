@@ -959,6 +959,41 @@ def distributed_index(
     _log.info("distributed_index: %d workers visible", n_workers)
 
     all_paths = [p for (p, _) in entries]
+    n_total_files = len(all_paths)
+
+    # Idempotency: drop files whose required tiers already exist so warm calls
+    # skip the register + gzip-scan + parse fan-out entirely. The coordinator
+    # read path short-circuits this way; the distributed path did not, so it
+    # re-parsed every file on every call.
+    if not force_rebuild:
+        from .indexer import Indexer
+
+        with Indexer(
+            files=all_paths,
+            index_dir=index_path,
+            require_checkpoint=True,
+            require_bloom=True,
+            require_manifest=build_manifest,
+            require_aggregation=aggregation_config,
+            force_rebuild=False,
+        ) as _resolver:
+            _status = _resolver.resolve()
+        _needs = set(_status.needs_work)
+        _log.info(
+            "distributed_index: resolver reports %d/%d files need work",
+            len(_needs),
+            len(all_paths),
+        )
+        if not _needs:
+            return {
+                "total_files": n_total_files,
+                "per_worker": [],
+                "index_path": index_path,
+                "artifact_batches": 0,
+            }
+        if len(_needs) < len(entries):
+            entries = [(p, s) for (p, s) in entries if p in _needs]
+            all_paths = [p for (p, _) in entries]
 
     # 2. Register all files once on coordinator (one register_files call;
     #    file_ids are then parallel to `entries`).
@@ -1187,7 +1222,7 @@ def distributed_index(
 
     per_worker_file_counts = [len(set(ids)) for ids in worker_file_ids]
     return {
-        "total_files": len(entries),
+        "total_files": n_total_files,
         "per_worker": per_worker_file_counts,
         "index_path": index_path,
         "artifact_batches": total_artifacts,

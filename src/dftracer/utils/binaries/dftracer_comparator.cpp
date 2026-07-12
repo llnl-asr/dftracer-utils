@@ -12,6 +12,7 @@
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_utility.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/tree_table_formatter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
@@ -29,6 +30,7 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::composites::dft::aggregators;
 using namespace dftracer::utils::utilities::composites::dft::comparator;
+using dftracer::utils::utilities::composites::dft::indexing::ensure_index_fresh;
 using dftracer::utils::utilities::composites::dft::indexing::
     IndexResolverUtility;
 using dftracer::utils::utilities::composites::dft::indexing::ResolverInput;
@@ -471,6 +473,14 @@ static int run_comparator(const ComparatorArgParse* cli) {
         if (!fs::exists(path)) {
             DFTRACER_UTILS_LOG_ERROR("Path does not exist: %s", path.c_str());
             co_return;
+        }
+
+        if (fs::is_regular_file(path)) {
+            co_await ensure_index_fresh(&scope, "", path, index_dir,
+                                        config.force_rebuild);
+        } else {
+            co_await ensure_index_fresh(&scope, path, "", index_dir,
+                                        config.force_rebuild);
         }
 
         IndexResolverUtility resolver;

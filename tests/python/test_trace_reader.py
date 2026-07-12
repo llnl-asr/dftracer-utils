@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Test cases for TraceReader Python bindings."""
 
+import os
+
 import pytest
 
 import dftracer.utils as dft_utils
+from dftracer.utils import Indexer
 from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
 from .common import Environment
@@ -43,6 +46,24 @@ class TestTraceReaderCreation:
             # TraceReader probes for the index store at __init__ time
             reader = dft_utils.TraceReader(gz_file)
             assert reader.has_index is True
+
+    def test_stale_index_not_trusted(self):
+        """A source changed since indexing is read raw, not from a stale index."""
+        with Environment() as env:
+            index_dir = os.path.join(env.temp_dir, ".dftindex")
+            gz_file = env.create_dft_trace_file("t.pfw.gz", num_events=10)
+            Indexer(files=[gz_file], index_dir=index_dir).ensure_indexed()
+
+            fresh = dft_utils.TraceReader(gz_file, index_dir=index_dir)
+            assert fresh.has_index is True
+            n_before = sum(1 for _ in fresh.iter_lines())
+
+            # More events -> different size -> stale.
+            env.create_dft_trace_file("t.pfw.gz", num_events=30)
+            stale = dft_utils.TraceReader(gz_file, index_dir=index_dir)
+            assert stale.has_index is False
+            n_after = sum(1 for _ in stale.iter_lines())
+            assert n_after > n_before
 
     def test_index_dir_default_is_empty_string(self):
         """index_dir defaults to the empty string."""

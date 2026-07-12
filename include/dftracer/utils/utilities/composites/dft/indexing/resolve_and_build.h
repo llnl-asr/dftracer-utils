@@ -39,6 +39,21 @@ struct ResolveAndBuildInput {
 coro::CoroTask<ResolverResult> resolve_and_build_index(
     CoroScope* scope, ResolveAndBuildInput input);
 
+// Rebuilds any index root for `directory`/`files` that is missing or stale, so
+// read-before-use entry points never see a changed source. Named coroutines
+// with by-value params (CP.53) so callers, especially coroutine lambdas, hold
+// no vector on their own frame (GCC 12/13 frame bug).
+coro::CoroTask<void> ensure_indexes_fresh(CoroScope* scope,
+                                          std::string directory,
+                                          std::vector<std::string> files,
+                                          std::string index_dir,
+                                          bool force_rebuild = false);
+
+// Single directory-or-file convenience; builds the vector inside this frame.
+coro::CoroTask<void> ensure_index_fresh(CoroScope* scope, std::string directory,
+                                        std::string file, std::string index_dir,
+                                        bool force_rebuild = false);
+
 }  // namespace dftracer::utils::utilities::composites::dft::indexing
 
 #endif

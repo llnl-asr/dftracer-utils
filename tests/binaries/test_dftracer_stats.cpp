@@ -176,4 +176,41 @@ TEST_SUITE("DFTracerStats") {
         int rc = run_stats(binary, {"-d", env.get_dir()});
         CHECK(rc == 0);
     }
+
+    TEST_CASE("rebuilds stale index on changed source") {
+        auto binary = find_stats_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_stats binary not found, skipping.");
+            return;
+        }
+
+        auto total_events = [](const std::string& json) -> long {
+            auto p = json.find("total_events");
+            if (p == std::string::npos) return -1;
+            p = json.find_first_of("0123456789", p);
+            return p == std::string::npos ? -1 : std::atol(json.c_str() + p);
+        };
+
+        dft_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        auto f = create_pfw_gz(env, 100, 0);
+        REQUIRE(!f.empty());
+
+        int rc = 0;
+        long n1 = total_events(
+            run_stats_capture(binary, {"-d", env.get_dir(), "--json"}, &rc));
+        CHECK(rc == 0);
+        CHECK(n1 > 0);
+
+        // Rewrite the same file with more events; the index is now stale.
+        auto raw = env.create_dft_test_gzip_file(300);
+        REQUIRE(!raw.empty());
+        fs::remove(f);
+        fs::rename(raw, f);
+
+        long n2 = total_events(
+            run_stats_capture(binary, {"-d", env.get_dir(), "--json"}, &rc));
+        CHECK(rc == 0);
+        CHECK(n2 > n1);
+    }
 }

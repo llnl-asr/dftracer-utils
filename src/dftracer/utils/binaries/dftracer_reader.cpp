@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io.h>
 #include <dftracer/utils/utilities/composites/composites.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <dftracer/utils/utilities/indexer/internal/indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -268,6 +269,7 @@ int main(int argc, char **argv) {
     }
     ::close(test_fd);
 
+    const bool index_explicit = !index_path.empty();
     if (index_path.empty()) {
         index_path = utilities::composites::dft::internal::determine_index_path(
             gz_path, index_dir);
@@ -281,6 +283,18 @@ int main(int argc, char **argv) {
                              : format == ArchiveFormat::GZIP ? "GZIP"
                                                              : "UNKNOWN");
 #endif
+
+    // Skip for an explicit --index path (helper derives its own) or when
+    // --check/--force-rebuild already handle rebuilds in run_reader below.
+    if (!index_explicit && !check_rebuild && !force_rebuild) {
+        cli::PipelineArgs refresh_pipeline;
+        refresh_pipeline.executor_threads =
+            dftracer_utils_hardware_concurrency();
+        refresh_pipeline.io_threads = dftracer_utils_hardware_concurrency();
+        cli::ensure_indexes_fresh_blocking("DFTracer Reader Index Refresh",
+                                           refresh_pipeline, "", {gz_path},
+                                           index_dir);
+    }
 
     return run_reader(gz_path, index_path, checkpoint_size, force_rebuild,
                       check_rebuild, read_mode, read_buffer_size, start, end)

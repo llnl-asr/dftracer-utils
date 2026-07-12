@@ -14,6 +14,7 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_visitor.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/group_writer_task.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/manifest_extractor.h>
@@ -652,6 +653,9 @@ coro::CoroTask<int> run_organize(const OrganizeArgParse* cli) {
                 resolver_input.index_dir = index_dir;
                 resolver_input.require_manifest = true;
 
+                co_await ensure_indexes_fresh(&ctx, cli_ptr->directory.value,
+                                              cli_ptr->files_args.value,
+                                              index_dir, force_rebuild);
                 resolve_result = co_await resolver.process(resolver_input);
             }
 

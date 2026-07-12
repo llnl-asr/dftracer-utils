@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/composites/dft/reorganize/reconstructor_utility.h>
 
 #include <chrono>
@@ -13,6 +14,7 @@
 #include "common_cli.h"
 
 using namespace dftracer::utils;
+using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::composites::dft::reorganize;
 
 class ReconstructArgParse : public cli::ArgParse {
@@ -77,6 +79,8 @@ static coro::CoroTask<int> run_reconstruct(const ReconstructArgParse* cli,
     input.checkpoint_size = cli->checkpoint_size;
     input.parallelism = cli->pipeline.executor_threads;
     input.compress = !cli->no_compress;
+
+    co_await ensure_index_fresh(&scope, cli->directory.value, "", "");
 
     ReconstructorUtility reconstructor;
     ReconstructorResult result;

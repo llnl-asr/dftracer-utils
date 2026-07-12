@@ -12,6 +12,7 @@
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
@@ -491,6 +492,30 @@ int run_single_task(const std::string& name, const PipelineArgs& pipeline,
     p.set_destination(task);
     p.execute();
     return task->template get<int>();
+}
+
+// Split out so the run_single_task lambda below holds no coroutine locals,
+// which ICEs GCC 12/13.
+inline coro::CoroTask<int> ensure_indexes_fresh_task(
+    CoroScope& ctx, const std::string& directory,
+    const std::vector<std::string>& files, const std::string& index_dir,
+    bool force_rebuild) {
+    co_await utilities::composites::dft::indexing::ensure_indexes_fresh(
+        &ctx, directory, files, index_dir, force_rebuild);
+    co_return 0;
+}
+
+inline int ensure_indexes_fresh_blocking(const std::string& name,
+                                         const PipelineArgs& pipeline,
+                                         const std::string& directory,
+                                         std::vector<std::string> files,
+                                         const std::string& index_dir,
+                                         bool force_rebuild = false) {
+    return run_single_task(
+        name, pipeline, [&](CoroScope& ctx) -> coro::CoroTask<int> {
+            co_return co_await ensure_indexes_fresh_task(
+                ctx, directory, files, index_dir, force_rebuild);
+        });
 }
 
 // Channel-backed fan-out: a single bounded producer feeds `items` (moved in)

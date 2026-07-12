@@ -229,4 +229,27 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
     co_return result;
 }
 
+coro::CoroTask<void> ensure_indexes_fresh(CoroScope* scope,
+                                          std::string directory,
+                                          std::vector<std::string> files,
+                                          std::string index_dir,
+                                          bool force_rebuild) {
+    ResolveAndBuildInput in;
+    in.directory = std::move(directory);
+    in.files = std::move(files);
+    in.index_dir = std::move(index_dir);
+    in.require_checkpoints = true;
+    in.force_rebuild = force_rebuild;
+    co_await resolve_and_build_index(scope, std::move(in));
+}
+
+coro::CoroTask<void> ensure_index_fresh(CoroScope* scope, std::string directory,
+                                        std::string file, std::string index_dir,
+                                        bool force_rebuild) {
+    std::vector<std::string> files;
+    if (!file.empty()) files.push_back(std::move(file));
+    co_await ensure_indexes_fresh(scope, std::move(directory), std::move(files),
+                                  std::move(index_dir), force_rebuild);
+}
+
 }  // namespace dftracer::utils::utilities::composites::dft::indexing

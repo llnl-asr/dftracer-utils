@@ -13,6 +13,7 @@
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/queries/queries.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/chunk_detail_scanner_utility.h>
@@ -1600,6 +1601,15 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
 
     {
         ScopedTimer _t(stages, "collect_and_classify");
+        if (!config.no_auto_index) {
+            ScopedTimer _ef(stages, "ensure_index_fresh");
+            if (!config.directory.empty())
+                co_await ensure_index_fresh(&ctx, config.directory, "",
+                                            config.index_dir);
+            else
+                co_await ensure_indexes_fresh(&ctx, "", args->files_args.value,
+                                              config.index_dir);
+        }
         if (!config.directory.empty() &&
             config.report_type != StatisticsQueryType::DETAILED) {
             auto trusted_index_path = internal::determine_index_path(

@@ -448,6 +448,27 @@ void TraceReader::probe_index() {
     has_index_ =
         (format_ == ArchiveFormat::GZIP || format_ == ArchiveFormat::TAR_GZ) &&
         fs::exists(index_path_);
+    // Do not trust an index whose source changed since it was built; fall back
+    // to a raw read rather than serving stale data. Records predating stat
+    // tracking have no stored stat and keep the prior trust-on-existence path.
+    if (has_index_) {
+        try {
+            indexer::IndexDatabase db(
+                index_path_, rocksdb::RocksDatabase::OpenMode::ReadOnly);
+            auto stored = db.get_file_stat(
+                indexer::internal::get_logical_path(config_.file_path));
+            if (stored) {
+                auto mtime = static_cast<std::uint64_t>(
+                    indexer::internal::get_file_modification_time(
+                        config_.file_path));
+                auto size =
+                    indexer::internal::file_size_bytes(config_.file_path);
+                if (stored->mtime != mtime || stored->size != size)
+                    has_index_ = false;
+            }
+        } catch (...) {
+        }
+    }
 }
 
 bool TraceReader::has_index() const { return has_index_; }

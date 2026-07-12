@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_builder_utility.h>
@@ -491,8 +492,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     auto* files_ptr = &files;
 
     auto combined_task = make_task(
-        [files_needing_index_ptr, files_ptr,
+        [files_needing_index_ptr, files_ptr, no_auto_index,
          &vctx](CoroScope& ctx) -> coro::CoroTask<void> {
+            if (!no_auto_index) {
+                co_await indexing::ensure_indexes_fresh(&ctx, "", *files_ptr,
+                                                        vctx.index_dir);
+            }
+
             if (!files_needing_index_ptr->empty()) {
                 co_await batch_index_files(*files_needing_index_ptr, vctx, ctx);
 

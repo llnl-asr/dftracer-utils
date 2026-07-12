@@ -22,6 +22,7 @@
 #include <dftracer/utils/utilities/composites/dft/comparator/comparison_utility.h>
 #include <dftracer/utils/utilities/composites/dft/comparator/tree_table_formatter.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -321,6 +322,14 @@ static bool run_comparison_pipeline(ComparatorObject *self,
                     CoroScope &scope, const std::string &path,
                     const std::string &index_dir,
                     std::vector<std::string> &out_files) -> CoroTask<void> {
+                if (fs::is_regular_file(path)) {
+                    co_await composites::dft::indexing::ensure_index_fresh(
+                        &scope, "", path, index_dir, config.force_rebuild);
+                } else {
+                    co_await composites::dft::indexing::ensure_index_fresh(
+                        &scope, path, "", index_dir, config.force_rebuild);
+                }
+
                 IndexResolverUtility resolver;
                 ResolverInput resolve_input;
                 resolve_input.index_dir = index_dir;

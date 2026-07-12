@@ -1,20 +1,25 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/utilities/statistics_aggregator.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/statistics_aggregator_utility.h>
 #include <dftracer/utils/utilities/composites/dft/statistics/trace_statistics.h>
 
 #include <string>
 
+using dftracer::utils::CoroScope;
+using dftracer::utils::run_coro_scope;
 using dftracer::utils::Runtime;
 using dftracer::utils::coro::CoroTask;
 using namespace dftracer::utils::utilities::composites::dft::statistics;
+namespace indexing = dftracer::utils::utilities::composites::dft::indexing;
 
 DFTRACER_UTILS_RUNTIME_BACKED_SLOTS(StatisticsAggregator,
                                     StatisticsAggregatorObject)
@@ -40,6 +45,16 @@ static PyObject *StatisticsAggregator_compute(StatisticsAggregatorObject *self,
             input.index_dir = index_dir_str;
             input.index_path = dftracer::utils::utilities::composites::dft::
                 internal::determine_index_path(file_path_str, index_dir_str);
+
+            rt->submit(run_coro_scope(rt->executor(),
+                                      [file_path_str, index_dir_str](
+                                          CoroScope &scope) -> CoroTask<void> {
+                                          co_await indexing::ensure_index_fresh(
+                                              &scope, "", file_path_str,
+                                              index_dir_str, false);
+                                      }),
+                       "stats-ensure-fresh")
+                .get();
 
             auto *stats_p = &stats;
             auto input_copy = input;

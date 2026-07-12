@@ -9,6 +9,7 @@
 #include <dftracer/utils/core/utils/string.h>
 #include <dftracer/utils/core/utils/timer.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/index_resolver_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolve_and_build.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/composites/dft/metadata_collector_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -358,6 +359,9 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
                 co_return 1;
             }
 
+            co_await ensure_index_fresh(&ctx, directory, "", index_dir,
+                                        force_rebuild);
+
             auto trusted_index_path =
                 internal::determine_index_path(directory, index_dir);
             if (!force_rebuild && fs::exists(trusted_index_path)) {
@@ -434,6 +438,8 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
             }
         } else {
             ScopedTimer _rs(stages, "resolve_index_state");
+            co_await ensure_indexes_fresh(&ctx, "", cli->files_args.value,
+                                          index_dir, force_rebuild);
             IndexResolverUtility resolver;
             auto input = std::make_unique<ResolverInput>();
             input->files = cli->files_args.value;

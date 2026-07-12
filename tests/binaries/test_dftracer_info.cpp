@@ -205,4 +205,41 @@ TEST_SUITE("DFTracerInfo") {
         int rc = run_info(binary, {"--files", f, "--force-rebuild"});
         CHECK(rc == 0);
     }
+
+    TEST_CASE("rebuilds stale index on changed source") {
+        auto binary = find_info_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_info binary not found, skipping.");
+            return;
+        }
+
+        auto valid_events = [](const std::string& out) -> long {
+            auto p = out.find("Valid Events");
+            if (p == std::string::npos) return -1;
+            p = out.find_first_of("0123456789", p);
+            return p == std::string::npos ? -1 : std::atol(out.c_str() + p);
+        };
+
+        dft_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        auto f = create_pfw_gz(env, 100, 0);
+        REQUIRE(!f.empty());
+
+        int rc = 0;
+        long n1 =
+            valid_events(run_info_capture(binary, {"-d", env.get_dir()}, &rc));
+        CHECK(rc == 0);
+        CHECK(n1 > 0);
+
+        // Rewrite the same file with more events; the index is now stale.
+        auto raw = env.create_dft_test_gzip_file(300);
+        REQUIRE(!raw.empty());
+        fs::remove(f);
+        fs::rename(raw, f);
+
+        long n2 =
+            valid_events(run_info_capture(binary, {"-d", env.get_dir()}, &rc));
+        CHECK(rc == 0);
+        CHECK(n2 > n1);
+    }
 }

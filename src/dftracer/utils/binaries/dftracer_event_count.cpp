@@ -112,6 +112,10 @@ static int run_event_count(const EventCountArgParse* cli) {
     const auto force_rebuild = cli->indexing.force;
     const auto executor_threads = cli->pipeline.executor_threads;
 
+    cli::ensure_indexes_fresh_blocking("DFTracer Event Count Index",
+                                       cli->pipeline, log_dir, {}, index_dir,
+                                       force_rebuild);
+
     IndexResolverUtility resolver;
     ResolverInput resolve_input;
     resolve_input.directory = log_dir;

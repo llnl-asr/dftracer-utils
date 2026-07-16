@@ -1,6 +1,8 @@
 #include <dftracer/utils/utilities/common/query/evaluator.h>
+#include <dftracer/utils/utilities/common/query/pattern.h>
 
 #include <cmath>
+#include <regex>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -106,7 +108,15 @@ bool apply_compare(CompareOp op, std::optional<int> cmp) {
 }
 
 JsonValue resolve_field(const JsonValue& event, const FieldNode& field) {
-    return event.at(field.path);
+    auto v = event.at(field.path);
+    if (!v.is_null()) return v;
+    // DFTracer nests domain fields (fhash, hhash, ret, level, ...) under
+    // "args". Let a bare reference resolve there so nested fields are queryable
+    // by bare name, matching the index dimension names and the ValueMap path.
+    if (field.path.find('.') == std::string::npos) {
+        return event.at("args." + field.path);
+    }
+    return v;
 }
 
 bool eval_node(const QueryNode& node, const JsonValue& event);
@@ -137,6 +147,15 @@ bool eval_not_in(const NotInNode& n, const JsonValue& event) {
     return true;
 }
 
+bool eval_match(const MatchNode& n, const JsonValue& event) {
+    if (!n.compiled) return false;
+    auto fv = resolve_field(event, n.field);
+    if (!fv.is_string()) return false;
+    auto sv = fv.get<std::string_view>();
+    bool m = std::regex_search(sv.begin(), sv.end(), n.compiled->re);
+    return n.negated ? !m : m;
+}
+
 bool eval_node(const QueryNode& node, const JsonValue& event) {
     return std::visit(
         [&event](auto&& n) -> bool {
@@ -147,6 +166,8 @@ bool eval_node(const QueryNode& node, const JsonValue& event) {
                 return eval_in(n, event);
             } else if constexpr (std::is_same_v<T, NotInNode>) {
                 return eval_not_in(n, event);
+            } else if constexpr (std::is_same_v<T, MatchNode>) {
+                return eval_match(n, event);
             } else if constexpr (std::is_same_v<T, AndNode>) {
                 return eval_node(*n.left, event) && eval_node(*n.right, event);
             } else if constexpr (std::is_same_v<T, OrNode>) {
@@ -219,6 +240,15 @@ bool eval_map_node(const QueryNode& node, const ValueMap& fields) {
                     if (cmp && *cmp == 0) return false;
                 }
                 return true;
+            } else if constexpr (std::is_same_v<T, MatchNode>) {
+                if (!n.compiled) return false;
+                auto it = fields.find(n.field.path);
+                if (it == fields.end()) return false;
+                if (!std::holds_alternative<std::string>(it->second))
+                    return false;
+                const auto& s = std::get<std::string>(it->second);
+                bool m = std::regex_search(s.begin(), s.end(), n.compiled->re);
+                return n.negated ? !m : m;
             } else if constexpr (std::is_same_v<T, AndNode>) {
                 return eval_map_node(*n.left, fields) &&
                        eval_map_node(*n.right, fields);

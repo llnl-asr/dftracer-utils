@@ -4,6 +4,7 @@
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/chunk_pruner_utility.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolved_field_rewriter.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_bytes_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_plain_file_line_generator.h>
@@ -31,6 +32,7 @@
 namespace dftracer::utils::utilities::reader {
 
 namespace dft_internal = composites::dft::internal;
+namespace indexing = composites::dft::indexing;
 using common::json::JsonValue;
 using common::query::Query;
 using composites::dft::indexing::ChunkPrunerInput;
@@ -557,6 +559,22 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         query = std::move(*parsed);
     }
 
+    // Resolve virtual fields (resolved.*/r.*) to concrete hash in-clauses via
+    // the index before either the pruner or the per-event evaluator sees the
+    // query, so both operate on plain fhash/hhash/shash predicates.
+    if (query && has_index_ && !index_path_.empty() &&
+        indexing::has_resolved_fields(*query)) {
+        try {
+            indexer::IndexDatabase db(
+                index_path_, rocksdb::RocksDatabase::OpenMode::ReadOnly);
+            if (auto rewritten =
+                    indexing::rewrite_resolved_fields(*query, db)) {
+                query = std::move(*rewritten);
+            }
+        } catch (...) {
+        }
+    }
+
     // chunk_prune_only path: dim_stats already proved every event with the
     // predicate field matches; we still need to skip events lacking the
     // field (e.g., metadata "ph":"M" events). Field-presence probe is
@@ -566,6 +584,11 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
         const auto& fset = query->fields();
         presence_check_paths.assign(fset.begin(), fset.end());
     }
+
+    // Whether any nested field is referenced by dotted path (e.g. "args.ret"),
+    // in which case the ValueMap builders store the dotted key too.
+    const bool query_has_dotted =
+        query && internal::query_references_dotted(*query);
 
     // Fast path: indexed gz files go through a chunk generator with
     // simdjson iterate_many. Query is evaluated on the ondemand document
@@ -633,10 +656,9 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                                 if (nk_r.error()) continue;
                                 auto nv_r = nf.value();
                                 if (nv_r.error()) continue;
-                                auto nk = nk_r.value();
-                                if (!query->references(nk)) continue;
-                                fields[std::string(nk)] =
-                                    ondemand_to_literal(nv_r.value());
+                                internal::store_referenced_nested(
+                                    fields, *query, query_has_dotted, key,
+                                    nk_r.value(), nv_r.value());
                             }
                         } else if (query->references(key)) {
                             fields[std::string(key)] = ondemand_to_literal(val);
@@ -688,9 +710,8 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
                 parser.rewind();
                 parser.for_each_field(nk, [&](std::string_view key,
                                               simdjson::ondemand::value val) {
-                    if (query->references(key)) {
-                        fields[std::string(key)] = ondemand_to_literal(val);
-                    }
+                    internal::store_referenced_nested(
+                        fields, *query, query_has_dotted, nk, key, val);
                 });
             }
             if (!query->evaluate(fields)) continue;

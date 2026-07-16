@@ -2,10 +2,12 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/json/json.h>
 #include <dftracer/utils/utilities/common/query/evaluator.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolved_field_rewriter.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_definition.h>
 #include <dftracer/utils/utilities/composites/dft/views/view_reader_utility.h>
 #include <dftracer/utils/utilities/composites/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/composites/types.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
 #include <simdjson.h>
 
@@ -103,7 +105,29 @@ static void collect_referenced_hashes_batch(
 coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
     const ViewReaderInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("read view");
-    const auto& query = input.query ? input.query : input.view.query;
+    const std::optional<common::query::Query>* query_src =
+        input.query ? &input.query : &input.view.query;
+
+    // Resolve virtual fields (resolved.*/r.*) to concrete hash in-clauses via
+    // the index before per-event evaluation. Holds the rewrite for its
+    // lifetime.
+    std::optional<common::query::Query> rewritten;
+    if (*query_src && !input.index_path.empty() &&
+        dft::indexing::has_resolved_fields(**query_src)) {
+        try {
+            indexer::IndexDatabase db(
+                input.index_path,
+                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+            if (auto rw =
+                    dft::indexing::rewrite_resolved_fields(**query_src, db)) {
+                rewritten = std::move(rw);
+                query_src = &rewritten;
+            }
+        } catch (...) {
+        }
+    }
+
+    const auto& query = *query_src;
     bool use_query = query.has_value();
 
     // Smart metadata buffering:

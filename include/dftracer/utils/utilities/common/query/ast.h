@@ -14,6 +14,13 @@ namespace dftracer::utils::utilities::common::query {
 /// Comparison operators for query expressions.
 enum class CompareOp { EQ, NE, GT, LT, GE, LE };
 
+/// Pattern-match operators. LIKE/ILIKE use SQL wildcards (% = any run, _ = one
+/// char) and match the whole string; REGEX/IREGEX use ECMAScript regex and
+/// search anywhere in the value; ICONTAINS is case-insensitive substring
+/// containment (the "'sub' in field" form). The I* variants are
+/// case-insensitive.
+enum class MatchOp { LIKE, ILIKE, REGEX, IREGEX, ICONTAINS };
+
 /// A field reference (e.g., "cat", "args.level").
 struct FieldNode {
     std::string path;  ///< Dotted path into JSON.
@@ -54,6 +61,18 @@ struct NotInNode {
     ArrayNode values;
 };
 
+/// Compiled regex backing a MatchNode.
+struct CompiledPattern;
+
+/// field like/ilike/~/~* pattern (e.g., name like "%Send%").
+struct MatchNode {
+    FieldNode field;
+    MatchOp op;
+    std::string pattern;   ///< Original pattern text (for round-trip).
+    bool negated = false;  ///< True for "not like"/"not ilike"/!~/!~* forms.
+    std::shared_ptr<CompiledPattern> compiled;  ///< Precompiled matcher.
+};
+
 /// left and right.
 struct AndNode {
     QueryNodePtr left;
@@ -71,8 +90,8 @@ struct NotNode {
     QueryNodePtr operand;
 };
 
-using QueryNodeVariant =
-    std::variant<CompareNode, InNode, NotInNode, AndNode, OrNode, NotNode>;
+using QueryNodeVariant = std::variant<CompareNode, InNode, NotInNode, MatchNode,
+                                      AndNode, OrNode, NotNode>;
 
 /// Sum type for all query AST nodes.
 struct QueryNode {

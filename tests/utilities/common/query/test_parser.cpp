@@ -195,3 +195,72 @@ TEST_CASE("to_string round-trip") {
     auto str = to_string(**result);
     CHECK(str == R"((cat == "POSIX" and dur > 1000))");
 }
+
+TEST_CASE("tokenize - pattern operators") {
+    auto result = tokenize("name ~ 'a' or name ~* 'b' or name !~ 'c'");
+    REQUIRE(result.has_value());
+    auto& t = *result;
+    CHECK(t[1].kind == TokenKind::OP_REGEX);
+    CHECK(t[5].kind == TokenKind::OP_IREGEX);
+    CHECK(t[9].kind == TokenKind::OP_NREGEX);
+}
+
+TEST_CASE("tokenize - like keywords") {
+    auto result = tokenize("name LIKE '%x%' and name ILIKE '%y%'");
+    REQUIRE(result.has_value());
+    CHECK((*result)[1].kind == TokenKind::KW_LIKE);
+    CHECK((*result)[5].kind == TokenKind::KW_ILIKE);
+}
+
+TEST_CASE("parse - like / ilike / regex nodes") {
+    for (const char* q :
+         {R"(name like "%Send%")", R"(name ilike "%send%")", R"(name ~ "Send")",
+          R"(name ~* "send")", R"(name !~ "Send")", R"(name not like "%x%")"}) {
+        auto result = parse(q);
+        REQUIRE_MESSAGE(result.has_value(), q);
+        CHECK(std::holds_alternative<MatchNode>((*result)->data));
+    }
+}
+
+TEST_CASE("parse - substring 'sub' in field") {
+    auto result = parse(R"('send' in name)");
+    REQUIRE(result.has_value());
+    auto& node = **result;
+    REQUIRE(std::holds_alternative<MatchNode>(node.data));
+    auto& m = std::get<MatchNode>(node.data);
+    CHECK(m.field.path == "name");
+    CHECK(m.op == MatchOp::ICONTAINS);
+    CHECK_FALSE(m.negated);
+    CHECK(m.pattern == "send");
+}
+
+TEST_CASE("parse - substring 'sub' not in field") {
+    auto result = parse(R"('send' not in name)");
+    REQUIRE(result.has_value());
+    auto& m = std::get<MatchNode>((*result)->data);
+    CHECK(m.op == MatchOp::ICONTAINS);
+    CHECK(m.negated);
+}
+
+TEST_CASE("parse - field in [array] still membership") {
+    auto result = parse(R"(name in ["a", "b"])");
+    REQUIRE(result.has_value());
+    CHECK(std::holds_alternative<InNode>((*result)->data));
+}
+
+TEST_CASE("parse - invalid regex reports error") {
+    auto result = parse(R"(name ~ "(unclosed")");
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().message.find("Invalid pattern") != std::string::npos);
+}
+
+TEST_CASE("to_string round-trip - patterns") {
+    for (const char* q :
+         {R"(name like "%Send%")", R"(name ilike "%s%")", R"(name ~ "Send")",
+          R"(name ~* "s")", R"(name !~ "Send")", R"(name not like "%x%")",
+          R"("send" in name)", R"("send" not in name)"}) {
+        auto result = parse(q);
+        REQUIRE_MESSAGE(result.has_value(), q);
+        CHECK(to_string(**result) == q);
+    }
+}

@@ -144,6 +144,33 @@ TEST_SUITE("TraceReader") {
         }
     }
 
+    TEST_CASE("Query nested args field by bare and dotted name") {
+        // Test data events carry args:{"ret":1024*i, ...}. Bare `ret` and
+        // dotted `args.ret` must select the same events in the ValueMap path.
+        TestEnvironment env(100);
+        std::string gz_file = env.create_dft_test_gzip_file(100);
+        std::string index_dir = env.get_dir();
+        std::string index_path = env.get_index_path(gz_file);
+        auto indexer = IndexerFactory::create(gz_file, index_path,
+                                              32 * 1024 * 1024, false);
+        REQUIRE(indexer != nullptr);
+        indexer->build();
+
+        TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
+        REQUIRE(reader.has_index());
+
+        ReadConfig bare;
+        bare.query = "ret >= 100000";
+        auto n_bare = count_json_lines(reader.read_json(bare)).get();
+
+        ReadConfig dotted;
+        dotted.query = "args.ret >= 100000";
+        auto n_dotted = count_json_lines(reader.read_json(dotted)).get();
+
+        CHECK(n_bare > 0);
+        CHECK(n_dotted == n_bare);
+    }
+
     TEST_CASE("Read with start_line skip") {
         TestEnvironment env(100);
         std::string gz_file = env.create_dft_test_gzip_file(100);

@@ -70,6 +70,38 @@ inline common::query::LiteralValue ondemand_to_literal(
     return std::string{};
 }
 
+// True if the query references any dotted (nested) field, e.g. "args.ret".
+// Cheap; compute once per read to gate the dotted-key work below.
+inline bool query_references_dotted(const common::query::Query& query) {
+    for (const auto& f : query.fields()) {
+        if (f.find('.') != std::string_view::npos) return true;
+    }
+    return false;
+}
+
+// Store a nested field into the ValueMap under whichever form(s) the query
+// references: the bare child key (`ret`, the canonical form) and/or the dotted
+// path (`args.ret`). `check_dotted` should be query_references_dotted(query),
+// hoisted out of the per-event loop. Consumes `val` exactly once.
+inline void store_referenced_nested(common::query::ValueMap& fields,
+                                    const common::query::Query& query,
+                                    bool check_dotted, std::string_view parent,
+                                    std::string_view child,
+                                    simdjson::ondemand::value val) {
+    bool want_bare = query.references(child);
+    std::string dotted;
+    bool want_dotted = false;
+    if (check_dotted) {
+        dotted.reserve(parent.size() + 1 + child.size());
+        dotted.append(parent).append(".").append(child);
+        want_dotted = query.references(dotted);
+    }
+    if (!want_bare && !want_dotted) return;
+    auto lit = ondemand_to_literal(val);
+    if (want_bare) fields[std::string(child)] = lit;
+    if (want_dotted) fields[std::move(dotted)] = std::move(lit);
+}
+
 // Chunk generator with index-driven pruning. Defined in trace_reader.cpp;
 // shared by read_json (core) and read_arrow (Arrow export).
 coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(

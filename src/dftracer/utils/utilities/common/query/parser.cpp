@@ -1,8 +1,11 @@
 #include <dftracer/utils/utilities/common/query/parser.h>
+#include <dftracer/utils/utilities/common/query/pattern.h>
 
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <memory>
+#include <regex>
 #include <sstream>
 #include <string>
 
@@ -82,6 +85,18 @@ dftracer::utils::expected<std::vector<Token>, QueryError> tokenize(
             pos += 2;
             continue;
         }
+        if (c == '!' && pos + 1 < input.size() && input[pos + 1] == '~') {
+            if (pos + 2 < input.size() && input[pos + 2] == '*') {
+                tokens.push_back(
+                    {TokenKind::OP_NIREGEX, input.substr(start, 3), start});
+                pos += 3;
+            } else {
+                tokens.push_back(
+                    {TokenKind::OP_NREGEX, input.substr(start, 2), start});
+                pos += 2;
+            }
+            continue;
+        }
         if (c == '>' && pos + 1 < input.size() && input[pos + 1] == '=') {
             tokens.push_back({TokenKind::OP_GE, input.substr(start, 2), start});
             pos += 2;
@@ -100,6 +115,18 @@ dftracer::utils::expected<std::vector<Token>, QueryError> tokenize(
         if (c == '<') {
             tokens.push_back({TokenKind::OP_LT, input.substr(start, 1), start});
             ++pos;
+            continue;
+        }
+        if (c == '~') {
+            if (pos + 1 < input.size() && input[pos + 1] == '*') {
+                tokens.push_back(
+                    {TokenKind::OP_IREGEX, input.substr(start, 2), start});
+                pos += 2;
+            } else {
+                tokens.push_back(
+                    {TokenKind::OP_REGEX, input.substr(start, 1), start});
+                ++pos;
+            }
             continue;
         }
 
@@ -194,6 +221,10 @@ dftracer::utils::expected<std::vector<Token>, QueryError> tokenize(
                 kind = TokenKind::KW_NOT;
             else if (iequals(text, "in"))
                 kind = TokenKind::KW_IN;
+            else if (iequals(text, "like"))
+                kind = TokenKind::KW_LIKE;
+            else if (iequals(text, "ilike"))
+                kind = TokenKind::KW_ILIKE;
             else if (iequals(text, "true"))
                 kind = TokenKind::KW_TRUE;
             else if (iequals(text, "false"))
@@ -216,6 +247,86 @@ dftracer::utils::expected<std::vector<Token>, QueryError> tokenize(
 // ============================================================
 
 namespace {
+
+void append_escaped(std::string& out, char c) {
+    switch (c) {
+        case '.':
+        case '\\':
+        case '+':
+        case '*':
+        case '?':
+        case '(':
+        case ')':
+        case '[':
+        case ']':
+        case '{':
+        case '}':
+        case '^':
+        case '$':
+        case '|':
+            out += '\\';
+            [[fallthrough]];
+        default:
+            out += c;
+    }
+}
+
+// Translate a SQL LIKE pattern to an anchored ECMAScript regex: '%' matches any
+// run, '_' matches one char, everything else is literal.
+std::string like_to_regex(const std::string& like) {
+    std::string out = "^";
+    for (char c : like) {
+        if (c == '%') {
+            out += ".*";
+        } else if (c == '_') {
+            out += '.';
+        } else {
+            append_escaped(out, c);
+        }
+    }
+    out += '$';
+    return out;
+}
+
+// Treat the whole literal as a substring to search for (unanchored).
+std::string contains_to_regex(const std::string& sub) {
+    std::string out;
+    for (char c : sub) append_escaped(out, c);
+    return out;
+}
+
+dftracer::utils::expected<std::shared_ptr<CompiledPattern>, std::string>
+compile_pattern(MatchOp op, const std::string& pattern) {
+    std::string regex_src;
+    auto flags = std::regex::ECMAScript;
+    switch (op) {
+        case MatchOp::LIKE:
+            regex_src = like_to_regex(pattern);
+            break;
+        case MatchOp::ILIKE:
+            regex_src = like_to_regex(pattern);
+            flags |= std::regex::icase;
+            break;
+        case MatchOp::REGEX:
+            regex_src = pattern;
+            break;
+        case MatchOp::IREGEX:
+            regex_src = pattern;
+            flags |= std::regex::icase;
+            break;
+        case MatchOp::ICONTAINS:
+            regex_src = contains_to_regex(pattern);
+            flags |= std::regex::icase;
+            break;
+    }
+    try {
+        auto cp = std::make_shared<CompiledPattern>();
+        cp->re = std::regex(regex_src, flags);
+        return cp;
+    } catch (const std::regex_error& e) {
+        return dftracer::utils::unexpected(std::string(e.what()));
+    }
+}
 
 class Parser {
    public:
@@ -300,9 +411,16 @@ class Parser {
             return expr;
         }
 
+        // Python-style substring: 'sub' in field / 'sub' not in field
+        // (case-insensitive). Distinguished from "field in [array]" by the
+        // string literal on the left.
+        if (current().kind == TokenKind::STRING) {
+            return parse_contains();
+        }
+
         if (current().kind != TokenKind::IDENT) {
             return dftracer::utils::unexpected(
-                error("Expected field name or '(', got '" +
+                error("Expected field name, string, or '(', got '" +
                       std::string(current().text) + "'"));
         }
 
@@ -316,15 +434,51 @@ class Parser {
             return make_node(InNode{std::move(field), std::move(*arr)});
         }
         if (current().kind == TokenKind::KW_NOT) {
-            // Look ahead for "in"
-            if (pos_ + 1 < tokens_.size() &&
-                tokens_[pos_ + 1].kind == TokenKind::KW_IN) {
-                advance();  // consume "not"
-                advance();  // consume "in"
-                auto arr = parse_array();
-                if (!arr) return dftracer::utils::unexpected(arr.error());
-                return make_node(NotInNode{std::move(field), std::move(*arr)});
+            // Look ahead for "in", "like", or "ilike".
+            if (pos_ + 1 < tokens_.size()) {
+                auto next = tokens_[pos_ + 1].kind;
+                if (next == TokenKind::KW_IN) {
+                    advance();  // consume "not"
+                    advance();  // consume "in"
+                    auto arr = parse_array();
+                    if (!arr) return dftracer::utils::unexpected(arr.error());
+                    return make_node(
+                        NotInNode{std::move(field), std::move(*arr)});
+                }
+                if (next == TokenKind::KW_LIKE || next == TokenKind::KW_ILIKE) {
+                    advance();  // consume "not"
+                    advance();  // consume "like"/"ilike"
+                    return parse_match(std::move(field),
+                                       next == TokenKind::KW_LIKE
+                                           ? MatchOp::LIKE
+                                           : MatchOp::ILIKE,
+                                       /*negated=*/true);
+                }
             }
+        }
+
+        // Pattern match: like / ilike / ~ / ~* / !~ / !~*
+        switch (current().kind) {
+            case TokenKind::KW_LIKE:
+                advance();
+                return parse_match(std::move(field), MatchOp::LIKE, false);
+            case TokenKind::KW_ILIKE:
+                advance();
+                return parse_match(std::move(field), MatchOp::ILIKE, false);
+            case TokenKind::OP_REGEX:
+                advance();
+                return parse_match(std::move(field), MatchOp::REGEX, false);
+            case TokenKind::OP_IREGEX:
+                advance();
+                return parse_match(std::move(field), MatchOp::IREGEX, false);
+            case TokenKind::OP_NREGEX:
+                advance();
+                return parse_match(std::move(field), MatchOp::REGEX, true);
+            case TokenKind::OP_NIREGEX:
+                advance();
+                return parse_match(std::move(field), MatchOp::IREGEX, true);
+            default:
+                break;
         }
 
         // Comparison
@@ -338,6 +492,77 @@ class Parser {
     FieldNode parse_field() {
         auto& tok = advance();
         return FieldNode{std::string(tok.text)};
+    }
+
+    dftracer::utils::expected<QueryNodePtr, QueryError> parse_match(
+        FieldNode field, MatchOp op, bool negated) {
+        if (current().kind != TokenKind::STRING) {
+            return dftracer::utils::unexpected(
+                error("Expected string pattern, got '" +
+                      std::string(current().text) + "'"));
+        }
+        auto& tok = advance();
+        std::string pattern(tok.text);
+        auto compiled = compile_pattern(op, pattern);
+        if (!compiled) {
+            return dftracer::utils::unexpected(make_error(
+                source_, tok.column, tok.text.empty() ? 1 : tok.text.size(),
+                "Invalid pattern: " + compiled.error()));
+        }
+        MatchNode node;
+        node.field = std::move(field);
+        node.op = op;
+        node.pattern = std::move(pattern);
+        node.negated = negated;
+        node.compiled = std::move(*compiled);
+        return make_node(std::move(node));
+    }
+
+    // 'literal' in field / 'literal' not in field (case-insensitive substring).
+    dftracer::utils::expected<QueryNodePtr, QueryError> parse_contains() {
+        auto& str_tok = advance();  // the string literal
+        std::string literal(str_tok.text);
+
+        bool negated = false;
+        if (current().kind == TokenKind::KW_NOT) {
+            if (pos_ + 1 < tokens_.size() &&
+                tokens_[pos_ + 1].kind == TokenKind::KW_IN) {
+                advance();  // "not"
+                advance();  // "in"
+                negated = true;
+            } else {
+                return dftracer::utils::unexpected(
+                    error("Expected 'in' after 'not'"));
+            }
+        } else if (current().kind == TokenKind::KW_IN) {
+            advance();  // "in"
+        } else {
+            return dftracer::utils::unexpected(
+                error("Expected 'in' after string literal, got '" +
+                      std::string(current().text) + "'"));
+        }
+
+        if (current().kind != TokenKind::IDENT) {
+            return dftracer::utils::unexpected(
+                error("Expected field name after 'in', got '" +
+                      std::string(current().text) + "'"));
+        }
+        auto field = parse_field();
+
+        auto compiled = compile_pattern(MatchOp::ICONTAINS, literal);
+        if (!compiled) {
+            return dftracer::utils::unexpected(
+                make_error(source_, str_tok.column,
+                           str_tok.text.empty() ? 1 : str_tok.text.size(),
+                           "Invalid pattern: " + compiled.error()));
+        }
+        MatchNode node;
+        node.field = std::move(field);
+        node.op = MatchOp::ICONTAINS;
+        node.pattern = std::move(literal);
+        node.negated = negated;
+        node.compiled = std::move(*compiled);
+        return make_node(std::move(node));
     }
 
     dftracer::utils::expected<CompareOp, QueryError> parse_comp_op() {

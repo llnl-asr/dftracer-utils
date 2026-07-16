@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/string_arena.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/indexing/resolved_field_rewriter.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/trace_reader_prefilter.h>
@@ -17,6 +18,7 @@
 
 namespace dftracer::utils::utilities::reader {
 
+namespace indexing = composites::dft::indexing;
 using common::query::Query;
 using internal::build_prefilter;
 using internal::CompiledEqProbe;
@@ -207,7 +209,8 @@ bool arrow_row_from_doc(RecordBatchBuilder& builder,
 }
 
 void collect_query_fields(simdjson::ondemand::document_reference doc,
-                          const Query& query, common::query::ValueMap& out);
+                          const Query& query, bool check_dotted,
+                          common::query::ValueMap& out);
 
 // Run iterate_many over `padded`, build arrow rows, and emit completed
 // batches via `yield_one`. Updates `carry` with the truncated tail (if any)
@@ -216,7 +219,8 @@ template <typename Yield>
 void parse_padded_into_arrow(simdjson::ondemand::parser& bulk_parser,
                              simdjson::padded_string& padded,
                              const std::optional<Query>& query, bool flatten,
-                             RecordBatchBuilder& builder, StringArena& arena,
+                             bool query_has_dotted, RecordBatchBuilder& builder,
+                             StringArena& arena,
                              std::vector<ArrowKeyHint>& hints,
                              std::size_t batch_size, std::string* carry,
                              Yield&& yield_one) {
@@ -232,7 +236,7 @@ void parse_padded_into_arrow(simdjson::ondemand::parser& bulk_parser,
         auto& doc = doc_result.value();
         if (query) {
             common::query::ValueMap fields;
-            collect_query_fields(doc, *query, fields);
+            collect_query_fields(doc, *query, query_has_dotted, fields);
             if (!query->evaluate(fields)) continue;
             doc.rewind();
         }
@@ -286,7 +290,8 @@ std::string collect_matching_lines(std::span<const char> chunk,
 // Extract fields referenced by the query into a ValueMap, walking one level
 // of object nesting. Fields not referenced by the query are skipped.
 void collect_query_fields(simdjson::ondemand::document_reference doc,
-                          const Query& query, common::query::ValueMap& out) {
+                          const Query& query, bool check_dotted,
+                          common::query::ValueMap& out) {
     auto obj = doc.get_object();
     if (obj.error()) return;
     for (auto field : obj.value()) {
@@ -309,9 +314,8 @@ void collect_query_fields(simdjson::ondemand::document_reference doc,
                 if (nk_r.error()) continue;
                 auto nv_r = nf.value();
                 if (nv_r.error()) continue;
-                if (!query.references(nk_r.value())) continue;
-                out[std::string(nk_r.value())] =
-                    ondemand_to_literal(nv_r.value());
+                internal::store_referenced_nested(out, query, check_dotted, key,
+                                                  nk_r.value(), nv_r.value());
             }
         } else if (query.references(key)) {
             out[std::string(key)] = ondemand_to_literal(val);
@@ -330,6 +334,21 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         query = std::move(*parsed);
     }
 
+    // Resolve virtual fields (resolved.*/r.*) to concrete hash in-clauses via
+    // the index before the query drives pruning or per-event evaluation.
+    if (query && has_index_ && !index_path_.empty() &&
+        indexing::has_resolved_fields(*query)) {
+        try {
+            indexer::IndexDatabase db(
+                index_path_, rocksdb::RocksDatabase::OpenMode::ReadOnly);
+            if (auto rewritten =
+                    indexing::rewrite_resolved_fields(*query, db)) {
+                query = std::move(*rewritten);
+            }
+        } catch (...) {
+        }
+    }
+
     // When chunk_prune_only is set, dim_stats already proved every event in
     // the chunk that has the predicate field matches the literal. We still
     // need to skip events that lack the field (e.g., metadata "ph":"M"
@@ -339,6 +358,9 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         const auto& fset = query->fields();
         presence_check_paths.assign(fset.begin(), fset.end());
     }
+
+    const bool query_has_dotted =
+        query && internal::query_references_dotted(*query);
 
     // For AND-of-EQ predicates, evaluate directly against simdjson without
     // ValueMap (avoids wyhash + per-field std::string allocation per row).
@@ -473,7 +495,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
                     if (!eval_compiled_eq(compiled_probes, doc)) continue;
                 } else {
                     common::query::ValueMap fields;
-                    collect_query_fields(doc, *query, fields);
+                    collect_query_fields(doc, *query, query_has_dotted, fields);
                     if (!query->evaluate(fields)) continue;
                 }
                 doc.rewind();

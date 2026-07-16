@@ -45,10 +45,16 @@ enum class TokenKind {
     OP_LT,
     OP_GE,
     OP_LE,
+    OP_REGEX,    // ~
+    OP_IREGEX,   // ~*
+    OP_NREGEX,   // !~
+    OP_NIREGEX,  // !~*
     KW_AND,
     KW_OR,
     KW_NOT,
     KW_IN,
+    KW_LIKE,
+    KW_ILIKE,
     KW_TRUE,
     KW_FALSE,
     LPAREN,

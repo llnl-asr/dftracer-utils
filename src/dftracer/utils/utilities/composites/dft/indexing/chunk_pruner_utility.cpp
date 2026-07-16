@@ -285,6 +285,29 @@ bool histogram_has_events(PrunerContext& ctx, std::uint64_t ckpt,
     }
 }
 
+// Pattern-match nodes (like/ilike/regex/contains) cannot be pruned against
+// chunk stats, so they conservatively yield all chunks. A NotNode wrapping such
+// a subtree must not take the set-difference complement (it would drop every
+// chunk); detect that case and yield all chunks instead.
+bool subtree_has_match(const query_ns::QueryNode& node) {
+    return std::visit(
+        [](auto&& n) -> bool {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, query_ns::MatchNode>) {
+                return true;
+            } else if constexpr (std::is_same_v<T, query_ns::AndNode> ||
+                                 std::is_same_v<T, query_ns::OrNode>) {
+                return subtree_has_match(*n.left) ||
+                       subtree_has_match(*n.right);
+            } else if constexpr (std::is_same_v<T, query_ns::NotNode>) {
+                return subtree_has_match(*n.operand);
+            } else {
+                return false;
+            }
+        },
+        node.data);
+}
+
 // Recursive AST evaluation: returns candidate chunk set
 std::set<std::uint64_t> evaluate_node(const query_ns::QueryNode& node,
                                       PrunerContext& ctx);
@@ -470,6 +493,7 @@ std::set<std::uint64_t> evaluate_node(const query_ns::QueryNode& node,
                 left.insert(right.begin(), right.end());
                 return left;
             } else if constexpr (std::is_same_v<T, query_ns::NotNode>) {
+                if (subtree_has_match(*n.operand)) return ctx.all_chunks;
                 auto inner = evaluate_node(*n.operand, ctx);
                 std::set<std::uint64_t> complement;
                 std::set_difference(

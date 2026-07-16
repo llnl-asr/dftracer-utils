@@ -34,6 +34,7 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/indexing/test_chunk_statistics.cpp
     composites/dft/indexing/test_chunk_indexer.cpp
     composites/dft/indexing/test_chunk_pruner.cpp
+    composites/dft/indexing/test_resolved_field_rewriter.cpp
     composites/dft/indexing/test_manifest_indexer.cpp
     composites/dft/indexing/test_manifest_index_builder.cpp
     composites/dft/indexing/test_manifest_queries.cpp

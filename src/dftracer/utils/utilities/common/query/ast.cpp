@@ -25,6 +25,24 @@ const char* compare_op_str(CompareOp op) {
 
 namespace {
 
+// Operator keyword for a like/regex MatchNode ("in" is handled separately
+// since its serialization is literal-first).
+const char* match_op_str(MatchOp op, bool negated) {
+    switch (op) {
+        case MatchOp::LIKE:
+            return negated ? "not like" : "like";
+        case MatchOp::ILIKE:
+            return negated ? "not ilike" : "ilike";
+        case MatchOp::REGEX:
+            return negated ? "!~" : "~";
+        case MatchOp::IREGEX:
+            return negated ? "!~*" : "~*";
+        case MatchOp::ICONTAINS:
+            break;
+    }
+    return "??";
+}
+
 void literal_to_string(std::ostringstream& os, const LiteralNode& lit) {
     std::visit(
         [&os](auto&& v) {
@@ -66,6 +84,14 @@ void node_to_string(std::ostringstream& os, const QueryNode& node) {
             } else if constexpr (std::is_same_v<T, NotInNode>) {
                 os << n.field.path << " not in ";
                 array_to_string(os, n.values);
+            } else if constexpr (std::is_same_v<T, MatchNode>) {
+                if (n.op == MatchOp::ICONTAINS) {
+                    os << '"' << n.pattern
+                       << (n.negated ? "\" not in " : "\" in ") << n.field.path;
+                } else {
+                    os << n.field.path << ' ' << match_op_str(n.op, n.negated)
+                       << " \"" << n.pattern << '"';
+                }
             } else if constexpr (std::is_same_v<T, AndNode>) {
                 os << '(';
                 node_to_string(os, *n.left);
@@ -97,6 +123,8 @@ void collect_fields_impl(const QueryNode& node,
             } else if constexpr (std::is_same_v<T, InNode>) {
                 out.insert(n.field.path);
             } else if constexpr (std::is_same_v<T, NotInNode>) {
+                out.insert(n.field.path);
+            } else if constexpr (std::is_same_v<T, MatchNode>) {
                 out.insert(n.field.path);
             } else if constexpr (std::is_same_v<T, AndNode>) {
                 collect_fields_impl(*n.left, out);

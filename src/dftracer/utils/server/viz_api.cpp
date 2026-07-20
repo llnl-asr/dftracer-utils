@@ -49,11 +49,31 @@ static constexpr int DEFAULT_VIEWPORT_WIDTH = 1920;
 static constexpr int MIN_VIEWPORT_WIDTH = 320;
 static constexpr int MAX_VIEWPORT_WIDTH = 8192;
 
-/// Normalize the "ts" field in a Chrome Trace Event JSON string by
-/// subtracting an offset.  Returns the modified JSON.  Falls back to
-/// the original string on parse failure.
+// Rewrite the unsigned integer value of `key` (e.g. "\"dur\":") in `json` to
+// `value`. No-op when the key is absent. Returns whether it rewrote.
+static bool rewrite_uint_field(std::string& json, std::string_view key,
+                               std::uint64_t value) {
+    auto pos = json.find(key);
+    if (pos == std::string::npos) return false;
+    pos += key.size();
+    while (pos < json.size() && std::isspace(json[pos])) ++pos;
+    auto end_pos = pos;
+    while (end_pos < json.size() &&
+           (std::isdigit(json[end_pos]) || json[end_pos] == '-')) {
+        ++end_pos;
+    }
+    if (end_pos == pos) return false;
+    json.replace(pos, end_pos - pos, std::to_string(value));
+    return true;
+}
+
+/// Normalize a Chrome Trace Event JSON string: subtract `offset` (native units)
+/// from "ts" and scale ts/dur from the trace's native unit `metric` into
+/// microseconds. Falls back to the original string on parse failure. For a US
+/// trace this only subtracts the offset (scaling is identity).
 static std::string normalize_event_ts(const std::string& event_json,
-                                      std::uint64_t offset) {
+                                      std::uint64_t offset,
+                                      TraceIndex::TimeMetric metric) {
     thread_local simdjson::dom::parser tl_parser;
     auto result = tl_parser.parse(event_json);
     if (result.error()) return event_json;
@@ -74,24 +94,22 @@ static std::string normalize_event_ts(const std::string& event_json,
         return event_json;
     }
 
-    std::uint64_t new_ts = old_ts >= offset ? old_ts - offset : 0;
+    using dftracer::utils::utilities::composites::dft::scale_between;
+    using TM = TraceIndex::TimeMetric;
+    std::uint64_t new_ts =
+        scale_between(metric, TM::US, old_ts >= offset ? old_ts - offset : 0);
 
-    // simdjson DOM is read-only, so we need to rebuild the JSON with the new ts
-    // Find "ts": and replace the value
     std::string modified = event_json;
-    auto pos = modified.find("\"ts\":");
-    if (pos == std::string::npos) return event_json;
+    if (!rewrite_uint_field(modified, "\"ts\":", new_ts)) return event_json;
 
-    pos += 5;  // Skip past "ts":
-    while (pos < modified.size() && std::isspace(modified[pos])) ++pos;
-
-    auto end_pos = pos;
-    while (end_pos < modified.size() &&
-           (std::isdigit(modified[end_pos]) || modified[end_pos] == '-')) {
-        ++end_pos;
+    if (metric != TM::US) {
+        auto dur_result = root["dur"];
+        if (!dur_result.error() && dur_result.is_uint64()) {
+            rewrite_uint_field(
+                modified, "\"dur\":",
+                scale_between(metric, TM::US, dur_result.get_uint64().value()));
+        }
     }
-
-    modified.replace(pos, end_pos - pos, std::to_string(new_ts));
     return modified;
 }
 
@@ -336,10 +354,12 @@ static std::string build_viz_events_body(std::vector<std::string>& events,
                                          std::uint64_t global_min,
                                          double meta_begin, double meta_end,
                                          int limit, bool truncated,
-                                         std::uint64_t display_global_min) {
-    if (global_min > 0) {
+                                         std::uint64_t display_global_min,
+                                         TraceIndex::TimeMetric metric) {
+    // Even without an offset, a non-US trace still needs ts/dur scaled to us.
+    if (global_min > 0 || metric != TraceIndex::TimeMetric::US) {
         for (auto& event : events) {
-            event = normalize_event_ts(event, global_min);
+            event = normalize_event_ts(event, global_min, metric);
         }
     }
 
@@ -536,6 +556,14 @@ static coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     // so the predicate filters against absolute timestamps.
     double original_begin = begin;
     double original_end = end;
+    // Client sends us; the scan matches the native index. Convert first, then
+    // de-normalize against the native base. Identity for US traces.
+    if (index.time_metric() != TraceIndex::TimeMetric::US) {
+        begin = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(begin)));
+        end = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(end)));
+    }
     if (normalize && global_min > 0) {
         begin += static_cast<double>(global_min);
         end += static_cast<double>(global_min);
@@ -589,7 +617,8 @@ static coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
 
     std::string body = build_viz_events_body(
         collected_events, global_min, original_begin, original_end, limit,
-        truncated, index.global_min_timestamp_us());
+        truncated, index.native_to_us(index.global_min_timestamp_us()),
+        index.time_metric());
     co_return HttpResponse::ok(body);
 }
 
@@ -1765,6 +1794,22 @@ static std::string serialize_stats_body(std::uint64_t total_count,
     return std::string(b);
 }
 
+// Scale duration fields (native trace unit -> us) before serialization. The
+// `wall` value is derived from client-us begin/end and is already in us.
+static void scale_stat_durations(std::vector<StatRow>& rows, double& total_dur,
+                                 TraceIndex::TimeMetric metric) {
+    const double us =
+        dftracer::utils::utilities::composites::dft::time_metric_us_scale(
+            metric);
+    if (us == 1.0) return;
+    for (auto& r : rows) {
+        r.total *= us;
+        r.min *= us;
+        r.max *= us;
+    }
+    total_dur *= us;
+}
+
 static const std::vector<VizSummary::GroupRow>& summary_group_rows(
     const VizSummary& s, GroupBy g) {
     switch (g) {
@@ -1828,6 +1873,12 @@ static coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     }
     double original_begin = begin;
     double original_end = end;
+    if (index.time_metric() != TraceIndex::TimeMetric::US) {
+        begin = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(begin)));
+        end = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(end)));
+    }
     if (normalize && global_min > 0) {
         begin += static_cast<double>(global_min);
         end += static_cast<double>(global_min);
@@ -1850,6 +1901,7 @@ static coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
                 total_count += r.count;
                 total_dur += r.total;
             }
+            scale_stat_durations(rows, total_dur, index.time_metric());
             co_return HttpResponse::ok(serialize_stats_body(
                 total_count, total_dur, original_end - original_begin, false,
                 rows));
@@ -1904,6 +1956,7 @@ static coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
         return a.total > b.total;
     });
 
+    scale_stat_durations(rows, total_dur, index.time_metric());
     co_return HttpResponse::ok(
         serialize_stats_body(total_count, total_dur,
                              original_end - original_begin, truncated, rows));
@@ -2202,6 +2255,12 @@ static coro::CoroTask<HttpResponse> handle_viz_calltree(
         if (global_min == std::numeric_limits<std::uint64_t>::max())
             global_min = 0;
     }
+    if (index.time_metric() != TraceIndex::TimeMetric::US) {
+        begin = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(begin)));
+        end = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(end)));
+    }
     if (normalize && global_min > 0) {
         begin += static_cast<double>(global_min);
         end += static_cast<double>(global_min);
@@ -2288,6 +2347,17 @@ static coro::CoroTask<HttpResponse> handle_viz_calltree(
     arena[0].count = root_count;
     arena[0].self = 0;
 
+    // Node total/self are summed native durations; scale to us for display.
+    const double dur_us =
+        dftracer::utils::utilities::composites::dft::time_metric_us_scale(
+            index.time_metric());
+    if (dur_us != 1.0) {
+        for (auto& n : arena) {
+            n.total *= dur_us;
+            if (n.self > 0) n.self *= dur_us;
+        }
+    }
+
     auto& b = scratch_json_builder();
     b.start_object();
     b.append_key_value("truncated", truncated);
@@ -2344,6 +2414,12 @@ static coro::CoroTask<HttpResponse> handle_viz_histogram(
         if (global_min == std::numeric_limits<std::uint64_t>::max())
             global_min = 0;
     }
+    if (index.time_metric() != TraceIndex::TimeMetric::US) {
+        begin = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(begin)));
+        end = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(end)));
+    }
     if (normalize && global_min > 0) {
         begin += static_cast<double>(global_min);
         end += static_cast<double>(global_min);
@@ -2388,6 +2464,13 @@ static coro::CoroTask<HttpResponse> handle_viz_histogram(
     for (auto& p : partials)
         for (double d : p) all.push_back(d);
     std::sort(all.begin(), all.end());
+
+    // Durations are in the trace's native unit; scale to us for display.
+    const double dur_us =
+        dftracer::utils::utilities::composites::dft::time_metric_us_scale(
+            index.time_metric());
+    if (dur_us != 1.0)
+        for (double& d : all) d *= dur_us;
 
     auto& sb = scratch_json_builder();
     if (all.empty()) {
@@ -2511,9 +2594,17 @@ static std::string serialize_density_body(
     const std::vector<std::string>& big, const DensityMap& dens,
     double original_begin, double original_end, double threshold, int limit,
     bool truncated, bool ts_normalized, std::uint64_t display_global_min,
-    double max_dur, const std::vector<std::uint32_t>* big_depth = nullptr,
+    double max_dur, TraceIndex::TimeMetric metric,
+    const std::vector<std::uint32_t>* big_depth = nullptr,
     const ankerl::unordered_dense::map<std::string, std::string>* group_names =
         nullptr) {
+    // Blocks are positioned/sized in native threshold units; scale the visible
+    // time fields (block ts/dur, duration sums, max_dur) to microseconds.
+    const double us =
+        dftracer::utils::utilities::composites::dft::time_metric_us_scale(
+            metric);
+    const double threshold_us = threshold * us;
+    max_dur *= us;
     auto& b = scratch_json_builder();
     b.start_object();
     b.escape_and_append_with_quotes("events");
@@ -2540,8 +2631,8 @@ static std::string serialize_density_body(
     for (const auto& [k, a] : dens) {
         blocks.push_back(
             {a.name, k.pid, k.tid,
-             original_begin + static_cast<double>(k.col) * threshold, threshold,
-             a.count, a.total, a.depth, k.group});
+             original_begin + static_cast<double>(k.col) * threshold_us,
+             threshold_us, a.count, a.total * us, a.depth, k.group});
     }
     b.append_key_value("density", blocks);
     b.append_comma();
@@ -2622,7 +2713,8 @@ static coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
 static std::string serve_density_from_summary(
     const VizSummary& s, const QueryParams& params, double begin_abs,
     double end_abs, double original_begin, double original_end,
-    double threshold, bool ts_normalized, std::uint64_t display_global_min) {
+    double threshold, bool ts_normalized, std::uint64_t display_global_min,
+    TraceIndex::TimeMetric metric) {
     auto pid_s = params.get("pid");
     auto tid_s = params.get("tid");
     bool has_pid = !pid_s.empty();
@@ -2669,9 +2761,10 @@ static std::string serve_density_from_summary(
             static_cast<double>(sp.begin) >= end_abs)
             continue;
         span_lanes.insert((sp.pid << 20) ^ sp.tid);
-        spans.push_back(ts_normalized && display_global_min > 0
-                            ? normalize_event_ts(sp.json, display_global_min)
-                            : sp.json);
+        spans.push_back(
+            ts_normalized && display_global_min > 0
+                ? normalize_event_ts(sp.json, display_global_min, metric)
+                : sp.json);
     }
     // App spans get an injected depth 0; long events after them do not, so the
     // client stacks overlapping wide events instead of piling them on one row.
@@ -2683,9 +2776,10 @@ static std::string serve_density_from_summary(
             static_cast<double>(sp.begin) >= end_abs)
             continue;
         span_lanes.insert((sp.pid << 20) ^ sp.tid);
-        spans.push_back(ts_normalized && display_global_min > 0
-                            ? normalize_event_ts(sp.json, display_global_min)
-                            : sp.json);
+        spans.push_back(
+            ts_normalized && display_global_min > 0
+                ? normalize_event_ts(sp.json, display_global_min, metric)
+                : sp.json);
     }
     // Folded child activity sits one row below its app span, matching the
     // containment nesting the live path computes.
@@ -2694,10 +2788,10 @@ static std::string serve_density_from_summary(
             if (span_lanes.count((k.pid << 20) ^ k.tid)) a.depth = 1;
 
     std::vector<std::uint32_t> span_depth(napp_spans, 0);
-    return serialize_density_body(spans, dens, original_begin, original_end,
-                                  threshold, 0, false, ts_normalized,
-                                  display_global_min,
-                                  static_cast<double>(s.max_dur), &span_depth);
+    return serialize_density_body(
+        spans, dens, original_begin, original_end, threshold, 0, false,
+        ts_normalized, display_global_min, static_cast<double>(s.max_dur),
+        metric, &span_depth);
 }
 
 // GET /api/v1/viz/density: like /viz/events, but instead of dropping sub-pixel
@@ -2777,6 +2871,12 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
     }
     double original_begin = begin;
     double original_end = end;
+    if (index.time_metric() != TraceIndex::TimeMetric::US) {
+        begin = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(begin)));
+        end = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(end)));
+    }
     if (normalize && global_min > 0) {
         begin += static_cast<double>(global_min);
         end += static_cast<double>(global_min);
@@ -2797,7 +2897,9 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
             threshold >= s->bucket_us) {
             co_return HttpResponse::ok(serve_density_from_summary(
                 *s, params, begin, end, original_begin, original_end, threshold,
-                global_min > 0, index.global_min_timestamp_us()));
+                global_min > 0,
+                index.native_to_us(index.global_min_timestamp_us()),
+                index.time_metric()));
         }
     }
 
@@ -2951,13 +3053,15 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
     // normalization rewrites the big strings; order is preserved in place).
     std::vector<std::uint32_t> big_depth =
         assign_view_depths(big, dens, begin, threshold);
-    if (global_min > 0) {
-        for (auto& e : big) e = normalize_event_ts(e, global_min);
+    if (global_min > 0 || index.time_metric() != TraceIndex::TimeMetric::US) {
+        for (auto& e : big)
+            e = normalize_event_ts(e, global_min, index.time_metric());
     }
 
     co_return HttpResponse::ok(serialize_density_body(
         big, dens, original_begin, original_end, threshold, limit, truncated,
-        global_min > 0, index.global_min_timestamp_us(), max_dur, &big_depth,
+        global_min > 0, index.native_to_us(index.global_min_timestamp_us()),
+        max_dur, index.time_metric(), &big_depth,
         group_names.empty() ? nullptr : &group_names));
 }
 
@@ -2994,7 +3098,8 @@ static std::string serve_counters_from_summary(const VizSummary& s,
                                                double begin_abs, double end_abs,
                                                double original_begin,
                                                double original_end, int buckets,
-                                               double bucket_us_out) {
+                                               double bucket_us_out,
+                                               TraceIndex::TimeMetric metric) {
     std::vector<double> read(buckets, 0.0), write(buckets, 0.0),
         ops(buckets, 0.0);
     std::int64_t fb0 = s.bucket_of(begin_abs);
@@ -3011,8 +3116,12 @@ static std::string serve_counters_from_summary(const VizSummary& s,
         write[oi] += s.write_bytes[f];
         ops[oi] += s.ops[f];
     }
-    return serialize_counters_body(read, write, ops, original_begin,
-                                   original_end, buckets, bucket_us_out, false);
+    return serialize_counters_body(
+        read, write, ops, original_begin, original_end, buckets,
+        bucket_us_out *
+            dftracer::utils::utilities::composites::dft::time_metric_us_scale(
+                metric),
+        false);
 }
 
 // GET /api/v1/viz/counters: per-bucket read/write bytes and I/O op counts over
@@ -3048,6 +3157,12 @@ static coro::CoroTask<HttpResponse> handle_viz_counters(
     }
     double original_begin = begin;
     double original_end = end;
+    if (index.time_metric() != TraceIndex::TimeMetric::US) {
+        begin = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(begin)));
+        end = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(end)));
+    }
     if (normalize && global_min > 0) {
         begin += static_cast<double>(global_min);
         end += static_cast<double>(global_min);
@@ -3061,9 +3176,9 @@ static coro::CoroTask<HttpResponse> handle_viz_counters(
         const VizSummary* s = co_await ensure_viz_summary(index);
         if (s && s->bucket_us > 0 && s->t_end > s->t_begin &&
             bucket_us >= s->bucket_us) {
-            co_return HttpResponse::ok(
-                serve_counters_from_summary(*s, begin, end, original_begin,
-                                            original_end, buckets, bucket_us));
+            co_return HttpResponse::ok(serve_counters_from_summary(
+                *s, begin, end, original_begin, original_end, buckets,
+                bucket_us, index.time_metric()));
         }
     }
 
@@ -3097,7 +3212,11 @@ static coro::CoroTask<HttpResponse> handle_viz_counters(
 
     co_return HttpResponse::ok(serialize_counters_body(
         total.read_bytes, total.write_bytes, total.ops, original_begin,
-        original_end, buckets, bucket_us, truncated));
+        original_end, buckets,
+        bucket_us *
+            dftracer::utils::utilities::composites::dft::time_metric_us_scale(
+                index.time_metric()),
+        truncated));
 }
 
 // Process-spawning calls: dftracer POSIX (exact "fork"/"clone"/...) and kernel
@@ -3364,6 +3483,9 @@ static coro::CoroTask<HttpResponse> handle_viz_proctree(
     std::vector<bool> used(inf_forks.size(), false);
     std::vector<ProcNode> nodes;
     nodes.reserve(procs.size());
+    const double proc_dur_us =
+        dftracer::utils::utilities::composites::dft::time_metric_us_scale(
+            index.time_metric());
     for (auto& [fts, pid] : procs) {
         std::int64_t parent = -1;
         std::uint64_t spawn_ts = 0;
@@ -3401,10 +3523,11 @@ static coro::CoroTask<HttpResponse> handle_viz_proctree(
         auto op = io_ops.find(pid);
         auto ib = io_busy.find(pid);
         auto rk = rank.find(pid);
-        nodes.push_back({pid, parent, spawn_ts, fts - base, host,
+        nodes.push_back({pid, parent, index.native_to_us(spawn_ts),
+                         index.native_to_us(fts - base), host,
                          bp != bytes.end() ? bp->second : 0,
                          op != io_ops.end() ? op->second : 0,
-                         ib != io_busy.end() ? ib->second : 0.0,
+                         (ib != io_busy.end() ? ib->second : 0.0) * proc_dur_us,
                          rk != rank.end() ? &rk->second : nullptr});
     }
 
@@ -3488,9 +3611,11 @@ static coro::CoroTask<HttpResponse> handle_viz_breaks(
             if (!first) b.append_comma();
             first = false;
             b.start_object();
-            b.append_key_value("begin", g.first - global_min);
+            b.append_key_value("begin",
+                               index.native_to_us(g.first - global_min));
             b.append_comma();
-            b.append_key_value("end", g.second - global_min);
+            b.append_key_value("end",
+                               index.native_to_us(g.second - global_min));
             b.end_object();
         }
     }

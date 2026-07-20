@@ -495,6 +495,34 @@ void TraceReader::ensure_metadata_cached() {
     metadata_cached_ = true;
 }
 
+coro::CoroTask<composites::dft::TimeMetric> TraceReader::read_time_metric(
+    std::size_t max_lines) {
+    using composites::dft::DFTracerEvent;
+    using composites::dft::TimeMetric;
+
+    ReadConfig probe;
+    probe.end_line = max_lines;
+    auto gen = read_lines(probe);
+    simdjson::dom::parser parser;
+    TimeMetric metric = TimeMetric::US;
+    while (auto line_opt = co_await gen.next()) {
+        const char* start = nullptr;
+        std::size_t len = 0;
+        if (!json_trim_and_validate(line_opt->content.data(),
+                                    line_opt->content.size(), start, len))
+            continue;
+        auto doc = parser.parse(start, len);
+        if (doc.error()) continue;
+        DFTracerEvent event;
+        if (!DFTracerEvent::parse(common::json::JsonValue(doc.value()), event))
+            continue;
+        if (composites::dft::extract_time_metric(event, metric)) break;
+        // CM precedes timeline events; stop once past the metadata header.
+        if (event.is_event()) break;
+    }
+    co_return metric;
+}
+
 std::size_t TraceReader::get_max_bytes() {
     ensure_metadata_cached();
     return cached_max_bytes_;

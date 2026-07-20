@@ -28,6 +28,7 @@ set(UTILITIES_TEST_SOURCES
     composites/dft/test_event_collector.cpp
     composites/dft/test_index_builder.cpp
     composites/dft/test_metadata_collector.cpp
+    composites/dft/test_time_metric.cpp
 
     # DFT Indexing Composites
     composites/dft/indexing/test_bloom_filter.cpp

@@ -5,7 +5,9 @@
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/utilities/common/json/parser.h>
+#include <dftracer/utils/utilities/composites/dft/time_metric.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
@@ -28,6 +30,32 @@ struct JsonLine {
     std::size_t line_number;
     JsonParser* parser;
 };
+
+/// Target output unit for `ts`/`dur` (see ReadConfig::normalize_time). `None`
+/// returns the file's native unit unchanged.
+enum class TimeNormalization {
+    None = 0,
+    Nanoseconds = 1,
+    Microseconds = 2,
+    Milliseconds = 3,
+    Seconds = 4,
+};
+
+/// Map a non-None normalization target to its TimeMetric.
+inline composites::dft::TimeMetric time_normalization_target(
+    TimeNormalization norm) {
+    switch (norm) {
+        case TimeNormalization::Nanoseconds:
+            return composites::dft::TimeMetric::NS;
+        case TimeNormalization::Milliseconds:
+            return composites::dft::TimeMetric::MS;
+        case TimeNormalization::Seconds:
+            return composites::dft::TimeMetric::SEC;
+        case TimeNormalization::Microseconds:
+        default:
+            return composites::dft::TimeMetric::US;
+    }
+}
 
 /// File-level configuration for TraceReader.
 struct TraceReaderConfig {
@@ -76,6 +104,12 @@ struct ReadConfig {
     /// nesting still round-trips as JSON text under the flattened key.
     bool flatten_objects = false;
 
+    /// Target output unit for `ts`/`dur`. Defaults to `None` (native unit
+    /// unchanged). Any other value scales from the file's declared `CM`
+    /// time_metric (absent = us) to that unit. Query DSL predicates always
+    /// match the native index and are unaffected.
+    TimeNormalization normalize_time = TimeNormalization::None;
+
     bool has_line_range() const { return start_line > 0 || end_line > 0; }
     bool has_byte_range() const { return start_byte > 0 || end_byte > 0; }
 };
@@ -107,6 +141,12 @@ class TraceReader {
     coro::AsyncGenerator<common::arrow::ArrowExportResult> read_arrow(
         ReadConfig config = {}, std::size_t batch_size = 10000);
 #endif
+
+    /// Resolve the file's native time unit from its leading `CM` time_metric
+    /// metadata by scanning up to `max_lines` header lines. Returns US when no
+    /// `CM` is declared. Independent of any query filter.
+    coro::CoroTask<composites::dft::TimeMetric> read_time_metric(
+        std::size_t max_lines = 256);
 
     /// True if a `.dftindex` database was found at construction time.
     bool has_index() const;

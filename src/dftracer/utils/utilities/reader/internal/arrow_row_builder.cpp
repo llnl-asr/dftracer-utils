@@ -191,7 +191,7 @@ void append_system_columns(
 // output schema.  Appends one row to `builder` with the full set of output
 // columns.  Returns false if the row should be skipped (no valid name).
 bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
-                   JsonParser &parser) {
+                   JsonParser &parser, TimeScaleState &time_scale) {
     using SVH = JsonValueHelper;
     // --- Single-pass extraction: capture top-level fields and args in one
     // member walk (dispatch on key, any field order). ---
@@ -223,6 +223,11 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     bool is_M = (ph == "M");
     bool is_C = (ph == "C");
     bool is_event = !is_M && !is_C;
+
+    if (is_M && name_sv == "CM" && args.name && *args.name == "time_metric" &&
+        args.value) {
+        time_scale.metric = composites::dft::parse_time_metric(*args.value);
+    }
 
     std::int8_t row_type = ROW_EVENT;
     if (is_M) {
@@ -316,12 +321,21 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     bool has_ts = (is_event || is_C) && ts_opt.has_value();
     bool has_dur = dur_opt.has_value();
     std::int64_t ts_val = 0, dur_val = 0;
+    const bool scale_time =
+        time_scale.target && *time_scale.target != time_scale.metric;
+    auto scaled = [&](std::int64_t v) {
+        return static_cast<std::int64_t>(composites::dft::scale_between(
+            time_scale.metric, *time_scale.target,
+            static_cast<std::uint64_t>(v)));
+    };
     if (has_ts) {
         ts_val = *ts_opt;
+        if (scale_time) ts_val = scaled(ts_val);
         builder.append_int64(ci_ts, ts_val);
     }
     if (is_event && has_ts && has_dur) {
         dur_val = *dur_opt;
+        if (scale_time) dur_val = scaled(dur_val);
         builder.append_int64(ci_dur, dur_val);
         builder.append_int64(ci_te, ts_val + dur_val);
     }
@@ -484,8 +498,9 @@ void flatten_object_into(RecordBatchBuilder &builder, StringArena &arena,
 }
 
 bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
-                     StringArena &arena, bool normalize) {
-    if (normalize) return normalize_row(builder, arena, parser);
+                     StringArena &arena, bool normalize,
+                     TimeScaleState &time_scale) {
+    if (normalize) return normalize_row(builder, arena, parser, time_scale);
 
     using SVH = JsonValueHelper;
     parser.for_each_field([&](std::string_view key_sv,
@@ -559,14 +574,14 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
 
 bool process_json_line(RecordBatchBuilder &builder, JsonParser &parser,
                        StringArena &arena, std::string_view content,
-                       bool normalize) {
+                       bool normalize, TimeScaleState &time_scale) {
     const char *trimmed;
     std::size_t trimmed_length;
     if (!dftracer::utils::json_trim_and_validate_with_comma(
             content.data(), content.size(), trimmed, trimmed_length))
         return false;
     if (!parser.parse(std::string_view(trimmed, trimmed_length))) return false;
-    return build_arrow_row(builder, parser, arena, normalize);
+    return build_arrow_row(builder, parser, arena, normalize, time_scale);
 }
 
 }  // namespace dftracer::utils::utilities::reader::internal

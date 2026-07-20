@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/utilities/common/json/parser.h>
 #include <dftracer/utils/utilities/composites/dft/args_map.h>
+#include <dftracer/utils/utilities/composites/dft/time_metric.h>
 #include <simdjson.h>
 
 #include <string_view>
@@ -29,8 +30,12 @@ void insert_simdjson_value(ArgsMap &map, std::string_view key,
                            simdjson::ondemand::value val);
 
 // Parse one JSON row from `parser` into `ev`, routing the top-level "args"
-// object into ev.args and all other fields into ev.top.
-void parse_json_to_event(common::json::JsonParser &parser, JsonDictEvent &ev);
+// object into ev.args and all other fields into ev.top. When `time_scale`
+// requests a target unit, top-level ts/dur are scaled from the file's native
+// unit into it.
+void parse_json_to_event(
+    common::json::JsonParser &parser, JsonDictEvent &ev,
+    const composites::dft::TimeScaleState &time_scale = {});
 
 }  // namespace dftracer::utils::utilities::reader::internal
 

@@ -70,6 +70,32 @@ sequential or indexed reading and supports streaming iterators:
        # Check progress
        print(rt.get_progress())
 
+Time-unit normalization
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+By default the reader returns ``ts``/``dur`` in the trace's native time unit,
+declared by its ``CM`` ``time_metric`` metadata event (``NS``, ``MS``, ``SEC``,
+or ``US``; absent means microseconds). Pass ``normalize_time`` to
+``read_arrow``/``iter_arrow`` or ``read_json``/``iter_json`` to scale ``ts`` and
+``dur`` into a common unit:
+
+.. code-block:: python
+
+   from dftracer.utils import TimeUnit
+
+   # A trace declaring time_metric=NS: native values are nanoseconds
+   reader.read_json()                            # ts/dur unchanged (native NS)
+   reader.read_json(normalize_time="us")         # scaled to microseconds
+   reader.read_json(normalize_time=TimeUnit.US)  # same, via the enum
+   reader.read_arrow(normalize=True, normalize_time="ms")  # to milliseconds
+
+``normalize_time`` accepts a :class:`~dftracer.utils.TimeUnit`
+(``TimeUnit.NS``/``US``/``MS``/``SEC``) or the equivalent string
+(``"ns"``/``"us"``/``"ms"``/``"sec"``); ``None`` (the default) keeps the native
+unit. The unit is resolved per file and applies even when a ``query`` filters
+out the metadata line. Query predicates (e.g. ``ts >= ...``) always match the
+native index and are unaffected by ``normalize_time``.
+
 Async Task Submission
 ~~~~~~~~~~~~~~~~~~~~~
 

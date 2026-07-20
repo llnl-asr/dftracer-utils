@@ -15,6 +15,7 @@
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
+#include <dftracer/utils/utilities/reader/trace_reader.h>
 
 #include <cinttypes>
 #include <limits>
@@ -332,6 +333,25 @@ coro::CoroTask<void> TraceIndex::initialize() {
         pipeline.set_source(init_task);
         pipeline.set_destination(init_task);
         pipeline.execute();
+    }
+
+    // One time unit per trace: resolve it once from the first file's CM.
+    if (!files_.empty()) {
+        try {
+            utilities::reader::TraceReaderConfig cfg;
+            cfg.file_path = files_.front().path;
+            cfg.index_dir = index_dir_;
+            utilities::reader::TraceReader reader(cfg);
+            time_metric_ = co_await reader.read_time_metric();
+        } catch (const std::exception& e) {
+            DFTRACER_UTILS_LOG_WARN(
+                "TraceIndex: failed to resolve time_metric: %s", e.what());
+        }
+        if (time_metric_ != TimeMetric::US) {
+            DFTRACER_UTILS_LOG_INFO(
+                "TraceIndex: trace time unit is %s (scaling viz to us)",
+                std::string(time_metric_to_string(time_metric_)).c_str());
+        }
     }
 
     DFTRACER_UTILS_LOG_INFO("TraceIndex: found %zu trace files in %s",

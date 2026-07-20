@@ -485,6 +485,7 @@ class TraceReader:
         query: Optional[str] = None,
         batch_size: int = 1024,
         memory_budget: int = 0,
+        normalize_time: Optional[str] = None,
     ) -> Iterator["JsonDictValue"]:
         """Return a streaming iterator over parsed JSON events.
 
@@ -502,6 +503,7 @@ class TraceReader:
         buffer_size: int = 4194304,
         query: Optional[str] = None,
         batch_size: int = 1024,
+        normalize_time: Optional[str] = None,
     ) -> List["JsonDictValue"]:
         """Read all events as parsed :class:`JsonDictValue` wrappers (list).
 
@@ -558,6 +560,7 @@ class TraceReader:
         flatten_objects: bool = False,
         normalize: bool = False,
         memory_budget: int = 0,
+        normalize_time: Optional[str] = None,
     ) -> Iterator["_ArrowBatchCapsule"]:
         """Return iterator over Arrow record batches.
 
@@ -580,6 +583,7 @@ class TraceReader:
         flatten_objects: bool = False,
         normalize: bool = False,
         memory_budget: int = 0,
+        normalize_time: Optional[str] = None,
     ) -> "_ArrowBatchStream":
         """Return an Arrow C Data Interface stream over record batches.
 
@@ -605,6 +609,7 @@ class TraceReader:
         query: Optional[str] = None,
         flatten_objects: bool = False,
         normalize: bool = False,
+        normalize_time: Optional[str] = None,
     ) -> "ArrowTable":
         """Read all events as an ArrowTable.
 

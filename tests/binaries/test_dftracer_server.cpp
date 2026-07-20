@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #include <cerrno>
 #include <chrono>
@@ -43,6 +44,35 @@ std::string create_pfw_gz(dft_utils_test::TestEnvironment& env, int num_events,
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
     fs::rename(trace_gz, pfw_path);
     return pfw_path;
+}
+
+/// Write a gzipped .pfw trace declaring time_metric=NS into `dir`. Events span
+/// ts 5000100000..5020000000 ns (=> 5000100..5020000 us) with durations
+/// 50000..250000 ns (=> 50..250 us), so scaling is observable in the response.
+std::string create_ns_pfw_gz(const std::string& dir) {
+    std::string path = dir + "/ns_trace.pfw.gz";
+    gzFile f = gzopen(path.c_str(), "wb");
+    if (f == nullptr) return "";
+    gzputs(f, "[\n");
+    gzputs(
+        f,
+        "{\"id\":0,\"name\":\"CM\",\"cat\":\"dft\",\"pid\":0,\"tid\":0,"
+        "\"ph\":\"M\",\"args\":{\"name\":\"time_metric\",\"value\":\"NS\"}}\n");
+    for (int i = 1; i <= 200; ++i) {
+        unsigned long long ts =
+            5000000000ULL + static_cast<unsigned long long>(i) * 100000ULL;
+        unsigned long long dur =
+            50000ULL * static_cast<unsigned long long>(1 + (i % 5));
+        char buf[256];
+        std::snprintf(
+            buf, sizeof(buf),
+            "{\"id\":%d,\"name\":\"read\",\"cat\":\"posix\",\"pid\":1,"
+            "\"tid\":%d,\"ts\":%llu,\"dur\":%llu,\"ph\":\"X\"}\n",
+            i, 1000 + i % 3, ts, dur);
+        gzputs(f, buf);
+    }
+    gzclose(f);
+    return path;
 }
 
 /// Find the dftracer_server binary. Checks DFTRACER_SERVER_PATH env first,
@@ -1060,5 +1090,77 @@ TEST_CASE("DFTracer Server - calltree endpoint") {
             "\r\n");
         REQUIRE(!resp.empty());
         CHECK(extract_status_code(resp) == 400);
+    }
+}
+
+// A trace declaring time_metric=NS must be presented in microseconds by the
+// viz/info APIs (native ns values divided by 1000), not the raw ns magnitudes.
+TEST_CASE("DFTracer Server - CM time_metric scales viz to microseconds") {
+    auto binary = find_server_binary();
+    if (binary.empty()) {
+        MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
+        return;
+    }
+
+    dft_utils_test::TestEnvironment env(1);
+    REQUIRE(env.is_valid());
+    auto ns_file = create_ns_pfw_gz(env.get_dir());
+    REQUIRE(!ns_file.empty());
+
+    int port = pick_port() + 1;
+    ServerProcess server;
+    REQUIRE(server.start(binary, env.get_dir(), port));
+
+    // /info bounds are microseconds (5000100..5020000), not native ns.
+    {
+        auto resp = http_request(port,
+                                 "GET /api/v1/info HTTP/1.1\r\n"
+                                 "Host: localhost\r\n"
+                                 "Connection: close\r\n"
+                                 "\r\n");
+        REQUIRE(!resp.empty());
+        CHECK(extract_status_code(resp) == 200);
+        auto body = extract_body(resp);
+        CHECK(body.find("\"min_timestamp_us\":5000100") != std::string::npos);
+        // Max is max(ts+dur): event 199 ends at 5020150000 ns => 5020150 us.
+        CHECK(body.find("\"max_timestamp_us\":5020150") != std::string::npos);
+        // The unscaled native magnitude must not leak through.
+        CHECK(body.find("5000100000") == std::string::npos);
+    }
+
+    // /viz/events durations are microseconds (50..250), not native ns.
+    {
+        auto resp = http_request(
+            port,
+            "GET /api/v1/viz/events?begin=0&end=25000&summary=1 HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Connection: close\r\n"
+            "\r\n");
+        REQUIRE(!resp.empty());
+        CHECK(extract_status_code(resp) == 200);
+        auto body = extract_body(resp);
+        CHECK(body.find("\"dur\":250,") != std::string::npos);
+        CHECK(body.find("\"dur\":250000") == std::string::npos);
+        CHECK(body.find("\"global_min_timestamp_us\":5000100") !=
+              std::string::npos);
+    }
+
+    // /viz/stats aggregates durations in microseconds.
+    {
+        auto resp =
+            http_request(port,
+                         "GET /api/v1/viz/stats?begin=0&end=25000 HTTP/1.1\r\n"
+                         "Host: localhost\r\n"
+                         "Connection: close\r\n"
+                         "\r\n");
+        REQUIRE(!resp.empty());
+        CHECK(extract_status_code(resp) == 200);
+        auto body = extract_body(resp);
+        CHECK(body.find("\"max\":250") != std::string::npos);
+        CHECK(body.find("\"max\":250000") == std::string::npos);
     }
 }

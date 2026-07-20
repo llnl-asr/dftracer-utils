@@ -152,7 +152,37 @@ CoroTask<void> produce_raw_batched(
     }
 }
 
+using dftracer::utils::utilities::composites::dft::TimeScaleState;
+using dftracer::utils::utilities::reader::time_normalization_target;
+using dftracer::utils::utilities::reader::TimeNormalization;
 using dftracer::utils::utilities::reader::internal::parse_json_to_event;
+
+// Map a Python normalize_time string to the reader enum. Empty/None/"native"
+// mean no scaling. Returns false on an unrecognized value.
+static bool parse_normalize_time(const char *s, TimeNormalization &out) {
+    if (!s || !*s) {
+        out = TimeNormalization::None;
+        return true;
+    }
+    std::string v;
+    for (const char *p = s; *p; ++p)
+        v.push_back(
+            static_cast<char>(std::tolower(static_cast<unsigned char>(*p))));
+    if (v == "none" || v == "native") {
+        out = TimeNormalization::None;
+    } else if (v == "ns" || v == "nanoseconds") {
+        out = TimeNormalization::Nanoseconds;
+    } else if (v == "us" || v == "microseconds") {
+        out = TimeNormalization::Microseconds;
+    } else if (v == "ms" || v == "milliseconds") {
+        out = TimeNormalization::Milliseconds;
+    } else if (v == "s" || v == "sec" || v == "seconds") {
+        out = TimeNormalization::Seconds;
+    } else {
+        return false;
+    }
+    return true;
+}
 
 static constexpr std::size_t ESTIMATED_BYTES_PER_LINE = 256;
 static constexpr std::size_t ESTIMATED_BYTES_PER_RAW_CHUNK = 4 * 1024 * 1024;
@@ -166,6 +196,11 @@ CoroTask<void> produce_json_dicts(
     auto guard = producer.guard();
     try {
         TraceReader reader(std::move(cfg));
+        TimeScaleState time_scale;
+        if (rc.normalize_time != TimeNormalization::None) {
+            time_scale.target = time_normalization_target(rc.normalize_time);
+            time_scale.metric = co_await reader.read_time_metric();
+        }
         auto gen = reader.read_json(rc);
         JsonDictBatch batch;
         batch.events.reserve(batch_size);
@@ -174,7 +209,7 @@ CoroTask<void> produce_json_dicts(
             if (state->cancelled.load(std::memory_order_acquire)) break;
 
             JsonDictEvent ev;
-            parse_json_to_event(*opt->parser, ev);
+            parse_json_to_event(*opt->parser, ev, time_scale);
             batch.events.push_back(std::move(ev));
 
             if (batch.events.size() >= batch_size) {
@@ -226,6 +261,11 @@ static CoroTask<void> json_dict_file_worker(
         cfg.auto_build_index = auto_build_index;
 
         TraceReader reader(std::move(cfg));
+        TimeScaleState time_scale;
+        if (rc.normalize_time != TimeNormalization::None) {
+            time_scale.target = time_normalization_target(rc.normalize_time);
+            time_scale.metric = co_await reader.read_time_metric();
+        }
         auto gen = reader.read_json(rc);
         JsonDictBatch batch;
         batch.events.reserve(batch_size);
@@ -233,7 +273,7 @@ static CoroTask<void> json_dict_file_worker(
         while (auto opt = co_await gen.next()) {
             if (cancelled->load(std::memory_order_acquire)) co_return;
             JsonDictEvent ev;
-            parse_json_to_event(*opt->parser, ev);
+            parse_json_to_event(*opt->parser, ev, time_scale);
             batch.events.push_back(std::move(ev));
             if (batch.events.size() >= batch_size) {
                 if (!co_await producer.send(std::move(batch))) co_return;
@@ -511,7 +551,9 @@ using dftracer::utils::utilities::common::arrow::ArrowExportResult;
 using dftracer::utils::utilities::common::arrow::RecordBatchBuilder;
 
 using dftracer::utils::StringArena;
+using dftracer::utils::utilities::reader::TimeNormalization;
 using dftracer::utils::utilities::reader::internal::build_arrow_row;
+using dftracer::utils::utilities::reader::internal::TimeScaleState;
 
 static CoroTask<void> produce_arrow_for_file(
     dftracer::utils::coro::Channel<ArrowExportResult> *chan,
@@ -545,10 +587,17 @@ static CoroTask<void> produce_arrow_for_file(
     RecordBatchBuilder builder;
     builder.reserve(batch_size);
     StringArena arena;
+    TimeScaleState time_scale;
+    if (rc.normalize_time != TimeNormalization::None) {
+        time_scale.target = time_normalization_target(rc.normalize_time);
+        time_scale.metric = co_await reader.read_time_metric();
+    }
 
     while (auto opt = co_await gen.next()) {
         if (cancelled->load(std::memory_order_acquire)) co_return;
-        if (!build_arrow_row(builder, *opt->parser, arena, normalize)) continue;
+        if (!build_arrow_row(builder, *opt->parser, arena, normalize,
+                             time_scale))
+            continue;
         if (builder.num_rows() >= batch_size) {
             auto result = builder.finish();
             arena.clear();
@@ -597,10 +646,16 @@ static CoroTask<void> file_worker(
         RecordBatchBuilder builder;
         builder.reserve(batch_size);
         StringArena arena;
+        TimeScaleState time_scale;
+        if (rc.normalize_time != TimeNormalization::None) {
+            time_scale.target = time_normalization_target(rc.normalize_time);
+            time_scale.metric = co_await reader.read_time_metric();
+        }
 
         while (auto opt = co_await gen.next()) {
             if (cancelled->load(std::memory_order_acquire)) co_return;
-            if (!build_arrow_row(builder, *opt->parser, arena, normalize))
+            if (!build_arrow_row(builder, *opt->parser, arena, normalize,
+                                 time_scale))
                 continue;
             if (builder.num_rows() >= batch_size) {
                 auto result = builder.finish();
@@ -695,10 +750,17 @@ static CoroTask<void> checkpoint_worker(
         RecordBatchBuilder builder;
         builder.reserve(batch_size);
         StringArena arena;
+        TimeScaleState time_scale;
+        if (local_rc.normalize_time != TimeNormalization::None) {
+            time_scale.target =
+                time_normalization_target(local_rc.normalize_time);
+            time_scale.metric = co_await reader_ptr->read_time_metric();
+        }
 
         while (auto opt = co_await gen.next()) {
             if (cancelled->load(std::memory_order_acquire)) co_return;
-            if (!build_arrow_row(builder, *opt->parser, arena, normalize))
+            if (!build_arrow_row(builder, *opt->parser, arena, normalize,
+                                 time_scale))
                 continue;
             if (builder.num_rows() >= batch_size) {
                 auto result = builder.finish();
@@ -834,10 +896,16 @@ CoroTask<void> produce_arrow_batches(
         builder.reserve(batch_size);
 
         StringArena arena;
+        TimeScaleState time_scale;
+        if (rc.normalize_time != TimeNormalization::None) {
+            time_scale.target = time_normalization_target(rc.normalize_time);
+            time_scale.metric = co_await reader.read_time_metric();
+        }
 
         while (auto opt = co_await gen.next()) {
             if (state->cancelled.load(std::memory_order_acquire)) break;
-            if (!build_arrow_row(builder, *opt->parser, arena, normalize))
+            if (!build_arrow_row(builder, *opt->parser, arena, normalize,
+                                 time_scale))
                 continue;
 
             if (builder.num_rows() >= batch_size) {
@@ -1539,20 +1607,30 @@ static PyObject *TraceReader_read_lines(TraceReaderObject *self, PyObject *args,
 
 static PyObject *TraceReader_iter_json(TraceReaderObject *self, PyObject *args,
                                        PyObject *kwds) {
-    static const char *kwlist[] = {"start_line", "end_line",      "start_byte",
-                                   "end_byte",   "buffer_size",   "query",
-                                   "batch_size", "memory_budget", NULL};
+    static const char *kwlist[] = {
+        "start_line",     "end_line", "start_byte", "end_byte",
+        "buffer_size",    "query",    "batch_size", "memory_budget",
+        "normalize_time", NULL};
     Py_ssize_t start_line = 0, end_line = 0;
     Py_ssize_t start_byte = 0, end_byte = 0;
     Py_ssize_t buffer_size = 4 * 1024 * 1024;
     const char *query_str = NULL;
     Py_ssize_t batch_size = 1024;
     Py_ssize_t memory_budget = 0;
+    const char *normalize_time_str = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|nnnnnznn", (char **)kwlist,
-                                     &start_line, &end_line, &start_byte,
-                                     &end_byte, &buffer_size, &query_str,
-                                     &batch_size, &memory_budget)) {
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "|nnnnnznnz", (char **)kwlist, &start_line, &end_line,
+            &start_byte, &end_byte, &buffer_size, &query_str, &batch_size,
+            &memory_budget, &normalize_time_str)) {
+        return NULL;
+    }
+
+    TimeNormalization normalize_time = TimeNormalization::None;
+    if (!parse_normalize_time(normalize_time_str, normalize_time)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "normalize_time must be one of None, 'ns', 'us', 'ms', "
+                        "'sec'");
         return NULL;
     }
 
@@ -1578,6 +1656,7 @@ static PyObject *TraceReader_iter_json(TraceReaderObject *self, PyObject *args,
     rc.start_byte = static_cast<std::size_t>(start_byte);
     rc.end_byte = static_cast<std::size_t>(end_byte);
     rc.buffer_size = static_cast<std::size_t>(buffer_size);
+    rc.normalize_time = normalize_time;
     if (query_str) rc.query = query_str;
 
     auto state = std::make_shared<JsonDictIteratorState>();
@@ -1647,9 +1726,9 @@ static PyObject *TraceReader_read_raw(TraceReaderObject *self, PyObject *args,
 static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
                                         PyObject *kwds) {
     static const char *kwlist[] = {
-        "batch_size", "start_line",    "end_line", "start_byte",
-        "end_byte",   "buffer_size",   "query",    "flatten_objects",
-        "normalize",  "memory_budget", NULL};
+        "batch_size", "start_line",    "end_line",       "start_byte",
+        "end_byte",   "buffer_size",   "query",          "flatten_objects",
+        "normalize",  "memory_budget", "normalize_time", NULL};
     Py_ssize_t batch_size = 10000;
     Py_ssize_t start_line = 0, end_line = 0;
     Py_ssize_t start_byte = 0, end_byte = 0;
@@ -1658,11 +1737,21 @@ static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
     int flatten_objects = 1;  // default: expand top-level objects
     int normalize = 0;
     Py_ssize_t memory_budget = 0;
+    const char *normalize_time_str = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|nnnnnnzppn", (char **)kwlist, &batch_size,
+            args, kwds, "|nnnnnnzppnz", (char **)kwlist, &batch_size,
             &start_line, &end_line, &start_byte, &end_byte, &buffer_size,
-            &query_str, &flatten_objects, &normalize, &memory_budget)) {
+            &query_str, &flatten_objects, &normalize, &memory_budget,
+            &normalize_time_str)) {
+        return NULL;
+    }
+
+    TimeNormalization normalize_time = TimeNormalization::None;
+    if (!parse_normalize_time(normalize_time_str, normalize_time)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "normalize_time must be one of None, 'ns', 'us', 'ms', "
+                        "'sec'");
         return NULL;
     }
 
@@ -1693,6 +1782,7 @@ static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
     rc.end_byte = static_cast<std::size_t>(end_byte);
     rc.buffer_size = static_cast<std::size_t>(buffer_size);
     rc.flatten_objects = flatten_objects != 0;
+    rc.normalize_time = normalize_time;
     if (query_str) rc.query = query_str;
 
     auto state = std::make_shared<ArrowIteratorState>();
@@ -1762,9 +1852,9 @@ static PyObject *TraceReader_iter_arrow(TraceReaderObject *self, PyObject *args,
 static std::shared_ptr<ArrowIteratorState> spawn_arrow_producer(
     TraceReaderObject *self, PyObject *args, PyObject *kwds) {
     static const char *kwlist[] = {
-        "batch_size", "start_line",    "end_line", "start_byte",
-        "end_byte",   "buffer_size",   "query",    "flatten_objects",
-        "normalize",  "memory_budget", NULL};
+        "batch_size", "start_line",    "end_line",       "start_byte",
+        "end_byte",   "buffer_size",   "query",          "flatten_objects",
+        "normalize",  "memory_budget", "normalize_time", NULL};
     Py_ssize_t batch_size = 10000;
     Py_ssize_t start_line = 0, end_line = 0;
     Py_ssize_t start_byte = 0, end_byte = 0;
@@ -1773,11 +1863,21 @@ static std::shared_ptr<ArrowIteratorState> spawn_arrow_producer(
     int flatten_objects = 1;  // default: expand top-level objects
     int normalize = 0;
     Py_ssize_t memory_budget = 0;
+    const char *normalize_time_str = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|nnnnnnzppn", (char **)kwlist, &batch_size,
+            args, kwds, "|nnnnnnzppnz", (char **)kwlist, &batch_size,
             &start_line, &end_line, &start_byte, &end_byte, &buffer_size,
-            &query_str, &flatten_objects, &normalize, &memory_budget)) {
+            &query_str, &flatten_objects, &normalize, &memory_budget,
+            &normalize_time_str)) {
+        return nullptr;
+    }
+
+    TimeNormalization normalize_time = TimeNormalization::None;
+    if (!parse_normalize_time(normalize_time_str, normalize_time)) {
+        PyErr_SetString(PyExc_ValueError,
+                        "normalize_time must be one of None, 'ns', 'us', 'ms', "
+                        "'sec'");
         return nullptr;
     }
 
@@ -1808,6 +1908,7 @@ static std::shared_ptr<ArrowIteratorState> spawn_arrow_producer(
     rc.end_byte = static_cast<std::size_t>(end_byte);
     rc.buffer_size = static_cast<std::size_t>(buffer_size);
     rc.flatten_objects = flatten_objects != 0;
+    rc.normalize_time = normalize_time;
     if (query_str) rc.query = query_str;
 
     auto state = std::make_shared<ArrowIteratorState>();

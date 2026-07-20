@@ -437,11 +437,14 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& req,
 static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
                                                 const QueryParams& /*params*/,
                                                 TraceIndex& index) {
-    auto global_min = index.global_min_timestamp_us();
-    auto global_max = index.global_max_timestamp_us();
+    auto global_min_native = index.global_min_timestamp_us();
+    auto global_max_native = index.global_max_timestamp_us();
     bool has_time_range =
-        global_max > 0 &&
-        global_min != std::numeric_limits<std::uint64_t>::max();
+        global_max_native > 0 &&
+        global_min_native != std::numeric_limits<std::uint64_t>::max();
+    // Client works in microseconds; scale native (index-unit) bounds to us.
+    auto global_min = index.native_to_us(global_min_native);
+    auto global_max = index.native_to_us(global_max_native);
 
     auto& b = scratch_json_builder();
     b.start_object();
@@ -478,10 +481,12 @@ static coro::CoroTask<HttpResponse> handle_info(const HttpRequest& /*req*/,
         if (f.min_timestamp_us > 0 || f.max_timestamp_us > 0) {
             b.append_comma();
             b.append_key_value("min_timestamp_us",
-                               static_cast<std::int64_t>(f.min_timestamp_us));
+                               static_cast<std::int64_t>(
+                                   index.native_to_us(f.min_timestamp_us)));
             b.append_comma();
             b.append_key_value("max_timestamp_us",
-                               static_cast<std::int64_t>(f.max_timestamp_us));
+                               static_cast<std::int64_t>(
+                                   index.native_to_us(f.max_timestamp_us)));
         }
         b.end_object();
     }

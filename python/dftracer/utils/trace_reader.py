@@ -6,6 +6,7 @@ as shims over iter_arrow via pyarrow.
 
 from __future__ import annotations
 
+from enum import Enum
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Type, Union
 
@@ -20,6 +21,27 @@ from .dftracer_utils_ext import (
 if TYPE_CHECKING:
     from .arrow import ArrowTable
     from .runtime import Runtime
+
+
+class TimeUnit(str, Enum):
+    """Target unit for TraceReader ``normalize_time`` (ts/dur scaling)."""
+
+    NS = "ns"
+    US = "us"
+    MS = "ms"
+    SEC = "sec"
+
+
+# Accepts a TimeUnit, its string value, or None (native, no scaling).
+TimeUnitLike = Union[str, TimeUnit, None]
+
+
+def _resolve_time_unit(value: TimeUnitLike) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, TimeUnit):
+        return value.value
+    return value  # plain string; the native layer validates it
 
 
 class TraceReader:
@@ -119,6 +141,7 @@ class TraceReader:
         query: Optional[str] = None,
         batch_size: int = 1024,
         memory_budget: int = 0,
+        normalize_time: TimeUnitLike = None,
     ) -> Iterator[JsonDictValue]:
         return self._native.iter_json(
             start_line=start_line,
@@ -129,6 +152,7 @@ class TraceReader:
             query=query,
             batch_size=batch_size,
             memory_budget=memory_budget,
+            normalize_time=_resolve_time_unit(normalize_time),
         )
 
     def read_json(
@@ -140,6 +164,7 @@ class TraceReader:
         buffer_size: int = 4194304,
         query: Optional[str] = None,
         batch_size: int = 1024,
+        normalize_time: TimeUnitLike = None,
     ) -> List[JsonDictValue]:
         return self._native.read_json(
             start_line=start_line,
@@ -149,6 +174,7 @@ class TraceReader:
             buffer_size=buffer_size,
             query=query,
             batch_size=batch_size,
+            normalize_time=_resolve_time_unit(normalize_time),
         )
 
     # -- raw --
@@ -213,6 +239,7 @@ class TraceReader:
         flatten_objects: bool = False,
         normalize: bool = False,
         memory_budget: int = 0,
+        normalize_time: TimeUnitLike = None,
     ) -> Iterator[_ArrowBatchCapsule]:
         return self._native.iter_arrow(
             batch_size=batch_size,
@@ -225,6 +252,7 @@ class TraceReader:
             flatten_objects=flatten_objects,
             normalize=normalize,
             memory_budget=memory_budget,
+            normalize_time=_resolve_time_unit(normalize_time),
         )
 
     def iter_arrow_stream(
@@ -239,6 +267,7 @@ class TraceReader:
         flatten_objects: bool = False,
         normalize: bool = False,
         memory_budget: int = 0,
+        normalize_time: TimeUnitLike = None,
     ) -> Any:
         return self._native.iter_arrow_stream(
             batch_size=batch_size,
@@ -251,6 +280,7 @@ class TraceReader:
             flatten_objects=flatten_objects,
             normalize=normalize,
             memory_budget=memory_budget,
+            normalize_time=_resolve_time_unit(normalize_time),
         )
 
     def read_arrow(
@@ -264,6 +294,7 @@ class TraceReader:
         query: Optional[str] = None,
         flatten_objects: bool = False,
         normalize: bool = False,
+        normalize_time: TimeUnitLike = None,
     ) -> ArrowTable:
         return self._native.read_arrow(
             batch_size=batch_size,
@@ -275,6 +306,7 @@ class TraceReader:
             query=query,
             flatten_objects=flatten_objects,
             normalize=normalize,
+            normalize_time=_resolve_time_unit(normalize_time),
         )
 
     # -- JSON shims via arrow --

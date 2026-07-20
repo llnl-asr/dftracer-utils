@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/server/viz_summary.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
+#include <dftracer/utils/utilities/composites/dft/time_metric.h>
 
 #include <atomic>
 #include <cstddef>
@@ -60,6 +61,22 @@ class TraceIndex {
         dftracer::utils::utilities::composites::dft::indexing::BloomFilterCache;
     BloomCache& bloom_cache() { return bloom_cache_; }
 
+    // Trace-wide native time unit (one unit per trace), from the leading CM
+    // time_metric of the first file (absent = US). Index/event ts and dur are
+    // stored in this unit; the viz layer converts at its us boundary.
+    using TimeMetric = dftracer::utils::utilities::composites::dft::TimeMetric;
+    TimeMetric time_metric() const { return time_metric_; }
+    std::uint64_t native_to_us(std::uint64_t v) const {
+        return dftracer::utils::utilities::composites::dft::scale_between(
+            time_metric_, TimeMetric::US, v);
+    }
+    std::uint64_t us_to_native(std::uint64_t v) const {
+        return dftracer::utils::utilities::composites::dft::scale_between(
+            TimeMetric::US, time_metric_, v);
+    }
+
+    // Native (index-unit) global bounds. The `_us` names are historical: for a
+    // US trace they are microseconds; for NS/MS/SEC traces use native_to_us().
     std::uint64_t global_min_timestamp_us() const { return global_min_ts_; }
     std::uint64_t global_max_timestamp_us() const { return global_max_ts_; }
 
@@ -88,6 +105,7 @@ class TraceIndex {
     std::unordered_map<std::string, std::size_t> path_to_index_;
     std::uint64_t global_min_ts_ = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t global_max_ts_ = 0;
+    TimeMetric time_metric_ = TimeMetric::US;
     std::size_t max_concurrent_;
     BloomCache bloom_cache_;
 

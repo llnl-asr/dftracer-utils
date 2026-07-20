@@ -35,7 +35,7 @@ from .indexer import (  # noqa: F401
 )
 from .query import Expr, Field  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
-from .trace_reader import TraceReader  # noqa: F401
+from .trace_reader import TimeUnit, TraceReader  # noqa: F401
 
 _default_wrapper: Optional["Runtime"] = None
 
@@ -90,6 +90,7 @@ __all__ = [
     "IndexerCheckpoint",
     "IndexStatus",
     "JsonDictValue",
+    "TimeUnit",
     "TraceReader",
     "Runtime",
     "TaskHandle",

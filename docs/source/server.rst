@@ -250,6 +250,15 @@ Get global metadata about all trace files (time bounds, file listing).
         ]
     }
 
+Time units
+++++++++++
+
+All timestamps and durations in the server API are **microseconds**. If a trace
+declares a different unit via its ``CM`` ``time_metric`` metadata event
+(``NS``/``MS``/``SEC``; absent means ``US``), the server resolves that unit once
+per trace and converts every request bound and response value to microseconds -
+so clients always work in microseconds regardless of the trace's native unit.
+
 Visualization API
 ~~~~~~~~~~~~~~~~~
 

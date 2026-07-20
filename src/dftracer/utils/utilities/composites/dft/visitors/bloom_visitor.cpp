@@ -365,9 +365,12 @@ void BloomVisitor::on_event(const EventRecord& record) {
                 [&](std::string_view key, const common::json::JsonValue&) {
                     if (SKIP.find(key) == SKIP.end()) columns_.emplace(key);
                 });
-            if (record.has_args && record.args_dom.is_object())
-                for (auto kv : record.args_dom.get_object().value_unsafe())
-                    columns_.emplace(kv.key);
+            if (record.has_args) {
+                simdjson::dom::object args_obj;
+                if (record.args_dom.get_object().get(args_obj) ==
+                    simdjson::SUCCESS)
+                    for (auto kv : args_obj) columns_.emplace(kv.key);
+            }
         }
 
         // Observe a fixed slot: adds to bloom (if bloom_idx >= 0) and to

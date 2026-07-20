@@ -18,28 +18,70 @@ function emptyNode(name: string): FlameNode {
 
 // Aggregate every function across all its call sites: self always sums; total
 // sums only at the top-most occurrence on a branch so recursion is not double
-// counted; count sums all occurrences.
-export function functionList(roots: FlameNode[]): FnRow[] {
-  const map = new Map<string, FnRow>();
-  const ancest = new Set<string>();
-  const walk = (n: FlameNode): void => {
-    for (const c of n.children) {
-      let r = map.get(c.name);
-      if (!r) {
-        r = { name: c.name, self: 0, total: 0, count: 0 };
-        map.set(c.name, r);
+// counted; count sums all occurrences. Iterative so large trees can be walked
+// in bounded chunks without blocking the main thread.
+class FnListBuilder {
+  private map = new Map<string, FnRow>();
+  private ancest = new Set<string>();
+  private stack: { n: FlameNode; i: number; added: string | null }[];
+
+  constructor(roots: FlameNode[]) {
+    this.stack = roots.map((r) => ({ n: r, i: 0, added: null as string | null })).reverse();
+  }
+
+  // Process up to `budget` steps; true when the walk is complete.
+  step(budget: number): boolean {
+    const { map, ancest, stack } = this;
+    while (budget-- > 0 && stack.length) {
+      const top = stack[stack.length - 1];
+      if (top.i < top.n.children.length) {
+        const c = top.n.children[top.i++];
+        let r = map.get(c.name);
+        if (!r) {
+          r = { name: c.name, self: 0, total: 0, count: 0 };
+          map.set(c.name, r);
+        }
+        r.self += c.self;
+        r.count += c.count;
+        const nested = ancest.has(c.name);
+        if (!nested) {
+          r.total += c.total;
+          ancest.add(c.name);
+        }
+        stack.push({ n: c, i: 0, added: nested ? null : c.name });
+      } else {
+        stack.pop();
+        if (top.added !== null) ancest.delete(top.added);
       }
-      r.self += c.self;
-      r.count += c.count;
-      const nested = ancest.has(c.name);
-      if (!nested) r.total += c.total;
-      if (!nested) ancest.add(c.name);
-      walk(c);
-      if (!nested) ancest.delete(c.name);
     }
-  };
-  for (const root of roots) walk(root);
-  return [...map.values()];
+    return stack.length === 0;
+  }
+
+  result(): FnRow[] {
+    return [...this.map.values()];
+  }
+}
+
+export function functionList(roots: FlameNode[]): FnRow[] {
+  const b = new FnListBuilder(roots);
+  while (!b.step(1 << 20)) {
+    /* drain synchronously */
+  }
+  return b.result();
+}
+
+// Chunked variant: yields to the event loop between chunks so the UI stays
+// responsive on huge trees. `isStale` aborts a superseded computation.
+export async function functionListAsync(
+  roots: FlameNode[],
+  isStale?: () => boolean,
+): Promise<FnRow[]> {
+  const b = new FnListBuilder(roots);
+  while (!b.step(50000)) {
+    if (isStale?.()) return [];
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  return b.result();
 }
 
 // Merge every subtree rooted at `name` into one tree (the callees view).

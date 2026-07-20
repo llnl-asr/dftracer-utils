@@ -66,6 +66,10 @@ struct VizSummary {
     // operation with its real layer instead of guessing from the name.
     std::vector<std::pair<std::string, std::string>> name_cats;
 
+    // Every groupable column present in the trace (top-level scalar fields +
+    // args keys), harvested once per distinct event name. Sorted.
+    std::vector<std::string> columns;
+
     std::size_t total_files = 0;  // distinct files declared by FH metadata
     std::size_t io_files = 0;     // subset actually read from or written to
 
@@ -77,6 +81,12 @@ struct VizSummary {
         std::string json;  // absolute ts; normalized per request
     };
     std::vector<AppSpan> app_spans;
+
+    // Events wider than one summary bucket, kept whole: folded into their
+    // start-bucket cell they would collapse to a 1px sliver at zoom-out.
+    // Served as real spans by the summary density path.
+    std::vector<AppSpan> long_events;
+    static constexpr std::size_t MAX_LONG_EVENTS = 20'000;
 
     // Absolute-us spans between runs (no lane active, no process alive). Any
     // present means a multi-run trace the viewer can timelapse-compress.

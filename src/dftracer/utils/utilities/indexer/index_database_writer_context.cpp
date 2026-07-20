@@ -49,6 +49,7 @@ using encoding::file_category_counts_key;
 using encoding::file_name_counts_key;
 using encoding::file_pid_tid_counts_key;
 using encoding::file_scalar_stats_key;
+using encoding::make_column_key;
 using encoding::make_dimension_key;
 using encoding::manifest_event_key;
 using encoding::name_chunk_owner_key;
@@ -926,6 +927,15 @@ void IndexDatabaseWriterContext::insert_checkpoint(
     auto status = db_->put(batch_, rocks::cf::CHECKPOINTS, key, value);
     if (!status.ok()) {
         throw_db_error("Failed to insert checkpoint", status);
+    }
+}
+
+void IndexDatabaseWriterContext::insert_column(int file_id,
+                                               std::string_view column) {
+    const auto key = make_column_key(file_id, column);
+    auto status = db_->put(batch_, cf::DIMENSIONS, key, "");
+    if (!status.ok()) {
+        throw_db_error("Failed to insert column", status);
     }
 }
 

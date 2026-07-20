@@ -84,6 +84,10 @@ class IndexBatchSink {
     virtual void insert_index_dimension(int file_id,
                                         std::string_view dimension) = 0;
 
+    // A groupable column name present in the file (top-level scalar field or
+    // args key). Not a pruning dimension; stored under the "c|" prefix.
+    virtual void insert_column(int file_id, std::string_view column) = 0;
+
     virtual void insert_chunk_dimension_stats(
         int file_id, std::uint64_t checkpoint_idx,
         const ChunkDimensionStats& stats,

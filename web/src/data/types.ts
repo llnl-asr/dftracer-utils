@@ -33,6 +33,7 @@ export interface VizResponse {
 
 // One aggregated block of sub-pixel events (Perfetto-style density LOD).
 export interface DensityBlock {
+  group?: string; // group_by value; absent when grouping is off or value missing
   name: string;
   pid: number;
   tid: number;
@@ -46,7 +47,8 @@ export interface DensityBlock {
 export interface VizDensityResponse {
   events: TraceEvent[];
   density: DensityBlock[];
-  metadata: VizMetadata & { density_count?: number };
+  // group_names maps raw group values (e.g. fhash) to display names.
+  metadata: VizMetadata & { density_count?: number; group_names?: Record<string, string> };
 }
 
 // Per-bucket I/O counters for bandwidth/IOPS tracks (GET /api/v1/viz/counters).
@@ -79,6 +81,7 @@ export interface VizQuery {
   limit?: number;
   lookback?: number; // scan back this far to catch events that overlap the window
   width?: number; // canvas width in px; sets the server's 1px fold cutoff
+  groupBy?: string; // density grouping column (server group_by)
 }
 
 // One process in the inferred fork hierarchy (GET /api/v1/viz/proctree).

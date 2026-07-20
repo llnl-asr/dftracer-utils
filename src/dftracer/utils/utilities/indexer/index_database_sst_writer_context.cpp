@@ -272,6 +272,12 @@ void IndexDatabaseSstWriterContext::insert_index_dimension(
         encoding::make_dimension_key(file_id, dimension), std::string{});
 }
 
+void IndexDatabaseSstWriterContext::insert_column(int file_id,
+                                                  std::string_view column) {
+    dimensions_buf_.emplace_back(encoding::make_column_key(file_id, column),
+                                 std::string{});
+}
+
 void IndexDatabaseSstWriterContext::insert_chunk_dimension_stats(
     int file_id, std::uint64_t checkpoint_idx, const ChunkDimensionStats& stats,
     std::size_t value_counts_cap) {

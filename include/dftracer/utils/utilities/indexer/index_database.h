@@ -170,6 +170,11 @@ class IndexDatabase {
 
     std::vector<std::string> query_index_dimensions(int file_id) const;
 
+    /// Distinct groupable column names across all files in this index
+    /// (top-level scalar fields + args keys), harvested at index build. Empty
+    /// for indexes built before column discovery existed.
+    std::vector<std::string> query_all_columns() const;
+
     bool has_index_dimension(int file_id, std::string_view dimension) const;
 
     std::vector<ChunkStatisticsResult> query_chunk_statistics(

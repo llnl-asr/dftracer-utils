@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_SERVER_HTTP_REQUEST_H
 #define DFTRACER_UTILS_SERVER_HTTP_REQUEST_H
 
+#include <dftracer/utils/server/cancel.h>
+
 #include <cstddef>
 #include <string_view>
 #include <utility>
@@ -13,6 +15,10 @@ struct HttpRequest {
     std::string_view path;
     int minor_version = 0;
     std::vector<std::pair<std::string_view, std::string_view>> headers;
+
+    /// Cooperative cancellation for this request's handler. Empty (never
+    /// cancelled) unless set by the connection handler.
+    CancelToken cancel_token;
 
     /// Parse from receive buffer.
     /// Returns bytes consumed on success, -1 on error,

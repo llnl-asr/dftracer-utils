@@ -54,6 +54,121 @@ export interface Gap {
   dur: number;
 }
 
+// Ordered lane-grouping hierarchy. The default reproduces the classic
+// host > process > thread gutter; any other order/subset uses the generic
+// header/leaf layout. "col" groups by an event column (see setLaneGrouping's
+// `column`), e.g. cat, name, or args.ret.
+export type LaneGroupLevel = "host" | "pid" | "tid" | "col";
+export const DEFAULT_LANE_GROUPS: readonly LaneGroupLevel[] = ["host", "pid", "tid"];
+
+// Group for events missing the column (or when the column does not exist).
+export const NONE_GROUP = "(none)";
+// Overflow bucket when a column has more distinct values than fits in lanes.
+export const OTHER_GROUP = "(other)";
+const MAX_COL_GROUPS = 120;
+
+// Value of `col` in an event for lane grouping, as a display string. Dotted
+// paths walk nested objects; bare names fall back into args. Missing, null,
+// empty, or non-scalar values group under NONE_GROUP so no event is dropped.
+export function eventGroupValue(ev: TraceEvent, col: string): string {
+  const rec = ev as unknown as Record<string, unknown>;
+  let v: unknown;
+  if (col.includes(".")) {
+    v = col
+      .split(".")
+      .reduce<unknown>(
+        (cur, key) =>
+          cur !== null && typeof cur === "object"
+            ? (cur as Record<string, unknown>)[key]
+            : undefined,
+        rec,
+      );
+  } else {
+    v = rec[col];
+    if (v == null) {
+      const args = rec["args"];
+      if (args !== null && typeof args === "object") v = (args as Record<string, unknown>)[col];
+    }
+  }
+  if (v == null || typeof v === "object") return NONE_GROUP;
+  const s = String(v);
+  return s === "" ? NONE_GROUP : s;
+}
+
+const HASH_ALIAS: Record<string, string> = {
+  fhash: "resolved.fpath",
+  hhash: "resolved.hostname",
+  exec_hash: "resolved.exec",
+  cmd_hash: "resolved.cmd",
+  cwd: "resolved.cwd",
+};
+
+// Add a column and, for hash columns, its resolved.* alias.
+export function addGroupColumn(into: Set<string>, name: string): void {
+  into.add(name);
+  const bare = name.startsWith("args.") ? name.slice(5) : name;
+  if (HASH_ALIAS[bare]) into.add(HASH_ALIAS[bare]);
+}
+
+// Harvest groupable column names from raw events: scalar top-level fields and
+// args keys (bare names work via the args fallback), plus resolved.* aliases
+// for hash columns. Samples a bounded prefix; accumulates into `into`. Used as
+// a fallback until the authoritative /viz/columns list arrives.
+export function collectGroupColumns(events: TraceEvent[], into: Set<string>): void {
+  const SKIP_TOP = new Set(["pid", "tid", "ts", "dur", "ph", "id", "args", "depth"]);
+  let n = 0;
+  for (const ev of events) {
+    if (n++ >= 300) break;
+    const rec = ev as unknown as Record<string, unknown>;
+    for (const [k, v] of Object.entries(rec)) {
+      if (SKIP_TOP.has(k)) continue;
+      if (v !== null && v !== "" && typeof v !== "object") addGroupColumn(into, k);
+    }
+    const args = rec["args"];
+    if (args !== null && typeof args === "object") {
+      for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
+        if (v !== null && v !== "" && typeof v !== "object") addGroupColumn(into, k);
+      }
+    }
+  }
+}
+
+// Order two group values: numeric when both look numeric (so mhost 2 < 10),
+// otherwise a natural compare that orders embedded numbers by value.
+export function compareGroupKeys(a: string, b: string): number {
+  const na = Number(a);
+  const nb = Number(b);
+  const aNum = a.trim() !== "" && Number.isFinite(na);
+  const bNum = b.trim() !== "" && Number.isFinite(nb);
+  if (aNum && bNum) return na - nb || (a < b ? -1 : a > b ? 1 : 0);
+  if (aNum) return -1; // numbers before text
+  if (bNum) return 1;
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+}
+
+// Lowest free row for a span starting at `ts`, greedy interval partitioning:
+// reuses any row whose occupant has ended, so staggered overlapping spans pack
+// into max-concurrency rows (a pure stack would give every span a new row).
+// Marks the chosen row busy until `end`.
+export function takeRow(rowEnds: number[], ts: number, end: number): number {
+  for (let r = 0; r < rowEnds.length; r++) {
+    if (rowEnds[r] <= ts) {
+      rowEnds[r] = end;
+      return r;
+    }
+  }
+  rowEnds.push(end);
+  return rowEnds.length - 1;
+}
+
+// Map a raw group value (e.g. an fhash) to its server-resolved display name;
+// unresolved values pass through unchanged.
+export function resolveGroup(value: string, names?: Record<string, string>): string {
+  if (!names) return value;
+  const n = names[value];
+  return n === undefined || n === "" ? value : n;
+}
+
 export interface TimelineCallbacks {
   // Fired (debounced) when the target time window changes; the app turns this
   // into a /viz/events query.
@@ -120,6 +235,10 @@ export class Timeline {
   // Every (pid/tid) lane ever seen, so a track stays visible (empty) when the
   // current window has no events for it, instead of vanishing on zoom.
   private laneRegistry = new Set<string>();
+
+  private groupSpec: LaneGroupLevel[] = [...DEFAULT_LANE_GROUPS];
+  private groupColumn = ""; // event column backing the "col" level
+  private knownColumns = new Set<string>(); // groupable columns seen in events
 
   // Fork hierarchy (by pid): DFS order, depth, parent, and spawn timestamp.
   private procOrder = new Map<number, number>();
@@ -558,7 +677,11 @@ export class Timeline {
     return this.searchIdx + 1;
   }
 
-  setData(events: TraceEvent[], density: DensityBlock[] = []): void {
+  setData(
+    events: TraceEvent[],
+    density: DensityBlock[] = [],
+    groupNames?: Record<string, string>,
+  ): void {
     const byLane = new Map<string, Slice[]>();
     const push = (key: string, s: Slice) => {
       let arr = byLane.get(key);
@@ -568,12 +691,17 @@ export class Timeline {
       }
       arr.push(s);
     };
+    collectGroupColumns(events, this.knownColumns);
+    const colActive = this.colGroupingActive();
     for (const ev of events) {
       if (ev.ph === "M") continue; // metadata
       const ts = num(ev.ts);
       const dur = num(ev.dur);
       if (!Number.isFinite(ts) || dur < 0) continue;
-      push(`${ev.pid}/${ev.tid}`, {
+      const key = colActive
+        ? `${ev.pid}/${ev.tid}\u0000${resolveGroup(eventGroupValue(ev, this.groupColumn), groupNames)}`
+        : `${ev.pid}/${ev.tid}`;
+      push(key, {
         ev,
         ts,
         dur,
@@ -585,7 +713,8 @@ export class Timeline {
         density: false,
       });
     }
-    // Aggregated density blocks render as slices too.
+    // Aggregated density blocks render as slices too. The server echoes the
+    // group_by value per block; blocks without one land in "(none)".
     for (const b of density) {
       const synthetic = {
         name: b.name,
@@ -600,7 +729,10 @@ export class Timeline {
         total: b.total,
         aggregated: true,
       } as unknown as TraceEvent;
-      push(`${b.pid}/${b.tid}`, {
+      const bkey = colActive
+        ? `${b.pid}/${b.tid}\u0000${resolveGroup(b.group ? b.group : NONE_GROUP, groupNames)}`
+        : `${b.pid}/${b.tid}`;
+      push(bkey, {
         ev: synthetic,
         ts: b.ts,
         dur: b.dur,
@@ -644,10 +776,55 @@ export class Timeline {
     this.layoutLanes();
   }
 
+  setLaneGrouping(spec: LaneGroupLevel[], column = ""): void {
+    const clean = spec
+      .filter((v, i) => spec.indexOf(v) === i)
+      .filter((v) => v !== "col" || column !== "");
+    if (clean.length === 0) return;
+    const col = clean.includes("col") ? column : "";
+    if (clean.join() === this.groupSpec.join() && col === this.groupColumn) return;
+    // Lane keys embed the column value, so a column change invalidates the
+    // bucketed data; the app refetches after this.
+    const shapeChanged = col !== this.groupColumn;
+    this.groupSpec = clean;
+    this.groupColumn = col;
+    this.collapsed.clear(); // collapse keys are hierarchy-specific
+    if (shapeChanged) {
+      this.laneRegistry.clear();
+      this.slicesByKey = new Map();
+    }
+    this.layoutLanes();
+  }
+
+  laneGrouping(): LaneGroupLevel[] {
+    return [...this.groupSpec];
+  }
+
+  knownGroupColumns(): string[] {
+    return [...this.knownColumns].sort();
+  }
+
+  addKnownColumns(names: string[]): void {
+    for (const n of names) addGroupColumn(this.knownColumns, n);
+  }
+
+  private colGroupingActive(): boolean {
+    return this.groupColumn !== "" && this.groupSpec.includes("col");
+  }
+
+  private isDefaultGrouping(): boolean {
+    return this.groupSpec.join() === DEFAULT_LANE_GROUPS.join();
+  }
+
+  private layoutLanes(): void {
+    if (this.isDefaultGrouping()) this.layoutLanesDefault();
+    else this.layoutLanesGeneric();
+  }
+
   // Build the gutter tree: host -> process (fork DFS) -> thread. Collapsed
   // groups fold their descendants' slices into one summary row so load still
   // shows. Assigns each slice a target lane + stack depth and flows y.
-  private layoutLanes(): void {
+  private layoutLanesDefault(): void {
     const orderOf = (pid: number) => this.procOrder.get(pid) ?? 1e9 + pid;
     // Band by node/host. procOrder is rank-ordered, so bands sort by their
     // lowest rank (below) and lanes within a band sort by rank.
@@ -801,27 +978,191 @@ export class Timeline {
       for (const r of roots) walk(r, 0);
     }
 
-    const slices: Slice[] = [];
-    const openByLane = new Map<number, number[]>();
+    this.finishLayout(lanes, targetOf, new Set());
+  }
+
+  // Generic layout for a non-default grouping: an ordered hierarchy over lane
+  // attributes. Non-leaf levels render as collapsible summary headers; the last
+  // level renders bars. Lanes that merge several (pid, tid) keys stack on the
+  // client, since server depths are per-thread.
+  private layoutLanesGeneric(): void {
+    const spec = this.groupSpec;
+    interface Leaf {
+      key: string;
+      pid: number;
+      tid: string;
+      host: string;
+      group: string;
+    }
+    const leaves: Leaf[] = [];
+    const hostPids = new Map<string, number[]>();
+    for (const k of this.laneRegistry) {
+      const nul = k.indexOf("\u0000");
+      const base = nul === -1 ? k : k.slice(0, nul);
+      const group = nul === -1 ? NONE_GROUP : k.slice(nul + 1);
+      const slash = base.indexOf("/");
+      const pid = Number(base.slice(0, slash));
+      const host = this.hostByPid.get(pid) ?? "unknown";
+      leaves.push({ key: k, pid, tid: base.slice(slash + 1), host, group });
+      let a = hostPids.get(host);
+      if (!a) {
+        a = [];
+        hostPids.set(host, a);
+      }
+      if (!a.includes(pid)) a.push(pid);
+    }
+    this.hostPids = hostPids;
+
+    const orderOf = (pid: number) => this.procOrder.get(pid) ?? 1e9 + pid;
+    const valOf = (l: Leaf, lvl: LaneGroupLevel) =>
+      lvl === "host" ? l.host : lvl === "pid" ? String(l.pid) : lvl === "tid" ? l.tid : l.group;
+    const labelOf = (lvl: LaneGroupLevel, v: string) =>
+      lvl === "host"
+        ? v
+        : lvl === "pid"
+          ? (this.processLabels.get(v) ?? "proc " + v)
+          : lvl === "tid"
+            ? "thread " + v
+            : `${this.groupColumn} ${v}`;
+
+    const lanes: Lane[] = [];
+    const targetOf = new Map<string, number>();
+    const merged = new Set<number>();
+    const colActive = this.colGroupingActive();
+    const routeAll = (members: Leaf[], idx: number) => {
+      for (const m of members) targetOf.set(m.key, idx);
+      // Merged multi-key lanes, and any column-split lane (a subset of one
+      // thread's events), need client-side depth packing.
+      if (members.length > 1 || colActive) merged.add(idx);
+    };
+
+    const build = (subset: Leaf[], levelIdx: number, path: string, indent: number): void => {
+      const lvl = spec[levelIdx];
+      const groups = new Map<string, Leaf[]>();
+      for (const l of subset) {
+        const v = valOf(l, lvl);
+        let a = groups.get(v);
+        if (!a) {
+          a = [];
+          groups.set(v, a);
+        }
+        a.push(l);
+      }
+      const keys = [...groups.keys()].sort((a, b) => {
+        if (lvl === "pid") return orderOf(Number(a)) - orderOf(Number(b));
+        if (lvl === "tid") return Number(a) - Number(b);
+        if (lvl === "col") {
+          // Missing/overflow buckets last; numeric values sort numerically,
+          // everything else lexicographically.
+          if (a === NONE_GROUP) return 1;
+          if (b === NONE_GROUP) return -1;
+          return compareGroupKeys(a, b);
+        }
+        const ma = Math.min(...groups.get(a)!.map((l) => orderOf(l.pid)));
+        const mb = Math.min(...groups.get(b)!.map((l) => orderOf(l.pid)));
+        return ma - mb || (a < b ? -1 : 1);
+      });
+      // A high-cardinality column would explode the lane count; overflow into
+      // one "(other)" bucket instead.
+      let entries: [string, Leaf[]][] = keys.map((v) => [v, groups.get(v)!]);
+      if (lvl === "col" && entries.length > MAX_COL_GROUPS) {
+        const keep = entries.slice(0, MAX_COL_GROUPS);
+        const rest = entries.slice(MAX_COL_GROUPS).flatMap(([, m]) => m);
+        keep.push([OTHER_GROUP, rest]);
+        entries = keep;
+      }
+      const isLeaf = levelIdx === spec.length - 1;
+      for (const [v, members] of entries) {
+        const laneKey = path + lvl + ":" + v;
+        const idx = lanes.length;
+        if (isLeaf) {
+          lanes.push({
+            key: laneKey,
+            pid: lvl === "pid" || members.length === 1 ? String(members[0].pid) : "",
+            tid: lvl === "tid" || members.length === 1 ? members[0].tid : "",
+            rows: 1,
+            y: 0,
+            kind: lvl === "tid" ? "thread" : "proc",
+            label: labelOf(lvl, v),
+            indent,
+            collapsible: false,
+            collapseKey: "",
+            flatten: false,
+            host: members[0].host,
+            processFirst: levelIdx === 0,
+            soleThread: false,
+            depth: levelIdx,
+          });
+          routeAll(members, idx);
+        } else {
+          lanes.push({
+            key: laneKey,
+            pid: "",
+            tid: "",
+            rows: 1,
+            y: 0,
+            // "host" kind drives band gaps and host-level column aggregation,
+            // so only host levels get it; other headers render as proc rows.
+            kind: lvl === "host" ? "host" : "proc",
+            label: labelOf(lvl, v),
+            indent,
+            collapsible: true,
+            collapseKey: laneKey,
+            flatten: true,
+            host: lvl === "host" ? v : members[0].host,
+            processFirst: true,
+            soleThread: false,
+            depth: levelIdx,
+          });
+          if (this.collapsed.has(laneKey)) routeAll(members, idx);
+          else build(members, levelIdx + 1, laneKey + "|", indent + TWIST_W);
+        }
+      }
+    };
+    build(leaves, 0, "", 0);
+    this.finishLayout(lanes, targetOf, merged);
+  }
+
+  // Route slices to their lanes, stack them, and flow lane y offsets.
+  // `clientStack` lanes merge several (pid, tid) keys, so the server depth
+  // does not apply and the client open-stack is used instead.
+  private finishLayout(
+    lanes: Lane[],
+    targetOf: Map<string, number>,
+    clientStack: Set<number>,
+  ): void {
+    const byLane = new Map<number, Slice[]>();
     for (const [key, arr] of this.slicesByKey) {
       const idx = targetOf.get(key);
       if (idx == null) continue;
-      const lane = lanes[idx];
-      arr.sort((a, b) => a.ts - b.ts || b.dur - a.dur);
-      let open = openByLane.get(idx);
-      if (!open) {
-        open = [];
-        openByLane.set(idx, open);
+      let a = byLane.get(idx);
+      if (!a) {
+        a = [];
+        byLane.set(idx, a);
       }
+      for (const s of arr) a.push(s);
+    }
+
+    const slices: Slice[] = [];
+    for (const [idx, arr] of byLane) {
+      const lane = lanes[idx];
+      const useClient = clientStack.has(idx);
+      arr.sort((a, b) => a.ts - b.ts || b.dur - a.dur);
+      const rowEnds: number[] = [];
       for (const s of arr) {
-        while (open.length && open[open.length - 1] <= s.ts) open.pop();
         s.laneIdx = idx;
         // Prefer the server-computed depth (stable across zoom); fall back to
-        // the client stack for data sources that do not supply one.
+        // greedy row packing for slices that do not supply one.
         if (lane.flatten) s.depth = 0;
-        else if (s.sdepth >= 0) s.depth = s.sdepth;
-        else s.depth = open.length;
-        if (!s.density && !lane.flatten && s.sdepth < 0) open.push(s.ts + Math.max(s.dur, 0));
+        else if (!useClient && s.sdepth >= 0) s.depth = s.sdepth;
+        else if (s.density) {
+          // Density blocks peek at the next free row without occupying it.
+          let r = 0;
+          while (r < rowEnds.length && rowEnds[r] > s.ts) r++;
+          s.depth = r;
+        } else {
+          s.depth = takeRow(rowEnds, s.ts, s.ts + Math.max(s.dur, 0));
+        }
         lane.rows = Math.max(lane.rows, s.depth + 1);
         slices.push(s);
       }
@@ -1600,6 +1941,8 @@ export class Timeline {
   // clone to the child, drawn only on selection to avoid flow-arrow clutter.
   private renderSpawnArrows(ctx: CanvasRenderingContext2D): void {
     if (this.procParent.size === 0) return;
+    // Fork arrows assume pid rows nested under hosts; skip in custom groupings.
+    if (!this.isDefaultGrouping()) return;
     const laneOfPid = new Map<number, Lane>();
     for (const lane of this.lanes) {
       const p = Number(lane.pid);

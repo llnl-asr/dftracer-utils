@@ -122,6 +122,11 @@ class BloomVisitor : public DftEventVisitor {
     ChunkIndexerConfig config_;
     std::vector<std::string> extra_dim_names_;
     std::vector<ChunkState> chunks_;
+
+    // Groupable columns across the file, harvested once per distinct event name
+    // (schema is per name). Written under the "c|" prefix at finalize.
+    dftracer::utils::StringViewSet columns_;
+    dftracer::utils::StringViewSet col_seen_names_;
     /// Number of checkpoints already flushed and dropped from `chunks_`.
     /// `chunks_[i]` represents checkpoint `chunks_base_idx_ + i`.
     std::size_t chunks_base_idx_ = 0;

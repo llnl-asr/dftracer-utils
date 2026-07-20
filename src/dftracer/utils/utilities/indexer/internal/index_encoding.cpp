@@ -120,6 +120,14 @@ std::string make_dimension_key(int file_id, std::string_view dimension) {
     return key;
 }
 
+std::string make_column_key(int file_id, std::string_view column) {
+    std::string key("c|");
+    key.reserve(2 + sizeof(std::uint32_t) + column.size());
+    rocks::KeyCodec::append_be32(key, static_cast<std::uint32_t>(file_id));
+    key.append(column);
+    return key;
+}
+
 std::string chunk_bloom_key(int file_id, std::string_view dimension,
                             std::uint64_t checkpoint_idx) {
     std::string key = prefix_for_file(file_id);

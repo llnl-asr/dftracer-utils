@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <string>
@@ -306,6 +307,37 @@ TEST_SUITE("IndexDatabase") {
         }
 
         CHECK(db.query_file_pids(file_id).empty());
+    }
+
+    TEST_CASE("column store round-trips and unions across files") {
+        auto root = dft_utils_test::make_unique_test_path("idx_columns");
+        fs::create_directories(root);
+        IndexDatabase db((root / ".dftindex").string());
+
+        // Empty before anything is written (old-index compatibility path).
+        CHECK(db.query_all_columns().empty());
+
+        int f1, f2;
+        {
+            auto writer = db.begin_write();
+            writer->init_schema();
+            f1 = writer->get_or_create_file_info("a.pfw.gz", 0x1111);
+            f2 = writer->get_or_create_file_info("b.pfw.gz", 0x2222);
+            writer->insert_index_dimension(f1, "name");  // "d|" space
+            writer->insert_column(f1, "cat");
+            writer->insert_column(f1, "mhost");
+            writer->insert_column(f2, "mhost");  // duplicate across files
+            writer->insert_column(f2, "fhash");
+            writer->commit();
+        }
+
+        auto cols = db.query_all_columns();  // sorted, de-duplicated union
+        CHECK(cols == std::vector<std::string>{"cat", "fhash", "mhost"});
+
+        // Columns live under "c|" and must not leak into the dimension scan.
+        auto dims = db.query_index_dimensions(f1);
+        CHECK(std::find(dims.begin(), dims.end(), "name") != dims.end());
+        CHECK(std::find(dims.begin(), dims.end(), "cat") == dims.end());
     }
 }
 

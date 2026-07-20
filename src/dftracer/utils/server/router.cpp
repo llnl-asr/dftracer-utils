@@ -147,7 +147,8 @@ coro::CoroTask<HttpResponse> Router::handle(const HttpRequest& req) {
             .headers = {{"Access-Control-Allow-Methods", "GET, POST, OPTIONS"},
                         {"Access-Control-Allow-Headers",
                          "Authorization, "
-                         "Content-Type"},
+                         "Content-Type, "
+                         "X-Request-Id"},
                         {"Access-Control-Max-Age", "86400"}},
             .body = ""};
     }

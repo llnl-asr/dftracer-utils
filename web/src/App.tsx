@@ -1,6 +1,7 @@
-import { createEffect, createSignal, onCleanup, onMount, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
 import {
   fetchCallTree,
+  fetchColumns,
   fetchHistogram,
   fetchInfo,
   fetchLayers,
@@ -12,7 +13,7 @@ import {
   fetchVizStats,
   SINGLE_FILE,
 } from "./data/api";
-import { calleesTree, callersTree, functionList } from "./flame/sandwich";
+import { calleesTree, callersTree, functionListAsync, type FnRow } from "./flame/sandwich";
 import type {
   DensityBlock,
   FlameNode,
@@ -24,7 +25,7 @@ import type {
 } from "./data/types";
 import { CONFIG } from "./data/config";
 import { onHostMessage, post } from "./data/vscode";
-import { Timeline, type Gap } from "./timeline/timeline";
+import { DEFAULT_LANE_GROUPS, Timeline, type Gap, type LaneGroupLevel } from "./timeline/timeline";
 import { ApiExplorer } from "./api/ApiExplorer";
 import { Flamegraph } from "./flame/flamegraph";
 import { SandwichView } from "./flame/SandwichView";
@@ -230,6 +231,39 @@ export default function App() {
   const [showGaps, setShowGaps] = createSignal(false);
   const [multiRun, setMultiRun] = createSignal(false);
   const [timelapse, setTimelapse] = createSignal(false);
+  const ALL_LANE_LEVELS: LaneGroupLevel[] = ["host", "pid", "tid", "col"];
+  const LANE_LEVEL_LABEL: Record<LaneGroupLevel, string> = {
+    host: "host",
+    pid: "process",
+    tid: "thread",
+    col: "column",
+  };
+  const [laneGroups, setLaneGroups] = createSignal<LaneGroupLevel[]>([...DEFAULT_LANE_GROUPS]);
+  const [laneGroupColumn, setLaneGroupColumn] = createSignal("");
+  const [laneColumnOptions, setLaneColumnOptions] = createSignal<string[]>([]);
+  const [showLanePanel, setShowLanePanel] = createSignal(false);
+  const isDefaultLaneGroups = () => laneGroups().join() === DEFAULT_LANE_GROUPS.join();
+  // The column actually in effect ("" unless a col level with a name is active).
+  const activeLaneColumn = () =>
+    laneGroups().includes("col") && laneGroupColumn().trim() ? laneGroupColumn().trim() : "";
+  const moveLaneGroup = (i: number, d: number) => {
+    const a = [...laneGroups()];
+    const j = i + d;
+    if (j < 0 || j >= a.length) return;
+    [a[i], a[j]] = [a[j], a[i]];
+    setLaneGroups(a);
+  };
+  let prevLaneColumn = "";
+  createEffect(() => {
+    const col = activeLaneColumn();
+    timeline?.setLaneGrouping(laneGroups(), col);
+    // Column grouping changes the lane keys and the density group_by, so the
+    // current window must be refetched.
+    if (col !== prevLaneColumn) {
+      prevLaneColumn = col;
+      if (lastRange) requestData(lastRange[0], lastRange[1]);
+    }
+  });
   const [gaps, setGaps] = createSignal<Gap[]>([]);
   const [sidebarOpen, setSidebarOpen] = createSignal(false);
   const [analyzeTab, setAnalyzeTab] = createSignal<"name" | "file" | "pid" | "cat">("name");
@@ -300,15 +334,28 @@ export default function App() {
   let anFlameInflight: AbortController | undefined;
   let anFlameKey: string | null = null;
   const isFlameTab = () => bottomTab() === "bottlenecks" || bottomTab() === "bottomup";
-  // bottlenecks ranks by inclusive time, bottom-up by self (exclusive) time.
-  const bottomFns = () => {
+  // The full-tree walk runs once per tree, chunked so it never freezes the UI;
+  // the previous list stays visible while a new one computes.
+  const [bottomFnsRaw, setBottomFnsRaw] = createSignal<FnRow[]>([]);
+  let bottomFnsGen = 0;
+  createEffect(() => {
     const t = anFlameTree();
-    if (!t) return [];
-    const list = functionList([t]);
+    const gen = ++bottomFnsGen;
+    if (!t) {
+      setBottomFnsRaw([]);
+      return;
+    }
+    void functionListAsync([t], () => gen !== bottomFnsGen).then((list) => {
+      if (gen === bottomFnsGen) setBottomFnsRaw(list);
+    });
+  });
+  // bottlenecks ranks by inclusive time, bottom-up by self (exclusive) time.
+  const bottomFns = createMemo(() => {
+    const list = [...bottomFnsRaw()];
     return bottomTab() === "bottomup"
       ? list.sort((a, b) => b.self - a.self)
       : list.sort((a, b) => b.total - a.total);
-  };
+  });
   // Cache Analyze results per (query, tab); the whole-trace scan is expensive.
   const analyzeCache = new Map<string, SelectionStats>();
   const [distKey, setDistKey] = createSignal<string | null>(null);
@@ -331,6 +378,30 @@ export default function App() {
     const t = inspSwTree();
     const n = inspSwName();
     return t && n ? calleesTree([t], n) : null;
+  };
+
+  const busy = () =>
+    loading() ||
+    flameLoading() ||
+    analyzeLoading() ||
+    eventLogLoading() ||
+    anFlameLoading() ||
+    distLoading();
+
+  // Each fetch's finally clears its own state; the abort also cancels server-side.
+  const cancelAll = () => {
+    for (const ac of [
+      inflight,
+      overviewInflight,
+      counterInflight,
+      flameInflight,
+      analyzeInflight,
+      eventLogInflight,
+      anFlameInflight,
+      distInflight,
+      inspInflight,
+    ])
+      ac?.abort();
   };
   // Cached per query, shared by every selection's sandwich to avoid refetching.
   let inspTreeQuery: string | null = null;
@@ -559,7 +630,9 @@ export default function App() {
     if (v === "flamegraph" || v === "sandwich") loadFlame();
   }
 
+  let lastRange: [number, number] | null = null;
   async function requestData(begin: number, end: number) {
+    lastRange = [begin, end];
     inflight?.abort();
     const ac = new AbortController();
     inflight = ac;
@@ -574,12 +647,14 @@ export default function App() {
           query: appliedQuery(),
           lookback: maxDurSeen,
           width: timeline?.viewportWidth(),
+          groupBy: activeLaneColumn() || undefined,
         },
         ac.signal,
       );
       if (ac.signal.aborted) return;
       setMeta(res.metadata);
-      timeline?.setData(res.events, res.density);
+      timeline?.setData(res.events, res.density, res.metadata.group_names);
+      setLaneColumnOptions(timeline?.knownGroupColumns() ?? []);
 
       // Single-file view: the file's data may be a tiny sliver of the global
       // (multi-node) span, so fit the viewport to it on first load.
@@ -846,6 +921,27 @@ export default function App() {
     }
   }
 
+  let columnsLoaded = false;
+  async function loadColumns() {
+    if (columnsLoaded) return;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try {
+        const res = await fetchColumns();
+        if (res.columns.length) {
+          timeline?.addKnownColumns(res.columns);
+          setLaneColumnOptions(timeline?.knownGroupColumns() ?? []);
+        }
+        if (res.ready) {
+          columnsLoaded = true;
+          return;
+        }
+      } catch {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 1000)); // summary still building
+    }
+  }
+
   onMount(async () => {
     timeline = new Timeline(canvas, {
       onRangeChange: (b, e) => ensureData(b, e),
@@ -897,67 +993,70 @@ export default function App() {
         if (saved !== "dark" && saved !== "light") applyTheme(e.matches ? "light" : "dark");
       });
     }
-    if (NEEDS_LOAD) return; // no server yet; the load screen is shown instead
-    try {
-      const i = await fetchInfo();
-      setInfo(i);
-      const tr = i.time_range;
-      const span = tr ? tr.max_timestamp_us - tr.min_timestamp_us : 0;
-      if (span > 0) {
-        totalSpan = span;
-        timeline.setTotalSpan(span);
-        fetchVizBreaks()
-          .then((br) => {
-            setMultiRun(br.multi_run);
-            setTimelapse(br.multi_run);
-            timeline?.setBreaks(br.gaps, br.multi_run);
-          })
-          .catch(() => {});
-        loadOverview();
-      } else {
-        setError("No indexed events with a valid time range were found.");
-      }
-      // Retry once if empty: the first request may race the summary build.
-      const loadLayers = async (retry: boolean) => {
-        try {
-          const r = await fetchLayers();
-          setFileCounts({ total: r.total_files, io: r.io_files });
-          if (Object.keys(r.layers).length) LAYER_MAP = r.layers;
-          else if (retry) setTimeout(() => loadLayers(false), 1500);
-        } catch {
-          /* heuristic fallback */
+    async function boot() {
+      if (NEEDS_LOAD) return; // no server yet; the load screen is shown instead
+      try {
+        const i = await fetchInfo();
+        setInfo(i);
+        const tr = i.time_range;
+        const span = tr ? tr.max_timestamp_us - tr.min_timestamp_us : 0;
+        if (span > 0) {
+          totalSpan = span;
+          timeline?.setTotalSpan(span);
+          fetchVizBreaks()
+            .then((br) => {
+              setMultiRun(br.multi_run);
+              timeline?.setBreaks(br.gaps, false);
+            })
+            .catch(() => {});
+          loadOverview();
+          void loadColumns();
+        } else {
+          setError("No indexed events with a valid time range were found.");
         }
-      };
-      loadLayers(true);
-      // Fork hierarchy for lane ordering + spawn arrows; best-effort.
-      fetchProcTree()
-        .then((pt) => {
-          timeline?.setProcTree(pt.nodes);
-          const hosts = new Map<number, string>();
-          const bytes = new Map<number, number>();
-          const ioBusy = new Map<number, number>();
-          const labels = new Map<string, string>();
-          const ranks = new Map<string, string>();
-          for (const n of pt.nodes) {
-            if (n.host) hosts.set(n.pid, n.host);
-            if (n.bytes) bytes.set(n.pid, n.bytes);
-            if (n.io_busy) ioBusy.set(n.pid, n.io_busy);
-            const hasRank = n.rank != null && n.rank !== "";
-            labels.set(String(n.pid), hasRank ? `rank ${n.rank}` : `proc ${n.pid}`);
-            if (hasRank) ranks.set(String(n.pid), n.rank as string);
+        // Retry once if empty: the first request may race the summary build.
+        const loadLayers = async (retry: boolean) => {
+          try {
+            const r = await fetchLayers();
+            setFileCounts({ total: r.total_files, io: r.io_files });
+            if (Object.keys(r.layers).length) LAYER_MAP = r.layers;
+            else if (retry) setTimeout(() => loadLayers(false), 1500);
+          } catch {
+            /* heuristic fallback */
           }
-          timeline?.setHosts(hosts);
-          timeline?.setBytes(bytes);
-          timeline?.setIoBusy(ioBusy);
-          timeline?.setProcessLabels(labels);
-          setProcRank(ranks);
-          setGaps(timeline?.topGaps(15) ?? []); // relabel with resolved ranks
-          loadKpis(new Set(pt.nodes.map((n) => n.pid)).size);
-        })
-        .catch(() => loadKpis(0));
-    } catch (err) {
-      setError(`Failed to load /api/v1/info: ${(err as Error).message}`);
+        };
+        loadLayers(true);
+        // Fork hierarchy for lane ordering + spawn arrows; best-effort.
+        fetchProcTree()
+          .then((pt) => {
+            timeline?.setProcTree(pt.nodes);
+            const hosts = new Map<number, string>();
+            const bytes = new Map<number, number>();
+            const ioBusy = new Map<number, number>();
+            const labels = new Map<string, string>();
+            const ranks = new Map<string, string>();
+            for (const n of pt.nodes) {
+              if (n.host) hosts.set(n.pid, n.host);
+              if (n.bytes) bytes.set(n.pid, n.bytes);
+              if (n.io_busy) ioBusy.set(n.pid, n.io_busy);
+              const hasRank = n.rank != null && n.rank !== "";
+              labels.set(String(n.pid), hasRank ? `rank ${n.rank}` : `proc ${n.pid}`);
+              if (hasRank) ranks.set(String(n.pid), n.rank as string);
+            }
+            timeline?.setHosts(hosts);
+            timeline?.setBytes(bytes);
+            timeline?.setIoBusy(ioBusy);
+            timeline?.setProcessLabels(labels);
+            setProcRank(ranks);
+            setGaps(timeline?.topGaps(15) ?? []); // relabel with resolved ranks
+            loadKpis(new Set(pt.nodes.map((n) => n.pid)).size);
+          })
+          .catch(() => loadKpis(0));
+      } catch (err) {
+        setError(`Failed to load /api/v1/info: ${(err as Error).message}`);
+      }
     }
+    void boot();
   });
 
   function onGlobalKey(e: KeyboardEvent) {
@@ -1120,6 +1219,22 @@ export default function App() {
               onClick={() => setShowLegend(!showLegend())}
             >
               Legend
+            </button>
+            <button
+              type="button"
+              class="ghost"
+              classList={{ active: !isDefaultLaneGroups() }}
+              title="Group timeline lanes (order and levels)"
+              onClick={() => {
+                const open = !showLanePanel();
+                setShowLanePanel(open);
+                if (open) {
+                  void loadColumns();
+                  setLaneColumnOptions(timeline?.knownGroupColumns() ?? []);
+                }
+              }}
+            >
+              Lanes
             </button>
             <button
               type="button"
@@ -1472,11 +1587,12 @@ export default function App() {
                     {(_flame) => {
                       const metricOf = (n: { self: number; total: number }) =>
                         bottomTab() === "bottomup" ? n.self : n.total;
-                      const grand = () =>
+                      const grand = createMemo(() =>
                         Math.max(
                           1,
                           bottomFns().reduce((s2, n) => s2 + metricOf(n), 0),
-                        );
+                        ),
+                      );
                       return (
                         <table class="kv stats analyze-table op-table">
                           <thead>
@@ -1686,7 +1802,119 @@ export default function App() {
             </aside>
           </Show>
 
-          <Show when={selected()}>
+          <Show when={showLanePanel()}>
+            <aside class="inspector">
+              <div class="sidebar-head">
+                <b>LANE GROUPING</b>
+                <button class="ghost sm" onClick={() => setShowLanePanel(false)}>
+                  x
+                </button>
+              </div>
+              <div class="insp-scroll">
+                <div class="lane-config">
+                  <div class="lane-sec-title">grouping order</div>
+                  <div class="lane-group-list">
+                    <For each={laneGroups()}>
+                      {(lvl, i) => (
+                        <div class="lane-group-row">
+                          <span class="lane-group-name">
+                            {i() + 1}.{" "}
+                            {lvl === "col"
+                              ? `column: ${laneGroupColumn() || "(pick below)"}`
+                              : LANE_LEVEL_LABEL[lvl]}
+                          </span>
+                          <button
+                            class="ghost sm"
+                            disabled={i() === 0}
+                            title="move up"
+                            onClick={() => moveLaneGroup(i(), -1)}
+                          >
+                            ^
+                          </button>
+                          <button
+                            class="ghost sm"
+                            disabled={i() === laneGroups().length - 1}
+                            title="move down"
+                            onClick={() => moveLaneGroup(i(), 1)}
+                          >
+                            v
+                          </button>
+                          <button
+                            class="ghost sm"
+                            disabled={laneGroups().length === 1}
+                            title="remove level"
+                            onClick={() => setLaneGroups(laneGroups().filter((x) => x !== lvl))}
+                          >
+                            x
+                          </button>
+                        </div>
+                      )}
+                    </For>
+                    <Show when={!isDefaultLaneGroups()}>
+                      <button
+                        class="ghost sm lane-group-reset"
+                        onClick={() => {
+                          setLaneGroups([...DEFAULT_LANE_GROUPS]);
+                          setLaneGroupColumn("");
+                        }}
+                      >
+                        reset to host / process / thread
+                      </button>
+                    </Show>
+                  </div>
+                  <div class="lane-sec-title">candidates</div>
+                  <div class="lane-cands">
+                    <For
+                      each={ALL_LANE_LEVELS.filter((l) => l !== "col" && !laneGroups().includes(l))}
+                    >
+                      {(lvl) => (
+                        <button
+                          class="ghost sm lane-cand"
+                          onClick={() => setLaneGroups([...laneGroups(), lvl])}
+                        >
+                          + {LANE_LEVEL_LABEL[lvl]}
+                        </button>
+                      )}
+                    </For>
+                    <For each={laneColumnOptions()}>
+                      {(c) => (
+                        <button
+                          class="ghost sm lane-cand"
+                          classList={{
+                            active: laneGroups().includes("col") && laneGroupColumn() === c,
+                          }}
+                          title="group lanes by this column"
+                          onClick={() => {
+                            setLaneGroupColumn(c);
+                            if (!laneGroups().includes("col"))
+                              setLaneGroups([...laneGroups(), "col"]);
+                          }}
+                        >
+                          + {c}
+                        </button>
+                      )}
+                    </For>
+                    <div class="lane-custom">
+                      <input
+                        class="lane-group-col"
+                        type="text"
+                        placeholder="column name"
+                        value={laneGroupColumn()}
+                        onChange={(e) => {
+                          const v = e.currentTarget.value.trim();
+                          setLaneGroupColumn(v);
+                          if (v && !laneGroups().includes("col"))
+                            setLaneGroups([...laneGroups(), "col"]);
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </Show>
+
+          <Show when={selected() && !showLanePanel()}>
             <aside class="inspector">
               <div class="sidebar-head">
                 <b>SELECTION</b>
@@ -1999,8 +2227,11 @@ export default function App() {
         </div>
 
         <footer class="status">
-          <Show when={loading()}>
+          <Show when={busy()}>
             <span class="spin">loading...</span>
+            <button class="cancel-btn" onClick={cancelAll} title="Cancel in-flight requests">
+              Cancel
+            </button>
           </Show>
           <Show when={error()}>
             <span class="err">{error()}</span>

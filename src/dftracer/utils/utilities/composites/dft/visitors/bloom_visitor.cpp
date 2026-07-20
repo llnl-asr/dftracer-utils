@@ -356,6 +356,20 @@ void BloomVisitor::on_event(const EventRecord& record) {
         chunk.statistics.update_from_event(ev.name, ev.cat, ev.pid, ev.tid,
                                            ev.ts, ev.dur);
 
+        // Column discovery: harvest schema once per distinct event name.
+        if (col_seen_names_.find(ev.name) == col_seen_names_.end()) {
+            col_seen_names_.emplace(ev.name);
+            static const ankerl::unordered_dense::set<std::string_view> SKIP = {
+                "pid", "tid", "ts", "dur", "ph", "id", "args"};
+            record.json.for_each_member(
+                [&](std::string_view key, const common::json::JsonValue&) {
+                    if (SKIP.find(key) == SKIP.end()) columns_.emplace(key);
+                });
+            if (record.has_args && record.args_dom.is_object())
+                for (auto kv : record.args_dom.get_object().value_unsafe())
+                    columns_.emplace(kv.key);
+        }
+
         // Observe a fixed slot: adds to bloom (if bloom_idx >= 0) and to
         // dim_stats.
         auto observe_fixed = [&chunk](int bloom_idx, std::size_t dim_idx,
@@ -510,6 +524,8 @@ void BloomVisitor::merge_parallel_slice(DftEventVisitor& slice_base) {
 
         dst.events_processed += src.events_processed;
     }
+
+    for (const auto& c : slice->columns_) columns_.emplace(c);
 }
 
 void BloomVisitor::finalize(indexer::IndexDatabaseWriterContext& db,
@@ -518,6 +534,7 @@ void BloomVisitor::finalize(indexer::IndexDatabaseWriterContext& db,
         db, file_id, extra_dim_names_, chunks_, config_);
     persist_bloom_concrete_tail(db, file_id, file_statistics, chunks_.size(),
                                 /*refresh_root_summaries=*/true);
+    for (const auto& c : columns_) db.insert_column(file_id, c);
 }
 
 void BloomVisitor::finalize_sink_only(indexer::IndexBatchSink& sink,
@@ -627,6 +644,7 @@ void BloomVisitor::finalize_file_to_sink(indexer::IndexBatchSink& sink,
     }
     sink.insert_index_dimension(file_id, std::string(DIM_TS));
     sink.insert_index_dimension(file_id, std::string(DIM_DUR));
+    for (const auto& c : columns_) sink.insert_column(file_id, c);
 
     sink.insert_file_scalar_stats(file_id, file_acc_.statistics,
                                   file_acc_.num_chunks_emitted);

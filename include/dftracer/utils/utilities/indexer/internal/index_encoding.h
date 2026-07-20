@@ -53,6 +53,10 @@ std::string encode_file_pids_value(
 
 std::string make_dimension_key(int file_id, std::string_view dimension);
 
+// Groupable column names present in a file. Shares the DIMENSIONS CF with a
+// distinct "c|" prefix so no separate column family is needed.
+std::string make_column_key(int file_id, std::string_view column);
+
 std::string chunk_bloom_key(int file_id, std::string_view dimension,
                             std::uint64_t checkpoint_idx);
 

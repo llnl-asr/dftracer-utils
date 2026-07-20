@@ -67,6 +67,7 @@ set(TEST_CPP_SOURCES
     server/test_http_request.cpp
     server/test_query_params.cpp
     server/test_trace_index.cpp
+    server/test_cancel.cpp
     )
 
 foreach(test_file ${TEST_CPP_SOURCES})

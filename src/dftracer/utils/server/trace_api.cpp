@@ -235,10 +235,11 @@ using StreamChunk = HttpResponse::StreamChunk;
 static coro::AsyncGenerator<StreamChunk> stream_events(
     std::vector<const TraceIndex::FileInfo*> files, ViewDefinition ev_view,
     std::optional<Query> /*query_opt*/, double ts_min, double ts_max,
-    BloomFilterCache* bloom_cache, int limit) {
+    BloomFilterCache* bloom_cache, int limit, CancelToken cancel) {
     int emitted = 0;
 
     for (auto* file_info : files) {
+        if (cancel.cancelled()) co_return;
         if (limit > 0 && emitted >= limit) break;
 
         if (file_info->uncompressed_size == 0 &&
@@ -272,6 +273,7 @@ static coro::AsyncGenerator<StreamChunk> stream_events(
             ViewReaderUtility reader;
             auto event_gen = reader.process(reader_input);
             while (auto batch = co_await event_gen.next()) {
+                if (cancel.cancelled()) co_return;
                 int count = std::min(
                     static_cast<int>(batch->events.size()),
                     limit > 0 ? limit - emitted
@@ -291,7 +293,7 @@ static coro::AsyncGenerator<StreamChunk> stream_events(
 // ============================================================================
 
 // --- GET /api/v1/events ---
-static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
+static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& req,
                                                   const QueryParams& params,
                                                   TraceIndex& index) {
     int limit = params.get_int("limit", 1000);
@@ -304,9 +306,9 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
     auto view = build_view_from_params(params);
     auto query = build_query_from_params(params);
 
-    auto gen = std::make_unique<HttpResponse::StreamGenerator>(
-        stream_events(std::move(files), std::move(view), std::move(query),
-                      ts_min, ts_max, &index.bloom_cache(), limit));
+    auto gen = std::make_unique<HttpResponse::StreamGenerator>(stream_events(
+        std::move(files), std::move(view), std::move(query), ts_min, ts_max,
+        &index.bloom_cache(), limit, req.cancel_token));
 
     auto resp = HttpResponse::streaming(std::move(gen));
     resp.headers.push_back({"X-Limit", std::to_string(limit)});
@@ -315,7 +317,7 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& /*req*/,
 
 // --- GET /api/v1/events/stream ---
 static coro::CoroTask<HttpResponse> handle_events_stream(
-    const HttpRequest& /*req*/, const QueryParams& params, TraceIndex& index) {
+    const HttpRequest& req, const QueryParams& params, TraceIndex& index) {
     double ts_min = params.get_double("ts_min", 0);
     double ts_max = params.get_double("ts_max", 0);
     auto files = resolve_target_files(index, params, ts_min, ts_max);
@@ -323,9 +325,9 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
     auto query = build_query_from_params(params);
     int limit = params.get_int("limit", 0);
 
-    auto gen = std::make_unique<HttpResponse::StreamGenerator>(
-        stream_events(std::move(files), std::move(view), std::move(query),
-                      ts_min, ts_max, &index.bloom_cache(), limit));
+    auto gen = std::make_unique<HttpResponse::StreamGenerator>(stream_events(
+        std::move(files), std::move(view), std::move(query), ts_min, ts_max,
+        &index.bloom_cache(), limit, req.cancel_token));
 
     co_return HttpResponse::streaming(std::move(gen));
 }
@@ -363,6 +365,7 @@ static coro::CoroTask<HttpResponse> handle_stats(const HttpRequest& req,
 
     // Resolve each group and read statistics
     for (auto& [idx_path, files] : files_by_index) {
+        if (req.cancel_token.cancelled()) co_return HttpResponse::ok("{}");
         std::vector<std::string> file_paths;
         file_paths.reserve(files.size());
         for (const auto& [_, path] : files) {
@@ -559,6 +562,20 @@ void register_trace_api(Router& router, TraceIndex& index) {
                  {},
                  R"({"file_count":2,"global_min_timestamp_us":1000000,)"
                  R"("global_max_timestamp_us":6999732})"});
+
+    router.post(
+        "/api/v1/cancel",
+        [](const HttpRequest& /*req*/,
+           const QueryParams& params) -> coro::CoroTask<HttpResponse> {
+            std::string id(params.get("id"));
+            bool found = CancelRegistry::instance().cancel(id);
+            co_return HttpResponse::ok(std::string("{\"cancelled\":") +
+                                       (found ? "true" : "false") + "}");
+        },
+        RouteDoc{"Cancel an in-flight request by its X-Request-Id.",
+                 "Control",
+                 {{"id", "Request id to cancel", true, ""}},
+                 R"({"cancelled":true})"});
 }
 
 }  // namespace dftracer::utils::server

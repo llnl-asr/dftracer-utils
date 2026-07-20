@@ -142,6 +142,7 @@ class IndexDatabaseSstWriterContext : public IndexBatchSink {
 
     void insert_index_dimension(int file_id,
                                 std::string_view dimension) override;
+    void insert_column(int file_id, std::string_view column) override;
 
     void insert_chunk_dimension_stats(
         int file_id, std::uint64_t checkpoint_idx,

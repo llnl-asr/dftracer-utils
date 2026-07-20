@@ -245,6 +245,7 @@ list(APPEND DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_executors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/replay/replay_result.cpp
     # Server (HTTP/TCP)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/cancel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/cursor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/server/http_request.cpp

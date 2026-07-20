@@ -920,3 +920,145 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
               std::string::npos);
     }
 }
+
+// The calltree endpoint builds its tree with streaming per-file workers merged
+// into one tree; two files (with overlapping pids) exercise the worker fan-out,
+// the merge, and the grouped P-node dedup. Grouped and flat trees must report
+// the same totals.
+TEST_CASE("DFTracer Server - calltree endpoint") {
+    auto binary = find_server_binary();
+    if (binary.empty()) {
+        MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
+        return;
+    }
+
+    dft_utils_test::TestEnvironment env(1);
+    REQUIRE(env.is_valid());
+    REQUIRE(!create_pfw_gz(env, 40, 1).empty());
+    REQUIRE(!create_pfw_gz(env, 30, 2).empty());
+
+    int port = pick_port();
+    ServerProcess server;
+    REQUIRE(server.start(binary, env.get_dir(), port));
+    REQUIRE(wait_for_http(port));
+
+    // Root fields come right after `"tree":{` in serialization order.
+    auto root_field = [](const std::string& body, const char* key) -> double {
+        auto tpos = body.find("\"tree\":{");
+        REQUIRE(tpos != std::string::npos);
+        auto kpos = body.find("\"" + std::string(key) + "\":", tpos);
+        REQUIRE(kpos != std::string::npos);
+        return std::strtod(body.c_str() + kpos + std::strlen(key) + 3, nullptr);
+    };
+
+    auto flat = http_request(port,
+                             "GET /api/v1/viz/calltree?begin=0&end=999999999"
+                             " HTTP/1.1\r\n"
+                             "Host: localhost\r\n"
+                             "X-Request-Id: e2e-calltree\r\n"
+                             "Connection: close\r\n"
+                             "\r\n");
+    REQUIRE(!flat.empty());
+    CHECK(extract_status_code(flat) == 200);
+    auto fbody = extract_body(flat);
+    CHECK(fbody.find("\"truncated\":false") != std::string::npos);
+    CHECK(fbody.find("\"name\":\"all\"") != std::string::npos);
+    double f_total = root_field(fbody, "total");
+    double f_count = root_field(fbody, "count");
+    CHECK(f_total > 0);
+    CHECK(f_count == 70);  // 40 + 30 events, one frame each
+
+    auto grouped =
+        http_request(port,
+                     "GET /api/v1/viz/calltree?begin=0&end=999999999&group=pid"
+                     " HTTP/1.1\r\n"
+                     "Host: localhost\r\n"
+                     "Connection: close\r\n"
+                     "\r\n");
+    REQUIRE(!grouped.empty());
+    CHECK(extract_status_code(grouped) == 200);
+    auto gbody = extract_body(grouped);
+    CHECK(gbody.find("\"name\":\"P") != std::string::npos);
+    CHECK(root_field(gbody, "total") == doctest::Approx(f_total));
+    CHECK(root_field(gbody, "count") == doctest::Approx(f_count));
+
+    // -- POST /api/v1/cancel: unknown id is a no-op, route is wired --
+    auto cancel = http_request(port,
+                               "POST /api/v1/cancel?id=nope HTTP/1.1\r\n"
+                               "Host: localhost\r\n"
+                               "Connection: close\r\n"
+                               "\r\n");
+    REQUIRE(!cancel.empty());
+    CHECK(extract_status_code(cancel) == 200);
+    CHECK(extract_body(cancel).find("\"cancelled\":false") !=
+          std::string::npos);
+
+    // -- GET /api/v1/viz/columns lists groupable columns (incl. args keys) --
+    {
+        auto resp = http_request(port,
+                                 "GET /api/v1/viz/columns HTTP/1.1\r\n"
+                                 "Host: localhost\r\n"
+                                 "Connection: close\r\n"
+                                 "\r\n");
+        REQUIRE(!resp.empty());
+        CHECK(extract_status_code(resp) == 200);
+        auto body = extract_body(resp);
+        CHECK(body.find("\"columns\"") != std::string::npos);
+        CHECK(body.find("\"ready\":true") != std::string::npos);
+        // The test events carry cat/name and an args.ret key.
+        CHECK(body.find("\"cat\"") != std::string::npos);
+        CHECK(body.find("\"ret\"") != std::string::npos);
+        // Lane-level / bookkeeping fields are not offered as columns.
+        CHECK(body.find("\"pid\"") == std::string::npos);
+    }
+
+    // -- GET /api/v1/viz/density with group_by --
+    {
+        // summary=64 forces sub-pixel folding so density blocks exist.
+        auto resp = http_request(
+            port,
+            "GET /api/v1/viz/density?begin=0&end=999999999&summary=64"
+            "&group_by=cat HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Connection: close\r\n"
+            "\r\n");
+        REQUIRE(!resp.empty());
+        CHECK(extract_status_code(resp) == 200);
+        auto body = extract_body(resp);
+        CHECK(body.find("\"density\"") != std::string::npos);
+        // Every test event has a cat, so grouped blocks echo it.
+        CHECK(body.find("\"group\":\"") != std::string::npos);
+    }
+    {
+        // A column no event has: still 200, blocks just carry no group (the
+        // client renders them under "(none)").
+        auto resp = http_request(
+            port,
+            "GET /api/v1/viz/density?begin=0&end=999999999&summary=64"
+            "&group_by=no_such_column HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Connection: close\r\n"
+            "\r\n");
+        REQUIRE(!resp.empty());
+        CHECK(extract_status_code(resp) == 200);
+        auto body = extract_body(resp);
+        CHECK(body.find("\"density\"") != std::string::npos);
+        CHECK(body.find("\"group\":\"") == std::string::npos);
+    }
+    {
+        // Malformed column names are rejected.
+        auto resp = http_request(
+            port,
+            "GET /api/v1/viz/density?begin=0&end=999999999&summary=64"
+            "&group_by=bad%20name! HTTP/1.1\r\n"
+            "Host: localhost\r\n"
+            "Connection: close\r\n"
+            "\r\n");
+        REQUIRE(!resp.empty());
+        CHECK(extract_status_code(resp) == 400);
+    }
+}

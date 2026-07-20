@@ -52,7 +52,13 @@ coro::CoroTask<void> handle_connection(int client_fd,
             break;
         }
 
-        // Route and handle.
+        // Route and handle. Register a cancellation token keyed by the
+        // client-supplied request id so a separate cancel request can reach it.
+        std::string req_id(req.header("x-request-id"));
+        CancelToken token =
+            CancelRegistry::instance().create(req_id, client_fd);
+        req.cancel_token = token;
+
         HttpResponse resp;
         try {
             resp = co_await router.handle(req);
@@ -101,6 +107,7 @@ coro::CoroTask<void> handle_connection(int client_fd,
                     if (rc < 0) {
                         DFTRACER_UTILS_LOG_ERROR(
                             "Streaming write failed; closing connection");
+                        token.cancel();
                         goto stream_done;
                     }
                 }
@@ -111,6 +118,8 @@ coro::CoroTask<void> handle_connection(int client_fd,
             auto out = resp.serialize();
             co_await io::send(client_fd, out.data(), out.size(), 0);
         }
+
+        CancelRegistry::instance().remove(req_id);
 
         // Consume parsed bytes; shift any remaining data.
         auto consumed = static_cast<std::size_t>(parsed);

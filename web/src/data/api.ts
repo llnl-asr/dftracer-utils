@@ -39,13 +39,48 @@ export async function apiRequest(path: string): Promise<{ status: number; body: 
   }
 }
 
-async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(apiUrl(url), { signal });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `${res.status} ${res.statusText}`);
+function newRequestId(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export function cancelRequest(id: string): void {
+  try {
+    void fetch(apiUrl(`/api/v1/cancel?id=${encodeURIComponent(id)}`), {
+      method: "POST",
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* best effort */
   }
-  return (await res.json()) as T;
+}
+
+async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  // Tag the request so aborting it also cancels the server-side work: closing
+  // the socket alone doesn't stop a non-streaming aggregation mid-flight.
+  const reqId = newRequestId();
+  let onAbort: (() => void) | undefined;
+  if (signal) {
+    if (signal.aborted) cancelRequest(reqId);
+    else {
+      onAbort = () => cancelRequest(reqId);
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+  try {
+    const res = await fetch(apiUrl(url), {
+      signal,
+      headers: { "X-Request-Id": reqId },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text || `${res.status} ${res.statusText}`);
+    }
+    return (await res.json()) as T;
+  } finally {
+    if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+  }
 }
 
 export function fetchInfo(signal?: AbortSignal): Promise<InfoResponse> {
@@ -81,6 +116,7 @@ export function fetchVizDensity(q: VizQuery, signal?: AbortSignal): Promise<VizD
   if (q.limit && q.limit > 0) params.set("limit", String(q.limit));
   if (q.lookback && q.lookback > 0) params.set("lookback", String(Math.ceil(q.lookback)));
   if (q.width && q.width > 0) params.set("width", String(Math.round(q.width)));
+  if (q.groupBy && q.groupBy.trim()) params.set("group_by", q.groupBy.trim());
   return getJson<VizDensityResponse>(`/api/v1/viz/density?${withFile(params).toString()}`, signal);
 }
 
@@ -154,6 +190,13 @@ export function fetchVizStats(
   if (query && query.trim()) params.set("query", query.trim());
   if (group) params.set("group", group);
   return getJson<SelectionStats>(`/api/v1/viz/stats?${withFile(params).toString()}`, signal);
+}
+
+export function fetchColumns(signal?: AbortSignal): Promise<{ columns: string[]; ready: boolean }> {
+  return getJson<{ columns: string[]; ready: boolean }>(
+    `/api/v1/viz/columns?${withFile(new URLSearchParams()).toString()}`,
+    signal,
+  );
 }
 
 export interface LayersResponse {

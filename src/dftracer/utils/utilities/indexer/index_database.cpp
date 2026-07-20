@@ -920,6 +920,20 @@ std::vector<std::string> IndexDatabase::query_index_dimensions(
     return dimensions;
 }
 
+std::vector<std::string> IndexDatabase::query_all_columns() const {
+    // Key layout: "c|" + BE32(file_id) + column. Scan the whole "c|" space and
+    // union the column names across files.
+    constexpr std::size_t HEADER = 2 + sizeof(std::uint32_t);
+    ankerl::unordered_dense::set<std::string> cols;
+    scan_prefix(*db_, cf::DIMENSIONS, "c|", [&](::rocksdb::Iterator& it) {
+        auto key = iterator_key(it);
+        if (key.size() > HEADER) cols.emplace(key.substr(HEADER));
+    });
+    std::vector<std::string> out(cols.begin(), cols.end());
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 bool IndexDatabase::has_index_dimension(int file_id,
                                         std::string_view dimension) const {
     std::string value;

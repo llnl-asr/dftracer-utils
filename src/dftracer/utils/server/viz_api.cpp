@@ -1274,9 +1274,11 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
             for (auto kv : obj.value_unsafe())
                 if (SKIP.find(kv.key) == SKIP.end()) b.cols[w].emplace(kv.key);
         auto ar = root["args"];
-        if (!ar.error() && ar.is_object())
-            for (auto kv : ar.get_object().value_unsafe())
-                b.cols[w].emplace(kv.key);
+        if (!ar.error() && ar.is_object()) {
+            simdjson::dom::object args_obj;
+            if (ar.get_object().get(args_obj) == simdjson::SUCCESS)
+                for (auto kv : args_obj) b.cols[w].emplace(kv.key);
+        }
     }
 
     if (name0 == "start" || name0 == "end") {

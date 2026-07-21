@@ -26,6 +26,7 @@ interface Slice {
   count: number; // >1 for aggregated density blocks
   total: number; // summed busy time (== dur for individual events)
   density: boolean;
+  fill: string; // resolved once here; the frame loop redraws every slice
 }
 
 interface Lane {
@@ -182,11 +183,16 @@ export interface TimelineCallbacks {
   onSelectRangeClear?: () => void;
 }
 
-const GUTTER = 348;
-const COL_UTIL = 128; // left edge of the I/O UTIL bar column
+const GUTTER_DEFAULT = 348;
+const GUTTER_MIN = 180;
+const GUTTER_MAX = 900;
+const GUTTER_KEY = "dftracer.gutterW";
+// Offsets from the gutter's right edge, so widening it all goes to the label.
+const COL_UTIL_OFF = 220; // left edge of the I/O UTIL bar column
 const COL_UTIL_W = 44;
-const COL_OPS = 282; // right edge of the OPS (ops/s) column
-const COL_BYTES = GUTTER - 12; // right edge of the BYTES column
+const COL_OPS_OFF = 66; // right edge of the OPS (ops/s) column
+const COL_BYTES_OFF = 12; // right edge of the BYTES column
+const GUTTER_GRAB = 5; // px either side of the divider that starts a resize
 const RULER_H = 28;
 const ROW_H = 18;
 const LANE_GAP = 6;
@@ -201,6 +207,7 @@ const RANGE_DEBOUNCE_MS = 130;
 const ZOOM_SENSITIVITY = 0.0025;
 const ZOOM_MAX_STEP = 90;
 const MINI_COLS = 600; // activity buckets across the whole trace
+const MINI_SHADES = 24; // quantized activity shades, so colours are reused
 const NAV_KEYS = new Set(["w", "a", "s", "d", "arrowleft", "arrowright", "arrowup", "arrowdown"]);
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -257,6 +264,12 @@ export class Timeline {
   private miniActivityMax = 1;
   // Whole-trace per-lane activity for the minimap heatmap (keyed pid/tid).
   private overviewLanes = new Map<string, Float64Array>();
+  // The lane heatmap only changes with its data, size or theme, but the minimap
+  // is redrawn every frame for the viewport box: keep the heatmap on its own
+  // canvas and blit it instead of re-filling every cell.
+  private miniLaneCanvas: HTMLCanvasElement | null = null;
+  private miniLaneKey = "";
+  private overviewVersion = 0;
   private overviewMax = 1;
   private ovOpsByPid = new Map<number, number>(); // total events per pid
   private ioBusyByPid = new Map<number, number>(); // I/O busy us per pid
@@ -300,11 +313,13 @@ export class Timeline {
   private lastY = 0;
   private moved = false;
   private gutterDown: { x: number; y: number } | null = null;
-  private mouseX = GUTTER;
+  private gutter = GUTTER_DEFAULT;
+  private gutterResizing = false;
+  private mouseX = GUTTER_DEFAULT;
   private cursorInside = false;
   private keys = new Set<string>();
   private pendingZoom = 0;
-  private zoomFocusX = GUTTER;
+  private zoomFocusX = this.gutter;
   private selecting = false;
   private selAnchorT = 0;
   private selection: { t0: number; t1: number } | null = null;
@@ -326,6 +341,12 @@ export class Timeline {
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("2D canvas context unavailable");
     this.ctx = ctx;
+    try {
+      const saved = Number(localStorage.getItem(GUTTER_KEY));
+      if (Number.isFinite(saved) && saved > 0) this.gutter = clamp(saved, GUTTER_MIN, GUTTER_MAX);
+    } catch {
+      /* storage unavailable; use the default width */
+    }
 
     canvas.addEventListener("wheel", this.onWheel, { passive: false });
     canvas.addEventListener("mousedown", this.onMouseDown);
@@ -364,6 +385,7 @@ export class Timeline {
 
   setTheme(mode: ThemeMode): void {
     this.th = vizTheme(mode);
+    this.overviewVersion++;
     this.invalidate();
   }
 
@@ -413,7 +435,7 @@ export class Timeline {
   // Display us -> screen x (viewport-space, no gap remap).
   private xdOf(d: number): number {
     const span = this.live.end - this.live.begin;
-    return GUTTER + ((d - this.live.begin) / span) * this.plotW();
+    return this.gutter + ((d - this.live.begin) / span) * this.plotW();
   }
 
   resetView(): void {
@@ -441,6 +463,7 @@ export class Timeline {
   // Fork hierarchy: order processes by DFS (children after parent) and record
   // depth + spawn time so lanes indent and spawn arrows can be drawn.
   setProcTree(nodes: ProcTreeNode[]): void {
+    this.overviewVersion++;
     this.procOrder = new Map();
     this.procDepth = new Map();
     this.procParent = new Map();
@@ -581,19 +604,19 @@ export class Timeline {
     if (!this.showGaps) return;
     ctx.save();
     ctx.beginPath();
-    ctx.rect(GUTTER, RULER_H, this.cssW - GUTTER, this.cssH - RULER_H);
+    ctx.rect(this.gutter, RULER_H, this.cssW - this.gutter, this.cssH - RULER_H);
     ctx.clip();
     const active = this.selectedGap ?? this.hoveredGap;
     for (const g of this.gaps) {
       const x0 = this.xOf(g.t0);
       const x1 = this.xOf(g.t1);
       if (x1 - x0 < 3) continue; // skip sub-few-pixel gaps
-      if (x1 < GUTTER || x0 > this.cssW) continue;
+      if (x1 < this.gutter || x0 > this.cssW) continue;
       const lane = this.lanes[g.laneIdx];
       const y = RULER_H - this.scrollY + lane.y;
       const hh = lane.rows * ROW_H;
       if (y + hh < RULER_H || y > this.cssH) continue;
-      const x = Math.max(x0, GUTTER);
+      const x = Math.max(x0, this.gutter);
       const w = Math.min(x1, this.cssW) - x;
       const yy = Math.max(y, RULER_H);
       const on = g === active;
@@ -621,7 +644,7 @@ export class Timeline {
     const padX = 6;
     const bw = tw + padX * 2;
     const bh = 18;
-    const bx = clamp((x0 + x1) / 2 - bw / 2, GUTTER + 2, this.cssW - bw - 2);
+    const bx = clamp((x0 + x1) / 2 - bw / 2, this.gutter + 2, this.cssW - bw - 2);
     const by = clamp(y - bh - 4, RULER_H + 2, this.cssH - bh - 2);
     ctx.fillStyle = this.th.ttBg;
     ctx.strokeStyle = this.th.gapStroke;
@@ -711,6 +734,7 @@ export class Timeline {
         count: 1,
         total: dur,
         density: false,
+        fill: colorFor(sliceKey(ev)),
       });
     }
     // Aggregated density blocks render as slices too. The server echoes the
@@ -742,6 +766,7 @@ export class Timeline {
         count: b.count,
         total: b.total,
         density: true,
+        fill: colorFor(sliceKey(synthetic)),
       });
     }
 
@@ -1189,8 +1214,33 @@ export class Timeline {
 
   // --- coordinate transforms -------------------------------------------------
 
+  private colUtil(): number {
+    return this.gutter - COL_UTIL_OFF;
+  }
+
+  private colOps(): number {
+    return this.gutter - COL_OPS_OFF;
+  }
+
+  private colBytes(): number {
+    return this.gutter - COL_BYTES_OFF;
+  }
+
+  // Widen or narrow the track panel; the label column absorbs the difference.
+  setGutterWidth(w: number): void {
+    const next = clamp(Math.round(w), GUTTER_MIN, GUTTER_MAX);
+    if (next === this.gutter) return;
+    this.gutter = next;
+    try {
+      localStorage.setItem(GUTTER_KEY, String(next));
+    } catch {
+      /* storage unavailable; the width just does not persist */
+    }
+    this.invalidate();
+  }
+
   private plotW(): number {
-    return Math.max(1, this.cssW - GUTTER);
+    return Math.max(1, this.cssW - this.gutter);
   }
 
   private xOf(ts: number): number {
@@ -1199,7 +1249,7 @@ export class Timeline {
 
   private timeOf(x: number): number {
     const span = this.live.end - this.live.begin;
-    return this.live.begin + ((x - GUTTER) / this.plotW()) * span;
+    return this.live.begin + ((x - this.gutter) / this.plotW()) * span;
   }
 
   // --- interaction -----------------------------------------------------------
@@ -1297,15 +1347,19 @@ export class Timeline {
 
   private onMouseDown = (e: MouseEvent): void => {
     const { x, y } = this.localPos(e);
+    if (Math.abs(x - this.gutter) <= GUTTER_GRAB) {
+      this.gutterResizing = true;
+      return;
+    }
     // Drag on the ruler, or Shift+drag anywhere, selects a time range for stats.
-    if (x >= GUTTER && (y < RULER_H || e.shiftKey)) {
+    if (x >= this.gutter && (y < RULER_H || e.shiftKey)) {
       this.selecting = true;
       this.selAnchorT = this.timeOf(x);
       this.selection = { t0: this.selAnchorT, t1: this.selAnchorT };
       this.invalidate();
       return;
     }
-    if (x < GUTTER && y > RULER_H) {
+    if (x < this.gutter && y > RULER_H) {
       // Gutter: a potential collapse click; never a pan/scroll drag.
       this.gutterDown = { x, y };
       return;
@@ -1319,6 +1373,11 @@ export class Timeline {
   private onMouseMove = (e: MouseEvent): void => {
     const { x, y } = this.localPos(e);
     this.mouseX = x;
+    if (this.gutterResizing) {
+      this.canvas.style.cursor = "col-resize";
+      this.setGutterWidth(x);
+      return;
+    }
     if (this.selecting) {
       const t = clamp(this.timeOf(x), 0, this.totalSpan);
       this.selection = {
@@ -1356,9 +1415,14 @@ export class Timeline {
       this.cb.onHover?.(null, 0, 0);
       return;
     }
-    this.cursorInside = x >= GUTTER && y >= RULER_H && x <= this.cssW;
+    if (Math.abs(x - this.gutter) <= GUTTER_GRAB) {
+      this.canvas.style.cursor = "col-resize";
+      return;
+    }
+    this.cursorInside = x >= this.gutter && y >= RULER_H && x <= this.cssW;
     if (this.cursorInside) this.canvas.style.cursor = "crosshair";
-    else if (x < GUTTER && y > RULER_H && this.gutterRowAt(y)) this.canvas.style.cursor = "pointer";
+    else if (x < this.gutter && y > RULER_H && this.gutterRowAt(y))
+      this.canvas.style.cursor = "pointer";
     else this.canvas.style.cursor = "default";
     const hit = this.hitTest(x, y);
     const gap = hit ? null : this.gapAt(x, y);
@@ -1373,7 +1437,7 @@ export class Timeline {
 
   // Gutter column-header key under the cursor (for metric help tooltips).
   private headerKeyAt(x: number, y: number): string | null {
-    if (y > RULER_H || x > GUTTER) return null;
+    if (y > RULER_H || x > this.gutter) return null;
     if (x < 120) return "track";
     if (x < 228) return "i/o util";
     if (x < 288) return "ops";
@@ -1381,6 +1445,10 @@ export class Timeline {
   }
 
   private onMouseUp = (e: MouseEvent): void => {
+    if (this.gutterResizing) {
+      this.gutterResizing = false;
+      return;
+    }
     if (this.gutterDown) {
       const g = this.gutterDown;
       this.gutterDown = null;
@@ -1408,7 +1476,7 @@ export class Timeline {
       const { x, y } = this.localPos(e);
       const hit = this.hitTest(x, y);
       // A click on empty plot clears both the picked event and any range.
-      if (!hit && x > GUTTER && this.selection) {
+      if (!hit && x > this.gutter && this.selection) {
         this.selection = null;
         this.cb.onSelectRangeClear?.();
       }
@@ -1449,7 +1517,7 @@ export class Timeline {
   };
 
   private hitTest(x: number, y: number): Slice | null {
-    if (x < GUTTER || y < RULER_H) return null;
+    if (x < this.gutter || y < RULER_H) return null;
     let best: Slice | null = null;
     for (const s of this.slices) {
       const sx = this.xOf(s.ts);
@@ -1465,7 +1533,7 @@ export class Timeline {
 
   // Topmost visible gap under the cursor (only when gaps are shown).
   private gapAt(x: number, y: number): Gap | null {
-    if (!this.showGaps || x < GUTTER || y < RULER_H) return null;
+    if (!this.showGaps || x < this.gutter || y < RULER_H) return null;
     let best: Gap | null = null;
     for (const g of this.gaps) {
       const x0 = this.xOf(g.t0);
@@ -1585,6 +1653,7 @@ export class Timeline {
     for (const b of blocks) ops.set(b.pid, (ops.get(b.pid) ?? 0) + (b.count || 0));
     this.ovOpsByPid = ops;
     this.overviewLanes = byLane;
+    this.overviewVersion++;
     this.overviewMax = max;
     this.invalidate();
   }
@@ -1642,6 +1711,23 @@ export class Timeline {
   // A scaled-down heatmap of the track stack: one thin row per lane in the same
   // fork-DFS order (with process gaps), activity intensity along time.
   private renderMiniLanes(ctx: CanvasRenderingContext2D): void {
+    const key = `${this.overviewVersion}|${this.procOrder.size}|${this.miniW}x${this.miniH}@${this.dpr}`;
+    if (this.miniLaneKey !== key || !this.miniLaneCanvas) {
+      const cv = this.miniLaneCanvas ?? document.createElement("canvas");
+      cv.width = Math.max(1, Math.round(this.miniW * this.dpr));
+      cv.height = Math.max(1, Math.round(this.miniH * this.dpr));
+      const c2 = cv.getContext("2d");
+      if (!c2) return;
+      c2.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      c2.clearRect(0, 0, this.miniW, this.miniH);
+      this.paintMiniLanes(c2);
+      this.miniLaneCanvas = cv;
+      this.miniLaneKey = key;
+    }
+    ctx.drawImage(this.miniLaneCanvas, 0, 0, this.miniW, this.miniH);
+  }
+
+  private paintMiniLanes(ctx: CanvasRenderingContext2D): void {
     const orderOf = (pid: number) => this.procOrder.get(pid) ?? 1e9 + pid;
     const keys = [...this.overviewLanes.keys()].sort((a, b) => {
       const [pa, ta] = a.split("/").map(Number);
@@ -1667,18 +1753,29 @@ export class Timeline {
     const rowH = Math.max(1, (bot - top - ngap * gap) / n);
     const bw = this.miniW / MINI_COLS;
     const denom = Math.log(this.overviewMax + 1) || 1;
+    // Quantized once: a fresh rgba() string per cell means a CSS colour parse
+    // per cell, which dwarfs the fills themselves.
+    const shades: string[] = [];
+    for (let i = 0; i <= MINI_SHADES; i++)
+      shades.push(`rgba(${this.th.miniActivity},${(0.25 + (0.65 * i) / MINI_SHADES).toFixed(3)})`);
 
     let y = top;
+    let lastShade = "";
     for (let i = 0; i < n; i++) {
       if (newProc[i]) y += gap;
       const arr = this.overviewLanes.get(keys[i]) as Float64Array;
       ctx.fillStyle = this.th.miniIdle; // idle-lane baseline
+      lastShade = "";
       ctx.fillRect(0, y, this.miniW, rowH);
       for (let c = 0; c < MINI_COLS; c++) {
         const raw = arr[c];
         if (raw <= 0) continue;
         const v = Math.log(raw + 1) / denom; // log so light activity shows
-        ctx.fillStyle = `rgba(${this.th.miniActivity},${0.25 + 0.65 * Math.min(1, v)})`;
+        const shade = shades[Math.round(Math.min(1, v) * MINI_SHADES)];
+        if (shade !== lastShade) {
+          ctx.fillStyle = shade;
+          lastShade = shade;
+        }
         ctx.fillRect(c * bw, y, Math.max(1, bw), rowH);
       }
       y += rowH;
@@ -1796,7 +1893,7 @@ export class Timeline {
       const plotH = h - 4;
       ctx.save();
       ctx.beginPath();
-      ctx.rect(GUTTER, 0, this.counterW - GUTTER, h);
+      ctx.rect(this.gutter, 0, this.counterW - this.gutter, h);
       ctx.clip();
       // Smoothed stacked areas: draw read+write total first, then read over it,
       // so [baseline, readTop] reads teal and [readTop, totalTop] reads amber.
@@ -1804,7 +1901,7 @@ export class Timeline {
       for (let i = 0; i < d.read.length; i++) {
         const tc = d.begin + (i + 0.5) * d.bucketUs;
         const x = this.xOf(tc);
-        if (x < GUTTER - 4 || x > this.counterW + 4) continue;
+        if (x < this.gutter - 4 || x > this.counterW + 4) continue;
         const rh = ((d.read[i] * perSec) / this.counterPeak) * plotH;
         const wh = ((d.write[i] * perSec) / this.counterPeak) * plotH;
         pts.push({ x, rt: h - rh, tt: h - rh - wh });
@@ -1833,11 +1930,11 @@ export class Timeline {
 
     // Left gutter: label + peak scale.
     ctx.fillStyle = this.th.plotBg;
-    ctx.fillRect(0, 0, GUTTER, h);
+    ctx.fillRect(0, 0, this.gutter, h);
     ctx.strokeStyle = this.th.divider;
     ctx.beginPath();
-    ctx.moveTo(GUTTER - 0.5, 0);
-    ctx.lineTo(GUTTER - 0.5, h);
+    ctx.moveTo(this.gutter - 0.5, 0);
+    ctx.lineTo(this.gutter - 0.5, h);
     ctx.moveTo(0, h - 0.5);
     ctx.lineTo(this.counterW, h - 0.5);
     ctx.stroke();
@@ -1849,7 +1946,7 @@ export class Timeline {
     ctx.fillStyle = this.th.laneText;
     ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textAlign = "right";
-    ctx.fillText(formatBytesPerSec(this.counterPeak), GUTTER - 8, 5);
+    ctx.fillText(formatBytesPerSec(this.counterPeak), this.gutter - 8, 5);
     ctx.textAlign = "left";
     const ly = h - 6;
     ctx.fillStyle = this.th.read;
@@ -1970,7 +2067,7 @@ export class Timeline {
       const first = this.procFirst.get(childPid) ?? spawn;
       const x1 = this.xOf(spawn);
       const x2 = this.xOf(first);
-      if ((x1 < GUTTER && x2 < GUTTER) || (x1 > this.cssW && x2 > this.cssW)) return;
+      if ((x1 < this.gutter && x2 < this.gutter) || (x1 > this.cssW && x2 > this.cssW)) return;
       const y1 = botOf(pl);
       const y2 = topOf(cl);
       ctx.strokeStyle = hot ? this.th.accent : this.th.accentSoft;
@@ -2011,7 +2108,7 @@ export class Timeline {
     const label = formatTime(this.toReal(this.timeOf(this.mouseX)));
     ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
     const tw = ctx.measureText(label).width + 8;
-    const lx = clamp(this.mouseX - tw / 2, GUTTER, this.cssW - tw);
+    const lx = clamp(this.mouseX - tw / 2, this.gutter, this.cssW - tw);
     ctx.fillStyle = this.th.groupText;
     ctx.fillRect(lx, RULER_H - 15, tw, 14);
     ctx.fillStyle = this.th.plotBg;
@@ -2026,8 +2123,8 @@ export class Timeline {
     for (const g of this.runGaps) {
       const x0 = this.xdOf(this.toDisplay(g.begin));
       const x1 = this.xdOf(this.toDisplay(g.end));
-      if (x1 < GUTTER || x0 > this.cssW) continue;
-      const cx0 = Math.max(GUTTER, x0);
+      if (x1 < this.gutter || x0 > this.cssW) continue;
+      const cx0 = Math.max(this.gutter, x0);
       const cx1 = Math.min(this.cssW, x1);
       ctx.save();
       ctx.beginPath();
@@ -2056,7 +2153,7 @@ export class Timeline {
       ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
       ctx.textBaseline = "middle";
       const tw = ctx.measureText(label).width + 8;
-      const mid = clamp((cx0 + cx1) / 2, GUTTER + tw / 2, this.cssW - tw / 2);
+      const mid = clamp((cx0 + cx1) / 2, this.gutter + tw / 2, this.cssW - tw / 2);
       ctx.fillStyle = this.th.plotBg;
       ctx.fillRect(mid - tw / 2, RULER_H + 2, tw, 13);
       ctx.strokeStyle = this.th.accent;
@@ -2086,7 +2183,7 @@ export class Timeline {
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let t = first; t <= this.live.end; t += step) {
-      const x = Math.round(GUTTER + ((t - this.live.begin) / span) * pw) + 0.5;
+      const x = Math.round(this.gutter + ((t - this.live.begin) / span) * pw) + 0.5;
       ctx.moveTo(x, RULER_H);
       ctx.lineTo(x, this.cssH);
     }
@@ -2098,13 +2195,13 @@ export class Timeline {
     const span = this.live.end - this.live.begin;
     const pw = this.plotW();
     const x0 = clamp(
-      GUTTER + ((this.selection.t0 - this.live.begin) / span) * pw,
-      GUTTER,
+      this.gutter + ((this.selection.t0 - this.live.begin) / span) * pw,
+      this.gutter,
       this.cssW,
     );
     const x1 = clamp(
-      GUTTER + ((this.selection.t1 - this.live.begin) / span) * pw,
-      GUTTER,
+      this.gutter + ((this.selection.t1 - this.live.begin) / span) * pw,
+      this.gutter,
       this.cssW,
     );
     ctx.fillStyle = this.th.selFill;
@@ -2130,7 +2227,7 @@ export class Timeline {
     const mw = ctx.measureText(main).width;
     const bwW = ctx.measureText(bwStr).width;
     const tw = mw + bwW + pad * 2;
-    const lx = clamp((x0 + x1) / 2 - tw / 2, GUTTER, this.cssW - tw);
+    const lx = clamp((x0 + x1) / 2 - tw / 2, this.gutter, this.cssW - tw);
     const ty = RULER_H + 3;
     ctx.fillStyle = this.th.plotBg;
     ctx.fillRect(lx, ty, tw, 17);
@@ -2173,40 +2270,63 @@ export class Timeline {
   private renderSlices(ctx: CanvasRenderingContext2D): void {
     ctx.save();
     ctx.beginPath();
-    ctx.rect(GUTTER, RULER_H, this.cssW - GUTTER, this.cssH - RULER_H);
+    ctx.rect(this.gutter, RULER_H, this.cssW - this.gutter, this.cssH - RULER_H);
     ctx.clip();
 
     ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline = "middle";
 
-    for (const s of this.slices) {
-      const sx = this.xOf(s.ts);
-      const sw = Math.max(this.xOf(s.ts + s.dur) - sx, 1);
-      if (sx + sw < GUTTER || sx > this.cssW) continue;
+    // Hoisted: xOf() per slice is four calls deep (toDisplay -> xdOf -> plotW)
+    // and this loop runs over every slice on every frame.
+    const begin = this.live.begin;
+    const scale = this.plotW() / Math.max(1e-9, this.live.end - begin);
+    const toDisp = this.axis.toDisplay;
+    const slices = this.slices;
+    const cssW = this.cssW;
+    const cssH = this.cssH;
+    const yTop = RULER_H - this.scrollY;
+    let lastFill = "";
+    let lastAlpha = 1;
+    for (let si = 0; si < slices.length; si++) {
+      const s = slices[si];
       const lane = this.lanes[s.laneIdx];
-      const sy = RULER_H - this.scrollY + lane.y + s.depth * ROW_H;
-      if (sy + ROW_H < RULER_H || sy > this.cssH) continue;
+      const sy = yTop + lane.y + s.depth * ROW_H;
+      if (sy + ROW_H < RULER_H || sy > cssH) continue;
+      const sx = this.gutter + (toDisp(s.ts) - begin) * scale;
+      if (sx > cssW) continue;
+      const sw = Math.max(this.gutter + (toDisp(s.ts + s.dur) - begin) * scale - sx, 1);
+      if (sx + sw < this.gutter) continue;
 
-      const key = sliceKey(s.ev);
-      const fill = colorFor(key);
-      const x = Math.max(sx, GUTTER);
+      const fill = s.fill;
+      const x = Math.max(sx, this.gutter);
       const w = Math.min(sx + sw, this.cssW) - x;
       // When searching, dim non-matching slices so matches stand out.
       const dim = this.searchTerm !== "" && !this.searchMatchSet.has(s);
+      // Canvas state changes cost far more than the fills themselves, so only
+      // touch them when the value actually changes.
+      const alpha = s.density ? (dim ? 0.12 : 0.55) : dim ? 0.15 : 1;
+      if (alpha !== lastAlpha) {
+        ctx.globalAlpha = alpha;
+        lastAlpha = alpha;
+      }
+      if (fill !== lastFill) {
+        ctx.fillStyle = fill;
+        lastFill = fill;
+      }
       if (s.density) {
         // Aggregated block: inset and dimmed so a run of them reads as a
         // "density" strip distinct from individual slices.
-        ctx.globalAlpha = dim ? 0.12 : 0.55;
-        ctx.fillStyle = fill;
         ctx.fillRect(x, sy + 3, w, ROW_H - 6);
-        ctx.globalAlpha = 1;
       } else {
-        ctx.globalAlpha = dim ? 0.15 : 1;
-        ctx.fillStyle = fill;
         ctx.fillRect(x, sy + 1, w, ROW_H - 2);
-        ctx.globalAlpha = 1;
       }
 
+      if (s === this.hovered || s.ev === this.selected || (!s.density && sw > 32)) {
+        if (lastAlpha !== 1) {
+          ctx.globalAlpha = 1;
+          lastAlpha = 1;
+        }
+      }
       if (s === this.hovered) {
         ctx.strokeStyle = this.th.accent;
         ctx.lineWidth = 1;
@@ -2220,6 +2340,7 @@ export class Timeline {
 
       if (!s.density && sw > 32) {
         ctx.fillStyle = contrastText(fill);
+        lastFill = "";
         const label = String(s.ev.name ?? "");
         ctx.save();
         ctx.beginPath();
@@ -2247,10 +2368,10 @@ export class Timeline {
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     ctx.fillText("TRACK", 12, RULER_H / 2);
-    ctx.fillText("I/O UTIL", COL_UTIL, RULER_H / 2);
+    ctx.fillText("I/O UTIL", this.colUtil(), RULER_H / 2);
     ctx.textAlign = "right";
-    ctx.fillText("OPS", COL_OPS, RULER_H / 2);
-    ctx.fillText("BYTES", COL_BYTES, RULER_H / 2);
+    ctx.fillText("OPS", this.colOps(), RULER_H / 2);
+    ctx.fillText("BYTES", this.colBytes(), RULER_H / 2);
     ctx.textAlign = "left";
 
     const span = this.live.end - this.live.begin;
@@ -2260,7 +2381,7 @@ export class Timeline {
     ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline = "middle";
     for (let t = first; t <= this.live.end; t += step) {
-      const x = GUTTER + ((t - this.live.begin) / span) * pw;
+      const x = this.gutter + ((t - this.live.begin) / span) * pw;
       // Short tick mark in the header; the full-height line is a background
       // gridline drawn behind the slices.
       ctx.strokeStyle = this.th.divider;
@@ -2276,11 +2397,11 @@ export class Timeline {
   // to its parent (a vertical spine at the parent's indent + a horizontal tick).
   private renderGutter(ctx: CanvasRenderingContext2D): void {
     ctx.fillStyle = this.th.plotBg;
-    ctx.fillRect(0, RULER_H, GUTTER, this.cssH - RULER_H);
+    ctx.fillRect(0, RULER_H, this.gutter, this.cssH - RULER_H);
     ctx.strokeStyle = this.th.divider;
     ctx.beginPath();
-    ctx.moveTo(GUTTER - 0.5, 0);
-    ctx.lineTo(GUTTER - 0.5, this.cssH);
+    ctx.moveTo(this.gutter - 0.5, 0);
+    ctx.lineTo(this.gutter - 0.5, this.cssH);
     ctx.stroke();
 
     for (const lane of this.lanes) {
@@ -2293,7 +2414,7 @@ export class Timeline {
 
       if (lane.kind === "host") {
         ctx.fillStyle = this.th.groupBand;
-        ctx.fillRect(0, top, GUTTER - 1, bottom - top);
+        ctx.fillRect(0, top, this.gutter - 1, bottom - top);
       }
 
       const collapsed = this.collapsed.has(lane.collapseKey);
@@ -2312,7 +2433,7 @@ export class Timeline {
       const labelX = lane.indent + TWIST_W + (lane.kind === "thread" ? 2 : 4);
       ctx.save();
       ctx.beginPath();
-      ctx.rect(labelX, top, COL_UTIL - labelX - 8, bottom - top);
+      ctx.rect(labelX, top, this.colUtil() - labelX - 8, bottom - top);
       ctx.clip();
       ctx.textBaseline = "middle";
       ctx.textAlign = "left";
@@ -2364,9 +2485,9 @@ export class Timeline {
 
     const bh = 6;
     ctx.fillStyle = this.th.divider;
-    ctx.fillRect(COL_UTIL, cy - bh / 2, COL_UTIL_W, bh);
+    ctx.fillRect(this.colUtil(), cy - bh / 2, COL_UTIL_W, bh);
     ctx.fillStyle = util > 0.8 ? this.th.gapStroke : this.th.accent;
-    ctx.fillRect(COL_UTIL, cy - bh / 2, COL_UTIL_W * util, bh);
+    ctx.fillRect(this.colUtil(), cy - bh / 2, COL_UTIL_W * util, bh);
     ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
@@ -2375,14 +2496,14 @@ export class Timeline {
       lane.kind === "host"
         ? `${Math.round(util * 100)}%±${Math.round(utilSd * 100)}%`
         : `${Math.round(util * 100)}%`;
-    ctx.fillText(utilText, COL_UTIL + COL_UTIL_W + 5, cy);
+    ctx.fillText(utilText, this.colUtil() + COL_UTIL_W + 5, cy);
     ctx.textAlign = "right";
-    ctx.fillText(formatRate(ops / wallSec), COL_OPS, cy);
+    ctx.fillText(formatRate(ops / wallSec), this.colOps(), cy);
     if (bytes > 0) {
-      ctx.fillText(formatBytesCompact(bytes), COL_BYTES, cy);
+      ctx.fillText(formatBytesCompact(bytes), this.colBytes(), cy);
     } else {
       ctx.fillStyle = this.th.ruler;
-      ctx.fillText("-", COL_BYTES, cy);
+      ctx.fillText("-", this.colBytes(), cy);
     }
     ctx.textAlign = "left";
   }

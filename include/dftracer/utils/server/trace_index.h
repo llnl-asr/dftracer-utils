@@ -2,16 +2,19 @@
 #define DFTRACER_UTILS_SERVER_TRACE_INDEX_H
 
 #include <dftracer/utils/core/common/constants.h>
+#include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/server/viz_summary.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
 #include <dftracer/utils/utilities/composites/dft/time_metric.h>
+#include <dftracer/utils/utilities/indexer/index_database.h>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -39,7 +42,9 @@ class TraceIndex {
     };
 
     TraceIndex(const std::string& directory, const std::string& index_dir,
-               std::size_t max_concurrent = 8);
+               std::size_t max_concurrent = 8,
+               std::size_t checkpoint_size =
+                   constants::indexer::DEFAULT_CHECKPOINT_SIZE);
 
     /// Scan directory and populate the file list.
     coro::CoroTask<void> initialize();
@@ -80,25 +85,37 @@ class TraceIndex {
     std::uint64_t global_min_timestamp_us() const { return global_min_ts_; }
     std::uint64_t global_max_timestamp_us() const { return global_max_ts_; }
 
-    // Lazily-built activity summary. Returns nullptr until the build finishes;
-    // callers fall back to a live scan meanwhile.
+    // Lazily-built activity summary. Null until the build finishes.
     const VizSummary* viz_summary() const {
         return viz_summary_state_.load(std::memory_order_acquire) == 2
                    ? viz_summary_.get()
                    : nullptr;
     }
-    // Claim the right to build the summary; only the first caller gets true.
-    bool try_begin_summary_build() {
-        int expected = 0;
-        return viz_summary_state_.compare_exchange_strong(
-            expected, 1, std::memory_order_acq_rel);
-    }
+    // Serializes the build so concurrent requests wait for it instead of each
+    // launching a whole-trace live scan of its own.
+    coro::AsyncMutex& viz_summary_mutex() { return viz_summary_mutex_; }
     void set_viz_summary(std::unique_ptr<VizSummary> summary) {
         viz_summary_ = std::move(summary);
         viz_summary_state_.store(2, std::memory_order_release);
     }
 
+    // Resolve a content hash (file/host/string) to its name via a point lookup
+    // in the per-root index databases, which are opened once and kept. Empty
+    // when no root knows the hash.
+    using HashType =
+        dftracer::utils::utilities::indexer::IndexDatabase::HashType;
+    std::string resolve_hash(HashType type, const std::string& hash);
+
+    // On-disk summary cache (index_dir/.dftviz_summary), keyed by a fingerprint
+    // of the current file set so a re-indexed trace invalidates it. Loading it
+    // skips the full rescan on restart.
+    bool load_persisted_viz_summary();
+    void persist_viz_summary() const;
+
    private:
+    std::string viz_summary_cache_path() const;
+    std::string viz_summary_fingerprint() const;
+
     std::string directory_;
     std::string index_dir_;
     std::vector<FileInfo> files_;
@@ -107,8 +124,16 @@ class TraceIndex {
     std::uint64_t global_max_ts_ = 0;
     TimeMetric time_metric_ = TimeMetric::US;
     std::size_t max_concurrent_;
+    std::size_t checkpoint_size_;
     BloomCache bloom_cache_;
 
+    std::mutex hash_db_mutex_;
+    std::unordered_map<
+        std::string,
+        std::shared_ptr<dftracer::utils::utilities::indexer::IndexDatabase>>
+        hash_dbs_;
+
+    coro::AsyncMutex viz_summary_mutex_;
     std::unique_ptr<VizSummary> viz_summary_;
     std::atomic<int> viz_summary_state_{0};  // 0 not built, 1 building, 2 ready
 };

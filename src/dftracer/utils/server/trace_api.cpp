@@ -568,6 +568,60 @@ void register_trace_api(Router& router, TraceIndex& index) {
                  R"({"file_count":2,"global_min_timestamp_us":1000000,)"
                  R"("global_max_timestamp_us":6999732})"});
 
+    router.get(
+        "/api/v1/resolve",
+        [index_ptr](const HttpRequest& /*req*/,
+                    const QueryParams& params) -> coro::CoroTask<HttpResponse> {
+            std::string hashes(params.get("hash"));
+            if (hashes.empty())
+                co_return HttpResponse::bad_request("Missing parameter: hash");
+            auto kind = params.get("type");
+            using HashType = TraceIndex::HashType;
+            HashType type = HashType::FILE;
+            if (kind == "host")
+                type = HashType::HOST;
+            else if (kind == "string")
+                type = HashType::STRING;
+            else if (kind == "proc")
+                type = HashType::PROC;
+            else if (!kind.empty() && kind != "file")
+                co_return HttpResponse::bad_request("Invalid type: " +
+                                                    std::string(kind));
+
+            auto& b = scratch_json_builder();
+            b.start_object();
+            b.escape_and_append_with_quotes("names");
+            b.append_colon();
+            b.start_object();
+            bool first = true;
+            std::size_t start = 0;
+            // Comma-separated so one click can resolve its file and host at
+            // once; unknown hashes are simply absent from the reply.
+            while (start <= hashes.size()) {
+                auto end = hashes.find(',', start);
+                if (end == std::string::npos) end = hashes.size();
+                std::string one = hashes.substr(start, end - start);
+                start = end + 1;
+                if (one.empty()) continue;
+                auto name = index_ptr->resolve_hash(type, one);
+                if (name.empty()) continue;
+                if (!first) b.append_comma();
+                first = false;
+                b.escape_and_append_with_quotes(one);
+                b.append_colon();
+                b.escape_and_append_with_quotes(name);
+            }
+            b.end_object();
+            b.end_object();
+            co_return HttpResponse::ok(std::string(b));
+        },
+        RouteDoc{
+            "Resolve content hashes (file/host/string) to their names.",
+            "Control",
+            {{"hash", "Hash, or several separated by commas", true, ""},
+             {"type", "file (default), host, string or proc", false, "file"}},
+            R"({"names":{"314c1a1cdb22a136":"/data/train/img_0.npz"}})"});
+
     router.post(
         "/api/v1/cancel",
         [](const HttpRequest& /*req*/,

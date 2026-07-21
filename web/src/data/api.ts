@@ -45,6 +45,14 @@ function newRequestId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+export function fetchResolve(
+  hashes: string[],
+  type: "file" | "host" = "file",
+): Promise<{ names: Record<string, string> }> {
+  const params = new URLSearchParams({ hash: hashes.join(","), type });
+  return getJson<{ names: Record<string, string> }>(`/api/v1/resolve?${params.toString()}`);
+}
+
 export function cancelRequest(id: string): void {
   try {
     void fetch(apiUrl(`/api/v1/cancel?id=${encodeURIComponent(id)}`), {

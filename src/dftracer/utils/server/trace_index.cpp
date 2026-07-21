@@ -18,6 +18,9 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 
 #include <cinttypes>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <unordered_map>
@@ -30,11 +33,346 @@ using namespace dftracer::utils::utilities::composites::dft::indexing;
 using namespace dftracer::utils::utilities::filesystem;
 namespace indexer = dftracer::utils::utilities::indexer;
 
+namespace {
+
+// Bump VERSION when the on-disk layout below changes; the loader then ignores
+// the stale cache.
+constexpr std::uint32_t VIZ_SUMMARY_MAGIC = 0x315A5644;  // "DVZ1"
+constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 4;
+
+struct BufWriter {
+    std::string b;
+    void u32(std::uint32_t v) { b.append(reinterpret_cast<char*>(&v), 4); }
+    void u64(std::uint64_t v) { b.append(reinterpret_cast<char*>(&v), 8); }
+    void i64(std::int64_t v) { u64(static_cast<std::uint64_t>(v)); }
+    void dbl(double v) { b.append(reinterpret_cast<char*>(&v), 8); }
+    void str(const std::string& s) {
+        u64(s.size());
+        b.append(s);
+    }
+};
+
+struct BufReader {
+    const char* p;
+    const char* end;
+    bool ok = true;
+    std::uint32_t u32() {
+        std::uint32_t v = 0;
+        if (!ok || p + 4 > end) {
+            ok = false;
+            return 0;
+        }
+        std::memcpy(&v, p, 4);
+        p += 4;
+        return v;
+    }
+    std::uint64_t u64() {
+        std::uint64_t v = 0;
+        if (!ok || p + 8 > end) {
+            ok = false;
+            return 0;
+        }
+        std::memcpy(&v, p, 8);
+        p += 8;
+        return v;
+    }
+    std::int64_t i64() { return static_cast<std::int64_t>(u64()); }
+    double dbl() {
+        double v = 0;
+        if (!ok || p + 8 > end) {
+            ok = false;
+            return 0;
+        }
+        std::memcpy(&v, p, 8);
+        p += 8;
+        return v;
+    }
+    std::string str() {
+        std::uint64_t n = u64();
+        if (!ok || n > static_cast<std::uint64_t>(end - p)) {
+            ok = false;
+            return {};
+        }
+        std::string s(p, p + n);
+        p += n;
+        return s;
+    }
+    // Guard a count before resize: each element consumes >= elem_min bytes, so
+    // a corrupt count can't request an absurd allocation.
+    bool fits(std::uint64_t n, std::size_t elem_min) const {
+        if (!ok) return false;
+        std::size_t rem = static_cast<std::size_t>(end - p);
+        return elem_min == 0 || n <= rem / elem_min;
+    }
+};
+
+void write_group_rows(BufWriter& w,
+                      const std::vector<VizSummary::GroupRow>& rows) {
+    w.u64(rows.size());
+    for (const auto& r : rows) {
+        w.str(r.key);
+        w.u64(r.count);
+        w.dbl(r.total);
+        w.dbl(r.min);
+        w.dbl(r.max);
+    }
+}
+
+bool read_group_rows(BufReader& r, std::vector<VizSummary::GroupRow>& rows) {
+    std::uint64_t n = r.u64();
+    if (!r.fits(n, 8 + 8 + 8 * 3)) return false;
+    rows.resize(n);
+    for (auto& row : rows) {
+        row.key = r.str();
+        row.count = r.u64();
+        row.total = r.dbl();
+        row.min = r.dbl();
+        row.max = r.dbl();
+    }
+    return r.ok;
+}
+
+void write_spans(BufWriter& w, const std::vector<VizSummary::AppSpan>& spans) {
+    w.u64(spans.size());
+    for (const auto& s : spans) {
+        w.u64(s.begin);
+        w.u64(s.end);
+        w.i64(s.pid);
+        w.i64(s.tid);
+        w.u32(s.name_id);
+        w.str(s.json);
+    }
+}
+
+bool read_spans(BufReader& r, std::vector<VizSummary::AppSpan>& spans) {
+    std::uint64_t n = r.u64();
+    if (!r.fits(n, 8 * 4 + 4 + 8)) return false;
+    spans.resize(n);
+    for (auto& s : spans) {
+        s.begin = r.u64();
+        s.end = r.u64();
+        s.pid = r.i64();
+        s.tid = r.i64();
+        s.name_id = r.u32();
+        s.json = r.str();
+    }
+    return r.ok;
+}
+
+void serialize_summary(BufWriter& w, const VizSummary& s) {
+    w.u64(s.t_begin);
+    w.u64(s.t_end);
+    w.u64(s.nbuckets);
+    w.dbl(s.bucket_us);
+    w.u64(s.max_dur);
+    w.u64(s.total_files);
+    w.u64(s.io_files);
+
+    w.dbl(s.long_threshold_us);
+
+    w.u64(s.names.size());
+    for (const auto& n : s.names) w.str(n);
+
+    w.u64(s.levels.size());
+    for (const auto& lv : s.levels) {
+        w.u64(lv.nbuckets);
+        w.dbl(lv.bucket_us);
+        auto wvec_lvl = [&](const std::vector<double>& v) {
+            w.u64(v.size());
+            for (double x : v) w.dbl(x);
+        };
+        wvec_lvl(lv.read_bytes);
+        wvec_lvl(lv.write_bytes);
+        wvec_lvl(lv.ops);
+        w.u64(lv.lanes.size());
+        for (const auto& l : lv.lanes) {
+            w.i64(l.pid);
+            w.i64(l.tid);
+            w.u64(l.cells.size());
+            for (std::uint32_t bk : l.buckets) w.u32(bk);
+            for (const auto& c : l.cells) {
+                w.u32(c.count);
+                w.u64(c.total);
+                w.u32(c.max_dur);
+                w.u32(c.name_id);
+            }
+        }
+    }
+
+    write_group_rows(w, s.by_name);
+    write_group_rows(w, s.by_cat);
+    write_group_rows(w, s.by_pid);
+    write_group_rows(w, s.by_fhash);
+
+    w.u64(s.name_cats.size());
+    for (const auto& p : s.name_cats) {
+        w.str(p.first);
+        w.str(p.second);
+    }
+
+    w.u64(s.columns.size());
+    for (const auto& c : s.columns) w.str(c);
+
+    write_spans(w, s.app_spans);
+    write_spans(w, s.long_events);
+
+    w.u64(s.idle_gaps.size());
+    for (const auto& g : s.idle_gaps) {
+        w.u64(g.first);
+        w.u64(g.second);
+    }
+
+    w.u64(s.procs.size());
+    for (const auto& p : s.procs) {
+        w.i64(p.pid);
+        w.i64(p.ppid);
+        w.u64(p.first_ts);
+        w.u64(p.bytes);
+        w.u64(p.io_ops);
+        w.dbl(p.io_busy);
+        w.str(p.hhash);
+        w.str(p.rank);
+    }
+
+    w.u64(s.forks.size());
+    for (const auto& f : s.forks) {
+        w.u64(f.ts);
+        w.i64(f.pid);
+        w.i64(f.child);
+    }
+
+    w.u64(s.hosts.size());
+    for (const auto& h : s.hosts) {
+        w.str(h.first);
+        w.str(h.second);
+    }
+}
+
+bool deserialize_summary(BufReader& r, VizSummary& s) {
+    s.t_begin = r.u64();
+    s.t_end = r.u64();
+    s.nbuckets = static_cast<std::size_t>(r.u64());
+    s.bucket_us = r.dbl();
+    s.max_dur = r.u64();
+    s.total_files = static_cast<std::size_t>(r.u64());
+    s.io_files = static_cast<std::size_t>(r.u64());
+
+    s.long_threshold_us = r.dbl();
+
+    std::uint64_t nnames = r.u64();
+    if (!r.fits(nnames, 8)) return false;
+    s.names.resize(nnames);
+    for (auto& n : s.names) n = r.str();
+
+    std::uint64_t nlevels = r.u64();
+    if (!r.fits(nlevels, 8 + 8 + 8)) return false;
+    s.levels.resize(nlevels);
+    for (auto& lv : s.levels) {
+        lv.nbuckets = static_cast<std::size_t>(r.u64());
+        lv.bucket_us = r.dbl();
+        auto rvec_lvl = [&](std::vector<double>& v) -> bool {
+            std::uint64_t n = r.u64();
+            if (!r.fits(n, 8)) return false;
+            v.resize(n);
+            for (auto& x : v) x = r.dbl();
+            return r.ok;
+        };
+        if (!rvec_lvl(lv.read_bytes) || !rvec_lvl(lv.write_bytes) ||
+            !rvec_lvl(lv.ops))
+            return false;
+        std::uint64_t nlanes = r.u64();
+        if (!r.fits(nlanes, 8 * 2 + 8)) return false;
+        lv.lanes.resize(nlanes);
+        for (auto& l : lv.lanes) {
+            l.pid = r.i64();
+            l.tid = r.i64();
+            std::uint64_t ncells = r.u64();
+            if (!r.fits(ncells, 4 + 4 + 8 + 4 + 4)) return false;
+            l.buckets.resize(ncells);
+            for (auto& bk : l.buckets) bk = r.u32();
+            l.cells.resize(ncells);
+            for (auto& c : l.cells) {
+                c.count = r.u32();
+                c.total = r.u64();
+                c.max_dur = r.u32();
+                c.name_id = r.u32();
+            }
+        }
+    }
+
+    if (!read_group_rows(r, s.by_name) || !read_group_rows(r, s.by_cat) ||
+        !read_group_rows(r, s.by_pid) || !read_group_rows(r, s.by_fhash))
+        return false;
+
+    std::uint64_t ncats = r.u64();
+    if (!r.fits(ncats, 8 * 2)) return false;
+    s.name_cats.resize(ncats);
+    for (auto& p : s.name_cats) {
+        p.first = r.str();
+        p.second = r.str();
+    }
+
+    std::uint64_t ncols = r.u64();
+    if (!r.fits(ncols, 8)) return false;
+    s.columns.resize(ncols);
+    for (auto& c : s.columns) c = r.str();
+
+    if (!read_spans(r, s.app_spans) || !read_spans(r, s.long_events))
+        return false;
+
+    std::uint64_t ngaps = r.u64();
+    if (!r.fits(ngaps, 8 * 2)) return false;
+    s.idle_gaps.resize(ngaps);
+    for (auto& g : s.idle_gaps) {
+        g.first = r.u64();
+        g.second = r.u64();
+    }
+
+    std::uint64_t nprocs = r.u64();
+    if (!r.fits(nprocs, 8 * 5 + 8 * 2)) return false;
+    s.procs.resize(nprocs);
+    for (auto& p : s.procs) {
+        p.pid = r.i64();
+        p.ppid = r.i64();
+        p.first_ts = r.u64();
+        p.bytes = r.u64();
+        p.io_ops = r.u64();
+        p.io_busy = r.dbl();
+        p.hhash = r.str();
+        p.rank = r.str();
+    }
+
+    std::uint64_t nforks = r.u64();
+    if (!r.fits(nforks, 8 * 3)) return false;
+    s.forks.resize(nforks);
+    for (auto& f : s.forks) {
+        f.ts = r.u64();
+        f.pid = r.i64();
+        f.child = r.i64();
+    }
+
+    std::uint64_t nhosts = r.u64();
+    if (!r.fits(nhosts, 8 * 2)) return false;
+    s.hosts.resize(nhosts);
+    for (auto& h : s.hosts) {
+        h.first = r.str();
+        h.second = r.str();
+    }
+
+    return r.ok;
+}
+
+}  // namespace
+
 TraceIndex::TraceIndex(const std::string& directory,
-                       const std::string& index_dir, std::size_t max_concurrent)
+                       const std::string& index_dir, std::size_t max_concurrent,
+                       std::size_t checkpoint_size)
     : directory_(directory),
       index_dir_(index_dir),
-      max_concurrent_(max_concurrent == 0 ? 8 : max_concurrent) {}
+      max_concurrent_(max_concurrent == 0 ? 8 : max_concurrent),
+      checkpoint_size_(checkpoint_size == 0
+                           ? constants::indexer::DEFAULT_CHECKPOINT_SIZE
+                           : checkpoint_size) {}
 
 coro::CoroTask<void> TraceIndex::initialize() {
     PatternDirectoryScannerUtility scanner;
@@ -126,11 +464,12 @@ coro::CoroTask<void> TraceIndex::initialize() {
         auto* global_max_ts_ptr = &global_max_ts_;
         std::string index_dir = index_dir_;
         std::size_t max_concurrent = max_concurrent_;
+        std::size_t checkpoint_size = checkpoint_size_;
 
         auto init_task = make_task(
             [files_ptr, needs_build_ptr, large_files_ptr, global_min_ts_ptr,
-             global_max_ts_ptr, index_dir,
-             max_concurrent](CoroScope& ctx) -> coro::CoroTask<void> {
+             global_max_ts_ptr, index_dir, max_concurrent,
+             checkpoint_size](CoroScope& ctx) -> coro::CoroTask<void> {
                 if (!needs_build_ptr->empty()) {
                     DFTRACER_UTILS_LOG_INFO(
                         "TraceIndex: building index for %zu file(s) ...",
@@ -179,8 +518,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
                     const auto* index_dir_ptr = &index_dir;
                     co_await ctx.scope([&file_chan, files_ptr, needs_build_ptr,
-                                        index_dir_ptr,
-                                        max_concurrent](CoroScope& scope)
+                                        index_dir_ptr, max_concurrent,
+                                        checkpoint_size](CoroScope& scope)
                                            -> coro::CoroTask<void> {
                         scope.spawn(
                             [ch = file_chan->producer(), needs_build_ptr](
@@ -193,38 +532,42 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             });
 
                         for (std::size_t w = 0; w < max_concurrent; ++w) {
-                            scope.spawn([ch = file_chan->consumer(), files_ptr,
-                                         index_dir_ptr](CoroScope&)
-                                            -> coro::CoroTask<void> {
-                                while (auto fi_opt = co_await ch.receive()) {
-                                    std::size_t fi = *fi_opt;
-                                    auto* info = &(*files_ptr)[fi];
+                            scope.spawn(
+                                [ch = file_chan->consumer(), files_ptr,
+                                 index_dir_ptr, checkpoint_size](
+                                    CoroScope&) -> coro::CoroTask<void> {
+                                    while (auto fi_opt =
+                                               co_await ch.receive()) {
+                                        std::size_t fi = *fi_opt;
+                                        auto* info = &(*files_ptr)[fi];
 
-                                    indexer::IndexBuilderUtility builder;
-                                    auto config =
-                                        indexer::IndexBuildConfig::for_file(
-                                            info->path)
-                                            .with_index_dir(*index_dir_ptr);
-                                    auto result =
-                                        co_await builder.process(config);
+                                        indexer::IndexBuilderUtility builder;
+                                        auto config =
+                                            indexer::IndexBuildConfig::for_file(
+                                                info->path)
+                                                .with_index_dir(*index_dir_ptr)
+                                                .with_checkpoint_size(
+                                                    checkpoint_size);
+                                        auto result =
+                                            co_await builder.process(config);
 
-                                    if (result.success) {
-                                        info->index_path =
-                                            internal::determine_index_path(
-                                                info->path, *index_dir_ptr);
-                                        info->has_bloom_data = true;
-                                        info->has_checkpoint_index =
-                                            fs::exists(info->index_path);
-                                    } else {
-                                        DFTRACER_UTILS_LOG_WARN(
-                                            "TraceIndex: failed to "
-                                            "index %s: %s",
-                                            info->path.c_str(),
-                                            result.error_message.c_str());
+                                        if (result.success) {
+                                            info->index_path =
+                                                internal::determine_index_path(
+                                                    info->path, *index_dir_ptr);
+                                            info->has_bloom_data = true;
+                                            info->has_checkpoint_index =
+                                                fs::exists(info->index_path);
+                                        } else {
+                                            DFTRACER_UTILS_LOG_WARN(
+                                                "TraceIndex: failed to "
+                                                "index %s: %s",
+                                                info->path.c_str(),
+                                                result.error_message.c_str());
+                                        }
                                     }
-                                }
-                                co_return;
-                            });
+                                    co_return;
+                                });
                         }
                         co_return;
                     });
@@ -360,6 +703,142 @@ coro::CoroTask<void> TraceIndex::initialize() {
         DFTRACER_UTILS_LOG_INFO("TraceIndex: global time range [%" PRIu64
                                 ", %" PRIu64 "] us",
                                 global_min_ts_, global_max_ts_);
+    }
+
+    // Adopt a valid cached summary now rather than on the first request: the
+    // viewer opens with several summary-backed requests at once, and all of
+    // them would otherwise queue behind the load.
+    load_persisted_viz_summary();
+}
+
+// Hash tables can hold millions of entries, so this uses a point lookup and
+// keeps each root's database open rather than caching whole tables per request.
+std::string TraceIndex::resolve_hash(HashType type, const std::string& hash) {
+    if (hash.empty()) return {};
+    for (const auto& f : files_) {
+        if (f.index_path.empty()) continue;
+        std::shared_ptr<indexer::IndexDatabase> db;
+        {
+            std::lock_guard<std::mutex> lk(hash_db_mutex_);
+            auto it = hash_dbs_.find(f.index_path);
+            if (it != hash_dbs_.end()) {
+                db = it->second;
+            } else {
+                try {
+                    db = std::make_shared<indexer::IndexDatabase>(
+                        f.index_path,
+                        rocksdb::RocksDatabase::OpenMode::ReadOnly);
+                } catch (const std::exception&) {
+                    db = nullptr;
+                }
+                hash_dbs_.emplace(f.index_path, db);
+            }
+        }
+        if (!db) continue;
+        try {
+            auto name = db->lookup_hash(type, hash);
+            if (name && !name->empty()) return *name;
+        } catch (const std::exception&) {
+            continue;
+        }
+    }
+    return {};
+}
+
+std::string TraceIndex::viz_summary_cache_path() const {
+    return (fs::path(index_dir_) / ".dftviz_summary").string();
+}
+
+// A changed source is re-indexed in initialize(), shifting these per-file
+// values, so the cache invalidates itself on mismatch.
+std::string TraceIndex::viz_summary_fingerprint() const {
+    std::uint64_t h = 1469598103934665603ULL;
+    auto mix = [&](const void* data, std::size_t n) {
+        const auto* b = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < n; ++i) {
+            h ^= b[i];
+            h *= 1099511628211ULL;
+        }
+    };
+    std::uint32_t ver = VIZ_SUMMARY_FORMAT_VERSION;
+    mix(&ver, sizeof ver);
+    int tm = static_cast<int>(time_metric_);
+    mix(&tm, sizeof tm);
+    mix(&global_min_ts_, sizeof global_min_ts_);
+    mix(&global_max_ts_, sizeof global_max_ts_);
+    for (const auto& f : files_) {
+        mix(f.path.data(), f.path.size());
+        mix(&f.uncompressed_size, sizeof f.uncompressed_size);
+        mix(&f.num_checkpoints, sizeof f.num_checkpoints);
+        mix(&f.min_timestamp_us, sizeof f.min_timestamp_us);
+        mix(&f.max_timestamp_us, sizeof f.max_timestamp_us);
+    }
+    char out[17];
+    std::snprintf(out, sizeof out, "%016llx",
+                  static_cast<unsigned long long>(h));
+    return std::string(out);
+}
+
+bool TraceIndex::load_persisted_viz_summary() {
+    try {
+        auto path = viz_summary_cache_path();
+        std::ifstream is(path, std::ios::binary | std::ios::ate);
+        if (!is) return false;
+        auto size = is.tellg();
+        if (size <= 0) return false;
+        std::string buf(static_cast<std::size_t>(size), '\0');
+        is.seekg(0);
+        if (!is.read(buf.data(), size)) return false;
+
+        BufReader r{buf.data(), buf.data() + buf.size()};
+        if (r.u32() != VIZ_SUMMARY_MAGIC ||
+            r.u32() != VIZ_SUMMARY_FORMAT_VERSION)
+            return false;
+        std::string fp = r.str();
+        if (!r.ok || fp != viz_summary_fingerprint()) return false;
+
+        auto summary = std::make_unique<VizSummary>();
+        if (!deserialize_summary(r, *summary)) return false;
+
+        set_viz_summary(std::move(summary));
+        DFTRACER_UTILS_LOG_INFO("TraceIndex: loaded cached viz summary from %s",
+                                path.c_str());
+        return true;
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_WARN("TraceIndex: viz summary cache load failed: %s",
+                                e.what());
+        return false;
+    }
+}
+
+void TraceIndex::persist_viz_summary() const {
+    if (viz_summary_state_.load(std::memory_order_acquire) != 2 ||
+        !viz_summary_)
+        return;
+    try {
+        BufWriter w;
+        w.u32(VIZ_SUMMARY_MAGIC);
+        w.u32(VIZ_SUMMARY_FORMAT_VERSION);
+        w.str(viz_summary_fingerprint());
+        serialize_summary(w, *viz_summary_);
+
+        auto path = viz_summary_cache_path();
+        auto tmp = path + ".tmp";
+        {
+            std::ofstream os(tmp, std::ios::binary | std::ios::trunc);
+            if (!os.write(w.b.data(),
+                          static_cast<std::streamsize>(w.b.size()))) {
+                std::error_code rec;
+                fs::remove(tmp, rec);
+                return;
+            }
+        }
+        std::error_code ec;
+        fs::rename(tmp, path, ec);
+        if (ec) fs::remove(tmp, ec);
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_WARN(
+            "TraceIndex: viz summary cache write failed: %s", e.what());
     }
 }
 

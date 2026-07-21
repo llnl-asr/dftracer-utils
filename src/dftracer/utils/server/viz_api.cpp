@@ -8,6 +8,7 @@
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
 #include <dftracer/utils/server/router.h>
+#include <dftracer/utils/server/signal_handler.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/server/viz_api.h>
 #include <dftracer/utils/utilities/common/json/json_doc_guard.h>
@@ -25,7 +26,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -479,10 +479,14 @@ static coro::CoroTask<bool> scan_view_events(
         // concurrently with itself, so per-slot output needs no lock.
         scope.spawn([w, chan, view_ptr, produced_ptr, on_batch_ptr, cap,
                      cancel](CoroScope&) -> coro::CoroTask<void> {
+            // Keep draining once done: leaving the channel while the producer
+            // is suspended in send() with no other reader deadlocks the scope,
+            // and the join never completes (a cancelled request would then
+            // hang shutdown). Draining is free - no work is done per item.
             while (auto item = co_await chan->receive()) {
-                if (cancel.cancelled()) co_return;
+                if (cancel.cancelled()) continue;
                 if (produced_ptr->load(std::memory_order_relaxed) >= cap)
-                    co_return;
+                    continue;
 
                 ViewReaderInput reader_input;
                 reader_input.with_file_path(item->file->path)
@@ -495,7 +499,7 @@ static coro::CoroTask<bool> scan_view_events(
                 auto gen = reader.process(reader_input);
                 while (auto batch = co_await gen.next()) {
                     if (batch->events.empty()) continue;
-                    if (cancel.cancelled()) co_return;
+                    if (cancel.cancelled()) break;
                     if (produced_ptr->load(std::memory_order_relaxed) >= cap)
                         break;
                     (*on_batch_ptr)(w, batch->events);
@@ -516,6 +520,8 @@ static coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
                                              TraceIndex& index, double begin,
                                              double end,
                                              const QueryParams& params);
+static coro::CoroTask<const VizSummary*> ensure_viz_summary(TraceIndex& index);
+static bool viz_summary_eligible(const QueryParams& params);
 
 static coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
                                                       const QueryParams& params,
@@ -571,6 +577,15 @@ static coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
 
     double min_dur =
         duration_threshold(begin, end, static_cast<unsigned>(summary));
+    // Full detail (summary=1) has no duration floor, so a wide window would
+    // return every sub-pixel event (millions on a large trace, hanging the
+    // client). Bound it to ~1px at the client width; sub-pixel events cannot
+    // be drawn anyway, and zooming in shrinks the window so detail returns.
+    if (min_dur <= 0 && end > begin) {
+        int px_width = params.get_int("width", DEFAULT_VIEWPORT_WIDTH);
+        px_width = std::clamp(px_width, MIN_VIEWPORT_WIDTH, MAX_VIEWPORT_WIDTH);
+        min_dur = (end - begin) / static_cast<double>(px_width);
+    }
 
     // Overlap, bounded: look back at most `lookback` (the longest event's
     // duration, supplied by the client) so events that started before the
@@ -585,6 +600,56 @@ static coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     // Optional limit: 0 (default) means no limit.
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
+
+    // Zoom-out fast path: when nothing is filtered and the duration threshold
+    // is at least the summary's long-event threshold, the events that survive
+    // are exactly a subset of the summary's cached long_events. Serve them from
+    // memory instead of scanning every file (minutes for a large trace).
+    if (min_dur > 0 && viz_summary_eligible(params)) {
+        const VizSummary* s = co_await ensure_viz_summary(index);
+        if (s != nullptr && s->long_threshold_us > 0 &&
+            min_dur >= s->long_threshold_us) {
+            auto pid_s = params.get("pid");
+            auto tid_s = params.get("tid");
+            bool has_pid = !pid_s.empty();
+            bool has_tid = !tid_s.empty();
+            std::int64_t want_pid =
+                has_pid ? std::strtoll(pid_s.data(), nullptr, 10) : 0;
+            std::int64_t want_tid =
+                has_tid ? std::strtoll(tid_s.data(), nullptr, 10) : 0;
+            std::vector<const VizSummary::AppSpan*> hits;
+            for (const auto& ev : s->long_events) {
+                if (static_cast<double>(ev.end - ev.begin) < min_dur) continue;
+                if (static_cast<double>(ev.end) <= begin ||
+                    static_cast<double>(ev.begin) >= end)
+                    continue;
+                if (has_pid && ev.pid != want_pid) continue;
+                if (has_tid && ev.tid != want_tid) continue;
+                hits.push_back(&ev);
+            }
+            // Keep the widest: a shallow zoom can match more of the list than
+            // any response should carry.
+            if (hits.size() > VizSummary::MAX_RESPONSE_SPANS) {
+                std::nth_element(
+                    hits.begin(), hits.begin() + VizSummary::MAX_RESPONSE_SPANS,
+                    hits.end(),
+                    [](const VizSummary::AppSpan* a,
+                       const VizSummary::AppSpan* x) {
+                        return a->end - a->begin > x->end - x->begin;
+                    });
+                hits.resize(VizSummary::MAX_RESPONSE_SPANS);
+            }
+            std::vector<std::string> collected;
+            collected.reserve(hits.size());
+            for (const auto* ev : hits) collected.push_back(ev->json);
+            co_await append_app_spans(collected, index, begin, end, params);
+            std::string body = build_viz_events_body(
+                collected, global_min, original_begin, original_end, limit,
+                false, index.native_to_us(index.global_min_timestamp_us()),
+                index.time_metric());
+            co_return HttpResponse::ok(body);
+        }
+    }
 
     std::vector<const TraceIndex::FileInfo*> target_files =
         select_viz_target_files(index, params, scan_begin, end);
@@ -881,6 +946,65 @@ static bool fold_density(std::string_view event, double threshold, double begin,
     return true;
 }
 
+// Thin out FH/HH hash-declaration records: keep every one an event in this
+// response refers to, plus a small carry of the rest so the client keeps
+// building its hash map. A trace with millions of files emits these constantly
+// and in a dense window they outweigh the drawable events several times over.
+static constexpr std::size_t MAX_UNREFERENCED_HASH_RECORDS = 500;
+
+static void drop_unreferenced_hash_records(std::vector<std::string>& big) {
+    thread_local simdjson::dom::parser parser;
+    thread_local std::string buf;
+    ankerl::unordered_dense::set<std::string> referenced;
+    std::vector<bool> is_decl(big.size(), false);
+
+    for (std::size_t i = 0; i < big.size(); ++i) {
+        buf.assign(big[i]);
+        auto res = parser.parse(buf);
+        if (res.error()) continue;
+        auto root = res.value_unsafe();
+        if (!root.is_object()) continue;
+        auto nr = root["name"];
+        std::string_view name;
+        if (!nr.error() && nr.is_string())
+            name = nr.get_string().value_unsafe();
+        auto args = root["args"];
+        if (args.error() || !args.is_object()) continue;
+        if (name == "FH" || name == "HH") {
+            is_decl[i] = true;
+            continue;
+        }
+        for (const char* key : {"fhash", "hhash"}) {
+            auto v = args[key];
+            if (!v.error() && v.is_string())
+                referenced.emplace(v.get_string().value_unsafe());
+        }
+    }
+
+    std::size_t out = 0;
+    std::size_t carried = 0;
+    for (std::size_t i = 0; i < big.size(); ++i) {
+        if (is_decl[i]) {
+            buf.assign(big[i]);
+            auto res = parser.parse(buf);
+            bool keep = false;
+            if (!res.error()) {
+                auto v = res.value_unsafe()["args"]["value"];
+                if (!v.error() && v.is_string())
+                    keep = referenced.count(
+                               std::string(v.get_string().value_unsafe())) != 0;
+            }
+            if (!keep) {
+                if (carried >= MAX_UNREFERENCED_HASH_RECORDS) continue;
+                ++carried;
+            }
+        }
+        if (out != i) big[out] = std::move(big[i]);
+        ++out;
+    }
+    big.resize(out);
+}
+
 // Parse just the ts and dur of an event. Returns false for metadata/instant
 // events that lack either field.
 static bool parse_ts_dur(std::string_view event, double& ts, double& dur) {
@@ -1094,29 +1218,89 @@ struct PidTidHash {
     }
 };
 
-struct SumLane {
-    std::int64_t pid;
-    std::int64_t tid;
-    std::vector<std::atomic<std::uint32_t>> count;
-    std::vector<std::atomic<std::uint64_t>> total;
-    std::vector<std::atomic<std::uint32_t>> maxd;
-    std::vector<std::atomic<std::uint32_t>> nameid;
-    SumLane(std::size_t nb, std::int64_t p, std::int64_t t)
-        : pid(p), tid(t), count(nb), total(nb), maxd(nb), nameid(nb) {
-        for (auto& x : nameid)
-            x.store(std::numeric_limits<std::uint32_t>::max(),
-                    std::memory_order_relaxed);
+// One worker's sparse cells at the finest level, keyed by lane and bucket.
+// `demote` coarsens the whole accumulator by 4x when it outgrows its budget;
+// since every level is an exact 4:1 fold of the one below, workers can sit at
+// different depths and still merge.
+struct FineAcc {
+    ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> slot;
+    std::vector<std::uint64_t> keys;
+    std::vector<VizSummary::Cell> cells;
+    unsigned demote = 0;
+
+    static std::uint64_t key_of(std::uint32_t lane, std::uint64_t bucket) {
+        return (static_cast<std::uint64_t>(lane) << 32) | bucket;
+    }
+
+    void add(std::uint32_t lane, std::uint64_t bucket, double dur,
+             std::uint32_t name_id) {
+        std::uint64_t k = key_of(lane, bucket >> (2 * demote));
+        auto it = slot.find(k);
+        std::uint32_t i;
+        if (it != slot.end()) {
+            i = it->second;
+        } else {
+            i = static_cast<std::uint32_t>(cells.size());
+            slot.emplace(k, i);
+            keys.push_back(k);
+            cells.emplace_back();
+        }
+        auto& c = cells[i];
+        c.count += 1;
+        c.total += static_cast<std::uint64_t>(dur < 0 ? 0 : dur);
+        std::uint32_t d = dur >= 4294967295.0
+                              ? 4294967295u
+                              : static_cast<std::uint32_t>(dur < 0 ? 0 : dur);
+        if (d > c.max_dur || c.count == 1) {
+            c.max_dur = d;
+            c.name_id = name_id;
+        }
+    }
+
+    void coarsen() {
+        ++demote;
+        ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> ns;
+        std::vector<std::uint64_t> nk;
+        std::vector<VizSummary::Cell> nc;
+        ns.reserve(keys.size() / 2);
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            std::uint64_t k = key_of(static_cast<std::uint32_t>(keys[i] >> 32),
+                                     (keys[i] & 0xFFFFFFFFULL) >> 2);
+            auto it = ns.find(k);
+            if (it == ns.end()) {
+                ns.emplace(k, static_cast<std::uint32_t>(nc.size()));
+                nk.push_back(k);
+                nc.push_back(cells[i]);
+            } else {
+                auto& dst = nc[it->second];
+                const auto& src = cells[i];
+                dst.count += src.count;
+                dst.total += src.total;
+                if (src.max_dur > dst.max_dur) {
+                    dst.max_dur = src.max_dur;
+                    dst.name_id = src.name_id;
+                }
+            }
+        }
+        slot = std::move(ns);
+        keys = std::move(nk);
+        cells = std::move(nc);
     }
 };
 
 struct SumBuild {
-    std::size_t nb = 0;
+    std::size_t nb = 0;             // level 0 (counter grid)
     double bucket_us = 1;
+    std::size_t nb_fine = 0;        // finest level, before any coarsening
+    double fine_bucket_us = 1;
+    std::size_t max_lanes = 0;
+    std::size_t fine_cell_cap = 0;  // per worker
+    std::size_t long_cap = 0;       // per worker
     std::uint64_t t0 = 0;
 
     std::mutex lane_mtx;
-    ankerl::unordered_dense::map<PidTid, std::size_t, PidTidHash> lane_of;
-    std::deque<SumLane> lanes;
+    ankerl::unordered_dense::map<PidTid, std::uint32_t, PidTidHash> lane_of;
+    std::vector<PidTid> lane_keys;
 
     std::vector<std::atomic<double>> cread;
     std::vector<std::atomic<double>> cwrite;
@@ -1128,9 +1312,12 @@ struct SumBuild {
     std::vector<std::string> names;
 
     // Per-worker caches so the hot path never locks.
-    std::vector<ankerl::unordered_dense::map<PidTid, SumLane*, PidTidHash>>
+    std::vector<ankerl::unordered_dense::map<PidTid, std::uint32_t, PidTidHash>>
         lane_cache;
     std::vector<dftracer::utils::StringViewMap<std::uint32_t>> name_cache;
+
+    std::vector<FineAcc> fine;
+    std::vector<std::size_t> long_quota;  // per level-0 bucket, per worker
 
     // Per-worker Analyze aggregates (no lock); merged single-threaded after the
     // scan. One map per GroupBy dimension.
@@ -1145,7 +1332,7 @@ struct SumBuild {
     std::vector<ankerl::unordered_dense::map<std::int64_t, std::string>>
         app_start, app_end;
 
-    // Per-worker events wider than one bucket, kept whole (see
+    // Per-worker events at least one finest-level bucket wide, kept whole (see
     // VizSummary::long_events).
     std::vector<std::vector<VizSummary::AppSpan>> long_evs;
 
@@ -1161,25 +1348,114 @@ struct SumBuild {
     // I/O).
     std::vector<dftracer::utils::StringViewSet> io_fh;
 
-    SumLane* get_lane(std::size_t w, std::int64_t pid, std::int64_t tid) {
+    // Per-worker process-hierarchy state (see VizSummary::procs), keyed by pid
+    // so it stays small however many events a process emits.
+    std::vector<ankerl::unordered_dense::map<std::int64_t, VizSummary::ProcRow>>
+        procs;
+    std::vector<std::vector<VizSummary::ForkEdge>> forks;
+    std::vector<dftracer::utils::StringViewMap<std::string>> hh_parts;
+
+    VizSummary::ProcRow& proc_of(std::size_t w, std::int64_t pid) {
+        auto& m = procs[w];
+        auto it = m.find(pid);
+        if (it == m.end()) {
+            it = m.emplace(pid, VizSummary::ProcRow{}).first;
+            it->second.pid = pid;
+        }
+        return it->second;
+    }
+
+    static constexpr std::uint32_t NO_LANE =
+        std::numeric_limits<std::uint32_t>::max();
+
+    std::uint32_t get_lane(std::size_t w, std::int64_t pid, std::int64_t tid) {
         PidTid key{pid, tid};
         auto& cache = lane_cache[w];
         auto ci = cache.find(key);
         if (ci != cache.end()) return ci->second;
         std::lock_guard<std::mutex> lk(lane_mtx);
         auto it = lane_of.find(key);
-        SumLane* lane;
+        std::uint32_t lane;
         if (it != lane_of.end()) {
-            lane = &lanes[it->second];
+            lane = it->second;
         } else {
-            if (lanes.size() * nb >= VizSummary::MAX_CELLS)
-                return nullptr;  // budget reached; drop further lanes
-            lane_of.emplace(key, lanes.size());
-            lanes.emplace_back(nb, pid, tid);
-            lane = &lanes.back();
+            if (lane_keys.size() >= max_lanes)
+                return NO_LANE;  // budget reached; drop further lanes
+            lane = static_cast<std::uint32_t>(lane_keys.size());
+            lane_of.emplace(key, lane);
+            lane_keys.push_back(key);
         }
         cache.emplace(key, lane);
         return lane;
+    }
+
+    // Fold an event into the worker's cells, coarsening when over budget.
+    void fold_cell(std::size_t w, std::uint32_t lane, double ts, double dur,
+                   std::uint32_t name_id) {
+        auto& acc = fine[w];
+        double rel = (ts - static_cast<double>(t0)) / fine_bucket_us;
+        auto bucket = rel <= 0 ? 0 : static_cast<std::uint64_t>(rel);
+        if (bucket >= nb_fine) bucket = nb_fine - 1;
+        acc.add(lane, bucket, dur, name_id);
+        while (acc.cells.size() > fine_cell_cap &&
+               acc.demote < VizSummary::EXTRA_LEVELS)
+            acc.coarsen();
+    }
+
+    std::uint64_t coarse_bucket(std::uint64_t ts) const {
+        double rel =
+            (static_cast<double>(ts) - static_cast<double>(t0)) / bucket_us;
+        if (rel <= 0) return 0;
+        auto bk = static_cast<std::uint64_t>(rel);
+        return bk >= nb ? nb - 1 : bk;
+    }
+
+    // Trim a worker's long events to `long_quota` per level-0 bucket, keeping
+    // the widest and folding the rest into cells. A global "widest wins" cap
+    // would spend the whole budget on a few enormous events and leave zoomed-in
+    // windows empty, so the budget is spread over time instead.
+    void compact_long(std::size_t w) {
+        auto& lv = long_evs[w];
+        std::sort(
+            lv.begin(), lv.end(),
+            [this](const VizSummary::AppSpan& a, const VizSummary::AppSpan& x) {
+                auto ba = coarse_bucket(a.begin);
+                auto bx = coarse_bucket(x.begin);
+                if (ba != bx) return ba < bx;
+                return a.end - a.begin > x.end - x.begin;
+            });
+        std::size_t out = 0, run = 0;
+        std::uint64_t cur = std::numeric_limits<std::uint64_t>::max();
+        for (std::size_t i = 0; i < lv.size(); ++i) {
+            auto bk = coarse_bucket(lv[i].begin);
+            if (bk != cur) {
+                cur = bk;
+                run = 0;
+            }
+            if (run < long_quota[w]) {
+                ++run;
+                if (out != i) lv[out] = std::move(lv[i]);
+                ++out;
+                continue;
+            }
+            auto lane = get_lane(w, lv[i].pid, lv[i].tid);
+            if (lane != NO_LANE)
+                fold_cell(w, lane, static_cast<double>(lv[i].begin),
+                          static_cast<double>(lv[i].end - lv[i].begin),
+                          lv[i].name_id);
+        }
+        lv.resize(out);
+    }
+
+    void push_long(std::size_t w, VizSummary::AppSpan&& span) {
+        auto& lv = long_evs[w];
+        lv.push_back(std::move(span));
+        if (lv.size() < long_cap) return;
+        compact_long(w);
+        if (lv.size() > long_cap / 2 && long_quota[w] > 1) {
+            long_quota[w] /= 2;
+            compact_long(w);
+        }
     }
 
     std::uint32_t intern(std::size_t w, std::string_view name) {
@@ -1230,6 +1506,15 @@ static void fold_group(NameMap& m, std::string_view key, double dur) {
     it->second.total += dur;
 }
 
+static bool is_fork_syscall(std::string_view name) {
+    return name == "fork" || name == "vfork" || name == "clone" ||
+           name == "clone3" || name == "posix_spawn" ||
+           name == "posix_spawnp" ||
+           name.find("sys_clone") != std::string_view::npos ||
+           name.find("sys_fork") != std::string_view::npos ||
+           name.find("sys_vfork") != std::string_view::npos;
+}
+
 static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     thread_local simdjson::dom::parser parser;
     thread_local std::string buf;
@@ -1245,23 +1530,93 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
         if (!nr.error() && nr.is_string())
             name0 = nr.get_string().value_unsafe();
     }
-    if (name0 == "FH" || name0 == "SH") {
+    // Hash and rank metadata carry no ts/dur, so they are harvested before the
+    // gates below drop such records.
+    if (name0 == "FH" || name0 == "SH" || name0 == "HH") {
         auto args = root["args"];
         if (!args.error() && args.is_object()) {
             auto v = args["value"];
             auto n = args["name"];
             if (!v.error() && v.is_string() && !n.error() && n.is_string()) {
-                auto& tbl = name0 == "FH" ? b.fh_parts[w] : b.sh_parts[w];
+                auto& tbl = name0 == "FH"   ? b.fh_parts[w]
+                            : name0 == "SH" ? b.sh_parts[w]
+                                            : b.hh_parts[w];
                 tbl.emplace(std::string(v.get_string().value_unsafe()),
                             std::string(n.get_string().value_unsafe()));
             }
         }
         return;
     }
+    if (name0 == "PR") {
+        auto args = root["args"];
+        auto pp = root["pid"];
+        if (!args.error() && args.is_object() && !pp.error()) {
+            auto an = args["name"];
+            auto av = args["value"];
+            if (!an.error() && an.is_string() &&
+                an.get_string().value_unsafe() == "rank" && !av.error() &&
+                av.is_string()) {
+                auto pid =
+                    static_cast<std::int64_t>(json_number(pp.value_unsafe()));
+                auto& row = b.proc_of(w, pid);
+                if (row.rank.empty())
+                    row.rank = std::string(av.get_string().value_unsafe());
+            }
+        }
+        return;
+    }
 
     auto dr = root["dur"];
-    if (dr.error()) return;
-    double dur = json_number(dr.value_unsafe());
+    bool has_dur = !dr.error();
+    double dur = has_dur ? json_number(dr.value_unsafe()) : 0;
+
+    // Process hierarchy (see VizSummary::procs). Runs before the dur gate so it
+    // sees exactly what a live proctree scan sees.
+    {
+        auto pr = root["pid"];
+        auto tr = root["ts"];
+        if (!pr.error() && !tr.error()) {
+            auto pid =
+                static_cast<std::int64_t>(json_number(pr.value_unsafe()));
+            auto ts =
+                static_cast<std::uint64_t>(json_number(tr.value_unsafe()));
+            auto& row = b.proc_of(w, pid);
+            if (row.first_ts == 0 || ts < row.first_ts) row.first_ts = ts;
+
+            double ret = 0;
+            auto args = root["args"];
+            if (!args.error() && args.is_object()) {
+                auto ppr = args["ppid"];
+                if (!ppr.error()) {
+                    auto pp = static_cast<std::int64_t>(
+                        json_number(ppr.value_unsafe()));
+                    if (pp > 0 && pp != pid) row.ppid = pp;
+                }
+                auto rr = args["ret"];
+                if (!rr.error()) ret = json_number(rr.value_unsafe());
+                auto hr = args["hhash"];
+                if (!hr.error() && hr.is_string() && row.hhash.empty())
+                    row.hhash = std::string(hr.get_string().value_unsafe());
+            }
+            if (ret > 0 && (name0.find("read") != std::string_view::npos ||
+                            name0.find("write") != std::string_view::npos))
+                row.bytes += static_cast<std::uint64_t>(ret);
+
+            auto cr = root["cat"];
+            if (!cr.error() && cr.is_string()) {
+                auto cat = cr.get_string().value_unsafe();
+                if (cat == "POSIX" || cat == "STDIO" || cat == "IO") {
+                    row.io_ops += 1;
+                    if (has_dur) row.io_busy += dur;
+                }
+            }
+            if (!name0.empty() && is_fork_syscall(name0))
+                b.forks[w].push_back(VizSummary::ForkEdge{
+                    ts, pid, ret > 0 ? static_cast<std::int64_t>(ret) : -1});
+        }
+    }
+
+    if (!has_dur) return;
 
     // Column discovery: harvest the schema once per distinct event name (same
     // name => same keys), so this is O(distinct names), not O(events).
@@ -1328,39 +1683,37 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     if (tr.error()) return;  // bucketing/counters below need a timestamp
     double ts = json_number(tr.value_unsafe());
     std::int64_t bucket = static_cast<std::int64_t>(
-        (ts - static_cast<double>(b.t0)) / b.bucket_us);
+        (ts - static_cast<double>(b.t0)) / b.fine_bucket_us);
     if (bucket < 0) return;
-    if (bucket >= static_cast<std::int64_t>(b.nb)) bucket = b.nb - 1;
+    if (bucket >= static_cast<std::int64_t>(b.nb_fine)) bucket = b.nb_fine - 1;
+    // Counters live at the finest resolution and are folded down to the coarser
+    // levels afterwards, so a zoomed-in counter track needs no live scan.
     auto bi = static_cast<std::size_t>(bucket);
 
     auto tir = root["tid"];
     if (!tir.error())
         tid = static_cast<std::int64_t>(json_number(tir.value_unsafe()));
 
-    if (dur >= b.bucket_us && dur > 0) {
-        // Wider than one bucket: folded at the start bucket this would render
-        // as a 1px sliver at zoom-out. Keep the event whole; the summary
-        // density path serves it as a real span.
-        b.long_evs[w].push_back(
-            VizSummary::AppSpan{static_cast<std::uint64_t>(ts),
-                                static_cast<std::uint64_t>(ts + dur), pid, tid,
-                                std::string(event)});
-    } else if (SumLane* lane = b.get_lane(w, pid, tid)) {
-        lane->count[bi].fetch_add(1, std::memory_order_relaxed);
-        lane->total[bi].fetch_add(static_cast<std::uint64_t>(dur < 0 ? 0 : dur),
-                                  std::memory_order_relaxed);
-        std::uint32_t d = dur >= 4294967295.0
-                              ? 4294967295u
-                              : static_cast<std::uint32_t>(dur < 0 ? 0 : dur);
-        if (d > lane->maxd[bi].load(std::memory_order_relaxed)) {
-            atomic_max(lane->maxd[bi], d);
-            std::string_view name;
-            auto nr = root["name"];
-            if (!nr.error() && nr.is_string())
-                name = nr.get_string().value_unsafe();
-            lane->nameid[bi].store(b.intern(w, name),
-                                   std::memory_order_relaxed);
-        }
+    std::uint32_t name_id;
+    {
+        std::string_view name;
+        auto nr = root["name"];
+        if (!nr.error() && nr.is_string())
+            name = nr.get_string().value_unsafe();
+        name_id = b.intern(w, name);
+    }
+
+    if (dur >= b.fine_bucket_us && dur > 0) {
+        // Wider than a finest-level bucket: folded into a cell it would render
+        // as a sliver, so keep it whole and let each request decide whether it
+        // is wide enough to draw.
+        b.push_long(
+            w, VizSummary::AppSpan{static_cast<std::uint64_t>(ts),
+                                   static_cast<std::uint64_t>(ts + dur), pid,
+                                   tid, name_id, std::string(event)});
+    } else {
+        auto lane = b.get_lane(w, pid, tid);
+        if (lane != SumBuild::NO_LANE) b.fold_cell(w, lane, ts, dur, name_id);
     }
     atomic_max(b.gmax_dur, static_cast<std::uint64_t>(dur < 0 ? 0 : dur));
 
@@ -1415,10 +1768,21 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     b.nb = nb;
     b.t0 = gmin;
     b.bucket_us = static_cast<double>(gmax - gmin) / static_cast<double>(nb);
-    b.cread = std::vector<std::atomic<double>>(nb);
-    b.cwrite = std::vector<std::atomic<double>>(nb);
-    b.cops = std::vector<std::atomic<double>>(nb);
+    b.max_lanes = std::max<std::size_t>(1, VizSummary::MAX_CELLS / nb);
+    b.nb_fine = nb << (2 * VizSummary::EXTRA_LEVELS);
+    b.fine_bucket_us =
+        static_cast<double>(gmax - gmin) / static_cast<double>(b.nb_fine);
+    b.cread = std::vector<std::atomic<double>>(b.nb_fine);
+    b.cwrite = std::vector<std::atomic<double>>(b.nb_fine);
+    b.cops = std::vector<std::atomic<double>>(b.nb_fine);
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
+    b.fine_cell_cap =
+        std::max<std::size_t>(1, VizSummary::MAX_FINE_CELLS / slots);
+    b.long_cap = std::max<std::size_t>(2, VizSummary::MAX_LONG_EVENTS / slots);
+    b.fine.resize(slots);
+    b.long_quota.assign(
+        slots, std::max<std::size_t>(1, VizSummary::MAX_LONG_EVENTS /
+                                            std::max<std::size_t>(1, nb)));
     b.lane_cache.resize(slots);
     b.name_cache.resize(slots);
     b.g_name.resize(slots);
@@ -1434,6 +1798,9 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     b.col_seen.resize(slots);
     b.name_cat.resize(slots);
     b.io_fh.resize(slots);
+    b.procs.resize(slots);
+    b.forks.resize(slots);
+    b.hh_parts.resize(slots);
 
     ViewDefinition view;
     view.name = "viz_summary";
@@ -1456,57 +1823,140 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     summary->bucket_us = b.bucket_us;
     summary->max_dur = b.gmax_dur.load(std::memory_order_relaxed);
     summary->names = std::move(b.names);
-    summary->read_bytes.assign(nb, 0.0);
-    summary->write_bytes.assign(nb, 0.0);
-    summary->ops.assign(nb, 0.0);
-    for (std::size_t i = 0; i < nb; ++i) {
-        summary->read_bytes[i] = b.cread[i].load(std::memory_order_relaxed);
-        summary->write_bytes[i] = b.cwrite[i].load(std::memory_order_relaxed);
-        summary->ops[i] = b.cops[i].load(std::memory_order_relaxed);
+    summary->long_threshold_us = b.fine_bucket_us;
+    // Workers each hold up to their own per-bucket quota, so the union can
+    // exceed the budget; compact once more across all of them.
+    for (std::size_t w = 1; w < b.long_evs.size(); ++w) {
+        auto& part = b.long_evs[w];
+        for (auto& ev : part) b.long_evs[0].push_back(std::move(ev));
+        part.clear();
+        part.shrink_to_fit();
     }
-    summary->lanes.reserve(b.lanes.size());
-    for (auto& sl : b.lanes) {
-        VizSummary::Lane lane;
-        lane.pid = sl.pid;
-        lane.tid = sl.tid;
-        lane.cells.resize(nb);
-        for (std::size_t i = 0; i < nb; ++i) {
-            lane.cells[i].count = sl.count[i].load(std::memory_order_relaxed);
-            lane.cells[i].total = sl.total[i].load(std::memory_order_relaxed);
-            lane.cells[i].max_dur = sl.maxd[i].load(std::memory_order_relaxed);
-            lane.cells[i].name_id =
-                sl.nameid[i].load(std::memory_order_relaxed);
-        }
-        summary->lanes.push_back(std::move(lane));
+    b.long_quota[0] =
+        std::max<std::size_t>(1, VizSummary::MAX_LONG_EVENTS / nb);
+    while (b.long_evs[0].size() > VizSummary::MAX_LONG_EVENTS) {
+        b.compact_long(0);
+        if (b.long_evs[0].size() <= VizSummary::MAX_LONG_EVENTS) break;
+        if (b.long_quota[0] == 1) break;
+        b.long_quota[0] /= 2;
     }
+    summary->long_events = std::move(b.long_evs[0]);
 
-    for (auto& part : b.long_evs)
-        for (auto& ev : part) summary->long_events.push_back(std::move(ev));
-    if (summary->long_events.size() > VizSummary::MAX_LONG_EVENTS) {
-        // Keep the widest; fold the overflow into start-bucket cells (the
-        // pre-cap behavior) so no activity is lost.
-        auto& lv = summary->long_events;
-        std::sort(
-            lv.begin(), lv.end(),
-            [](const VizSummary::AppSpan& a, const VizSummary::AppSpan& x) {
-                return a.end - a.begin > x.end - x.begin;
-            });
-        ankerl::unordered_dense::map<PidTid, std::size_t, PidTidHash> lane_idx;
-        for (std::size_t i = 0; i < summary->lanes.size(); ++i)
-            lane_idx.emplace(
-                PidTid{summary->lanes[i].pid, summary->lanes[i].tid}, i);
-        for (std::size_t i = VizSummary::MAX_LONG_EVENTS; i < lv.size(); ++i) {
-            const auto& ev = lv[i];
-            auto it = lane_idx.find(PidTid{ev.pid, ev.tid});
-            if (it == lane_idx.end()) continue;
-            auto bi = summary->bucket_of(static_cast<double>(ev.begin));
-            if (bi < 0) continue;
-            auto& cell =
-                summary->lanes[it->second].cells[static_cast<std::size_t>(bi)];
-            cell.count += 1;
-            cell.total += ev.end - ev.begin;
+    // Workers that outgrew their cell budget coarsened independently; the
+    // merged pyramid can only be as fine as the coarsest of them.
+    unsigned demote = 0;
+    for (auto& acc : b.fine) demote = std::max(demote, acc.demote);
+    for (auto& acc : b.fine)
+        while (acc.demote < demote) acc.coarsen();
+    std::sort(summary->long_events.begin(), summary->long_events.end(),
+              [](const VizSummary::AppSpan& a, const VizSummary::AppSpan& x) {
+                  return a.begin < x.begin;
+              });
+
+    {
+        std::size_t total = 0;
+        for (auto& acc : b.fine) total += acc.cells.size();
+        std::vector<std::pair<std::uint64_t, VizSummary::Cell>> merged;
+        merged.reserve(total);
+        for (auto& acc : b.fine) {
+            for (std::size_t i = 0; i < acc.keys.size(); ++i)
+                merged.emplace_back(acc.keys[i], acc.cells[i]);
+            acc = FineAcc{};
         }
-        lv.resize(VizSummary::MAX_LONG_EVENTS);
+        std::sort(
+            merged.begin(), merged.end(),
+            [](const auto& x, const auto& y) { return x.first < y.first; });
+
+        std::size_t nb_fine = b.nb_fine >> (2 * demote);
+        // Counters were folded at the pre-coarsening resolution; bring them to
+        // the merged one, then they ride the same 4:1 folds as the cells.
+        std::vector<double> cread(nb_fine, 0.0), cwrite(nb_fine, 0.0),
+            cops(nb_fine, 0.0);
+        for (std::size_t i = 0; i < b.nb_fine; ++i) {
+            std::size_t j = i >> (2 * demote);
+            if (j >= nb_fine) j = nb_fine - 1;
+            cread[j] += b.cread[i].load(std::memory_order_relaxed);
+            cwrite[j] += b.cwrite[i].load(std::memory_order_relaxed);
+            cops[j] += b.cops[i].load(std::memory_order_relaxed);
+        }
+
+        for (std::size_t l = 0; l <= VizSummary::EXTRA_LEVELS - demote; ++l) {
+            if (l > 0) {
+                // Fold 4:1 into the next coarser level, in place: keys stay
+                // sorted because the lane stays in the high bits.
+                std::size_t out = 0;
+                for (std::size_t i = 0; i < merged.size(); ++i) {
+                    std::uint64_t k = (merged[i].first & ~0xFFFFFFFFULL) |
+                                      ((merged[i].first & 0xFFFFFFFFULL) >> 2);
+                    if (out > 0 && merged[out - 1].first == k) {
+                        auto& dst = merged[out - 1].second;
+                        const auto& src = merged[i].second;
+                        dst.count += src.count;
+                        dst.total += src.total;
+                        if (src.max_dur > dst.max_dur) {
+                            dst.max_dur = src.max_dur;
+                            dst.name_id = src.name_id;
+                        }
+                    } else {
+                        merged[out] = merged[i];
+                        merged[out].first = k;
+                        ++out;
+                    }
+                }
+                merged.resize(out);
+                nb_fine >>= 2;
+                auto fold = [](const std::vector<double>& src, std::size_t n) {
+                    std::vector<double> dst(n, 0.0);
+                    for (std::size_t i = 0; i < src.size(); ++i) {
+                        std::size_t j = i >> 2;
+                        dst[j < n ? j : n - 1] += src[i];
+                    }
+                    return dst;
+                };
+                cread = fold(cread, nb_fine);
+                cwrite = fold(cwrite, nb_fine);
+                cops = fold(cops, nb_fine);
+            } else {
+                std::size_t out = 0;
+                for (std::size_t i = 0; i < merged.size(); ++i) {
+                    if (out > 0 && merged[out - 1].first == merged[i].first) {
+                        auto& dst = merged[out - 1].second;
+                        const auto& src = merged[i].second;
+                        dst.count += src.count;
+                        dst.total += src.total;
+                        if (src.max_dur > dst.max_dur) {
+                            dst.max_dur = src.max_dur;
+                            dst.name_id = src.name_id;
+                        }
+                    } else {
+                        merged[out++] = merged[i];
+                    }
+                }
+                merged.resize(out);
+            }
+
+            VizSummary::Level level;
+            level.nbuckets = nb_fine;
+            level.bucket_us =
+                static_cast<double>(gmax - gmin) / static_cast<double>(nb_fine);
+            level.read_bytes = cread;
+            level.write_bytes = cwrite;
+            level.ops = cops;
+            level.lanes.resize(b.lane_keys.size());
+            for (std::size_t i = 0; i < b.lane_keys.size(); ++i) {
+                level.lanes[i].pid = b.lane_keys[i].pid;
+                level.lanes[i].tid = b.lane_keys[i].tid;
+            }
+            for (const auto& [k, cell] : merged) {
+                auto li = static_cast<std::size_t>(k >> 32);
+                if (li >= level.lanes.size()) continue;
+                level.lanes[li].buckets.push_back(
+                    static_cast<std::uint32_t>(k & 0xFFFFFFFFULL));
+                level.lanes[li].cells.push_back(cell);
+            }
+            summary->levels.push_back(std::move(level));
+        }
+        std::reverse(summary->levels.begin(), summary->levels.end());
     }
 
     {
@@ -1650,7 +2100,8 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             jb.end_object();
             jb.end_object();
             summary->app_spans.push_back(
-                {start_ts, end_ts, pid, tid, std::string(jb)});
+                {start_ts, end_ts, pid, tid,
+                 std::numeric_limits<std::uint32_t>::max(), std::string(jb)});
         }
     }
 
@@ -1658,6 +2109,49 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     for (auto& part : b.io_fh)
         for (auto& k : part) io_fh.emplace(k);
     summary->io_files = io_fh.size();
+
+    {
+        ankerl::unordered_dense::map<std::int64_t, VizSummary::ProcRow> procs;
+        for (auto& part : b.procs) {
+            for (auto& [pid, src] : part) {
+                auto it = procs.find(pid);
+                if (it == procs.end()) {
+                    procs.emplace(pid, src);
+                    continue;
+                }
+                auto& dst = it->second;
+                if (dst.first_ts == 0 ||
+                    (src.first_ts != 0 && src.first_ts < dst.first_ts))
+                    dst.first_ts = src.first_ts;
+                if (dst.ppid < 0) dst.ppid = src.ppid;
+                dst.bytes += src.bytes;
+                dst.io_ops += src.io_ops;
+                dst.io_busy += src.io_busy;
+                if (dst.hhash.empty()) dst.hhash = src.hhash;
+                if (dst.rank.empty()) dst.rank = src.rank;
+            }
+            part.clear();
+        }
+        summary->procs.reserve(procs.size());
+        for (auto& [pid, row] : procs) summary->procs.push_back(row);
+        std::sort(summary->procs.begin(), summary->procs.end(),
+                  [](const VizSummary::ProcRow& a,
+                     const VizSummary::ProcRow& x) { return a.pid < x.pid; });
+
+        for (auto& part : b.forks) {
+            for (auto& f : part) summary->forks.push_back(f);
+            part.clear();
+        }
+        std::sort(summary->forks.begin(), summary->forks.end(),
+                  [](const VizSummary::ForkEdge& a,
+                     const VizSummary::ForkEdge& x) { return a.ts < x.ts; });
+
+        dftracer::utils::StringViewMap<std::string> hh;
+        for (auto& part : b.hh_parts)
+            for (auto& kv : part) hh.emplace(kv.first, kv.second);
+        summary->hosts.reserve(hh.size());
+        for (auto& kv : hh) summary->hosts.emplace_back(kv.first, kv.second);
+    }
 
     // Merge the per-worker name -> category maps (first writer wins).
     dftracer::utils::StringViewMap<std::string> nc;
@@ -1691,9 +2185,18 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         // No app-spans (malformed trace): fall back to a lane-activity scan,
         // requiring a gap to be a fraction of active (not total) time.
         std::vector<bool> active(nb, false);
-        for (const auto& lane : summary->lanes)
-            for (std::size_t i = 0; i < nb; ++i)
-                if (lane.cells[i].count) active[i] = true;
+        if (!summary->levels.empty())
+            for (const auto& lane : summary->levels.front().lanes)
+                for (std::uint32_t bk : lane.buckets)
+                    if (bk < nb) active[bk] = true;
+        for (const auto& ev : summary->long_events) {
+            auto b0 = summary->bucket_of(static_cast<double>(ev.begin));
+            auto b1 = summary->bucket_of(static_cast<double>(ev.end));
+            if (b0 < 0) continue;
+            if (b1 < b0) b1 = b0;
+            for (std::int64_t i = b0; i <= b1; ++i)
+                active[static_cast<std::size_t>(i)] = true;
+        }
         std::size_t first = 0, last = 0, active_count = 0;
         bool any = false;
         for (std::size_t i = 0; i < nb; ++i)
@@ -1732,19 +2235,38 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         }
     }
 
+    if (g_shutdown_requested.load(std::memory_order_acquire)) {
+        DFTRACER_UTILS_LOG_INFO("viz: summary build abandoned (shutting down)");
+        co_return;
+    }
+
+    std::size_t cells = 0;
+    for (const auto& lane : summary->levels.back().lanes)
+        cells += lane.cells.size();
     DFTRACER_UTILS_LOG_INFO(
-        "viz: built activity summary (%zu lanes, %zu buckets/lane, %zu idle "
-        "gaps)",
-        summary->lanes.size(), nb, summary->idle_gaps.size());
+        "viz: built activity summary (%zu lanes, %zu levels, finest %.0f us "
+        "with %zu cells, %zu long events, %zu idle gaps)",
+        b.lane_keys.size(), summary->levels.size(),
+        summary->levels.back().bucket_us, cells, summary->long_events.size(),
+        summary->idle_gaps.size());
     index.set_viz_summary(std::move(summary));
 }
 
-// The summary, building it on first use. Null when another request is already
-// building it, in which case the caller falls back to a live scan.
+// The summary, building it on first use. Requests that arrive during the build
+// wait for it: a whole-trace live scan each (the old fallback) costs more than
+// the build they are waiting on, and the client opens the timeline with half a
+// dozen summary-backed requests at once.
 static coro::CoroTask<const VizSummary*> ensure_viz_summary(TraceIndex& index) {
     const VizSummary* s = index.viz_summary();
-    if (!s && index.try_begin_summary_build()) {
-        co_await build_viz_summary(index);
+    if (s) co_return s;
+    co_await index.viz_summary_mutex().lock();
+    coro::AsyncMutexGuard guard(index.viz_summary_mutex());
+    s = index.viz_summary();
+    if (!s) {
+        if (!index.load_persisted_viz_summary()) {
+            co_await build_viz_summary(index);
+            index.persist_viz_summary();
+        }
         s = index.viz_summary();
     }
     co_return s;
@@ -2710,12 +3232,13 @@ static coro::CoroTask<void> append_app_spans(std::vector<std::string>& out,
     }
 }
 
-// Re-aggregate the summary's finest per-lane buckets over [begin_abs, end_abs]
-// into pixel-column density blocks. `begin_abs`/`end_abs` are absolute us.
+// Re-aggregate one pyramid level's buckets over [begin_abs, end_abs] into
+// pixel-column density blocks. `begin_abs`/`end_abs` are absolute us.
 static std::string serve_density_from_summary(
-    const VizSummary& s, const QueryParams& params, double begin_abs,
-    double end_abs, double original_begin, double original_end,
-    double threshold, bool ts_normalized, std::uint64_t display_global_min,
+    const VizSummary& s, const VizSummary::Level& level,
+    const QueryParams& params, double begin_abs, double end_abs,
+    double original_begin, double original_end, double threshold,
+    bool ts_normalized, std::uint64_t display_global_min,
     TraceIndex::TimeMetric metric) {
     auto pid_s = params.get("pid");
     auto tid_s = params.get("tid");
@@ -2726,32 +3249,98 @@ static std::string serve_density_from_summary(
     std::int64_t want_tid =
         has_tid ? std::strtoll(tid_s.data(), nullptr, 10) : 0;
 
-    std::int64_t b0 = s.bucket_of(begin_abs);
-    std::int64_t b1 = s.bucket_of(end_abs);
+    std::int64_t b0 = s.bucket_of(begin_abs, level.bucket_us, level.nbuckets);
+    std::int64_t b1 = s.bucket_of(end_abs, level.bucket_us, level.nbuckets);
     if (b0 < 0) b0 = 0;
-    if (b1 < 0) b1 = static_cast<std::int64_t>(s.nbuckets) - 1;
+    if (b1 < 0) b1 = static_cast<std::int64_t>(level.nbuckets) - 1;
 
     DensityMap dens;
-    for (const auto& lane : s.lanes) {
+    auto add_cell = [&](std::int64_t pid, std::int64_t tid, std::int64_t col,
+                        std::uint64_t count, double total,
+                        const VizSummary::Cell& cell) {
+        if (count == 0 && total <= 0) return;
+        auto& a = dens[DensityKey{pid, tid, col, {}}];
+        a.count += count;
+        a.total += total;
+        if (static_cast<double>(cell.max_dur) > a.max_dur) {
+            a.max_dur = static_cast<double>(cell.max_dur);
+            if (cell.name_id < s.names.size()) a.name = s.names[cell.name_id];
+        }
+    };
+    for (const auto& lane : level.lanes) {
         if (has_pid && lane.pid != want_pid) continue;
         if (has_tid && lane.tid != want_tid) continue;
-        for (std::int64_t bk = b0; bk <= b1; ++bk) {
-            const auto& cell = lane.cells[static_cast<std::size_t>(bk)];
-            if (cell.count == 0) continue;
-            double center = static_cast<double>(s.t_begin) +
-                            (static_cast<double>(bk) + 0.5) * s.bucket_us;
+        auto lo = std::lower_bound(lane.buckets.begin(), lane.buckets.end(),
+                                   static_cast<std::uint32_t>(b0));
+        for (auto it = lo;
+             it != lane.buckets.end() && *it <= static_cast<std::uint32_t>(b1);
+             ++it) {
+            const auto& cell =
+                lane.cells[static_cast<std::size_t>(it - lane.buckets.begin())];
+            // A bucket never exceeds one column, so it falls in one column or
+            // straddles two. Split it by overlap rather than dumping it whole
+            // into the column holding its center, which would misplace a third
+            // of the events once buckets and columns are of similar size.
+            double bstart = static_cast<double>(s.t_begin) +
+                            static_cast<double>(*it) * level.bucket_us;
             std::int64_t col =
-                static_cast<std::int64_t>((center - begin_abs) / threshold);
-            DensityKey key{lane.pid, lane.tid, col, {}};
-            auto& a = dens[key];
-            a.count += cell.count;
-            a.total += static_cast<double>(cell.total);
-            if (static_cast<double>(cell.max_dur) > a.max_dur) {
-                a.max_dur = static_cast<double>(cell.max_dur);
-                if (cell.name_id < s.names.size())
-                    a.name = s.names[cell.name_id];
+                static_cast<std::int64_t>((bstart - begin_abs) / threshold);
+            double edge = begin_abs + static_cast<double>(col + 1) * threshold;
+            double head = edge - bstart;
+            if (head >= level.bucket_us) {
+                add_cell(lane.pid, lane.tid, col, cell.count,
+                         static_cast<double>(cell.total), cell);
+                continue;
             }
+            double f = head / level.bucket_us;
+            auto c0 = static_cast<std::uint64_t>(
+                std::llround(static_cast<double>(cell.count) * f));
+            if (c0 > cell.count) c0 = cell.count;
+            double t0 = static_cast<double>(cell.total) * f;
+            add_cell(lane.pid, lane.tid, col, c0, t0, cell);
+            add_cell(lane.pid, lane.tid, col + 1, cell.count - c0,
+                     static_cast<double>(cell.total) - t0, cell);
         }
+    }
+
+    // Long events at least one pixel wide are drawn as real spans; the rest
+    // fold into density blocks, which is the split a live scan makes. The
+    // widest win when there are more than a response can carry.
+    std::vector<const VizSummary::AppSpan*> wide;
+    auto fold_span = [&](const VizSummary::AppSpan& sp) {
+        auto dur = static_cast<double>(sp.end - sp.begin);
+        std::int64_t col = static_cast<std::int64_t>(
+            (static_cast<double>(sp.begin) - begin_abs) / threshold);
+        auto& a = dens[DensityKey{sp.pid, sp.tid, col, {}}];
+        a.count += 1;
+        a.total += dur;
+        if (dur > a.max_dur) {
+            a.max_dur = dur;
+            if (sp.name_id < s.names.size()) a.name = s.names[sp.name_id];
+        }
+    };
+    for (const auto& sp : s.long_events) {
+        if (has_pid && sp.pid != want_pid) continue;
+        if (has_tid && sp.tid != want_tid) continue;
+        if (static_cast<double>(sp.end) <= begin_abs ||
+            static_cast<double>(sp.begin) >= end_abs)
+            continue;
+        if (static_cast<double>(sp.end - sp.begin) >= threshold)
+            wide.push_back(&sp);
+        else
+            fold_span(sp);
+    }
+    if (wide.size() > VizSummary::MAX_RESPONSE_SPANS) {
+        std::nth_element(
+            wide.begin(), wide.begin() + VizSummary::MAX_RESPONSE_SPANS,
+            wide.end(),
+            [](const VizSummary::AppSpan* a, const VizSummary::AppSpan* b) {
+                return a->end - a->begin > b->end - b->begin;
+            });
+        for (std::size_t i = VizSummary::MAX_RESPONSE_SPANS; i < wide.size();
+             ++i)
+            fold_span(*wide[i]);
+        wide.resize(VizSummary::MAX_RESPONSE_SPANS);
     }
 
     std::vector<std::string> spans;
@@ -2771,17 +3360,13 @@ static std::string serve_density_from_summary(
     // App spans get an injected depth 0; long events after them do not, so the
     // client stacks overlapping wide events instead of piling them on one row.
     const std::size_t napp_spans = spans.size();
-    for (const auto& sp : s.long_events) {
-        if (has_pid && sp.pid != want_pid) continue;
-        if (has_tid && sp.tid != want_tid) continue;
-        if (static_cast<double>(sp.end) <= begin_abs ||
-            static_cast<double>(sp.begin) >= end_abs)
-            continue;
-        span_lanes.insert((sp.pid << 20) ^ sp.tid);
+    spans.reserve(spans.size() + wide.size());
+    for (const auto* sp : wide) {
+        span_lanes.insert((sp->pid << 20) ^ sp->tid);
         spans.push_back(
             ts_normalized && display_global_min > 0
-                ? normalize_event_ts(sp.json, display_global_min, metric)
-                : sp.json);
+                ? normalize_event_ts(sp->json, display_global_min, metric)
+                : sp->json);
     }
     // Folded child activity sits one row below its app span, matching the
     // containment nesting the live path computes.
@@ -2891,17 +3476,23 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
         duration_threshold(begin, end, static_cast<unsigned>(summary),
                            static_cast<unsigned>(width));
 
-    // Zoomed-out, unfiltered views come from the prebuilt summary (no event
-    // cap), built lazily here; concurrent requests fall through to a live scan.
+    // Unfiltered views come from the prebuilt summary pyramid (no event cap),
+    // built lazily here; concurrent requests fall through to a live scan, as do
+    // zooms finer than the pyramid's finest level.
     if (threshold > 0 && viz_summary_eligible(params)) {
         const VizSummary* s = co_await ensure_viz_summary(index);
-        if (s && s->bucket_us > 0 && s->t_end > s->t_begin &&
-            threshold >= s->bucket_us) {
-            co_return HttpResponse::ok(serve_density_from_summary(
-                *s, params, begin, end, original_begin, original_end, threshold,
-                global_min > 0,
-                index.native_to_us(index.global_min_timestamp_us()),
-                index.time_metric()));
+        if (s && s->t_end > s->t_begin) {
+            if (const VizSummary::Level* level = s->level_for(threshold)) {
+                DFTRACER_UTILS_LOG_DEBUG(
+                    "viz: density threshold %.0f us served from level "
+                    "%.0f us",
+                    threshold, level->bucket_us);
+                co_return HttpResponse::ok(serve_density_from_summary(
+                    *s, *level, params, begin, end, original_begin,
+                    original_end, threshold, global_min > 0,
+                    index.native_to_us(index.global_min_timestamp_us()),
+                    index.time_metric()));
+            }
         }
     }
 
@@ -2914,6 +3505,21 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
     // `lookback` can never starve the in-window scan's budget.
     double lookback = params.get_double("lookback", 0);
     if (lookback < 0) lookback = 0;
+
+    // The client feeds back the longest event in the trace as `lookback`, so
+    // honoring it literally rescans everything before the window - 24s against
+    // 0.5s for the window itself on a large trace. Every event that wide is
+    // already in the summary's long-event list, so take enclosers from there
+    // and scan back only far enough to catch the ones too short to be listed.
+    const VizSummary* enc_summary = nullptr;
+    if (lookback > 0 && viz_summary_eligible(params)) {
+        const VizSummary* s = co_await ensure_viz_summary(index);
+        if (s != nullptr && s->long_threshold_us > 0) {
+            enc_summary = s;
+            lookback = std::min(lookback, s->long_threshold_us);
+        }
+    }
+
     double scan_begin = begin - lookback;
     if (scan_begin < 0) scan_begin = 0;
 
@@ -2956,7 +3562,12 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
     // Pass 2 (enclosers): keep only events still open at `begin`
     // (ts < begin <= ts + dur); these ancestor bars set containment depth.
     if (scan_begin < begin) {
-        auto on_batch_enc = [&accs, begin](
+        // Wide enclosers come from the summary below; excluding them here
+        // keeps them from being served twice.
+        double skip_from = enc_summary != nullptr
+                               ? enc_summary->long_threshold_us
+                               : std::numeric_limits<double>::infinity();
+        auto on_batch_enc = [&accs, begin, skip_from](
                                 std::size_t w,
                                 const std::vector<std::string_view>& events) {
             Acc& acc = accs[w];
@@ -2964,7 +3575,7 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
                 double ts = 0, dur = 0;
                 if (!parse_ts_dur(ev, ts, dur)) continue;
                 if (dur > acc.max_dur) acc.max_dur = dur;
-                if (ts < begin && ts + dur > begin) {
+                if (ts < begin && ts + dur > begin && dur < skip_from) {
                     acc.big.emplace_back(ev);
                     acc.big_dur.push_back(dur);
                 }
@@ -2997,6 +3608,30 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
                 it->second.merge_from(kv.second);
         }
     }
+    // Enclosers wide enough to be listed in the summary, found without the
+    // scan back toward the start of the trace that finding them live takes.
+    if (enc_summary != nullptr) {
+        auto pid_s = params.get("pid");
+        auto tid_s = params.get("tid");
+        bool has_pid = !pid_s.empty();
+        bool has_tid = !tid_s.empty();
+        std::int64_t want_pid =
+            has_pid ? std::strtoll(pid_s.data(), nullptr, 10) : 0;
+        std::int64_t want_tid =
+            has_tid ? std::strtoll(tid_s.data(), nullptr, 10) : 0;
+        for (const auto& sp : enc_summary->long_events) {
+            if (static_cast<double>(sp.begin) >= begin ||
+                static_cast<double>(sp.end) <= begin)
+                continue;
+            if (has_pid && sp.pid != want_pid) continue;
+            if (has_tid && sp.tid != want_tid) continue;
+            auto dur = static_cast<double>(sp.end - sp.begin);
+            if (dur > max_dur) max_dur = dur;
+            big.push_back(sp.json);
+            big_dur.push_back(dur);
+        }
+    }
+
     // scan_view_events overshoots its cap (checked per batch), so clamp here.
     // Keep the longest events: those are the slices wide enough to see.
     if (limit > 0 && big.size() > static_cast<std::size_t>(limit)) {
@@ -3015,6 +3650,8 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
         big.swap(kept);
         truncated = true;
     }
+
+    drop_unreferenced_hash_records(big);
 
     co_await append_app_spans(big, index, begin, end, params);
 
@@ -3096,27 +3733,25 @@ static std::string serialize_counters_body(const std::vector<double>& read,
 
 // Re-aggregate the summary's finest counter buckets into `buckets` output
 // buckets over [begin_abs, end_abs] (absolute us).
-static std::string serve_counters_from_summary(const VizSummary& s,
-                                               double begin_abs, double end_abs,
-                                               double original_begin,
-                                               double original_end, int buckets,
-                                               double bucket_us_out,
-                                               TraceIndex::TimeMetric metric) {
+static std::string serve_counters_from_summary(
+    const VizSummary& s, const VizSummary::Level& level, double begin_abs,
+    double end_abs, double original_begin, double original_end, int buckets,
+    double bucket_us_out, TraceIndex::TimeMetric metric) {
     std::vector<double> read(buckets, 0.0), write(buckets, 0.0),
         ops(buckets, 0.0);
-    std::int64_t fb0 = s.bucket_of(begin_abs);
-    std::int64_t fb1 = s.bucket_of(end_abs);
+    std::int64_t fb0 = s.bucket_of(begin_abs, level.bucket_us, level.nbuckets);
+    std::int64_t fb1 = s.bucket_of(end_abs, level.bucket_us, level.nbuckets);
     if (fb0 < 0) fb0 = 0;
-    if (fb1 < 0) fb1 = static_cast<std::int64_t>(s.nbuckets) - 1;
+    if (fb1 < 0) fb1 = static_cast<std::int64_t>(level.nbuckets) - 1;
     for (std::int64_t fb = fb0; fb <= fb1; ++fb) {
         double center = static_cast<double>(s.t_begin) +
-                        (static_cast<double>(fb) + 0.5) * s.bucket_us;
+                        (static_cast<double>(fb) + 0.5) * level.bucket_us;
         long oi = static_cast<long>((center - begin_abs) / bucket_us_out);
         if (oi < 0 || oi >= buckets) continue;
         auto f = static_cast<std::size_t>(fb);
-        read[oi] += s.read_bytes[f];
-        write[oi] += s.write_bytes[f];
-        ops[oi] += s.ops[f];
+        read[oi] += level.read_bytes[f];
+        write[oi] += level.write_bytes[f];
+        ops[oi] += level.ops[f];
     }
     return serialize_counters_body(
         read, write, ops, original_begin, original_end, buckets,
@@ -3176,11 +3811,12 @@ static coro::CoroTask<HttpResponse> handle_viz_counters(
     // Zoomed-out, unfiltered counter tracks come from the activity summary.
     if (viz_summary_eligible(params)) {
         const VizSummary* s = co_await ensure_viz_summary(index);
-        if (s && s->bucket_us > 0 && s->t_end > s->t_begin &&
-            bucket_us >= s->bucket_us) {
-            co_return HttpResponse::ok(serve_counters_from_summary(
-                *s, begin, end, original_begin, original_end, buckets,
-                bucket_us, index.time_metric()));
+        if (s != nullptr && s->t_end > s->t_begin) {
+            if (const VizSummary::Level* level = s->level_for(bucket_us)) {
+                co_return HttpResponse::ok(serve_counters_from_summary(
+                    *s, *level, begin, end, original_begin, original_end,
+                    buckets, bucket_us, index.time_metric()));
+            }
         }
     }
 
@@ -3224,14 +3860,6 @@ static coro::CoroTask<HttpResponse> handle_viz_counters(
 // Process-spawning calls: dftracer POSIX (exact "fork"/"clone"/...) and kernel
 // syscalls ("__arm64_sys_clone"). Excludes library helpers like ibv_*fork* and
 // register_tm_clones, which contain "fork"/"clone" but don't spawn.
-static bool is_fork_syscall(std::string_view name) {
-    return name == "fork" || name == "vfork" || name == "clone" ||
-           name == "clone3" || name == "posix_spawn" ||
-           name == "posix_spawnp" ||
-           name.find("sys_clone") != std::string_view::npos ||
-           name.find("sys_fork") != std::string_view::npos ||
-           name.find("sys_vfork") != std::string_view::npos;
-}
 
 // One process in the proctree response. `host` borrows the hostname table;
 // `rank` is null when the trace carries no "PR" metadata for the pid, and the
@@ -3418,16 +4046,37 @@ static coro::CoroTask<HttpResponse> handle_viz_proctree(
         }
     };
 
-    ViewDefinition view;
-    view.name = "viz_proctree";
-    view.with_query("ts >= " + std::to_string(gmin) +
-                    " and ts <= " + std::to_string(gmax));
-    auto files = select_viz_target_files(
-        index, params, static_cast<double>(gmin), static_cast<double>(gmax));
+    // The per-process totals are exact and whole-trace, so the summary answers
+    // this identically to a scan; only a single-file view has to scan.
     bool single_file = !params.get("file").empty();
-    co_await scan_view_events(index, files, view, static_cast<double>(gmin),
-                              static_cast<double>(gmax), 0, slots, on_batch,
-                              req.cancel_token, single_file);
+    const VizSummary* summary =
+        single_file ? nullptr : co_await ensure_viz_summary(index);
+    if (summary != nullptr) {
+        Acc& acc = accs[0];
+        for (const auto& p : summary->procs) {
+            if (p.first_ts != 0) acc.first_ts.emplace(p.pid, p.first_ts);
+            if (p.ppid > 0) acc.ppid.emplace(p.pid, p.ppid);
+            if (p.bytes != 0) acc.bytes.emplace(p.pid, p.bytes);
+            if (p.io_ops != 0) acc.io_ops.emplace(p.pid, p.io_ops);
+            if (p.io_busy != 0) acc.io_busy.emplace(p.pid, p.io_busy);
+            if (!p.hhash.empty()) acc.pid_hhash.emplace(p.pid, p.hhash);
+            if (!p.rank.empty()) acc.rank.emplace(p.pid, p.rank);
+        }
+        for (const auto& f : summary->forks)
+            acc.forks.emplace_back(f.ts, f.pid, f.child);
+        for (const auto& h : summary->hosts) acc.hh.emplace(h.first, h.second);
+    } else {
+        ViewDefinition view;
+        view.name = "viz_proctree";
+        view.with_query("ts >= " + std::to_string(gmin) +
+                        " and ts <= " + std::to_string(gmax));
+        auto files =
+            select_viz_target_files(index, params, static_cast<double>(gmin),
+                                    static_cast<double>(gmax));
+        co_await scan_view_events(index, files, view, static_cast<double>(gmin),
+                                  static_cast<double>(gmax), 0, slots, on_batch,
+                                  req.cancel_token, single_file);
+    }
 
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> first_ts;
     ankerl::unordered_dense::map<std::int64_t, std::int64_t> parent_of;

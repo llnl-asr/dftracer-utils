@@ -951,6 +951,71 @@ TEST_CASE("DFTracer Server - rebuilds stale index on changed source") {
     }
 }
 
+// The viz summary is cached to disk so a restart skips the full rescan, and the
+// cache must invalidate when the source changes rather than serve stale data.
+TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
+    auto binary = find_server_binary();
+    if (binary.empty()) {
+        MESSAGE("dftracer_server binary not found, skipping.");
+        return;
+    }
+    if (!can_bind_local_tcp_socket()) {
+        MESSAGE("local TCP bind is unavailable in this environment, skipping.");
+        return;
+    }
+
+    dft_utils_test::TestEnvironment env(1);
+    REQUIRE(env.is_valid());
+    std::string pfw = env.get_dir() + "/mr.pfw.gz";
+    std::string cache = env.get_dir() + "/.dftviz_summary";
+    const std::string breaks_req =
+        "GET /api/v1/viz/breaks HTTP/1.1\r\n"
+        "Host: localhost\r\nConnection: close\r\n\r\n";
+
+    auto v1 = env.create_dft_multirun_gzip_file(2, 1000000, 10000);
+    REQUIRE(!v1.empty());
+    fs::rename(v1, pfw);
+
+    // First run builds the summary (a /viz request) and writes the cache.
+    {
+        int port = pick_port() + 2;
+        ServerProcess server;
+        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(wait_for_http(port));
+        auto body = extract_body(http_request(port, breaks_req));
+        CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
+              std::string::npos);
+    }
+    CHECK(fs::exists(cache));
+
+    // Second run reuses the cache; the result is unchanged.
+    {
+        int port = pick_port() + 3;
+        ServerProcess server;
+        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(wait_for_http(port));
+        auto body = extract_body(http_request(port, breaks_req));
+        CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
+              std::string::npos);
+        CHECK(body.find("\"begin\":2010000") == std::string::npos);
+    }
+
+    // A changed source invalidates the cache: the new run's gap must appear.
+    auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);
+    REQUIRE(!v2.empty());
+    fs::remove(pfw);
+    fs::rename(v2, pfw);
+    {
+        int port = pick_port() + 4;
+        ServerProcess server;
+        REQUIRE(server.start(binary, env.get_dir(), port));
+        REQUIRE(wait_for_http(port));
+        auto body = extract_body(http_request(port, breaks_req));
+        CHECK(body.find("\"begin\":2010000,\"end\":2020000") !=
+              std::string::npos);
+    }
+}
+
 // The calltree endpoint builds its tree with streaming per-file workers merged
 // into one tree; two files (with overlapping pids) exercise the worker fan-out,
 // the merge, and the grouped P-node dedup. Grouped and flat trees must report

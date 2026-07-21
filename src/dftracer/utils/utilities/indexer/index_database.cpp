@@ -1899,6 +1899,17 @@ std::unordered_map<std::string, std::string> IndexDatabase::query_hash_table(
     return {};
 }
 
+std::optional<std::string> IndexDatabase::lookup_hash(
+    HashType type, std::string_view hash) const {
+    if (hash.empty()) return std::nullopt;
+    std::string value;
+    auto status = db_->get(
+        encoding::hash_table_forward_key(static_cast<std::uint8_t>(type), hash),
+        &value, cf::HASH_TABLES);
+    if (!status.ok()) return std::nullopt;
+    return value;
+}
+
 std::optional<std::string> IndexDatabase::resolve_hash(
     HashType type, std::string_view hash) const {
     ensure_hash_tables_cached();

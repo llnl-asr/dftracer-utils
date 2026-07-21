@@ -11,6 +11,7 @@ import {
   fetchVizBreaks,
   fetchVizDensity,
   fetchVizStats,
+  fetchResolve,
   SINGLE_FILE,
 } from "./data/api";
 import { calleesTree, callersTree, functionListAsync, type FnRow } from "./flame/sandwich";
@@ -611,16 +612,44 @@ export default function App() {
     return rows;
   }
 
+  // Hashes seen but not resolved yet, so a miss is only ever fetched once.
+  const resolvePending = new Set<string>();
+
+  function resolveHash(hash: string, type: "file" | "host"): void {
+    const key = type + ":" + hash;
+    if (resolvePending.has(key)) return;
+    resolvePending.add(key);
+    fetchResolve([hash], type)
+      .then((r) => {
+        const entries = Object.entries(r.names);
+        if (!entries.length) return;
+        if (type === "file") {
+          const m = new Map(fileByHash());
+          for (const [h, n] of entries) m.set(h, n);
+          setFileByHash(m);
+        } else {
+          const m = new Map(hostByHash());
+          for (const [h, n] of entries) m.set(h, n);
+          setHostByHash(m);
+        }
+      })
+      .catch(() => resolvePending.delete(key));
+  }
+
   function resolvedRows(ev: TraceEvent): [string, string][] {
     const args = (ev.args ?? {}) as Record<string, unknown>;
     const out: [string, string][] = [];
     if (args.hhash != null) {
-      const host = hostByHash().get(String(args.hhash));
+      const hash = String(args.hhash);
+      const host = hostByHash().get(hash);
       if (host) out.push(["host", host]);
+      else resolveHash(hash, "host");
     }
     if (args.fhash != null) {
-      const file = fileByHash().get(String(args.fhash));
+      const hash = String(args.fhash);
+      const file = fileByHash().get(hash);
       if (file) out.push(["file", file]);
+      else resolveHash(hash, "file");
     }
     return out;
   }

@@ -284,6 +284,12 @@ class IndexDatabase {
     std::optional<std::string> resolve_hash(HashType type,
                                             std::string_view hash) const;
 
+    /// Resolve one hash with a point lookup, without caching every hash table
+    /// first. Preferred when only a few hashes are needed and the tables are
+    /// large (a trace can declare millions of files).
+    std::optional<std::string> lookup_hash(HashType type,
+                                           std::string_view hash) const;
+
     /// Query all hash tables at once.
     /// Returns {type -> {hash -> name}}.
     std::unordered_map<HashType, std::unordered_map<std::string, std::string>>

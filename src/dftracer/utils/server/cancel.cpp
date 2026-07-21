@@ -1,4 +1,5 @@
 #include <dftracer/utils/server/cancel.h>
+#include <dftracer/utils/server/signal_handler.h>
 #include <sys/socket.h>
 
 #include <cerrno>
@@ -22,6 +23,9 @@ bool peer_disconnected(int fd) {
 }  // namespace
 
 bool CancelToken::cancelled() const {
+    // Shutdown cancels everything, including work started without a token, so
+    // Ctrl-C does not wait out a long scan.
+    if (g_shutdown_requested.load(std::memory_order_acquire)) return true;
     if (!state_) return false;
     if (state_->flag.load(std::memory_order_relaxed)) return true;
     if (state_->peer_fd < 0) return false;

@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
@@ -13,6 +14,7 @@
 #include <dftracer/utils/server/viz_api.h>
 #include <dftracer/utils/server/viz_ui.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -31,6 +33,7 @@ class ServerArgParse : public cli::ArgParse {
     std::string bind_addr = "127.0.0.1";
     std::string auth_token;
     uint16_t port = 8080;
+    std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
 
     explicit ServerArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         schema(directory, pipeline);
@@ -62,6 +65,17 @@ class ServerArgParse : public cli::ArgParse {
                 "Optional access token; when set, every request must supply it "
                 "via ?token= or an 'Authorization: Bearer <token>' header")
             .default_value<std::string>("");
+
+        parser()
+            .add_argument("--checkpoint-size")
+            .help(
+                "Decompression checkpoint interval in bytes for auto-indexing "
+                "(default: " +
+                std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE) +
+                "). Smaller = finer zoom-in seeks, larger index")
+            .scan<'d', std::size_t>()
+            .default_value(static_cast<std::size_t>(
+                constants::indexer::DEFAULT_CHECKPOINT_SIZE));
     }
 
     void post_parse() override {
@@ -69,6 +83,7 @@ class ServerArgParse : public cli::ArgParse {
         bind_addr = parser().get<std::string>("--bind");
         auth_token = parser().get<std::string>("--token");
         port = parser().get<uint16_t>("--port");
+        checkpoint_size = parser().get<std::size_t>("--checkpoint-size");
     }
 };
 
@@ -97,7 +112,13 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
 
     Pipeline pipeline(pipeline_config);
 
-    TraceIndex trace_index(dir, index_dir, executor_threads);
+    std::fprintf(stderr,
+                 "Using %zu worker threads; auto-index checkpoint size %zu "
+                 "bytes\n",
+                 executor_threads, cli->checkpoint_size);
+
+    TraceIndex trace_index(dir, index_dir, executor_threads,
+                           cli->checkpoint_size);
     co_await trace_index.initialize();
 
     Router router;

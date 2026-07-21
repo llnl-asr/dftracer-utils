@@ -194,6 +194,8 @@ class ManualStreamingCompressorUtility {
                                     "Failed to close gzip member");
         }
         deflateReset(&stream_);
+        if (format_ == CompressionFormat::GZIP)
+            deflateSetHeader(&stream_, &gz_header_);
     }
 
     std::size_t total_bytes_in() const { return total_in_; }
@@ -205,6 +207,8 @@ class ManualStreamingCompressorUtility {
     }
 
    private:
+    gz_header gz_header_{};
+
     void initialize() {
         std::memset(&stream_, 0, sizeof(stream_));
 
@@ -215,6 +219,15 @@ class ManualStreamingCompressorUtility {
         if (ret != Z_OK) {
             throw DFTUtilsException(ErrorCode::COMPRESSION,
                                     "Failed to initialize deflate");
+        }
+
+        // Emit OS=3 (Unix). zlib-ng's default (0x13) is non-standard and is
+        // rejected by the gzip member scanner, so multi-member output would
+        // never be recognized for intra-file parallel indexing.
+        if (format_ == CompressionFormat::GZIP) {
+            std::memset(&gz_header_, 0, sizeof(gz_header_));
+            gz_header_.os = 3;
+            deflateSetHeader(&stream_, &gz_header_);
         }
 
         initialized_ = true;

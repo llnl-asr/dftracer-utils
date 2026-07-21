@@ -12,10 +12,15 @@ namespace {
 bool peer_disconnected(int fd) {
     char b;
     ssize_t n = ::recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
-    if (n == 0) return true;                     // orderly shutdown (FIN)
+    if (n == 0) return true;  // orderly shutdown (FIN)
     if (n < 0) {
         int e = errno;
-        return e != EAGAIN && e != EWOULDBLOCK;  // reset/error vs. no data yet
+        // "No data yet" vs. a real reset/error.
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+        return e != EAGAIN && e != EWOULDBLOCK;
+#else
+        return e != EAGAIN;
+#endif
     }
     return false;  // data buffered (e.g. a pipelined request): still connected
 }

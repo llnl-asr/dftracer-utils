@@ -285,6 +285,31 @@ struct IndexingArgs : CliSchema {
     }
 };
 
+// Shared options for binaries that write .pfw.gz trace output.
+struct CompressionArgs : CliSchema {
+    int gzip_member_size_mb = 8;
+
+    void register_on(argparse::ArgumentParser& p) override {
+        p.add_group("Output");
+        p.add_argument("--gzip-member-size")
+            .help(
+                "Uncompressed gzip member size in MB within each output file "
+                "(0 = single member; smaller = more intra-file read/index "
+                "parallelism)")
+            .scan<'d', int>()
+            .default_value(8);
+    }
+
+    void parse_from(const argparse::ArgumentParser& p) override {
+        gzip_member_size_mb = p.get<int>("--gzip-member-size");
+    }
+
+    std::size_t member_size_bytes() const {
+        return static_cast<std::size_t>(std::max(0, gzip_member_size_mb)) *
+               (1024u * 1024u);
+    }
+};
+
 struct QueryArgs : CliSchema {
     std::string query;
     std::string help =

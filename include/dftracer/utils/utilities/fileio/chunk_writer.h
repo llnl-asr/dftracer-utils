@@ -17,6 +17,14 @@ struct ChunkWriterConfig {
     std::string output_dir;
     std::string base_name;
     std::size_t chunk_size_bytes = 256 * 1024 * 1024;
+    // Uncompressed bytes per gzip member within a compressed chunk. 0 keeps a
+    // single member per file; a positive value emits multi-member gzip (closed
+    // at line boundaries once the member exceeds this size) so readers can
+    // inflate/index members in parallel.
+    std::size_t member_size_bytes = 0;
+    // Coalesce output into writes of this many bytes so I/O granularity suits a
+    // parallel filesystem (Lustre/GPFS) instead of many tiny writes.
+    std::size_t io_flush_bytes = 16 * 1024 * 1024;
     bool compress = true;
     int compression_level = Z_DEFAULT_COMPRESSION;
     bool json_array_wrapper = true;
@@ -36,6 +44,14 @@ struct ChunkWriterConfig {
     }
     ChunkWriterConfig& with_chunk_size(std::size_t bytes) {
         chunk_size_bytes = bytes;
+        return *this;
+    }
+    ChunkWriterConfig& with_member_size(std::size_t bytes) {
+        member_size_bytes = bytes;
+        return *this;
+    }
+    ChunkWriterConfig& with_io_flush_size(std::size_t bytes) {
+        io_flush_bytes = bytes;
         return *this;
     }
     ChunkWriterConfig& with_compression(bool enabled) {
@@ -84,7 +100,11 @@ class ChunkWriter {
 
    private:
     coro::CoroTask<void> flush_buffer();
+    coro::CoroTask<void> flush_member();
     coro::CoroTask<void> flush_raw(const char* data, std::size_t len);
+    // Coalesce writes to `io_flush_bytes` granularity for the PFS.
+    coro::CoroTask<void> write_out(const char* data, std::size_t size);
+    coro::CoroTask<void> flush_io();
     coro::CoroTask<void> finalize_current_chunk();
     coro::CoroTask<void> open_next_chunk();
     std::string chunk_path(int index) const;
@@ -95,11 +115,13 @@ class ChunkWriter {
     int chunk_index_ = 0;
     std::size_t current_chunk_bytes_ = 0;
     std::size_t current_chunk_events_ = 0;
+    std::size_t current_member_bytes_ = 0;
     std::size_t total_bytes_ = 0;
     std::size_t total_events_ = 0;
 
     static constexpr std::size_t WRITE_BUFFER_SIZE = 256 * 1024;
     std::vector<char> write_buffer_;
+    std::vector<char> io_buffer_;
 
     std::unique_ptr<compression::zlib::ManualStreamingCompressorUtility>
         compressor_;

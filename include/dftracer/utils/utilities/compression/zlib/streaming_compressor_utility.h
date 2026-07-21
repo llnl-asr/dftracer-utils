@@ -44,16 +44,18 @@ class ManualStreamingCompressorUtility {
     std::size_t total_in_ = 0;
     std::size_t total_out_ = 0;
 
-    static constexpr std::size_t OUTPUT_BUFFER_SIZE = 64 * 1024;
+    static constexpr std::size_t DEFAULT_OUTPUT_BUFFER_SIZE = 1 << 20;  // 1 MiB
     std::vector<unsigned char> output_buffer_;
 
    public:
     explicit ManualStreamingCompressorUtility(
         int compression_level = Z_DEFAULT_COMPRESSION,
-        CompressionFormat format = CompressionFormat::GZIP)
+        CompressionFormat format = CompressionFormat::GZIP,
+        std::size_t output_buffer_size = DEFAULT_OUTPUT_BUFFER_SIZE)
         : compression_level_(compression_level),
           format_(format),
-          output_buffer_(OUTPUT_BUFFER_SIZE) {}
+          output_buffer_(output_buffer_size ? output_buffer_size
+                                            : DEFAULT_OUTPUT_BUFFER_SIZE) {}
 
     ~ManualStreamingCompressorUtility() {
         if (!finalized_ && initialized_) {
@@ -152,6 +154,46 @@ class ManualStreamingCompressorUtility {
         }
 
         finalized_ = true;
+    }
+
+    /**
+     * @brief End the current gzip member and start a fresh one.
+     *
+     * Finalizes the open deflate stream (Z_FINISH) and resets it, so the next
+     * compress() call begins a new, independently-inflatable gzip member.
+     * Concatenated members form a valid multi-member gzip file that readers can
+     * decompress in parallel. No-op if nothing has been written or after
+     * finalize_stream().
+     */
+    coro::AsyncGenerator<ByteView> flush_member() {
+        if (!initialized_ || finalized_) {
+            co_return;
+        }
+        int ret;
+        do {
+            stream_.avail_in = 0;
+            stream_.next_in = nullptr;
+            stream_.avail_out = static_cast<uInt>(output_buffer_.size());
+            stream_.next_out = output_buffer_.data();
+
+            ret = deflate(&stream_, Z_FINISH);
+            if (ret == Z_STREAM_ERROR) {
+                throw DFTUtilsException(ErrorCode::COMPRESSION,
+                                        "Deflate stream error closing member");
+            }
+            std::size_t compressed_size =
+                output_buffer_.size() - stream_.avail_out;
+            if (compressed_size > 0) {
+                total_out_ += compressed_size;
+                co_yield ByteView(output_buffer_.data(), compressed_size);
+            }
+        } while (ret == Z_OK);
+
+        if (ret != Z_STREAM_END) {
+            throw DFTUtilsException(ErrorCode::COMPRESSION,
+                                    "Failed to close gzip member");
+        }
+        deflateReset(&stream_);
     }
 
     std::size_t total_bytes_in() const { return total_in_; }

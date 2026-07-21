@@ -30,6 +30,7 @@ class SplitArgParse : public cli::ArgParse {
     cli::DirectoryArgs directory;
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
+    cli::CompressionArgs compression;
     cli::WatchdogArgs watchdog;
 
     std::string app_name = "app";
@@ -41,7 +42,7 @@ class SplitArgParse : public cli::ArgParse {
     explicit SplitArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         indexing.force_help =
             "Override existing files and force index recreation";
-        schema(directory, pipeline, indexing, watchdog);
+        schema(directory, pipeline, indexing, compression, watchdog);
     }
 
    protected:
@@ -58,7 +59,8 @@ class SplitArgParse : public cli::ArgParse {
 
         parser()
             .add_argument("-s", "--chunk-size")
-            .help("Chunk size in MB")
+            .help(
+                "Output file size in MB (approximate compressed/on-disk size)")
             .scan<'d', int>()
             .default_value(4);
 
@@ -88,6 +90,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     const auto output_dir = fs::absolute(cli->output_dir).string();
     const auto& app_name = cli->app_name;
     const auto chunk_size_mb = cli->chunk_size_mb;
+    const std::size_t member_size_bytes = cli->compression.member_size_bytes();
     const auto force = cli->indexing.force;
     const auto compress = cli->compress;
     const auto verify = cli->verify;
@@ -115,7 +118,11 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     std::printf("  Compress: %s\n", compress ? "true" : "false");
     std::printf("  Data dir: %s\n", log_dir.c_str());
     std::printf("  Output dir: %s\n", output_dir.c_str());
-    std::printf("  Chunk size: %d MB\n", chunk_size_mb);
+    std::printf("  Chunk size: %d MB (compressed)\n", chunk_size_mb);
+    std::printf("  Gzip member size: %d MB%s\n",
+                cli->compression.gzip_member_size_mb,
+                cli->compression.gzip_member_size_mb > 0 ? " (multi-member)"
+                                                         : " (single member)");
     std::printf("  Executor threads: %zu\n", executor_threads);
     std::printf("==========================================\n\n");
 
@@ -259,8 +266,9 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     auto* output_dir_ptr = &output_dir;
 
     auto task_extract_chunks = make_task(
-        [app_name_ptr, output_dir_ptr, compress, verify, executor_threads](
-            CoroScope& scope, std::vector<ChunkManifest> manifests)
+        [app_name_ptr, output_dir_ptr, compress, verify, executor_threads,
+         member_size_bytes](CoroScope& scope,
+                            std::vector<ChunkManifest> manifests)
             -> coro::CoroTask<ExtractChunksOutput> {
             DFTRACER_UTILS_LOG_INFO("Extracting %zu chunks in parallel...",
                                     manifests.size());
@@ -279,7 +287,8 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
                                  .with_output_dir(*output_dir_ptr)
                                  .with_app_name(*app_name_ptr)
                                  .with_compression(compress)
-                                 .with_compute_hash(verify);
+                                 .with_compute_hash(verify)
+                                 .with_member_size(member_size_bytes);
 
                 futures.push_back(scope.spawn(
                     [input = std::move(input),

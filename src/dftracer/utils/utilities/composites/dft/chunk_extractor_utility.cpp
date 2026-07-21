@@ -48,6 +48,7 @@ ChunkExtractorUtility::extract_and_write(
     writer_config.base_name =
         input.app_name + "-" + std::to_string(input.chunk_index);
     writer_config.chunk_size_bytes = std::numeric_limits<std::size_t>::max();
+    writer_config.member_size_bytes = input.member_size_bytes;
     writer_config.compress = input.compress;
 
     ChunkWriter writer(writer_config);

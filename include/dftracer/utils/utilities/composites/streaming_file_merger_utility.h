@@ -89,6 +89,7 @@ class StreamingFileProducerUtility {
 struct StreamingFileConsumerInput {
     std::string output_file;
     bool compress{false};
+    std::size_t member_size_bytes{0};
 
     static StreamingFileConsumerInput with_output(const std::string& path) {
         StreamingFileConsumerInput input;
@@ -98,6 +99,11 @@ struct StreamingFileConsumerInput {
 
     StreamingFileConsumerInput& with_compression(bool enable) {
         compress = enable;
+        return *this;
+    }
+
+    StreamingFileConsumerInput& with_member_size(std::size_t bytes) {
+        member_size_bytes = bytes;
         return *this;
     }
 };

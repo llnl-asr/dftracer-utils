@@ -18,6 +18,7 @@ class MergeArgParse : public cli::ArgParse {
                                  "Directory containing .pfw or .pfw.gz files"};
     cli::PipelineArgs pipeline;
     cli::WatchdogArgs watchdog;
+    cli::CompressionArgs compression;
 
     bool force = false;
     std::string output;
@@ -28,7 +29,7 @@ class MergeArgParse : public cli::ArgParse {
     std::size_t batch_size_kb = 256;
 
     explicit MergeArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
-        schema(directory, pipeline, watchdog);
+        schema(directory, pipeline, watchdog, compression);
     }
 
    protected:
@@ -97,6 +98,7 @@ static int run_merge(const MergeArgParse& cli) {
     const auto output_file = fs::absolute(cli.output).string();
     const auto force_override = cli.force;
     const auto compress_output = cli.compress;
+    const std::size_t member_size_bytes = cli.compression.member_size_bytes();
     const auto gzip_only = cli.gzip_only;
     const auto verify = cli.verify;
     const auto channel_capacity = cli.channel_capacity;
@@ -214,13 +216,15 @@ static int run_merge(const MergeArgParse& cli) {
     auto* consumer_result_ptr = &consumer_result;
     auto* consumer_success_ptr = &consumer_success;
     auto consumer_task = make_task(
-        [channel, buf_pool, output_file, compress_output, consumer_result_ptr,
+        [channel, buf_pool, output_file, compress_output, member_size_bytes,
+         consumer_result_ptr,
          consumer_success_ptr]([[maybe_unused]] CoroScope& ctx)
             -> coro::CoroTask<StreamingFileConsumerOutput> {
             StreamingFileConsumerUtility consumer(channel, buf_pool);
 
             auto input = StreamingFileConsumerInput::with_output(output_file)
-                             .with_compression(compress_output);
+                             .with_compression(compress_output)
+                             .with_member_size(member_size_bytes);
 
             auto result = co_await consumer.process_async(ctx, input);
             if (result) {

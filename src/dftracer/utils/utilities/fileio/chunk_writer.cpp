@@ -50,7 +50,9 @@ coro::CoroTask<void> ChunkWriter::open_next_chunk() {
     open_ = true;
     current_chunk_bytes_ = 0;
     current_chunk_events_ = 0;
+    current_member_bytes_ = 0;
     write_buffer_.clear();
+    io_buffer_.clear();
 
     if (config_.compress) {
         compressor_ = std::make_unique<
@@ -71,11 +73,21 @@ coro::CoroTask<void> ChunkWriter::write_line(ByteView line) {
     write_buffer_.insert(write_buffer_.end(), line.as<char>(),
                          line.as<char>() + line.size());
     current_chunk_bytes_ += line.size() + 1;
+    current_member_bytes_ += line.size() + 1;
     current_chunk_events_++;
     total_events_++;
 
     if (write_buffer_.size() >= WRITE_BUFFER_SIZE) {
         co_await flush_buffer();
+    }
+
+    // Close the gzip member at this line boundary once it is large enough, so
+    // the chunk is multi-member (parallel-inflatable).
+    if (compressor_ && config_.member_size_bytes > 0 &&
+        current_member_bytes_ >= config_.member_size_bytes) {
+        co_await flush_buffer();
+        co_await flush_member();
+        current_member_bytes_ = 0;
     }
 
     if (current_chunk_bytes_ >= config_.chunk_size_bytes) {
@@ -115,14 +127,26 @@ coro::CoroTask<void> ChunkWriter::flush_buffer() {
             const char* data = chunk->as<char>();
             std::size_t size = chunk->size();
             chunk.reset();
-            co_await io::write(fd_, data, size);
-            total_bytes_ += size;
+            co_await write_out(data, size);
         }
     } else {
-        co_await io::write(fd_, write_buffer_.data(), write_buffer_.size());
-        total_bytes_ += write_buffer_.size();
+        co_await write_out(write_buffer_.data(), write_buffer_.size());
     }
     write_buffer_.clear();
+}
+
+coro::CoroTask<void> ChunkWriter::flush_member() {
+    if (!compressor_) co_return;
+    using GenType = coro::AsyncGenerator<ByteView>;
+    auto gen = std::make_unique<GenType>(compressor_->flush_member());
+    while (true) {
+        auto chunk = co_await gen->next();
+        if (!chunk) break;
+        const char* data = chunk->as<char>();
+        std::size_t size = chunk->size();
+        chunk.reset();
+        co_await write_out(data, size);
+    }
 }
 
 coro::CoroTask<void> ChunkWriter::flush_raw(const char* data, std::size_t len) {
@@ -136,12 +160,28 @@ coro::CoroTask<void> ChunkWriter::flush_raw(const char* data, std::size_t len) {
             const char* cdata = chunk->as<char>();
             std::size_t csize = chunk->size();
             chunk.reset();
-            co_await io::write(fd_, cdata, csize);
-            total_bytes_ += csize;
+            co_await write_out(cdata, csize);
         }
     } else {
-        co_await io::write(fd_, data, len);
-        total_bytes_ += len;
+        co_await write_out(data, len);
+    }
+}
+
+coro::CoroTask<void> ChunkWriter::write_out(const char* data,
+                                            std::size_t size) {
+    if (size == 0) co_return;
+    io_buffer_.insert(io_buffer_.end(), data, data + size);
+    total_bytes_ += size;
+    if (io_buffer_.size() >= config_.io_flush_bytes) {
+        co_await io::write(fd_, io_buffer_.data(), io_buffer_.size());
+        io_buffer_.clear();
+    }
+}
+
+coro::CoroTask<void> ChunkWriter::flush_io() {
+    if (!io_buffer_.empty()) {
+        co_await io::write(fd_, io_buffer_.data(), io_buffer_.size());
+        io_buffer_.clear();
     }
 }
 
@@ -165,12 +205,12 @@ coro::CoroTask<void> ChunkWriter::finalize_current_chunk() {
             const char* data = chunk->as<char>();
             std::size_t size = chunk->size();
             chunk.reset();
-            co_await io::write(fd_, data, size);
-            total_bytes_ += size;
+            co_await write_out(data, size);
         }
         compressor_.reset();
     }
 
+    co_await flush_io();
     co_await io::close(fd_);
     fd_ = -1;
 

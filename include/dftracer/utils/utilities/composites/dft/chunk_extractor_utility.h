@@ -27,6 +27,8 @@ struct ChunkExtractorUtilityInput {
     std::string app_name;
     bool compress = false;
     bool compute_hash = true;
+    // Uncompressed bytes per gzip member (0 = single member per file).
+    std::size_t member_size_bytes = 0;
 
     ChunkExtractorUtilityInput()
         : chunk_index(0), compress(false), compute_hash(true) {}
@@ -59,6 +61,11 @@ struct ChunkExtractorUtilityInput {
         return *this;
     }
 
+    ChunkExtractorUtilityInput& with_member_size(std::size_t bytes) {
+        member_size_bytes = bytes;
+        return *this;
+    }
+
     // Convert to byte-based fileio::ChunkManifest for extraction
     fileio::ChunkManifest to_io_manifest() const {
         fileio::ChunkManifest io_manifest;
@@ -78,7 +85,9 @@ struct ChunkExtractorUtilityInput {
     bool operator==(const ChunkExtractorUtilityInput& other) const {
         return chunk_index == other.chunk_index && manifest == other.manifest &&
                output_dir == other.output_dir && app_name == other.app_name &&
-               compress == other.compress && compute_hash == other.compute_hash;
+               compress == other.compress &&
+               compute_hash == other.compute_hash &&
+               member_size_bytes == other.member_size_bytes;
     }
 };
 

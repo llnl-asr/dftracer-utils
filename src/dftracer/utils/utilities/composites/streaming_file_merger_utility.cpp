@@ -150,9 +150,17 @@ StreamingFileConsumerUtility::process_async(
                     co_await writer.process(*chunk);
                 }
             };
+            auto flush_member = [&]() -> coro::CoroTask<void> {
+                auto gen = compressor.flush_member();
+                while (auto chunk = co_await gen.next()) {
+                    co_await writer.process(*chunk);
+                }
+            };
 
             co_await write_compressed("[\n", 2);
 
+            const std::size_t member_size = input.member_size_bytes;
+            std::size_t member_bytes = 0;
             bool first = true;
             while (auto next = co_await ctx.receive(channel_)) {
                 auto& current = *next;
@@ -161,9 +169,16 @@ StreamingFileConsumerUtility::process_async(
                 if (current.buf.empty()) continue;
                 if (!first) co_await write_compressed("\n", 1);
                 first = false;
-                co_await write_compressed(current.buf.data(),
-                                          current.buf.size());
+                std::size_t bufsize = current.buf.size();
+                co_await write_compressed(current.buf.data(), bufsize);
                 buf_pool_->release(std::move(current.buf));
+                // Batches are whole lines, so close the member here for a
+                // line-aligned multi-member (parallel-inflatable) file.
+                member_bytes += bufsize + 1;
+                if (member_size > 0 && member_bytes >= member_size) {
+                    co_await flush_member();
+                    member_bytes = 0;
+                }
             }
 
             if (result.total_events > 0) {

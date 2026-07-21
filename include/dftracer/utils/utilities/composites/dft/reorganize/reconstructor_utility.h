@@ -17,12 +17,14 @@ struct ReconstructorInput {
     std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     std::size_t parallelism = 0;
     bool compress = true;
+    std::size_t member_size_bytes = 0;
 
     ReconstructorInput& with_input_dir(std::string dir);
     ReconstructorInput& with_output_dir(std::string dir);
     ReconstructorInput& with_checkpoint_size(std::size_t sz);
     ReconstructorInput& with_parallelism(std::size_t n);
     ReconstructorInput& with_compress(bool c);
+    ReconstructorInput& with_member_size(std::size_t bytes);
 };
 
 struct ReconstructedFileInfo {

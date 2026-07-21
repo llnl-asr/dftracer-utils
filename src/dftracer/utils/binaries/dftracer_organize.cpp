@@ -90,8 +90,9 @@ class OrganizeArgParse : public cli::ArgParse {
         parser()
             .add_argument("--chunk-size")
             .help(
-                "Target chunk size in MB. 0 = auto: one file per group on "
-                "Lustre, 256 MB rotation elsewhere (default: 0)")
+                "Target output file size in MB (compressed/on-disk). 0 = auto: "
+                "one file per group on Lustre, 256 MB rotation elsewhere "
+                "(default: 0)")
             .scan<'d', std::size_t>()
             .default_value(static_cast<std::size_t>(0));
 

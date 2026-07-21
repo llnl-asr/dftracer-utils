@@ -482,3 +482,56 @@ TEST_CASE(
         CHECK(result == original);
     }
 }
+
+TEST_CASE("ManualStreamingCompressorUtility - flush_member multi-member") {
+    ManualStreamingCompressorUtility comp;
+    const std::string a = "first member payload line\n";
+    const std::string b = "second member payload line\n";
+
+    std::vector<unsigned char> out;
+    [&]() -> CoroTask<void> {
+        auto append = [&](auto& gen) -> CoroTask<void> {
+            while (auto c = co_await gen.next())
+                out.insert(out.end(), c->template as<unsigned char>(),
+                           c->template as<unsigned char>() + c->size());
+        };
+        auto g1 = comp.compress(ByteView(a));
+        co_await append(g1);
+        auto fm = comp.flush_member();  // close member 1
+        co_await append(fm);
+        auto g2 = comp.compress(ByteView(b));
+        co_await append(g2);
+        auto fin = comp.finalize_stream();  // close member 2
+        co_await append(fin);
+    }()
+                 .get();
+
+    // Two independent gzip members (magic 1f 8b 08 appears at each start).
+    int members = 0;
+    for (std::size_t i = 0; i + 2 < out.size(); ++i)
+        if (out[i] == 0x1f && out[i + 1] == 0x8b && out[i + 2] == 0x08)
+            ++members;
+    CHECK(members == 2);
+
+    // Concatenated members round-trip to the full payload.
+    StreamingDecompressorUtility decomp(DecompressionFormat::GZIP);
+    auto decompressed =
+        decompress_all(decomp, ByteView(out.data(), out.size()));
+    std::string result(decompressed.begin(), decompressed.end());
+    CHECK(result == a + b);
+}
+
+TEST_CASE("ManualStreamingCompressorUtility - configurable output buffer") {
+    // A small buffer still produces valid output equal to the default.
+    ManualStreamingCompressorUtility small(Z_DEFAULT_COMPRESSION,
+                                           CompressionFormat::GZIP, 4096);
+    std::string payload(200000, 'x');
+    for (std::size_t i = 0; i < payload.size(); i += 7) payload[i] = 'a';
+    auto compressed = compress_all(small, ByteView(payload));
+
+    StreamingDecompressorUtility decomp(DecompressionFormat::GZIP);
+    auto decompressed =
+        decompress_all(decomp, ByteView(compressed.data(), compressed.size()));
+    std::string result(decompressed.begin(), decompressed.end());
+    CHECK(result == payload);
+}

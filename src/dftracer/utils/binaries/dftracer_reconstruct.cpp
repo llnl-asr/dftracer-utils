@@ -22,13 +22,14 @@ class ReconstructArgParse : public cli::ArgParse {
     cli::DirectoryArgs directory{cli::DirMode::REQUIRED,
                                  "Directory containing reorganized files"};
     cli::PipelineArgs pipeline;
+    cli::CompressionArgs compression;
 
     std::size_t checkpoint_size = 0;
     std::string output_dir;
     bool no_compress = false;
 
     explicit ReconstructArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
-        schema(directory, pipeline);
+        schema(directory, pipeline, compression);
     }
 
    protected:
@@ -79,6 +80,7 @@ static coro::CoroTask<int> run_reconstruct(const ReconstructArgParse* cli,
     input.checkpoint_size = cli->checkpoint_size;
     input.parallelism = cli->pipeline.executor_threads;
     input.compress = !cli->no_compress;
+    input.member_size_bytes = cli->compression.member_size_bytes();
 
     co_await ensure_index_fresh(&scope, cli->directory.value, "", "");
 

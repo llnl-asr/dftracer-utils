@@ -47,6 +47,11 @@ ReconstructorInput& ReconstructorInput::with_parallelism(std::size_t n) {
     return *this;
 }
 
+ReconstructorInput& ReconstructorInput::with_member_size(std::size_t bytes) {
+    member_size_bytes = bytes;
+    return *this;
+}
+
 ReconstructorInput& ReconstructorInput::with_compress(bool c) {
     compress = c;
     return *this;
@@ -99,6 +104,7 @@ struct ReconstructLineBatch {
 struct WriterContext {
     std::string output_dir;
     bool compress;
+    std::size_t member_size_bytes = 0;
     std::atomic<std::size_t>* total_events;
     std::atomic<std::size_t>* total_bytes;
     std::vector<ReconstructedFileInfo>* file_results;
@@ -126,6 +132,7 @@ static coro::CoroTask<void> run_writer(
                       .with_output_dir(wctx.output_dir)
                       .with_base_name(base)
                       .with_chunk_size(std::numeric_limits<std::size_t>::max())
+                      .with_member_size(wctx.member_size_bytes)
                       .with_compression(wctx.compress);
 
     ChunkWriter writer(config);
@@ -329,6 +336,7 @@ coro::CoroTask<ReconstructorResult> ReconstructorUtility::process(
     WriterContext wctx;
     wctx.output_dir = input.output_dir;
     wctx.compress = input.compress;
+    wctx.member_size_bytes = input.member_size_bytes;
     wctx.total_events = &total_events;
     wctx.total_bytes = &total_bytes;
     wctx.file_results = &file_results;

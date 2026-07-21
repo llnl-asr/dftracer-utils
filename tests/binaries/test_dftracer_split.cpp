@@ -98,6 +98,24 @@ int count_gz_files(const std::string& dir) {
     return n;
 }
 
+// Count gzip members across all .pfw.gz output files (each member starts with
+// the RFC 1952 magic 1F 8B 08).
+int count_gzip_members(const std::string& dir) {
+    int members = 0;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (!entry.is_regular_file()) continue;
+        std::string p = entry.path().string();
+        if (p.size() < 7 || p.substr(p.size() - 7) != ".pfw.gz") continue;
+        std::ifstream f(p, std::ios::binary);
+        std::vector<unsigned char> buf((std::istreambuf_iterator<char>(f)),
+                                       std::istreambuf_iterator<char>());
+        for (std::size_t i = 0; i + 2 < buf.size(); ++i)
+            if (buf[i] == 0x1f && buf[i + 1] == 0x8b && buf[i + 2] == 0x08)
+                ++members;
+    }
+    return members;
+}
+
 }  // namespace
 
 // ============================================================================
@@ -135,6 +153,38 @@ TEST_SUITE("DFTracerSplit") {
         CHECK(rc == 0);
         REQUIRE(fs::exists(out_dir));
         CHECK(count_gz_files(out_dir) > 0);
+    }
+
+    TEST_CASE("gzip-member-size controls multi-member output") {
+        auto binary = find_split_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_split binary not found, skipping.");
+            return;
+        }
+
+        dft_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        // Large enough to exceed a 1 MB uncompressed member.
+        auto f = create_pfw_gz(env, 40000, 0);
+        REQUIRE(!f.empty());
+
+        // Multi-member: 1 MB members over several MB of events -> many members.
+        std::string mm = env.get_dir() + "/split_mm";
+        int rc = run_split(
+            binary, {"-d", env.get_dir(), "-o", mm, "-f", "--gzip-member-size",
+                     "1", "--disable-watchdog"});
+        CHECK(rc == 0);
+        REQUIRE(fs::exists(mm));
+        CHECK(count_gzip_members(mm) >= 2);
+
+        // Single-member: --gzip-member-size 0 -> exactly one member per file.
+        std::string sm = env.get_dir() + "/split_sm";
+        rc = run_split(
+            binary, {"-d", env.get_dir(), "-o", sm, "-f", "--gzip-member-size",
+                     "0", "--disable-watchdog"});
+        CHECK(rc == 0);
+        REQUIRE(fs::exists(sm));
+        CHECK(count_gzip_members(sm) == count_gz_files(sm));
     }
 
     TEST_CASE("split with verify flag") {

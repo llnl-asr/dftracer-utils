@@ -3667,24 +3667,11 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
             auto g = extract_group_from_line(e, group_col);
             if (!g.empty()) raw_groups.insert(std::move(g));
         }
-        if (!raw_groups.empty()) {
-            try {
-                ankerl::unordered_dense::set<std::string> roots;
-                for (const auto* f : win_files)
-                    if (!f->index_path.empty()) roots.insert(f->index_path);
-                for (const auto& r : roots) {
-                    utilities::indexer::IndexDatabase db(
-                        r, rocksdb::RocksDatabase::OpenMode::ReadOnly);
-                    auto table = db.query_hash_table(*resolve_type);
-                    for (const auto& g : raw_groups) {
-                        auto it = table.find(g);
-                        if (it != table.end())
-                            group_names.emplace(g, it->second);
-                    }
-                }
-            } catch (...) {
-                // No usable hash table: raw hashes still group correctly.
-            }
+        // One point lookup per group value: reading whole hash tables costs
+        // O(files the trace declares), which is 71s on a 20M-file trace.
+        for (const auto& g : raw_groups) {
+            auto name = index.resolve_hash(*resolve_type, g);
+            if (!name.empty()) group_names.emplace(g, std::move(name));
         }
     }
 

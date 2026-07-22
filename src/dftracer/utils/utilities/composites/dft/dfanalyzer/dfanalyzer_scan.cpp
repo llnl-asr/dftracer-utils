@@ -204,47 +204,62 @@ inline IOCategory get_io_category(std::string_view func_name) {
     return IOCategory::OTHER;
 }
 
+// Resolves fhash/hhash to names, preferring one point lookup per distinct
+// hash actually seen over ingesting whole hash tables: a trace can declare
+// millions of files, and this runs once per shard range per scan.
 class HashResolver {
    public:
     HashResolver(
         const std::unordered_map<std::string, std::string>* file_hashes,
-        const std::unordered_map<std::string, std::string>* host_hashes)
-        : file_hashes_(file_hashes), host_hashes_(host_hashes) {
-        if (file_hashes_) {
-            for (const auto& [hash, name] : *file_hashes_) {
-                auto hash_sv = intern_.intern(hash);
-                auto name_sv = intern_.intern(name);
-                file_map_[hash_sv] = name_sv;
-            }
+        const std::unordered_map<std::string, std::string>* host_hashes,
+        const indexer::IndexDatabase* hash_db = nullptr)
+        : hash_db_(hash_db) {
+        if (hash_db_) return;  // resolved lazily below
+        if (file_hashes) {
+            for (const auto& [hash, name] : *file_hashes)
+                file_map_[intern_.intern(hash)] = intern_.intern(name);
         }
-        if (host_hashes_) {
-            for (const auto& [hash, name] : *host_hashes_) {
-                auto hash_sv = intern_.intern(hash);
-                auto name_sv = intern_.intern(name);
-                host_map_[hash_sv] = name_sv;
-            }
+        if (host_hashes) {
+            for (const auto& [hash, name] : *host_hashes)
+                host_map_[intern_.intern(hash)] = intern_.intern(name);
         }
     }
 
     // Unresolved hashes resolve to empty (not the hash itself): the
     // dfanalyzer side treats empty file_name/host_name as missing (NA).
     std::string_view resolve_file(std::string_view hash) {
-        if (hash.empty()) return hash;
-        auto it = file_map_.find(intern_.intern(hash));
-        return it != file_map_.end() ? it->second : std::string_view{};
+        return resolve(hash, file_map_, indexer::IndexDatabase::HashType::FILE);
     }
 
     std::string_view resolve_host(std::string_view hash) {
-        if (hash.empty()) return hash;
-        auto it = host_map_.find(intern_.intern(hash));
-        return it != host_map_.end() ? it->second : std::string_view{};
+        return resolve(hash, host_map_, indexer::IndexDatabase::HashType::HOST);
     }
 
     std::string_view intern(std::string_view sv) { return intern_.intern(sv); }
 
    private:
-    const std::unordered_map<std::string, std::string>* file_hashes_;
-    const std::unordered_map<std::string, std::string>* host_hashes_;
+    std::string_view resolve(
+        std::string_view hash,
+        std::unordered_map<std::string_view, std::string_view>& map,
+        indexer::IndexDatabase::HashType type) {
+        if (hash.empty()) return hash;
+        auto key = intern_.intern(hash);
+        auto it = map.find(key);
+        if (it != map.end()) return it->second;
+        if (!hash_db_) return {};
+        // Misses are memoized too, so an unknown hash costs one lookup.
+        std::string_view name;
+        try {
+            auto found = hash_db_->lookup_hash(type, hash);
+            if (found) name = intern_.intern(*found);
+        } catch (const std::exception&) {
+            name = {};
+        }
+        map.emplace(key, name);
+        return name;
+    }
+
+    const indexer::IndexDatabase* hash_db_;
     dftracer::utils::StringIntern intern_;
     std::unordered_map<std::string_view, std::string_view> file_map_;
     std::unordered_map<std::string_view, std::string_view> host_map_;
@@ -632,7 +647,8 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
     const DfaEmitCtx emit_ctx{input.ctx, bucket_width_us, input.batch_size};
     std::size_t event_count = 0, profile_count = 0, system_count = 0;
 
-    HashResolver resolver(input.ctx->file_hashes, input.ctx->host_hashes);
+    HashResolver resolver(input.ctx->file_hashes, input.ctx->host_hashes,
+                          input.ctx->hash_db);
     std::unordered_map<ProcKey, std::string, ProcKeyHash> proc_name_cache;
     std::unordered_map<std::string_view, IOCategory> io_cat_cache;
 

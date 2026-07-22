@@ -128,6 +128,7 @@ class TraceIndex {
     BloomCache bloom_cache_;
 
     std::mutex hash_db_mutex_;
+    std::unordered_map<std::string, std::string> hash_names_;
     std::unordered_map<
         std::string,
         std::shared_ptr<dftracer::utils::utilities::indexer::IndexDatabase>>

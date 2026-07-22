@@ -921,20 +921,15 @@ static PyObject* Indexer_iter_arrow_dfanalyzer(IndexerObject* self,
             dftracer::utils::utilities::indexer::IndexDatabase idx_db(
                 index_path,
                 dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-            auto file_hashes =
-                idx_db.query_hash_table(dftracer::utils::utilities::indexer::
-                                            IndexDatabase::HashType::FILE);
-            auto host_hashes =
-                idx_db.query_hash_table(dftracer::utils::utilities::indexer::
-                                            IndexDatabase::HashType::HOST);
-
             auto time_bounds = handle->agg->query_time_bounds();
             std::uint64_t time_origin =
                 time_bounds.valid ? time_bounds.min_time_bucket : 0;
 
             DfanalyzerContext ctx;
-            ctx.file_hashes = &file_hashes;
-            ctx.host_hashes = &host_hashes;
+            // Resolve hashes on demand. Ingesting both hash tables costs
+            // O(files the trace declares) - 71s on a 20M-file trace - and this
+            // runs once per dfanalyzer task, per shard range.
+            ctx.hash_db = &idx_db;
             ctx.query_filter = query_opt ? &*query_opt : nullptr;
             ctx.time_origin = time_origin;
             ctx.time_resolution = time_resolution;
@@ -1076,20 +1071,15 @@ static PyObject* Indexer_iter_arrow_dfanalyzer_all(IndexerObject* self,
             dftracer::utils::utilities::indexer::IndexDatabase idx_db(
                 index_path,
                 dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-            auto file_hashes =
-                idx_db.query_hash_table(dftracer::utils::utilities::indexer::
-                                            IndexDatabase::HashType::FILE);
-            auto host_hashes =
-                idx_db.query_hash_table(dftracer::utils::utilities::indexer::
-                                            IndexDatabase::HashType::HOST);
-
             auto time_bounds = handle->agg->query_time_bounds();
             std::uint64_t time_origin =
                 time_bounds.valid ? time_bounds.min_time_bucket : 0;
 
             DfanalyzerContext ctx;
-            ctx.file_hashes = &file_hashes;
-            ctx.host_hashes = &host_hashes;
+            // Resolve hashes on demand. Ingesting both hash tables costs
+            // O(files the trace declares) - 71s on a 20M-file trace - and this
+            // runs once per dfanalyzer task, per shard range.
+            ctx.hash_db = &idx_db;
             ctx.query_filter = query_opt ? &*query_opt : nullptr;
             ctx.time_origin = time_origin;
             ctx.time_resolution = time_resolution;

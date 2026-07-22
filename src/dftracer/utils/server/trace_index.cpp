@@ -715,6 +715,18 @@ coro::CoroTask<void> TraceIndex::initialize() {
 // keeps each root's database open rather than caching whole tables per request.
 std::string TraceIndex::resolve_hash(HashType type, const std::string& hash) {
     if (hash.empty()) return {};
+    // Memoized across requests, misses included: a lane grouping resolves
+    // thousands of hashes and the viewer re-asks on every zoom.
+    std::string memo_key;
+    memo_key.reserve(hash.size() + 1);
+    memo_key.push_back(static_cast<char>(static_cast<int>(type)));
+    memo_key.append(hash);
+    {
+        std::lock_guard<std::mutex> lk(hash_db_mutex_);
+        auto it = hash_names_.find(memo_key);
+        if (it != hash_names_.end()) return it->second;
+    }
+    std::string resolved;
     for (const auto& f : files_) {
         if (f.index_path.empty()) continue;
         std::shared_ptr<indexer::IndexDatabase> db;
@@ -737,12 +749,19 @@ std::string TraceIndex::resolve_hash(HashType type, const std::string& hash) {
         if (!db) continue;
         try {
             auto name = db->lookup_hash(type, hash);
-            if (name && !name->empty()) return *name;
+            if (name && !name->empty()) {
+                resolved = std::move(*name);
+                break;
+            }
         } catch (const std::exception&) {
             continue;
         }
     }
-    return {};
+    {
+        std::lock_guard<std::mutex> lk(hash_db_mutex_);
+        hash_names_.emplace(std::move(memo_key), resolved);
+    }
+    return resolved;
 }
 
 std::string TraceIndex::viz_summary_cache_path() const {

@@ -18,13 +18,13 @@ struct MergeKey {
     std::uint64_t pid;
     std::uint64_t tid;
     std::uint32_t hhash_id;
-    std::uint32_t fhash_id;
+    std::uint64_t fhash;
     std::uint64_t target_bucket;  // computed from source bucket
 
     bool operator==(const MergeKey& other) const {
         return cat_id == other.cat_id && name_id == other.name_id &&
                pid == other.pid && tid == other.tid &&
-               hhash_id == other.hhash_id && fhash_id == other.fhash_id &&
+               hhash_id == other.hhash_id && fhash == other.fhash &&
                target_bucket == other.target_bucket;
     }
 };
@@ -37,7 +37,7 @@ struct MergeKeyHash {
         h.update_value(k.pid);
         h.update_value(k.tid);
         h.update_value(k.hhash_id);
-        h.update_value(k.fhash_id);
+        h.update_value(k.fhash);
         h.update_value(k.target_bucket);
         return static_cast<std::size_t>(h.finish());
     }
@@ -68,8 +68,8 @@ AggregationBatch shrink_batch(const AggregationBatch& input,
         std::uint64_t source_time = key.time_bucket * source_interval_us;
         std::uint64_t target_bucket = source_time / target_interval_us;
 
-        MergeKey mk{key.cat_id,   key.name_id,  key.pid,      key.tid,
-                    key.hhash_id, key.fhash_id, target_bucket};
+        MergeKey mk{key.cat_id,   key.name_id, key.pid,      key.tid,
+                    key.hhash_id, key.fhash,   target_bucket};
 
         auto it = merged.find(mk);
         if (it == merged.end()) {

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_SERIALIZATION_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_SERIALIZATION_H
 
+#include <dftracer/utils/core/common/hash/hex64.h>
 #include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
@@ -138,9 +139,26 @@ struct AggKeyView {
     std::uint64_t pid;
     std::uint64_t tid;
     std::string_view hhash;
-    std::string_view fhash;
+    /// The file hash itself, or an intern id when `fhash_inline` is false, in
+    /// which case `fhash_str` carries the original text.
+    std::uint64_t fhash;
+    bool fhash_inline;
+    std::string_view fhash_str;
     std::uint64_t time_bucket;
 };
+
+/// Hex text of `kv`'s file hash, rendered into `buf` for inline hashes.
+inline std::string_view fhash_text(
+    const AggKeyView& kv, char (&buf)[::dftracer::utils::hash::HEX64_DIGITS]) {
+    if (!kv.fhash_inline) return kv.fhash_str;
+    if (kv.fhash == 0) return {};
+    ::dftracer::utils::hash::format_hex64(kv.fhash, buf);
+    return std::string_view(buf, sizeof(buf));
+}
+
+/// Bit in the map-type byte marking an inline 8-byte file hash, so the
+/// interned fallback costs no extra key bytes.
+inline constexpr std::uint8_t AGG_KEY_FHASH_INLINE = 0x80;
 
 /// Decode a LEB128 varint, advancing `p` (bounded by `end`).
 inline std::uint64_t decode_varint(const std::uint8_t*& p,
@@ -167,7 +185,9 @@ inline bool parse_agg_key_view(std::string_view data,
 
     p += 2;  // shard
 
-    out.map_type = static_cast<AggMapType>(*p++);
+    const std::uint8_t type_byte = *p++;
+    out.map_type = static_cast<AggMapType>(type_byte & ~AGG_KEY_FHASH_INLINE);
+    out.fhash_inline = (type_byte & AGG_KEY_FHASH_INLINE) != 0;
 
     auto read_varint = [&]() { return decode_varint(p, end); };
 
@@ -176,13 +196,22 @@ inline bool parse_agg_key_view(std::string_view data,
     out.pid = read_varint();
     out.tid = read_varint();
     auto hhash_id = static_cast<std::uint32_t>(read_varint());
-    auto fhash_id = static_cast<std::uint32_t>(read_varint());
+    if (out.fhash_inline) {
+        if (end - p < 8) return false;
+        out.fhash = 0;
+        for (int i = 0; i < 8; ++i)
+            out.fhash = (out.fhash << 8) | static_cast<std::uint64_t>(*p++);
+    } else {
+        out.fhash = read_varint();
+        out.fhash_str =
+            out.fhash ? intern.resolve(static_cast<std::uint32_t>(out.fhash))
+                      : std::string_view{};
+    }
     out.time_bucket = read_varint();
 
     out.cat = intern.resolve(cat_id);
     out.name = intern.resolve(name_id);
     out.hhash = hhash_id ? intern.resolve(hhash_id) : std::string_view{};
-    out.fhash = fhash_id ? intern.resolve(fhash_id) : std::string_view{};
 
     return true;
 }

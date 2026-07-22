@@ -24,7 +24,7 @@ TraceMetadata extract_metadata(const StringIntern& intern,
     // Use pid+tid combined as unique thread identifier
     std::unordered_set<std::uint64_t> tids;
     // Distinct data files (fhash_id) and per-process accesses (pid | fhash_id).
-    std::unordered_set<std::uint32_t> fhashes;
+    std::unordered_set<std::uint64_t> fhashes;
     std::unordered_set<std::uint64_t> pid_fhashes;
     // Bounded by the number of aggregation keys; reserve to avoid rehashing.
     fhashes.reserve(aggregations.size());
@@ -38,11 +38,10 @@ TraceMetadata extract_metadata(const StringIntern& intern,
         std::uint64_t ptid = (key.pid << 32) | (key.tid & 0xFFFFFFFF);
         tids.insert(ptid);
 
-        // fhash_id == 0 means no associated file (e.g. metadata events).
-        if (key.fhash_id != 0) {
-            fhashes.insert(key.fhash_id);
-            pid_fhashes.insert((static_cast<std::uint64_t>(key.pid) << 32) |
-                               static_cast<std::uint64_t>(key.fhash_id));
+        // 0 means no associated file (e.g. metadata events).
+        if (key.fhash != 0) {
+            fhashes.insert(key.fhash);
+            pid_fhashes.insert(key.fhash ^ (key.pid * 0x9E3779B97F4A7C15ULL));
         }
 
         meta.total_io_time_us += static_cast<double>(metrics.duration.total);

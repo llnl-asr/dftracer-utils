@@ -29,6 +29,7 @@ set(TEST_CPP_SOURCES
     core/test_runtime.cpp
     core/test_logging.cpp
     core/test_string_intern.cpp
+    core/test_hex64.cpp
     # Pipeline tests
     pipeline/test_pipeline.cpp
 

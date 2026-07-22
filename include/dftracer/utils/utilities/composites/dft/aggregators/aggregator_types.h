@@ -73,8 +73,9 @@ struct AggregationEntry {
         if (!key.hhash(intern).empty()) {
             fields["hhash"] = std::string(key.hhash(intern));
         }
-        if (!key.fhash(intern).empty()) {
-            fields["fhash"] = std::string(key.fhash(intern));
+        char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
+        if (auto fh = key.fhash_str(intern, fbuf); !fh.empty()) {
+            fields["fhash"] = std::string(fh);
         }
         fields["time_bucket"] = key.time_bucket;
         // Include extra_keys (args fields used for grouping)

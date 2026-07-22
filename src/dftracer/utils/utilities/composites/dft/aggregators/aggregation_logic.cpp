@@ -81,7 +81,12 @@ AggregationKey build_aggregation_key(const DFTracerEvent& ev,
     }
     auto fhash_sv = ev.args["fhash"].get<std::string_view>();
     if (!fhash_sv.empty() && config.group_by_file) {
-        key.fhash_id = intern.get_or_insert(fhash_sv);
+        if (auto v = ::dftracer::utils::hash::parse_hex64(fhash_sv)) {
+            key.fhash = *v;
+        } else {
+            key.fhash_inline = false;
+            key.fhash = intern.get_or_insert(fhash_sv);
+        }
     }
 
     key.time_bucket = compute_time_bucket(ev.ts, ev.dur, config);

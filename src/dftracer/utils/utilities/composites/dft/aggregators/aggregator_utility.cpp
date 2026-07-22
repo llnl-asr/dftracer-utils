@@ -166,7 +166,8 @@ ArrowExportResult AggregationBatch::to_arrow() const {
         builder.append_uint64(ci++, key.pid);
         builder.append_uint64(ci++, key.tid);
         builder.append_string(ci++, key.hhash(strings()));
-        builder.append_string(ci++, key.fhash(strings()));
+        char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
+        builder.append_string(ci++, key.fhash_str(strings(), fbuf));
         builder.append_uint64(ci++, key.time_bucket);
         builder.append_uint64(ci++, metrics.count);
         builder.append_uint64(ci++, metrics.duration.total);
@@ -386,7 +387,8 @@ ArrowExportResult AggregationBatch::to_dfanalyzer_arrow(
             const auto& metrics = entry.metrics;
             std::size_t ci = 0;
 
-            auto fhash = key.fhash(strings());
+            char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
+            auto fhash = key.fhash_str(strings(), fbuf);
             auto hhash = key.hhash(strings());
             auto file_name = resolve_hash(ctx.file_hashes, fhash);
             auto host_name = resolve_hash(ctx.host_hashes, hhash);

@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/hash/hex64.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
 #include <doctest/doctest.h>
@@ -10,7 +11,7 @@ using namespace dftracer::utils::utilities::composites::dft::aggregators;
 static AggregationKey make_key(
     std::string_view cat = "cat1", std::string_view name = "name1",
     std::uint64_t pid = 1, std::uint64_t tid = 1,
-    std::string_view hhash = "hh1", std::string_view fhash = "fh1",
+    std::string_view hhash = "hh1", std::string_view fhash = "00000000000000f1",
     std::uint64_t time_bucket = 0,
     std::vector<std::pair<std::string_view, std::string_view>> extra = {}) {
     static auto table = make_intern_table();
@@ -21,7 +22,12 @@ static AggregationKey make_key(
     k.pid = pid;
     k.tid = tid;
     k.hhash_id = intern.get_or_insert(hhash);
-    k.fhash_id = intern.get_or_insert(fhash);
+    if (auto v = dftracer::utils::hash::parse_hex64(fhash)) {
+        k.fhash = *v;
+    } else {
+        k.fhash_inline = false;
+        k.fhash = intern.get_or_insert(fhash);
+    }
     k.time_bucket = time_bucket;
     if (!extra.empty()) {
         k.extra_keys = std::make_unique<

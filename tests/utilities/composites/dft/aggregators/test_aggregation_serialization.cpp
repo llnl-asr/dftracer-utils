@@ -15,7 +15,7 @@ TEST_SUITE("AggregationSerialization") {
         key.pid = 12345;
         key.tid = 67890;
         key.hhash_id = intern.get_or_insert("abc123");
-        key.fhash_id = intern.get_or_insert("def456");
+        key.fhash = 0xdef456ULL;
         key.time_bucket = 5000000;
 
         auto data = serialize_agg_key(42, AggMapType::EVENT, key, intern);
@@ -27,9 +27,55 @@ TEST_SUITE("AggregationSerialization") {
         CHECK(result.key.pid == key.pid);
         CHECK(result.key.tid == key.tid);
         CHECK(result.key.hhash(intern) == "abc123");
-        CHECK(result.key.fhash(intern) == "def456");
+        CHECK(result.key.fhash_inline);
+        CHECK(result.key.fhash == 0xdef456ULL);
         CHECK(result.key.time_bucket == key.time_bucket);
         CHECK(result.key.extra_keys == nullptr);
+    }
+
+    TEST_CASE("key roundtrip - file hash travels in the key") {
+        auto table = make_intern_table();
+        auto& intern = table->intern;
+
+        SUBCASE("canonical hash is inline, not interned") {
+            AggregationKey key;
+            key.cat_id = intern.get_or_insert("posix");
+            key.name_id = intern.get_or_insert("read");
+            key.fhash = 0xf07c4ebf132e3799ULL;
+            const auto before = intern.entry_count();
+
+            auto data = serialize_agg_key(0, AggMapType::EVENT, key, intern);
+            auto result = deserialize_agg_key(data);
+            CHECK(result.key.fhash_inline);
+            CHECK(result.key.fhash == key.fhash);
+            CHECK(intern.entry_count() == before);
+
+            AggKeyView view;
+            REQUIRE(parse_agg_key_view(data, intern, view));
+            char buf[dftracer::utils::hash::HEX64_DIGITS];
+            CHECK(fhash_text(view, buf) == "f07c4ebf132e3799");
+        }
+
+        SUBCASE("a hash outside that form keeps its text") {
+            std::string out;
+            serialize_agg_key_into(out, 0, AggMapType::EVENT, "posix", "read",
+                                   1, 2, "", "NOT-A-HASH", 0, intern);
+            AggKeyView view;
+            REQUIRE(parse_agg_key_view(out, intern, view));
+            CHECK_FALSE(view.fhash_inline);
+            char buf[dftracer::utils::hash::HEX64_DIGITS];
+            CHECK(fhash_text(view, buf) == "NOT-A-HASH");
+        }
+
+        SUBCASE("no file hash resolves to empty") {
+            std::string out;
+            serialize_agg_key_into(out, 0, AggMapType::EVENT, "posix", "read",
+                                   1, 2, "", "", 0, intern);
+            AggKeyView view;
+            REQUIRE(parse_agg_key_view(out, intern, view));
+            char buf[dftracer::utils::hash::HEX64_DIGITS];
+            CHECK(fhash_text(view, buf).empty());
+        }
     }
 
     TEST_CASE("key roundtrip - with extra keys") {

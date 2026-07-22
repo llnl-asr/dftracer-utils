@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/hash/hex64.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
@@ -14,6 +15,7 @@ namespace hash = dftracer::utils::utilities::hash;
 
 using common::serialization::BinaryReader;
 using common::serialization::put_be16;
+using common::serialization::put_be64;
 using common::serialization::put_blob;
 using common::serialization::put_double;
 using common::serialization::put_str;
@@ -172,13 +174,18 @@ void serialize_agg_key_into(std::string& out, std::uint32_t /*config_hash*/,
     auto cat = intern.resolve(key.cat_id);
     auto name = intern.resolve(key.name_id);
     put_be16(out, compute_shard(cat, name, key.pid, key.tid));
-    put_u8(out, static_cast<std::uint8_t>(map_type));
+    put_u8(out, static_cast<std::uint8_t>(map_type) |
+                    (key.fhash_inline ? AGG_KEY_FHASH_INLINE : 0));
     put_varint(out, key.cat_id);
     put_varint(out, key.name_id);
     put_varint(out, key.pid);
     put_varint(out, key.tid);
     put_varint(out, key.hhash_id);
-    put_varint(out, key.fhash_id);
+    if (key.fhash_inline) {
+        put_be64(out, key.fhash);
+    } else {
+        put_varint(out, key.fhash);
+    }
     put_varint(out, key.time_bucket);
     std::uint16_t num_extra =
         key.extra_keys ? static_cast<std::uint16_t>(key.extra_keys->size()) : 0;
@@ -202,20 +209,26 @@ void serialize_agg_key_into(
     const std::uint16_t num_extra =
         extra_keys ? static_cast<std::uint16_t>(extra_keys->size()) : 0;
 
-    // All fields are varints now — conservative upper bound
-    std::size_t total = 2 + 1 + 7 * 5 + 2 + num_extra * 2 * 5;
+    std::size_t total = 2 + 1 + 6 * 5 + 8 + 2 + num_extra * 2 * 5;
 
     out.clear();
     out.reserve(total);
 
     put_be16(out, shard);
-    out.push_back(static_cast<char>(map_type));
+    const auto fhash_val = ::dftracer::utils::hash::parse_hex64(fhash);
+    out.push_back(static_cast<char>(
+        static_cast<std::uint8_t>(map_type) |
+        (fhash_val ? AGG_KEY_FHASH_INLINE : std::uint8_t{0})));
     put_varint(out, intern.get_or_insert(cat));
     put_varint(out, intern.get_or_insert(name));
     put_varint(out, pid);
     put_varint(out, tid);
     put_varint(out, hhash.empty() ? 0 : intern.get_or_insert(hhash));
-    put_varint(out, fhash.empty() ? 0 : intern.get_or_insert(fhash));
+    if (fhash_val) {
+        put_be64(out, *fhash_val);
+    } else {
+        put_varint(out, fhash.empty() ? 0 : intern.get_or_insert(fhash));
+    }
     put_varint(out, time_bucket);
     put_be16(out, num_extra);
     if (extra_keys) {
@@ -238,14 +251,16 @@ std::string serialize_agg_key(std::uint32_t config_hash, AggMapType map_type,
 DeserializedAggKey deserialize_agg_key(std::string_view data) {
     BinaryReader r(data);
     (void)r.be16();
-    auto map_type = static_cast<AggMapType>(r.u8());
+    const auto type_byte = r.u8();
+    auto map_type = static_cast<AggMapType>(type_byte & ~AGG_KEY_FHASH_INLINE);
     AggregationKey key;
+    key.fhash_inline = (type_byte & AGG_KEY_FHASH_INLINE) != 0;
     key.cat_id = static_cast<std::uint32_t>(r.varint());
     key.name_id = static_cast<std::uint32_t>(r.varint());
     key.pid = r.varint();
     key.tid = r.varint();
     key.hhash_id = static_cast<std::uint32_t>(r.varint());
-    key.fhash_id = static_cast<std::uint32_t>(r.varint());
+    key.fhash = key.fhash_inline ? r.be64() : r.varint();
     key.time_bucket = r.varint();
     auto num_extra = r.be16();
     if (num_extra > 0) {

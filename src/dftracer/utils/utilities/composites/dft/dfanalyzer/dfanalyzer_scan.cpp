@@ -103,7 +103,8 @@ AggScanOutput scan_aggregation_shard_range(AggScanInput input) {
             builder.append_uint64(ci++, kv.pid);
             builder.append_uint64(ci++, kv.tid);
             builder.append_dict_string(ci++, kv.hhash);
-            builder.append_dict_string(ci++, kv.fhash);
+            char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
+            builder.append_dict_string(ci++, fhash_text(kv, fbuf));
             builder.append_uint64(ci++, kv.time_bucket);
             builder.append_uint64(ci++, mv.count);
             builder.append_uint64(ci++, mv.dur_total);
@@ -227,6 +228,27 @@ class HashResolver {
 
     // Unresolved hashes resolve to empty (not the hash itself): the
     // dfanalyzer side treats empty file_name/host_name as missing (NA).
+    /// Keyed by the hash value, so the hex text is only built on a miss.
+    std::string_view resolve_file(std::uint64_t hash) {
+        if (hash == 0) return {};
+        auto it = file_map64_.find(hash);
+        if (it != file_map64_.end()) return it->second;
+        char buf[::dftracer::utils::hash::HEX64_DIGITS];
+        ::dftracer::utils::hash::format_hex64(hash, buf);
+        std::string_view name;
+        try {
+            auto found = hash_db_ ? hash_db_->lookup_hash(
+                                        indexer::IndexDatabase::HashType::FILE,
+                                        std::string_view(buf, sizeof(buf)))
+                                  : std::nullopt;
+            if (found) name = intern_.intern(*found);
+        } catch (const std::exception&) {
+            name = {};
+        }
+        file_map64_.emplace(hash, name);
+        return name;
+    }
+
     std::string_view resolve_file(std::string_view hash) {
         return resolve(hash, file_map_, indexer::IndexDatabase::HashType::FILE);
     }
@@ -261,6 +283,7 @@ class HashResolver {
 
     const indexer::IndexDatabase* hash_db_;
     dftracer::utils::StringIntern intern_;
+    std::unordered_map<std::uint64_t, std::string_view> file_map64_;
     std::unordered_map<std::string_view, std::string_view> file_map_;
     std::unordered_map<std::string_view, std::string_view> host_map_;
 };
@@ -314,7 +337,7 @@ struct CoarseKey {
     std::string_view func_name;
     std::uint64_t pid = 0;
     std::uint64_t tid = 0;
-    std::string_view file_hash;
+    std::uint64_t file_hash = 0;
     std::string_view host_hash;
     std::string_view file_name;
     std::string_view host_name;
@@ -343,7 +366,7 @@ struct CoarseKeyHash {
         h = combine(h, std::hash<std::string_view>{}(k.func_name));
         h = combine(h, std::hash<std::uint64_t>{}(k.pid));
         h = combine(h, std::hash<std::uint64_t>{}(k.tid));
-        h = combine(h, std::hash<std::string_view>{}(k.file_hash));
+        h = combine(h, std::hash<std::uint64_t>{}(k.file_hash));
         h = combine(h, std::hash<std::string_view>{}(k.host_hash));
         h = combine(h, std::hash<std::string_view>{}(k.file_name));
         h = combine(h, std::hash<std::string_view>{}(k.host_name));
@@ -452,7 +475,8 @@ void append_fine_row(RecordBatchBuilder& builder, std::size_t& count,
     builder.append_dict_string(ci++, kv.name);
     builder.append_int64(ci++, static_cast<std::int64_t>(kv.pid));
     builder.append_int64(ci++, static_cast<std::int64_t>(kv.tid));
-    builder.append_dict_string(ci++, kv.fhash);
+    char fhash_buf[::dftracer::utils::hash::HEX64_DIGITS];
+    builder.append_dict_string(ci++, fhash_text(kv, fhash_buf));
     builder.append_dict_string(ci++, kv.hhash);
     builder.append_dict_string(ci++, file_name);
     builder.append_dict_string(ci++, host_name);
@@ -465,7 +489,7 @@ void append_fine_row(RecordBatchBuilder& builder, std::size_t& count,
     builder.append_int64(
         ci++, static_cast<std::int64_t>(mv.distinct_files > 0
                                             ? mv.distinct_files
-                                            : (kv.fhash.empty() ? 0 : 1)));
+                                            : (kv.fhash == 0 ? 0 : 1)));
     builder.append_double(
         ci++, static_cast<double>(mv.dur_total) / ec.ctx->time_resolution);
 
@@ -547,9 +571,17 @@ void append_coarse_row(RecordBatchBuilder& builder, const CoarseKey& key,
             case GB_TID:
                 builder.append_int64(ci++, static_cast<std::int64_t>(key.tid));
                 break;
-            case GB_FILE_HASH:
-                builder.append_dict_string(ci++, key.file_hash);
+            case GB_FILE_HASH: {
+                char buf[::dftracer::utils::hash::HEX64_DIGITS];
+                if (key.file_hash) {
+                    ::dftracer::utils::hash::format_hex64(key.file_hash, buf);
+                    builder.append_dict_string(
+                        ci++, std::string_view(buf, sizeof(buf)));
+                } else {
+                    builder.append_dict_string(ci++, {});
+                }
                 break;
+            }
             case GB_HOST_HASH:
                 builder.append_dict_string(ci++, key.host_hash);
                 break;
@@ -717,8 +749,6 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
                 if (cfg.mask & GB_CAT) stable.cat = resolver.intern(kv.cat);
                 if (cfg.mask & GB_FUNC_NAME)
                     stable.func_name = resolver.intern(kv.name);
-                if (cfg.mask & GB_FILE_HASH)
-                    stable.file_hash = resolver.intern(kv.fhash);
                 if (cfg.mask & GB_HOST_HASH)
                     stable.host_hash = resolver.intern(kv.hhash);
                 auto [nit, _] = map.emplace(std::move(stable), CoarseMetrics{});
@@ -784,8 +814,10 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
                 if (q.references("tid")) fields["tid"] = kv.tid;
                 if (q.references("hhash"))
                     fields["hhash"] = std::string(kv.hhash);
-                if (q.references("fhash"))
-                    fields["fhash"] = std::string(kv.fhash);
+                if (q.references("fhash")) {
+                    char qbuf[::dftracer::utils::hash::HEX64_DIGITS];
+                    fields["fhash"] = std::string(fhash_text(kv, qbuf));
+                }
                 if (q.references("time_bucket"))
                     fields["time_bucket"] = kv.time_bucket;
                 if (!q.evaluate(fields)) return true;
@@ -794,7 +826,9 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
             AggMetricsView mv;
             if (!parse_agg_value_view(val_bytes, mv)) return true;
 
-            auto file_name = resolver.resolve_file(kv.fhash);
+            auto file_name = kv.fhash_inline
+                                 ? resolver.resolve_file(kv.fhash)
+                                 : resolver.resolve_file(kv.fhash_str);
             auto host_name = resolver.resolve_host(kv.hhash);
 
             ProcKey pk{kv.hhash, kv.pid, kv.tid};

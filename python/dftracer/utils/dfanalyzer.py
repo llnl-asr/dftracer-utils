@@ -30,6 +30,7 @@ __all__ = [
     "build_final_meta",
     "build_index_distributed",
     "build_partial_meta",
+    "hlm_scan_group_by",
     "coerce_arrow_numerics_to_pandas_native",
     "coerce_profile_dtypes",
     "distributed_hlm",
@@ -278,8 +279,12 @@ def worker_hlm_partial(
 ):
     """Per-worker partial HLM from already-resident IPC bytes.
 
-    Workers own disjoint PID sets and proc_name is always in hlm_groupby, so
-    per-worker partials have disjoint keys and need no cross-worker merge.
+    Handles both scan shapes: one row per stored key, or rows already folded
+    by `scan_to_ipc(group_by=...)`. A folded table arrives with the squared
+    and per-call columns present, so they are combined rather than derived.
+
+    Partials only have disjoint keys when workers own disjoint PID sets. A
+    shard-split scan does not, so `distributed_hlm` merges them.
     """
     empty = lambda: make_empty_hlm(  # noqa: E731
         hlm_groupby, hlm_agg, bin_cols, int_index_cols, float_metric_cols
@@ -311,15 +316,16 @@ def worker_hlm_partial(
         if table.num_rows == 0:
             return empty()
 
-    time_col = table.column("time")
-    size_col = table.column("size")
-    table = table.append_column("time_sq", pc.multiply(time_col, time_col))  # ty: ignore[unresolved-attribute]
-    size_filled = pc.if_else(pc.is_null(size_col), pa.scalar(0, pa.int64()), size_col)  # ty: ignore[unresolved-attribute]
-    table = table.append_column("size_sq", pc.multiply(size_filled, size_filled))  # ty: ignore[unresolved-attribute]
-    table = table.append_column("time_call_min", time_col)
-    table = table.append_column("time_call_max", time_col)
-    table = table.append_column("size_call_min", size_col)
-    table = table.append_column("size_call_max", size_col)
+    if "time_sq" not in table.column_names:
+        time_col = table.column("time")
+        size_col = table.column("size")
+        table = table.append_column("time_sq", pc.multiply(time_col, time_col))  # ty: ignore[unresolved-attribute]
+        size_filled = pc.if_else(pc.is_null(size_col), pa.scalar(0, pa.int64()), size_col)  # ty: ignore[unresolved-attribute]
+        table = table.append_column("size_sq", pc.multiply(size_filled, size_filled))  # ty: ignore[unresolved-attribute]
+        table = table.append_column("time_call_min", time_col)
+        table = table.append_column("time_call_max", time_col)
+        table = table.append_column("size_call_min", size_col)
+        table = table.append_column("size_call_max", size_col)
 
     available_groupby = [c for c in hlm_groupby if c in table.column_names]
     if not available_groupby:
@@ -705,6 +711,36 @@ def distributed_time_origin(event_futures, dask_client):
     return min(mins) if mins else None
 
 
+# Columns the in-scan fold can produce, so a caller can only ask for what the
+# scan knows how to group on.
+_SCAN_GROUP_COLUMNS = frozenset(
+    {
+        "cat",
+        "func_name",
+        "pid",
+        "tid",
+        "file_hash",
+        "host_hash",
+        "file_name",
+        "host_name",
+        "proc_name",
+        "io_cat",
+        "acc_pat",
+        "time_range",
+    }
+)
+
+
+def hlm_scan_group_by(view_types, hlm_extra_cols):
+    """The `group_by` for `scan_to_ipc` that matches this HLM's grain.
+
+    Folding to it in C++ keeps whole-key rows out of Python; anything the scan
+    cannot group on is dropped, and the HLM regroups on what arrives.
+    """
+    wanted = list(dict.fromkeys(list(view_types) + list(hlm_extra_cols)))
+    return [c for c in wanted if c in _SCAN_GROUP_COLUMNS]
+
+
 def distributed_hlm(
     data_type,
     view_types,
@@ -717,12 +753,16 @@ def distributed_hlm(
     int_index_cols,
     float_metric_cols,
     postread_config=None,
+    merge_partials=False,
 ):
     """Distributed high-level-metrics aggregation over per-worker IPC bytes.
 
     Submits one `worker_hlm_partial` task per worker, pinned to the worker that
     already holds the IPC bytes, and assembles a Dask DataFrame. Returns None
     when no worker IPC futures exist.
+
+    `merge_partials` combines keys seen by more than one worker, which a
+    shard-split scan produces and a pid-partitioned one does not.
     """
     import dask
     import dask.dataframe as dd
@@ -768,4 +808,10 @@ def distributed_hlm(
     parts = [p for p in parts if p is not None and not getattr(p, "empty", False)]
     if not parts:
         parts = [meta]
+    elif merge_partials and len(parts) > 1:
+        combined = pd.concat(parts)
+        agg_map = {c: hlm_agg[c] for c in combined.columns if c in hlm_agg}
+        if agg_map:
+            combined = combined.groupby(level=list(range(combined.index.nlevels))).agg(agg_map)
+        parts = [combined.reindex(columns=meta.columns)]
     return dd.from_delayed([dask.delayed(p) for p in parts], meta=meta)

@@ -80,7 +80,6 @@ class AggregationVisitor : public DftEventVisitor {
     // Legacy (RocksDatabase-backed) mode.
     AggInternPtr intern_;
     std::shared_ptr<rocksdb::RocksDatabase> db_;
-    std::vector<rocksdb::RocksDatabase::Batch> pending_batches_;
 
     // Distributed (SST-backed) mode. The visitor rotates sst_sink_ per
     // flush to keep each SST's key space strictly ascending (merge

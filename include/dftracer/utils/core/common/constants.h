@@ -39,6 +39,10 @@ static constexpr std::size_t ZSTD_MAX_DICT_BYTES = 262144;        // 256KB
 static constexpr std::size_t ZSTD_MAX_TRAIN_BYTES = 1024 * 1024;  // 1MB
 
 static constexpr std::size_t BLOCK_CACHE_BYTES = 512ULL * 1024 * 1024;
+// Total memtable budget across every column family, capped by a shared
+// WriteBufferManager so many CFs or many per-node workers cannot each reserve
+// their own write buffers.
+static constexpr std::size_t WRITE_BUFFER_BYTES = 512ULL * 1024 * 1024;
 // Point-lookup families read one small value per get, so they want small
 // blocks and a filter rather than the scan-oriented defaults.
 static constexpr std::size_t POINT_LOOKUP_BLOCK_SIZE = 4 * 1024;

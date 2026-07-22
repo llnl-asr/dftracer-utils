@@ -415,8 +415,8 @@ void AggregationVisitor::seal_local_buffer() {
         return;
     }
 
-    // Legacy mode: flush to a RocksDatabase batch; commit at
-    // on_file_complete.
+    // Commit per flush rather than holding batches until on_file_complete,
+    // which parked a whole file's serialized output in memory.
     if (!db_) return;
     auto batch = db_->begin_batch();
     for (auto& [k, m] : local_buffer_) {
@@ -434,7 +434,7 @@ void AggregationVisitor::seal_local_buffer() {
     system_buffer_.clear();
 
     flush_intern_dictionary(*db_, batch, *intern_);
-    pending_batches_.push_back(std::move(batch));
+    db_->commit_batch(batch);
 }
 
 coro::CoroTask<void> AggregationVisitor::on_file_complete() {
@@ -450,11 +450,7 @@ coro::CoroTask<void> AggregationVisitor::on_file_complete() {
         co_return;
     }
 
-    if (pending_batches_.empty()) co_return;
-    for (auto& batch : pending_batches_) {
-        db_->commit_batch(batch);
-    }
-    pending_batches_.clear();
+    co_return;
 }
 
 void AggregationVisitor::flush_to_batch(rocksdb::RocksDatabase::Batch& batch) {

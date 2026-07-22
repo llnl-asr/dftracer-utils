@@ -7,6 +7,7 @@
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/table.h>
+#include <rocksdb/write_buffer_manager.h>
 
 #include <algorithm>
 #include <atomic>
@@ -91,6 +92,25 @@ const decltype(cf::ALL)& RocksDatabase::default_column_families() {
     return cf::ALL;
 }
 
+namespace {
+/// One cache for the process. Left unset, every column family gets its own
+/// 8 MB default, which no realistic working set fits in.
+std::shared_ptr<::rocksdb::Cache>& shared_block_cache() {
+    static std::shared_ptr<::rocksdb::Cache> cache =
+        ::rocksdb::NewLRUCache(constants::rocksdb::BLOCK_CACHE_BYTES);
+    return cache;
+}
+
+/// Caps total memtable memory across every column family and every DB in the
+/// process; without it each CF reserves its own write buffers.
+std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
+    static std::shared_ptr<::rocksdb::WriteBufferManager> mgr =
+        std::make_shared<::rocksdb::WriteBufferManager>(
+            constants::rocksdb::WRITE_BUFFER_BYTES, shared_block_cache());
+    return mgr;
+}
+}  // namespace
+
 ::rocksdb::Options RocksDatabase::default_options() {
     ::rocksdb::Options options;
     options.create_if_missing = true;
@@ -102,18 +122,9 @@ const decltype(cf::ALL)& RocksDatabase::default_column_families() {
     options.max_subcompactions = 8;
     options.write_buffer_size = 256 * 1024 * 1024;
     options.max_write_buffer_number = 4;
+    options.write_buffer_manager = shared_write_buffer_manager();
     return options;
 }
-
-namespace {
-/// One cache for the process. Left unset, every column family gets its own
-/// 8 MB default, which no realistic working set fits in.
-std::shared_ptr<::rocksdb::Cache>& shared_block_cache() {
-    static std::shared_ptr<::rocksdb::Cache> cache =
-        ::rocksdb::NewLRUCache(constants::rocksdb::BLOCK_CACHE_BYTES);
-    return cache;
-}
-}  // namespace
 
 ::rocksdb::ColumnFamilyOptions RocksDatabase::default_column_family_options() {
     ::rocksdb::ColumnFamilyOptions options;

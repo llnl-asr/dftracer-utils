@@ -504,47 +504,6 @@ static std::optional<std::string> resolve_index_path(IndexerObject* self) {
     return result;
 }
 
-static PyObject* Indexer_count_hash_entries(IndexerObject* self,
-                                            PyObject* args) {
-    const char* type_str = nullptr;
-    if (!PyArg_ParseTuple(args, "s", &type_str)) return nullptr;
-
-    using dftracer::utils::utilities::indexer::IndexDatabase;
-    using HashType = IndexDatabase::HashType;
-
-    HashType type;
-    if (std::strcmp(type_str, "file") == 0) {
-        type = HashType::FILE;
-    } else if (std::strcmp(type_str, "host") == 0) {
-        type = HashType::HOST;
-    } else if (std::strcmp(type_str, "string") == 0) {
-        type = HashType::STRING;
-    } else if (std::strcmp(type_str, "proc") == 0) {
-        type = HashType::PROC;
-    } else {
-        PyErr_SetString(PyExc_ValueError,
-                        "type must be 'file', 'host', 'string', or 'proc'");
-        return nullptr;
-    }
-
-    auto idx_opt = resolve_index_path(self);
-    if (!idx_opt) return nullptr;
-    std::string index_path = std::move(*idx_opt);
-
-    std::uint64_t count = 0;
-    if (!run_blocking_r(
-            [&] {
-                IndexDatabase db(index_path,
-                                 dftracer::utils::rocksdb::RocksDatabase::
-                                     OpenMode::ReadOnly);
-                return db.count_hash_entries(type);
-            },
-            count)) {
-        return nullptr;
-    }
-    return PyLong_FromUnsignedLongLong(count);
-}
-
 static PyObject* Indexer_get_hash_table(IndexerObject* self, PyObject* args) {
     const char* type_str = nullptr;
     if (!PyArg_ParseTuple(args, "s", &type_str)) {
@@ -1484,7 +1443,50 @@ static PyObject* scan_aggregation_manifest_fn(PyObject* /*self*/,
     return result_dict;
 }
 
+static PyObject* count_hash_entries_fn(PyObject* /*self*/, PyObject* args) {
+    const char* index_path = nullptr;
+    const char* type_str = nullptr;
+    if (!PyArg_ParseTuple(args, "ss", &index_path, &type_str)) return nullptr;
+
+    using dftracer::utils::utilities::indexer::IndexDatabase;
+    using HashType = IndexDatabase::HashType;
+
+    HashType type;
+    if (std::strcmp(type_str, "file") == 0) {
+        type = HashType::FILE;
+    } else if (std::strcmp(type_str, "host") == 0) {
+        type = HashType::HOST;
+    } else if (std::strcmp(type_str, "string") == 0) {
+        type = HashType::STRING;
+    } else if (std::strcmp(type_str, "proc") == 0) {
+        type = HashType::PROC;
+    } else {
+        PyErr_SetString(PyExc_ValueError,
+                        "type must be 'file', 'host', 'string', or 'proc'");
+        return nullptr;
+    }
+
+    std::uint64_t count = 0;
+    if (!run_blocking_r(
+            [&] {
+                IndexDatabase db(index_path,
+                                 dftracer::utils::rocksdb::RocksDatabase::
+                                     OpenMode::ReadOnly);
+                return db.count_hash_entries(type);
+            },
+            count)) {
+        return nullptr;
+    }
+    return PyLong_FromUnsignedLongLong(count);
+}
+
 static PyMethodDef BatchIndexerModuleMethods[] = {
+    {"count_hash_entries", (PyCFunction)count_hash_entries_fn, METH_VARARGS,
+     "count_hash_entries(index_path, type)\n"
+     "--\n\n"
+     "Number of hashes of `type` ('file', 'host', 'string', 'proc') in the\n"
+     "index at `index_path`. Counted by iteration, so a table holding tens\n"
+     "of millions of entries is not materialised to take its length.\n"},
     {"scan_aggregation_manifest", (PyCFunction)scan_aggregation_manifest_fn,
      METH_VARARGS | METH_KEYWORDS,
      "scan_aggregation_manifest(agg_ssts, sys_ssts, scratch_dir, "
@@ -1528,13 +1530,6 @@ static PyMethodDef Indexer_methods[] = {
      "Resolve and build if needed.\n\n"
      "Returns:\n"
      "    dict with index status after building.\n"},
-    {"count_hash_entries", (PyCFunction)Indexer_count_hash_entries,
-     METH_VARARGS,
-     "count_hash_entries(type)\n"
-     "--\n\n"
-     "Number of hashes of `type` ('file', 'host', 'string', 'proc').\n\n"
-     "Counts by iteration, so it does not materialise a table that can hold\n"
-     "tens of millions of entries.\n"},
     {"get_hash_table", (PyCFunction)Indexer_get_hash_table, METH_VARARGS,
      "get_hash_table(type)\n"
      "--\n\n"

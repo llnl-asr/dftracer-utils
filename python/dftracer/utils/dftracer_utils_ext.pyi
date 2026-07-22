@@ -145,13 +145,6 @@ class Indexer:
         """
         ...
 
-    def count_hash_entries(self, hash_type: str) -> int:
-        """Number of hashes of `hash_type` ('file', 'host', 'string', 'proc').
-
-        Counted by iteration rather than by materialising the table.
-        """
-        ...
-
     def get_hash_table(self, hash_type: str) -> Dict[str, str]:
         """Get hash table mapping hash values to original strings.
 
@@ -1166,4 +1159,11 @@ def get_log_level() -> str:
 
 def set_log_color(mode: str) -> None:
     """Set the logger color mode (auto|always|never)."""
+    ...
+
+def count_hash_entries(index_path: str, hash_type: str) -> int:
+    """Number of `hash_type` hashes in the index at `index_path`.
+
+    Counted by iteration rather than by materialising the table.
+    """
     ...

@@ -30,6 +30,7 @@ __all__ = [
     "build_final_meta",
     "build_index_distributed",
     "build_partial_meta",
+    "count_index_hashes",
     "dfanalyzer_events_meta",
     "hlm_scan_group_by",
     "coerce_arrow_numerics_to_pandas_native",
@@ -643,6 +644,17 @@ def normalize_arrow_dtypes(df):
     for col in df.select_dtypes(include=["category"]).columns:
         df[col] = df[col].astype("object")
     return df
+
+
+def count_index_hashes(index_path: str, hash_type: str) -> int:
+    """Number of `hash_type` hashes in the index at `index_path`.
+
+    Distinct file and host counts are properties of the index, so they survive
+    a scan folded to a grain that no longer carries those columns.
+    """
+    from .dftracer_utils_ext import count_hash_entries
+
+    return count_hash_entries(index_path, hash_type)
 
 
 def index_path_for(trace_path: str) -> str:

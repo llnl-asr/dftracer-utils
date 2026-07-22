@@ -208,14 +208,6 @@ class Indexer:
         """
         return self._native.get_checkpoint_indexer(file_path)
 
-    def count_hash_entries(self, hash_type: str) -> int:
-        """Number of hashes of `hash_type` ('file', 'host', 'string', 'proc').
-
-        Counted by iteration, so a trace with tens of millions of files does
-        not have its whole hash table materialised to be counted.
-        """
-        return self._native.count_hash_entries(hash_type)
-
     def get_hash_table(self, hash_type: str) -> dict:
         """Query hash table mappings.
 

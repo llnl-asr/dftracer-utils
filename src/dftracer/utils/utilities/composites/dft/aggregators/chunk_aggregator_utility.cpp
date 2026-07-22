@@ -49,6 +49,8 @@ coro::CoroTask<ChunkAggregationOutput> ChunkAggregatorUtility::process(
 
     auto json_gen = trace_reader.read_json(rc);
 
+    auto& intern = input.intern->intern;
+
     AggregationMap local_aggregations;
     AggregationMap local_profiles;
     AggregationMap local_system;
@@ -68,13 +70,16 @@ coro::CoroTask<ChunkAggregationOutput> ChunkAggregatorUtility::process(
             local_tracker->extract_from_event(ev.name, ev.pid, ev.ts, ev.dur,
                                               ev.args, input.config);
         }
-        auto key = build_aggregation_key(ev, input.config);
+        auto key = build_aggregation_key(ev, input.config, intern);
         if (ev.is_system()) {
-            update_aggregation_entry(ev, input.config, local_system, key);
+            update_aggregation_entry(ev, input.config, local_system, key,
+                                     intern);
         } else if (ev.is_profile()) {
-            update_aggregation_entry(ev, input.config, local_profiles, key);
+            update_aggregation_entry(ev, input.config, local_profiles, key,
+                                     intern);
         } else {
-            update_aggregation_entry(ev, input.config, local_aggregations, key);
+            update_aggregation_entry(ev, input.config, local_aggregations, key,
+                                     intern);
         }
         output.events_processed++;
     }

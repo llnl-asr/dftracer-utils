@@ -64,8 +64,9 @@ std::string make_per_file_batch_id(std::string_view prefix,
 
 AggregationVisitor::AggregationVisitor(
     std::shared_ptr<rocksdb::RocksDatabase> db, std::uint32_t config_hash,
-    AggregationConfig config, std::string file_path)
-    : db_(std::move(db)),
+    AggregationConfig config, std::string file_path, AggInternPtr intern)
+    : intern_(std::move(intern)),
+      db_(std::move(db)),
       config_hash_(config_hash),
       config_(std::move(config)),
       file_path_(std::move(file_path)) {
@@ -81,8 +82,10 @@ AggregationVisitor::AggregationVisitor(std::string staging_dir,
                                        std::string batch_id_prefix,
                                        std::uint32_t config_hash,
                                        AggregationConfig config,
-                                       std::string file_path)
-    : sst_staging_dir_(std::move(staging_dir)),
+                                       std::string file_path,
+                                       AggInternPtr intern)
+    : intern_(std::move(intern)),
+      sst_staging_dir_(std::move(staging_dir)),
       sst_batch_prefix_(make_per_file_batch_id(batch_id_prefix, file_path)),
       config_hash_(config_hash),
       config_(std::move(config)),
@@ -164,7 +167,7 @@ void AggregationVisitor::on_event(const EventRecord& record) {
     auto key_fhash = config_.group_by_file ? fhash : std::string_view{};
     serialize_agg_key_into(key_buf_, config_hash_, map_type, cat_lower, ev.name,
                            ev.pid, ev.tid, hhash, key_fhash, time_bucket,
-                           extra_ptr);
+                           intern_->intern, extra_ptr);
 
     AggregationMetrics* entry_ptr;
     if (last_entry_ != nullptr && last_key_ == key_buf_) {
@@ -399,7 +402,7 @@ void AggregationVisitor::seal_local_buffer() {
         }
         system_buffer_.clear();
 
-        flush_intern_dictionary(*sst_sink_);
+        flush_intern_dictionary(*sst_sink_, *intern_);
 
         // Commit this flush's SSTs and open a new SstWriterContext for
         // the next flush. Only rotate if something was actually written;
@@ -430,7 +433,7 @@ void AggregationVisitor::seal_local_buffer() {
     }
     system_buffer_.clear();
 
-    flush_intern_dictionary(*db_, batch);
+    flush_intern_dictionary(*db_, batch, *intern_);
     pending_batches_.push_back(std::move(batch));
 }
 
@@ -470,7 +473,7 @@ void AggregationVisitor::flush_to_batch(rocksdb::RocksDatabase::Batch& batch) {
     }
     system_buffer_.clear();
 
-    flush_intern_dictionary(*db_, batch);
+    flush_intern_dictionary(*db_, batch, *intern_);
 }
 
 ChunkAggregationOutput AggregationVisitor::take_output() {

@@ -1,14 +1,24 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/rocksdb/database.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/event_aggregator.h>
 #include <doctest/doctest.h>
+
+#include <filesystem>
+#include <string>
 
 using namespace dftracer::utils::utilities::composites::dft::aggregators;
 
 namespace {
 
+dftracer::utils::StringIntern& test_intern() {
+    static auto table = make_intern_table();
+    return table->intern;
+}
+
 AggregationKey make_key(std::string_view cat, std::string_view name,
                         std::uint64_t time_bucket = 0) {
-    auto& intern = aggregation_intern();
+    auto& intern = test_intern();
     AggregationKey key;
     key.cat_id = intern.get_or_insert(cat);
     key.name_id = intern.get_or_insert(name);
@@ -69,5 +79,56 @@ TEST_SUITE("EventAggregator") {
 
         REQUIRE(output.system_aggregations.size() == 1);
         CHECK(output.system_aggregations.begin()->second.count == 4);
+    }
+
+    TEST_CASE("Two indexes open at once keep their own string ids") {
+        namespace fs = std::filesystem;
+        auto root = fs::temp_directory_path() / "dft_intern_two_index_test";
+        fs::remove_all(root);
+        const auto path_a = (root / "a").string();
+        const auto path_b = (root / "b").string();
+
+        // Both dictionaries start at id 0, so index B's ids collide with A's.
+        // They only resolve correctly if each index owns its own table.
+        std::string key_a, key_b;
+        {
+            auto db = EventAggregator::open_with_merge_operator(path_a);
+            EventAggregator agg(db, 0);
+            auto& intern = agg.intern();
+            AggregationKey k;
+            k.cat_id = intern.get_or_insert("POSIX");
+            k.name_id = intern.get_or_insert("read");
+            key_a = serialize_agg_key(0, AggMapType::EVENT, k, intern);
+            auto batch = db->begin_batch();
+            flush_intern_dictionary(*db, batch, *agg.intern_table());
+            db->commit_batch(batch);
+        }
+        {
+            auto db = EventAggregator::open_with_merge_operator(path_b);
+            EventAggregator agg(db, 0);
+            auto& intern = agg.intern();
+            AggregationKey k;
+            k.cat_id = intern.get_or_insert("MPI");
+            k.name_id = intern.get_or_insert("send");
+            key_b = serialize_agg_key(0, AggMapType::EVENT, k, intern);
+            auto batch = db->begin_batch();
+            flush_intern_dictionary(*db, batch, *agg.intern_table());
+            db->commit_batch(batch);
+        }
+
+        auto db_a = EventAggregator::open_with_merge_operator(path_a);
+        EventAggregator agg_a(db_a, 0);
+        auto db_b = EventAggregator::open_with_merge_operator(path_b);
+        EventAggregator agg_b(db_b, 0);
+
+        AggKeyView view_a, view_b;
+        REQUIRE(parse_agg_key_view(key_a, agg_a.intern(), view_a));
+        REQUIRE(parse_agg_key_view(key_b, agg_b.intern(), view_b));
+        CHECK(view_a.cat == "POSIX");
+        CHECK(view_a.name == "read");
+        CHECK(view_b.cat == "MPI");
+        CHECK(view_b.name == "send");
+
+        fs::remove_all(root);
     }
 }

@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <doctest/doctest.h>
 
@@ -6,7 +7,8 @@ using namespace dftracer::utils::utilities::composites::dft::aggregators;
 
 TEST_SUITE("AggregationSerialization") {
     TEST_CASE("key roundtrip - basic") {
-        auto& intern = aggregation_intern();
+        auto table = make_intern_table();
+        auto& intern = table->intern;
         AggregationKey key;
         key.cat_id = intern.get_or_insert("POSIX");
         key.name_id = intern.get_or_insert("read");
@@ -16,22 +18,23 @@ TEST_SUITE("AggregationSerialization") {
         key.fhash_id = intern.get_or_insert("def456");
         key.time_bucket = 5000000;
 
-        auto data = serialize_agg_key(42, AggMapType::EVENT, key);
+        auto data = serialize_agg_key(42, AggMapType::EVENT, key, intern);
         auto result = deserialize_agg_key(data);
 
         CHECK(result.map_type == AggMapType::EVENT);
-        CHECK(result.key.cat() == "POSIX");
-        CHECK(result.key.name() == "read");
+        CHECK(result.key.cat(intern) == "POSIX");
+        CHECK(result.key.name(intern) == "read");
         CHECK(result.key.pid == key.pid);
         CHECK(result.key.tid == key.tid);
-        CHECK(result.key.hhash() == "abc123");
-        CHECK(result.key.fhash() == "def456");
+        CHECK(result.key.hhash(intern) == "abc123");
+        CHECK(result.key.fhash(intern) == "def456");
         CHECK(result.key.time_bucket == key.time_bucket);
         CHECK(result.key.extra_keys == nullptr);
     }
 
     TEST_CASE("key roundtrip - with extra keys") {
-        auto& intern = aggregation_intern();
+        auto table = make_intern_table();
+        auto& intern = table->intern;
         AggregationKey key;
         key.cat_id = intern.get_or_insert("MPI");
         key.name_id = intern.get_or_insert("send");
@@ -47,11 +50,11 @@ TEST_SUITE("AggregationSerialization") {
         key.extra_keys->emplace_back(ek_a, ev_a);
         key.extra_keys->emplace_back(ek_b, ev_b);
 
-        auto data = serialize_agg_key(99, AggMapType::PROFILE, key);
+        auto data = serialize_agg_key(99, AggMapType::PROFILE, key, intern);
         auto result = deserialize_agg_key(data);
 
         CHECK(result.map_type == AggMapType::PROFILE);
-        CHECK(result.key.cat() == "MPI");
+        CHECK(result.key.cat(intern) == "MPI");
         REQUIRE(result.key.extra_keys != nullptr);
         REQUIRE(result.key.extra_keys->size() == 2);
         CHECK(intern.resolve((*result.key.extra_keys)[0].first) == "epoch");
@@ -61,7 +64,8 @@ TEST_SUITE("AggregationSerialization") {
     }
 
     TEST_CASE("key roundtrip - map type preserved") {
-        auto& intern = aggregation_intern();
+        auto table = make_intern_table();
+        auto& intern = table->intern;
         AggregationKey key;
         key.cat_id = intern.get_or_insert("CAT");
         key.name_id = intern.get_or_insert("NAME");
@@ -71,14 +75,15 @@ TEST_SUITE("AggregationSerialization") {
 
         for (auto mt :
              {AggMapType::EVENT, AggMapType::PROFILE, AggMapType::SYSTEM}) {
-            auto data = serialize_agg_key(0, mt, key);
+            auto data = serialize_agg_key(0, mt, key, intern);
             auto result = deserialize_agg_key(data);
             CHECK(result.map_type == mt);
         }
     }
 
     TEST_CASE("key sort order - shard prefix") {
-        auto& intern = aggregation_intern();
+        auto table = make_intern_table();
+        auto& intern = table->intern;
         AggregationKey a, b;
         a.cat_id = intern.get_or_insert("AAA");
         a.name_id = intern.get_or_insert("aaa");
@@ -88,13 +93,14 @@ TEST_SUITE("AggregationSerialization") {
 
         b = a;
         b.cat_id = intern.get_or_insert("BBB");
-        auto ka = serialize_agg_key(0, AggMapType::EVENT, a);
-        auto kb = serialize_agg_key(0, AggMapType::EVENT, b);
+        auto ka = serialize_agg_key(0, AggMapType::EVENT, a, intern);
+        auto kb = serialize_agg_key(0, AggMapType::EVENT, b, intern);
         CHECK(ka < kb);
     }
 
     TEST_CASE("key uniqueness - different time_bucket") {
-        auto& intern = aggregation_intern();
+        auto table = make_intern_table();
+        auto& intern = table->intern;
         AggregationKey a, b;
         a.cat_id = intern.get_or_insert("AAA");
         a.name_id = intern.get_or_insert("aaa");
@@ -105,8 +111,8 @@ TEST_SUITE("AggregationSerialization") {
         b = a;
         b.time_bucket = 2000000;
 
-        auto ka = serialize_agg_key(0, AggMapType::EVENT, a);
-        auto kb = serialize_agg_key(0, AggMapType::EVENT, b);
+        auto ka = serialize_agg_key(0, AggMapType::EVENT, a, intern);
+        auto kb = serialize_agg_key(0, AggMapType::EVENT, b, intern);
         CHECK(ka != kb);
     }
 

@@ -166,9 +166,9 @@ MetricStats deserialize_metric_stats(BinaryReader& r, double accuracy) {
 }  // namespace
 
 void serialize_agg_key_into(std::string& out, std::uint32_t /*config_hash*/,
-                            AggMapType map_type, const AggregationKey& key) {
+                            AggMapType map_type, const AggregationKey& key,
+                            const StringIntern& intern) {
     out.clear();
-    auto& intern = aggregation_intern();
     auto cat = intern.resolve(key.cat_id);
     auto name = intern.resolve(key.name_id);
     put_be16(out, compute_shard(cat, name, key.pid, key.tid));
@@ -195,10 +195,9 @@ void serialize_agg_key_into(
     std::string& out, std::uint32_t /*config_hash*/, AggMapType map_type,
     std::string_view cat, std::string_view name, std::uint64_t pid,
     std::uint64_t tid, std::string_view hhash, std::string_view fhash,
-    std::uint64_t time_bucket,
+    std::uint64_t time_bucket, StringIntern& intern,
     const std::vector<std::pair<std::string_view, std::string_view>>*
         extra_keys) {
-    auto& intern = aggregation_intern();
     const std::uint16_t shard = compute_shard(cat, name, pid, tid);
     const std::uint16_t num_extra =
         extra_keys ? static_cast<std::uint16_t>(extra_keys->size()) : 0;
@@ -228,10 +227,11 @@ void serialize_agg_key_into(
 }
 
 std::string serialize_agg_key(std::uint32_t config_hash, AggMapType map_type,
-                              const AggregationKey& key) {
+                              const AggregationKey& key,
+                              const StringIntern& intern) {
     std::string out;
     out.reserve(47);
-    serialize_agg_key_into(out, config_hash, map_type, key);
+    serialize_agg_key_into(out, config_hash, map_type, key, intern);
     return out;
 }
 
@@ -418,16 +418,12 @@ AggregationMetrics deserialize_agg_value(std::string_view data) {
     return m;
 }
 
-namespace {
-std::atomic<std::uint32_t>& intern_flushed_watermark() {
-    static std::atomic<std::uint32_t> watermark{0};
-    return watermark;
-}
-}  // namespace
+namespace {}  // namespace
 
-void load_intern_dictionary(dftracer::utils::rocksdb::RocksDatabase& db) {
+void load_intern_dictionary(dftracer::utils::rocksdb::RocksDatabase& db,
+                            AggInternTable& table) {
     namespace rcf = dftracer::utils::rocksdb::cf;
-    auto& intern = aggregation_intern();
+    auto& intern = table.intern;
     auto it = db.new_iterator(rcf::AGGREGATION);
     for (it->Seek({AGG_INTERN_DICT_PREFIX, AGG_INTERN_DICT_PREFIX_LEN});
          it->Valid(); it->Next()) {
@@ -455,18 +451,19 @@ void load_intern_dictionary(dftracer::utils::rocksdb::RocksDatabase& db) {
             id, std::string_view(val_slice.data(), val_slice.size()));
     }
     // Everything just loaded is already on disk.
-    intern_flushed_watermark().store(
+    table.flushed_entries.store(
         static_cast<std::uint32_t>(intern.entry_count()),
         std::memory_order_relaxed);
 }
 
 void flush_intern_dictionary(
     dftracer::utils::rocksdb::RocksDatabase& db,
-    dftracer::utils::rocksdb::RocksDatabase::Batch& batch) {
+    dftracer::utils::rocksdb::RocksDatabase::Batch& batch,
+    AggInternTable& table) {
     namespace rcf = dftracer::utils::rocksdb::cf;
-    auto& intern = aggregation_intern();
+    auto& intern = table.intern;
     auto current = static_cast<std::uint32_t>(intern.entry_count());
-    auto flushed = intern_flushed_watermark().load(std::memory_order_relaxed);
+    auto flushed = table.flushed_entries.load(std::memory_order_relaxed);
     if (current <= flushed) return;
 
     for (std::uint32_t n = flushed; n < current; ++n) {
@@ -480,7 +477,7 @@ void flush_intern_dictionary(
 
     // CAS to advance watermark; another thread may have already advanced it
     while (flushed < current) {
-        if (intern_flushed_watermark().compare_exchange_weak(
+        if (table.flushed_entries.compare_exchange_weak(
                 flushed, current, std::memory_order_relaxed))
             break;
         if (flushed >= current) break;
@@ -488,10 +485,11 @@ void flush_intern_dictionary(
 }
 
 void flush_intern_dictionary(
-    dftracer::utils::utilities::indexer::IndexBatchSink& sink) {
-    auto& intern = aggregation_intern();
+    dftracer::utils::utilities::indexer::IndexBatchSink& sink,
+    AggInternTable& table) {
+    auto& intern = table.intern;
     auto current = static_cast<std::uint32_t>(intern.entry_count());
-    auto flushed = intern_flushed_watermark().load(std::memory_order_relaxed);
+    auto flushed = table.flushed_entries.load(std::memory_order_relaxed);
     if (current <= flushed) return;
 
     std::string key;
@@ -505,7 +503,7 @@ void flush_intern_dictionary(
     }
 
     while (flushed < current) {
-        if (intern_flushed_watermark().compare_exchange_weak(
+        if (table.flushed_entries.compare_exchange_weak(
                 flushed, current, std::memory_order_relaxed))
             break;
         if (flushed >= current) break;

@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/common/json/json_value.h>
 #include <dftracer/utils/utilities/common/query/query.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_map.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
@@ -34,6 +35,9 @@ struct ChunkAggregatorInput {
     std::size_t start_line = 0;
     std::size_t end_line = 0;
     AggregationConfig config;
+    /// Table the produced keys' ids belong to; shared with the aggregator the
+    /// output is merged into.
+    AggInternPtr intern;
     std::optional<common::query::Query> query;
     std::size_t checkpoint_size = 0;
     int chunk_index = 0;
@@ -42,6 +46,11 @@ struct ChunkAggregatorInput {
 
     ChunkAggregatorInput& with_file_path(const std::string& path) {
         file_path = path;
+        return *this;
+    }
+
+    ChunkAggregatorInput& with_intern(AggInternPtr table) {
+        intern = std::move(table);
         return *this;
     }
 

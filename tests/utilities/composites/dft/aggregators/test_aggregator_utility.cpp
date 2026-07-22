@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/pipeline/scheduler.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregator_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -84,21 +85,22 @@ TEST_SUITE("AggregatorUtility") {
         REQUIRE(event_batch != nullptr);
         REQUIRE(profile_batch != nullptr);
         REQUIRE(system_batch != nullptr);
+        const auto& intern = event_batch->strings();
 
         CHECK(event_batch->entries.size() == 1);
         CHECK(profile_batch->entries.size() == 1);
         CHECK(system_batch->entries.size() == 1);
 
         const auto& event_entry = event_batch->entries.front();
-        CHECK(event_entry.key.cat() == "posix");
-        CHECK(event_entry.key.name() == "read");
+        CHECK(event_entry.key.cat(intern) == "posix");
+        CHECK(event_entry.key.name(intern) == "read");
         CHECK(event_entry.metrics.count == 1);
         CHECK(event_entry.metrics.duration.total == 50);
         CHECK(event_entry.metrics.size.total == 64);
 
         const auto& profile_entry = profile_batch->entries.front();
-        CHECK(profile_entry.key.cat() == "profile");
-        CHECK(profile_entry.key.name() == "cpu_usage");
+        CHECK(profile_entry.key.cat(intern) == "profile");
+        CHECK(profile_entry.key.name(intern) == "cpu_usage");
         CHECK(profile_entry.metrics.count == 4);
         CHECK(profile_entry.metrics.duration.total == 80);
         CHECK(profile_entry.metrics.size.total == 400);
@@ -106,8 +108,8 @@ TEST_SUITE("AggregatorUtility") {
         CHECK((*profile_entry.metrics.custom_metrics)["bytes"].total == 1000);
 
         const auto& system_entry = system_batch->entries.front();
-        CHECK(system_entry.key.cat() == "sys");
-        CHECK(system_entry.key.name() == "mem_bw");
+        CHECK(system_entry.key.cat(intern) == "sys");
+        CHECK(system_entry.key.name(intern) == "mem_bw");
         CHECK(system_entry.metrics.count == 2);
         CHECK(system_entry.metrics.duration.total == 40);
         CHECK(system_entry.metrics.size.total == 600);

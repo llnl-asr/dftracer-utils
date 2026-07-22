@@ -367,7 +367,8 @@ coro::CoroTask<bool> open_chunk(ChunkState& st, const std::string& path,
             st.inline_index.aggregation =
                 std::make_unique<aggregators::AggregationVisitor>(
                     config.staging_root, "agg_" + std::to_string(batch_idx),
-                    /*config_hash=*/0u, agg_cfg, path);
+                    /*config_hash=*/0u, agg_cfg, path,
+                    aggregators::intern_for_index(config.staging_root));
         }
         DftEventDispatcher::VisitorList visitors;
         visitors.emplace_back(*st.inline_index.bloom);

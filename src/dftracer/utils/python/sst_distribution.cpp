@@ -671,12 +671,14 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     if (agg_config_ptr) {
         auto agg_staging = staging;
         auto agg_prefix = batch + "_agg";
+        auto agg_intern = dftracer::utils::utilities::composites::dft::
+            aggregators::intern_for_index(index_dir);
         // Counter keeps per-file SST dirs unique across duplicate file_paths
         // when one worker owns multiple slices of the same file.
         auto visitor_counter = std::make_shared<std::atomic<std::size_t>>(0);
         batch_config->dft_visitor_factory =
-            [agg_staging, agg_prefix, agg_config_ptr,
-             visitor_counter](const std::string &file_path)
+            [agg_staging, agg_prefix, agg_config_ptr, visitor_counter,
+             agg_intern](const std::string &file_path)
             -> std::vector<std::unique_ptr<
                 dftracer::utils::utilities::composites::dft::DftEventVisitor>> {
             using dftracer::utils::utilities::composites::dft::DftEventVisitor;
@@ -688,7 +690,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
             std::vector<std::unique_ptr<DftEventVisitor>> visitors;
             visitors.push_back(std::make_unique<AggregationVisitor>(
                 agg_staging, prefix, /*config_hash=*/0, *agg_config_ptr,
-                file_path));
+                file_path, agg_intern));
             return visitors;
         };
     }
@@ -821,8 +823,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
 static PyObject *enable_aggregation_deterministic_ids_fn(PyObject * /*self*/,
                                                          PyObject * /*args*/) {
     dftracer::utils::utilities::composites::dft::aggregators::
-        aggregation_intern()
-            .enable_deterministic_ids();
+        enable_deterministic_intern_ids();
     Py_RETURN_NONE;
 }
 

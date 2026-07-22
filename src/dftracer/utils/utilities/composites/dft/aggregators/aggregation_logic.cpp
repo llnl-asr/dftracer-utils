@@ -65,9 +65,8 @@ std::uint64_t compute_time_bucket(std::uint64_t timestamp,
 }
 
 AggregationKey build_aggregation_key(const DFTracerEvent& ev,
-                                     const AggregationConfig& config) {
-    auto& intern = aggregation_intern();
-
+                                     const AggregationConfig& config,
+                                     StringIntern& intern) {
     AggregationKey key;
     std::string cat_storage;
     key.cat_id =
@@ -105,7 +104,8 @@ AggregationKey build_aggregation_key(const DFTracerEvent& ev,
 void update_aggregation_entry(const DFTracerEvent& ev,
                               const AggregationConfig& config,
                               AggregationMap& aggregations,
-                              const AggregationKey& key) {
+                              const AggregationKey& key,
+                              const StringIntern& intern) {
     auto it = aggregations.find(key);
     if (it == aggregations.end()) {
         it = aggregations
@@ -162,7 +162,7 @@ void update_aggregation_entry(const DFTracerEvent& ev,
 
         auto ret = ev.args["ret"];
         if (ret.exists() &&
-            internal::is_data_transfer_op(key.cat(), key.name())) {
+            internal::is_data_transfer_op(key.cat(intern), key.name(intern))) {
             std::uint64_t size = ret.get<std::uint64_t>();
             metrics.update_size(size, config.compute_percentiles);
         }

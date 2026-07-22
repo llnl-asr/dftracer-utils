@@ -128,7 +128,9 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
     auto& db = *db_handle;
 
     // The intern dictionary must be populated before any key parsing happens.
-    agg::load_intern_dictionary(db);
+    auto intern_table = agg::intern_for_index(db_path);
+    agg::load_intern_dictionary(db, *intern_table);
+    const auto& intern = intern_table->intern;
 
     AggregatedTraces out;
 
@@ -163,7 +165,7 @@ AggregatedTraces load_aggregated_traces(const std::string& db_path,
         if (is_system_key(key_sv)) continue;
 
         agg::AggKeyView kv;
-        if (!agg::parse_agg_key_view(key_sv, kv)) continue;
+        if (!agg::parse_agg_key_view(key_sv, intern, kv)) continue;
 
         ComponentAccumulator* target = nullptr;
         if (matches(kv.cat, CATEGORY_DATALOADER) &&

@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_config.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/system_metrics.h>
 #include <dftracer/utils/utilities/composites/dft/dft_event_visitor.h>
@@ -29,7 +30,7 @@ class AggregationVisitor : public DftEventVisitor {
     /// `dftracer_aggregator.cpp`, `dftracer_organize.cpp`.
     AggregationVisitor(std::shared_ptr<rocksdb::RocksDatabase> db,
                        std::uint32_t config_hash, AggregationConfig config,
-                       std::string file_path);
+                       std::string file_path, AggInternPtr intern);
 
     /// Distributed mode: flush to a per-visitor SstWriterContext rooted at
     /// `staging_dir`. FLUSH_THRESHOLD emits partial SSTs (mixed Put+Merge)
@@ -44,7 +45,7 @@ class AggregationVisitor : public DftEventVisitor {
     /// per-file visitors never collide).
     AggregationVisitor(std::string staging_dir, std::string batch_id_prefix,
                        std::uint32_t config_hash, AggregationConfig config,
-                       std::string file_path);
+                       std::string file_path, AggInternPtr intern);
 
     void begin(std::size_t num_checkpoints) override;
     void on_checkpoint(std::size_t checkpoint_idx) override;
@@ -77,6 +78,7 @@ class AggregationVisitor : public DftEventVisitor {
     void handle_system_event(const EventRecord& record);
 
     // Legacy (RocksDatabase-backed) mode.
+    AggInternPtr intern_;
     std::shared_ptr<rocksdb::RocksDatabase> db_;
     std::vector<rocksdb::RocksDatabase::Batch> pending_batches_;
 

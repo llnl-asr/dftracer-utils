@@ -288,7 +288,7 @@ coro::CoroTask<bool> write_shard_events(
             //         pid(varint) tid(varint) hhash(varint ID) fhash(varint ID)
             //         time_bucket(varint) num_extra(2) [k(varint ID) v(varint
             //         ID)]*
-            auto& intern = aggregation_intern();
+            auto& intern = input->aggregator->intern();
             BinaryReader kr(key_bytes);
             kr.skip(2);     // shard
             (void)kr.u8();  // map_type

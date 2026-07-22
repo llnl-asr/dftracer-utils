@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_EVENT_AGGREGATOR_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_EVENT_AGGREGATOR_H
 
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
 
 #include <atomic>
@@ -24,6 +25,11 @@ class EventAggregator {
 
     EventAggregator(std::shared_ptr<rocksdb::RocksDatabase> db,
                     std::uint32_t config_hash);
+
+    /// The table its keys resolve against, shared with anything else holding
+    /// this index open.
+    const AggInternPtr& intern_table() const { return intern_; }
+    StringIntern& intern() const { return intern_->intern; }
 
     void merge_chunk(ChunkAggregationOutput&& chunk_output);
 
@@ -134,6 +140,7 @@ class EventAggregator {
     std::unordered_set<std::string> unique_files_;
 
     // RocksDB state
+    AggInternPtr intern_;
     std::shared_ptr<rocksdb::RocksDatabase> db_;
     std::uint32_t config_hash_ = 0;
     std::atomic<std::size_t> total_events_{0};

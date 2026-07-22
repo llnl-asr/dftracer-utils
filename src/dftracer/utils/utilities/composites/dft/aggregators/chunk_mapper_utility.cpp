@@ -21,6 +21,7 @@ ChunkAggregatorInput make_chunk_input(const FileChunkMapperInput& input,
         .with_line_range(start_line, end_line)
         .with_chunk_index(chunk_index)
         .with_config(input.config)
+        .with_intern(input.intern)
         .with_checkpoint_size(input.checkpoint_size)
         .with_batch_size(input.batch_size);
     chunk.query = input.query;

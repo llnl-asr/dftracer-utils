@@ -159,7 +159,7 @@ static coro::CoroTask<void> process_file_task(
     std::string file_path, coro::ChannelProducer<ChunkAggregatorInput> ch,
     std::string index_dir, std::size_t checkpoint_size, bool force_rebuild,
     AggregationConfig agg_config, std::optional<common::query::Query> query,
-    std::atomic<int>* global_chunk_idx_ptr) {
+    std::atomic<int>* global_chunk_idx_ptr, AggInternPtr intern) {
     constexpr std::size_t CHUNK_SIZE_MB = 4;
     constexpr std::size_t BATCH_SIZE_MB = 4;
 
@@ -185,6 +185,7 @@ static coro::CoroTask<void> process_file_task(
     FileChunkMapperUtility file_mapper;
     auto mapper_input = FileChunkMapperInput::from_metadata(metadata)
                             .with_config(agg_config)
+                            .with_intern(intern)
                             .with_checkpoint_size(checkpoint_size)
                             .with_target_chunk_size(CHUNK_SIZE_MB)
                             .with_batch_size(BATCH_SIZE_MB * 1024 * 1024);
@@ -236,15 +237,17 @@ static coro::CoroTask<EventAggregatorOutput> run_aggregation(
 
         for (const auto& file_path : input_files) {
             auto* global_chunk_idx_ptr = &global_chunk_idx;
-            scope.spawn([file_path, ch = chunk_chan->producer(), index_dir,
-                         checkpoint_size, force_rebuild, agg_config, query,
-                         global_chunk_idx_ptr](CoroScope& /*fctx*/) mutable
-                            -> coro::CoroTask<void> {
-                co_await process_file_task(
-                    std::move(file_path), std::move(ch), std::move(index_dir),
-                    checkpoint_size, force_rebuild, std::move(agg_config),
-                    std::move(query), global_chunk_idx_ptr);
-            });
+            scope.spawn(
+                [file_path, ch = chunk_chan->producer(), index_dir,
+                 checkpoint_size, force_rebuild, agg_config, query,
+                 global_chunk_idx_ptr, intern = merger.intern_table()](
+                    CoroScope& /*fctx*/) mutable -> coro::CoroTask<void> {
+                    co_await process_file_task(
+                        std::move(file_path), std::move(ch),
+                        std::move(index_dir), checkpoint_size, force_rebuild,
+                        std::move(agg_config), std::move(query),
+                        global_chunk_idx_ptr, std::move(intern));
+                });
         }
 
         for (std::size_t w = 0; w < executor_threads; ++w) {
@@ -659,8 +662,10 @@ static int run_comparator(const ComparatorArgParse* cli) {
                         auto v_files =
                             variant_results[0][0].total_files_processed;
                         output.baseline_meta = extract_metadata(
+                            baseline_results[ni][vi].strings(),
                             baseline_results[ni][vi].aggregations, b_files);
                         output.variant_meta = extract_metadata(
+                            variant_results[ni][vi].strings(),
                             variant_results[ni][vi].aggregations, v_files);
                     }
 

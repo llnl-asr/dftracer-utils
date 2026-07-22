@@ -39,7 +39,7 @@ coro::CoroTask<indexer::IndexBuildBatchResult> batch_index_and_aggregate(
     std::string index_dir, std::size_t checkpoint_size, bool force_rebuild,
     std::size_t parallelism, AggregationConfig agg_config,
     std::shared_ptr<::dftracer::utils::rocksdb::RocksDatabase> agg_db,
-    std::uint32_t config_hash) {
+    std::uint32_t config_hash, AggInternPtr intern) {
     auto batch_config = std::make_shared<indexer::IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(file_paths);
     batch_config->index_dir = std::move(index_dir);
@@ -50,12 +50,12 @@ coro::CoroTask<indexer::IndexBuildBatchResult> batch_index_and_aggregate(
 
     auto agg_config_ptr =
         std::make_shared<AggregationConfig>(std::move(agg_config));
-    batch_config->dft_visitor_factory =
-        [agg_db, config_hash, agg_config_ptr](const std::string& file_path)
+    batch_config->dft_visitor_factory = [agg_db, config_hash, agg_config_ptr,
+                                         intern](const std::string& file_path)
         -> std::vector<std::unique_ptr<composites::dft::DftEventVisitor>> {
         std::vector<std::unique_ptr<composites::dft::DftEventVisitor>> visitors;
         visitors.push_back(std::make_unique<AggregationVisitor>(
-            agg_db, config_hash, *agg_config_ptr, file_path));
+            agg_db, config_hash, *agg_config_ptr, file_path, intern));
         return visitors;
     };
 
@@ -289,7 +289,8 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
                         &scope, files_to_process, input.index_dir,
                         input.checkpoint_size, input.force_rebuild,
                         input.pipeline_config.executor_threads,
-                        input.agg_config, agg_db, config_hash);
+                        input.agg_config, agg_db, config_hash,
+                        merger->intern_table());
 
                     {
                         ::dftracer::utils::ScopedTimer _vd(stages,
@@ -342,6 +343,7 @@ coro::CoroTask<Result<AggregationRunResult>> run_aggregation(
                                                        "arrow_scan_write");
                     constexpr std::size_t BATCH_ROWS = 10000;
                     AggregationBatch batch;
+                    batch.intern = merger->intern_table();
                     batch.entries.reserve(BATCH_ROWS);
                     batch.global_extra_key_ids = &global_extra_key_ids;
                     batch.global_custom_metric_names =

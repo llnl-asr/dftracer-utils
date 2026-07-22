@@ -39,7 +39,7 @@ std::unique_ptr<AggDbHandle> open_agg_db(const std::string& index_path,
             index_path,
             dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
         if (db && db->is_open()) {
-            load_intern_dictionary(*db);
+            load_intern_dictionary(*db, *intern_for_index(index_path));
         }
     }
     if (!db || !db->is_open()) {
@@ -88,7 +88,8 @@ AggScanOutput scan_aggregation_shard_range(AggScanInput input) {
         input.shard_begin, input.shard_end,
         [&](std::string_view key_bytes, std::string_view val_bytes) -> bool {
             AggKeyView kv;
-            if (!parse_agg_key_view(key_bytes, kv)) return true;
+            if (!parse_agg_key_view(key_bytes, input.agg->intern(), kv))
+                return true;
             if (kv.map_type != input.target_type) return true;
 
             AggMetricsFullView mv;
@@ -768,7 +769,8 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
         input.shard_begin, input.shard_end,
         [&](std::string_view key_bytes, std::string_view val_bytes) -> bool {
             AggKeyView kv;
-            if (!parse_agg_key_view(key_bytes, kv)) return true;
+            if (!parse_agg_key_view(key_bytes, input.agg->intern(), kv))
+                return true;
 
             if (input.type_filter && kv.map_type != *input.type_filter)
                 return true;

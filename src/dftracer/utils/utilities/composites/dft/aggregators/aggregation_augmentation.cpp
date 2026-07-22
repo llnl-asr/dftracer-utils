@@ -49,6 +49,7 @@ AggregationBatch shrink_batch(const AggregationBatch& input,
                               std::uint64_t target_interval_us) {
     AggregationBatch result;
     result.batch_type = input.batch_type;
+    result.intern = input.intern;
     result.total_events_processed = input.total_events_processed;
     result.total_files_processed = input.total_files_processed;
     result.total_bytes_processed = input.total_bytes_processed;
@@ -98,6 +99,7 @@ AggregationBatch expand_batch(const AggregationBatch& input,
                               std::uint64_t target_interval_us) {
     AggregationBatch result;
     result.batch_type = input.batch_type;
+    result.intern = input.intern;
     result.total_events_processed = input.total_events_processed;
     result.total_files_processed = input.total_files_processed;
     result.total_bytes_processed = input.total_bytes_processed;
@@ -250,6 +252,7 @@ AggregationBatch augment_batch(const AggregationBatch& input,
     if (config.source_interval_us == config.target_interval_us) {
         AggregationBatch result;
         result.batch_type = input.batch_type;
+        result.intern = input.intern;
         result.total_events_processed = input.total_events_processed;
         result.total_files_processed = input.total_files_processed;
         result.total_bytes_processed = input.total_bytes_processed;

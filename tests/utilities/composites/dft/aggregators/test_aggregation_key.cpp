@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
 #include <doctest/doctest.h>
 
@@ -12,7 +13,8 @@ static AggregationKey make_key(
     std::string_view hhash = "hh1", std::string_view fhash = "fh1",
     std::uint64_t time_bucket = 0,
     std::vector<std::pair<std::string_view, std::string_view>> extra = {}) {
-    auto& intern = aggregation_intern();
+    static auto table = make_intern_table();
+    auto& intern = table->intern;
     AggregationKey k;
     k.cat_id = intern.get_or_insert(cat);
     k.name_id = intern.get_or_insert(name);

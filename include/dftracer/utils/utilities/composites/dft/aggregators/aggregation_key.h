@@ -11,11 +11,6 @@
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
-inline StringIntern& aggregation_intern() {
-    static StringIntern intern;
-    return intern;
-}
-
 struct AggregationKey {
     std::uint32_t cat_id = 0;
     std::uint32_t name_id = 0;
@@ -92,19 +87,18 @@ struct AggregationKey {
     AggregationKey(AggregationKey&&) = default;
     AggregationKey& operator=(AggregationKey&&) = default;
 
-    std::string_view cat() const {
-        return aggregation_intern().resolve(cat_id);
+    // Ids are meaningless without the table that issued them.
+    std::string_view cat(const StringIntern& intern) const {
+        return intern.resolve(cat_id);
     }
-    std::string_view name() const {
-        return aggregation_intern().resolve(name_id);
+    std::string_view name(const StringIntern& intern) const {
+        return intern.resolve(name_id);
     }
-    std::string_view hhash() const {
-        return hhash_id ? aggregation_intern().resolve(hhash_id)
-                        : std::string_view{};
+    std::string_view hhash(const StringIntern& intern) const {
+        return hhash_id ? intern.resolve(hhash_id) : std::string_view{};
     }
-    std::string_view fhash() const {
-        return fhash_id ? aggregation_intern().resolve(fhash_id)
-                        : std::string_view{};
+    std::string_view fhash(const StringIntern& intern) const {
+        return fhash_id ? intern.resolve(fhash_id) : std::string_view{};
     }
 };
 

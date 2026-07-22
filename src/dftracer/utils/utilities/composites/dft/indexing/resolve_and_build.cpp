@@ -131,13 +131,14 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         // Attach AggregationVisitor if aggregation is required
         if (agg_db && agg_config_ptr) {
             batch_config->dft_visitor_factory =
-                [agg_db, agg_config_ptr](const std::string& file_path)
+                [agg_db, agg_config_ptr,
+                 intern = merger->intern_table()](const std::string& file_path)
                 -> std::vector<
                     std::unique_ptr<composites::dft::DftEventVisitor>> {
                 std::vector<std::unique_ptr<composites::dft::DftEventVisitor>>
                     visitors;
                 visitors.push_back(std::make_unique<AggregationVisitor>(
-                    agg_db, 0, *agg_config_ptr, file_path));
+                    agg_db, 0, *agg_config_ptr, file_path, intern));
                 return visitors;
             };
         }

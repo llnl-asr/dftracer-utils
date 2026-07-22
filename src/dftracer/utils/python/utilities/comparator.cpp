@@ -159,7 +159,8 @@ CoroTask<EventAggregatorOutput> run_aggregation(
                     auto *global_chunk_idx_ptr = &global_chunk_idx;
                     scope.spawn([file_path, ch = chunk_chan->producer(),
                                  index_dir, checkpoint_size, force_rebuild,
-                                 agg_config, query, global_chunk_idx_ptr](
+                                 agg_config, query, global_chunk_idx_ptr,
+                                 intern = merger.intern_table()](
                                     CoroScope & /*fctx*/) mutable
                                     -> CoroTask<void> {
                         [[maybe_unused]] auto producer_guard = ch.guard();
@@ -186,6 +187,7 @@ CoroTask<EventAggregatorOutput> run_aggregation(
                         auto mapper_input =
                             FileChunkMapperInput::from_metadata(metadata)
                                 .with_config(agg_config)
+                                .with_intern(intern)
                                 .with_checkpoint_size(checkpoint_size)
                                 .with_target_chunk_size(CHUNK_SIZE_MB)
                                 .with_batch_size(BATCH_SIZE_MB * 1024 * 1024);
@@ -464,9 +466,11 @@ static bool run_comparison_pipeline(ComparatorObject *self,
                         output_ptr->baseline_file_count = b_files_actual;
                         output_ptr->variant_file_count = v_files_actual;
                         output_ptr->baseline_meta = extract_metadata(
-                            base_result.aggregations, b_files_actual);
+                            base_result.strings(), base_result.aggregations,
+                            b_files_actual);
                         output_ptr->variant_meta = extract_metadata(
-                            var_result.aggregations, v_files_actual);
+                            var_result.strings(), var_result.aggregations,
+                            v_files_actual);
                         metadata_set = true;
                     }
 

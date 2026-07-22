@@ -1058,8 +1058,7 @@ int run(int argc, char** argv) {
 
     // Deterministic hash-based intern ids so the same string maps to the
     // same id on every rank, keeping cross-rank aggregation keys identical.
-    composites::dft::aggregators::aggregation_intern()
-        .enable_deterministic_ids();
+    composites::dft::aggregators::enable_deterministic_intern_ids();
 
     ctx.index_dir = cli.indexing.index_dir;
     if (ctx.index_dir.empty())

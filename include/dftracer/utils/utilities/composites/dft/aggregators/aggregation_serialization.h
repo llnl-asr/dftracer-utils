@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_SERIALIZATION_H
 
 #include <dftracer/utils/core/rocksdb/database.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_output.h>
 
 #include <cmath>
@@ -107,17 +108,19 @@ inline std::string make_agg_file_key(std::int32_t file_id) {
 }
 
 void serialize_agg_key_into(std::string& out, std::uint32_t config_hash,
-                            AggMapType map_type, const AggregationKey& key);
+                            AggMapType map_type, const AggregationKey& key,
+                            const StringIntern& intern);
 
 void serialize_agg_key_into(
     std::string& out, std::uint32_t config_hash, AggMapType map_type,
     std::string_view cat, std::string_view name, std::uint64_t pid,
     std::uint64_t tid, std::string_view hhash, std::string_view fhash,
-    std::uint64_t time_bucket,
+    std::uint64_t time_bucket, StringIntern& intern,
     const std::vector<std::pair<std::string_view, std::string_view>>*
         extra_keys = nullptr);
 std::string serialize_agg_key(std::uint32_t config_hash, AggMapType map_type,
-                              const AggregationKey& key);
+                              const AggregationKey& key,
+                              const StringIntern& intern);
 
 struct DeserializedAggKey {
     std::uint32_t config_hash;
@@ -127,7 +130,7 @@ struct DeserializedAggKey {
 DeserializedAggKey deserialize_agg_key(std::string_view data);
 
 /// Key view with resolved strings from the intern table.
-/// Lifetime: valid as long as aggregation_intern() exists (process lifetime).
+/// Lifetime: valid as long as the table that resolved them.
 struct AggKeyView {
     AggMapType map_type;
     std::string_view cat;
@@ -155,7 +158,8 @@ inline std::uint64_t decode_varint(const std::uint8_t*& p,
 
 /// Parse aggregation key: reads varint intern IDs and resolves to strings.
 /// Returns false if parsing fails.
-inline bool parse_agg_key_view(std::string_view data, AggKeyView& out) {
+inline bool parse_agg_key_view(std::string_view data,
+                               const StringIntern& intern, AggKeyView& out) {
     if (data.size() < 6) return false;
 
     const auto* p = reinterpret_cast<const std::uint8_t*>(data.data());
@@ -167,7 +171,6 @@ inline bool parse_agg_key_view(std::string_view data, AggKeyView& out) {
 
     auto read_varint = [&]() { return decode_varint(p, end); };
 
-    auto& intern = aggregation_intern();
     auto cat_id = static_cast<std::uint32_t>(read_varint());
     auto name_id = static_cast<std::uint32_t>(read_varint());
     out.pid = read_varint();
@@ -358,13 +361,15 @@ inline bool parse_agg_value_full_view(std::string_view data,
     return true;
 }
 
-/// Load intern dictionary from RocksDB into aggregation_intern().
-void load_intern_dictionary(dftracer::utils::rocksdb::RocksDatabase& db);
+/// Load an index's intern dictionary into `table`.
+void load_intern_dictionary(dftracer::utils::rocksdb::RocksDatabase& db,
+                            AggInternTable& table);
 
 /// Flush any new intern entries to RocksDB as 0xFFFD keys.
 void flush_intern_dictionary(
     dftracer::utils::rocksdb::RocksDatabase& db,
-    dftracer::utils::rocksdb::RocksDatabase::Batch& batch);
+    dftracer::utils::rocksdb::RocksDatabase::Batch& batch,
+    AggInternTable& table);
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators
 
@@ -378,7 +383,8 @@ namespace dftracer::utils::utilities::composites::dft::aggregators {
 /// `IndexBatchSink::insert_aggregation_put`. Used by the distributed SST
 /// pipeline where the visitor writes to an SST instead of a live DB.
 void flush_intern_dictionary(
-    dftracer::utils::utilities::indexer::IndexBatchSink& sink);
+    dftracer::utils::utilities::indexer::IndexBatchSink& sink,
+    AggInternTable& table);
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators
 

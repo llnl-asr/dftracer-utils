@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/chunk_aggregator_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -48,6 +49,8 @@ TEST_SUITE("ChunkAggregatorUtility") {
         input.checkpoint_size = 32 * 1024 * 1024;
         input.chunk_index = 0;
         input.config = config;
+        input.intern = make_intern_table();
+        auto& intern = input.intern->intern;
 
         auto output = ChunkAggregatorUtility{}.process(input).get();
 
@@ -56,8 +59,8 @@ TEST_SUITE("ChunkAggregatorUtility") {
 
         REQUIRE(output.aggregations.size() == 1);
         const auto& [event_key, event_metrics] = *output.aggregations.begin();
-        CHECK(event_key.cat() == "posix");
-        CHECK(event_key.name() == "read");
+        CHECK(event_key.cat(intern) == "posix");
+        CHECK(event_key.name(intern) == "read");
         CHECK(event_metrics.count == 1);
         CHECK(event_metrics.duration.total == 50);
         CHECK(event_metrics.size.total == 64);
@@ -68,8 +71,8 @@ TEST_SUITE("ChunkAggregatorUtility") {
         REQUIRE(output.profile_aggregations.size() == 1);
         const auto& [profile_key, profile_metrics] =
             *output.profile_aggregations.begin();
-        CHECK(profile_key.cat() == "profile");
-        CHECK(profile_key.name() == "cpu_usage");
+        CHECK(profile_key.cat(intern) == "profile");
+        CHECK(profile_key.name(intern) == "cpu_usage");
         CHECK(profile_metrics.count == 4);
         CHECK(profile_metrics.duration.total == 80);
         CHECK(profile_metrics.duration.min == 10);
@@ -87,8 +90,8 @@ TEST_SUITE("ChunkAggregatorUtility") {
         REQUIRE(output.system_aggregations.size() == 1);
         const auto& [system_key, system_metrics] =
             *output.system_aggregations.begin();
-        CHECK(system_key.cat() == "sys");
-        CHECK(system_key.name() == "mem_bw");
+        CHECK(system_key.cat(intern) == "sys");
+        CHECK(system_key.name(intern) == "mem_bw");
         CHECK(system_metrics.count == 2);
         CHECK(system_metrics.duration.total == 40);
         CHECK(system_metrics.duration.mean == doctest::Approx(20.0));
@@ -125,6 +128,8 @@ TEST_SUITE("ChunkAggregatorUtility") {
         input.checkpoint_size = 32 * 1024 * 1024;
         input.chunk_index = 1;
         input.config = config;
+        input.intern = make_intern_table();
+        auto& intern = input.intern->intern;
         input.query = dftracer::utils::utilities::common::query::parse_or_throw(
             R"(cat == "PROFILE")");
 

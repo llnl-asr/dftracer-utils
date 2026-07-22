@@ -16,12 +16,14 @@ std::uint64_t compute_time_bucket(std::uint64_t timestamp,
                                   const AggregationConfig& config);
 
 AggregationKey build_aggregation_key(const DFTracerEvent& ev,
-                                     const AggregationConfig& config);
+                                     const AggregationConfig& config,
+                                     StringIntern& intern);
 
 void update_aggregation_entry(const DFTracerEvent& ev,
                               const AggregationConfig& config,
                               AggregationMap& aggregations,
-                              const AggregationKey& key);
+                              const AggregationKey& key,
+                              const StringIntern& intern);
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators
 

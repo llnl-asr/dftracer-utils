@@ -130,8 +130,8 @@ ArrowExportResult AggregationBatch::to_arrow() const {
         schema.push_back({"count_ci_upper", ColumnType::DOUBLE});
     }
     for (auto id : extra_key_ids) {
-        schema.push_back({std::string(aggregation_intern().resolve(id)),
-                          ColumnType::STRING});
+        schema.push_back(
+            {std::string(strings().resolve(id)), ColumnType::STRING});
     }
     // Custom metric suffixed names
     struct MetricSuffix {
@@ -161,12 +161,12 @@ ArrowExportResult AggregationBatch::to_arrow() const {
         const auto& metrics = entry.metrics;
         std::size_t ci = 0;
         builder.append_int64(ci++, static_cast<int64_t>(batch_type));
-        builder.append_string(ci++, key.cat());
-        builder.append_string(ci++, key.name());
+        builder.append_string(ci++, key.cat(strings()));
+        builder.append_string(ci++, key.name(strings()));
         builder.append_uint64(ci++, key.pid);
         builder.append_uint64(ci++, key.tid);
-        builder.append_string(ci++, key.hhash());
-        builder.append_string(ci++, key.fhash());
+        builder.append_string(ci++, key.hhash(strings()));
+        builder.append_string(ci++, key.fhash(strings()));
         builder.append_uint64(ci++, key.time_bucket);
         builder.append_uint64(ci++, metrics.count);
         builder.append_uint64(ci++, metrics.duration.total);
@@ -188,8 +188,8 @@ ArrowExportResult AggregationBatch::to_arrow() const {
             if (key.extra_keys) {
                 for (const auto& [present_id, value_id] : *key.extra_keys) {
                     if (present_id == extra_key_id) {
-                        builder.append_string(
-                            ci++, aggregation_intern().resolve(value_id));
+                        builder.append_string(ci++,
+                                              strings().resolve(value_id));
                         found_extra_key = true;
                         break;
                     }
@@ -318,7 +318,7 @@ ArrowExportResult AggregationBatch::to_dfanalyzer_arrow(
             const auto& metrics = entry.metrics;
             std::size_t ci = 0;
 
-            builder.append_string(ci++, key.hhash());
+            builder.append_string(ci++, key.hhash(strings()));
             auto time_range =
                 bucket_width_us > 0
                     ? static_cast<std::int64_t>(
@@ -386,16 +386,16 @@ ArrowExportResult AggregationBatch::to_dfanalyzer_arrow(
             const auto& metrics = entry.metrics;
             std::size_t ci = 0;
 
-            auto fhash = key.fhash();
-            auto hhash = key.hhash();
+            auto fhash = key.fhash(strings());
+            auto hhash = key.hhash(strings());
             auto file_name = resolve_hash(ctx.file_hashes, fhash);
             auto host_name = resolve_hash(ctx.host_hashes, hhash);
             auto proc_name =
                 build_proc_name(host_name, hhash, key.pid, key.tid);
-            auto io_cat = get_io_category(key.name());
+            auto io_cat = get_io_category(key.name(strings()));
 
-            builder.append_string(ci++, key.cat());
-            builder.append_string(ci++, key.name());
+            builder.append_string(ci++, key.cat(strings()));
+            builder.append_string(ci++, key.name(strings()));
             builder.append_int64(ci++, static_cast<std::int64_t>(key.pid));
             builder.append_int64(ci++, static_cast<std::int64_t>(key.tid));
             builder.append_string(ci++, fhash);
@@ -553,12 +553,13 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
 
         // Attach AggregationVisitor to each file during parsing
         batch_config->dft_visitor_factory =
-            [agg_db, agg_config_ptr](const std::string& file_path)
+            [agg_db, agg_config_ptr,
+             intern = merger->intern_table()](const std::string& file_path)
             -> std::vector<std::unique_ptr<composites::dft::DftEventVisitor>> {
             std::vector<std::unique_ptr<composites::dft::DftEventVisitor>>
                 visitors;
             visitors.push_back(std::make_unique<AggregationVisitor>(
-                agg_db, 0, *agg_config_ptr, file_path));
+                agg_db, 0, *agg_config_ptr, file_path, intern));
             return visitors;
         };
 
@@ -598,6 +599,7 @@ coro::AsyncGenerator<AggregationBatch> AggregatorUtility::process(
     auto make_batch = [&](AggregationBatchType type) {
         AggregationBatch b;
         b.batch_type = type;
+        b.intern = merger->intern_table();
         b.total_events_processed = total_events;
         b.total_files_processed = total_files;
         b.global_extra_key_ids = global_extra_key_ids.get();

@@ -362,12 +362,14 @@ static coro::CoroTask<void> run_group_indexing(
     if (agg_config) {
         auto agg_config_ptr = std::make_shared<AggregationConfig>(*agg_config);
         batch_config->dft_visitor_factory =
-            [agg_db, agg_config_ptr](const std::string& file_path)
+            [agg_db, agg_config_ptr,
+             intern = merger->intern_table()](const std::string& file_path)
             -> std::vector<std::unique_ptr<composites::dft::DftEventVisitor>> {
             std::vector<std::unique_ptr<composites::dft::DftEventVisitor>>
                 visitors;
             visitors.push_back(std::make_unique<AggregationVisitor>(
-                agg_db, /*config_hash=*/0u, *agg_config_ptr, file_path));
+                agg_db, /*config_hash=*/0u, *agg_config_ptr, file_path,
+                intern));
             return visitors;
         };
         auto* merger_ptr = merger.get();

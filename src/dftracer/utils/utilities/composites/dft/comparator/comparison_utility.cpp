@@ -33,11 +33,12 @@ double vec_mean(const std::vector<double>& v) {
 // Merge entries from a CollapsedMap into a single CollapsedMetrics.
 // If cat_filter is non-empty, only include entries matching that cat.
 CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
+                                 const StringIntern& intern,
                                  std::string_view cat_filter = "") {
     CollapsedMetrics total;
     std::vector<double> counts, dur_means, size_means, xfers, bws;
     for (const auto& [key, entry] : cm) {
-        if (!cat_filter.empty() && key.cat() != cat_filter) continue;
+        if (!cat_filter.empty() && key.cat(intern) != cat_filter) continue;
         total.merged.merge_from(entry.merged);
         counts.push_back(entry.count_mean);
         dur_means.push_back(entry.dur_mean_of_means);
@@ -55,12 +56,14 @@ CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
     return total;
 }
 
-CollapsedMetrics merge_all(const CollapsedMap& cm) {
-    return merge_collapsed(cm);
+CollapsedMetrics merge_all(const CollapsedMap& cm, const StringIntern& intern) {
+    return merge_collapsed(cm, intern);
 }
 
-CollapsedMetrics merge_by_cat(const CollapsedMap& cm, std::string_view cat) {
-    return merge_collapsed(cm, cat);
+CollapsedMetrics merge_by_cat(const CollapsedMap& cm,
+                              const StringIntern& intern,
+                              std::string_view cat) {
+    return merge_collapsed(cm, intern, cat);
 }
 
 double worst_regression(const std::vector<MetricComparison>& metrics) {
@@ -97,6 +100,7 @@ GroupComparison make_group(std::string_view label,
 static std::map<std::string_view, std::vector<GroupComparison>>
 build_per_cat_groups(const CollapsedMap& base_collapsed,
                      const CollapsedMap& var_collapsed,
+                     const StringIntern& intern,
                      const std::vector<std::string>& metrics,
                      const std::vector<double>& percentiles) {
     static const CollapsedMetrics EMPTY{};
@@ -119,10 +123,10 @@ build_per_cat_groups(const CollapsedMap& base_collapsed,
             (var_it != var_collapsed.end()) ? var_it->second : EMPTY;
 
         GroupComparison gc = make_group(
-            key.name(), base_cm, var_cm, base_it != base_collapsed.end(),
+            key.name(intern), base_cm, var_cm, base_it != base_collapsed.end(),
             var_it != var_collapsed.end(), metrics, percentiles);
 
-        by_cat[key.cat()].push_back(std::move(gc));
+        by_cat[key.cat(intern)].push_back(std::move(gc));
     }
 
     return by_cat;
@@ -131,10 +135,16 @@ build_per_cat_groups(const CollapsedMap& base_collapsed,
 std::vector<GroupComparison> ComparisonUtility::join_visitor(
     const ComparisonVisitorPair& pair) const {
     // Kept for compatibility; not used in the new build_result_tree path.
-    auto base_collapsed = collapse_by_group(pair.baseline.aggregations);
-    auto var_collapsed = collapse_by_group(pair.variant.aggregations);
+    // Baseline and variant come from different indexes, so their ids only
+    // become comparable once collapsed into one table.
+    auto table = aggregators::make_intern_table();
+    auto& intern = table->intern;
+    auto base_collapsed = collapse_by_group(pair.baseline.aggregations,
+                                            pair.baseline.strings(), intern);
+    auto var_collapsed = collapse_by_group(pair.variant.aggregations,
+                                           pair.variant.strings(), intern);
 
-    auto by_cat = build_per_cat_groups(base_collapsed, var_collapsed,
+    auto by_cat = build_per_cat_groups(base_collapsed, var_collapsed, intern,
                                        pair.node.resolved_metrics,
                                        pair.node.resolved_percentiles);
 
@@ -149,11 +159,17 @@ std::vector<GroupComparison> ComparisonUtility::join_visitor(
 
 GroupComparison ComparisonUtility::build_summary(
     const ComparisonVisitorPair& pair) const {
-    auto base_collapsed = collapse_by_group(pair.baseline.aggregations);
-    auto var_collapsed = collapse_by_group(pair.variant.aggregations);
+    // Baseline and variant come from different indexes, so their ids only
+    // become comparable once collapsed into one table.
+    auto table = aggregators::make_intern_table();
+    auto& intern = table->intern;
+    auto base_collapsed = collapse_by_group(pair.baseline.aggregations,
+                                            pair.baseline.strings(), intern);
+    auto var_collapsed = collapse_by_group(pair.variant.aggregations,
+                                           pair.variant.strings(), intern);
 
-    CollapsedMetrics base_total = merge_all(base_collapsed);
-    CollapsedMetrics var_total = merge_all(var_collapsed);
+    CollapsedMetrics base_total = merge_all(base_collapsed, intern);
+    CollapsedMetrics var_total = merge_all(var_collapsed, intern);
 
     GroupComparison summary;
     summary.label = "";
@@ -196,15 +212,21 @@ NodeResult ComparisonUtility::build_result_tree(
     std::size_t& visitor_index) const {
     const ComparisonVisitorPair& pair = visitors[visitor_index++];
 
-    auto base_collapsed = collapse_by_group(pair.baseline.aggregations);
-    auto var_collapsed = collapse_by_group(pair.variant.aggregations);
+    // Baseline and variant come from different indexes, so their ids only
+    // become comparable once collapsed into one table.
+    auto table = aggregators::make_intern_table();
+    auto& intern = table->intern;
+    auto base_collapsed = collapse_by_group(pair.baseline.aggregations,
+                                            pair.baseline.strings(), intern);
+    auto var_collapsed = collapse_by_group(pair.variant.aggregations,
+                                           pair.variant.strings(), intern);
 
     const auto& metrics = pair.node.resolved_metrics;
     const auto& percentiles = pair.node.resolved_percentiles;
 
     // Root summary: merge everything.
-    CollapsedMetrics base_total = merge_all(base_collapsed);
-    CollapsedMetrics var_total = merge_all(var_collapsed);
+    CollapsedMetrics base_total = merge_all(base_collapsed, intern);
+    CollapsedMetrics var_total = merge_all(var_collapsed, intern);
 
     NodeResult result;
     result.name = node.name;
@@ -220,8 +242,8 @@ NodeResult ComparisonUtility::build_result_tree(
     result.summary.worst_pct_change = worst_regression(result.summary.metrics);
 
     // Build per-category children.
-    auto by_cat = build_per_cat_groups(base_collapsed, var_collapsed, metrics,
-                                       percentiles);
+    auto by_cat = build_per_cat_groups(base_collapsed, var_collapsed, intern,
+                                       metrics, percentiles);
 
     for (auto& [cat, cat_groups] : by_cat) {
         NodeResult child;
@@ -230,8 +252,8 @@ NodeResult ComparisonUtility::build_result_tree(
         child.group_by = node.group_by;
 
         // Category summary: merge all entries for this cat.
-        CollapsedMetrics base_cat = merge_by_cat(base_collapsed, cat);
-        CollapsedMetrics var_cat = merge_by_cat(var_collapsed, cat);
+        CollapsedMetrics base_cat = merge_by_cat(base_collapsed, intern, cat);
+        CollapsedMetrics var_cat = merge_by_cat(var_collapsed, intern, cat);
 
         child.summary.label = "";
         child.summary.baseline_present =

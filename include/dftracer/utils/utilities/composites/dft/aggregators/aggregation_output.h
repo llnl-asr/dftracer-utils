@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_OUTPUT_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_OUTPUT_H
 
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_map.h>
 
 #include <cstddef>
@@ -45,6 +46,8 @@ struct ChunkAggregationOutput {
 };
 
 struct EventAggregatorOutput {
+    /// The table the keys' string ids belong to.
+    AggInternPtr intern;
     AggregationMap aggregations;
     AggregationMap profile_aggregations;
     AggregationMap system_aggregations;
@@ -53,6 +56,14 @@ struct EventAggregatorOutput {
     std::size_t total_bytes_processed = 0;
     std::vector<std::shared_ptr<AssociationTracker>> trackers;
     bool success = true;
+
+    const StringIntern& strings() const {
+        if (!intern) {
+            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                    "aggregation output has no intern table");
+        }
+        return intern->intern;
+    }
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::aggregators

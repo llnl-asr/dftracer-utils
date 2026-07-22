@@ -184,12 +184,16 @@ using CollapsedMap =
 
 /// Extract trace metadata (unique PIDs, TIDs, makespan) from raw
 /// aggregation output.
-TraceMetadata extract_metadata(const AggregationMap& aggregations,
+TraceMetadata extract_metadata(const StringIntern& intern,
+                               const AggregationMap& aggregations,
                                std::size_t file_count);
 
 /// Collapse aggregation output by grouping on (category, name) and
 /// merging across time windows.
-CollapsedMap collapse_by_group(const AggregationMap& aggregations);
+/// `src` resolves the input keys; the collapsed keys are interned into `dst`,
+/// so two runs collapsed against one `dst` are comparable.
+CollapsedMap collapse_by_group(const AggregationMap& aggregations,
+                               const StringIntern& src, StringIntern& dst);
 
 /// Compute Cohen's d effect size from two MetricStats with sample
 /// counts.

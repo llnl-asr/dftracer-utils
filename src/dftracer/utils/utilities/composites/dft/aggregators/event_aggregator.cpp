@@ -17,12 +17,14 @@ namespace rocks = dftracer::utils::rocksdb;
 
 static constexpr std::string_view TIME_BOUNDS_DB_KEY = "__time_bounds__";
 
-EventAggregator::EventAggregator() : rocksdb_mode_(false) {}
+EventAggregator::EventAggregator()
+    : rocksdb_mode_(false), intern_(make_intern_table()) {}
 
 EventAggregator::EventAggregator(std::shared_ptr<rocksdb::RocksDatabase> db,
                                  std::uint32_t config_hash)
     : rocksdb_mode_(true), db_(std::move(db)), config_hash_(config_hash) {
-    load_intern_dictionary(*db_);
+    intern_ = intern_for_index(db_->path());
+    load_intern_dictionary(*db_, *intern_);
 }
 
 void EventAggregator::merge_chunk(ChunkAggregationOutput&& chunk_output) {
@@ -81,7 +83,7 @@ void EventAggregator::merge_chunk_rocksdb(
 }
 
 void EventAggregator::add_observed_extra_key(const std::string& key) {
-    auto& intern = aggregation_intern();
+    auto& intern = intern_->intern;
     observed_extra_key_ids_.insert(intern.get_or_insert(key));
 }
 
@@ -92,6 +94,7 @@ void EventAggregator::add_observed_custom_metric(const std::string& name) {
 EventAggregatorOutput EventAggregator::finalize() {
     if (rocksdb_mode_) {
         EventAggregatorOutput output;
+        output.intern = intern_;
         output.total_events_processed = total_events_.load();
         output.total_bytes_processed = total_bytes_.load();
         output.total_files_processed = unique_files_.size();
@@ -133,6 +136,7 @@ EventAggregatorOutput EventAggregator::finalize() {
         return output;
     }
 
+    state_.intern = intern_;
     state_.total_files_processed = unique_files_.size();
     state_.success = true;
 
@@ -253,9 +257,9 @@ namespace {
 
 std::string serialize_observed_columns(
     const std::set<std::uint32_t>& extra_key_ids,
-    const std::set<std::string>& custom_metric_names) {
+    const std::set<std::string>& custom_metric_names,
+    const StringIntern& intern) {
     namespace rocks = dftracer::utils::rocksdb;
-    auto& intern = aggregation_intern();
     std::string out;
     auto put_str = [&](std::string_view s) {
         rocks::KeyCodec::append_be32(out, static_cast<std::uint32_t>(s.size()));
@@ -275,9 +279,9 @@ std::string serialize_observed_columns(
 
 void deserialize_observed_columns(std::string_view data,
                                   std::set<std::uint32_t>& extra_key_ids,
-                                  std::set<std::string>& custom_metric_names) {
+                                  std::set<std::string>& custom_metric_names,
+                                  StringIntern& intern) {
     namespace rocks = dftracer::utils::rocksdb;
-    auto& intern = aggregation_intern();
     std::size_t off = 0;
     auto read_u32 = [&]() -> std::uint32_t {
         if (off + 4 > data.size()) return 0;
@@ -316,11 +320,13 @@ EventAggregator::ObservedColumns EventAggregator::observed_columns() {
         if (db_->get(COLUMNS_DB_KEY, &val, rcf::AGGREGATION).ok() &&
             !val.empty()) {
             deserialize_observed_columns(val, observed_extra_key_ids_,
-                                         observed_custom_metric_names_);
+                                         observed_custom_metric_names_,
+                                         intern_->intern);
         }
 
         auto serialized = serialize_observed_columns(
-            observed_extra_key_ids_, observed_custom_metric_names_);
+            observed_extra_key_ids_, observed_custom_metric_names_,
+            intern_->intern);
         db_->put(COLUMNS_DB_KEY, serialized, rcf::AGGREGATION);
     }
 

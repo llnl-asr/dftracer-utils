@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/utilities/common/query/query.h>
+#include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_intern.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_key.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_metrics.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -62,27 +63,25 @@ struct AggregationEntry {
     /// Create a ValueMap from the key and metrics for query evaluation.
     /// Includes cat, name, pid, tid, hhash, fhash, time_bucket, extra_keys,
     /// and aggregation metrics (count, dur_total, dur_min, dur_max, etc.).
-    common::query::ValueMap to_value_map() const {
+    common::query::ValueMap to_value_map(const StringIntern& intern) const {
         common::query::ValueMap fields;
         // Key fields
-        fields["cat"] = std::string(key.cat());
-        fields["name"] = std::string(key.name());
+        fields["cat"] = std::string(key.cat(intern));
+        fields["name"] = std::string(key.name(intern));
         fields["pid"] = static_cast<uint64_t>(key.pid);
         fields["tid"] = static_cast<uint64_t>(key.tid);
-        if (!key.hhash().empty()) {
-            fields["hhash"] = std::string(key.hhash());
+        if (!key.hhash(intern).empty()) {
+            fields["hhash"] = std::string(key.hhash(intern));
         }
-        if (!key.fhash().empty()) {
-            fields["fhash"] = std::string(key.fhash());
+        if (!key.fhash(intern).empty()) {
+            fields["fhash"] = std::string(key.fhash(intern));
         }
         fields["time_bucket"] = key.time_bucket;
         // Include extra_keys (args fields used for grouping)
         if (key.extra_keys) {
             for (const auto& [key_id, value_id] : *key.extra_keys) {
-                auto key_str =
-                    std::string(aggregation_intern().resolve(key_id));
-                auto value_str =
-                    std::string(aggregation_intern().resolve(value_id));
+                auto key_str = std::string(intern.resolve(key_id));
+                auto value_str = std::string(intern.resolve(value_id));
                 fields[key_str] = value_str;
             }
         }
@@ -111,8 +110,9 @@ struct AggregationEntry {
     }
 
     /// Check if this entry matches a query.
-    bool matches(const common::query::Query& query) const {
-        return query.evaluate(to_value_map());
+    bool matches(const common::query::Query& query,
+                 const StringIntern& intern) const {
+        return query.evaluate(to_value_map(intern));
     }
 };
 
@@ -130,6 +130,17 @@ struct AggregationBatch {
     const std::vector<std::uint32_t>* global_extra_key_ids = nullptr;
     const std::vector<std::string>* global_custom_metric_names = nullptr;
 
+    /// The table the entries' string ids belong to.
+    AggInternPtr intern;
+
+    const StringIntern& strings() const {
+        if (!intern) {
+            throw DFTUtilsException(ErrorCode::INTERNAL,
+                                    "aggregation batch has no intern table");
+        }
+        return intern->intern;
+    }
+
     /// Filter entries by query, returning a new batch with matching entries.
     AggregationBatch filter(const common::query::Query& query) const {
         AggregationBatch filtered;
@@ -140,9 +151,10 @@ struct AggregationBatch {
         filtered.has_approximated_entries = has_approximated_entries;
         filtered.global_extra_key_ids = global_extra_key_ids;
         filtered.global_custom_metric_names = global_custom_metric_names;
+        filtered.intern = intern;
 
         for (const auto& entry : entries) {
-            if (entry.matches(query)) {
+            if (entry.matches(query, intern->intern)) {
                 filtered.entries.push_back(entry);
             }
         }

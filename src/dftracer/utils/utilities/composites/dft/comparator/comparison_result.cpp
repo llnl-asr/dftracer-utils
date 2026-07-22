@@ -15,7 +15,8 @@
 
 namespace dftracer::utils::utilities::composites::dft::comparator {
 
-TraceMetadata extract_metadata(const AggregationMap& aggregations,
+TraceMetadata extract_metadata(const StringIntern& intern,
+                               const AggregationMap& aggregations,
                                std::size_t file_count) {
     TraceMetadata meta;
 
@@ -46,7 +47,7 @@ TraceMetadata extract_metadata(const AggregationMap& aggregations,
 
         meta.total_io_time_us += static_cast<double>(metrics.duration.total);
 
-        if (internal::is_data_transfer_op(key.cat(), key.name())) {
+        if (internal::is_data_transfer_op(key.cat(intern), key.name(intern))) {
             meta.total_bytes += static_cast<double>(metrics.size.total);
         }
 
@@ -183,12 +184,13 @@ double safe_div(double a, double b) { return b > 0.0 ? a / b : 0.0; }
 
 }  // anonymous namespace
 
-CollapsedMap collapse_by_group(const AggregationMap& aggregations) {
+CollapsedMap collapse_by_group(const AggregationMap& aggregations,
+                               const StringIntern& src, StringIntern& dst) {
     // Step 1: For each (cat, name, time_bucket), take max across pids.
     std::unordered_map<WindowKey, WindowMax, WindowKeyHash> windows;
 
     for (const auto& [key, m] : aggregations) {
-        WindowKey wk{key.cat(), key.name(), key.time_bucket};
+        WindowKey wk{key.cat(src), key.name(src), key.time_bucket};
         auto& w = windows[wk];
 
         double cnt = static_cast<double>(m.count);
@@ -199,7 +201,7 @@ CollapsedMap collapse_by_group(const AggregationMap& aggregations) {
         if (sm > w.size_mean) w.size_mean = sm;
 
         // Only compute transfer_size/bandwidth for actual I/O ops
-        if (internal::is_data_transfer_op(key.cat(), key.name())) {
+        if (internal::is_data_transfer_op(key.cat(src), key.name(src))) {
             double total_bytes = static_cast<double>(m.size.total);
             double total_dur_us = static_cast<double>(m.duration.total);
             double xfer = safe_div(total_bytes, cnt);
@@ -225,8 +227,8 @@ CollapsedMap collapse_by_group(const AggregationMap& aggregations) {
 
     for (auto& [wk, w] : windows) {
         AggregationKey gk;
-        gk.cat_id = aggregators::aggregation_intern().get_or_insert(wk.cat);
-        gk.name_id = aggregators::aggregation_intern().get_or_insert(wk.name);
+        gk.cat_id = dst.get_or_insert(wk.cat);
+        gk.name_id = dst.get_or_insert(wk.name);
         gk.pid = 0;
         gk.tid = 0;
         gk.time_bucket = 0;

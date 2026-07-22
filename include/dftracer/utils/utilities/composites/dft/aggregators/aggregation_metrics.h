@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
+#include <dftracer/utils/utilities/common/statistics/distinct_sketch.h>
 
 #include <cstdint>
 #include <limits>
@@ -105,6 +106,9 @@ struct AggregationMetrics {
 
     std::unique_ptr<CustomMetricsMap> custom_metrics;
 
+    // Only populated when the file hash is out of the key.
+    common::statistics::DistinctSketch distinct_files;
+
     double sketch_accuracy = 0.01;
 
     explicit AggregationMetrics(double relative_accuracy = 0.01)
@@ -120,6 +124,7 @@ struct AggregationMetrics {
           offset(other.offset),
           ts(other.ts),
           te(other.te),
+          distinct_files(other.distinct_files),
           boundary_associations(
               other.boundary_associations
                   ? std::make_unique<

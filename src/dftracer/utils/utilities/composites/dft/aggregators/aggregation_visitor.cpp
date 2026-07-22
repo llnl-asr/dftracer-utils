@@ -8,9 +8,30 @@
 #include <dftracer/utils/utilities/composites/dft/aggregators/system_metrics_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/args_map.h>
 #include <dftracer/utils/utilities/composites/dft/internal/utils.h>
+#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 #include <dftracer/utils/utilities/indexer/index_batch_sink.h>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
+
+namespace {
+// dftracer hashes are hex; reuse their bits rather than hashing again.
+std::uint64_t hash_of_hex(std::string_view sv) {
+    std::uint64_t v = 0;
+    for (char c : sv) {
+        std::uint64_t d;
+        if (c >= '0' && c <= '9')
+            d = static_cast<std::uint64_t>(c - '0');
+        else if (c >= 'a' && c <= 'f')
+            d = static_cast<std::uint64_t>(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F')
+            d = static_cast<std::uint64_t>(c - 'A' + 10);
+        else
+            return hash::fnv1a_hash(sv);
+        v = (v << 4) | d;
+    }
+    return v ? v : 1;
+}
+}  // namespace
 
 namespace rcf = dftracer::utils::rocksdb::cf;
 
@@ -140,8 +161,9 @@ void AggregationVisitor::on_event(const EventRecord& record) {
 
     std::string cat_storage;
     std::string_view cat_lower = internal::to_lower_ascii(ev.cat, cat_storage);
+    auto key_fhash = config_.group_by_file ? fhash : std::string_view{};
     serialize_agg_key_into(key_buf_, config_hash_, map_type, cat_lower, ev.name,
-                           ev.pid, ev.tid, hhash, fhash, time_bucket,
+                           ev.pid, ev.tid, hhash, key_fhash, time_bucket,
                            extra_ptr);
 
     AggregationMetrics* entry_ptr;
@@ -155,6 +177,8 @@ void AggregationVisitor::on_event(const EventRecord& record) {
         last_key_ = it->first;
     }
     auto& entry = *entry_ptr;
+    if (!config_.group_by_file && !fhash.empty())
+        entry.distinct_files.add_hash(hash_of_hex(fhash));
     const bool compute_percentiles = config_.compute_percentiles;
 
     std::uint64_t ev_count = 1;

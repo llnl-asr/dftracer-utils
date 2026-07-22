@@ -7,6 +7,25 @@
 namespace dftracer::utils::utilities::composites::dft::aggregators {
 
 namespace {
+std::uint64_t parse_hex_hash(std::string_view sv) {
+    std::uint64_t v = 0;
+    for (char c : sv) {
+        std::uint64_t d;
+        if (c >= '0' && c <= '9')
+            d = static_cast<std::uint64_t>(c - '0');
+        else if (c >= 'a' && c <= 'f')
+            d = static_cast<std::uint64_t>(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F')
+            d = static_cast<std::uint64_t>(c - 'A' + 10);
+        else
+            return std::hash<std::string_view>{}(sv);
+        v = (v << 4) | d;
+    }
+    return v ? v : 1;
+}
+}  // namespace
+
+namespace {
 
 void apply_preaggregated_metric(MetricStats& stats, std::uint64_t ev_count,
                                 const ArgsValueProxy& sum_val,
@@ -62,7 +81,7 @@ AggregationKey build_aggregation_key(const DFTracerEvent& ev,
         key.hhash_id = intern.get_or_insert(hhash_sv);
     }
     auto fhash_sv = ev.args["fhash"].get<std::string_view>();
-    if (!fhash_sv.empty()) {
+    if (!fhash_sv.empty() && config.group_by_file) {
         key.fhash_id = intern.get_or_insert(fhash_sv);
     }
 
@@ -94,6 +113,12 @@ void update_aggregation_entry(const DFTracerEvent& ev,
                  .first;
     }
     auto& metrics = it->second;
+
+    if (!config.group_by_file) {
+        auto fhash = ev.args["fhash"].get<std::string_view>();
+        if (!fhash.empty())
+            metrics.distinct_files.add_hash(parse_hex_hash(fhash));
+    }
 
     std::uint64_t ev_count = 0;
 

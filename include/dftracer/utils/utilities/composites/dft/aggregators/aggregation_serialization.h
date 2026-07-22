@@ -22,13 +22,19 @@ static constexpr std::uint8_t METRIC_FMT_FULL_WITH_SKETCH = 2;
 static constexpr char AGG_INTERN_DICT_PREFIX[] = "\xFF\xFD";
 static constexpr std::size_t AGG_INTERN_DICT_PREFIX_LEN = 2;
 
-// Global config: 0xFFFE -> time_interval_us (8) + config_hash (4)
+// Global config: 0xFFFE -> time_interval_us (8) + config_hash (4) + flags (1)
 static constexpr char AGG_GLOBAL_CONFIG_KEY[] = "\xFF\xFE";
-static constexpr std::size_t AGG_GLOBAL_CONFIG_LEN = 12;
+static constexpr std::size_t AGG_GLOBAL_CONFIG_LEN = 13;
+// Indexes written before the flags byte always grouped by file.
+static constexpr std::size_t AGG_GLOBAL_CONFIG_LEN_V1 = 12;
+static constexpr std::uint8_t AGG_FLAG_GROUP_BY_FILE = 1u << 0;
 
 struct AggGlobalConfig {
     std::uint64_t time_interval_us = 0;
     std::uint32_t config_hash = 0;
+    // Consumers that read fhash off the key check this before concluding the
+    // trace touched no files.
+    bool group_by_file = true;
 };
 
 inline std::string serialize_agg_global_config(const AggGlobalConfig& cfg) {
@@ -45,12 +51,13 @@ inline std::string serialize_agg_global_config(const AggGlobalConfig& cfg) {
     val[9] = static_cast<char>((cfg.config_hash >> 16) & 0xFF);
     val[10] = static_cast<char>((cfg.config_hash >> 8) & 0xFF);
     val[11] = static_cast<char>(cfg.config_hash & 0xFF);
+    val[12] = static_cast<char>(cfg.group_by_file ? AGG_FLAG_GROUP_BY_FILE : 0);
     return val;
 }
 
 inline AggGlobalConfig deserialize_agg_global_config(std::string_view data) {
     AggGlobalConfig cfg;
-    if (data.size() >= AGG_GLOBAL_CONFIG_LEN) {
+    if (data.size() >= AGG_GLOBAL_CONFIG_LEN_V1) {
         cfg.time_interval_us =
             (static_cast<std::uint64_t>(static_cast<std::uint8_t>(data[0]))
              << 56) |
@@ -75,6 +82,9 @@ inline AggGlobalConfig deserialize_agg_global_config(std::string_view data) {
             (static_cast<std::uint32_t>(static_cast<std::uint8_t>(data[10]))
              << 8) |
             static_cast<std::uint32_t>(static_cast<std::uint8_t>(data[11]));
+        cfg.group_by_file =
+            data.size() < AGG_GLOBAL_CONFIG_LEN ||
+            (static_cast<std::uint8_t>(data[12]) & AGG_FLAG_GROUP_BY_FILE) != 0;
     }
     return cfg;
 }
@@ -182,6 +192,8 @@ AggregationMetrics deserialize_agg_value(std::string_view data);
 /// Lightweight metrics view for Arrow export - only the fields needed.
 struct AggMetricsView {
     std::uint64_t count;
+    // 0 when the file hash is in the key, or the index predates the sketch.
+    std::uint64_t distinct_files = 0;
     std::uint64_t dur_total;
     std::uint64_t dur_min;
     std::uint64_t dur_max;
@@ -267,6 +279,23 @@ inline bool parse_agg_value_view(std::string_view data, AggMetricsView& out) {
     read_metric_stats_partial(out.offset_total, out.offset_min, out.offset_max);
     out.ts = read_varint();
     out.te = read_varint();
+
+    out.distinct_files = 0;
+    if (p < end) {
+        read_varint();  // parent_pid
+        auto num_custom = read_varint();
+        for (std::uint64_t i = 0; i < num_custom && p + 2 <= end; ++i) {
+            // put_str writes a big-endian 16-bit length, not a varint.
+            std::size_t name_len = (static_cast<std::size_t>(p[0]) << 8) | p[1];
+            p += 2 + name_len;
+            std::uint64_t c_total, c_min, c_max;
+            read_metric_stats_partial(c_total, c_min, c_max);
+        }
+        if (p < end) {
+            auto tag = read_varint();
+            if (tag != 0) out.distinct_files = read_varint();
+        }
+    }
 
     return true;
 }

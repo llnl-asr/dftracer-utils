@@ -22,6 +22,10 @@ struct AggregationConfig {
     std::uint64_t reference_timestamp = 0;
     bool normalize_time = false;  // Normalize time_bucket to 0-based time_range
 
+    // Off makes the key coarse enough to aggregate on traces with millions of
+    // files; distinct files are then counted with a sketch.
+    bool group_by_file = true;
+
     std::vector<std::string> extra_group_keys;
     std::vector<std::string> custom_metric_fields;
 

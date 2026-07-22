@@ -81,6 +81,7 @@ class Indexer:
         group_keys: Optional[List[str]] = None,
         custom_metric_fields: Optional[List[str]] = None,
         compute_percentiles: bool = False,
+        group_by_file: bool = True,
         checkpoint_size: int = 32 * 1024 * 1024,
         parallelism: int = 0,
         force_rebuild: bool = False,

@@ -62,7 +62,8 @@ class IndexDatabase {
     /// DB has a config marker even though the AGG SSTs live in the manifest.
     /// `consolidate_index` invokes it too before the deferred AGG ingest.
     void write_agg_global_config(std::uint64_t time_interval_us,
-                                 std::uint32_t config_hash = 0);
+                                 std::uint32_t config_hash = 0,
+                                 bool group_by_file = true);
 
     /// Write per-file aggregation completion markers (0xFFFF + file_id BE)
     /// into the AGGREGATION CF. The index resolver treats these as "this

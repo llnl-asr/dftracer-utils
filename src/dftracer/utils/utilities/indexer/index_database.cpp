@@ -485,7 +485,8 @@ void IndexDatabase::rebuild_root_summaries() {
 }
 
 void IndexDatabase::write_agg_global_config(std::uint64_t time_interval_us,
-                                            std::uint32_t config_hash) {
+                                            std::uint32_t config_hash,
+                                            bool group_by_file) {
     using dftracer::utils::utilities::composites::dft::aggregators::
         AGG_GLOBAL_CONFIG_KEY;
     using dftracer::utils::utilities::composites::dft::aggregators::
@@ -496,6 +497,7 @@ void IndexDatabase::write_agg_global_config(std::uint64_t time_interval_us,
     AggGlobalConfig cfg;
     cfg.time_interval_us = time_interval_us;
     cfg.config_hash = config_hash;
+    cfg.group_by_file = group_by_file;
     auto status = db_->put(std::string_view(AGG_GLOBAL_CONFIG_KEY, 2),
                            serialize_agg_global_config(cfg), cf::AGGREGATION);
     if (!status.ok()) {

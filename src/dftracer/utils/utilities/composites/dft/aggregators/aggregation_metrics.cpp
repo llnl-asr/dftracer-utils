@@ -163,6 +163,8 @@ void AggregationMetrics::merge_from(const AggregationMetrics& other) {
     ts = std::min(ts, other.ts);
     te = std::max(te, other.te);
 
+    distinct_files.merge_from(other.distinct_files);
+
     if (other.custom_metrics) {
         if (!custom_metrics) {
             custom_metrics = std::make_unique<CustomMetricsMap>();

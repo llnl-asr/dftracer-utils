@@ -75,6 +75,7 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject* args,
         self->group_keys = nullptr;
         self->custom_metric_fields = nullptr;
         self->compute_percentiles = 0;
+        self->group_by_file = 1;
         self->checkpoint_size =
             dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
         self->parallelism = 0;
@@ -95,6 +96,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
                                    "group_keys",
                                    "custom_metric_fields",
                                    "compute_percentiles",
+                                   "group_by_file",
                                    "checkpoint_size",
                                    "parallelism",
                                    "force_rebuild",
@@ -112,6 +114,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     PyObject* group_keys_obj = Py_None;
     PyObject* custom_metrics_obj = Py_None;
     int compute_percentiles = 0;
+    int group_by_file = 1;
     Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
         dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     Py_ssize_t parallelism = 0;
@@ -119,11 +122,12 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     PyObject* runtime_arg = nullptr;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|sOsppppdOOpnnpO", (char**)kwlist, &directory,
+            args, kwds, "|sOsppppdOOppnnpO", (char**)kwlist, &directory,
             &files_obj, &index_dir, &require_checkpoint, &require_bloom,
             &require_manifest, &require_aggregation, &time_interval_ms,
             &group_keys_obj, &custom_metrics_obj, &compute_percentiles,
-            &checkpoint_size, &parallelism, &force_rebuild, &runtime_arg)) {
+            &group_by_file, &checkpoint_size, &parallelism, &force_rebuild,
+            &runtime_arg)) {
         return -1;
     }
 
@@ -165,6 +169,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     self->require_aggregation = require_aggregation;
     self->time_interval_ms = time_interval_ms;
     self->compute_percentiles = compute_percentiles;
+    self->group_by_file = group_by_file;
     self->checkpoint_size = static_cast<std::size_t>(checkpoint_size);
     self->parallelism = static_cast<std::size_t>(parallelism);
     self->force_rebuild = force_rebuild;
@@ -232,6 +237,7 @@ static std::optional<AggregationConfig> build_aggregation_config(
     }
 
     config.compute_percentiles = self->compute_percentiles != 0;
+    config.group_by_file = self->group_by_file != 0;
     return config;
 }
 

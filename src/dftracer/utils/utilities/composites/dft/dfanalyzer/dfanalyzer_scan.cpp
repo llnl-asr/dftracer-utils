@@ -294,6 +294,7 @@ const std::vector<ColumnSpec> DFANALYZER_SCHEMA = {
     {"io_cat", ColumnType::INT64},
     {"acc_pat", ColumnType::INT64},
     {"count", ColumnType::INT64},
+    {"file_nunique", ColumnType::INT64},
     {"time", ColumnType::DOUBLE},
     {"size", ColumnType::INT64},
     {"time_min", ColumnType::DOUBLE},
@@ -459,6 +460,11 @@ void append_fine_row(RecordBatchBuilder& builder, std::size_t& count,
     builder.append_int64(ci++, 0);
 
     builder.append_int64(ci++, static_cast<std::int64_t>(mv.count));
+    // With the file hash in the key, a row is one file.
+    builder.append_int64(
+        ci++, static_cast<std::int64_t>(mv.distinct_files > 0
+                                            ? mv.distinct_files
+                                            : (kv.fhash.empty() ? 0 : 1)));
     builder.append_double(
         ci++, static_cast<double>(mv.dur_total) / ec.ctx->time_resolution);
 

@@ -73,6 +73,7 @@ set(UTILITIES_TEST_SOURCES
 
     # DFT Aggregator Composites
     common/statistics/test_ddsketch.cpp
+    common/statistics/test_distinct_sketch.cpp
     composites/dft/aggregators/test_aggregation_metrics.cpp
     composites/dft/aggregators/test_aggregation_key.cpp
     composites/dft/aggregators/test_aggregation_config.cpp

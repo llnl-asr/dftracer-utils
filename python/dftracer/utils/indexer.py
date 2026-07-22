@@ -22,12 +22,17 @@ class AggregationConfig:
         group_keys: Extra grouping dimensions (default None).
         custom_metric_fields: Extra numeric args fields to aggregate (default None).
         compute_percentiles: Enable percentile sketch collection (default False).
+        group_by_file: Keep the file hash in the aggregation key (default True).
+            A trace touching millions of files makes that key nearly as fine as
+            the events themselves; turning it off collapses the rows and counts
+            distinct files with a sketch instead (`file_nunique`).
     """
 
     time_interval_ms: float = 5000.0
     group_keys: Optional[List[str]] = None
     custom_metric_fields: Optional[List[str]] = None
     compute_percentiles: bool = False
+    group_by_file: bool = True
 
 
 @dataclass
@@ -135,6 +140,7 @@ class Indexer:
             group_keys=agg_config.group_keys if agg_config else None,
             custom_metric_fields=agg_config.custom_metric_fields if agg_config else None,
             compute_percentiles=agg_config.compute_percentiles if agg_config else False,
+            group_by_file=agg_config.group_by_file if agg_config else True,
             checkpoint_size=checkpoint_size,
             parallelism=parallelism,
             force_rebuild=force_rebuild,

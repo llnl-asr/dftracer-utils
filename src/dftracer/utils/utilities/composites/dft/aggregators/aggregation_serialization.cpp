@@ -3,6 +3,7 @@
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 #include <dftracer/utils/utilities/indexer/index_batch_sink.h>
 
+#include <algorithm>
 #include <cstring>
 
 namespace dftracer::utils::utilities::composites::dft::aggregators {
@@ -260,6 +261,36 @@ DeserializedAggKey deserialize_agg_key(std::string_view data) {
     return {0, map_type, std::move(key)};
 }
 
+// Trails the value, so a reader that stops after the custom metrics ignores it.
+constexpr std::uint64_t SKETCH_NONE = 0;
+constexpr std::uint64_t SKETCH_DENSE = 1;
+constexpr std::uint64_t SKETCH_SPARSE = 2;
+
+void put_distinct_sketch(std::string& out,
+                         const common::statistics::DistinctSketch& sketch) {
+    const auto& dense = sketch.dense_registers();
+    const auto& sparse = sketch.sparse_hashes();
+    if (dense.empty() && sparse.empty()) {
+        put_varint(out, SKETCH_NONE);
+        return;
+    }
+    // The estimate rides along so a reader that only wants the count never
+    // decodes the registers.
+    if (!dense.empty()) {
+        put_varint(out, SKETCH_DENSE);
+        put_varint(out, sketch.estimate());
+        out.append(reinterpret_cast<const char*>(dense.data()), dense.size());
+        return;
+    }
+    auto unique = sparse;
+    std::sort(unique.begin(), unique.end());
+    unique.erase(std::unique(unique.begin(), unique.end()), unique.end());
+    put_varint(out, SKETCH_SPARSE);
+    put_varint(out, static_cast<std::uint64_t>(unique.size()));
+    put_varint(out, static_cast<std::uint64_t>(unique.size()));
+    for (std::uint64_t h : unique) put_varint(out, h);
+}
+
 void serialize_agg_value_into(std::string& out, const AggregationMetrics& m) {
     // Fast path: no sketches anywhere. Pre-size to a conservative upper
     // bound and write directly via pointer, then shrink.
@@ -273,7 +304,7 @@ void serialize_agg_value_into(std::string& out, const AggregationMetrics& m) {
         }
     }
 
-    if (!has_sketch) {
+    if (!has_sketch && m.distinct_files.empty()) {
         std::size_t custom_bytes = 0;
         if (m.custom_metrics) {
             for (const auto& [name, _] : *m.custom_metrics) {
@@ -285,7 +316,8 @@ void serialize_agg_value_into(std::string& out, const AggregationMetrics& m) {
             10 /*count*/ + METRIC_STATS_MAX_BYTES_NO_SKETCH /*dur*/ +
             METRIC_STATS_MAX_BYTES_NO_SKETCH /*size*/ +
             METRIC_STATS_MAX_BYTES_NO_SKETCH /*offset*/ + 10 + 10 +
-            10 /*ts/te/parent*/ + 10 /*num_custom*/ + custom_bytes;
+            10 /*ts/te/parent*/ + 10 /*num_custom*/ + custom_bytes +
+            10 /*sketch length*/;
         out.resize(max_total);
         char* begin = out.data();
         char* p = begin;
@@ -307,6 +339,7 @@ void serialize_agg_value_into(std::string& out, const AggregationMetrics& m) {
                 p = write_metric_stats(p, ms);
             }
         }
+        p = write_varint(p, SKETCH_NONE);  // no distinct-file sketch
         out.resize(static_cast<std::size_t>(p - begin));
         return;
     }
@@ -330,6 +363,7 @@ void serialize_agg_value_into(std::string& out, const AggregationMetrics& m) {
             serialize_metric_stats(out, ms);
         }
     }
+    put_distinct_sketch(out, m.distinct_files);
 }
 
 std::string serialize_agg_value(const AggregationMetrics& m) {
@@ -357,6 +391,28 @@ AggregationMetrics deserialize_agg_value(std::string_view data) {
             auto name = r.str();
             auto ms = deserialize_metric_stats(r, m.sketch_accuracy);
             m.custom_metrics->emplace(std::string(name), std::move(ms));
+        }
+    }
+    // Absent in values written before the sketch existed.
+    if (r.has_remaining()) {
+        auto tag = r.varint();
+        if (tag != SKETCH_NONE) r.varint();  // estimate, recomputed below
+        if (tag == SKETCH_DENSE) {
+            constexpr auto n = common::statistics::DistinctSketch::REGISTERS;
+            auto bytes = r.remaining();
+            if (bytes.size() >= n) {
+                const auto* p =
+                    reinterpret_cast<const std::uint8_t*>(bytes.data());
+                m.distinct_files.set_dense_registers(
+                    std::vector<std::uint8_t>(p, p + n));
+                r.skip(n);
+            }
+        } else if (tag == SKETCH_SPARSE) {
+            auto n = r.varint();
+            std::vector<std::uint64_t> hashes;
+            hashes.reserve(static_cast<std::size_t>(n));
+            for (std::uint64_t i = 0; i < n; ++i) hashes.push_back(r.varint());
+            m.distinct_files.set_sparse_hashes(std::move(hashes));
         }
     }
     return m;

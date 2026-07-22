@@ -238,3 +238,62 @@ TEST_SUITE("AggregationSerialization") {
         CHECK(m2.duration.sketch->count() == m.duration.sketch->count());
     }
 }
+
+TEST_SUITE("AggregationSerialization - distinct files") {
+    TEST_CASE("value round trip keeps the sketch") {
+        for (int n : {0, 20, 5000}) {
+            AggregationMetrics m;
+            m.count = 7;
+            m.ts = 10;
+            m.te = 99;
+            for (int i = 0; i < n; ++i)
+                m.distinct_files.add("f" + std::to_string(i));
+
+            auto blob = serialize_agg_value(m);
+            auto back = deserialize_agg_value(blob);
+            CHECK(back.count == 7);
+            if (n == 0) {
+                CHECK(back.distinct_files.empty());
+            } else {
+                CHECK(back.distinct_files.estimate() ==
+                      m.distinct_files.estimate());
+            }
+
+            AggMetricsView view;
+            REQUIRE(parse_agg_value_view(blob, view));
+            CHECK(view.count == 7);
+            CHECK(view.distinct_files == m.distinct_files.estimate());
+        }
+    }
+
+    TEST_CASE("view reports no distinct files for a value without a sketch") {
+        AggregationMetrics m;
+        m.count = 3;
+        m.ts = 1;
+        m.te = 2;
+        auto blob = serialize_agg_value(m);
+        AggMetricsView view;
+        REQUIRE(parse_agg_value_view(blob, view));
+        CHECK(view.distinct_files == 0);
+    }
+
+    TEST_CASE("custom metrics do not confuse the sketch position") {
+        AggregationMetrics m;
+        m.count = 5;
+        m.custom_metrics = std::make_unique<CustomMetricsMap>();
+        MetricStats ms(0.01);
+        ms.count = 2;
+        ms.total = 40;
+        ms.min = 15;
+        ms.max = 25;
+        m.custom_metrics->emplace("bandwidth", ms);
+        for (int i = 0; i < 30; ++i)
+            m.distinct_files.add("f" + std::to_string(i));
+
+        auto blob = serialize_agg_value(m);
+        AggMetricsView view;
+        REQUIRE(parse_agg_value_view(blob, view));
+        CHECK(view.count == 5);
+        CHECK(view.distinct_files == 30);
+    }
+}

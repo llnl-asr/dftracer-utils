@@ -37,9 +37,6 @@ using namespace internal;
 
 namespace {
 
-// v2 added per-file mtime/size to the registry record for staleness detection.
-constexpr std::uint32_t SCHEMA_VERSION = 2;
-
 using encoding::prefix_for_file;
 
 // LEB128 varint decode with return-on-truncation policy: if the buffer ends
@@ -602,8 +599,9 @@ void IndexDatabase::init_schema() {
     std::string value;
     auto status = db_->get(schema_version_key(), &value);
     if (status.IsNotFound()) {
-        status = db_->put(schema_version_key(),
-                          rocks::KeyCodec::encode_be32(SCHEMA_VERSION));
+        status = db_->put(
+            schema_version_key(),
+            rocks::KeyCodec::encode_be32(IndexDatabase::SCHEMA_VERSION));
         if (!status.ok()) {
             throw_db_error("Failed to initialize schema version", status);
         }

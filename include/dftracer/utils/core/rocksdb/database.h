@@ -90,6 +90,10 @@ class RocksDatabase {
     static ::rocksdb::Options default_options();
     static ::rocksdb::ColumnFamilyOptions default_column_family_options();
 
+    /// Options for families read by key rather than scanned.
+    static ::rocksdb::ColumnFamilyOptions point_lookup_column_family_options();
+    static bool is_point_lookup_cf(std::string_view name) noexcept;
+
    private:
     ::rocksdb::ColumnFamilyHandle* column_family_handle(
         std::string_view column_family) const;

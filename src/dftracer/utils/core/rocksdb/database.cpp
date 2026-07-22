@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/env.h>
 #include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/rocksdb/filesystem.h>
+#include <rocksdb/filter_policy.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/table.h>
 
@@ -104,6 +105,16 @@ const decltype(cf::ALL)& RocksDatabase::default_column_families() {
     return options;
 }
 
+namespace {
+/// One cache for the process. Left unset, every column family gets its own
+/// 8 MB default, which no realistic working set fits in.
+std::shared_ptr<::rocksdb::Cache>& shared_block_cache() {
+    static std::shared_ptr<::rocksdb::Cache> cache =
+        ::rocksdb::NewLRUCache(constants::rocksdb::BLOCK_CACHE_BYTES);
+    return cache;
+}
+}  // namespace
+
 ::rocksdb::ColumnFamilyOptions RocksDatabase::default_column_family_options() {
     ::rocksdb::ColumnFamilyOptions options;
 
@@ -111,6 +122,7 @@ const decltype(cf::ALL)& RocksDatabase::default_column_families() {
     bbt.block_size = 32 * 1024;
     bbt.format_version = 5;
     bbt.index_block_restart_interval = 16;
+    bbt.block_cache = shared_block_cache();
     options.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
 
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
@@ -137,6 +149,30 @@ const decltype(cf::ALL)& RocksDatabase::default_column_families() {
     options.bottommost_compression = ::rocksdb::kZlibCompression;
 #endif
     return options;
+}
+
+::rocksdb::ColumnFamilyOptions
+RocksDatabase::point_lookup_column_family_options() {
+    auto options = default_column_family_options();
+
+    // Hash keys are uniformly distributed, so every SST's range covers almost
+    // every key: without a filter a get searches all of them. Large blocks
+    // also mean reading and decompressing 32 KB to return a few dozen bytes.
+    ::rocksdb::BlockBasedTableOptions bbt;
+    bbt.block_size = constants::rocksdb::POINT_LOOKUP_BLOCK_SIZE;
+    bbt.format_version = 5;
+    bbt.index_block_restart_interval = 16;
+    bbt.block_cache = shared_block_cache();
+    bbt.filter_policy.reset(::rocksdb::NewBloomFilterPolicy(
+        constants::rocksdb::BLOOM_BITS_PER_KEY, false));
+    bbt.cache_index_and_filter_blocks = true;
+    bbt.pin_l0_filter_and_index_blocks_in_cache = true;
+    options.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
+    return options;
+}
+
+bool RocksDatabase::is_point_lookup_cf(std::string_view name) noexcept {
+    return name == cf::HASH_TABLES || name == cf::NAME_DICTIONARY;
 }
 
 bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
@@ -187,7 +223,9 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     std::vector<::rocksdb::ColumnFamilyDescriptor> descriptors;
     descriptors.reserve(column_family_names.size());
     for (const auto& name : column_family_names) {
-        auto opts = cf_options;
+        auto opts = is_point_lookup_cf(name)
+                        ? point_lookup_column_family_options()
+                        : cf_options;
         if (cf_options_override_) {
             cf_options_override_(name, opts);
         }

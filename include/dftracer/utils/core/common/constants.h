@@ -37,6 +37,12 @@ namespace rocksdb {
 static constexpr int ZSTD_COMPRESSION_LEVEL = 9;
 static constexpr std::size_t ZSTD_MAX_DICT_BYTES = 262144;        // 256KB
 static constexpr std::size_t ZSTD_MAX_TRAIN_BYTES = 1024 * 1024;  // 1MB
+
+static constexpr std::size_t BLOCK_CACHE_BYTES = 512ULL * 1024 * 1024;
+// Point-lookup families read one small value per get, so they want small
+// blocks and a filter rather than the scan-oriented defaults.
+static constexpr std::size_t POINT_LOOKUP_BLOCK_SIZE = 4 * 1024;
+static constexpr double BLOOM_BITS_PER_KEY = 10.0;
 }  // namespace rocksdb
 }  // namespace dftracer::utils::constants
 

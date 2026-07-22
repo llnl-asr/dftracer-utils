@@ -123,6 +123,11 @@ class IndexDatabase {
     /// Stored schema version, 0 if unset.
     std::uint32_t get_schema_version() const;
 
+    /// v2 added per-file mtime/size to the registry record. v3 moved the file
+    /// hash into the aggregation key and gave the point-lookup families bloom
+    /// filters, neither of which is readable from an older index.
+    static constexpr std::uint32_t SCHEMA_VERSION = 3;
+
     /// True if the stored schema predates the current build's layout.
     bool schema_outdated() const;
 

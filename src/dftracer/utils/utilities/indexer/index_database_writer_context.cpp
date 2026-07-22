@@ -66,8 +66,6 @@ using encoding::manifest_metadata_key;
 using encoding::metadata_key;
 using encoding::prefix_for_file;
 
-constexpr std::uint32_t SCHEMA_VERSION = 2;
-
 std::string next_file_id_key() {
     return std::string(encoding::NEXT_FILE_ID_KEY);
 }
@@ -325,8 +323,9 @@ void IndexDatabaseWriterContext::init_schema() {
     std::string value;
     auto status = db_->get(schema_version_key(), &value);
     if (status.IsNotFound()) {
-        status = db_->put(batch_, cf::DEFAULT, schema_version_key(),
-                          rocks::KeyCodec::encode_be32(SCHEMA_VERSION));
+        status = db_->put(
+            batch_, cf::DEFAULT, schema_version_key(),
+            rocks::KeyCodec::encode_be32(IndexDatabase::SCHEMA_VERSION));
         if (!status.ok()) {
             throw_db_error("Failed to initialize schema version", status);
         }

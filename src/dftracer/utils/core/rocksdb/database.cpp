@@ -165,8 +165,9 @@ RocksDatabase::point_lookup_column_family_options() {
     bbt.block_cache = shared_block_cache();
     bbt.filter_policy.reset(::rocksdb::NewBloomFilterPolicy(
         constants::rocksdb::BLOOM_BITS_PER_KEY, false));
-    bbt.cache_index_and_filter_blocks = true;
-    bbt.pin_l0_filter_and_index_blocks_in_cache = true;
+    // Left in the table reader rather than the block cache: a scan streams
+    // enough data blocks through the cache to evict the filters it needs.
+    bbt.cache_index_and_filter_blocks = false;
     options.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
     return options;
 }

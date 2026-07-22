@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_CORE_COMMON_STRING_INTERN_H
 
 #include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/hash/fnv1a.h>
 
 #include <atomic>
 #include <cstdint>
@@ -27,18 +28,22 @@ class StringIntern {
 
     StringIntern()
         : buckets_(std::make_unique<std::atomic<Node*>[]>(BUCKET_COUNT)),
-          directory_(std::make_unique<std::atomic<Slot*>[]>(DIRECTORY_SIZE)) {
+          directory_(std::make_unique<std::atomic<Slot*>[]>(DIRECTORY_SIZE)),
+          log_(std::make_unique<std::atomic<std::atomic<std::uint32_t>*>[]>(
+              DIRECTORY_SIZE)) {
         for (std::size_t i = 0; i < BUCKET_COUNT; ++i) {
             buckets_[i].store(nullptr, std::memory_order_relaxed);
         }
         for (std::size_t i = 0; i < DIRECTORY_SIZE; ++i) {
             directory_[i].store(nullptr, std::memory_order_relaxed);
+            log_[i].store(nullptr, std::memory_order_relaxed);
         }
     }
 
     ~StringIntern() {
         for (std::size_t i = 0; i < DIRECTORY_SIZE; ++i) {
             delete[] directory_[i].load(std::memory_order_relaxed);
+            delete[] log_[i].load(std::memory_order_relaxed);
         }
         for (std::size_t i = 0; i < BUCKET_COUNT; ++i) {
             auto* node = buckets_[i].load(std::memory_order_relaxed);
@@ -203,6 +208,20 @@ class StringIntern {
         return p ? std::string_view(*p) : std::string_view{};
     }
 
+    /// Number of strings interned, and the id of the n-th in insertion order.
+    /// Content-derived ids are sparse over the whole id space, so anything
+    /// enumerating the dictionary walks this instead of the id range.
+    std::size_t entry_count() const {
+        return entry_count_.load(std::memory_order_acquire);
+    }
+
+    std::uint32_t entry_id(std::size_t n) const {
+        auto* block = log_[n >> BLOCK_BITS].load(std::memory_order_acquire);
+        return block
+                   ? block[n & (BLOCK_SIZE - 1)].load(std::memory_order_relaxed)
+                   : 0;
+    }
+
     /// The string bound to `id`, or null when the slot is free. Callers under
     /// `insert_mutex_` use this to spot a conflicting binding.
     const std::string* slot_value(std::uint32_t id) const {
@@ -238,6 +257,7 @@ class StringIntern {
     /// enough to avoid a birthday collision; a collision throws rather than
     /// bind two strings to one id. Dictionaries that scale with the trace
     /// (per-file hashes) need sequential ids and a per-index table.
+
     ///
     /// Must be called before any `get_or_insert`.
     void enable_deterministic_ids() noexcept {
@@ -245,6 +265,19 @@ class StringIntern {
     }
 
    private:
+    /// Append `id` to the insertion log. Caller holds `insert_mutex_`.
+    void log_entry(std::uint32_t id) {
+        const auto n = entry_count_.load(std::memory_order_relaxed);
+        auto& dir = log_[n >> BLOCK_BITS];
+        auto* block = dir.load(std::memory_order_acquire);
+        if (!block) {
+            block = new std::atomic<std::uint32_t>[BLOCK_SIZE];
+            dir.store(block, std::memory_order_release);
+        }
+        block[n & (BLOCK_SIZE - 1)].store(id, std::memory_order_relaxed);
+        entry_count_.store(n + 1, std::memory_order_release);
+    }
+
     /// Bind `id` to `str`. Allocates the block on first use. Caller holds
     /// `insert_mutex_`.
     void bind_slot(std::uint32_t id, const std::string* str) {
@@ -263,6 +296,7 @@ class StringIntern {
             dir.store(block, std::memory_order_release);
         }
         block[id & (BLOCK_SIZE - 1)].store(str, std::memory_order_release);
+        log_entry(id);
     }
 
     static constexpr std::size_t BUCKET_COUNT = 1u << 12;  // 4096
@@ -275,12 +309,17 @@ class StringIntern {
         std::atomic<Node*> next;
     };
 
+    // A fixed function, unlike std::hash, whose result varies by standard
+    // library: deterministic ids must agree across processes that were not
+    // necessarily built against the same one.
     static std::size_t hash(std::string_view sv) {
-        return std::hash<std::string_view>{}(sv);
+        return hash::fnv1a_mix(hash::fnv1a_hash(sv));
     }
 
     std::unique_ptr<std::atomic<Node*>[]> buckets_;
     std::unique_ptr<std::atomic<Slot*>[]> directory_;
+    std::unique_ptr<std::atomic<std::atomic<std::uint32_t>*>[]> log_;
+    std::atomic<std::size_t> entry_count_{0};
     std::atomic<std::size_t> num_strings_{0};
     std::atomic<bool> deterministic_ids_{false};
     std::mutex insert_mutex_;

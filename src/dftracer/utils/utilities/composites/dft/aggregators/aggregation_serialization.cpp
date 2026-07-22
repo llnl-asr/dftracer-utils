@@ -429,7 +429,6 @@ void load_intern_dictionary(dftracer::utils::rocksdb::RocksDatabase& db) {
     namespace rcf = dftracer::utils::rocksdb::cf;
     auto& intern = aggregation_intern();
     auto it = db.new_iterator(rcf::AGGREGATION);
-    std::uint32_t max_id_plus_one = 0;
     for (it->Seek({AGG_INTERN_DICT_PREFIX, AGG_INTERN_DICT_PREFIX_LEN});
          it->Valid(); it->Next()) {
         auto key_slice = it->key();
@@ -454,10 +453,11 @@ void load_intern_dictionary(dftracer::utils::rocksdb::RocksDatabase& db) {
         auto val_slice = it->value();
         intern.insert_at_id(
             id, std::string_view(val_slice.data(), val_slice.size()));
-        if (id + 1u > max_id_plus_one) max_id_plus_one = id + 1u;
     }
-    intern_flushed_watermark().store(max_id_plus_one,
-                                     std::memory_order_relaxed);
+    // Everything just loaded is already on disk.
+    intern_flushed_watermark().store(
+        static_cast<std::uint32_t>(intern.entry_count()),
+        std::memory_order_relaxed);
 }
 
 void flush_intern_dictionary(
@@ -465,11 +465,12 @@ void flush_intern_dictionary(
     dftracer::utils::rocksdb::RocksDatabase::Batch& batch) {
     namespace rcf = dftracer::utils::rocksdb::cf;
     auto& intern = aggregation_intern();
-    auto current = static_cast<std::uint32_t>(intern.size());
+    auto current = static_cast<std::uint32_t>(intern.entry_count());
     auto flushed = intern_flushed_watermark().load(std::memory_order_relaxed);
     if (current <= flushed) return;
 
-    for (std::uint32_t id = flushed; id < current; ++id) {
+    for (std::uint32_t n = flushed; n < current; ++n) {
+        const auto id = intern.entry_id(n);
         std::string key(AGG_INTERN_DICT_PREFIX, AGG_INTERN_DICT_PREFIX_LEN);
         common::serialization::put_varint(key, id);
         auto sv = intern.resolve(id);
@@ -489,12 +490,13 @@ void flush_intern_dictionary(
 void flush_intern_dictionary(
     dftracer::utils::utilities::indexer::IndexBatchSink& sink) {
     auto& intern = aggregation_intern();
-    auto current = static_cast<std::uint32_t>(intern.size());
+    auto current = static_cast<std::uint32_t>(intern.entry_count());
     auto flushed = intern_flushed_watermark().load(std::memory_order_relaxed);
     if (current <= flushed) return;
 
     std::string key;
-    for (std::uint32_t id = flushed; id < current; ++id) {
+    for (std::uint32_t n = flushed; n < current; ++n) {
+        const auto id = intern.entry_id(n);
         key.assign(AGG_INTERN_DICT_PREFIX, AGG_INTERN_DICT_PREFIX_LEN);
         common::serialization::put_varint(key, id);
         auto sv = intern.resolve(id);

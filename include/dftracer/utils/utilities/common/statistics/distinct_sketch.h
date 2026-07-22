@@ -146,18 +146,7 @@ class BasicDistinctSketch {
     }
 
     static std::uint64_t hash64(std::string_view s) {
-        return mix(hash::fnv1a_hash(s));
-    }
-
-    // The register index comes from the top bits, which FNV leaves poorly
-    // distributed on short inputs.
-    static std::uint64_t mix(std::uint64_t h) {
-        h ^= h >> 33;
-        h *= 0xff51afd7ed558ccdULL;
-        h ^= h >> 33;
-        h *= 0xc4ceb9fe1a85ec53ULL;
-        h ^= h >> 33;
-        return h;
+        return hash::fnv1a_mix(hash::fnv1a_hash(s));
     }
 
     std::vector<std::uint64_t> sparse_;

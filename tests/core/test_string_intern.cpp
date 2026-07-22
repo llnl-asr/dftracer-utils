@@ -69,6 +69,23 @@ TEST_SUITE("StringIntern") {
         }
     }
 
+    TEST_CASE("StringIntern - insertion log enumerates only real entries") {
+        // Content-derived ids are sparse over the whole id space, so anything
+        // persisting the dictionary must walk the log, not the id range.
+        StringIntern intern;
+        intern.enable_deterministic_ids();
+        std::vector<std::string> inserted;
+        for (int i = 0; i < 1000; ++i) {
+            inserted.push_back("value_" + std::to_string(i));
+            intern.get_or_insert(inserted.back());
+        }
+        intern.get_or_insert("value_0");
+        REQUIRE(intern.entry_count() == inserted.size());
+        for (std::size_t n = 0; n < intern.entry_count(); ++n) {
+            CHECK(intern.resolve(intern.entry_id(n)) == inserted[n]);
+        }
+    }
+
     TEST_CASE("StringIntern - concurrent inserts all resolve") {
         StringIntern intern;
         constexpr int THREADS = 8;

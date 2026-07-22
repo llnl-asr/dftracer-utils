@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_HASH_FNV1A_HASHER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_HASH_FNV1A_HASHER_UTILITY_H
 
+#include <dftracer/utils/core/common/hash/fnv1a.h>
 #include <dftracer/utils/utilities/hash/internal/base_hasher_utility.h>
 
 #include <cstddef>
@@ -9,24 +10,11 @@
 
 namespace dftracer::utils::utilities::hash {
 
-// FNV-1a constants
-inline constexpr std::uint64_t FNV1A_OFFSET_BASIS = 0xcbf29ce484222325ULL;
-inline constexpr std::uint64_t FNV1A_PRIME = 0x00000100000001B3ULL;
-
-// Simple FNV-1a 64-bit hash for one-shot use
-inline std::uint64_t fnv1a_hash(const void* data, std::size_t len) {
-    std::uint64_t hash = FNV1A_OFFSET_BASIS;
-    const auto* bytes = static_cast<const std::uint8_t*>(data);
-    for (std::size_t i = 0; i < len; ++i) {
-        hash ^= bytes[i];
-        hash *= FNV1A_PRIME;
-    }
-    return hash;
-}
-
-inline std::uint64_t fnv1a_hash(std::string_view data) {
-    return fnv1a_hash(data.data(), data.size());
-}
+// The primitives live in core so non-utilities code can share them.
+using dftracer::utils::hash::fnv1a_hash;
+using dftracer::utils::hash::fnv1a_mix;
+using dftracer::utils::hash::FNV1A_OFFSET_BASIS;
+using dftracer::utils::hash::FNV1A_PRIME;
 
 // Incremental hash builder for combining multiple values
 struct Fnv1aHashBuilder {

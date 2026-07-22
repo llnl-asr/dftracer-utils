@@ -6,52 +6,53 @@
 
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace dftracer::utils {
 
 class StringIntern {
     using Slot = std::atomic<const std::string*>;
+    using LogSlot = std::atomic<std::uint32_t>;
+    using IndexSlot = std::atomic<std::uint32_t>;
 
    public:
     // id -> string lives in lazily allocated blocks behind a fixed directory,
-    // so the table costs a block per 4096 ids actually used instead of one
-    // preallocated array, and no id is unaddressable.
+    // so an idle table costs the directory rather than the whole id space.
     static constexpr std::size_t BLOCK_BITS = 12;
     static constexpr std::size_t BLOCK_SIZE = 1u << BLOCK_BITS;
     static constexpr std::size_t DIRECTORY_SIZE = 1u << 16;
     static constexpr std::size_t FAST_CAPACITY = BLOCK_SIZE * DIRECTORY_SIZE;
 
+    static constexpr std::uint32_t NO_ID = UINT32_MAX;
+
     StringIntern()
-        : buckets_(std::make_unique<std::atomic<Node*>[]>(BUCKET_COUNT)),
-          directory_(std::make_unique<std::atomic<Slot*>[]>(DIRECTORY_SIZE)),
-          log_(std::make_unique<std::atomic<std::atomic<std::uint32_t>*>[]>(
-              DIRECTORY_SIZE)) {
-        for (std::size_t i = 0; i < BUCKET_COUNT; ++i) {
-            buckets_[i].store(nullptr, std::memory_order_relaxed);
-        }
+        : directory_(std::make_unique<std::atomic<Slot*>[]>(DIRECTORY_SIZE)),
+          log_(std::make_unique<std::atomic<LogSlot*>[]>(DIRECTORY_SIZE)) {
         for (std::size_t i = 0; i < DIRECTORY_SIZE; ++i) {
             directory_[i].store(nullptr, std::memory_order_relaxed);
             log_[i].store(nullptr, std::memory_order_relaxed);
         }
+        index_.store(make_index(INITIAL_INDEX_SLOTS),
+                     std::memory_order_release);
     }
 
     ~StringIntern() {
+        // One index slot per distinct string, so this frees each exactly once
+        // even where two ids share a string.
+        auto* idx = index_.load(std::memory_order_relaxed);
+        for (std::size_t i = 0; i <= idx->mask; ++i) {
+            auto v = idx->slots[i].load(std::memory_order_relaxed);
+            if (v != 0) delete const_cast<std::string*>(slot_value(v - 1));
+        }
+        delete_index(idx);
+        for (auto* old : retired_) delete_index(old);
         for (std::size_t i = 0; i < DIRECTORY_SIZE; ++i) {
             delete[] directory_[i].load(std::memory_order_relaxed);
             delete[] log_[i].load(std::memory_order_relaxed);
-        }
-        for (std::size_t i = 0; i < BUCKET_COUNT; ++i) {
-            auto* node = buckets_[i].load(std::memory_order_relaxed);
-            while (node) {
-                auto* next = node->next.load(std::memory_order_relaxed);
-                delete node;
-                node = next;
-            }
         }
     }
 
@@ -62,89 +63,41 @@ class StringIntern {
 
     std::uint32_t get_or_insert(std::string_view sv) {
         const auto h = hash(sv);
-        const auto bucket = h & BUCKET_MASK;
+        if (auto id = lookup(h, sv); id != NO_ID) return id;
 
-        // Lock-free lookup
-        auto* node = buckets_[bucket].load(std::memory_order_acquire);
-        while (node) {
-            if (node->hash == h && node->str == sv) {
-                return node->id;
-            }
-            node = node->next.load(std::memory_order_acquire);
-        }
-
-        // Rare: new string; take mutex
         std::lock_guard lock(insert_mutex_);
-
-        // Re-check under lock (another thread may have inserted)
-        node = buckets_[bucket].load(std::memory_order_acquire);
-        while (node) {
-            if (node->hash == h && node->str == sv) {
-                return node->id;
-            }
-            node = node->next.load(std::memory_order_acquire);
-        }
+        if (auto id = lookup(h, sv); id != NO_ID) return id;
 
         std::uint32_t id;
         if (deterministic_ids_.load(std::memory_order_acquire)) {
-            // Content-derived so the same string gets the same id in every
-            // process. A collision is refused below rather than silently
-            // binding two strings to one id.
             id = static_cast<std::uint32_t>(h & (FAST_CAPACITY - 1));
         } else {
             id = static_cast<std::uint32_t>(
                 num_strings_.load(std::memory_order_relaxed));
         }
-        auto* new_node = new Node{std::string(sv), h, id, {}};
-        new_node->next.store(buckets_[bucket].load(std::memory_order_relaxed),
-                             std::memory_order_relaxed);
 
-        // Two strings landing on one deterministic id would merge unrelated
-        // aggregation keys, so refuse rather than let the first one win.
+        // Two strings on one deterministic id would merge unrelated keys.
         if (const auto* existing = slot_value(id)) {
-            if (*existing != sv) {
-                delete new_node;
-                throw DFTUtilsException(
-                    ErrorCode::INTERNAL,
-                    "string intern: deterministic id collision between '" +
-                        *existing + "' and '" + std::string(sv) +
-                        "'; the dictionary is too large for this id space");
-            }
-        } else {
-            bind_slot(id, &new_node->str);
+            if (*existing == sv) return id;
+            throw DFTUtilsException(
+                ErrorCode::INTERNAL,
+                "string intern: deterministic id collision between '" +
+                    *existing + "' and '" + std::string(sv) +
+                    "'; the dictionary is too large for this id space");
         }
 
-        // Publishing the bucket releases the slot store above too.
-        buckets_[bucket].store(new_node, std::memory_order_release);
-
-        if (!deterministic_ids_.load(std::memory_order_acquire)) {
-            // Sequential id path: advance counter past the id we just
-            // handed out so size() stays monotonic.
-            num_strings_.store(static_cast<std::size_t>(id) + 1,
-                               std::memory_order_release);
-        } else {
-            // Deterministic id path: `size()` is a weak estimate of
-            // distinct strings; bump if this id is the highest seen.
-            std::size_t cur = num_strings_.load(std::memory_order_relaxed);
-            const std::size_t need = static_cast<std::size_t>(id) + 1;
-            while (cur < need && !num_strings_.compare_exchange_weak(
-                                     cur, need, std::memory_order_release,
-                                     std::memory_order_relaxed)) {
-            }
-        }
-
+        auto* str = new std::string(sv);
+        bind_slot(id, str);
+        index_insert(h, id);
+        advance_num_strings(id);
         return id;
     }
 
-    /// Insert or look up a string at a specific id, for loading a persisted
-    /// dictionary where ids must be preserved. Ids are index-local, so loading
-    /// a second index's dictionary here would rebind them: a conflicting id
-    /// throws rather than resolve to the wrong string.
-    /// Safe to call concurrently with other inserts; must be called before
-    /// any `resolve(id)` at that id.
+    /// Insert at a specific id, for loading a persisted dictionary. Ids are
+    /// index-local, so a conflicting id throws rather than rebind to another
+    /// index's string. Must precede any `resolve(id)` at that id.
     void insert_at_id(std::uint32_t id, std::string_view sv) {
         const auto h = hash(sv);
-        const auto bucket = h & BUCKET_MASK;
 
         std::lock_guard lock(insert_mutex_);
 
@@ -157,44 +110,17 @@ class StringIntern {
                     "' (dictionaries from two indexes in one table?)");
         }
 
-        // Also avoid inserting a second node for the same string (would leave
-        // the older node referenced by the bucket chain pointing at a stale
-        // id, confusing get_or_insert which returns the first match).
-        auto* node = buckets_[bucket].load(std::memory_order_acquire);
-        while (node) {
-            if (node->hash == h && node->str == sv) {
-                // Same string under another id: bind this id to it too.
-                bind_slot(id, &node->str);
-                if (static_cast<std::size_t>(id) + 1 >
-                    num_strings_.load(std::memory_order_relaxed)) {
-                    num_strings_.store(static_cast<std::size_t>(id) + 1,
-                                       std::memory_order_release);
-                }
-                return;
-            }
-            node = node->next.load(std::memory_order_acquire);
+        if (auto existing_id = lookup(h, sv); existing_id != NO_ID) {
+            bind_slot(id, slot_value(existing_id));
+        } else {
+            bind_slot(id, new std::string(sv));
+            index_insert(h, id);
         }
-
-        auto* new_node = new Node{std::string(sv), h, id, {}};
-        new_node->next.store(buckets_[bucket].load(std::memory_order_relaxed),
-                             std::memory_order_relaxed);
-
-        bind_slot(id, &new_node->str);
-
-        buckets_[bucket].store(new_node, std::memory_order_release);
-
-        // Advance num_strings_ past the highest id ever inserted so future
-        // get_or_insert calls don't collide with a loaded id.
-        std::size_t cur = num_strings_.load(std::memory_order_relaxed);
-        const std::size_t need = static_cast<std::size_t>(id) + 1;
-        while (cur < need && !num_strings_.compare_exchange_weak(
-                                 cur, need, std::memory_order_release,
-                                 std::memory_order_relaxed)) {
-        }
+        advance_num_strings(id);
     }
 
-    /// Empty means "no string at this id". An id past the table's reach is a
-    /// corrupt or foreign key, not an absent string, and says so.
+    /// Empty means "no string at this id"; an id past the table's reach is a
+    /// corrupt or foreign key, not an absent string.
     std::string_view resolve(std::uint32_t id) const {
         if (id >= FAST_CAPACITY) {
             throw DFTUtilsException(
@@ -209,8 +135,8 @@ class StringIntern {
     }
 
     /// Number of strings interned, and the id of the n-th in insertion order.
-    /// Content-derived ids are sparse over the whole id space, so anything
-    /// enumerating the dictionary walks this instead of the id range.
+    /// Content-derived ids are sparse, so enumerating the dictionary walks
+    /// these rather than the id range.
     std::size_t entry_count() const {
         return entry_count_.load(std::memory_order_acquire);
     }
@@ -222,8 +148,7 @@ class StringIntern {
                    : 0;
     }
 
-    /// The string bound to `id`, or null when the slot is free. Callers under
-    /// `insert_mutex_` use this to spot a conflicting binding.
+    /// The string bound to `id`, or null when the slot is free.
     const std::string* slot_value(std::uint32_t id) const {
         if (id >= FAST_CAPACITY) return nullptr;
         auto* block =
@@ -240,46 +165,110 @@ class StringIntern {
         return num_strings_.load(std::memory_order_acquire);
     }
 
-    /// Shift the next-to-assign id counter to `base`. Subsequent
-    /// `get_or_insert` calls allocate ids starting at `base`.
-    /// Must be called before any `get_or_insert` on this instance.
-    /// Lock-free: caller ensures no concurrent inserts.
+    /// Shift the next-to-assign id counter to `base`. Must precede any
+    /// `get_or_insert`; the caller ensures no concurrent inserts.
     void reserve_id_base(std::uint32_t base) noexcept {
         num_strings_.store(base, std::memory_order_release);
     }
 
-    /// Derive ids from string content instead of a counter, so the same
-    /// string gets the same id in every process. Needed where keys embedding
-    /// string ids must match across MPI ranks for RocksDB merge operators to
-    /// combine them.
-    ///
-    /// The id space is finite, so this only holds for dictionaries small
-    /// enough to avoid a birthday collision; a collision throws rather than
-    /// bind two strings to one id. Dictionaries that scale with the trace
-    /// (per-file hashes) need sequential ids and a per-index table.
-
-    ///
-    /// Must be called before any `get_or_insert`.
+    /// Derive ids from string content instead of a counter, so keys embedding
+    /// them match across MPI ranks. The id space is finite, so this only holds
+    /// for dictionaries small enough to avoid a birthday collision; a collision
+    /// throws. Must precede any `get_or_insert`.
     void enable_deterministic_ids() noexcept {
         deterministic_ids_.store(true, std::memory_order_release);
     }
 
    private:
-    /// Append `id` to the insertion log. Caller holds `insert_mutex_`.
+    /// Open-addressed string -> id lookup; slots hold `id + 1`, so 0 is free.
+    /// Growth publishes a replacement and never writes the old one again, so a
+    /// reader on it stays correct and at worst misses a newer string, which
+    /// sends it down the locked path.
+    struct Index {
+        std::size_t mask;
+        IndexSlot* slots;
+    };
+
+    static constexpr std::size_t INITIAL_INDEX_SLOTS = 1u << 10;
+
+    static Index* make_index(std::size_t slots) {
+        auto* idx = new Index{slots - 1, new IndexSlot[slots]};
+        for (std::size_t i = 0; i < slots; ++i)
+            idx->slots[i].store(0, std::memory_order_relaxed);
+        return idx;
+    }
+
+    static void delete_index(Index* idx) {
+        delete[] idx->slots;
+        delete idx;
+    }
+
+    std::uint32_t lookup(std::size_t h, std::string_view sv) const {
+        const auto* idx = index_.load(std::memory_order_acquire);
+        for (std::size_t i = h & idx->mask;; i = (i + 1) & idx->mask) {
+            auto v = idx->slots[i].load(std::memory_order_acquire);
+            if (v == 0) return NO_ID;
+            const auto* s = slot_value(v - 1);
+            if (s && *s == sv) return v - 1;
+        }
+    }
+
+    /// Caller holds `insert_mutex_`.
+    void index_insert(std::size_t h, std::uint32_t id) {
+        auto* idx = index_.load(std::memory_order_relaxed);
+        if ((index_size_ + 1) * 4 >= (idx->mask + 1) * 3) {
+            idx = grow_index();
+        }
+        for (std::size_t i = h & idx->mask;; i = (i + 1) & idx->mask) {
+            if (idx->slots[i].load(std::memory_order_relaxed) == 0) {
+                idx->slots[i].store(id + 1, std::memory_order_release);
+                break;
+            }
+        }
+        ++index_size_;
+    }
+
+    Index* grow_index() {
+        auto* old = index_.load(std::memory_order_relaxed);
+        auto* fresh = make_index((old->mask + 1) * 2);
+        for (std::size_t i = 0; i <= old->mask; ++i) {
+            auto v = old->slots[i].load(std::memory_order_relaxed);
+            if (v == 0) continue;
+            const auto h = hash(*slot_value(v - 1));
+            for (std::size_t j = h & fresh->mask;; j = (j + 1) & fresh->mask) {
+                if (fresh->slots[j].load(std::memory_order_relaxed) == 0) {
+                    fresh->slots[j].store(v, std::memory_order_relaxed);
+                    break;
+                }
+            }
+        }
+        retired_.push_back(old);
+        index_.store(fresh, std::memory_order_release);
+        return fresh;
+    }
+
+    /// Caller holds `insert_mutex_`.
+    void advance_num_strings(std::uint32_t id) {
+        const std::size_t need = static_cast<std::size_t>(id) + 1;
+        if (need > num_strings_.load(std::memory_order_relaxed)) {
+            num_strings_.store(need, std::memory_order_release);
+        }
+    }
+
+    /// Caller holds `insert_mutex_`.
     void log_entry(std::uint32_t id) {
         const auto n = entry_count_.load(std::memory_order_relaxed);
         auto& dir = log_[n >> BLOCK_BITS];
         auto* block = dir.load(std::memory_order_acquire);
         if (!block) {
-            block = new std::atomic<std::uint32_t>[BLOCK_SIZE];
+            block = new LogSlot[BLOCK_SIZE];
             dir.store(block, std::memory_order_release);
         }
         block[n & (BLOCK_SIZE - 1)].store(id, std::memory_order_relaxed);
         entry_count_.store(n + 1, std::memory_order_release);
     }
 
-    /// Bind `id` to `str`. Allocates the block on first use. Caller holds
-    /// `insert_mutex_`.
+    /// Caller holds `insert_mutex_`.
     void bind_slot(std::uint32_t id, const std::string* str) {
         if (id >= FAST_CAPACITY) {
             throw DFTUtilsException(
@@ -299,26 +288,17 @@ class StringIntern {
         log_entry(id);
     }
 
-    static constexpr std::size_t BUCKET_COUNT = 1u << 12;  // 4096
-    static constexpr std::size_t BUCKET_MASK = BUCKET_COUNT - 1;
-
-    struct Node {
-        const std::string str;
-        const std::size_t hash;
-        const std::uint32_t id;
-        std::atomic<Node*> next;
-    };
-
-    // A fixed function, unlike std::hash, whose result varies by standard
-    // library: deterministic ids must agree across processes that were not
-    // necessarily built against the same one.
+    // Fixed, unlike std::hash, whose result varies by standard library:
+    // deterministic ids must agree across independently built processes.
     static std::size_t hash(std::string_view sv) {
         return hash::fnv1a_mix(hash::fnv1a_hash(sv));
     }
 
-    std::unique_ptr<std::atomic<Node*>[]> buckets_;
     std::unique_ptr<std::atomic<Slot*>[]> directory_;
-    std::unique_ptr<std::atomic<std::atomic<std::uint32_t>*>[]> log_;
+    std::unique_ptr<std::atomic<LogSlot*>[]> log_;
+    std::atomic<Index*> index_{nullptr};
+    std::vector<Index*> retired_;
+    std::size_t index_size_ = 0;
     std::atomic<std::size_t> entry_count_{0};
     std::atomic<std::size_t> num_strings_{0};
     std::atomic<bool> deterministic_ids_{false};

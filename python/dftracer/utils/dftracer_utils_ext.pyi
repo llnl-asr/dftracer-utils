@@ -145,6 +145,13 @@ class Indexer:
         """
         ...
 
+    def count_hash_entries(self, hash_type: str) -> int:
+        """Number of hashes of `hash_type` ('file', 'host', 'string', 'proc').
+
+        Counted by iteration rather than by materialising the table.
+        """
+        ...
+
     def get_hash_table(self, hash_type: str) -> Dict[str, str]:
         """Get hash table mapping hash values to original strings.
 

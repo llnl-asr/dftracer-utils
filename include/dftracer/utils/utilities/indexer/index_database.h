@@ -293,6 +293,10 @@ class IndexDatabase {
     /// Resolve one hash with a point lookup, without caching every hash table
     /// first. Preferred when only a few hashes are needed and the tables are
     /// large (a trace can declare millions of files).
+    /// Number of hashes of `type`, counted by iterating rather than
+    /// materialising the table: it can hold tens of millions of entries.
+    std::uint64_t count_hash_entries(HashType type) const;
+
     std::optional<std::string> lookup_hash(HashType type,
                                            std::string_view hash) const;
 

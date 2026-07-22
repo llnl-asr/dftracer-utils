@@ -30,6 +30,7 @@ __all__ = [
     "build_final_meta",
     "build_index_distributed",
     "build_partial_meta",
+    "dfanalyzer_events_meta",
     "hlm_scan_group_by",
     "coerce_arrow_numerics_to_pandas_native",
     "coerce_profile_dtypes",
@@ -47,6 +48,84 @@ __all__ = [
 ]
 
 _TRACE_SUFFIXES = (".pfw", ".pfw.gz")
+
+
+# The scan's own schema, so callers do not transcribe it. Column order and
+# dtypes must track dfanalyzer_scan.cpp: DFANALYZER_SCHEMA for the full grain,
+# and the grouped specs for a folded scan.
+_FULL_EVENTS_META = {
+    "cat": "str",
+    "func_name": "str",
+    "pid": "int64",
+    "tid": "int64",
+    "file_hash": "str",
+    "host_hash": "str",
+    "file_name": "str",
+    "host_name": "str",
+    "proc_name": "str",
+    "io_cat": "int64",
+    "acc_pat": "int64",
+    "count": "int64",
+    "file_nunique": "int64",
+    "time": "float64",
+    "size": "float64",
+    "time_min": "float64",
+    "time_max": "float64",
+    "size_min": "float64",
+    "size_max": "float64",
+    "offset_min": "int64",
+    "offset_max": "int64",
+    "time_range": "int64",
+    "time_start": "int64",
+    "time_end": "int64",
+}
+
+_GROUPED_COLUMN_DTYPES = {
+    "cat": "str",
+    "func_name": "str",
+    "pid": "int64",
+    "tid": "int64",
+    "file_hash": "str",
+    "host_hash": "str",
+    "file_name": "str",
+    "host_name": "str",
+    "proc_name": "str",
+    "io_cat": "int64",
+    "acc_pat": "int64",
+    "time_range": "int64",
+}
+
+_GROUPED_METRIC_META = {
+    "count": "int64",
+    "time": "float64",
+    "size": "float64",
+    "time_sq": "float64",
+    "size_sq": "float64",
+    "time_min": "float64",
+    "time_max": "float64",
+    "size_min": "float64",
+    "size_max": "float64",
+    "time_call_min": "float64",
+    "time_call_max": "float64",
+    "size_call_min": "float64",
+    "size_call_max": "float64",
+    "time_start": "int64",
+    "time_end": "int64",
+}
+
+
+def dfanalyzer_events_meta(group_by: Optional[List[str]] = None) -> "pd.DataFrame":
+    """Empty frame matching what `scan_to_ipc` emits for this `group_by`.
+
+    Without `group_by` that is one row per stored key; with it, the grouped
+    columns followed by the combined metrics.
+    """
+    if not group_by:
+        cols = dict(_FULL_EVENTS_META)
+    else:
+        cols = {c: _GROUPED_COLUMN_DTYPES[c] for c in group_by if c in _GROUPED_COLUMN_DTYPES}
+        cols.update(_GROUPED_METRIC_META)
+    return pd.DataFrame({name: pd.Series(dtype=dt) for name, dt in cols.items()})
 
 
 def ipc_to_pandas(ipc_bytes: bytes):

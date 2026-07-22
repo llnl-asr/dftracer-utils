@@ -1899,6 +1899,22 @@ std::unordered_map<std::string, std::string> IndexDatabase::query_hash_table(
     return {};
 }
 
+std::uint64_t IndexDatabase::count_hash_entries(HashType type) const {
+    const auto prefix = encoding::hash_table_forward_key(
+        static_cast<std::uint8_t>(type), std::string_view{});
+    auto it = db_->new_iterator(cf::HASH_TABLES);
+    std::uint64_t count = 0;
+    for (it->Seek(::rocksdb::Slice(prefix.data(), prefix.size())); it->Valid();
+         it->Next()) {
+        auto key = it->key();
+        if (key.size() < prefix.size() ||
+            std::memcmp(key.data(), prefix.data(), prefix.size()) != 0)
+            break;
+        ++count;
+    }
+    return count;
+}
+
 std::optional<std::string> IndexDatabase::lookup_hash(
     HashType type, std::string_view hash) const {
     if (hash.empty()) return std::nullopt;

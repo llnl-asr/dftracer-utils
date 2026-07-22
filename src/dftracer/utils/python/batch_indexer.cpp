@@ -926,9 +926,8 @@ static PyObject* Indexer_iter_arrow_dfanalyzer(IndexerObject* self,
                 time_bounds.valid ? time_bounds.min_time_bucket : 0;
 
             DfanalyzerContext ctx;
-            // Resolve hashes on demand. Ingesting both hash tables costs
-            // O(files the trace declares) - 71s on a 20M-file trace - and this
-            // runs once per dfanalyzer task, per shard range.
+            // Resolve on demand: ingesting both hash tables costs the whole
+            // trace's file list, and this runs once per dfanalyzer task.
             ctx.hash_db = &idx_db;
             ctx.query_filter = query_opt ? &*query_opt : nullptr;
             ctx.time_origin = time_origin;
@@ -1076,9 +1075,8 @@ static PyObject* Indexer_iter_arrow_dfanalyzer_all(IndexerObject* self,
                 time_bounds.valid ? time_bounds.min_time_bucket : 0;
 
             DfanalyzerContext ctx;
-            // Resolve hashes on demand. Ingesting both hash tables costs
-            // O(files the trace declares) - 71s on a 20M-file trace - and this
-            // runs once per dfanalyzer task, per shard range.
+            // Resolve on demand: ingesting both hash tables costs the whole
+            // trace's file list, and this runs once per dfanalyzer task.
             ctx.hash_db = &idx_db;
             ctx.query_filter = query_opt ? &*query_opt : nullptr;
             ctx.time_origin = time_origin;

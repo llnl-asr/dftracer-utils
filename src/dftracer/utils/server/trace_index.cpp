@@ -711,12 +711,12 @@ coro::CoroTask<void> TraceIndex::initialize() {
     load_persisted_viz_summary();
 }
 
-// Hash tables can hold millions of entries, so this uses a point lookup and
-// keeps each root's database open rather than caching whole tables per request.
+// Looks up single hashes and keeps each root's database open, rather than
+// caching whole hash tables per request.
 std::string TraceIndex::resolve_hash(HashType type, const std::string& hash) {
     if (hash.empty()) return {};
-    // Memoized across requests, misses included: a lane grouping resolves
-    // thousands of hashes and the viewer re-asks on every zoom.
+    // Memoized across requests, misses included: the viewer re-asks for the
+    // same hashes on every zoom.
     std::string memo_key;
     memo_key.reserve(hash.size() + 1);
     memo_key.push_back(static_cast<char>(static_cast<int>(type)));

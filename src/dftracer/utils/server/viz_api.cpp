@@ -3507,10 +3507,9 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
     if (lookback < 0) lookback = 0;
 
     // The client feeds back the longest event in the trace as `lookback`, so
-    // honoring it literally rescans everything before the window - 24s against
-    // 0.5s for the window itself on a large trace. Every event that wide is
-    // already in the summary's long-event list, so take enclosers from there
-    // and scan back only far enough to catch the ones too short to be listed.
+    // honoring it literally rescans everything before the window. Anything that
+    // wide is already in the summary's long-event list, so take enclosers from
+    // there and scan back only far enough to catch the ones too short to list.
     const VizSummary* enc_summary = nullptr;
     if (lookback > 0 && viz_summary_eligible(params)) {
         const VizSummary* s = co_await ensure_viz_summary(index);
@@ -3667,8 +3666,8 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
             auto g = extract_group_from_line(e, group_col);
             if (!g.empty()) raw_groups.insert(std::move(g));
         }
-        // One point lookup per group value: reading whole hash tables costs
-        // O(files the trace declares), which is 71s on a 20M-file trace.
+        // One lookup per group value: reading whole hash tables costs the
+        // trace's entire file list.
         for (const auto& g : raw_groups) {
             auto name = index.resolve_hash(*resolve_type, g);
             if (!name.empty()) group_names.emplace(g, std::move(name));

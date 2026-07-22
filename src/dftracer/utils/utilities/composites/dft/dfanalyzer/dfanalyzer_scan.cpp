@@ -204,9 +204,8 @@ inline IOCategory get_io_category(std::string_view func_name) {
     return IOCategory::OTHER;
 }
 
-// Resolves fhash/hhash to names, preferring one point lookup per distinct
-// hash actually seen over ingesting whole hash tables: a trace can declare
-// millions of files, and this runs once per shard range per scan.
+// Resolves fhash/hhash to names. With a `hash_db` it looks up only the hashes
+// it meets, rather than ingesting hash tables sized by the whole trace.
 class HashResolver {
    public:
     HashResolver(

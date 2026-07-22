@@ -10,12 +10,12 @@
 
 namespace dftracer::utils::server {
 
-// Activity summary ("mipmap") for the viz overview: a full parallel scan folds
-// every event into per-lane time buckets once, letting density and counter
-// queries answer in O(buckets) with no event cap. The buckets form a pyramid of
-// levels, each 4x finer than the one above, so a zoomed-in window is served
-// from the coarsest level whose buckets still fit inside one output pixel.
-// Only zooms below the finest level, and filtered queries, scan live.
+// Activity summary ("mipmap") for the viz overview: one parallel scan folds
+// every event into per-lane time buckets, so density and counter queries need
+// no event scan and no cap. The buckets form a pyramid of levels, each 4x finer
+// than the one above; a request reads the coarsest level whose buckets still
+// fit inside one output pixel. Zooms below the finest level, and filtered
+// queries, scan live.
 struct VizSummary {
     // Level-0 (counter grid) budget: ~60 MB at 20 bytes/cell. Also caps lanes.
     static constexpr std::size_t MAX_CELLS = 3'000'000;

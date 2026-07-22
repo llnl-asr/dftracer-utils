@@ -22,14 +22,12 @@ namespace dftracer::utils::utilities::composites::dft::aggregators {
 /// Context for converting aggregation data to dfanalyzer-compatible Arrow
 /// format.
 struct DfanalyzerContext {
-    /// Hash tables for resolving fhash/hhash to file_name/host_name. Optional:
-    /// with `hash_db` set they are looked up one at a time instead, which is
-    /// what a trace declaring millions of files needs.
+    /// Hash tables for resolving fhash/hhash to file_name/host_name.
     const std::unordered_map<std::string, std::string>* file_hashes = nullptr;
     const std::unordered_map<std::string, std::string>* host_hashes = nullptr;
 
-    /// Index database used to resolve hashes on demand. Preferred over the
-    /// tables above: loading them costs O(all declared files) per scan.
+    /// Resolves hashes on demand; preferred over the tables above, which cost
+    /// the trace's entire file list to load.
     const indexer::IndexDatabase* hash_db = nullptr;
 
     const common::query::Query* query_filter = nullptr;

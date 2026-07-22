@@ -106,8 +106,9 @@ def _runtime_threads(worker, host_worker_counts, total_cpus):
 def register_auto_thread_plugin() -> None:
     """Register the DFTracer worker plugin on the active distributed client.
 
-    Sizes each worker's C++ Runtime to the worker's own Dask thread count, so
-    several workers on one node do not each claim every core.
+    Sizes each worker's C++ Runtime, compute and I/O threads alike, to the
+    worker's own Dask thread count, so several workers on one node do not each
+    claim every core.
 
     Idempotent: re-registering the same plugin on the same scheduler triggers a
     teardown+setup round-trip on every worker, which deadlocks if the previous
@@ -159,13 +160,17 @@ def register_auto_thread_plugin() -> None:
                 )
                 my_host = worker.address.split("://")[-1].rsplit(":", 1)[0]
                 self.threads = _runtime_threads(worker, self._host_worker_counts, total_cpus)
-                own_threads = getattr(worker, "nthreads", None)
+                # The I/O pool needs the same treatment: left at 0 it defaults
+                # to one thread per core in every worker on the node.
+                self.io_threads = self.threads
                 logging.getLogger("distributed.worker").info(
-                    "DFTracer Runtime: host=%s cpus=%d worker_nthreads=%s cpp_threads=%d",
+                    "DFTracer Runtime: host=%s cpus=%d worker_nthreads=%s "
+                    "cpp_threads=%d io_threads=%d",
                     my_host,
                     total_cpus,
-                    own_threads,
+                    getattr(worker, "nthreads", None),
                     self.threads,
+                    self.io_threads,
                 )
                 super().setup(worker)
 

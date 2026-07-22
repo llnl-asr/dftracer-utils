@@ -1025,18 +1025,28 @@ static bool parse_group_by_arg(PyObject* obj, GroupByConfig& out) {
 static PyObject* Indexer_iter_arrow_dfanalyzer_all(IndexerObject* self,
                                                    PyObject* args,
                                                    PyObject* kwds) {
-    static const char* kwlist[] = {"batch_size",      "time_granularity",
-                                   "time_resolution", "query",
-                                   "group_by",        nullptr};
+    static const char* kwlist[] = {
+        "batch_size", "time_granularity", "time_resolution", "query",
+        "group_by",   "shard_begin",      "shard_end",       nullptr};
     Py_ssize_t batch_size = 10000;
     double time_granularity = 1.0;
     double time_resolution = 1000000.0;
     const char* query_str = nullptr;
     PyObject* group_by_obj = nullptr;
+    int shard_begin_i = 0;
+    int shard_end_i = DFT_NUM_SHARDS;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|nddzO", (char**)kwlist, &batch_size,
-            &time_granularity, &time_resolution, &query_str, &group_by_obj)) {
+            args, kwds, "|nddzOii", (char**)kwlist, &batch_size,
+            &time_granularity, &time_resolution, &query_str, &group_by_obj,
+            &shard_begin_i, &shard_end_i)) {
+        return nullptr;
+    }
+    if (shard_begin_i < 0 || shard_end_i > DFT_NUM_SHARDS ||
+        shard_begin_i > shard_end_i) {
+        PyErr_Format(PyExc_ValueError,
+                     "shard range [%d, %d) is outside [0, %d)", shard_begin_i,
+                     shard_end_i, static_cast<int>(DFT_NUM_SHARDS));
         return nullptr;
     }
 
@@ -1091,8 +1101,9 @@ static PyObject* Indexer_iter_arrow_dfanalyzer_all(IndexerObject* self,
 
             Runtime* rt = get_batch_indexer_runtime(self);
             std::vector<DfanalyzerScanOutput> outputs;
-            parallel_shard_scan<DfanalyzerScanOutput>(
-                rt,
+            parallel_shard_scan_range<DfanalyzerScanOutput>(
+                rt, static_cast<std::uint16_t>(shard_begin_i),
+                static_cast<std::uint16_t>(shard_end_i),
                 [&](std::uint16_t shard_begin, std::uint16_t shard_end) {
                     DfanalyzerScanInput input;
                     input.agg = handle->agg.get();

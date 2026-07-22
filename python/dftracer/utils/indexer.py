@@ -338,6 +338,8 @@ class Indexer:
         time_resolution: float = 1e6,
         query: Optional[str] = None,
         group_by: Optional[List[str]] = None,
+        shard_begin: int = 0,
+        shard_end: int = 4096,
     ):
         """Iterate over all aggregation types in a single scan.
 
@@ -361,6 +363,10 @@ class Indexer:
                 ``tid``, ``file_hash``, ``host_hash``, ``file_name``,
                 ``host_name``, ``proc_name``, ``io_cat``, ``acc_pat``,
                 ``time_range``.
+            shard_begin: First shard to scan.
+            shard_end: One past the last shard to scan. Splitting the shard
+                space across workers divides the scan; filtering by pid does
+                not, since every worker still reads every key.
 
         Returns:
             Dict with 'events', 'profiles', 'system' keys, each containing
@@ -379,6 +385,8 @@ class Indexer:
             time_resolution,
             query,
             group_by,
+            shard_begin,
+            shard_end,
         )
 
 

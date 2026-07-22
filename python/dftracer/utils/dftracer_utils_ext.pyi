@@ -227,6 +227,8 @@ class Indexer:
         time_resolution: float = 1e6,
         query: Optional[str] = None,
         group_by: Optional[List[str]] = None,
+        shard_begin: int = 0,
+        shard_end: int = 4096,
     ) -> Dict[str, List[Any]]:
         """Iterate over all aggregation types in a single scan.
 

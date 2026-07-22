@@ -70,12 +70,22 @@ def batches_to_ipc(batches_by_type: Dict[str, Any]) -> Dict[str, Optional[bytes]
     return result
 
 
-def scan_to_ipc(files, index_path, time_granularity, time_resolution, query, group_by=None):
+def scan_to_ipc(
+    files,
+    index_path,
+    time_granularity,
+    time_resolution,
+    query,
+    group_by=None,
+    shard_begin=0,
+    shard_end=4096,
+):
     """Dask worker task: scan the aggregation CF for `files`, return IPC bytes.
 
     `group_by` folds the requested dimensions during the scan, so only the
     grouped rows cross into Python. Without it the scan emits one row per
-    stored key.
+    stored key. `shard_begin`/`shard_end` split the scan itself, so N workers
+    each read 1/N of the keys rather than all of them.
     """
     indexer = _open_readonly_indexer(files, index_path)
     all_batches = indexer.iter_arrow_dfanalyzer_all(
@@ -83,6 +93,8 @@ def scan_to_ipc(files, index_path, time_granularity, time_resolution, query, gro
         time_resolution=time_resolution,
         query=query,
         group_by=group_by,
+        shard_begin=shard_begin,
+        shard_end=shard_end,
     )
     return batches_to_ipc(all_batches)
 

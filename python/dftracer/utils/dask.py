@@ -83,11 +83,31 @@ def resolve_local_staging(client) -> str:
     return os.path.join(worker_local_dir, "dftracer-sst-staging")
 
 
+def _runtime_threads(worker, host_worker_counts, total_cpus):
+    """C++ Runtime thread count for one Dask worker.
+
+    Dask already divided the node between its workers and the Runtime is shared
+    by every task on this worker, so the worker's own thread count is the share
+    to match. `host_worker_counts` is a client-side snapshot and only a
+    fallback: a worker that started later, or whose address spells the host
+    differently, is missing from it, and assuming it is alone on the node
+    oversubscribes by however many workers the node really has.
+    """
+    own = getattr(worker, "nthreads", None) or getattr(
+        getattr(worker, "state", None), "nthreads", None
+    )
+    if own:
+        return max(1, min(int(own), total_cpus))
+    host = worker.address.split("://")[-1].rsplit(":", 1)[0]
+    n_local = host_worker_counts.get(host) or max(host_worker_counts.values(), default=1)
+    return max(1, total_cpus // n_local)
+
+
 def register_auto_thread_plugin() -> None:
     """Register the DFTracer worker plugin on the active distributed client.
 
-    Sizes each worker's C++ Runtime threads as hardware_concurrency /
-    n_workers_on_node so the Runtime uses all cores without oversubscription.
+    Sizes each worker's C++ Runtime to the worker's own Dask thread count, so
+    several workers on one node do not each claim every core.
 
     Idempotent: re-registering the same plugin on the same scheduler triggers a
     teardown+setup round-trip on every worker, which deadlocks if the previous
@@ -138,15 +158,14 @@ def register_auto_thread_plugin() -> None:
                     else os.cpu_count() or 1
                 )
                 my_host = worker.address.split("://")[-1].rsplit(":", 1)[0]
-                n_local = self._host_worker_counts.get(my_host, 1)
-                self.threads = max(1, total_cpus // n_local)
+                self.threads = _runtime_threads(worker, self._host_worker_counts, total_cpus)
+                own_threads = getattr(worker, "nthreads", None)
                 logging.getLogger("distributed.worker").info(
-                    "DFTracer Runtime: host=%s cpus=%d workers_on_host=%d cpp_threads=%d dict_keys=%s",
+                    "DFTracer Runtime: host=%s cpus=%d worker_nthreads=%s cpp_threads=%d",
                     my_host,
                     total_cpus,
-                    n_local,
+                    own_threads,
                     self.threads,
-                    list(self._host_worker_counts.keys()),
                 )
                 super().setup(worker)
 

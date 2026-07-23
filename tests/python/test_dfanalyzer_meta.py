@@ -1,6 +1,20 @@
 """The scan schema and the meta describing it must not drift apart."""
 
-from dftracer.utils.dfanalyzer import dfanalyzer_events_meta, hlm_scan_group_by
+import pytest
+
+# dfanalyzer needs numpy/pandas (test-only); skip cleanly where absent instead
+# of erroring at collection.
+pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
+
+from dftracer.utils.dfanalyzer import (  # noqa: E402
+    dfanalyzer_events_meta,
+    hlm_scan_group_by,
+)
+
+# The "str" dtype (vs legacy "object") only materializes on pandas builds with
+# the string dtype active (pandas 3.x / future.infer_string).
+_HAS_STR_DTYPE = str(pd.Series(dtype="str").dtype) == "str"
 
 
 class TestScanGroupBy:
@@ -41,6 +55,7 @@ class TestEventsMeta:
         assert "not_a_column" not in cols
         assert cols[0] == "cat"
 
+    @pytest.mark.skipif(not _HAS_STR_DTYPE, reason="pandas string dtype inactive")
     def test_string_columns_decode_to_str_not_object(self):
         # ipc_to_pandas decodes dictionary columns to pandas str; declaring
         # object here is what made dask reject the partition.

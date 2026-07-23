@@ -571,12 +571,15 @@ coro::CoroTask<void> task_phase_a(RunCtx& ctx, CoroScope& scope) {
         batch_config->rebuild_root_summaries = false;
 
         const std::string batch_id = "r" + std::to_string(ctx.rank);
+        auto agg_intern = composites::dft::aggregators::make_intern_table();
         batch_config->dft_visitor_factory =
-            [rank_staging, batch_id, agg_config](const std::string& file_path)
+            [rank_staging, batch_id, agg_config,
+             agg_intern](const std::string& file_path)
             -> std::vector<std::unique_ptr<composites::dft::DftEventVisitor>> {
             std::vector<std::unique_ptr<composites::dft::DftEventVisitor>> v;
             v.push_back(std::make_unique<AggregationVisitor>(
-                rank_staging, batch_id + "_agg", 0, *agg_config, file_path));
+                rank_staging, batch_id + "_agg", 0, *agg_config, file_path,
+                agg_intern));
             return v;
         };
         batch_config->sink_factory =
@@ -886,8 +889,7 @@ coro::CoroTask<void> task_phase_c(RunCtx& ctx, CoroScope& scope) {
 
     auto agg_db =
         EventAggregator::open_read_only_with_merge_operator(actual_index_path);
-    composites::dft::aggregators::load_intern_dictionary(*agg_db);
-
+    // EventAggregator loads the intern dictionary from the db itself.
     EventAggregator aggregator(agg_db, 0);
 
     PerfettoTraceWriterInput input;

@@ -1,8 +1,6 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/rocksdb/key_codec.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_merge_operator.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
@@ -24,9 +22,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <functional>
 #include <limits>
-#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <utility>
@@ -394,26 +390,11 @@ void IndexDatabase::bulk_ingest(
         return skip_cfs.find(std::string(cf_name)) != skip_cfs.end();
     };
 
-    std::mutex err_mu;
-    ::rocksdb::Status first_error = ::rocksdb::Status::OK();
-    std::string first_error_cf;
-    const auto record_error = [&](std::string_view cf,
-                                  const ::rocksdb::Status& s) {
-        std::lock_guard<std::mutex> lk(err_mu);
-        if (first_error.ok()) {
-            first_error = s;
-            first_error_cf = std::string(cf);
-        }
-    };
-    const auto has_error = [&]() {
-        std::lock_guard<std::mutex> lk(err_mu);
-        return !first_error.ok();
-    };
-
-    // Per-file CFs never overlap across workers, so ingest them all in one
-    // atomic multi-CF call: one manifest edit instead of one per CF.
+    // One atomic multi-CF ingest: a single manifest edit. Overlapping
+    // content-addressed / aggregation SSTs are fine with allow_global_seqno,
+    // which assigns seqnos in list order (so the ordered merge still holds).
     std::vector<std::pair<std::string_view, const std::vector<std::string>*>>
-        batched = {
+        per_cf = {
             {cf::METADATA, &registry.metadata()},
             {cf::CHECKPOINTS, &registry.checkpoints()},
             {cf::MANIFEST, &registry.manifest()},
@@ -428,81 +409,24 @@ void IndexDatabase::bulk_ingest(
             {cf::FILE_NAME_COUNTS, &registry.file_name_counts()},
             {cf::NAME_FILE_POSTINGS, &registry.name_file_postings()},
             {cf::NAME_CHUNK_POSTINGS, &registry.name_chunk_postings()},
+            {cf::NAME_DICTIONARY, &registry.name_dictionary()},
+            {cf::HASH_TABLES, &registry.hash_tables()},
+            {cf::AGGREGATION, &registry.aggregation()},
+            {cf::SYSTEM_METRICS, &registry.system_metrics()},
         };
-    batched.erase(std::remove_if(batched.begin(), batched.end(),
-                                 [&](const auto& e) {
-                                     return skipped(e.first) ||
-                                            e.second->empty();
-                                 }),
-                  batched.end());
+    per_cf.erase(std::remove_if(per_cf.begin(), per_cf.end(),
+                                [&](const auto& e) {
+                                    return skipped(e.first) ||
+                                           e.second->empty();
+                                }),
+                 per_cf.end());
+    if (per_cf.empty()) return;
 
-    // Content-addressed CFs overlap across workers, so each SST ingests
-    // separately (order irrelevant, deterministic values); aggregation/
-    // system-metrics stay one ordered unit (seqno-sensitive merge).
-    std::vector<std::function<void()>> tasks;
-    if (!batched.empty()) {
-        tasks.push_back([&]() {
-            auto s = db_->ingest_external_files_multi(batched);
-            if (!s.ok()) record_error(batched.front().first, s);
-        });
-    }
-    const auto add_per_sst = [&](std::string_view cf,
-                                 const std::vector<std::string>& files) {
-        if (skipped(cf)) return;
-        for (const auto& p : files) {
-            tasks.push_back([&, cf, p]() {
-                auto s = db_->ingest_external_files(cf, {p}, false);
-                if (!s.ok()) record_error(cf, s);
-            });
-        }
-    };
-    const auto add_ordered = [&](std::string_view cf,
-                                 const std::vector<std::string>& files) {
-        if (skipped(cf) || files.empty()) return;
-        tasks.push_back([&, cf]() {
-            for (const auto& p : files) {
-                if (has_error()) return;
-                auto s = db_->ingest_external_files(cf, {p}, false);
-                if (!s.ok()) {
-                    record_error(cf, s);
-                    return;
-                }
-            }
-        });
-    };
-    add_per_sst(cf::NAME_DICTIONARY, registry.name_dictionary());
-    add_per_sst(cf::HASH_TABLES, registry.hash_tables());
-    add_ordered(cf::AGGREGATION, registry.aggregation());
-    add_ordered(cf::SYSTEM_METRICS, registry.system_metrics());
-
-    // Run on the process default runtime when set; the get() below blocks, so
-    // the captures outlive every spawned coroutine.
-    Runtime* runtime = process_default_runtime();
-    if (runtime && tasks.size() > 1) {
-        runtime
-            ->scope(
-                "bulk_ingest",
-                [&](CoroScope& scope) -> coro::CoroTask<void> {
-                    std::vector<coro::SpawnFuture<void>> futs;
-                    futs.reserve(tasks.size());
-                    for (std::size_t i = 0; i < tasks.size(); ++i) {
-                        futs.push_back(scope.spawn(
-                            [&tasks, i](CoroScope&) -> coro::CoroTask<void> {
-                                tasks[i]();
-                                co_return;
-                            }));
-                    }
-                    for (auto& f : futs) co_await f;
-                })
-            .get();
-    } else {
-        for (auto& t : tasks) t();
-    }
-
-    if (!first_error.ok()) {
-        throw_db_error(
-            "Failed to ingest SSTs into column family '" + first_error_cf + "'",
-            first_error);
+    auto status = db_->ingest_external_files_multi(per_cf);
+    if (!status.ok()) {
+        throw_db_error("Failed to ingest SSTs into column family '" +
+                           std::string(per_cf.front().first) + "'",
+                       status);
     }
 }
 

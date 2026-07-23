@@ -69,6 +69,7 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject* args,
         self->index_dir = nullptr;
         self->require_checkpoint = 1;
         self->require_bloom = 1;
+        self->build_bloom = 1;
         self->require_manifest = 1;
         self->require_aggregation = 0;
         self->time_interval_ms = 5000.0;
@@ -90,6 +91,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
                                    "index_dir",
                                    "require_checkpoint",
                                    "require_bloom",
+                                   "build_bloom",
                                    "require_manifest",
                                    "require_aggregation",
                                    "time_interval_ms",
@@ -108,6 +110,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     const char* index_dir = "";
     int require_checkpoint = 1;
     int require_bloom = 1;
+    int build_bloom = 1;
     int require_manifest = 1;
     int require_aggregation = 0;
     double time_interval_ms = 5000.0;
@@ -122,12 +125,12 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     PyObject* runtime_arg = nullptr;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|sOsppppdOOppnnpO", (char**)kwlist, &directory,
+            args, kwds, "|sOspppppdOOppnnpO", (char**)kwlist, &directory,
             &files_obj, &index_dir, &require_checkpoint, &require_bloom,
-            &require_manifest, &require_aggregation, &time_interval_ms,
-            &group_keys_obj, &custom_metrics_obj, &compute_percentiles,
-            &group_by_file, &checkpoint_size, &parallelism, &force_rebuild,
-            &runtime_arg)) {
+            &build_bloom, &require_manifest, &require_aggregation,
+            &time_interval_ms, &group_keys_obj, &custom_metrics_obj,
+            &compute_percentiles, &group_by_file, &checkpoint_size,
+            &parallelism, &force_rebuild, &runtime_arg)) {
         return -1;
     }
 
@@ -165,6 +168,7 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     self->index_dir = PyUnicode_FromString(index_dir);
     self->require_checkpoint = require_checkpoint;
     self->require_bloom = require_bloom;
+    self->build_bloom = build_bloom;
     self->require_manifest = require_manifest;
     self->require_aggregation = require_aggregation;
     self->time_interval_ms = time_interval_ms;
@@ -371,6 +375,7 @@ static PyObject* Indexer_build(IndexerObject* self,
     input.index_dir = index_dir ? index_dir : "";
     input.require_checkpoints = self->require_checkpoint;
     input.require_bloom = self->require_bloom;
+    input.build_bloom = self->build_bloom;
     input.require_manifest = self->require_manifest;
     input.require_aggregation = self->require_aggregation;
     input.aggregation_config = build_aggregation_config(self);

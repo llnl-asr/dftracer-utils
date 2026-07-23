@@ -17,6 +17,7 @@ struct IndexerObject {
     // Tier requirements
     int require_checkpoint;
     int require_bloom;
+    int build_bloom;
     int require_manifest;
     int require_aggregation;
 

@@ -47,6 +47,10 @@ coro::CoroTask<indexer::IndexBuildBatchResult> batch_index_and_aggregate(
     batch_config->parallelism = parallelism;
     batch_config->force_rebuild = force_rebuild;
     batch_config->use_batch_write = true;
+    // Aggregation reads the trace via checkpoints and writes the aggregation
+    // and hash tables; the bloom/stats/dimension tier is never read back, so
+    // skip its visitor - the biggest per-event cost - entirely.
+    batch_config->build_bloom = false;
 
     auto agg_config_ptr =
         std::make_shared<AggregationConfig>(std::move(agg_config));

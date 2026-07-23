@@ -125,6 +125,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         batch_config->parallelism = parallelism;
         batch_config->force_rebuild = input.force_rebuild;
         batch_config->build_manifest = input.require_manifest;
+        batch_config->build_bloom = input.build_bloom;
         batch_config->use_batch_write = true;
         batch_config->rebuild_root_summaries = true;
 

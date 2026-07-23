@@ -41,6 +41,10 @@ struct IndexBuildConfig {
     std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
     bool force_rebuild = false;
     bool build_manifest = false;
+    /// Build the bloom/stats/dimension tier. Off skips BloomVisitor, which is
+    /// the biggest per-event cost; only the raw-trace query path reads it, so
+    /// an aggregation-only index (dfanalyzer) does not need it.
+    bool build_bloom = true;
     composites::dft::indexing::ChunkIndexerConfig bloom_config;
     std::vector<std::string> bloom_dimensions;
     std::vector<std::reference_wrapper<composites::dft::DftEventVisitor>>
@@ -75,6 +79,10 @@ struct IndexBuildBatchConfig {
     std::size_t parallelism = 1;
     bool force_rebuild = false;
     bool build_manifest = false;
+    /// Build the bloom/stats/dimension tier. Off skips BloomVisitor, which is
+    /// the biggest per-event cost; only the raw-trace query path reads it, so
+    /// an aggregation-only index (dfanalyzer) does not need it.
+    bool build_bloom = true;
     composites::dft::indexing::ChunkIndexerConfig bloom_config;
     std::vector<std::string> bloom_dimensions;
     bool use_batch_write = true;

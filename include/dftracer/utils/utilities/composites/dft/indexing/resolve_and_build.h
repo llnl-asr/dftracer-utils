@@ -25,6 +25,9 @@ struct ResolveAndBuildInput {
     bool require_checkpoints = true;
     bool require_bloom = false;
     bool require_manifest = false;
+    /// Build the bloom/stats/dimension tier. Off for aggregation-only
+    /// consumers (dfanalyzer) that never read it.
+    bool build_bloom = true;
     bool require_aggregation = false;
 
     std::optional<aggregators::AggregationConfig> aggregation_config;

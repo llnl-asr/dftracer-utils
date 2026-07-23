@@ -75,6 +75,7 @@ class Indexer:
         index_dir: str = "",
         require_checkpoint: bool = True,
         require_bloom: bool = True,
+        build_bloom: bool = True,
         require_manifest: bool = True,
         require_aggregation: bool = False,
         time_interval_ms: float = 5000.0,

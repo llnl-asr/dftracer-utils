@@ -176,6 +176,7 @@ struct BatchWriteState {
     std::size_t parallelism = 0;
     std::size_t checkpoint_size = 0;
     bool build_manifest = false;
+    bool build_bloom = true;
     IndexBuildBatchConfig::DftVisitorFactory visitor_factory;
     IndexBuildBatchConfig::SinkFactory sink_factory;
     IndexBuildBatchConfig::SinkCommitFn sink_commit;
@@ -202,7 +203,8 @@ static coro::CoroTask<void> parse_and_emit_worker(
     const std::vector<std::string>* bloom_dims_ptr,
     std::atomic<std::uint64_t>* parse_ns_ptr,
     const IndexBuildBatchConfig::DftVisitorFactory* visitor_factory_ptr,
-    bool build_manifest, coro::ChannelProducer<internal::ParsedIndexJob> ch) {
+    bool build_manifest, bool build_bloom,
+    coro::ChannelProducer<internal::ParsedIndexJob> ch) {
     namespace gzip_indexer = internal::gzip;
     auto guard = ch.guard();
 
@@ -227,10 +229,12 @@ static coro::CoroTask<void> parse_and_emit_worker(
             // cross-rank-split file). BloomVisitor::ensure_chunk would also
             // resize chunks_ with a large checkpoint_idx_base.
             if (!pf.slice.skip_file_scoped_writes) {
-                job.bloom_visitor = std::make_unique<BloomVisitor>(
-                    bloom_config, *bloom_dims_ptr);
+                if (build_bloom) {
+                    job.bloom_visitor = std::make_unique<BloomVisitor>(
+                        bloom_config, *bloom_dims_ptr);
+                    dft_vis.emplace_back(*job.bloom_visitor);
+                }
                 job.hash_table_visitor = std::make_unique<HashTableVisitor>();
-                dft_vis.emplace_back(*job.bloom_visitor);
                 dft_vis.emplace_back(*job.hash_table_visitor);
                 if (build_manifest) {
                     job.manifest_visitor = std::make_unique<ManifestVisitor>();
@@ -402,6 +406,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     const auto* bloom_dims_ptr = state->bloom_dims.get();
     const auto checkpoint_size = state->checkpoint_size;
     const bool build_manifest = state->build_manifest;
+    const bool build_bloom = state->build_bloom;
     const IndexBuildBatchConfig::DftVisitorFactory* visitor_factory_ptr =
         state->visitor_factory ? &state->visitor_factory : nullptr;
     auto* sink_factory_ptr = &state->sink_factory;
@@ -411,7 +416,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                            done_ptr, parse_ns_ptr, results_ptr, parsed_jobs_ptr,
                            prepared_ptr, checkpoint_size, bloom_config_ptr,
                            bloom_dims_ptr, visitor_factory_ptr, build_manifest,
-                           write_chan_ptr, db_ptr, metrics_ptr,
+                           build_bloom, write_chan_ptr, db_ptr, metrics_ptr,
                            sink_factory_ptr, sink_commit_ptr](
                               CoroScope& child) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < parse_workers; ++w) {
@@ -419,13 +424,14 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                 [next_index_ptr, done_ptr, parse_ns_ptr, results_ptr,
                  parsed_jobs_ptr, prepared_ptr, checkpoint_size,
                  bloom_config_ptr, bloom_dims_ptr, visitor_factory_ptr,
-                 build_manifest, ch = write_chan_ptr->producer()](
+                 build_manifest, build_bloom, ch = write_chan_ptr->producer()](
                     CoroScope& own_scope) mutable -> coro::CoroTask<void> {
                     co_await parse_and_emit_worker(
                         &own_scope, next_index_ptr, done_ptr, results_ptr,
                         parsed_jobs_ptr, prepared_ptr, checkpoint_size,
                         *bloom_config_ptr, bloom_dims_ptr, parse_ns_ptr,
-                        visitor_factory_ptr, build_manifest, std::move(ch));
+                        visitor_factory_ptr, build_manifest, build_bloom,
+                        std::move(ch));
                 });
         }
 
@@ -470,6 +476,7 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     state->checkpoint_size = config.checkpoint_size;
     state->bloom_config = config.bloom_config;
     state->build_manifest = config.build_manifest;
+    state->build_bloom = config.build_bloom;
     state->bloom_dims = std::make_shared<std::vector<std::string>>(
         config.bloom_dimensions.empty()
             ? std::vector<std::string>(DEFAULT_BLOOM_DIMENSIONS.begin(),
@@ -643,6 +650,7 @@ static coro::CoroTask<IndexBuildBatchResult> run_batch_write_pipeline(
         chunk_config.parallelism = config_ptr->parallelism;
         chunk_config.force_rebuild = config_ptr->force_rebuild;
         chunk_config.build_manifest = config_ptr->build_manifest;
+        chunk_config.build_bloom = config_ptr->build_bloom;
         chunk_config.bloom_config = config_ptr->bloom_config;
         chunk_config.bloom_dimensions = config_ptr->bloom_dimensions;
         chunk_config.use_batch_write = true;

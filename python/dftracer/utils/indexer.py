@@ -82,6 +82,8 @@ class Indexer:
         index_dir: Directory for .dftindex stores (default: next to files).
         require_checkpoint: Build checkpoint tier (default True).
         require_bloom: Build bloom filter tier (default True).
+        build_bloom: Build the bloom/stats/dimension tier (default True). Off
+            for aggregation-only consumers that never read it.
         require_manifest: Build manifest tier (default True).
         require_aggregation: Aggregation config or True for defaults (default None).
         parallelism: Number of parallel workers (0 = all cores).
@@ -111,6 +113,7 @@ class Indexer:
         index_dir: str = "",
         require_checkpoint: bool = True,
         require_bloom: bool = True,
+        build_bloom: bool = True,
         require_manifest: bool = True,
         require_aggregation: Optional[Union[bool, AggregationConfig]] = None,
         checkpoint_size: int = DEFAULT_CHECKPOINT_SIZE,
@@ -134,6 +137,7 @@ class Indexer:
             index_dir=index_dir,
             require_checkpoint=require_checkpoint,
             require_bloom=require_bloom,
+            build_bloom=build_bloom,
             require_manifest=require_manifest,
             require_aggregation=agg_config is not None,
             time_interval_ms=agg_config.time_interval_ms if agg_config else 5000.0,

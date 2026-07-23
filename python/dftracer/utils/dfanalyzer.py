@@ -168,6 +168,9 @@ def scan_to_ipc(
     stored key. `shard_begin`/`shard_end` split the scan itself, so N workers
     each read 1/N of the keys rather than all of them.
     """
+    from .dask import _worker_progress_forwarder
+
+    scan_progress = _worker_progress_forwarder("Reading traces", f"{shard_begin}_{shard_end}")
     indexer = _open_readonly_indexer(files, index_path)
     all_batches = indexer.iter_arrow_dfanalyzer_all(
         time_granularity=time_granularity,
@@ -176,6 +179,7 @@ def scan_to_ipc(
         group_by=group_by,
         shard_begin=shard_begin,
         shard_end=shard_end,
+        progress=scan_progress,
     )
     return batches_to_ipc(all_batches)
 
@@ -716,7 +720,7 @@ def build_index_distributed(
     shared_staging="",
     client=None,
     aggregation=None,
-    progress: Optional[Callable[[int, int], None]] = None,
+    progress: Optional[Callable[[int, int, str], None]] = None,
 ):
     """Build the dftracer index across a Dask cluster.
 
@@ -754,7 +758,7 @@ def ensure_index(
     trace_groups,
     time_interval_ms,
     client=None,
-    progress: Optional[Callable[[int, int], None]] = None,
+    progress: Optional[Callable[[int, int, str], None]] = None,
 ):
     """Build (or refresh) the dftracer index for `trace_path` via Dask.
 

@@ -241,6 +241,7 @@ class Indexer:
         group_by: Optional[List[str]] = None,
         shard_begin: int = 0,
         shard_end: int = 4096,
+        progress: Optional[Callable[[int, int], None]] = None,
     ) -> Dict[str, List[Any]]:
         """Iterate over all aggregation types in a single scan.
 

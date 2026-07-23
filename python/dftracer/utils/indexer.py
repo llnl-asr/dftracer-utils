@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Callable, Dict, List, Optional, Set, Tuple, Union
 
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
 from .dftracer_utils_ext import Indexer as _NativeIndexer
@@ -346,6 +346,7 @@ class Indexer:
         group_by: Optional[List[str]] = None,
         shard_begin: int = 0,
         shard_end: int = 4096,
+        progress: Optional[Callable[[int, int], None]] = None,
     ):
         """Iterate over all aggregation types in a single scan.
 
@@ -393,6 +394,7 @@ class Indexer:
             group_by,
             shard_begin,
             shard_end,
+            progress,
         )
 
 

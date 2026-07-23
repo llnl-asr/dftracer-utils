@@ -74,6 +74,73 @@ else:
 
 _plugin_registered_schedulers: set = set()
 
+# All worker-side progress (parse, scan, ...) is published to one topic with a
+# `phase` label; the coordinator aggregates per (phase, batch).
+_PROGRESS_TOPIC = "dft-progress"
+
+
+def _worker_progress_forwarder(phase: str, batch: Any) -> Callable[[int, int], None]:
+    """Callback that publishes (done, total) progress for `phase`/`batch` to the
+    coordinator. Runs on a Dask worker; no-op off-worker (inline mode)."""
+    try:
+        from distributed import get_worker
+
+        worker = get_worker()
+    except (ImportError, ValueError):
+        worker = None
+
+    def _cb(done: int, total: int) -> None:
+        if worker is None:
+            return
+        msg = {"phase": phase, "batch": batch, "done": int(done), "total": int(total)}
+        # Called from a C++ worker thread; hop to the IOLoop so the event is
+        # sent on the worker's own loop rather than a foreign thread.
+        try:
+            worker.loop.add_callback(worker.log_event, _PROGRESS_TOPIC, msg)
+        except Exception:
+            try:
+                worker.log_event(_PROGRESS_TOPIC, msg)
+            except Exception:
+                pass
+
+    return _cb
+
+
+class _ProgressAggregator:
+    """Subscribe to the progress topic and forward aggregated
+    (done, total, phase) to `callback`, summing per (phase, batch)."""
+
+    def __init__(self, client, callback: Optional[Callable[[int, int, str], None]]):
+        self._client = client
+        self._callback = callback
+        self._state: Dict[tuple, tuple] = {}
+
+    def _handler(self, event) -> None:
+        if self._callback is None:
+            return
+        try:
+            _, msg = event
+            phase = msg["phase"]
+            self._state[(phase, msg["batch"])] = (int(msg["done"]), int(msg["total"]))
+            done = sum(d for (p, _), (d, _t) in self._state.items() if p == phase)
+            total = sum(t for (p, _), (_d, t) in self._state.items() if p == phase)
+            self._callback(done, total, phase)
+        except Exception:
+            pass
+
+    def __enter__(self):
+        if self._client is not None and self._callback is not None:
+            self._client.subscribe_topic(_PROGRESS_TOPIC, self._handler)
+        return self
+
+    def __exit__(self, *exc):
+        if self._client is not None and self._callback is not None:
+            try:
+                self._client.unsubscribe_topic(_PROGRESS_TOPIC)
+            except Exception:
+                pass
+        return False
+
 
 def resolve_local_staging(client) -> str:
     """Derive node-local SST scratch from each Dask worker's own scratch.
@@ -829,27 +896,7 @@ def _build_sst_task(
     _log = _logging.getLogger("dftracer.utils.dask._build_sst_task")
     _host = _socket.gethostname()
 
-    # Forward parse progress to the coordinator via a dask topic event.
-    try:
-        from distributed import get_worker
-
-        _worker = get_worker()
-    except (ImportError, ValueError):
-        _worker = None
-
-    def _progress_cb(done: int, total: int) -> None:
-        if _worker is None:
-            return
-        msg = {"batch": batch_id, "done": int(done), "total": int(total)}
-        # Called from a C++ worker thread; hop to the IOLoop so the event is
-        # sent on the worker's own loop rather than a foreign thread.
-        try:
-            _worker.loop.add_callback(_worker.log_event, "dft-index-progress", msg)
-        except Exception:
-            try:
-                _worker.log_event("dft-index-progress", msg)
-            except Exception:
-                pass
+    _progress_cb = _worker_progress_forwarder("Indexing", batch_id)
 
     t0 = _time.monotonic()
     if enable_det_ids:
@@ -928,7 +975,7 @@ def distributed_index(
     parallelism_per_worker: int = 0,
     flush_every_files: int = 0,
     aggregation_config: Optional[Any] = None,
-    progress: Optional[Callable[[int, int], None]] = None,
+    progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, Any]:
     """Index a set of trace files using Dask workers writing SSTs in parallel.
 
@@ -1187,64 +1234,39 @@ def distributed_index(
             )
     else:
         worker_addrs = list(client.nthreads().keys())
-        # Sum per-worker parse progress into one (done, total); total is known
-        # up front so the denominator is stable.
-        _topic = "dft-index-progress"
-        _true_total = sum(len(pw) for pw in worker_file_lists)
-        _done_by_batch: Dict[str, int] = {}
-
-        def _on_progress(event: Any) -> None:
-            if progress is None:
-                return
-            try:
-                _, msg = event
-                _done_by_batch[msg["batch"]] = int(msg["done"])
-                progress(sum(_done_by_batch.values()), _true_total)
-            except Exception:
-                pass
-
-        if progress is not None:
-            client.subscribe_topic(_topic, _on_progress)
-        futures = []
-        for w, (paths_w, ids_w, slices_w) in enumerate(
-            zip(worker_file_lists, worker_file_ids, worker_slices)
-        ):
-            if not paths_w:
-                continue
-            target = [worker_addrs[w % len(worker_addrs)]] if worker_addrs else None
-            worker_ids.append(w)
-            futures.append(
-                client.submit(
-                    _build_sst_task,
-                    paths_w,
-                    ids_w,
-                    slices_w,
-                    local_staging,
-                    shared_staging,
-                    f"worker_{w}",
-                    index_dir,
-                    checkpoint_size,
-                    bloom_dimensions,
-                    build_manifest,
-                    force_rebuild,
-                    parallelism_per_worker,
-                    flush_every_files,
-                    build_bloom,
-                    aggregation_config,
-                    True,
-                    workers=target,
-                    pure=False,
+        with _ProgressAggregator(client, progress):
+            futures = []
+            for w, (paths_w, ids_w, slices_w) in enumerate(
+                zip(worker_file_lists, worker_file_ids, worker_slices)
+            ):
+                if not paths_w:
+                    continue
+                target = [worker_addrs[w % len(worker_addrs)]] if worker_addrs else None
+                worker_ids.append(w)
+                futures.append(
+                    client.submit(
+                        _build_sst_task,
+                        paths_w,
+                        ids_w,
+                        slices_w,
+                        local_staging,
+                        shared_staging,
+                        f"worker_{w}",
+                        index_dir,
+                        checkpoint_size,
+                        bloom_dimensions,
+                        build_manifest,
+                        force_rebuild,
+                        parallelism_per_worker,
+                        flush_every_files,
+                        build_bloom,
+                        aggregation_config,
+                        True,
+                        workers=target,
+                        pure=False,
+                    )
                 )
-            )
-        try:
             worker_results = client.gather(futures)
-        finally:
-            if progress is not None:
-                try:
-                    client.unsubscribe_topic(_topic)
-                    progress(_true_total, _true_total)
-                except Exception:
-                    pass
     _log.info(
         "distributed_index: build dispatch+gather done in %.1fs (%d workers)",
         _time.monotonic() - _t_build,
@@ -1275,8 +1297,14 @@ def distributed_index(
         _time.monotonic() - _t_collect,
     )
 
+    # bulk_ingest and rebuild_root_summaries are single coordinator calls with
+    # no granular counter yet, so report them as indeterminate labelled phases.
     _t_ingest = _time.monotonic()
+    if progress is not None:
+        progress(0, 0, "Ingesting SSTs")
     db.bulk_ingest(registry)
+    if progress is not None:
+        progress(1, 1, "Ingesting SSTs")
     _log.info(
         "distributed_index: bulk_ingest done in %.1fs (%d artifacts)",
         _time.monotonic() - _t_ingest,
@@ -1284,7 +1312,11 @@ def distributed_index(
     )
     if rebuild_root_summaries:
         _t_root = _time.monotonic()
+        if progress is not None:
+            progress(0, 0, "Building summaries")
         db.rebuild_root_summaries()
+        if progress is not None:
+            progress(1, 1, "Building summaries")
         _log.info(
             "distributed_index: rebuild_root_summaries done in %.1fs",
             _time.monotonic() - _t_root,

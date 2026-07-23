@@ -11,8 +11,10 @@
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #endif
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -41,6 +43,12 @@ struct DfanalyzerContext {
 
     /// Time granularity in seconds (bucket width for time_range computation).
     double time_granularity = 1.0;
+
+    /// Shard-scan progress, shared across the scan's tasks. Set together or
+    /// left null.
+    std::atomic<std::size_t>* shards_done = nullptr;
+    std::size_t total_shards = 0;
+    const std::function<void(std::size_t, std::size_t)>* progress = nullptr;
 };
 
 enum class AggregationBatchType { EVENT, PROFILE, SYSTEM };

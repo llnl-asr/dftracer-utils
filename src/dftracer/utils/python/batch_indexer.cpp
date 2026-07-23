@@ -762,49 +762,38 @@ parse_query_arg(const char* query_str) {
 constexpr std::uint16_t DFT_NUM_SHARDS = 4096;
 
 template <typename Output, typename ScanFn>
-void parallel_shard_scan_range(
-    Runtime* rt, std::uint16_t outer_begin, std::uint16_t outer_end,
-    ScanFn&& scan_fn, std::vector<Output>& outputs,
-    const std::function<void(std::size_t, std::size_t)>* progress = nullptr) {
+void parallel_shard_scan_range(Runtime* rt, std::uint16_t outer_begin,
+                               std::uint16_t outer_end, ScanFn&& scan_fn,
+                               std::vector<Output>& outputs) {
     if (outer_end <= outer_begin) return;
     const std::size_t span = static_cast<std::size_t>(outer_end - outer_begin);
     const std::size_t num_tasks = std::min<std::size_t>(rt->threads(), span);
     const std::size_t shards_per_task = (span + num_tasks - 1) / num_tasks;
-    auto shards_done = std::make_shared<std::atomic<std::size_t>>(0);
-    rt->submit(
-          run_coro_scope(
-              rt->executor(),
-              [&](CoroScope& scope) -> CoroTask<void> {
-                  std::vector<dftracer::utils::coro::SpawnFuture<Output>>
-                      futures;
-                  futures.reserve(num_tasks);
-                  for (std::size_t t = 0; t < num_tasks; ++t) {
-                      auto shard_begin = static_cast<std::uint16_t>(
-                          outer_begin + t * shards_per_task);
-                      auto shard_end =
-                          static_cast<std::uint16_t>(std::min<std::size_t>(
-                              outer_begin + (t + 1) * shards_per_task,
-                              outer_end));
-                      futures.push_back(scope.spawn(
-                          [&scan_fn, shard_begin, shard_end, progress, span,
-                           shards_done](CoroScope&) -> CoroTask<Output> {
-                              auto out = scan_fn(shard_begin, shard_end);
-                              if (progress) {
-                                  const std::size_t d =
-                                      shards_done->fetch_add(shard_end -
-                                                             shard_begin) +
-                                      (shard_end - shard_begin);
-                                  (*progress)(d, span);
-                              }
-                              co_return out;
-                          }));
-                  }
-                  outputs.reserve(num_tasks);
-                  for (auto& f : futures) {
-                      outputs.push_back(co_await f);
-                  }
-              }),
-          "parallel-shard-scan-range")
+    rt->submit(run_coro_scope(
+                   rt->executor(),
+                   [&](CoroScope& scope) -> CoroTask<void> {
+                       std::vector<dftracer::utils::coro::SpawnFuture<Output>>
+                           futures;
+                       futures.reserve(num_tasks);
+                       for (std::size_t t = 0; t < num_tasks; ++t) {
+                           auto shard_begin = static_cast<std::uint16_t>(
+                               outer_begin + t * shards_per_task);
+                           auto shard_end =
+                               static_cast<std::uint16_t>(std::min<std::size_t>(
+                                   outer_begin + (t + 1) * shards_per_task,
+                                   outer_end));
+                           futures.push_back(
+                               scope.spawn([&scan_fn, shard_begin, shard_end](
+                                               CoroScope&) -> CoroTask<Output> {
+                                   co_return scan_fn(shard_begin, shard_end);
+                               }));
+                       }
+                       outputs.reserve(num_tasks);
+                       for (auto& f : futures) {
+                           outputs.push_back(co_await f);
+                       }
+                   }),
+               "parallel-shard-scan-range")
         .get();
 }
 
@@ -1142,6 +1131,11 @@ static PyObject* Indexer_iter_arrow_dfanalyzer_all(IndexerObject* self,
             ctx.time_origin = time_origin;
             ctx.time_resolution = time_resolution;
             ctx.time_granularity = time_granularity;
+            std::atomic<std::size_t> scan_shards_done{0};
+            ctx.shards_done = &scan_shards_done;
+            ctx.total_shards =
+                static_cast<std::size_t>(shard_end_i - shard_begin_i);
+            ctx.progress = scan_progress_ptr;
 
             Runtime* rt = get_batch_indexer_runtime(self);
             std::vector<DfanalyzerScanOutput> outputs;
@@ -1159,7 +1153,7 @@ static PyObject* Indexer_iter_arrow_dfanalyzer_all(IndexerObject* self,
                     input.group_by = group_by_ptr;
                     return scan_dfanalyzer_shards(input);
                 },
-                outputs, scan_progress_ptr);
+                outputs);
 
             for (auto& out : outputs) {
                 for (auto& r : out.events)

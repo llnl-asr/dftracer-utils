@@ -795,9 +795,29 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
             }
         };
 
+    const auto* scan_progress = input.ctx->progress;
+    auto* shards_done = input.ctx->shards_done;
+    const std::size_t total_shards = input.ctx->total_shards;
+    const std::size_t report_step = total_shards < 50 ? 1 : total_shards / 50;
+    std::uint16_t last_shard = input.shard_begin;
+    auto bump_shards = [&](std::uint16_t up_to) {
+        if (!scan_progress || up_to <= last_shard) return;
+        const std::size_t adv = up_to - last_shard;
+        last_shard = up_to;
+        const std::size_t prev = shards_done->fetch_add(adv);
+        const std::size_t d = prev + adv;
+        if (d / report_step != prev / report_step || d >= total_shards)
+            (*scan_progress)(d, total_shards);
+    };
     input.agg->scan_shard_range_raw(
         input.shard_begin, input.shard_end,
         [&](std::string_view key_bytes, std::string_view val_bytes) -> bool {
+            if (scan_progress && key_bytes.size() >= 2) {
+                const std::uint16_t cur = static_cast<std::uint16_t>(
+                    (static_cast<std::uint8_t>(key_bytes[0]) << 8) |
+                    static_cast<std::uint8_t>(key_bytes[1]));
+                if (cur > last_shard) bump_shards(cur);
+            }
             AggKeyView kv;
             if (!parse_agg_key_view(key_bytes, input.agg->intern(), kv))
                 return true;
@@ -903,6 +923,7 @@ DfanalyzerScanOutput scan_dfanalyzer_shards(DfanalyzerScanInput input) {
             }
             return true;
         });
+    bump_shards(input.shard_end);
 
     if (coarse) {
         const auto& cfg = *input.group_by;

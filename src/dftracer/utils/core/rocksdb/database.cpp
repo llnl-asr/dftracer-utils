@@ -25,7 +25,15 @@ std::atomic<bool>& process_exiting_flag() {
 }
 
 const ::rocksdb::ReadOptions& read_options() {
-    static const ::rocksdb::ReadOptions options;
+    static const auto options = [] {
+        ::rocksdb::ReadOptions ro;
+        // Prefetch data blocks asynchronously ahead of the scan cursor (our FS
+        // implements ReadAsync); adaptive_readahead grows the window as the
+        // scan runs so short range reads do not over-read.
+        ro.async_io = true;
+        ro.adaptive_readahead = true;
+        return ro;
+    }();
     return options;
 }
 
@@ -118,12 +126,10 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
     options.allow_concurrent_memtable_write = true;
     options.enable_pipelined_write = true;
     options.max_open_files = Env::rocksdb_max_open_files();
-    // Validate SST files in the background during open instead of serially on
-    // the open path; cuts open latency on high-file-count indexes on remote
-    // filesystems (Lustre). Async open requires skipping the synchronous
-    // per-SST stats pass, which is itself expensive over Lustre.
+    // Skip the synchronous per-SST stats pass on open; expensive over Lustre.
+    // (open_files_async is not usable here: it background-opens SSTs by name
+    // and races our ingest/compaction file churn, hitting ENOENT.)
     options.skip_stats_update_on_db_open = true;
-    options.open_files_async = true;
     options.max_background_jobs = 8;
     options.max_subcompactions = 8;
     options.write_buffer_size = 256 * 1024 * 1024;
@@ -140,9 +146,7 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
     bbt.format_version = 7;
     bbt.index_block_restart_interval = 16;
     bbt.block_cache = shared_block_cache();
-    // Store keys and values in separate regions of each data block: better
-    // compression and CPU-cache behavior for the scanned CFs whose values are
-    // fixed-layout binary blobs (aggregation, stats, postings).
+    // Better compression and read CPU for the scanned CFs (fixed-layout blobs).
     bbt.separate_key_value_in_data_block = true;
     options.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
 
@@ -184,9 +188,8 @@ RocksDatabase::point_lookup_column_family_options() {
     bbt.format_version = 7;
     bbt.index_block_restart_interval = 16;
     bbt.block_cache = shared_block_cache();
-    // Keys here are content hashes: uniformly distributed under the byte-wise
-    // comparator, exactly the case interpolation search is meant for. This is
-    // a read-time index-search choice and works on any existing SST.
+    // Content-hash keys are uniformly distributed: interpolation search beats
+    // binary. Read-time only, works on any SST.
     bbt.index_block_search_type =
         ::rocksdb::BlockBasedTableOptions::kInterpolation;
     bbt.filter_policy.reset(::rocksdb::NewBloomFilterPolicy(

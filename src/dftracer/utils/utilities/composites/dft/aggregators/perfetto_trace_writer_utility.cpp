@@ -285,13 +285,15 @@ coro::CoroTask<bool> write_shard_events(
             local_keys++;
 
             // Layout: shard(2) map_type(1) cat(varint ID) name(varint ID)
-            //         pid(varint) tid(varint) hhash(varint ID) fhash(varint ID)
-            //         time_bucket(varint) num_extra(2) [k(varint ID) v(varint
-            //         ID)]*
+            //         pid(varint) tid(varint) hhash(varint ID)
+            //         fhash(8 raw bytes if inline else varint ID)
+            //         time_bucket(varint) num_extra(2)
+            //         [k(varint ID) v(varint ID)]*
             auto& intern = input->aggregator->intern();
             BinaryReader kr(key_bytes);
-            kr.skip(2);     // shard
-            (void)kr.u8();  // map_type
+            kr.skip(2);  // shard
+            const std::uint8_t type_byte = kr.u8();
+            const bool fhash_inline = (type_byte & AGG_KEY_FHASH_INLINE) != 0;
             auto cat = intern.resolve(static_cast<std::uint32_t>(kr.varint()));
             auto name = intern.resolve(static_cast<std::uint32_t>(kr.varint()));
             auto pid = kr.varint();
@@ -299,9 +301,19 @@ coro::CoroTask<bool> write_shard_events(
             auto hhash_id = static_cast<std::uint32_t>(kr.varint());
             auto hhash =
                 hhash_id ? intern.resolve(hhash_id) : std::string_view{};
-            auto fhash_id = static_cast<std::uint32_t>(kr.varint());
-            auto fhash =
-                fhash_id ? intern.resolve(fhash_id) : std::string_view{};
+            char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
+            std::string_view fhash;
+            if (fhash_inline) {
+                std::uint64_t fh = kr.be64();
+                if (fh != 0) {
+                    ::dftracer::utils::hash::format_hex64(fh, fbuf);
+                    fhash = std::string_view(fbuf, sizeof(fbuf));
+                }
+            } else {
+                auto fhash_id = static_cast<std::uint32_t>(kr.varint());
+                fhash =
+                    fhash_id ? intern.resolve(fhash_id) : std::string_view{};
+            }
             auto time_bucket = kr.varint();
             auto num_extra = kr.be16();
 
@@ -312,6 +324,7 @@ coro::CoroTask<bool> write_shard_events(
                 tmp.varint();            // count
                 skip_metric_stats(tmp);  // duration
                 skip_metric_stats(tmp);  // size
+                skip_metric_stats(tmp);  // offset
                 regular_ts = tmp.varint();
                 regular_te = tmp.varint();
             }
@@ -371,8 +384,8 @@ coro::CoroTask<bool> write_shard_events(
                 buf.append_literal("\"");
             }
 
-            // Value bytes: count, dur, size, ts, te, parent_pid, num_custom,
-            // customs
+            // Value bytes: count, dur, size, offset, ts, te, parent_pid,
+            // num_custom, customs, distinct_sketch
             BinaryReader vr(value_bytes);
             auto count = vr.varint();
 
@@ -383,6 +396,8 @@ coro::CoroTask<bool> write_shard_events(
                                          buf);
             emit_metric_stats_from_bytes(vr, "ret", input->compute_statistics,
                                          buf);
+            emit_metric_stats_from_bytes(vr, "offset",
+                                         input->compute_statistics, buf);
 
             auto m_ts = vr.varint();
             auto m_te = vr.varint();

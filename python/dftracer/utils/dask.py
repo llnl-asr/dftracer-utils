@@ -544,7 +544,7 @@ def distributed_aggregate(
         index_dir=index_dir,
         require_checkpoint=True,
         require_bloom=True,
-        require_manifest=True,
+        require_manifest=False,
         require_aggregation=AggregationConfig(
             time_interval_ms=time_interval_ms,
             compute_percentiles=False,
@@ -711,7 +711,7 @@ def distributed_aggregate_all(
         index_dir=index_dir,
         require_checkpoint=True,
         require_bloom=True,
-        require_manifest=True,
+        require_manifest=False,
         require_aggregation=AggregationConfig(
             time_interval_ms=time_interval_ms,
             compute_percentiles=False,
@@ -890,7 +890,7 @@ def distributed_index(
     client: Optional["Client"] = None,
     checkpoint_size: int = 32 * 1024 * 1024,
     bloom_dimensions: Optional[List[str]] = None,
-    build_manifest: bool = True,
+    build_manifest: bool = False,
     force_rebuild: bool = False,
     build_bloom: bool = True,
     partition: str = "lpt",

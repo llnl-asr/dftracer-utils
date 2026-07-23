@@ -26,6 +26,9 @@ from .dftracer_utils_ext import (
     get_default_runtime as _get_default_native_runtime,
 )
 from .dftracer_utils_ext import (
+    peek_default_runtime as _peek_default_native_runtime,
+)
+from .dftracer_utils_ext import (
     set_default_runtime as _set_default_native_runtime,
 )
 from .indexer import (  # noqa: F401
@@ -46,6 +49,22 @@ def get_default_runtime() -> "Runtime":
     if _default_wrapper is None:
         native = _get_default_native_runtime()
         _default_wrapper = Runtime._from_native(native)
+    return _default_wrapper
+
+
+def peek_default_runtime() -> Optional["Runtime"]:
+    """Return the current default Runtime, or None if none exists yet.
+
+    Never creates one, so saving/restoring the default (e.g. in a Dask worker
+    plugin) does not spin up an unused full-machine-sized runtime.
+    """
+    global _default_wrapper
+    if _default_wrapper is not None:
+        return _default_wrapper
+    native = _peek_default_native_runtime()
+    if native is None:
+        return None
+    _default_wrapper = Runtime._from_native(native)
     return _default_wrapper
 
 
@@ -95,6 +114,7 @@ __all__ = [
     "Runtime",
     "TaskHandle",
     "get_default_runtime",
+    "peek_default_runtime",
     "get_log_level",
     "read_arrow",
     "set_default_runtime",

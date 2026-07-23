@@ -23,7 +23,12 @@ try:
 except ImportError:
     pa = None  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
-from dftracer.utils import Runtime, TraceReader, get_default_runtime, set_default_runtime
+from dftracer.utils import (
+    Runtime,
+    TraceReader,
+    peek_default_runtime,
+    set_default_runtime,
+)
 from dftracer.utils.arrow import (
     batch_to_ipc,
     decode_dictionary_columns,
@@ -42,7 +47,9 @@ if WorkerPlugin is not None:
             self.io_threads = io_threads
 
         def setup(self, worker):
-            worker._dftracer_prev_runtime = get_default_runtime()
+            # peek (do not create): forcing get_default_runtime here would
+            # spin up an unused hardware_concurrency-thread runtime per worker.
+            worker._dftracer_prev_runtime = peek_default_runtime()
             rt = Runtime(threads=self.threads, io_threads=self.io_threads)
             worker.dftracer_utils_runtime = rt
             set_default_runtime(rt)

@@ -333,6 +333,23 @@ static PyObject *get_default_runtime_py(PyObject *Py_UNUSED(module),
     return (PyObject *)obj;
 }
 
+// Return the current default runtime without creating one. Unlike
+// get_default_runtime, this never materializes a full-machine-sized runtime as
+// a side effect, so callers that only want to save/restore the default (e.g. a
+// Dask worker plugin) do not each spin up an unused hardware_concurrency-thread
+// runtime.
+static PyObject *peek_default_runtime_py(PyObject *Py_UNUSED(module),
+                                         PyObject *Py_UNUSED(ignored)) {
+    if (!g_default_runtime) Py_RETURN_NONE;
+
+    RuntimeObject *obj = (RuntimeObject *)RuntimeType.tp_alloc(&RuntimeType, 0);
+    if (!obj) return NULL;
+
+    new (&obj->runtime)
+        std::shared_ptr<dftracer::utils::Runtime>(g_default_runtime);
+    return (PyObject *)obj;
+}
+
 static PyObject *set_default_runtime_py(PyObject *Py_UNUSED(module),
                                         PyObject *args) {
     PyObject *arg;
@@ -452,6 +469,9 @@ PyTypeObject RuntimeType = {
 static PyMethodDef runtime_module_methods[] = {
     {"get_default_runtime", get_default_runtime_py, METH_NOARGS,
      "Return the module-level default Runtime (lazy-created)."},
+    {"peek_default_runtime", peek_default_runtime_py, METH_NOARGS,
+     "Return the current default Runtime, or None if none exists yet "
+     "(never creates one)."},
     {"set_default_runtime", set_default_runtime_py, METH_VARARGS,
      "Replace the module-level default Runtime (pass None to clear).\n"
      "\n"

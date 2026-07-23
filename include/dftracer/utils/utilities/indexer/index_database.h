@@ -47,6 +47,9 @@ class IndexDatabase {
     /// SSTs must be left outside the unified DB. Distributed builds use this
     /// to keep per-worker AGGREGATION / SYSTEM_METRICS SSTs addressable by
     /// manifest for parallel reads at analyze time.
+    /// Independent SSTs ingest concurrently on the process default runtime when
+    /// set (aggregation/system-metrics stay in list order); sequential
+    /// otherwise.
     void bulk_ingest(const SstArtifactRegistry& registry,
                      const std::unordered_set<std::string>& skip_cfs = {});
 

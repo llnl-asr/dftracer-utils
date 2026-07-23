@@ -139,6 +139,8 @@ static PyObject *IndexDatabase_bulk_ingest(IndexDatabaseObject *self,
         Py_DECREF(seq);
     }
 
+    // Ensure the process default runtime is set so bulk_ingest parallelizes.
+    (void)get_default_runtime();
     if (!run_blocking([&] { self->db->bulk_ingest(*registry, skip_cfs); }))
         return NULL;
     Py_RETURN_NONE;

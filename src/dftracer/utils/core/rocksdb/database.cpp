@@ -425,7 +425,8 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
     ::rocksdb::IngestExternalFileOptions opts;
     // Rename same-FS staged SSTs instead of copying; RocksDB copies on failure.
     opts.move_files = true;
-    opts.snapshot_consistency = true;
+    // Offline bulk build with no live readers, so skip the snapshot/seqno sync.
+    opts.snapshot_consistency = false;
     opts.allow_global_seqno = true;
     opts.allow_blocking_flush = true;
     opts.ingest_behind = ingest_behind;

@@ -1,6 +1,8 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/rocksdb/key_codec.h>
+#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_merge_operator.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/utilities/composites/dft/aggregators/association_tracker.h>
@@ -23,9 +25,11 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <utility>
+#include <vector>
 
 namespace dftracer::utils::utilities::indexer {
 
@@ -388,90 +392,110 @@ void IndexDatabase::bulk_ingest(
     const auto skipped = [&](std::string_view cf_name) {
         return skip_cfs.find(std::string(cf_name)) != skip_cfs.end();
     };
-    const auto ingest = [&](std::string_view cf_name,
-                            const std::vector<std::string>& files) {
-        if (skipped(cf_name)) return;
-        auto status = db_->ingest_external_files(cf_name, files,
-                                                 /*ingest_behind=*/false);
-        if (!status.ok()) {
-            throw_db_error("Failed to ingest SSTs into column family '" +
-                               std::string(cf_name) + "'",
-                           status);
+    // One independent IngestExternalFile per unit. Content-addressed CFs split
+    // one SST per unit (overlapping key ranges are legal, order irrelevant);
+    // aggregation/system-metrics stay one ordered unit (their merge result is
+    // seqno-order-sensitive).
+    struct Unit {
+        std::string_view cf;
+        std::vector<std::string> files;
+        bool ordered;
+    };
+    std::vector<Unit> units;
+    const auto add_batch = [&](std::string_view cf,
+                               std::vector<std::string> f) {
+        if (!skipped(cf) && !f.empty())
+            units.push_back(Unit{cf, std::move(f), false});
+    };
+    const auto add_per_sst = [&](std::string_view cf,
+                                 const std::vector<std::string>& f) {
+        if (skipped(cf)) return;
+        for (const auto& p : f) units.push_back(Unit{cf, {p}, false});
+    };
+    const auto add_ordered = [&](std::string_view cf,
+                                 std::vector<std::string> f) {
+        if (!skipped(cf) && !f.empty())
+            units.push_back(Unit{cf, std::move(f), true});
+    };
+
+    add_batch(cf::METADATA, registry.metadata());
+    add_batch(cf::CHECKPOINTS, registry.checkpoints());
+    add_batch(cf::MANIFEST, registry.manifest());
+    add_batch(cf::CHUNK_BLOOM, registry.chunk_bloom());
+    add_batch(cf::FILE_BLOOM, registry.file_bloom());
+    add_batch(cf::CHUNK_STATS, registry.chunk_stats());
+    add_batch(cf::CHUNK_DIM_STATS, registry.chunk_dim_stats());
+    add_batch(cf::DIMENSIONS, registry.dimensions());
+    add_batch(cf::FILE_SCALAR_STATS, registry.file_scalar_stats());
+    add_batch(cf::FILE_CAT_COUNTS, registry.file_cat_counts());
+    add_batch(cf::FILE_PID_TID_COUNTS, registry.file_pid_tid_counts());
+    add_batch(cf::FILE_NAME_COUNTS, registry.file_name_counts());
+    add_batch(cf::NAME_FILE_POSTINGS, registry.name_file_postings());
+    add_batch(cf::NAME_CHUNK_POSTINGS, registry.name_chunk_postings());
+    add_per_sst(cf::NAME_DICTIONARY, registry.name_dictionary());
+    add_per_sst(cf::HASH_TABLES, registry.hash_tables());
+    add_ordered(cf::AGGREGATION, registry.aggregation());
+    add_ordered(cf::SYSTEM_METRICS, registry.system_metrics());
+
+    std::mutex err_mu;
+    ::rocksdb::Status first_error = ::rocksdb::Status::OK();
+    std::string first_error_cf;
+    const auto record_error = [&](std::string_view cf,
+                                  const ::rocksdb::Status& s) {
+        std::lock_guard<std::mutex> lk(err_mu);
+        if (first_error.ok()) {
+            first_error = s;
+            first_error_cf = std::string(cf);
+        }
+    };
+    const auto has_error = [&]() {
+        std::lock_guard<std::mutex> lk(err_mu);
+        return !first_error.ok();
+    };
+    const auto do_unit = [&](const Unit& u) {
+        if (!u.ordered) {
+            auto s = db_->ingest_external_files(u.cf, u.files, false);
+            if (!s.ok()) record_error(u.cf, s);
+            return;
+        }
+        for (const auto& p : u.files) {
+            if (has_error()) return;
+            auto s = db_->ingest_external_files(u.cf, {p}, false);
+            if (!s.ok()) {
+                record_error(u.cf, s);
+                return;
+            }
         }
     };
 
-    ingest(cf::METADATA, registry.metadata());
-    ingest(cf::CHECKPOINTS, registry.checkpoints());
-    ingest(cf::MANIFEST, registry.manifest());
-    ingest(cf::CHUNK_BLOOM, registry.chunk_bloom());
-    ingest(cf::FILE_BLOOM, registry.file_bloom());
-    ingest(cf::CHUNK_STATS, registry.chunk_stats());
-    ingest(cf::CHUNK_DIM_STATS, registry.chunk_dim_stats());
-    ingest(cf::DIMENSIONS, registry.dimensions());
-    ingest(cf::FILE_SCALAR_STATS, registry.file_scalar_stats());
-    ingest(cf::FILE_CAT_COUNTS, registry.file_cat_counts());
-    ingest(cf::FILE_PID_TID_COUNTS, registry.file_pid_tid_counts());
-    ingest(cf::FILE_NAME_COUNTS, registry.file_name_counts());
-    // Multiple workers emit identical (name_id, name) dictionary pairs for
-    // shared event names, so SSTs across workers have overlapping key ranges.
-    // Regular ingest forbids overlap *within a single call*, so we ingest one
-    // SST at a time. The content-addressed values are deterministic (same
-    // name -> same hash), so the normal LSM sequence-number semantics (later
-    // ingest shadows earlier with identical value) preserve correctness
-    // without requiring `ingest_behind`.
-    if (!skipped(cf::NAME_DICTIONARY)) {
-        for (const auto& path : registry.name_dictionary()) {
-            auto status = db_->ingest_external_files(
-                cf::NAME_DICTIONARY, {path}, /*ingest_behind=*/false);
-            if (!status.ok()) {
-                throw_db_error(
-                    "Failed to ingest SST into column family 'name_dictionary'",
-                    status);
-            }
-        }
+    // Run on the process default runtime when set; the get() below blocks, so
+    // `units`/`do_unit` outlive every spawned coroutine.
+    Runtime* runtime = process_default_runtime();
+    if (runtime && units.size() > 1) {
+        runtime
+            ->scope("bulk_ingest",
+                    [&](CoroScope& scope) -> coro::CoroTask<void> {
+                        std::vector<coro::SpawnFuture<void>> futs;
+                        futs.reserve(units.size());
+                        for (std::size_t i = 0; i < units.size(); ++i) {
+                            futs.push_back(scope.spawn(
+                                [&do_unit, &units,
+                                 i](CoroScope&) -> coro::CoroTask<void> {
+                                    do_unit(units[i]);
+                                    co_return;
+                                }));
+                        }
+                        for (auto& f : futs) co_await f;
+                    })
+            .get();
+    } else {
+        for (const auto& u : units) do_unit(u);
     }
-    ingest(cf::NAME_FILE_POSTINGS, registry.name_file_postings());
-    ingest(cf::NAME_CHUNK_POSTINGS, registry.name_chunk_postings());
-    // HASH_TABLES is content-addressed: same hash -> same name across workers.
-    // Same rationale as NAME_DICTIONARY: ingest one SST at a time so rocksdb
-    // can place overlapping files at L0 with new seqnos; deterministic values
-    // mean last-writer-wins resolves correctly.
-    if (!skipped(cf::HASH_TABLES)) {
-        for (const auto& path : registry.hash_tables()) {
-            auto status = db_->ingest_external_files(cf::HASH_TABLES, {path},
-                                                     /*ingest_behind=*/false);
-            if (!status.ok()) {
-                throw_db_error(
-                    "Failed to ingest SST into column family 'hash_tables'",
-                    status);
-            }
-        }
-    }
-    // AGGREGATION + SYSTEM_METRICS: workers emit mixed Put+Merge SSTs with
-    // overlapping (pid, time_bucket, ...) keys across workers. Ingest one
-    // SST at a time; the rocksdb merge_operator on these CFs collapses
-    // cross-worker merge operands at read/compaction time.
-    if (!skipped(cf::AGGREGATION)) {
-        for (const auto& path : registry.aggregation()) {
-            auto status = db_->ingest_external_files(cf::AGGREGATION, {path},
-                                                     /*ingest_behind=*/false);
-            if (!status.ok()) {
-                throw_db_error(
-                    "Failed to ingest SST into column family 'aggregation'",
-                    status);
-            }
-        }
-    }
-    if (!skipped(cf::SYSTEM_METRICS)) {
-        for (const auto& path : registry.system_metrics()) {
-            auto status = db_->ingest_external_files(cf::SYSTEM_METRICS, {path},
-                                                     /*ingest_behind=*/false);
-            if (!status.ok()) {
-                throw_db_error(
-                    "Failed to ingest SST into column family 'system_metrics'",
-                    status);
-            }
-        }
+
+    if (!first_error.ok()) {
+        throw_db_error(
+            "Failed to ingest SSTs into column family '" + first_error_cf + "'",
+            first_error);
     }
 }
 

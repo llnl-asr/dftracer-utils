@@ -38,6 +38,7 @@ def _build_distributed(env, pids, num_events=100, rebuild_root=True):
         client=None,
         aggregation_config=AGG_CFG,
         rebuild_root_summaries=rebuild_root,
+        build_manifest=True,
     )
     return files, index_path, result
 

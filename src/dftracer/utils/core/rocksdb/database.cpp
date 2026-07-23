@@ -428,6 +428,9 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
     // Offline bulk build with no live readers, so skip the snapshot/seqno sync.
     opts.snapshot_consistency = false;
     opts.allow_global_seqno = true;
+    // Keep the assigned seqno in the manifest instead of rewriting it into each
+    // SST (format_version 5 supports this), avoiding a per-SST write + fsync.
+    opts.write_global_seqno = false;
     opts.allow_blocking_flush = true;
     opts.ingest_behind = ingest_behind;
     return db_->IngestExternalFile(column_family_handle(column_family),

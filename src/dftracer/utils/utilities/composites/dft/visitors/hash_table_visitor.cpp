@@ -4,6 +4,12 @@
 
 namespace dftracer::utils::utilities::composites::dft::visitors {
 
+namespace {
+// While streaming, flush once the buffered entries cross this count. Two puts
+// (forward + reverse) are written per entry.
+constexpr std::size_t STREAM_FLUSH_ENTRIES = 65536;
+}  // namespace
+
 void HashTableVisitor::begin(std::size_t /*num_checkpoints*/) {
     file_hashes_.clear();
     host_hashes_.clear();
@@ -40,18 +46,38 @@ void HashTableVisitor::on_event(const EventRecord& record) {
         proc_metadata_.try_emplace(std::string(hash_val),
                                    std::string(name_val));
     }
+
+    if (stream_sink_ && num_entries() >= STREAM_FLUSH_ENTRIES) {
+        flush_to_stream();
+    }
+}
+
+void HashTableVisitor::flush_to_stream() {
+    if (!file_hashes_.empty()) stream_sink_(HashType::FILE, file_hashes_);
+    if (!host_hashes_.empty()) stream_sink_(HashType::HOST, host_hashes_);
+    if (!string_hashes_.empty()) stream_sink_(HashType::STRING, string_hashes_);
+    if (!proc_metadata_.empty()) stream_sink_(HashType::PROC, proc_metadata_);
+    file_hashes_.clear();
+    host_hashes_.clear();
+    string_hashes_.clear();
+    proc_metadata_.clear();
 }
 
 std::unique_ptr<DftEventVisitor> HashTableVisitor::create_parallel_slice()
     const {
-    return std::make_unique<HashTableVisitor>();
+    return std::make_unique<HashTableVisitor>(stream_sink_);
 }
 
 void HashTableVisitor::merge_parallel_slice(DftEventVisitor& slice_base) {
     auto* slice = dynamic_cast<HashTableVisitor*>(&slice_base);
     if (!slice) return;
-    auto absorb = [](std::unordered_map<std::string, std::string>& dst,
-                     std::unordered_map<std::string, std::string>& src) {
+    // A streaming slice wrote as it filled; flush what it still holds to the
+    // same destination rather than pulling it into this visitor's buffer.
+    if (stream_sink_) {
+        slice->flush_to_stream();
+        return;
+    }
+    auto absorb = [](HashMap& dst, HashMap& src) {
         for (auto& [k, v] : src) {
             dst.try_emplace(std::move(const_cast<std::string&>(k)),
                             std::move(v));
@@ -65,14 +91,16 @@ void HashTableVisitor::merge_parallel_slice(DftEventVisitor& slice_base) {
 
 void HashTableVisitor::finalize(indexer::IndexBatchSink& writer,
                                 int /*file_id*/) {
-    auto write_entries =
-        [&writer](const std::unordered_map<std::string, std::string>& entries,
-                  HashType type) {
-            for (const auto& [hash, name] : entries) {
-                writer.insert_hash_table_entry(static_cast<std::uint8_t>(type),
-                                               hash, name);
-            }
-        };
+    if (stream_sink_) {
+        flush_to_stream();
+        return;
+    }
+    auto write_entries = [&writer](const HashMap& entries, HashType type) {
+        for (const auto& [hash, name] : entries) {
+            writer.insert_hash_table_entry(static_cast<std::uint8_t>(type),
+                                           hash, name);
+        }
+    };
 
     write_entries(file_hashes_, HashType::FILE);
     write_entries(host_hashes_, HashType::HOST);

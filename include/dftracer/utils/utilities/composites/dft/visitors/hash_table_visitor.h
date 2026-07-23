@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 
@@ -28,7 +29,12 @@ class HashTableVisitor : public DftEventVisitor {
         PROC = 3     // phash <-> proc metadata
     };
 
+    using HashMap = std::unordered_map<std::string, std::string>;
+    using StreamSink = std::function<void(HashType, const HashMap&)>;
+
     HashTableVisitor() = default;
+    explicit HashTableVisitor(StreamSink stream_sink)
+        : stream_sink_(std::move(stream_sink)) {}
     HashTableVisitor(const HashTableVisitor&) = delete;
     HashTableVisitor& operator=(const HashTableVisitor&) = delete;
     HashTableVisitor(HashTableVisitor&&) noexcept = default;
@@ -46,10 +52,13 @@ class HashTableVisitor : public DftEventVisitor {
     std::size_t num_entries() const;
 
    private:
-    std::unordered_map<std::string, std::string> file_hashes_;
-    std::unordered_map<std::string, std::string> host_hashes_;
-    std::unordered_map<std::string, std::string> string_hashes_;
-    std::unordered_map<std::string, std::string> proc_metadata_;
+    void flush_to_stream();
+
+    HashMap file_hashes_;
+    HashMap host_hashes_;
+    HashMap string_hashes_;
+    HashMap proc_metadata_;
+    StreamSink stream_sink_;
 };
 
 }  // namespace dftracer::utils::utilities::composites::dft::visitors

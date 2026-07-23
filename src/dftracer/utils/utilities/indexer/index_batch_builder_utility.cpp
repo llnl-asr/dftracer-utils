@@ -203,7 +203,7 @@ static coro::CoroTask<void> parse_and_emit_worker(
     const std::vector<std::string>* bloom_dims_ptr,
     std::atomic<std::uint64_t>* parse_ns_ptr,
     const IndexBuildBatchConfig::DftVisitorFactory* visitor_factory_ptr,
-    bool build_manifest, bool build_bloom,
+    bool build_manifest, bool build_bloom, IndexDatabase* stream_db,
     coro::ChannelProducer<internal::ParsedIndexJob> ch) {
     namespace gzip_indexer = internal::gzip;
     auto guard = ch.guard();
@@ -234,7 +234,26 @@ static coro::CoroTask<void> parse_and_emit_worker(
                         bloom_config, *bloom_dims_ptr);
                     dft_vis.emplace_back(*job.bloom_visitor);
                 }
-                job.hash_table_visitor = std::make_unique<HashTableVisitor>();
+                if (stream_db) {
+                    // Legacy path: stream hash entries to the shared db as the
+                    // buffer fills, so a file's whole table never sits in
+                    // memory. The SST path keeps buffering (bounded elsewhere).
+                    job.hash_table_visitor = std::make_unique<HashTableVisitor>(
+                        [stream_db](HashTableVisitor::HashType type,
+                                    const HashTableVisitor::HashMap& entries) {
+                            auto sink = stream_db->begin_write();
+                            for (const auto& [hash, name] : entries) {
+                                sink->insert_hash_table_entry(
+                                    static_cast<std::uint8_t>(type), hash,
+                                    name);
+                            }
+                            static_cast<IndexDatabaseWriterContext&>(*sink)
+                                .commit();
+                        });
+                } else {
+                    job.hash_table_visitor =
+                        std::make_unique<HashTableVisitor>();
+                }
                 dft_vis.emplace_back(*job.hash_table_visitor);
                 if (build_manifest) {
                     job.manifest_visitor = std::make_unique<ManifestVisitor>();
@@ -400,6 +419,9 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     auto* parsed_jobs_ptr = state->parsed_jobs.get();
     auto* prepared_ptr = state->prepared.get();
     auto* db_ptr = writer_db.get();
+    // Only the legacy (RocksDB) path has a live db to stream hash entries to;
+    // the SST path buffers per file (bounded by in-flight jobs).
+    IndexDatabase* stream_db_ptr = db_ptr;
     auto* metrics_ptr = writer_metrics.get();
     auto* write_chan_ptr = write_chan.get();
     const auto* bloom_config_ptr = bloom_config_holder.get();
@@ -417,21 +439,22 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                            prepared_ptr, checkpoint_size, bloom_config_ptr,
                            bloom_dims_ptr, visitor_factory_ptr, build_manifest,
                            build_bloom, write_chan_ptr, db_ptr, metrics_ptr,
-                           sink_factory_ptr, sink_commit_ptr](
+                           sink_factory_ptr, sink_commit_ptr, stream_db_ptr](
                               CoroScope& child) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < parse_workers; ++w) {
             child.spawn(
                 [next_index_ptr, done_ptr, parse_ns_ptr, results_ptr,
                  parsed_jobs_ptr, prepared_ptr, checkpoint_size,
                  bloom_config_ptr, bloom_dims_ptr, visitor_factory_ptr,
-                 build_manifest, build_bloom, ch = write_chan_ptr->producer()](
+                 build_manifest, build_bloom, stream_db_ptr,
+                 ch = write_chan_ptr->producer()](
                     CoroScope& own_scope) mutable -> coro::CoroTask<void> {
                     co_await parse_and_emit_worker(
                         &own_scope, next_index_ptr, done_ptr, results_ptr,
                         parsed_jobs_ptr, prepared_ptr, checkpoint_size,
                         *bloom_config_ptr, bloom_dims_ptr, parse_ns_ptr,
                         visitor_factory_ptr, build_manifest, build_bloom,
-                        std::move(ch));
+                        stream_db_ptr, std::move(ch));
                 });
         }
 

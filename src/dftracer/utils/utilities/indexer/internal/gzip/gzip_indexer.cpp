@@ -683,7 +683,8 @@ GzipIndexer::GzipIndexer(GzipIndexer&& other) noexcept
       cached_num_lines_ready(other.cached_num_lines_ready.load()),
       cached_checkpoint_size(other.cached_checkpoint_size.load()),
       cached_checkpoint_size_ready(other.cached_checkpoint_size_ready.load()),
-      cached_checkpoints(std::move(other.cached_checkpoints)) {}
+      cached_checkpoints(std::move(other.cached_checkpoints)),
+      cached_loaded(other.cached_loaded.load()) {}
 
 GzipIndexer& GzipIndexer::operator=(GzipIndexer&& other) noexcept {
     if (this != &other) {
@@ -702,6 +703,7 @@ GzipIndexer& GzipIndexer::operator=(GzipIndexer&& other) noexcept {
         cached_checkpoint_size.store(other.cached_checkpoint_size.load());
         cached_checkpoint_size_ready.store(
             other.cached_checkpoint_size_ready.load());
+        cached_loaded.store(other.cached_loaded.load());
         std::lock_guard<std::mutex> lock(cached_checkpoints_mutex);
         cached_checkpoints = std::move(other.cached_checkpoints);
     }
@@ -756,6 +758,7 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
     cached_max_bytes_ready = true;
     std::lock_guard<std::mutex> lock(cached_checkpoints_mutex);
     cached_checkpoints = db.query_checkpoints(file_id);
+    cached_loaded.store(true, std::memory_order_release);
     co_return;
 }
 
@@ -797,61 +800,52 @@ const std::string& GzipIndexer::get_archive_path() const { return gz_path; }
 
 const std::string& GzipIndexer::get_gz_path() const { return gz_path; }
 
-std::uint64_t GzipIndexer::get_max_bytes() const {
-    if (!cached_max_bytes_ready.load(std::memory_order_acquire)) {
-        const int file_id = get_file_id();
-        if (file_id != -1) {
-            IndexDatabase db(
-                index_path,
-                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-            auto val = db.get_max_bytes(file_id);
-            cached_max_bytes.store(val, std::memory_order_relaxed);
-            cached_max_bytes_ready.store(true, std::memory_order_release);
-        }
+void GzipIndexer::ensure_loaded() const {
+    if (cached_loaded.load(std::memory_order_acquire)) {
+        return;
     }
+    std::lock_guard<std::mutex> lock(cached_checkpoints_mutex);
+    if (cached_loaded.load(std::memory_order_relaxed)) {
+        return;
+    }
+    IndexDatabase db(
+        index_path,
+        dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
+    const int file_id = db.get_file_info_id(gz_path_logical_path);
+    cached_file_id.store(file_id, std::memory_order_relaxed);
+    if (file_id != -1) {
+        cached_num_lines.store(db.get_num_lines(file_id),
+                               std::memory_order_relaxed);
+        cached_num_lines_ready.store(true, std::memory_order_relaxed);
+        cached_max_bytes.store(db.get_max_bytes(file_id),
+                               std::memory_order_relaxed);
+        cached_max_bytes_ready.store(true, std::memory_order_relaxed);
+        cached_checkpoint_size.store(db.get_checkpoint_size(file_id),
+                                     std::memory_order_relaxed);
+        cached_checkpoint_size_ready.store(true, std::memory_order_relaxed);
+        cached_checkpoints = db.query_checkpoints(file_id);
+    }
+    cached_loaded.store(true, std::memory_order_release);
+}
+
+std::uint64_t GzipIndexer::get_max_bytes() const {
+    ensure_loaded();
     return cached_max_bytes.load(std::memory_order_relaxed);
 }
 
 std::uint64_t GzipIndexer::get_checkpoint_size() const {
-    if (!cached_checkpoint_size_ready.load(std::memory_order_acquire)) {
-        const int file_id = get_file_id();
-        if (file_id != -1) {
-            IndexDatabase db(
-                index_path,
-                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-            auto val = db.get_checkpoint_size(file_id);
-            cached_checkpoint_size.store(val, std::memory_order_relaxed);
-            cached_checkpoint_size_ready.store(true, std::memory_order_release);
-        }
-    }
+    ensure_loaded();
     return cached_checkpoint_size.load(std::memory_order_relaxed);
 }
 
 std::uint64_t GzipIndexer::get_num_lines() const {
-    if (!cached_num_lines_ready.load(std::memory_order_acquire)) {
-        const int file_id = get_file_id();
-        if (file_id != -1) {
-            IndexDatabase db(
-                index_path,
-                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-            auto val = db.get_num_lines(file_id);
-            cached_num_lines.store(val, std::memory_order_relaxed);
-            cached_num_lines_ready.store(true, std::memory_order_release);
-        }
-    }
+    ensure_loaded();
     return cached_num_lines.load(std::memory_order_relaxed);
 }
 
 int GzipIndexer::get_file_id() const {
-    auto val = cached_file_id.load(std::memory_order_relaxed);
-    if (val == -1) {
-        IndexDatabase db(
-            index_path,
-            dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-        val = db.get_file_info_id(gz_path_logical_path);
-        cached_file_id.store(val, std::memory_order_relaxed);
-    }
-    return val;
+    ensure_loaded();
+    return cached_file_id.load(std::memory_order_relaxed);
 }
 
 int GzipIndexer::find_file_id(const std::string& path) const {
@@ -874,29 +868,25 @@ bool GzipIndexer::find_checkpoint(std::size_t target_offset,
 }
 
 std::vector<IndexerCheckpoint> GzipIndexer::get_checkpoints() const {
+    ensure_loaded();
     std::lock_guard<std::mutex> lock(cached_checkpoints_mutex);
-    if (cached_checkpoints.empty()) {
-        const int file_id = get_file_id();
-        if (file_id != -1) {
-            IndexDatabase db(
-                index_path,
-                dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-            cached_checkpoints = db.query_checkpoints(file_id);
-        }
-    }
     return cached_checkpoints;
 }
 
 std::vector<IndexerCheckpoint> GzipIndexer::get_checkpoints_for_line_range(
     std::uint64_t start_line, std::uint64_t end_line) const {
-    const int file_id = get_file_id();
-    if (file_id == -1) {
-        return {};
+    ensure_loaded();
+    std::lock_guard<std::mutex> lock(cached_checkpoints_mutex);
+    std::vector<IndexerCheckpoint> out;
+    // Matches IndexDatabase::query_checkpoints_for_line_range: keep checkpoints
+    // whose line span overlaps [start_line, end_line].
+    for (const auto& cp : cached_checkpoints) {
+        if ((cp.first_line_num <= end_line && cp.last_line_num >= start_line) ||
+            (cp.first_line_num <= start_line && cp.last_line_num >= end_line)) {
+            out.push_back(cp);
+        }
     }
-    IndexDatabase db(
-        index_path,
-        dftracer::utils::rocksdb::RocksDatabase::OpenMode::ReadOnly);
-    return db.query_checkpoints_for_line_range(file_id, start_line, end_line);
+    return out;
 }
 
 }  // namespace dftracer::utils::utilities::indexer::internal::gzip

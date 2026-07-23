@@ -127,11 +127,16 @@ class GzipIndexer : public Indexer {
     mutable std::atomic<bool> cached_checkpoint_size_ready{false};
     mutable std::vector<IndexerCheckpoint> cached_checkpoints;
     mutable std::mutex cached_checkpoints_mutex;
+    mutable std::atomic<bool> cached_loaded{false};
 
     // Internal methods
     void open();
     void close();
     bool is_valid() const;
+    // Open the index once and populate every read-path cache (file id, line
+    // count, byte count, checkpoint size, checkpoints). The per-getter opens it
+    // replaces were the dominant cost of streaming a file.
+    void ensure_loaded() const;
 };
 
 }  // namespace dftracer::utils::utilities::indexer::internal::gzip

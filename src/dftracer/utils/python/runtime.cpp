@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
@@ -458,8 +459,22 @@ static PyMethodDef runtime_module_methods[] = {
      "    runtime (Runtime or None): New default runtime.\n"},
     {NULL}};
 
+// Runs during interpreter finalization. Stop the default runtime's worker and
+// I/O threads while the process is still healthy, then tell RocksDB we are
+// exiting so cached DB handles skip closing every open SST on teardown. A read
+// scan can leave hundreds of SSTs open (more so on a networked filesystem),
+// and without this the process can appear to hang after the work is done.
+static void dftracer_utils_atexit_cleanup() {
+    if (g_default_runtime) {
+        g_default_runtime->shutdown();
+    }
+    dftracer::utils::rocksdb::mark_process_exiting_for_rocksdb();
+}
+
 int init_runtime(PyObject *m) {
     if (register_type(m, &RuntimeType, "Runtime") < 0) return -1;
+
+    Py_AtExit(dftracer_utils_atexit_cleanup);
 
     for (PyMethodDef *def = runtime_module_methods; def->ml_name; ++def) {
         PyObject *fn = PyCFunction_New(def, NULL);

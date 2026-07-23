@@ -180,7 +180,7 @@ run_python_tests() {
 	done
 
 	# Install test dependencies only (not the package itself)
-	pip install pytest pyarrow
+	pip install pytest pyarrow pandas numpy
 
 	PYTHONPATH="${PWD}/python" pytest tests/python -v
 	local pytest_status=$?

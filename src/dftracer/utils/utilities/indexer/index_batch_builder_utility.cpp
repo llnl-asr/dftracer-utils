@@ -313,13 +313,21 @@ static coro::CoroTask<void> parse_and_emit_worker(
                 .count());
         parse_ns_ptr->fetch_add(file_ns, std::memory_order_relaxed);
 
-        // Per-file progress: a large trace spends minutes per file here, and
-        // without this the batch is silent from "pipeline begin" to done.
-        DFTRACER_UTILS_LOG_INFO(
-            "IndexBatch: parsed %zu/%zu %s (%.1fs, %zu events)",
-            done_ptr->fetch_add(1, std::memory_order_relaxed) + 1,
-            prepared_ptr->size(), basename_of(pf.file_path).c_str(),
+        // A large trace spends minutes per file here. Keep the per-file detail
+        // at DEBUG and emit an INFO heartbeat only every ~5% so a long build
+        // shows progress without a line per file.
+        const std::size_t done =
+            done_ptr->fetch_add(1, std::memory_order_relaxed) + 1;
+        const std::size_t total = prepared_ptr->size();
+        DFTRACER_UTILS_LOG_DEBUG(
+            "IndexBatch: parsed %zu/%zu %s (%.1fs, %zu events)", done, total,
+            basename_of(pf.file_path).c_str(),
             static_cast<double>(file_ns) / 1e9, result.events_processed);
+        const std::size_t step = total < 20 ? 1 : total / 20;
+        if (done == total || done % step == 0) {
+            DFTRACER_UTILS_LOG_INFO("IndexBatch: parsed %zu/%zu files", done,
+                                    total);
+        }
 
         if (!parse_ok) {
             (*results_ptr)[idx] = std::move(result);

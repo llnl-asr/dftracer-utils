@@ -120,7 +120,7 @@ before-test = [
   "python -c 'import tomli, subprocess, sys; subprocess.check_call([sys.executable, \"-m\", \"pip\", \"install\"] + tomli.load(open(\"pyproject.toml\", \"rb\"))[\"project\"][\"optional-dependencies\"][\"dev\"])'",
 ]
 test-command = "pytest {project}/tests"
-test-requires = "pytest numpy pandas"
+test-requires = "pytest numpy pandas pyarrow"
 
 # @note: enable this if you are using nix, see issue https://github.com/matthew-brett/delocate/issues/247
 # [tool.cibuildwheel.macos]

@@ -1,16 +1,9 @@
 """The scan schema and the meta describing it must not drift apart."""
 
+import pandas as pd
 import pytest
 
-# dfanalyzer needs numpy/pandas (test-only); skip cleanly where absent instead
-# of erroring at collection.
-pytest.importorskip("numpy")
-pd = pytest.importorskip("pandas")
-
-from dftracer.utils.dfanalyzer import (  # noqa: E402
-    dfanalyzer_events_meta,
-    hlm_scan_group_by,
-)
+from dftracer.utils.dfanalyzer import dfanalyzer_events_meta, hlm_scan_group_by
 
 # The "str" dtype (vs legacy "object") only materializes on pandas builds with
 # the string dtype active (pandas 3.x / future.infer_string).

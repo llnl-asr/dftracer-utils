@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/object_pool.h>
 #include <dftracer/utils/core/io/io_backend.h>
 #include <dftracer/utils/core/io/io_thread_pool.h>
@@ -618,8 +619,15 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
 
     void SupportedOps(int64_t& supported_ops) override {
         supported_ops = 0;
+#ifndef DFTRACER_UTILS_VALGRIND_MODE
+        // Async prefetch through our io backend is not Valgrind-safe: under its
+        // serialized scheduler a scan's in-flight ReadAsync can stall (the
+        // server's /viz/density handler then never responds) and RocksDB's
+        // prefetch context leaks at exit. Fall back to synchronous reads there,
+        // matching how io_uring is already disabled under Valgrind.
         supported_ops |= (1 << ::rocksdb::FSSupportedOps::kAsyncIO);
         supported_ops |= (1 << ::rocksdb::FSSupportedOps::kFSPrefetch);
+#endif
     }
 
     ::rocksdb::IOStatus NewSequentialFile(

@@ -84,7 +84,9 @@ class Indexer:
         require_bloom: Build bloom filter tier (default True).
         build_bloom: Build the bloom/stats/dimension tier (default True). Off
             for aggregation-only consumers that never read it.
-        require_manifest: Build manifest tier (default True).
+        require_manifest: Build manifest tier (default False). Only
+            dftracer_organize and pid-partitioned reads need it; both request
+            it explicitly.
         require_aggregation: Aggregation config or True for defaults (default None).
         parallelism: Number of parallel workers (0 = all cores).
         force_rebuild: Force rebuild even if index exists.
@@ -114,7 +116,7 @@ class Indexer:
         require_checkpoint: bool = True,
         require_bloom: bool = True,
         build_bloom: bool = True,
-        require_manifest: bool = True,
+        require_manifest: bool = False,
         require_aggregation: Optional[Union[bool, AggregationConfig]] = None,
         checkpoint_size: int = DEFAULT_CHECKPOINT_SIZE,
         parallelism: int = 0,

@@ -76,7 +76,7 @@ class Indexer:
         require_checkpoint: bool = True,
         require_bloom: bool = True,
         build_bloom: bool = True,
-        require_manifest: bool = True,
+        require_manifest: bool = False,
         require_aggregation: bool = False,
         time_interval_ms: float = 5000.0,
         group_keys: Optional[List[str]] = None,

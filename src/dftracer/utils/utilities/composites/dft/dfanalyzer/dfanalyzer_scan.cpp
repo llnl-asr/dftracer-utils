@@ -31,7 +31,7 @@ std::unique_ptr<AggDbHandle> open_agg_db(const std::string& index_path,
                                          std::string& error_msg) {
     std::shared_ptr<dftracer::utils::rocksdb::RocksDatabase> db;
     try {
-        db = EventAggregator::open_with_merge_operator(index_path);
+        db = EventAggregator::open_read_only_with_merge_operator(index_path);
     } catch (...) {
         auto& mgr = dftracer::utils::rocksdb::RocksDBManager::instance();
         mgr.reset(index_path);

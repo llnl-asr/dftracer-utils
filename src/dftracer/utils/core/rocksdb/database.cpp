@@ -201,6 +201,15 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     if (open_mode_ == OpenMode::ReadOnly) {
         db_options.create_if_missing = false;
         db_options.create_missing_column_families = false;
+        // Read paths do heavy point lookups (e.g. dfanalyzer hash resolution);
+        // with a small table cache the SST readers get evicted and every lookup
+        // re-opens the file to re-read its filter/index blocks, which thrashes.
+        // There is no write-side fd pressure here, so keep every SST open
+        // unless an explicit env cap is set.
+        if (!Env::get<int>("DFTRACER_UTILS_ROCKSDB_MAX_OPEN_FILES")
+                 .has_value()) {
+            db_options.max_open_files = -1;
+        }
     }
     file_system_ = make_dftracer_file_system();
     env_ = make_dftracer_env(file_system_);

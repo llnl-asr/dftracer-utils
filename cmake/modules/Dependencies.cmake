@@ -348,7 +348,7 @@ endfunction()
 # ==============================================================================
 
 set(DFTRACER_UTILS_ROCKSDB_VERSION
-    "10.10.1"
+    "11.1.2"
     CACHE STRING "RocksDB version to find or build")
 set(DFTRACER_UTILS_ROCKSDB_PREFIX
     "$ENV{DFTRACER_UTILS_ROCKSDB_PREFIX}"

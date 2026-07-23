@@ -382,9 +382,10 @@ EventAggregator::open_with_merge_operator(const std::string& index_path) {
 
             ::rocksdb::BlockBasedTableOptions bbt;
             bbt.block_size = 32 * 1024;
-            bbt.format_version = 5;
+            bbt.format_version = 7;
             bbt.index_block_restart_interval = 16;
             bbt.whole_key_filtering = false;
+            bbt.separate_key_value_in_data_block = true;
             opts.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
 
             opts.level0_file_num_compaction_trigger = 2;

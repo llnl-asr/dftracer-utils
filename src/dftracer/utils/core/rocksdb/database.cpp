@@ -118,6 +118,12 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
     options.allow_concurrent_memtable_write = true;
     options.enable_pipelined_write = true;
     options.max_open_files = Env::rocksdb_max_open_files();
+    // Validate SST files in the background during open instead of serially on
+    // the open path; cuts open latency on high-file-count indexes on remote
+    // filesystems (Lustre). Async open requires skipping the synchronous
+    // per-SST stats pass, which is itself expensive over Lustre.
+    options.skip_stats_update_on_db_open = true;
+    options.open_files_async = true;
     options.max_background_jobs = 8;
     options.max_subcompactions = 8;
     options.write_buffer_size = 256 * 1024 * 1024;
@@ -131,9 +137,13 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
 
     ::rocksdb::BlockBasedTableOptions bbt;
     bbt.block_size = 32 * 1024;
-    bbt.format_version = 5;
+    bbt.format_version = 7;
     bbt.index_block_restart_interval = 16;
     bbt.block_cache = shared_block_cache();
+    // Store keys and values in separate regions of each data block: better
+    // compression and CPU-cache behavior for the scanned CFs whose values are
+    // fixed-layout binary blobs (aggregation, stats, postings).
+    bbt.separate_key_value_in_data_block = true;
     options.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
 
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
@@ -171,9 +181,14 @@ RocksDatabase::point_lookup_column_family_options() {
     // also mean reading and decompressing 32 KB to return a few dozen bytes.
     ::rocksdb::BlockBasedTableOptions bbt;
     bbt.block_size = constants::rocksdb::POINT_LOOKUP_BLOCK_SIZE;
-    bbt.format_version = 5;
+    bbt.format_version = 7;
     bbt.index_block_restart_interval = 16;
     bbt.block_cache = shared_block_cache();
+    // Keys here are content hashes: uniformly distributed under the byte-wise
+    // comparator, exactly the case interpolation search is meant for. This is
+    // a read-time index-search choice and works on any existing SST.
+    bbt.index_block_search_type =
+        ::rocksdb::BlockBasedTableOptions::kInterpolation;
     bbt.filter_policy.reset(::rocksdb::NewBloomFilterPolicy(
         constants::rocksdb::BLOOM_BITS_PER_KEY, false));
     // Left in the table reader rather than the block cache: a scan streams
@@ -255,19 +270,22 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
 
     std::vector<::rocksdb::ColumnFamilyHandle*> handles;
     ::rocksdb::Status status;
+    std::unique_ptr<::rocksdb::DB> opened;
     if (open_mode_ == OpenMode::ReadOnly) {
         status = ::rocksdb::DB::OpenForReadOnly(
-            db_options, db_path_, descriptors, &handles, &db_, false);
+            db_options, db_path_, descriptors, &handles, &opened, false);
     } else {
         status = ::rocksdb::DB::Open(db_options, db_path_, descriptors,
-                                     &handles, &db_);
+                                     &handles, &opened);
     }
     if (!status.ok()) {
-        cleanup_failed_open(db_, handles);
+        ::rocksdb::DB* raw = opened.release();
+        cleanup_failed_open(raw, handles);
         throw DFTUtilsException(ErrorCode::IO, "Failed to open RocksDB at '" +
                                                    db_path_ +
                                                    "': " + status.ToString());
     }
+    db_ = opened.release();
 
     column_families_.clear();
     for (std::size_t i = 0; i < descriptors.size(); ++i) {

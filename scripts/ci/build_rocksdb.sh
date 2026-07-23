@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VERSION="${ROCKSDB_VERSION:-10.10.1}"
+VERSION="${ROCKSDB_VERSION:-11.1.2}"
 PREFIX="${ROCKSDB_PREFIX:-/opt/dftracer-deps/rocksdb-${VERSION}}"
 SRC_CACHE="${ROCKSDB_SRC_CACHE:-${TMPDIR:-/tmp}/rocksdb-src}"
 BUILD_DIR="${ROCKSDB_BUILD_DIR:-${TMPDIR:-/tmp}/rocksdb-build}"

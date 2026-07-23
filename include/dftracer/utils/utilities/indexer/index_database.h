@@ -128,8 +128,10 @@ class IndexDatabase {
 
     /// v2 added per-file mtime/size to the registry record. v3 moved the file
     /// hash into the aggregation key and gave the point-lookup families bloom
-    /// filters, neither of which is readable from an older index.
-    static constexpr std::uint32_t SCHEMA_VERSION = 3;
+    /// filters, neither of which is readable from an older index. v4 moved SSTs
+    /// to format_version 7 with keys and values separated in the data block,
+    /// which older RocksDB builds cannot read.
+    static constexpr std::uint32_t SCHEMA_VERSION = 4;
 
     /// True if the stored schema predates the current build's layout.
     bool schema_outdated() const;

@@ -14,7 +14,7 @@ concurrency:
 
 env:
   # Must match the default in scripts/ci/build_rocksdb.sh.
-  ROCKSDB_VERSION: "10.10.1"
+  ROCKSDB_VERSION: "11.1.2"
 
 jobs:
   changes:

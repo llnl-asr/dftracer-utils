@@ -349,9 +349,10 @@ rocks::RocksDatabase::CfOptionsOverride make_aggregation_cf_override() {
             opts.merge_operator = agg_merge_op;
             ::rocksdb::BlockBasedTableOptions bbt;
             bbt.block_size = 32 * 1024;
-            bbt.format_version = 5;
+            bbt.format_version = 7;
             bbt.index_block_restart_interval = 16;
             bbt.whole_key_filtering = false;
+            bbt.separate_key_value_in_data_block = true;
             opts.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
             opts.level0_file_num_compaction_trigger = 2;
             opts.max_bytes_for_level_multiplier = 20;

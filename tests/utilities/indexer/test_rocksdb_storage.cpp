@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/rocksdb/db_manager.h>
@@ -190,8 +191,15 @@ TEST_SUITE("RocksDBStorage") {
 
         int64_t supported_ops = 0;
         file_system->SupportedOps(supported_ops);
-        CHECK((supported_ops & (1LL << ::rocksdb::FSSupportedOps::kAsyncIO)) !=
-              0);
+        const bool async_advertised =
+            (supported_ops & (1LL << ::rocksdb::FSSupportedOps::kAsyncIO)) != 0;
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+        // Async FS ops are intentionally not advertised under Valgrind so
+        // RocksDB uses synchronous reads; ReadAsync/Poll below still work.
+        CHECK_FALSE(async_advertised);
+#else
+        CHECK(async_advertised);
+#endif
 
         std::array<char, 5> scratch{};
         ::rocksdb::FSReadRequest request;

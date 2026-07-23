@@ -391,21 +391,14 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
 
 static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
                                     PyObject *kwds) {
-    static const char *kwlist[] = {"files",
-                                   "file_ids",
-                                   "staging_dir",
-                                   "batch_id",
-                                   "index_dir",
-                                   "checkpoint_size",
-                                   "build_manifest",
-                                   "force_rebuild",
-                                   "bloom_dimensions",
-                                   "parallelism",
-                                   "flush_every_files",
-                                   "runtime",
-                                   "aggregation_config",
-                                   "file_slices",
-                                   NULL};
+    static const char *kwlist[] = {"files",          "file_ids",
+                                   "staging_dir",    "batch_id",
+                                   "index_dir",      "checkpoint_size",
+                                   "build_manifest", "force_rebuild",
+                                   "build_bloom",    "bloom_dimensions",
+                                   "parallelism",    "flush_every_files",
+                                   "runtime",        "aggregation_config",
+                                   "file_slices",    NULL};
     PyObject *files_obj;
     PyObject *file_ids_obj;
     const char *staging_dir;
@@ -415,6 +408,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
         dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     int build_manifest = 0;
     int force_rebuild = 0;
+    int build_bloom = 1;
     PyObject *bloom_dims_obj = NULL;
     Py_ssize_t parallelism = 0;
     Py_ssize_t flush_every_files = 0;
@@ -423,10 +417,10 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     PyObject *file_slices_obj = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "OOss|snppOnnOOO", (char **)kwlist, &files_obj,
+            args, kwds, "OOss|snpppOnnOOO", (char **)kwlist, &files_obj,
             &file_ids_obj, &staging_dir, &batch_id, &index_dir,
-            &checkpoint_size, &build_manifest, &force_rebuild, &bloom_dims_obj,
-            &parallelism, &flush_every_files, &runtime_arg,
+            &checkpoint_size, &build_manifest, &force_rebuild, &build_bloom,
+            &bloom_dims_obj, &parallelism, &flush_every_files, &runtime_arg,
             &aggregation_config_obj, &file_slices_obj)) {
         return NULL;
     }
@@ -657,6 +651,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
         batch_config->file_slices = parsed_slices;
     }
     batch_config->index_dir = index_dir;
+    batch_config->build_bloom = build_bloom != 0;
     batch_config->checkpoint_size = static_cast<std::size_t>(checkpoint_size);
     batch_config->build_manifest = build_manifest != 0;
     batch_config->force_rebuild = force_rebuild != 0;

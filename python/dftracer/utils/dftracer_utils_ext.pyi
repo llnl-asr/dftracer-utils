@@ -1060,6 +1060,7 @@ def build_sst_batch(
     checkpoint_size: int = 33554432,
     build_manifest: bool = False,
     force_rebuild: bool = False,
+    build_bloom: bool = True,
     bloom_dimensions: Optional[List[str]] = None,
     parallelism: int = 0,
     flush_every_files: int = 0,

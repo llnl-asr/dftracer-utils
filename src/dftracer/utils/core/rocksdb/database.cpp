@@ -437,4 +437,28 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
                                    external_files, opts);
 }
 
+::rocksdb::Status RocksDatabase::ingest_external_files_multi(
+    const std::vector<
+        std::pair<std::string_view, const std::vector<std::string>*>>& per_cf) {
+    ::rocksdb::IngestExternalFileOptions opts;
+    opts.move_files = true;
+    opts.snapshot_consistency = false;
+    opts.allow_global_seqno = true;
+    opts.write_global_seqno = false;
+    opts.allow_blocking_flush = true;
+
+    std::vector<::rocksdb::IngestExternalFileArg> args;
+    args.reserve(per_cf.size());
+    for (const auto& [cf_name, files] : per_cf) {
+        if (!files || files->empty()) continue;
+        ::rocksdb::IngestExternalFileArg arg;
+        arg.column_family = column_family_handle(cf_name);
+        arg.external_files = *files;
+        arg.options = opts;
+        args.push_back(std::move(arg));
+    }
+    if (args.empty()) return ::rocksdb::Status::OK();
+    return db_->IngestExternalFiles(args);
+}
+
 }  // namespace dftracer::utils::rocksdb

@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -392,50 +393,6 @@ void IndexDatabase::bulk_ingest(
     const auto skipped = [&](std::string_view cf_name) {
         return skip_cfs.find(std::string(cf_name)) != skip_cfs.end();
     };
-    // One independent IngestExternalFile per unit. Content-addressed CFs split
-    // one SST per unit (overlapping key ranges are legal, order irrelevant);
-    // aggregation/system-metrics stay one ordered unit (their merge result is
-    // seqno-order-sensitive).
-    struct Unit {
-        std::string_view cf;
-        std::vector<std::string> files;
-        bool ordered;
-    };
-    std::vector<Unit> units;
-    const auto add_batch = [&](std::string_view cf,
-                               std::vector<std::string> f) {
-        if (!skipped(cf) && !f.empty())
-            units.push_back(Unit{cf, std::move(f), false});
-    };
-    const auto add_per_sst = [&](std::string_view cf,
-                                 const std::vector<std::string>& f) {
-        if (skipped(cf)) return;
-        for (const auto& p : f) units.push_back(Unit{cf, {p}, false});
-    };
-    const auto add_ordered = [&](std::string_view cf,
-                                 std::vector<std::string> f) {
-        if (!skipped(cf) && !f.empty())
-            units.push_back(Unit{cf, std::move(f), true});
-    };
-
-    add_batch(cf::METADATA, registry.metadata());
-    add_batch(cf::CHECKPOINTS, registry.checkpoints());
-    add_batch(cf::MANIFEST, registry.manifest());
-    add_batch(cf::CHUNK_BLOOM, registry.chunk_bloom());
-    add_batch(cf::FILE_BLOOM, registry.file_bloom());
-    add_batch(cf::CHUNK_STATS, registry.chunk_stats());
-    add_batch(cf::CHUNK_DIM_STATS, registry.chunk_dim_stats());
-    add_batch(cf::DIMENSIONS, registry.dimensions());
-    add_batch(cf::FILE_SCALAR_STATS, registry.file_scalar_stats());
-    add_batch(cf::FILE_CAT_COUNTS, registry.file_cat_counts());
-    add_batch(cf::FILE_PID_TID_COUNTS, registry.file_pid_tid_counts());
-    add_batch(cf::FILE_NAME_COUNTS, registry.file_name_counts());
-    add_batch(cf::NAME_FILE_POSTINGS, registry.name_file_postings());
-    add_batch(cf::NAME_CHUNK_POSTINGS, registry.name_chunk_postings());
-    add_per_sst(cf::NAME_DICTIONARY, registry.name_dictionary());
-    add_per_sst(cf::HASH_TABLES, registry.hash_tables());
-    add_ordered(cf::AGGREGATION, registry.aggregation());
-    add_ordered(cf::SYSTEM_METRICS, registry.system_metrics());
 
     std::mutex err_mu;
     ::rocksdb::Status first_error = ::rocksdb::Status::OK();
@@ -452,44 +409,94 @@ void IndexDatabase::bulk_ingest(
         std::lock_guard<std::mutex> lk(err_mu);
         return !first_error.ok();
     };
-    const auto do_unit = [&](const Unit& u) {
-        if (!u.ordered) {
-            auto s = db_->ingest_external_files(u.cf, u.files, false);
-            if (!s.ok()) record_error(u.cf, s);
-            return;
-        }
-        for (const auto& p : u.files) {
-            if (has_error()) return;
-            auto s = db_->ingest_external_files(u.cf, {p}, false);
-            if (!s.ok()) {
-                record_error(u.cf, s);
-                return;
-            }
+
+    // Per-file CFs never overlap across workers, so ingest them all in one
+    // atomic multi-CF call: one manifest edit instead of one per CF.
+    std::vector<std::pair<std::string_view, const std::vector<std::string>*>>
+        batched = {
+            {cf::METADATA, &registry.metadata()},
+            {cf::CHECKPOINTS, &registry.checkpoints()},
+            {cf::MANIFEST, &registry.manifest()},
+            {cf::CHUNK_BLOOM, &registry.chunk_bloom()},
+            {cf::FILE_BLOOM, &registry.file_bloom()},
+            {cf::CHUNK_STATS, &registry.chunk_stats()},
+            {cf::CHUNK_DIM_STATS, &registry.chunk_dim_stats()},
+            {cf::DIMENSIONS, &registry.dimensions()},
+            {cf::FILE_SCALAR_STATS, &registry.file_scalar_stats()},
+            {cf::FILE_CAT_COUNTS, &registry.file_cat_counts()},
+            {cf::FILE_PID_TID_COUNTS, &registry.file_pid_tid_counts()},
+            {cf::FILE_NAME_COUNTS, &registry.file_name_counts()},
+            {cf::NAME_FILE_POSTINGS, &registry.name_file_postings()},
+            {cf::NAME_CHUNK_POSTINGS, &registry.name_chunk_postings()},
+        };
+    batched.erase(std::remove_if(batched.begin(), batched.end(),
+                                 [&](const auto& e) {
+                                     return skipped(e.first) ||
+                                            e.second->empty();
+                                 }),
+                  batched.end());
+
+    // Content-addressed CFs overlap across workers, so each SST ingests
+    // separately (order irrelevant, deterministic values); aggregation/
+    // system-metrics stay one ordered unit (seqno-sensitive merge).
+    std::vector<std::function<void()>> tasks;
+    if (!batched.empty()) {
+        tasks.push_back([&]() {
+            auto s = db_->ingest_external_files_multi(batched);
+            if (!s.ok()) record_error(batched.front().first, s);
+        });
+    }
+    const auto add_per_sst = [&](std::string_view cf,
+                                 const std::vector<std::string>& files) {
+        if (skipped(cf)) return;
+        for (const auto& p : files) {
+            tasks.push_back([&, cf, p]() {
+                auto s = db_->ingest_external_files(cf, {p}, false);
+                if (!s.ok()) record_error(cf, s);
+            });
         }
     };
+    const auto add_ordered = [&](std::string_view cf,
+                                 const std::vector<std::string>& files) {
+        if (skipped(cf) || files.empty()) return;
+        tasks.push_back([&, cf]() {
+            for (const auto& p : files) {
+                if (has_error()) return;
+                auto s = db_->ingest_external_files(cf, {p}, false);
+                if (!s.ok()) {
+                    record_error(cf, s);
+                    return;
+                }
+            }
+        });
+    };
+    add_per_sst(cf::NAME_DICTIONARY, registry.name_dictionary());
+    add_per_sst(cf::HASH_TABLES, registry.hash_tables());
+    add_ordered(cf::AGGREGATION, registry.aggregation());
+    add_ordered(cf::SYSTEM_METRICS, registry.system_metrics());
 
     // Run on the process default runtime when set; the get() below blocks, so
-    // `units`/`do_unit` outlive every spawned coroutine.
+    // the captures outlive every spawned coroutine.
     Runtime* runtime = process_default_runtime();
-    if (runtime && units.size() > 1) {
+    if (runtime && tasks.size() > 1) {
         runtime
-            ->scope("bulk_ingest",
-                    [&](CoroScope& scope) -> coro::CoroTask<void> {
-                        std::vector<coro::SpawnFuture<void>> futs;
-                        futs.reserve(units.size());
-                        for (std::size_t i = 0; i < units.size(); ++i) {
-                            futs.push_back(scope.spawn(
-                                [&do_unit, &units,
-                                 i](CoroScope&) -> coro::CoroTask<void> {
-                                    do_unit(units[i]);
-                                    co_return;
-                                }));
-                        }
-                        for (auto& f : futs) co_await f;
-                    })
+            ->scope(
+                "bulk_ingest",
+                [&](CoroScope& scope) -> coro::CoroTask<void> {
+                    std::vector<coro::SpawnFuture<void>> futs;
+                    futs.reserve(tasks.size());
+                    for (std::size_t i = 0; i < tasks.size(); ++i) {
+                        futs.push_back(scope.spawn(
+                            [&tasks, i](CoroScope&) -> coro::CoroTask<void> {
+                                tasks[i]();
+                                co_return;
+                            }));
+                    }
+                    for (auto& f : futs) co_await f;
+                })
             .get();
     } else {
-        for (const auto& u : units) do_unit(u);
+        for (auto& t : tasks) t();
     }
 
     if (!first_error.ok()) {

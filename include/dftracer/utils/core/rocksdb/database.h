@@ -82,6 +82,14 @@ class RocksDatabase {
         const std::vector<std::string>& external_files,
         bool ingest_behind = false);
 
+    /// Ingest into several column families in one atomic call (one manifest
+    /// edit + fsync for all of them). Each entry's files must be
+    /// non-overlapping within that CF; the file lists are borrowed (not copied)
+    /// and must outlive the call. Empty/null lists are skipped.
+    ::rocksdb::Status ingest_external_files_multi(
+        const std::vector<std::pair<std::string_view,
+                                    const std::vector<std::string>*>>& per_cf);
+
     using CfOptionsOverride = std::function<void(
         const std::string&, ::rocksdb::ColumnFamilyOptions&)>;
     void set_cf_options_override(CfOptionsOverride override);

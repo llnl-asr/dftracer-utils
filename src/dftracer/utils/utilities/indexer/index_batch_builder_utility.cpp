@@ -365,8 +365,12 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     // GCC 12 coroutine bug: capturing shared_ptr by value in coroutine
     // lambdas corrupts refcount. Keep shared_ptrs at this scope and pass
     // raw pointers to lambdas.
-    auto write_chan = coro::make_channel<internal::ParsedIndexJob>(
-        write_workers * WRITE_BATCH_SIZE);
+    // Each queued job holds its file's whole hash table, so a channel sized to
+    // WRITE_BATCH_SIZE lets every high-cardinality file's table sit in memory
+    // at once. Keep only a couple of completed jobs per writer buffered; the
+    // writer flushes by entry budget rather than waiting to fill a batch.
+    auto write_chan =
+        coro::make_channel<internal::ParsedIndexJob>(write_workers * 2);
     auto writer_metrics = std::make_shared<internal::BatchWriterMetrics>();
 
     // Only open the RocksDB-backed DB when no external sink factory is

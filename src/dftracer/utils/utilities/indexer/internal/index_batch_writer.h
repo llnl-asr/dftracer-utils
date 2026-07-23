@@ -109,10 +109,22 @@ inline coro::CoroTask<void> index_batch_write_worker(
         batch.clear();
     };
 
+    // Each job carries its file's hash table, so a batch of the nominal size
+    // holds every entry of `batch_size` high-cardinality files at once. Flush
+    // early once the accumulated entries cross a budget to bound peak heap.
+    static constexpr std::size_t MAX_BATCH_HASH_ENTRIES = 2u * 1024 * 1024;
+    std::size_t batch_hash_entries = 0;
+
     while (auto item = co_await channel->receive()) {
+        std::size_t entries = item->hash_table_visitor
+                                  ? item->hash_table_visitor->num_entries()
+                                  : 0;
         batch.push_back(std::move(*item));
-        if (batch.size() >= batch_size) {
+        batch_hash_entries += entries;
+        if (batch.size() >= batch_size ||
+            batch_hash_entries >= MAX_BATCH_HASH_ENTRIES) {
             flush();
+            batch_hash_entries = 0;
         }
     }
     flush();

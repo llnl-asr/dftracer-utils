@@ -111,6 +111,11 @@ struct IndexBuildBatchConfig {
             std::vector<std::unique_ptr<composites::dft::DftEventVisitor>>>)>;
     ExtraVisitorsDrainFn extra_visitors_drain;
 
+    /// Optional callback with (files_done, total_files) as files finish
+    /// parsing. Called from worker threads (throttled); must be thread-safe.
+    using ProgressFn = std::function<void(std::size_t done, std::size_t total)>;
+    ProgressFn progress;
+
     /// If non-empty, parallel to `file_paths`: use these file_ids instead
     /// of allocating via `get_or_create_file_info`. Used by the distributed
     /// indexer where the coordinator pre-registers all files. When set,

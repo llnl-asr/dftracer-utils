@@ -391,14 +391,23 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
 
 static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
                                     PyObject *kwds) {
-    static const char *kwlist[] = {"files",          "file_ids",
-                                   "staging_dir",    "batch_id",
-                                   "index_dir",      "checkpoint_size",
-                                   "build_manifest", "force_rebuild",
-                                   "build_bloom",    "bloom_dimensions",
-                                   "parallelism",    "flush_every_files",
-                                   "runtime",        "aggregation_config",
-                                   "file_slices",    NULL};
+    static const char *kwlist[] = {"files",
+                                   "file_ids",
+                                   "staging_dir",
+                                   "batch_id",
+                                   "index_dir",
+                                   "checkpoint_size",
+                                   "build_manifest",
+                                   "force_rebuild",
+                                   "build_bloom",
+                                   "bloom_dimensions",
+                                   "parallelism",
+                                   "flush_every_files",
+                                   "runtime",
+                                   "aggregation_config",
+                                   "file_slices",
+                                   "progress",
+                                   NULL};
     PyObject *files_obj;
     PyObject *file_ids_obj;
     const char *staging_dir;
@@ -415,13 +424,14 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     PyObject *runtime_arg = NULL;
     PyObject *aggregation_config_obj = NULL;
     PyObject *file_slices_obj = NULL;
+    PyObject *progress_obj = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "OOss|snpppOnnOOO", (char **)kwlist, &files_obj,
+            args, kwds, "OOss|snpppOnnOOOO", (char **)kwlist, &files_obj,
             &file_ids_obj, &staging_dir, &batch_id, &index_dir,
             &checkpoint_size, &build_manifest, &force_rebuild, &build_bloom,
             &bloom_dims_obj, &parallelism, &flush_every_files, &runtime_arg,
-            &aggregation_config_obj, &file_slices_obj)) {
+            &aggregation_config_obj, &file_slices_obj, &progress_obj)) {
         return NULL;
     }
 
@@ -662,6 +672,30 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     batch_config->flush_every_files =
         static_cast<std::size_t>(flush_every_files);
     batch_config->rebuild_root_summaries = false;
+
+    // The build runs with the GIL released; re-acquire it per call. The
+    // GIL-holding deleter drops the ref safely after the build.
+    if (progress_obj && progress_obj != Py_None) {
+        Py_INCREF(progress_obj);
+        std::shared_ptr<PyObject> cb(progress_obj, [](PyObject *p) {
+            PyGILState_STATE g = PyGILState_Ensure();
+            Py_DECREF(p);
+            PyGILState_Release(g);
+        });
+        batch_config->progress = [cb](std::size_t done, std::size_t total) {
+            PyGILState_STATE g = PyGILState_Ensure();
+            PyObject *r = PyObject_CallFunction(cb.get(), "nn",
+                                                static_cast<Py_ssize_t>(done),
+                                                static_cast<Py_ssize_t>(total));
+            if (r) {
+                Py_DECREF(r);
+            } else {
+                // A failing progress callback must not abort the build.
+                PyErr_Clear();
+            }
+            PyGILState_Release(g);
+        };
+    }
 
     if (agg_config_ptr) {
         auto agg_staging = staging;

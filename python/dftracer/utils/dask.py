@@ -2,7 +2,7 @@
 
 import os
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 try:
     from dask.distributed import Client, WorkerPlugin, get_client
@@ -829,6 +829,28 @@ def _build_sst_task(
     _log = _logging.getLogger("dftracer.utils.dask._build_sst_task")
     _host = _socket.gethostname()
 
+    # Forward parse progress to the coordinator via a dask topic event.
+    try:
+        from distributed import get_worker
+
+        _worker = get_worker()
+    except (ImportError, ValueError):
+        _worker = None
+
+    def _progress_cb(done: int, total: int) -> None:
+        if _worker is None:
+            return
+        msg = {"batch": batch_id, "done": int(done), "total": int(total)}
+        # Called from a C++ worker thread; hop to the IOLoop so the event is
+        # sent on the worker's own loop rather than a foreign thread.
+        try:
+            _worker.loop.add_callback(_worker.log_event, "dft-index-progress", msg)
+        except Exception:
+            try:
+                _worker.log_event("dft-index-progress", msg)
+            except Exception:
+                pass
+
     t0 = _time.monotonic()
     if enable_det_ids:
         from .dftracer_utils_ext import enable_aggregation_deterministic_ids
@@ -851,6 +873,7 @@ def _build_sst_task(
         None,
         aggregation_config,
         file_slices,
+        progress=_progress_cb,
     )
     t_build = _time.monotonic()
 
@@ -905,6 +928,7 @@ def distributed_index(
     parallelism_per_worker: int = 0,
     flush_every_files: int = 0,
     aggregation_config: Optional[Any] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, Any]:
     """Index a set of trace files using Dask workers writing SSTs in parallel.
 
@@ -1163,6 +1187,24 @@ def distributed_index(
             )
     else:
         worker_addrs = list(client.nthreads().keys())
+        # Sum per-worker parse progress into one (done, total); total is known
+        # up front so the denominator is stable.
+        _topic = "dft-index-progress"
+        _true_total = sum(len(pw) for pw in worker_file_lists)
+        _done_by_batch: Dict[str, int] = {}
+
+        def _on_progress(event: Any) -> None:
+            if progress is None:
+                return
+            try:
+                _, msg = event
+                _done_by_batch[msg["batch"]] = int(msg["done"])
+                progress(sum(_done_by_batch.values()), _true_total)
+            except Exception:
+                pass
+
+        if progress is not None:
+            client.subscribe_topic(_topic, _on_progress)
         futures = []
         for w, (paths_w, ids_w, slices_w) in enumerate(
             zip(worker_file_lists, worker_file_ids, worker_slices)
@@ -1194,7 +1236,15 @@ def distributed_index(
                     pure=False,
                 )
             )
-        worker_results = client.gather(futures)
+        try:
+            worker_results = client.gather(futures)
+        finally:
+            if progress is not None:
+                try:
+                    client.unsubscribe_topic(_topic)
+                    progress(_true_total, _true_total)
+                except Exception:
+                    pass
     _log.info(
         "distributed_index: build dispatch+gather done in %.1fs (%d workers)",
         _time.monotonic() - _t_build,

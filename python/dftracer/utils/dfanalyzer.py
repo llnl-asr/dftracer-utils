@@ -9,7 +9,7 @@ from __future__ import annotations
 import glob
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -716,6 +716,7 @@ def build_index_distributed(
     shared_staging="",
     client=None,
     aggregation=None,
+    progress: Optional[Callable[[int, int], None]] = None,
 ):
     """Build the dftracer index across a Dask cluster.
 
@@ -725,6 +726,9 @@ def build_index_distributed(
 
     If `client` is None the active Dask client is looked up; if none exists
     (or `dask.distributed` is not installed), tasks run inline serially.
+
+    `progress`, if given, is called with (files_done, total_files) as the
+    parse fans out across workers.
     """
     if client is None and get_client is not None:
         try:
@@ -741,10 +745,17 @@ def build_index_distributed(
         shared_staging=shared_staging,
         client=client,
         aggregation_config=aggregation,
+        progress=progress,
     )
 
 
-def ensure_index(trace_path, trace_groups, time_interval_ms, client=None):
+def ensure_index(
+    trace_path,
+    trace_groups,
+    time_interval_ms,
+    client=None,
+    progress: Optional[Callable[[int, int], None]] = None,
+):
     """Build (or refresh) the dftracer index for `trace_path` via Dask.
 
     Idempotent: dftracer-utils skips files whose tiers already exist, so repeat
@@ -771,6 +782,7 @@ def ensure_index(trace_path, trace_groups, time_interval_ms, client=None):
         shared_staging=os.path.dirname(index_path),
         client=client,
         aggregation=AggregationConfig(time_interval_ms=time_interval_ms),
+        progress=progress,
     )
 
 

@@ -1,7 +1,18 @@
 """Type stubs for dftracer_utils_ext module."""
 
 from types import TracebackType
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Type, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+)
 
 from .arrow import ArrowTable
 
@@ -1068,6 +1079,7 @@ def build_sst_batch(
     runtime: Optional[Union[Runtime, object]] = None,
     aggregation_config: Optional[Any] = None,
     file_slices: Optional[List[Optional[Tuple[int, int, int, bool, List[Tuple[int, int]]]]]] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[List[Dict[str, Optional[str]]], bytes]:
     """Run the indexer pipeline with an SST sink. Returns
     `(artifact_dicts, tracker_blob)`. `tracker_blob` is the serialized

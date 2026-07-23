@@ -180,6 +180,7 @@ struct BatchWriteState {
     IndexBuildBatchConfig::DftVisitorFactory visitor_factory;
     IndexBuildBatchConfig::SinkFactory sink_factory;
     IndexBuildBatchConfig::SinkCommitFn sink_commit;
+    IndexBuildBatchConfig::ProgressFn progress;
 };
 
 // Parse one file at a time (work-stealing via atomic next_index), and stream
@@ -204,6 +205,7 @@ static coro::CoroTask<void> parse_and_emit_worker(
     std::atomic<std::uint64_t>* parse_ns_ptr,
     const IndexBuildBatchConfig::DftVisitorFactory* visitor_factory_ptr,
     bool build_manifest, bool build_bloom, IndexDatabase* stream_db,
+    const IndexBuildBatchConfig::ProgressFn* progress_ptr,
     coro::ChannelProducer<internal::ParsedIndexJob> ch) {
     namespace gzip_indexer = internal::gzip;
     auto guard = ch.guard();
@@ -328,6 +330,13 @@ static coro::CoroTask<void> parse_and_emit_worker(
             DFTRACER_UTILS_LOG_INFO("IndexBatch: parsed %zu/%zu files", done,
                                     total);
         }
+        // Throttled to ~50 steps to bound the per-file callback/GIL cost.
+        if (progress_ptr) {
+            const std::size_t pstep = total < 50 ? 1 : total / 50;
+            if (done == total || done % pstep == 0) {
+                (*progress_ptr)(done, total);
+            }
+        }
 
         if (!parse_ok) {
             (*results_ptr)[idx] = std::move(result);
@@ -439,6 +448,8 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     const bool build_bloom = state->build_bloom;
     const IndexBuildBatchConfig::DftVisitorFactory* visitor_factory_ptr =
         state->visitor_factory ? &state->visitor_factory : nullptr;
+    const IndexBuildBatchConfig::ProgressFn* progress_ptr =
+        state->progress ? &state->progress : nullptr;
     auto* sink_factory_ptr = &state->sink_factory;
     auto* sink_commit_ptr = &state->sink_commit;
 
@@ -447,14 +458,15 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                            prepared_ptr, checkpoint_size, bloom_config_ptr,
                            bloom_dims_ptr, visitor_factory_ptr, build_manifest,
                            build_bloom, write_chan_ptr, db_ptr, metrics_ptr,
-                           sink_factory_ptr, sink_commit_ptr, stream_db_ptr](
+                           sink_factory_ptr, sink_commit_ptr, stream_db_ptr,
+                           progress_ptr](
                               CoroScope& child) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < parse_workers; ++w) {
             child.spawn(
                 [next_index_ptr, done_ptr, parse_ns_ptr, results_ptr,
                  parsed_jobs_ptr, prepared_ptr, checkpoint_size,
                  bloom_config_ptr, bloom_dims_ptr, visitor_factory_ptr,
-                 build_manifest, build_bloom, stream_db_ptr,
+                 build_manifest, build_bloom, stream_db_ptr, progress_ptr,
                  ch = write_chan_ptr->producer()](
                     CoroScope& own_scope) mutable -> coro::CoroTask<void> {
                     co_await parse_and_emit_worker(
@@ -462,7 +474,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                         parsed_jobs_ptr, prepared_ptr, checkpoint_size,
                         *bloom_config_ptr, bloom_dims_ptr, parse_ns_ptr,
                         visitor_factory_ptr, build_manifest, build_bloom,
-                        stream_db_ptr, std::move(ch));
+                        stream_db_ptr, progress_ptr, std::move(ch));
                 });
         }
 
@@ -508,6 +520,7 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     state->bloom_config = config.bloom_config;
     state->build_manifest = config.build_manifest;
     state->build_bloom = config.build_bloom;
+    state->progress = config.progress;
     state->bloom_dims = std::make_shared<std::vector<std::string>>(
         config.bloom_dimensions.empty()
             ? std::vector<std::string>(DEFAULT_BLOOM_DIMENSIONS.begin(),
@@ -687,6 +700,16 @@ static coro::CoroTask<IndexBuildBatchResult> run_batch_write_pipeline(
         chunk_config.use_batch_write = true;
         chunk_config.rebuild_root_summaries = false;
         chunk_config.dft_visitor_factory = config_ptr->dft_visitor_factory;
+        if (config_ptr->progress) {
+            // Sub-batch `done` restarts at 0; offset it so the callback always
+            // reports global (files_done, total) across the whole batch.
+            auto user_progress = config_ptr->progress;
+            const std::size_t offset = start;
+            chunk_config.progress = [user_progress, offset, total](
+                                        std::size_t done, std::size_t) {
+                user_progress(offset + done, total);
+            };
+        }
 
         auto partial =
             co_await run_single_batch(scope, std::move(chunk_config));

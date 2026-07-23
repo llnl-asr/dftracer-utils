@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_METRICS_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFT_AGGREGATORS_AGGREGATION_METRICS_H
 
+#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <dftracer/utils/utilities/common/statistics/distinct_sketch.h>
@@ -73,8 +74,8 @@ struct MetricStats {
 };
 
 using CustomMetricsMap =
-    std::unordered_map<std::string, MetricStats, TransparentStringHash,
-                       TransparentStringEqual>;
+    ankerl::unordered_dense::map<std::string, MetricStats,
+                                 TransparentStringHash, TransparentStringEqual>;
 
 // Return the entry for `name`, inserting a value constructed from `accuracy`
 // if absent. Works for any transparent-lookup map whose mapped_type is

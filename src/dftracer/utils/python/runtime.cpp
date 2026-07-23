@@ -15,7 +15,6 @@ static std::shared_ptr<dftracer::utils::Runtime> g_default_runtime;
 dftracer::utils::Runtime *get_default_runtime() {
     if (!g_default_runtime) {
         g_default_runtime = std::make_shared<dftracer::utils::Runtime>(0);
-        dftracer::utils::set_process_default_runtime(g_default_runtime.get());
     }
     return g_default_runtime.get();
 }
@@ -357,9 +356,6 @@ static PyObject *set_default_runtime_py(PyObject *Py_UNUSED(module),
     if (!PyArg_ParseTuple(args, "O", &arg)) return NULL;
 
     if (arg == Py_None) {
-        // Clear the process pointer before dropping the owner so it never
-        // dangles.
-        dftracer::utils::set_process_default_runtime(nullptr);
         g_default_runtime.reset();
         Py_RETURN_NONE;
     }
@@ -370,7 +366,6 @@ static PyObject *set_default_runtime_py(PyObject *Py_UNUSED(module),
     }
 
     g_default_runtime = ((RuntimeObject *)arg)->runtime;
-    dftracer::utils::set_process_default_runtime(g_default_runtime.get());
     Py_RETURN_NONE;
 }
 
@@ -490,7 +485,6 @@ static PyMethodDef runtime_module_methods[] = {
 // scan can leave hundreds of SSTs open (more so on a networked filesystem),
 // and without this the process can appear to hang after the work is done.
 static void dftracer_utils_atexit_cleanup() {
-    dftracer::utils::set_process_default_runtime(nullptr);
     if (g_default_runtime) {
         g_default_runtime->shutdown();
     }

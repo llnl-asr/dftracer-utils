@@ -130,13 +130,6 @@ class Runtime {
     std::mutex futures_mutex_;
 };
 
-/// Process-wide default runtime, published by whoever owns it (the Python
-/// layer's default runtime, or a binary at startup). Lets shared utilities
-/// parallelize on the already-sized executor without threading a Runtime
-/// through every caller. Null until set.
-Runtime* process_default_runtime();
-void set_process_default_runtime(Runtime* runtime);
-
 template <typename T>
 TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {

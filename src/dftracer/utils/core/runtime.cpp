@@ -5,7 +5,6 @@
 #include <dftracer/utils/core/runtime.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -13,18 +12,6 @@
 #include <thread>
 
 namespace dftracer::utils {
-
-namespace {
-std::atomic<Runtime*> g_process_runtime{nullptr};
-}
-
-Runtime* process_default_runtime() {
-    return g_process_runtime.load(std::memory_order_acquire);
-}
-
-void set_process_default_runtime(Runtime* runtime) {
-    g_process_runtime.store(runtime, std::memory_order_release);
-}
 
 namespace {
 // Resolve the worker-thread count. DFTRACER_UTILS_THREADS overrides everything

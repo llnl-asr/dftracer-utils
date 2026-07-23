@@ -58,10 +58,10 @@ struct AggregationKey {
     AggregationKey(const AggregationKey& other)
         : cat_id(other.cat_id),
           name_id(other.name_id),
-          pid(other.pid),
-          tid(other.tid),
           hhash_id(other.hhash_id),
           fhash_inline(other.fhash_inline),
+          pid(other.pid),
+          tid(other.tid),
           fhash(other.fhash),
           time_bucket(other.time_bucket),
           extra_keys(

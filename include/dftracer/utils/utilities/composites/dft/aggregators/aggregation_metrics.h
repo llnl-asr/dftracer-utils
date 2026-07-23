@@ -125,7 +125,6 @@ struct AggregationMetrics {
           offset(other.offset),
           ts(other.ts),
           te(other.te),
-          distinct_files(other.distinct_files),
           boundary_associations(
               other.boundary_associations
                   ? std::make_unique<
@@ -137,6 +136,7 @@ struct AggregationMetrics {
               other.custom_metrics
                   ? std::make_unique<CustomMetricsMap>(*other.custom_metrics)
                   : nullptr),
+          distinct_files(other.distinct_files),
           sketch_accuracy(other.sketch_accuracy) {}
 
     AggregationMetrics& operator=(const AggregationMetrics& other) {

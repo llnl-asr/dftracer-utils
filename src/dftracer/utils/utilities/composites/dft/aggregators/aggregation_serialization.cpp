@@ -281,8 +281,8 @@ constexpr std::uint64_t SKETCH_NONE = 0;
 constexpr std::uint64_t SKETCH_DENSE = 1;
 constexpr std::uint64_t SKETCH_SPARSE = 2;
 
-void put_distinct_sketch(std::string& out,
-                         const common::statistics::DistinctSketch& sketch) {
+static void put_distinct_sketch(
+    std::string& out, const common::statistics::DistinctSketch& sketch) {
     const auto& dense = sketch.dense_registers();
     const auto& sparse = sketch.sparse_hashes();
     if (dense.empty() && sparse.empty()) {

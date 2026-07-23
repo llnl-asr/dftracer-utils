@@ -26,11 +26,26 @@ std::size_t resolve_threads(std::size_t requested) {
     }
     return requested == 0 ? dftracer_utils_hardware_concurrency() : requested;
 }
+
+// Resolve the I/O-pool size. DFTRACER_UTILS_IO_THREADS overrides everything (a
+// lever to bound the epoll/kqueue thread pool independently of the compute
+// pool, e.g. so the coordinator does not open a full-machine-sized pool).
+// Otherwise 0 means hardware_concurrency, matching the executor default.
+std::size_t resolve_io_threads(std::size_t requested) {
+    if (auto env = Env::get<std::string_view>("DFTRACER_UTILS_IO_THREADS");
+        env.has_value()) {
+        const long long n =
+            std::strtoll(std::string(*env).c_str(), nullptr, 10);
+        if (n > 0) return static_cast<std::size_t>(n);
+    }
+    return requested == 0 ? dftracer_utils_hardware_concurrency() : requested;
+}
 }  // namespace
 
 Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
     ExecutorConfig config;
     config.num_threads = threads_;
+    config.io_pool_size = resolve_io_threads(config.io_pool_size);
     executor_ = std::make_unique<Executor>(config);
     executor_->start();
 
@@ -42,6 +57,7 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
     : threads_(resolve_threads(config.num_threads)) {
     ExecutorConfig cfg = config;
     cfg.num_threads = threads_;
+    cfg.io_pool_size = resolve_io_threads(config.io_pool_size);
     executor_ = std::make_unique<Executor>(cfg);
     executor_->start();
 
@@ -56,6 +72,7 @@ Runtime::Runtime(const ExecutorConfig& config,
     : threads_(resolve_threads(config.num_threads)) {
     ExecutorConfig cfg = config;
     cfg.num_threads = threads_;
+    cfg.io_pool_size = resolve_io_threads(config.io_pool_size);
     executor_ = std::make_unique<Executor>(cfg);
     executor_->start();
 

@@ -46,6 +46,7 @@ class IoThreadPool {
 
    private:
     void worker_loop();
+    void wake(std::size_t items);
 
     std::size_t num_threads_;
     unsigned batch_threshold_;

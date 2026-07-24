@@ -50,7 +50,7 @@ void IoThreadPool::submit(std::function<void()> fn) {
         if (batch_threshold_ == 0) {
             cv_.notify_one();  // Legacy: wake one worker per op
         } else {
-            cv_.notify_all();  // Batch: wake all to drain queue
+            wake(batch_threshold_);
         }
     }
 }
@@ -62,10 +62,17 @@ std::size_t IoThreadPool::flush() {
         count = unflushed_count_;
         unflushed_count_ = 0;
     }
-    if (count > 0) {
-        cv_.notify_all();
-    }
+    wake(count);
     return count;
+}
+
+void IoThreadPool::wake(std::size_t items) {
+    // A woken worker drains the queue, so waking the whole pool per flush just
+    // thunders it; wake only as many workers as pending items.
+    const std::size_t n = items < num_threads_ ? items : num_threads_;
+    for (std::size_t i = 0; i < n; ++i) {
+        cv_.notify_one();
+    }
 }
 
 void IoThreadPool::worker_loop() {

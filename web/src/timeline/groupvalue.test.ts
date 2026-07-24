@@ -64,6 +64,16 @@ describe("eventGroupValue", () => {
     expect(eventGroupValue(ev({ pid: 7 }), "pid")).toBe("7");
     expect(eventGroupValue(ev({}), "level")).toBe("0");
   });
+
+  it("joins multiple columns into a composite key", () => {
+    expect(eventGroupValue(ev({}), "cat,ret")).toBe("POSIX\x1f64");
+    expect(eventGroupValue(ev({}), "cat,name,level")).toBe("POSIX\x1fread\x1f0");
+  });
+
+  it("keeps missing composite components empty (matches server)", () => {
+    expect(eventGroupValue(ev({}), "cat,nope")).toBe("POSIX\x1f");
+    expect(eventGroupValue(ev({}), "nope,ret")).toBe("\x1f64");
+  });
 });
 
 describe("resolveGroup", () => {
@@ -77,6 +87,14 @@ describe("resolveGroup", () => {
 
   it("passes through without a map", () => {
     expect(resolveGroup("abc123")).toBe("abc123");
+  });
+
+  it("resolves each component of a composite key and joins for display", () => {
+    const names = { fh1: "/data/train.h5", h2: "node01" };
+    expect(resolveGroup("POSIX\x1ffh1", names)).toBe("POSIX / /data/train.h5");
+    expect(resolveGroup("h2\x1ffh1", names)).toBe("node01 / /data/train.h5");
+    expect(resolveGroup("POSIX\x1funknown", names)).toBe("POSIX / unknown");
+    expect(resolveGroup("POSIX\x1f", names)).toBe("POSIX / (none)");
   });
 });
 

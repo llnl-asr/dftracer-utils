@@ -1,5 +1,5 @@
 import type { DensityBlock, ProcTreeNode, TraceEvent } from "../data/types";
-import { colorFor, contrastText, sliceKey } from "./color";
+import { colorFor, colorSlot, contrastText, DENSITY_GREY, sliceKey } from "./color";
 import {
   formatBytesCompact,
   formatBytesPerSec,
@@ -68,11 +68,13 @@ export const NONE_GROUP = "(none)";
 export const OTHER_GROUP = "(other)";
 const MAX_COL_GROUPS = 120;
 
-// Value of `col` in an event for lane grouping, as a display string. Dotted
-// paths walk nested objects; bare names fall back into args. Missing, null,
-// empty, or non-scalar values group under NONE_GROUP so no event is dropped.
-export function eventGroupValue(ev: TraceEvent, col: string): string {
-  const rec = ev as unknown as Record<string, unknown>;
+// Joins the per-column values of a composite (multi-key) grouping. Must match
+// the server's GROUP_SEP so density blocks and big events land in the same lane.
+export const GROUP_SEP = "\x1f";
+
+// Raw value of a single column ("" when missing/null/non-scalar). Dotted paths
+// walk nested objects; bare names fall back into args.
+function rawGroupValue(rec: Record<string, unknown>, col: string): string {
   let v: unknown;
   if (col.includes(".")) {
     v = col
@@ -91,8 +93,23 @@ export function eventGroupValue(ev: TraceEvent, col: string): string {
       if (args !== null && typeof args === "object") v = (args as Record<string, unknown>)[col];
     }
   }
-  if (v == null || typeof v === "object") return NONE_GROUP;
-  const s = String(v);
+  if (v == null || typeof v === "object") return "";
+  return String(v);
+}
+
+// Value of `col` in an event for lane grouping. A comma-separated `col`
+// ("cat,fhash") yields the per-column raw values joined by GROUP_SEP (matching
+// the server, so each component can resolve independently); a single column
+// maps missing/empty to NONE_GROUP so no event is dropped.
+export function eventGroupValue(ev: TraceEvent, col: string): string {
+  const rec = ev as unknown as Record<string, unknown>;
+  if (col.includes(",")) {
+    return col
+      .split(",")
+      .map((c) => rawGroupValue(rec, c.trim()))
+      .join(GROUP_SEP);
+  }
+  const s = rawGroupValue(rec, col);
   return s === "" ? NONE_GROUP : s;
 }
 
@@ -165,6 +182,18 @@ export function takeRow(rowEnds: number[], ts: number, end: number): number {
 // Map a raw group value (e.g. an fhash) to its server-resolved display name;
 // unresolved values pass through unchanged.
 export function resolveGroup(value: string, names?: Record<string, string>): string {
+  if (value.includes(GROUP_SEP)) {
+    // Composite key: resolve each component (empty -> (none), hash -> name) and
+    // join for display.
+    return value
+      .split(GROUP_SEP)
+      .map((part) => {
+        if (part === "") return NONE_GROUP;
+        const n = names?.[part];
+        return n === undefined || n === "" ? part : n;
+      })
+      .join(" / ");
+  }
   if (!names) return value;
   const n = names[value];
   return n === undefined || n === "" ? value : n;
@@ -177,6 +206,9 @@ export interface TimelineCallbacks {
   onHover?: (ev: TraceEvent | null, clientX: number, clientY: number) => void;
   // Cursor over a gutter column header (track/i/o util/ops/i/o ops/bytes).
   onHeaderHover?: (key: string | null, clientX: number, clientY: number) => void;
+  // Lane label under the cursor in the gutter, surfaced when rows are too short
+  // to draw the label inline (null when not over a hidden-label lane).
+  onLaneHover?: (label: string | null, clientX: number, clientY: number) => void;
   onSelect?: (ev: TraceEvent | null) => void;
   // Fired when the user finishes dragging a time-range selection (for stats).
   onSelectRange?: (t0: number, t1: number) => void;
@@ -195,6 +227,9 @@ const COL_BYTES_OFF = 12; // right edge of the BYTES column
 const GUTTER_GRAB = 5; // px either side of the divider that starts a resize
 const RULER_H = 28;
 const ROW_H = 18;
+const MIN_ROW_H = 2; // vertical-zoom floor: bars stay a visible hairline (no upper cap)
+const LABEL_MIN_ROW_H = 12; // below this the metric columns/twist are hidden
+const MIN_LABEL_FONT = 4; // smallest gutter-label font; scales up with row height
 const LANE_GAP = 6;
 const HOST_GAP = 12; // vertical separation between host groups
 const TWIST_W = 14; // twisty hit-area / indent step per tree level
@@ -244,7 +279,13 @@ export class Timeline {
   private laneRegistry = new Set<string>();
 
   private groupSpec: LaneGroupLevel[] = [...DEFAULT_LANE_GROUPS];
-  private groupColumn = ""; // event column backing the "col" level
+  private groupColumn = ""; // comma-separated columns backing the "col" levels
+  private colGroupSizes: number[] = []; // columns per "col" level (1=nested, >1=merged)
+  private groupNames: Record<string, string> = {}; // hash -> resolved name
+  private colorBy = ""; // "" colors by event name; else by this column's value
+  private rowH = ROW_H; // lane row height in px; scaled by the vertical zoom
+  private showMetrics = true; // I/O UTIL / OPS / BYTES gutter columns
+  private gutterWithMetrics = GUTTER_DEFAULT; // gutter width to restore when re-showing metrics
   private knownColumns = new Set<string>(); // groupable columns seen in events
 
   // Fork hierarchy (by pid): DFS order, depth, parent, and spawn timestamp.
@@ -614,7 +655,7 @@ export class Timeline {
       if (x1 < this.gutter || x0 > this.cssW) continue;
       const lane = this.lanes[g.laneIdx];
       const y = RULER_H - this.scrollY + lane.y;
-      const hh = lane.rows * ROW_H;
+      const hh = lane.rows * this.rowH;
       if (y + hh < RULER_H || y > this.cssH) continue;
       const x = Math.max(x0, this.gutter);
       const w = Math.min(x1, this.cssW) - x;
@@ -715,6 +756,7 @@ export class Timeline {
       arr.push(s);
     };
     collectGroupColumns(events, this.knownColumns);
+    this.groupNames = groupNames ?? {};
     const colActive = this.colGroupingActive();
     for (const ev of events) {
       if (ev.ph === "M") continue; // metadata
@@ -722,7 +764,7 @@ export class Timeline {
       const dur = num(ev.dur);
       if (!Number.isFinite(ts) || dur < 0) continue;
       const key = colActive
-        ? `${ev.pid}/${ev.tid}\u0000${resolveGroup(eventGroupValue(ev, this.groupColumn), groupNames)}`
+        ? `${ev.pid}/${ev.tid}\u0000${eventGroupValue(ev, this.groupColumn)}`
         : `${ev.pid}/${ev.tid}`;
       push(key, {
         ev,
@@ -734,7 +776,7 @@ export class Timeline {
         count: 1,
         total: dur,
         density: false,
-        fill: colorFor(sliceKey(ev)),
+        fill: this.fillFor(ev, false),
       });
     }
     // Aggregated density blocks render as slices too. The server echoes the
@@ -754,7 +796,7 @@ export class Timeline {
         aggregated: true,
       } as unknown as TraceEvent;
       const bkey = colActive
-        ? `${b.pid}/${b.tid}\u0000${resolveGroup(b.group ? b.group : NONE_GROUP, groupNames)}`
+        ? `${b.pid}/${b.tid}\u0000${b.group ? b.group : NONE_GROUP}`
         : `${b.pid}/${b.tid}`;
       push(bkey, {
         ev: synthetic,
@@ -766,7 +808,7 @@ export class Timeline {
         count: b.count,
         total: b.total,
         density: true,
-        fill: colorFor(sliceKey(synthetic)),
+        fill: this.fillFor(synthetic, true),
       });
     }
 
@@ -801,18 +843,27 @@ export class Timeline {
     this.layoutLanes();
   }
 
-  setLaneGrouping(spec: LaneGroupLevel[], column = ""): void {
-    const clean = spec
-      .filter((v, i) => spec.indexOf(v) === i)
-      .filter((v) => v !== "col" || column !== "");
+  // spec has one "col" level per column GROUP; colGroupSizes gives each group's
+  // column count (1 = a nested single-column level, >1 = merged columns sharing
+  // a lane). column is the flattened column list in composite order.
+  setLaneGrouping(spec: LaneGroupLevel[], column = "", colGroupSizes: number[] = []): void {
+    // Dedup builtin levels; keep every "col".
+    const clean = spec.filter((v, i) => v === "col" || spec.indexOf(v) === i);
     if (clean.length === 0) return;
     const col = clean.includes("col") ? column : "";
-    if (clean.join() === this.groupSpec.join() && col === this.groupColumn) return;
-    // Lane keys embed the column value, so a column change invalidates the
-    // bucketed data; the app refetches after this.
+    const sizesKey = colGroupSizes.join(",");
+    if (
+      clean.join() === this.groupSpec.join() &&
+      col === this.groupColumn &&
+      sizesKey === this.colGroupSizes.join()
+    )
+      return;
+    // Lane keys embed the raw composite, so a change to the column set
+    // invalidates the bucketed data; the app refetches after that.
     const shapeChanged = col !== this.groupColumn;
     this.groupSpec = clean;
     this.groupColumn = col;
+    this.colGroupSizes = colGroupSizes;
     this.collapsed.clear(); // collapse keys are hierarchy-specific
     if (shapeChanged) {
       this.laneRegistry.clear();
@@ -825,8 +876,73 @@ export class Timeline {
     return [...this.groupSpec];
   }
 
+  // Vertical (lane-density) zoom: scale the row height so more or fewer lanes
+  // fit on screen. Independent of the time (horizontal) zoom.
+  rowHeight(): number {
+    return this.rowH;
+  }
+  setRowHeight(px: number): void {
+    const h = Math.max(MIN_ROW_H, Math.round(px)); // floor only; no upper cap
+    if (h === this.rowH) return;
+    this.rowH = h;
+    this.layoutLanes(); // lane.y depends on rowH
+    this.clampScroll();
+    this.requestFrame();
+  }
+  zoomRows(delta: number): void {
+    this.setRowHeight(this.rowH + delta);
+  }
+  // Show or hide the I/O UTIL / OPS / BYTES gutter columns; the lane label takes
+  // the freed width.
+  metricsShown(): boolean {
+    return this.showMetrics;
+  }
+  setShowMetrics(v: boolean): void {
+    if (v === this.showMetrics) return;
+    this.showMetrics = v;
+    // Reclaim the columns' width for the plot: narrow the gutter when hiding
+    // them, and restore its previous width when showing them again.
+    if (!v) {
+      this.gutterWithMetrics = this.gutter;
+      this.gutter = clamp(this.gutter - (COL_UTIL_OFF - 16), GUTTER_MIN, GUTTER_MAX);
+    } else {
+      this.gutter = clamp(this.gutterWithMetrics, GUTTER_MIN, GUTTER_MAX);
+    }
+    this.clampScroll();
+    this.invalidate();
+  }
+  // Shrink rows just enough that every lane fits in the viewport at once.
+  fitRows(): void {
+    const totalRows = this.lanes.reduce((n, l) => n + l.rows, 0);
+    if (totalRows === 0) return;
+    const gaps = this.lanes.length * LANE_GAP;
+    const avail = this.cssH - RULER_H - gaps;
+    this.setRowHeight(Math.floor(avail / totalRows));
+  }
+
   knownGroupColumns(): string[] {
     return [...this.knownColumns].sort();
+  }
+
+  colorField(): string {
+    return this.colorBy || "name";
+  }
+
+  // Switch the color dimension and recolor existing slices in place (no
+  // refetch): folded density blocks turn neutral grey since they mix values.
+  setColorBy(col: string): void {
+    const c = col === "name" ? "" : col;
+    if (c === this.colorBy) return;
+    this.colorBy = c;
+    for (const arr of this.slicesByKey.values())
+      for (const s of arr) s.fill = this.fillFor(s.ev, s.density);
+    this.invalidate();
+  }
+
+  private fillFor(ev: TraceEvent, density: boolean): string {
+    if (!this.colorBy) return colorFor(sliceKey(ev));
+    if (density) return DENSITY_GREY;
+    return colorFor(colorSlot(this.colorBy, eventGroupValue(ev, this.colorBy)));
   }
 
   addKnownColumns(names: string[]): void {
@@ -1039,16 +1155,36 @@ export class Timeline {
     this.hostPids = hostPids;
 
     const orderOf = (pid: number) => this.procOrder.get(pid) ?? 1e9 + pid;
-    const valOf = (l: Leaf, lvl: LaneGroupLevel) =>
-      lvl === "host" ? l.host : lvl === "pid" ? String(l.pid) : lvl === "tid" ? l.tid : l.group;
-    const labelOf = (lvl: LaneGroupLevel, v: string) =>
-      lvl === "host"
-        ? v
-        : lvl === "pid"
-          ? (this.processLabels.get(v) ?? "proc " + v)
-          : lvl === "tid"
-            ? "thread " + v
-            : `${this.groupColumn} ${v}`;
+    // Each "col" level covers a contiguous slice of the composite value: a
+    // one-column slice is a nested level; a multi-column slice is a merged group
+    // sharing a lane ("a / b"). colGroupSizes gives each level's slice width.
+    const colNames = this.groupColumn ? this.groupColumn.split(",") : [];
+    const colIndexOf: number[] = [];
+    let cc = 0;
+    for (const lvl of spec) colIndexOf.push(lvl === "col" ? cc++ : -1);
+    const colRanges: Array<[number, number]> = [];
+    for (let acc = 0, i = 0; i < this.colGroupSizes.length; i++) {
+      colRanges.push([acc, acc + this.colGroupSizes[i]]);
+      acc += this.colGroupSizes[i];
+    }
+    const rangeOf = (colIdx: number): [number, number] => colRanges[colIdx] ?? [colIdx, colIdx + 1];
+    const valOf = (l: Leaf, lvl: LaneGroupLevel, colIdx: number) => {
+      if (lvl === "host") return l.host;
+      if (lvl === "pid") return String(l.pid);
+      if (lvl === "tid") return l.tid;
+      const [s, e] = rangeOf(colIdx);
+      return l.group.split(GROUP_SEP).slice(s, e).join(GROUP_SEP) || NONE_GROUP;
+    };
+    const labelOf = (lvl: LaneGroupLevel, v: string, colIdx: number) => {
+      if (lvl === "host") return v;
+      if (lvl === "pid") return this.processLabels.get(v) ?? "proc " + v;
+      if (lvl === "tid") return "thread " + v;
+      const resolved = resolveGroup(v, this.groupNames);
+      // A single-column level names its dimension ("cat: POSIX"); a merged group
+      // shows just the combined value.
+      const [s, e] = rangeOf(colIdx);
+      return e - s === 1 && colNames[s] ? `${colNames[s]}: ${resolved}` : resolved;
+    };
 
     const lanes: Lane[] = [];
     const targetOf = new Map<string, number>();
@@ -1063,9 +1199,10 @@ export class Timeline {
 
     const build = (subset: Leaf[], levelIdx: number, path: string, indent: number): void => {
       const lvl = spec[levelIdx];
+      const colIdx = colIndexOf[levelIdx];
       const groups = new Map<string, Leaf[]>();
       for (const l of subset) {
-        const v = valOf(l, lvl);
+        const v = valOf(l, lvl, colIdx);
         let a = groups.get(v);
         if (!a) {
           a = [];
@@ -1108,7 +1245,7 @@ export class Timeline {
             rows: 1,
             y: 0,
             kind: lvl === "tid" ? "thread" : "proc",
-            label: labelOf(lvl, v),
+            label: labelOf(lvl, v, colIdx),
             indent,
             collapsible: false,
             collapseKey: "",
@@ -1129,7 +1266,7 @@ export class Timeline {
             // "host" kind drives band gaps and host-level column aggregation,
             // so only host levels get it; other headers render as proc rows.
             kind: lvl === "host" ? "host" : "proc",
-            label: labelOf(lvl, v),
+            label: labelOf(lvl, v, colIdx),
             indent,
             collapsible: true,
             collapseKey: laneKey,
@@ -1198,7 +1335,7 @@ export class Timeline {
     for (const lane of lanes) {
       if (lane.kind === "host" && prevKind) y += HOST_GAP;
       lane.y = y;
-      y += lane.rows * ROW_H + LANE_GAP;
+      y += lane.rows * this.rowH + LANE_GAP;
       prevKind = lane.kind;
     }
 
@@ -1277,13 +1414,18 @@ export class Timeline {
       this.requestFrame();
       return;
     }
-    const span = this.target.end - this.target.begin;
-    // Shift makes a vertical wheel pan horizontally (mouse-wheel users).
-    const panDelta = e.shiftKey ? e.deltaY : e.deltaX;
-    if (panDelta !== 0) {
-      this.panBy((panDelta / this.plotW()) * span);
+    if (e.shiftKey) {
+      // Shift+wheel: vertical (lane-density) zoom - scroll up grows rows, down
+      // shrinks them so more lanes fit.
+      const dy =
+        e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * this.cssH : e.deltaY;
+      if (dy !== 0) this.zoomRows(dy < 0 ? 2 : -2);
+      return;
     }
-    if (!e.shiftKey && e.deltaY !== 0) {
+    const span = this.target.end - this.target.begin;
+    // Trackpad horizontal swipe pans; a plain vertical wheel scrolls the lanes.
+    if (e.deltaX !== 0) this.panBy((e.deltaX / this.plotW()) * span);
+    if (e.deltaY !== 0) {
       this.scrollY += e.deltaY;
       this.clampScroll();
       this.invalidate();
@@ -1323,6 +1465,23 @@ export class Timeline {
     const el = document.activeElement;
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
     const k = e.key.toLowerCase();
+    // Vertical (lane-density) zoom: '-' shrinks rows (see more lanes), '='/'+'
+    // grows them, '0' fits every lane on screen. Distinct from w/s time zoom.
+    if (k === "-" || k === "_") {
+      this.zoomRows(-3);
+      e.preventDefault();
+      return;
+    }
+    if (k === "=" || k === "+") {
+      this.zoomRows(3);
+      e.preventDefault();
+      return;
+    }
+    if (k === "0") {
+      this.fitRows();
+      e.preventDefault();
+      return;
+    }
     if (NAV_KEYS.has(k)) {
       this.keys.add(k);
       e.preventDefault();
@@ -1413,6 +1572,7 @@ export class Timeline {
       }
       this.cursorInside = false;
       this.cb.onHover?.(null, 0, 0);
+      this.cb.onLaneHover?.(null, 0, 0);
       return;
     }
     if (Math.abs(x - this.gutter) <= GUTTER_GRAB) {
@@ -1433,6 +1593,12 @@ export class Timeline {
     }
     this.cb.onHover?.(hit?.ev ?? null, e.clientX, e.clientY);
     this.cb.onHeaderHover?.(this.headerKeyAt(x, y), e.clientX, e.clientY);
+    // When rows are too short to show labels inline, surface the label on hover.
+    const laneLabel =
+      x < this.gutter && y > RULER_H && this.rowH < LABEL_MIN_ROW_H
+        ? (this.laneAtY(y)?.label ?? null)
+        : null;
+    this.cb.onLaneHover?.(laneLabel, e.clientX, e.clientY);
   };
 
   // Gutter column-header key under the cursor (for metric help tooltips).
@@ -1524,8 +1690,8 @@ export class Timeline {
       const sw = Math.max(this.xOf(s.ts + s.dur) - sx, 1);
       if (x < sx || x > sx + sw) continue;
       const lane = this.lanes[s.laneIdx];
-      const sy = RULER_H - this.scrollY + lane.y + s.depth * ROW_H;
-      if (y < sy || y > sy + ROW_H) continue;
+      const sy = RULER_H - this.scrollY + lane.y + s.depth * this.rowH;
+      if (y < sy || y > sy + this.rowH) continue;
       if (!best || s.depth >= best.depth) best = s;
     }
     return best;
@@ -1541,7 +1707,7 @@ export class Timeline {
       if (x1 - x0 < 3 || x < x0 || x > x1) continue;
       const lane = this.lanes[g.laneIdx];
       const gy = RULER_H - this.scrollY + lane.y;
-      const gh = lane.rows * ROW_H;
+      const gh = lane.rows * this.rowH;
       if (y < gy || y > gy + gh) continue;
       // Smallest gap wins: nested lanes overlap, favor the most specific.
       if (!best || g.dur < best.dur) best = g;
@@ -2047,7 +2213,7 @@ export class Timeline {
     }
     // Anchor at the parent lane's bottom (where it "hands off") and the child
     // lane's top (its first event), so the connector reads as parent -> child.
-    const botOf = (lane: Lane) => RULER_H - this.scrollY + lane.y + lane.rows * ROW_H;
+    const botOf = (lane: Lane) => RULER_H - this.scrollY + lane.y + lane.rows * this.rowH;
     const topOf = (lane: Lane) => RULER_H - this.scrollY + lane.y;
     const selPid = this.selected ? Number(this.selected.pid) : null;
     const inLineage = (child: number) =>
@@ -2260,7 +2426,7 @@ export class Timeline {
     for (let i = 0; i < this.lanes.length; i++) {
       const lane = this.lanes[i];
       const y = RULER_H - this.scrollY + lane.y;
-      const h = lane.rows * ROW_H;
+      const h = lane.rows * this.rowH;
       if (y + h < RULER_H || y > this.cssH) continue;
       ctx.fillStyle = i % 2 === 0 ? this.th.laneAlt : this.th.panelBg;
       ctx.fillRect(0, y, this.cssW, h);
@@ -2290,8 +2456,8 @@ export class Timeline {
     for (let si = 0; si < slices.length; si++) {
       const s = slices[si];
       const lane = this.lanes[s.laneIdx];
-      const sy = yTop + lane.y + s.depth * ROW_H;
-      if (sy + ROW_H < RULER_H || sy > cssH) continue;
+      const sy = yTop + lane.y + s.depth * this.rowH;
+      if (sy + this.rowH < RULER_H || sy > cssH) continue;
       const sx = this.gutter + (toDisp(s.ts) - begin) * scale;
       if (sx > cssW) continue;
       const sw = Math.max(this.gutter + (toDisp(s.ts + s.dur) - begin) * scale - sx, 1);
@@ -2315,10 +2481,13 @@ export class Timeline {
       }
       if (s.density) {
         // Aggregated block: inset and dimmed so a run of them reads as a
-        // "density" strip distinct from individual slices.
-        ctx.fillRect(x, sy + 3, w, ROW_H - 6);
+        // "density" strip distinct from individual slices. Insets shrink on tiny
+        // rows so the bar never collapses to zero height and vanishes.
+        const inset = this.rowH >= 8 ? 3 : this.rowH >= 4 ? 1 : 0;
+        ctx.fillRect(x, sy + inset, w, Math.max(1, this.rowH - 2 * inset));
       } else {
-        ctx.fillRect(x, sy + 1, w, ROW_H - 2);
+        const inset = this.rowH >= 4 ? 1 : 0;
+        ctx.fillRect(x, sy + inset, w, Math.max(1, this.rowH - 2 * inset));
       }
 
       if (s === this.hovered || s.ev === this.selected || (!s.density && sw > 32)) {
@@ -2330,23 +2499,23 @@ export class Timeline {
       if (s === this.hovered) {
         ctx.strokeStyle = this.th.accent;
         ctx.lineWidth = 1;
-        ctx.strokeRect(x + 0.5, sy + 1.5, w - 1, ROW_H - 3);
+        ctx.strokeRect(x + 0.5, sy + 1.5, w - 1, this.rowH - 3);
       }
       if (s.ev === this.selected) {
         ctx.strokeStyle = this.th.accent;
         ctx.lineWidth = 2;
-        ctx.strokeRect(x + 1, sy + 2, w - 2, ROW_H - 4);
+        ctx.strokeRect(x + 1, sy + 2, w - 2, this.rowH - 4);
       }
 
-      if (!s.density && sw > 32) {
+      if (!s.density && sw > 32 && this.rowH >= LABEL_MIN_ROW_H) {
         ctx.fillStyle = contrastText(fill);
         lastFill = "";
         const label = String(s.ev.name ?? "");
         ctx.save();
         ctx.beginPath();
-        ctx.rect(x, sy, w - 4, ROW_H);
+        ctx.rect(x, sy, w - 4, this.rowH);
         ctx.clip();
-        ctx.fillText(label, x + 4, sy + ROW_H / 2);
+        ctx.fillText(label, x + 4, sy + this.rowH / 2);
         ctx.restore();
       }
     }
@@ -2368,11 +2537,13 @@ export class Timeline {
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     ctx.fillText("TRACK", 12, RULER_H / 2);
-    ctx.fillText("I/O UTIL", this.colUtil(), RULER_H / 2);
-    ctx.textAlign = "right";
-    ctx.fillText("OPS", this.colOps(), RULER_H / 2);
-    ctx.fillText("BYTES", this.colBytes(), RULER_H / 2);
-    ctx.textAlign = "left";
+    if (this.showMetrics) {
+      ctx.fillText("I/O UTIL", this.colUtil(), RULER_H / 2);
+      ctx.textAlign = "right";
+      ctx.fillText("OPS", this.colOps(), RULER_H / 2);
+      ctx.fillText("BYTES", this.colBytes(), RULER_H / 2);
+      ctx.textAlign = "left";
+    }
 
     const span = this.live.end - this.live.begin;
     const pw = this.plotW();
@@ -2406,11 +2577,15 @@ export class Timeline {
 
     for (const lane of this.lanes) {
       const y = RULER_H - this.scrollY + lane.y;
-      const h = lane.rows * ROW_H;
+      const h = lane.rows * this.rowH;
       const top = Math.max(y, RULER_H);
       const bottom = Math.min(y + h, this.cssH);
       if (bottom <= RULER_H || top >= this.cssH) continue;
-      const cy = clamp(y + ROW_H / 2, RULER_H + ROW_H / 2, this.cssH - 2);
+      const cy = clamp(y + this.rowH / 2, RULER_H + this.rowH / 2, this.cssH - 2);
+      // Rows too short for text: keep the structural bands (host/proc color) so
+      // lanes stay distinguishable, but skip the labels and metric columns that
+      // would otherwise overlap into an unreadable smear.
+      const showText = this.rowH >= LABEL_MIN_ROW_H;
 
       if (lane.kind === "host") {
         ctx.fillStyle = this.th.groupBand;
@@ -2418,7 +2593,7 @@ export class Timeline {
       }
 
       const collapsed = this.collapsed.has(lane.collapseKey);
-      if (lane.collapsible) {
+      if (lane.collapsible && showText) {
         ctx.fillStyle = this.th.ruler;
         ctx.font = "9px ui-monospace, SFMono-Regular, Menlo, monospace";
         ctx.textBaseline = "middle";
@@ -2430,27 +2605,31 @@ export class Timeline {
         ctx.fillRect(lane.indent + TWIST_W - 2, top, 2, bottom - top);
       }
 
+      // The label always draws; its font shrinks with the row so short lanes
+      // keep a (tiny) label instead of vanishing. Hover surfaces it full-size.
       const labelX = lane.indent + TWIST_W + (lane.kind === "thread" ? 2 : 4);
+      const labelRight = this.showMetrics ? this.colUtil() - 8 : this.gutter - 8;
+      const baseFs = lane.kind === "host" || lane.kind === "proc" ? 11 : 10;
+      const fs = clamp(this.rowH - 2, MIN_LABEL_FONT, baseFs);
+      const weight = lane.kind === "host" ? "600 " : "";
       ctx.save();
       ctx.beginPath();
-      ctx.rect(labelX, top, this.colUtil() - labelX - 8, bottom - top);
+      ctx.rect(labelX, top, labelRight - labelX, bottom - top);
       ctx.clip();
       ctx.textBaseline = "middle";
       ctx.textAlign = "left";
-      if (lane.kind === "host") {
-        ctx.fillStyle = this.th.groupText;
-        ctx.font = "600 11px ui-monospace, SFMono-Regular, Menlo, monospace";
-      } else if (lane.kind === "proc") {
-        ctx.fillStyle = this.th.laneText;
-        ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, monospace";
-      } else {
-        ctx.fillStyle = this.th.numText;
-        ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
-      }
+      ctx.fillStyle =
+        lane.kind === "host"
+          ? this.th.groupText
+          : lane.kind === "proc"
+            ? this.th.laneText
+            : this.th.numText;
+      ctx.font = `${weight}${fs}px ui-monospace, SFMono-Regular, Menlo, monospace`;
       ctx.fillText(lane.label, labelX, cy);
       ctx.restore();
 
-      if (lane.kind !== "thread") this.renderLaneColumns(ctx, lane, cy);
+      if (lane.kind !== "thread" && this.showMetrics && showText)
+        this.renderLaneColumns(ctx, lane, cy);
     }
   }
 
@@ -2513,7 +2692,17 @@ export class Timeline {
     for (const lane of this.lanes) {
       if (!lane.collapsible) continue;
       const ly = RULER_H - this.scrollY + lane.y;
-      if (y >= ly && y <= ly + ROW_H) return lane;
+      if (y >= ly && y <= ly + this.rowH) return lane;
+    }
+    return null;
+  }
+
+  // Any lane (leaf or header) whose gutter band spans y - used for the
+  // hidden-label hover tooltip.
+  private laneAtY(y: number): Lane | null {
+    for (const lane of this.lanes) {
+      const ly = RULER_H - this.scrollY + lane.y;
+      if (y >= ly && y <= ly + lane.rows * this.rowH) return lane;
     }
     return null;
   }

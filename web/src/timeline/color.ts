@@ -20,13 +20,48 @@ const PALETTE = [
   "#6aa9bf", // steel
 ];
 
+// Neutral fill for folded density blocks when coloring by a field: a folded
+// block aggregates many events, so a single hue would misrepresent the mix.
+export const DENSITY_GREY = "#4a515e";
+
+// Palette key for a color-by-field value. Namespacing by field keeps color
+// assignment stable per value and avoids cross-field collisions in the shared
+// palette map.
+export function colorSlot(field: string, value: string): string {
+  return field ? `${field}\u0000${value}` : value;
+}
+
 const assigned = new Map<string, string>();
 let nextSlot = 0;
+
+function hslToHex(h: number, s: number, l: number): string {
+  l /= 100;
+  const a = (s * Math.min(l, 1 - l)) / 100;
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * c)
+      .toString(16)
+      .padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+// Beyond the curated palette, sweep the hue wheel by the golden angle so each
+// new entity gets a maximally-separated, unique color instead of wrapping and
+// silently colliding. Lightness alternates in two bands for extra separation
+// between near-adjacent hues.
+function generatedColor(slot: number): string {
+  const overflow = slot - PALETTE.length;
+  const hue = (overflow * 137.508) % 360;
+  const light = overflow % 2 === 0 ? 62 : 50;
+  return hslToHex(hue, 52, light);
+}
 
 export function colorFor(key: string): string {
   let c = assigned.get(key);
   if (c) return c;
-  c = PALETTE[nextSlot % PALETTE.length];
+  c = nextSlot < PALETTE.length ? PALETTE[nextSlot] : generatedColor(nextSlot);
   nextSlot += 1;
   assigned.set(key, c);
   return c;

@@ -26,7 +26,7 @@ import type {
 } from "./data/types";
 import { CONFIG } from "./data/config";
 import { onHostMessage, post } from "./data/vscode";
-import { DEFAULT_LANE_GROUPS, Timeline, type Gap, type LaneGroupLevel } from "./timeline/timeline";
+import { eventGroupValue, Timeline, type Gap, type LaneGroupLevel } from "./timeline/timeline";
 import { ApiExplorer } from "./api/ApiExplorer";
 import { Flamegraph } from "./flame/flamegraph";
 import { SandwichView } from "./flame/SandwichView";
@@ -35,7 +35,7 @@ import { FlameTooltip, type FlameHover } from "./flame/FlameTooltip";
 // In the VS Code webview with no server yet: show the load screen instead of
 // booting the (empty) timeline.
 const NEEDS_LOAD = CONFIG.vscode && !CONFIG.apiBase;
-import { colorFor, sliceKey } from "./timeline/color";
+import { colorFor, colorSlot, DENSITY_GREY, sliceKey } from "./timeline/color";
 import { formatBytes, formatBytesPerSec, formatTime } from "./timeline/format";
 
 interface HoverState {
@@ -45,8 +45,9 @@ interface HoverState {
 }
 
 interface CatStat {
-  name: string;
+  name: string; // display label (resolved for hash color fields)
   count: number;
+  key: string; // palette key; keeps the swatch identical to the drawn bars
 }
 
 const ICON_TIMELINE =
@@ -215,6 +216,8 @@ export default function App() {
   const [headerHelp, setHeaderHelp] = createSignal<{ text: string; x: number; y: number } | null>(
     null,
   );
+  // Lane label shown on hover when rows are too short to draw it inline.
+  const [laneTip, setLaneTip] = createSignal<{ text: string; x: number; y: number } | null>(null);
   // Instant explanation tooltip for a metric label, consistent with the canvas
   // gutter headers.
   const help = (key: string) => {
@@ -223,13 +226,32 @@ export default function App() {
     const show = (e: MouseEvent) => setHeaderHelp({ text, x: e.clientX, y: e.clientY });
     return { onMouseEnter: show, onMouseMove: show, onMouseLeave: () => setHeaderHelp(null) };
   };
-  const [cats, setCats] = createSignal<CatStat[]>([]);
+  // Color-by candidates: event name plus any raw column. resolved.* aliases are
+  // dropped since the client resolves hash values for display, not per-event.
+  const colorByOptions = () => [
+    "name",
+    ...laneColumnOptions().filter((c) => c !== "name" && !c.startsWith("resolved.")),
+  ];
+  // Swatch color for one event under the active color dimension; mirrors the
+  // timeline's fill so tooltips/inspector match the drawn bars.
+  const eventColor = (ev: TraceEvent) => {
+    const f = colorBy();
+    if (f === "name") return colorFor(sliceKey(ev));
+    if ((ev as unknown as { aggregated?: boolean }).aggregated) return DENSITY_GREY;
+    return colorFor(colorSlot(f, eventGroupValue(ev, f)));
+  };
+  const [legendSource, setLegendSource] = createSignal<{
+    events: TraceEvent[];
+    density: DensityBlock[];
+  }>({ events: [], density: [] });
   const [showLegend, setShowLegend] = createSignal(false);
+  const [colorBy, setColorBy] = createSignal("name");
   const [searchTerm, setSearchTerm] = createSignal("");
   const [matchCount, setMatchCount] = createSignal(0);
   const [matchPos, setMatchPos] = createSignal(0);
   const [showHelp, setShowHelp] = createSignal(false);
   const [showGaps, setShowGaps] = createSignal(false);
+  const [showIoCols, setShowIoCols] = createSignal(true); // I/O UTIL/OPS/BYTES gutter columns
   const [multiRun, setMultiRun] = createSignal(false);
   const [timelapse, setTimelapse] = createSignal(false);
   const ALL_LANE_LEVELS: LaneGroupLevel[] = ["host", "pid", "tid", "col"];
@@ -239,29 +261,106 @@ export default function App() {
     tid: "thread",
     col: "column",
   };
-  const [laneGroups, setLaneGroups] = createSignal<LaneGroupLevel[]>([...DEFAULT_LANE_GROUPS]);
-  const [laneGroupColumn, setLaneGroupColumn] = createSignal("");
+  // A lane grouping item is either a builtin level (host/process/thread) or a
+  // group of one-or-more columns. Multiple columns in one group share a lane
+  // ("a / b", merged/collapsed); separate column groups nest as their own
+  // collapsible levels. The order of items is the gutter nesting order.
+  type BuiltinName = "host" | "pid" | "tid";
+  type LaneItem = { kind: "builtin"; name: BuiltinName } | { kind: "cols"; cols: string[] };
+  const DEFAULT_ITEMS: LaneItem[] = [
+    { kind: "builtin", name: "host" },
+    { kind: "builtin", name: "pid" },
+    { kind: "builtin", name: "tid" },
+  ];
+  const cloneItems = (items: LaneItem[]) =>
+    items.map((it) =>
+      it.kind === "cols" ? { kind: "cols" as const, cols: [...it.cols] } : { ...it },
+    );
+  const [laneItems, setLaneItems] = createSignal<LaneItem[]>(cloneItems(DEFAULT_ITEMS));
+  // A candidate column picked but not yet placed: the user then chooses whether
+  // it becomes its own nested level or merges into the last column group.
+  const [pendingCol, setPendingCol] = createSignal("");
   const [laneColumnOptions, setLaneColumnOptions] = createSignal<string[]>([]);
   const [showLanePanel, setShowLanePanel] = createSignal(false);
-  const isDefaultLaneGroups = () => laneGroups().join() === DEFAULT_LANE_GROUPS.join();
-  // The column actually in effect ("" unless a col level with a name is active).
-  const activeLaneColumn = () =>
-    laneGroups().includes("col") && laneGroupColumn().trim() ? laneGroupColumn().trim() : "";
-  const moveLaneGroup = (i: number, d: number) => {
-    const a = [...laneGroups()];
+  const isDefaultLaneGroups = () =>
+    laneItems().length === DEFAULT_ITEMS.length &&
+    laneItems().every(
+      (it, i) =>
+        it.kind === "builtin" && it.name === (DEFAULT_ITEMS[i] as { name: BuiltinName }).name,
+    );
+
+  // Columns in composite order (flattened across groups), each group's size, and
+  // the internal per-level spec the Timeline consumes.
+  const flatColumns = () => laneItems().flatMap((it) => (it.kind === "cols" ? it.cols : []));
+  const colGroupSizes = () =>
+    laneItems()
+      .filter((it) => it.kind === "cols")
+      .map((it) => it.cols.length);
+  const laneSpec = (): LaneGroupLevel[] =>
+    laneItems().map((it) => (it.kind === "builtin" ? it.name : "col"));
+  const activeColumnSet = () => new Set(flatColumns());
+
+  const moveLaneItem = (i: number, d: number) => {
+    const a = [...laneItems()];
     const j = i + d;
     if (j < 0 || j >= a.length) return;
     [a[i], a[j]] = [a[j], a[i]];
-    setLaneGroups(a);
+    setLaneItems(a);
   };
-  let prevLaneColumn = "";
+  const removeLaneItem = (i: number) => {
+    const a = laneItems().filter((_, k) => k !== i);
+    setLaneItems(a.length ? a : cloneItems(DEFAULT_ITEMS));
+  };
+  const removeColumn = (col: string) => {
+    const items = cloneItems(laneItems())
+      .map((it) =>
+        it.kind === "cols" ? { kind: "cols" as const, cols: it.cols.filter((c) => c !== col) } : it,
+      )
+      .filter((it) => it.kind !== "cols" || it.cols.length > 0);
+    setLaneItems(items.length ? items : cloneItems(DEFAULT_ITEMS));
+  };
+  const addBuiltin = (name: BuiltinName) =>
+    setLaneItems([...laneItems(), { kind: "builtin", name }]);
+  const hasColGroup = () => laneItems().some((it) => it.kind === "cols");
+  // Place the pending column: "nest" as its own new level, or "merge" into the
+  // last existing column group. The choice resets after each add.
+  const commitPending = (mode: "nest" | "merge") => {
+    const col = pendingCol().trim();
+    if (!col) return;
+    const items = cloneItems(laneItems());
+    let lastCols = -1;
+    for (let k = items.length - 1; k >= 0; k--)
+      if (items[k].kind === "cols") {
+        lastCols = k;
+        break;
+      }
+    if (mode === "merge" && lastCols >= 0) {
+      (items[lastCols] as { kind: "cols"; cols: string[] }).cols.push(col);
+    } else {
+      items.push({ kind: "cols", cols: [col] });
+    }
+    setLaneItems(items);
+    setPendingCol("");
+  };
+
+  let prevCols = "";
   createEffect(() => {
-    const col = activeLaneColumn();
-    timeline?.setLaneGrouping(laneGroups(), col);
-    // Column grouping changes the lane keys and the density group_by, so the
-    // current window must be refetched.
-    if (col !== prevLaneColumn) {
-      prevLaneColumn = col;
+    // Read the signal unconditionally: `timeline?.setColorBy(colorBy())` would
+    // short-circuit the argument on the first run (timeline still undefined) and
+    // never subscribe to colorBy.
+    const cb = colorBy();
+    timeline?.setColorBy(cb);
+  });
+
+  createEffect(() => {
+    const cols = flatColumns();
+    timeline?.setLaneGrouping(laneSpec(), cols.join(","), colGroupSizes());
+    // group_by (the flattened column list, order-sensitive) drives the server
+    // response, so refetch only when it changes; re-nesting/merging the same
+    // columns is a pure client relayout.
+    const key = cols.join(",");
+    if (key !== prevCols) {
+      prevCols = key;
       if (lastRange) requestData(lastRange[0], lastRange[1]);
     }
   });
@@ -413,6 +512,41 @@ export default function App() {
   const [hostByHash, setHostByHash] = createSignal<Map<string, string>>(new Map());
   const [fileByHash, setFileByHash] = createSignal<Map<string, string>>(new Map());
   const hostByPid = new Map<string, string>();
+
+  // Legend for the active color dimension. Palette keys match the timeline's
+  // (via colorSlot) so swatches equal the drawn bars. Folded density blocks are
+  // grey (mixed) under a field, so they contribute a per-value entry only when
+  // coloring by name.
+  const cats = createMemo<CatStat[]>(() => {
+    const field = colorBy();
+    const { events, density } = legendSource();
+    const counts = new Map<string, CatStat>();
+    const bump = (key: string, name: string, n: number) => {
+      const cur = counts.get(key);
+      if (cur) cur.count += n;
+      else counts.set(key, { key, name, count: n });
+    };
+    if (field === "name") {
+      for (const b of density) {
+        const nm = b.name != null ? String(b.name) : "";
+        if (nm) bump(nm, nm, Number(b.count) || 0);
+      }
+      for (const ev of events) {
+        if (ev.ph === "M") continue;
+        const c = sliceKey(ev);
+        if (c) bump(c, c, 1);
+      }
+    } else {
+      const fhm = fileByHash();
+      const hhm = hostByHash();
+      for (const ev of events) {
+        if (ev.ph === "M") continue;
+        const raw = eventGroupValue(ev, field);
+        bump(colorSlot(field, raw), fhm.get(raw) ?? hhm.get(raw) ?? raw, 1);
+      }
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count);
+  });
   // Range the Analyze panel aggregates over; null means the whole trace.
   const [anScope, setAnScope] = createSignal<{ t0: number; t1: number } | null>(null);
   const scopeRange = (): [number, number] => {
@@ -676,7 +810,7 @@ export default function App() {
           query: appliedQuery(),
           lookback: maxDurSeen,
           width: timeline?.viewportWidth(),
-          groupBy: activeLaneColumn() || undefined,
+          groupBy: flatColumns().join(",") || undefined,
         },
         ac.signal,
       );
@@ -724,10 +858,6 @@ export default function App() {
         })
         .catch(() => {});
 
-      const counts = new Map<string, number>();
-      for (const b of res.density) {
-        if (b.name) counts.set(b.name, (counts.get(b.name) ?? 0) + b.count);
-      }
       const hh = new Map(hostByHash());
       const fh = new Map(fileByHash());
       let resolvedChanged = false;
@@ -745,8 +875,6 @@ export default function App() {
           }
           continue;
         }
-        const c = sliceKey(ev);
-        if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
         if (args.hhash != null && !hostByPid.has(String(ev.pid))) {
           hostByPid.set(String(ev.pid), String(args.hhash));
         }
@@ -755,11 +883,7 @@ export default function App() {
         setHostByHash(hh);
         setFileByHash(fh);
       }
-      setCats(
-        [...counts.entries()]
-          .map(([name, count]) => ({ name, count }))
-          .sort((a, b) => b.count - a.count),
-      );
+      setLegendSource({ events: res.events, density: res.density });
 
       const hosts = new Map<number, string>();
       for (const [pid, hash] of hostByPid) {
@@ -979,6 +1103,7 @@ export default function App() {
         const text = key ? METRIC_HELP[key] : undefined;
         setHeaderHelp(text ? { text, x, y } : null);
       },
+      onLaneHover: (label, x, y) => setLaneTip(label ? { text: label, x, y } : null),
       onSelect: (ev) => {
         setSelected(ev);
         if (ev) {
@@ -1125,6 +1250,13 @@ export default function App() {
         {(h) => (
           <div class="tooltip help-tip" style={{ left: `${h().x + 14}px`, top: `${h().y + 18}px` }}>
             {h().text}
+          </div>
+        )}
+      </Show>
+      <Show when={laneTip()}>
+        {(t) => (
+          <div class="tooltip help-tip" style={{ left: `${t().x + 14}px`, top: `${t().y + 18}px` }}>
+            {t().text}
           </div>
         )}
       </Show>
@@ -1277,6 +1409,47 @@ export default function App() {
             >
               Gaps
             </button>
+            <Show when={view() === "timeline"}>
+              <span class="lane-zoom" title="Lane row height - also shift+wheel, or - / = / 0">
+                <button
+                  type="button"
+                  class="ghost sm"
+                  title="shorter rows (see more lanes)"
+                  onClick={() => timeline?.zoomRows(-3)}
+                >
+                  &minus;
+                </button>
+                <button
+                  type="button"
+                  class="ghost sm"
+                  title="fit all lanes on screen"
+                  onClick={() => timeline?.fitRows()}
+                >
+                  fit rows
+                </button>
+                <button
+                  type="button"
+                  class="ghost sm"
+                  title="taller rows"
+                  onClick={() => timeline?.zoomRows(3)}
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  class="ghost sm"
+                  classList={{ active: !showIoCols() }}
+                  title="show/hide the I/O UTIL, OPS, BYTES columns (more room for labels)"
+                  onClick={() => {
+                    const v = !showIoCols();
+                    setShowIoCols(v);
+                    timeline?.setShowMetrics(v);
+                  }}
+                >
+                  i/o cols
+                </button>
+              </span>
+            </Show>
             <Show when={multiRun()}>
               <button
                 type="button"
@@ -1393,8 +1566,11 @@ export default function App() {
                       ["drag / two-finger swipe", "pan"],
                       ["wheel", "scroll lanes"],
                       ["ctrl+wheel / pinch", "zoom at cursor"],
-                      ["W / S", "zoom in / out"],
+                      ["W / S", "zoom in / out (time)"],
                       ["A / D", "pan left / right"],
+                      ["- / =", "lane rows: shorter / taller"],
+                      ["0", "fit all lanes on screen"],
+                      ["shift+wheel", "zoom lane rows"],
                       ["double-click", "zoom in"],
                       ["drag on ruler / shift+drag", "measure a range (stats)"],
                       ["click a slice", "details"],
@@ -1843,36 +2019,36 @@ export default function App() {
                 <div class="lane-config">
                   <div class="lane-sec-title">grouping order</div>
                   <div class="lane-group-list">
-                    <For each={laneGroups()}>
-                      {(lvl, i) => (
+                    <For each={laneItems()}>
+                      {(item, i) => (
                         <div class="lane-group-row">
                           <span class="lane-group-name">
                             {i() + 1}.{" "}
-                            {lvl === "col"
-                              ? `column: ${laneGroupColumn() || "(pick below)"}`
-                              : LANE_LEVEL_LABEL[lvl]}
+                            {item.kind === "builtin"
+                              ? LANE_LEVEL_LABEL[item.name]
+                              : item.cols.join(" / ")}
                           </span>
                           <button
                             class="ghost sm"
                             disabled={i() === 0}
                             title="move up"
-                            onClick={() => moveLaneGroup(i(), -1)}
+                            onClick={() => moveLaneItem(i(), -1)}
                           >
                             ^
                           </button>
                           <button
                             class="ghost sm"
-                            disabled={i() === laneGroups().length - 1}
+                            disabled={i() === laneItems().length - 1}
                             title="move down"
-                            onClick={() => moveLaneGroup(i(), 1)}
+                            onClick={() => moveLaneItem(i(), 1)}
                           >
                             v
                           </button>
                           <button
                             class="ghost sm"
-                            disabled={laneGroups().length === 1}
+                            disabled={laneItems().length === 1}
                             title="remove level"
-                            onClick={() => setLaneGroups(laneGroups().filter((x) => x !== lvl))}
+                            onClick={() => removeLaneItem(i())}
                           >
                             x
                           </button>
@@ -1883,23 +2059,52 @@ export default function App() {
                       <button
                         class="ghost sm lane-group-reset"
                         onClick={() => {
-                          setLaneGroups([...DEFAULT_LANE_GROUPS]);
-                          setLaneGroupColumn("");
+                          setLaneItems(cloneItems(DEFAULT_ITEMS));
+                          setPendingCol("");
                         }}
                       >
                         reset to host / process / thread
                       </button>
                     </Show>
                   </div>
+                  <Show when={pendingCol()}>
+                    <div class="lane-pending">
+                      <span>
+                        add <b>{pendingCol()}</b> as:
+                      </span>
+                      <button class="ghost sm" onClick={() => commitPending("nest")}>
+                        new nested level
+                      </button>
+                      <button
+                        class="ghost sm"
+                        disabled={!hasColGroup()}
+                        title={
+                          hasColGroup()
+                            ? "merge into the last column group (shares one lane)"
+                            : "no column group to merge into yet"
+                        }
+                        onClick={() => commitPending("merge")}
+                      >
+                        merge into last
+                      </button>
+                      <button class="ghost sm" onClick={() => setPendingCol("")}>
+                        cancel
+                      </button>
+                    </div>
+                  </Show>
                   <div class="lane-sec-title">candidates</div>
                   <div class="lane-cands">
                     <For
-                      each={ALL_LANE_LEVELS.filter((l) => l !== "col" && !laneGroups().includes(l))}
+                      each={ALL_LANE_LEVELS.filter(
+                        (l) =>
+                          l !== "col" &&
+                          !laneItems().some((it) => it.kind === "builtin" && it.name === l),
+                      )}
                     >
                       {(lvl) => (
                         <button
                           class="ghost sm lane-cand"
-                          onClick={() => setLaneGroups([...laneGroups(), lvl])}
+                          onClick={() => addBuiltin(lvl as BuiltinName)}
                         >
                           + {LANE_LEVEL_LABEL[lvl]}
                         </button>
@@ -1909,15 +2114,15 @@ export default function App() {
                       {(c) => (
                         <button
                           class="ghost sm lane-cand"
-                          classList={{
-                            active: laneGroups().includes("col") && laneGroupColumn() === c,
-                          }}
-                          title="group lanes by this column"
-                          onClick={() => {
-                            setLaneGroupColumn(c);
-                            if (!laneGroups().includes("col"))
-                              setLaneGroups([...laneGroups(), "col"]);
-                          }}
+                          classList={{ active: activeColumnSet().has(c) }}
+                          title={
+                            activeColumnSet().has(c)
+                              ? "remove this column from grouping"
+                              : "pick this column, then choose nest or merge"
+                          }
+                          onClick={() =>
+                            activeColumnSet().has(c) ? removeColumn(c) : setPendingCol(c)
+                          }
                         >
                           + {c}
                         </button>
@@ -1927,13 +2132,11 @@ export default function App() {
                       <input
                         class="lane-group-col"
                         type="text"
-                        placeholder="column name"
-                        value={laneGroupColumn()}
+                        placeholder="custom column name"
                         onChange={(e) => {
                           const v = e.currentTarget.value.trim();
-                          setLaneGroupColumn(v);
-                          if (v && !laneGroups().includes("col"))
-                            setLaneGroups([...laneGroups(), "col"]);
+                          if (v) setPendingCol(v);
+                          e.currentTarget.value = "";
                         }}
                       />
                     </div>
@@ -1961,7 +2164,7 @@ export default function App() {
                 {(ev) => (
                   <div class="insp-scroll">
                     <div class="insp-title">
-                      <i style={{ background: colorFor(sliceKey(ev())) }} />
+                      <i style={{ background: eventColor(ev()) }} />
                       {String(ev().name ?? "")}
                       {isAggregated(ev()) ? "" : "()"}
                     </div>
@@ -2121,20 +2324,27 @@ export default function App() {
                 <Show when={showLegend() && cats().length > 0}>
                   <div class="legend-panel">
                     <div class="panel-head">
-                      <span>Categories ({cats().length})</span>
+                      <span>Colors ({cats().length})</span>
                       <button class="ghost sm" onClick={() => setShowLegend(false)}>
                         x
                       </button>
+                    </div>
+                    <div class="legend-colorby">
+                      <span>color by</span>
+                      <select value={colorBy()} onChange={(e) => setColorBy(e.currentTarget.value)}>
+                        <For each={colorByOptions()}>{(o) => <option value={o}>{o}</option>}</For>
+                      </select>
                     </div>
                     <div class="legend-list">
                       <For each={cats()}>
                         {(c) => (
                           <button
                             class="legend-item"
-                            title={`filter to ${c.name}`}
-                            onClick={() => filterByName(c.name)}
+                            title={colorBy() === "name" ? `filter to ${c.name}` : c.name}
+                            disabled={colorBy() !== "name"}
+                            onClick={() => colorBy() === "name" && filterByName(c.name)}
                           >
-                            <i style={{ background: colorFor(c.name) }} />
+                            <i style={{ background: colorFor(c.key) }} />
                             <span class="legend-name">{c.name}</span>
                             <span class="legend-count">{c.count.toLocaleString()}</span>
                           </button>
@@ -2182,7 +2392,7 @@ export default function App() {
                       style={{ left: `${h().x + 14}px`, top: `${h().y + 14}px` }}
                     >
                       <div class="tt-name">
-                        <i style={{ background: colorFor(sliceKey(h().ev)) }} />
+                        <i style={{ background: eventColor(h().ev) }} />
                         {String(h().ev.name ?? "")}
                         <Show when={isAggregated(h().ev)}>
                           <span class="agg-tag">merged</span>
@@ -2280,7 +2490,7 @@ export default function App() {
           <span class="hint">
             <Show
               when={view() === "flamegraph"}
-              fallback="drag or two-finger swipe to pan · pinch or ctrl+wheel to zoom · W/A/S/D keys · drag ruler to measure"
+              fallback="drag / swipe to pan · ctrl+wheel to zoom · W/A/S/D · shift+wheel or - = 0 for lane rows · drag ruler to measure"
             >
               click a frame to zoom in · click a parent frame to zoom out · width = total time
             </Show>

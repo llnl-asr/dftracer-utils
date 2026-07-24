@@ -2140,6 +2140,75 @@ export class Timeline {
     this.requestFrame();
   }
 
+  // Export the timeline as a PNG blob. `whole` fits the full time range and all
+  // lanes into one image (aggregated at that zoom); otherwise it captures the
+  // current viewport as drawn.
+  async exportPng(whole: boolean): Promise<Blob | null> {
+    if (!whole) {
+      return await new Promise((res) => this.canvas.toBlob((b) => res(b), "image/png"));
+    }
+    return this.renderWholeToBlob();
+  }
+
+  private async renderWholeToBlob(): Promise<Blob | null> {
+    const MAX_SIDE = 16384; // conservative per-side canvas cap across browsers
+    const saved = {
+      canvas: this.canvas,
+      ctx: this.ctx,
+      cssW: this.cssW,
+      cssH: this.cssH,
+      dpr: this.dpr,
+      target: this.target,
+      scrollY: this.scrollY,
+      rowH: this.rowH,
+      hovered: this.hovered,
+      hoveredGap: this.hoveredGap,
+    };
+    try {
+      const plotW = clamp(this.totalSpan > 0 ? 3000 : this.cssW - this.gutter, 1200, 8000);
+      // Fit every lane; shrink the export row height only if the full stack
+      // would blow past the canvas side limit.
+      if (RULER_H + this.contentH > MAX_SIDE && this.contentH > 0) {
+        const factor = (MAX_SIDE - RULER_H) / this.contentH;
+        this.rowH = Math.max(1, Math.floor(this.rowH * factor));
+        this.layoutLanes();
+      }
+      const cssW = this.gutter + plotW;
+      const cssH = Math.min(RULER_H + this.contentH, MAX_SIDE);
+      const off = document.createElement("canvas");
+      off.width = Math.round(cssW);
+      off.height = Math.round(cssH);
+      const octx = off.getContext("2d");
+      if (!octx) return null;
+      this.canvas = off;
+      this.ctx = octx;
+      this.dpr = 1;
+      this.cssW = cssW;
+      this.cssH = cssH;
+      this.scrollY = 0;
+      this.hovered = null;
+      this.hoveredGap = null;
+      this.target = { begin: 0, end: this.totalSpan || saved.target.end };
+      this.render();
+      return await new Promise((res) => off.toBlob((b) => res(b), "image/png"));
+    } finally {
+      this.canvas = saved.canvas;
+      this.ctx = saved.ctx;
+      this.cssW = saved.cssW;
+      this.cssH = saved.cssH;
+      this.dpr = saved.dpr;
+      this.target = saved.target;
+      this.scrollY = saved.scrollY;
+      this.hovered = saved.hovered;
+      this.hoveredGap = saved.hoveredGap;
+      if (this.rowH !== saved.rowH) {
+        this.rowH = saved.rowH;
+        this.layoutLanes();
+      }
+      this.invalidate();
+    }
+  }
+
   private frame = (): void => {
     this.frameScheduled = false;
     this.applyKeys();

@@ -245,7 +245,20 @@ export default function App() {
     density: DensityBlock[];
   }>({ events: [], density: [] });
   const [showLegend, setShowLegend] = createSignal(false);
+  const [showExport, setShowExport] = createSignal(false);
   const [colorBy, setColorBy] = createSignal("name");
+
+  const doExport = async (whole: boolean) => {
+    setShowExport(false);
+    const blob = await timeline?.exportPng(whole);
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = whole ? "timeline_full.png" : "timeline_view.png";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
   const [searchTerm, setSearchTerm] = createSignal("");
   const [matchCount, setMatchCount] = createSignal(0);
   const [matchPos, setMatchPos] = createSignal(0);
@@ -1448,6 +1461,27 @@ export default function App() {
                 >
                   i/o cols
                 </button>
+              </span>
+              <span class="export-wrap">
+                <button
+                  type="button"
+                  class="ghost sm"
+                  classList={{ active: showExport() }}
+                  title="Export the timeline as a PNG image"
+                  onClick={() => setShowExport(!showExport())}
+                >
+                  export
+                </button>
+                <Show when={showExport()}>
+                  <div class="export-menu">
+                    <button type="button" class="ghost sm" onClick={() => doExport(true)}>
+                      whole range (PNG)
+                    </button>
+                    <button type="button" class="ghost sm" onClick={() => doExport(false)}>
+                      current view (PNG)
+                    </button>
+                  </div>
+                </Show>
               </span>
             </Show>
             <Show when={multiRun()}>

@@ -1226,6 +1226,31 @@ button.ghost.sm {
   font-size: 12px;
 }
 
+.export-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.export-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+
+.export-menu button {
+  text-align: left;
+}
+
 .legend-colorby {
   display: flex;
   align-items: center;

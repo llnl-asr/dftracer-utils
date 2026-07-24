@@ -102,6 +102,23 @@ static void collect_referenced_hashes_batch(
     }
 }
 
+// First character of the top-level "ph" value (e.g. 'X', 'M', 'C'), or 0 if
+// absent. Uses simdjson On-Demand: SIMD structural indexing without building
+// the full DOM the reader would otherwise pay for on every event, so the
+// no-query/no-metadata path can drop "ph":"M" records cheaply. The padded
+// buffer is required by On-Demand and reused across calls.
+static char event_ph_char(const char* data, std::size_t n) {
+    thread_local simdjson::ondemand::parser parser;
+    thread_local std::string padbuf;
+    padbuf.assign(data, n);
+    padbuf.resize(n + simdjson::SIMDJSON_PADDING);
+    simdjson::ondemand::document doc;
+    if (parser.iterate(padbuf.data(), n, padbuf.size()).get(doc)) return 0;
+    std::string_view ph;
+    if (doc.find_field_unordered("ph").get_string().get(ph)) return 0;
+    return ph.empty() ? 0 : ph.front();
+}
+
 coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
     const ViewReaderInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("read view");
@@ -177,6 +194,23 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
             if (!newline) break;
             std::size_t line_len = newline - line_start;
 
+            // Fast path: with no query and no metadata harvesting, the only
+            // decision is to drop "ph":"M" records and emit the rest, so a
+            // targeted phase probe replaces the full DOM parse.
+            if (line_len > 0 && !use_query && !input.view.include_metadata) {
+                const char* s = line_start;
+                const char* e = line_start + line_len;
+                while (s < e && (*s == ' ' || *s == '\t')) ++s;
+                if (s < e && *s == '{' &&
+                    event_ph_char(line_start, line_len) != 'M') {
+                    batch.events_scanned++;
+                    batch.events.emplace_back(line_start, line_len);
+                    batch.events_matched++;
+                }
+                pos = (newline - data) + 1;
+                continue;
+            }
+
             if (line_len > 0) {
                 auto result = parser.parse(line_start, line_len);
                 if (!result.error()) {
@@ -190,7 +224,8 @@ coro::AsyncGenerator<ViewReaderBatch> ViewReaderUtility::process(
                             std::string_view name_sv =
                                 json["name"].get<std::string_view>();
 
-                            if (HASH_METADATA_NAMES.count(name_sv)) {
+                            if (HASH_METADATA_NAMES.count(name_sv) &&
+                                !input.view.emit_all_metadata) {
                                 auto args = json["args"];
                                 if (args.exists()) {
                                     auto val = args["value"];

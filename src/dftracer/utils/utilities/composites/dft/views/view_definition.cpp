@@ -38,6 +38,11 @@ ViewDefinition& ViewDefinition::with_include_metadata(bool v) {
     return *this;
 }
 
+ViewDefinition& ViewDefinition::with_emit_all_metadata(bool v) {
+    emit_all_metadata = v;
+    return *this;
+}
+
 std::string ViewDefinition::to_json() const {
     std::ostringstream out;
     out << "{\n";

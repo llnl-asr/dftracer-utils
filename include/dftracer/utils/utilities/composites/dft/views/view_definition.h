@@ -16,6 +16,11 @@ struct ViewDefinition {
     std::string description;       ///< Human-readable description.
     std::optional<Query> query;    ///< Event filter (nullopt = match all).
     bool include_metadata = true;  ///< Include ph=M metadata events.
+    /// Emit hash metadata (FH/HH/SH) immediately instead of buffering it for
+    /// reference-driven flushing. Consumers that aggregate all metadata (the
+    /// activity-summary build) need this, since traces whose data events carry
+    /// no hash args would otherwise never see it.
+    bool emit_all_metadata = false;
 
     ViewDefinition& with_name(const std::string& n);
     ViewDefinition& with_description(const std::string& d);
@@ -23,6 +28,7 @@ struct ViewDefinition {
     ViewDefinition& with_query(const std::string& query_str);
     ViewDefinition& with_query(Query q);
     ViewDefinition& with_include_metadata(bool v);
+    ViewDefinition& with_emit_all_metadata(bool v);
 
     std::string to_json() const;
     static ViewDefinition from_json(const std::string& json);

@@ -235,53 +235,78 @@ using StreamChunk = HttpResponse::StreamChunk;
 static coro::AsyncGenerator<StreamChunk> stream_events(
     std::vector<const TraceIndex::FileInfo*> files, ViewDefinition ev_view,
     std::optional<Query> /*query_opt*/, double ts_min, double ts_max,
-    BloomFilterCache* bloom_cache, int limit, CancelToken cancel) {
+    BloomFilterCache* bloom_cache, int limit, std::size_t max_concurrent,
+    CancelToken cancel) {
     int emitted = 0;
+    const std::size_t slots = std::max<std::size_t>(1, max_concurrent);
 
-    for (auto* file_info : files) {
+    // Prune a batch of files in parallel (bloom/index I/O dominates and is
+    // serial otherwise), then stream matches in file order so the `limit`
+    // early-exit still stops after the first satisfying files.
+    for (std::size_t base = 0; base < files.size(); base += slots) {
         if (cancel.cancelled()) co_return;
         if (limit > 0 && emitted >= limit) break;
 
-        if (file_info->uncompressed_size == 0 &&
-            file_info->num_checkpoints == 0)
-            continue;
+        const std::size_t batch_end = std::min(base + slots, files.size());
+        const std::size_t batch_n = batch_end - base;
+        std::vector<ViewBuilderOutput> outs(batch_n);
 
-        ViewBuilderInput builder_input;
-        builder_input.with_view(ev_view)
-            .with_file_path(file_info->path)
-            .with_index_path(file_info->has_bloom_data ? file_info->index_path
-                                                       : "")
-            .with_uncompressed_size(file_info->uncompressed_size)
-            .with_num_checkpoints(file_info->num_checkpoints)
-            .with_bloom_cache(bloom_cache)
-            .with_time_range(ts_min, ts_max);
+        {
+            CoroScope scope(Executor::current());
+            for (std::size_t i = 0; i < batch_n; ++i) {
+                auto* fi = files[base + i];
+                if (fi->uncompressed_size == 0 && fi->num_checkpoints == 0)
+                    continue;
+                auto* slot = &outs[i];
+                scope.spawn([fi, slot, &ev_view, bloom_cache, ts_min,
+                             ts_max](CoroScope&) -> coro::CoroTask<void> {
+                    ViewBuilderInput builder_input;
+                    builder_input.with_view(ev_view)
+                        .with_file_path(fi->path)
+                        .with_index_path(fi->has_bloom_data ? fi->index_path
+                                                            : "")
+                        .with_uncompressed_size(fi->uncompressed_size)
+                        .with_num_checkpoints(fi->num_checkpoints)
+                        .with_bloom_cache(bloom_cache)
+                        .with_time_range(ts_min, ts_max);
+                    ViewBuilderUtility builder;
+                    auto r = co_await builder.process(builder_input);
+                    if (r) *slot = std::move(*r);
+                });
+            }
+            co_await scope.join();
+        }
 
-        ViewBuilderUtility builder;
-        auto build_output = co_await builder.process(builder_input);
-        if (!build_output || !build_output->file_may_match) continue;
-
-        for (const auto& candidate : build_output->candidates) {
+        for (std::size_t i = 0; i < batch_n; ++i) {
+            if (cancel.cancelled()) co_return;
             if (limit > 0 && emitted >= limit) break;
+            if (!outs[i].file_may_match) continue;
+            auto* file_info = files[base + i];
 
-            ViewReaderInput reader_input;
-            reader_input.with_file_path(file_info->path)
-                .with_index_path(file_info->index_path)
-                .with_byte_range(candidate.start_byte, candidate.end_byte)
-                .with_checkpoint_idx(candidate.checkpoint_idx)
-                .with_view(ev_view);
+            for (const auto& candidate : outs[i].candidates) {
+                if (limit > 0 && emitted >= limit) break;
 
-            ViewReaderUtility reader;
-            auto event_gen = reader.process(reader_input);
-            while (auto batch = co_await event_gen.next()) {
-                if (cancel.cancelled()) co_return;
-                int count = std::min(
-                    static_cast<int>(batch->events.size()),
-                    limit > 0 ? limit - emitted
-                              : static_cast<int>(batch->events.size()));
-                if (count > 0) {
-                    co_yield StreamChunk{std::span<const std::string_view>(
-                        batch->events.data(), static_cast<std::size_t>(count))};
-                    emitted += count;
+                ViewReaderInput reader_input;
+                reader_input.with_file_path(file_info->path)
+                    .with_index_path(file_info->index_path)
+                    .with_byte_range(candidate.start_byte, candidate.end_byte)
+                    .with_checkpoint_idx(candidate.checkpoint_idx)
+                    .with_view(ev_view);
+
+                ViewReaderUtility reader;
+                auto event_gen = reader.process(reader_input);
+                while (auto batch = co_await event_gen.next()) {
+                    if (cancel.cancelled()) co_return;
+                    int count = std::min(
+                        static_cast<int>(batch->events.size()),
+                        limit > 0 ? limit - emitted
+                                  : static_cast<int>(batch->events.size()));
+                    if (count > 0) {
+                        co_yield StreamChunk{std::span<const std::string_view>(
+                            batch->events.data(),
+                            static_cast<std::size_t>(count))};
+                        emitted += count;
+                    }
                 }
             }
         }
@@ -308,7 +333,7 @@ static coro::CoroTask<HttpResponse> handle_events(const HttpRequest& req,
 
     auto gen = std::make_unique<HttpResponse::StreamGenerator>(stream_events(
         std::move(files), std::move(view), std::move(query), ts_min, ts_max,
-        &index.bloom_cache(), limit, req.cancel_token));
+        &index.bloom_cache(), limit, index.max_concurrent(), req.cancel_token));
 
     auto resp = HttpResponse::streaming(std::move(gen));
     resp.headers.push_back({"X-Limit", std::to_string(limit)});
@@ -327,7 +352,7 @@ static coro::CoroTask<HttpResponse> handle_events_stream(
 
     auto gen = std::make_unique<HttpResponse::StreamGenerator>(stream_events(
         std::move(files), std::move(view), std::move(query), ts_min, ts_max,
-        &index.bloom_cache(), limit, req.cancel_token));
+        &index.bloom_cache(), limit, index.max_concurrent(), req.cancel_token));
 
     co_return HttpResponse::streaming(std::move(gen));
 }

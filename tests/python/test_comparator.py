@@ -1,8 +1,16 @@
-"""Tests for ComparatorUtility."""
+"""Tests for ComparatorUtility.
+
+Each compare() runs a full build+aggregate, which is very slow under Valgrind.
+The cases below only inspect different facets of the same
+compare-a-trace-with-itself result, so the aggregations are computed once per
+method (module-scoped fixtures) and every case asserts on the cached result.
+"""
 
 import gzip
 import json
 import os
+
+import pytest
 
 from dftracer.utils.arrow import ArrowTable
 from dftracer.utils.dftracer_utils_ext import ComparatorUtility
@@ -10,9 +18,9 @@ from dftracer.utils.dftracer_utils_ext import ComparatorUtility
 from .common import Environment
 
 
-def _create_posix_trace(env, filename="posix_trace.pfw.gz", num_events=40):
-    """Create a trace file with POSIX/STDIO categories that the comparator default query matches."""
-    file_path = os.path.join(env.temp_dir, filename)
+def _write_posix_trace(dir_path, filename="posix_trace.pfw.gz", num_events=40):
+    """Write a POSIX/STDIO trace the comparator default query matches."""
+    file_path = os.path.join(dir_path, filename)
     posix_ops = ["read", "write", "open", "close", "stat", "lseek"]
     stdio_ops = ["fread", "fwrite", "fopen", "fclose"]
     lines = []
@@ -39,48 +47,60 @@ def _create_posix_trace(env, filename="posix_trace.pfw.gz", num_events=40):
         f.write("[\n")
         f.writelines(lines)
         f.write("]\n")
+    return file_path
 
+
+def _create_posix_trace(env, filename="posix_trace.pfw.gz", num_events=40):
+    file_path = _write_posix_trace(env.temp_dir, filename, num_events)
     env.test_files.append(file_path)
     return file_path
 
 
+@pytest.fixture(scope="module")
+def shared_gz(tmp_path_factory):
+    """One trace reused by every compare-with-self case (built once)."""
+    return _write_posix_trace(str(tmp_path_factory.mktemp("comparator_shared")))
+
+
+@pytest.fixture(scope="module")
+def cmp_result(shared_gz):
+    """compare() run once; ArrowTable.batches()/num_rows are re-readable."""
+    return ComparatorUtility().compare(shared_gz, shared_gz)
+
+
+@pytest.fixture(scope="module")
+def cmp_json(shared_gz):
+    return ComparatorUtility().compare_json(shared_gz, shared_gz)
+
+
+@pytest.fixture(scope="module")
+def cmp_table(shared_gz):
+    return ComparatorUtility().compare_table(shared_gz, shared_gz)
+
+
 class TestComparatorCompare:
-    def test_compare_returns_arrow_table(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare(gz_file, gz_file)
-            assert isinstance(result, ArrowTable)
+    def test_compare_returns_arrow_table(self, cmp_result):
+        assert isinstance(cmp_result, ArrowTable)
 
-    def test_compare_has_rows(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare(gz_file, gz_file)
-            assert result.num_rows > 0
+    def test_compare_has_rows(self, cmp_result):
+        assert cmp_result.num_rows > 0
 
-    def test_compare_schema_columns(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare(gz_file, gz_file)
-            for batch in result.batches():
-                assert hasattr(batch, "__arrow_c_array__")
+    def test_compare_schema_columns(self, cmp_result):
+        for batch in cmp_result.batches():
+            assert hasattr(batch, "__arrow_c_array__")
 
-    def test_compare_same_file_zero_deltas(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare(gz_file, gz_file)
-            try:
-                import pyarrow as pa
+    def test_compare_same_file_zero_deltas(self, cmp_result):
+        try:
+            import pyarrow as pa
 
-                batches = []
-                for batch in result.batches():
-                    batches.append(pa.record_batch(batch))
-                if batches:
-                    table = pa.Table.from_batches(batches)
-                    delta_col = table.column("delta")
-                    for val in delta_col:
-                        assert val.as_py() == 0.0 or val.as_py() is None
-            except ImportError:
-                pass  # pyarrow not available, skip detailed check
+            batches = [pa.record_batch(batch) for batch in cmp_result.batches()]
+            if batches:
+                table = pa.Table.from_batches(batches)
+                delta_col = table.column("delta")
+                for val in delta_col:
+                    assert val.as_py() == 0.0 or val.as_py() is None
+        except ImportError:
+            pass  # pyarrow not available, skip detailed check
 
     def test_compare_directory(self):
         with Environment(lines=20) as env:
@@ -91,64 +111,41 @@ class TestComparatorCompare:
             assert isinstance(result, ArrowTable)
             assert result.num_rows > 0
 
-    def test_call_delegates_to_compare(self):
-        with Environment(lines=10) as env:
-            gz_file = _create_posix_trace(env)
-            util = ComparatorUtility()
-            result = util(gz_file, gz_file)
-            assert isinstance(result, ArrowTable)
+    def test_call_delegates_to_compare(self, shared_gz):
+        util = ComparatorUtility()
+        result = util(shared_gz, shared_gz)
+        assert isinstance(result, ArrowTable)
 
 
 class TestComparatorCompareJson:
-    def test_compare_json_returns_string(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare_json(gz_file, gz_file)
-            assert isinstance(result, str)
+    def test_compare_json_returns_string(self, cmp_json):
+        assert isinstance(cmp_json, str)
 
-    def test_compare_json_valid_json(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare_json(gz_file, gz_file)
-            parsed = json.loads(result)
-            assert isinstance(parsed, dict)
+    def test_compare_json_valid_json(self, cmp_json):
+        parsed = json.loads(cmp_json)
+        assert isinstance(parsed, dict)
 
-    def test_compare_json_has_expected_keys(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare_json(gz_file, gz_file)
-            parsed = json.loads(result)
-            assert "baseline" in parsed
-            assert "nodes" in parsed
+    def test_compare_json_has_expected_keys(self, cmp_json):
+        parsed = json.loads(cmp_json)
+        assert "baseline" in parsed
+        assert "nodes" in parsed
 
-    def test_compare_json_same_file_zero_pct_change(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare_json(gz_file, gz_file)
-            parsed = json.loads(result)
-            for node in parsed.get("nodes", []):
-                summary = node.get("summary", {})
-                for metric in summary.get("metrics", []):
-                    assert metric["pct_change"] == 0.0
+    def test_compare_json_same_file_zero_pct_change(self, cmp_json):
+        parsed = json.loads(cmp_json)
+        for node in parsed.get("nodes", []):
+            summary = node.get("summary", {})
+            for metric in summary.get("metrics", []):
+                assert metric["pct_change"] == 0.0
 
 
 class TestComparatorCompareTable:
-    def test_compare_table_returns_string(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare_table(gz_file, gz_file)
-            assert isinstance(result, str)
+    def test_compare_table_returns_string(self, cmp_table):
+        assert isinstance(cmp_table, str)
 
-    def test_compare_table_has_content(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare_table(gz_file, gz_file)
-            assert len(result) > 0
+    def test_compare_table_has_content(self, cmp_table):
+        assert len(cmp_table) > 0
 
-    def test_compare_table_contains_expected_text(self):
-        with Environment(lines=20) as env:
-            gz_file = _create_posix_trace(env)
-            result = ComparatorUtility().compare_table(gz_file, gz_file)
-            result_lower = result.lower()
-            assert "count" in result_lower
-            assert "baseline" in result_lower or "summary" in result_lower
+    def test_compare_table_contains_expected_text(self, cmp_table):
+        result_lower = cmp_table.lower()
+        assert "count" in result_lower
+        assert "baseline" in result_lower or "summary" in result_lower

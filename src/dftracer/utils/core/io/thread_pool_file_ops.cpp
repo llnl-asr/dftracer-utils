@@ -290,7 +290,7 @@ void ThreadPoolFileOps::execute_request(IoRequest* req) {
 }
 
 std::size_t ThreadPoolFileOps::poll(int /*timeout_ms*/) {
-    return 0;  // Thread pool backends: completions fire via callbacks
+    return pool_.flush();
 }
 
 int ThreadPoolFileOps::flush() { return static_cast<int>(pool_.flush()); }

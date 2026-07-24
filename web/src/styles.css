@@ -1413,7 +1413,9 @@ button.ghost.sm {
 .sw-proc > span,
 .drawer-title,
 .toolbar .toggle,
-.toolbar > .ghost {
+.toolbar > .ghost,
+.toolbar .lane-zoom > .ghost,
+.toolbar .export-wrap > .ghost {
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }

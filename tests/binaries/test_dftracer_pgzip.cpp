@@ -45,13 +45,13 @@ std::string find_pgzip_binary() {
 }
 
 int run_pgzip(const std::string& binary, const std::vector<std::string>& args) {
+    std::vector<const char*> argv;
+    argv.push_back(binary.c_str());
+    for (const auto& arg : args) argv.push_back(arg.c_str());
+    argv.push_back(nullptr);
     pid_t pid = ::fork();
     if (pid < 0) return -1;
     if (pid == 0) {
-        std::vector<const char*> argv;
-        argv.push_back(binary.c_str());
-        for (const auto& arg : args) argv.push_back(arg.c_str());
-        argv.push_back(nullptr);
         ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
         ::_exit(127);
     }

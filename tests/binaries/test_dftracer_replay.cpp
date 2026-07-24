@@ -64,6 +64,13 @@ std::string run_replay_capture(const std::string& binary,
     int pipefd[2];
     if (::pipe(pipefd) < 0) return "";
 
+    // Build argv before fork: this binary is multithreaded, so the child may
+    // only call async-signal-safe functions until execv (malloc is not one).
+    std::vector<const char*> argv;
+    argv.push_back(binary.c_str());
+    for (const auto& arg : args) argv.push_back(arg.c_str());
+    argv.push_back(nullptr);
+
     pid_t pid = ::fork();
     if (pid < 0) {
         ::close(pipefd[0]);
@@ -75,10 +82,6 @@ std::string run_replay_capture(const std::string& binary,
         ::dup2(pipefd[1], STDOUT_FILENO);
         ::dup2(pipefd[1], STDERR_FILENO);
         ::close(pipefd[1]);
-        std::vector<const char*> argv;
-        argv.push_back(binary.c_str());
-        for (const auto& arg : args) argv.push_back(arg.c_str());
-        argv.push_back(nullptr);
         ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
         ::_exit(127);
     }

@@ -270,11 +270,13 @@ struct ServerProcess {
 
     bool start(const std::string& binary, const std::string& data_dir, int p) {
         port = p;
+        // Build before fork: the child may only call async-signal-safe
+        // functions until execl, and std::to_string allocates.
+        auto port_str = std::to_string(port);
         pid = ::fork();
         if (pid < 0) return false;
 
         if (pid == 0) {
-            auto port_str = std::to_string(port);
             ::execl(binary.c_str(), binary.c_str(), "-d", data_dir.c_str(),
                     "-p", port_str.c_str(), "--bind", "127.0.0.1",
                     "--executor-threads", "2", nullptr);

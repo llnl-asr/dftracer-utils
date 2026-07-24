@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/filesystem.h>
 #include <doctest/doctest.h>
+#include <fcntl.h>
 #include <simdjson.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -70,20 +71,21 @@ std::string find_comparator_binary() {
 int run_comparator(const std::string& binary,
                    const std::vector<std::string>& args,
                    const std::string& stdout_file = "") {
+    std::vector<const char*> argv;
+    argv.push_back(binary.c_str());
+    for (const auto& arg : args) argv.push_back(arg.c_str());
+    argv.push_back(nullptr);
     pid_t pid = ::fork();
     if (pid < 0) return -1;
     if (pid == 0) {
         if (!stdout_file.empty()) {
-            FILE* f = std::fopen(stdout_file.c_str(), "w");
-            if (f) {
-                dup2(fileno(f), STDOUT_FILENO);
-                std::fclose(f);
+            int fd =
+                ::open(stdout_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd >= 0) {
+                ::dup2(fd, STDOUT_FILENO);
+                ::close(fd);
             }
         }
-        std::vector<const char*> argv;
-        argv.push_back(binary.c_str());
-        for (const auto& arg : args) argv.push_back(arg.c_str());
-        argv.push_back(nullptr);
         ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
         ::_exit(127);
     }

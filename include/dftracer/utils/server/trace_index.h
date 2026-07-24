@@ -4,6 +4,7 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/server/viz_result_cache.h>
 #include <dftracer/utils/server/viz_summary.h>
 #include <dftracer/utils/utilities/composites/dft/indexing/bloom_filter_cache.h>
 #include <dftracer/utils/utilities/composites/dft/time_metric.h>
@@ -20,6 +21,9 @@
 #include <vector>
 
 namespace dftracer::utils::server {
+
+// Byte budget for the per-index viz result cache.
+inline constexpr std::size_t VIZ_RESULT_CACHE_BYTES = 256UL * 1024 * 1024;
 
 /// Scans a directory for trace files and caches paths to their
 /// root-local `.dftindex` database. Used by API handlers to resolve file
@@ -65,6 +69,9 @@ class TraceIndex {
     using BloomCache =
         dftracer::utils::utilities::composites::dft::indexing::BloomFilterCache;
     BloomCache& bloom_cache() { return bloom_cache_; }
+
+    // Result cache for heavy viz endpoints. Immutable trace => never stale.
+    VizResultCache& viz_cache() { return viz_cache_; }
 
     // Trace-wide native time unit (one unit per trace), from the leading CM
     // time_metric of the first file (absent = US). Index/event ts and dur are
@@ -126,6 +133,7 @@ class TraceIndex {
     std::size_t max_concurrent_;
     std::size_t checkpoint_size_;
     BloomCache bloom_cache_;
+    VizResultCache viz_cache_{VIZ_RESULT_CACHE_BYTES};
 
     std::mutex hash_db_mutex_;
     std::unordered_map<std::string, std::string> hash_names_;

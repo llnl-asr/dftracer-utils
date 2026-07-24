@@ -146,6 +146,10 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
     auto server_task = make_task(
         [&](CoroScope& ctx) -> coro::CoroTask<void> {
             auto* router_ptr = &router;
+            auto* index_ptr = &trace_index;
+            ctx.spawn([index_ptr](CoroScope&) -> coro::CoroTask<void> {
+                co_await prewarm_viz_summary(*index_ptr);
+            });
             co_await listener.accept_loop(
                 ctx,
                 [router_ptr](int client_fd,

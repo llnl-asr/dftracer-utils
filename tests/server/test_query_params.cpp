@@ -139,6 +139,37 @@ TEST_CASE("QueryParams - multiple values for same key returns first") {
     CHECK(params.get("key") == "first");
 }
 
+// ============================================================================
+// Canonical key (result-cache key)
+// ============================================================================
+
+TEST_CASE("QueryParams - canonical_key is order-independent") {
+    auto a = QueryParams::parse("begin=1&end=2&query=x");
+    auto b = QueryParams::parse("query=x&end=2&begin=1");
+
+    CHECK(a.canonical_key() == b.canonical_key());
+}
+
+TEST_CASE("QueryParams - canonical_key distinguishes different params") {
+    auto a = QueryParams::parse("begin=1&end=2");
+    auto b = QueryParams::parse("begin=1&end=3");
+
+    CHECK(a.canonical_key() != b.canonical_key());
+}
+
+TEST_CASE("QueryParams - canonical_key distinguishes value vs no-value") {
+    auto a = QueryParams::parse("flag=1");
+    auto b = QueryParams::parse("flag");
+
+    CHECK(a.canonical_key() != b.canonical_key());
+}
+
+TEST_CASE("QueryParams - canonical_key empty for empty query") {
+    auto params = QueryParams::parse("");
+
+    CHECK(params.canonical_key().empty());
+}
+
 TEST_CASE("QueryParams - complex real-world query string") {
     auto params = QueryParams::parse(
         "file=%2Ftmp%2Fdata.pfw.gz&limit=1000&begin=0.0"

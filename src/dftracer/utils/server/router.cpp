@@ -69,6 +69,24 @@ bool QueryParams::has(std::string_view key) const {
     return false;
 }
 
+std::string QueryParams::canonical_key() const {
+    std::vector<const std::pair<std::string, std::string>*> sorted;
+    sorted.reserve(params_.size());
+    for (const auto& p : params_) sorted.push_back(&p);
+    std::sort(sorted.begin(), sorted.end(), [](const auto* a, const auto* b) {
+        if (a->first != b->first) return a->first < b->first;
+        return a->second < b->second;
+    });
+    std::string key;
+    for (const auto* p : sorted) {
+        key.append(p->first);
+        key.push_back('=');
+        key.append(p->second);
+        key.push_back('\x1f');
+    }
+    return key;
+}
+
 int QueryParams::get_int(std::string_view key, int default_value) const {
     auto sv = get(key);
     if (sv.empty()) return default_value;

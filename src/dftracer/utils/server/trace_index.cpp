@@ -38,7 +38,7 @@ namespace {
 // Bump VERSION when the on-disk layout below changes; the loader then ignores
 // the stale cache.
 constexpr std::uint32_t VIZ_SUMMARY_MAGIC = 0x315A5644;  // "DVZ1"
-constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 4;
+constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 5;
 
 struct BufWriter {
     std::string b;

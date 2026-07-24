@@ -26,6 +26,10 @@ class QueryParams {
     int get_int(std::string_view key, int default_value = 0) const;
     double get_double(std::string_view key, double default_value = 0) const;
 
+    /// Order-independent signature of all params, for use as a result-cache
+    /// key.
+    std::string canonical_key() const;
+
    private:
     std::vector<std::pair<std::string, std::string>> params_;
 };

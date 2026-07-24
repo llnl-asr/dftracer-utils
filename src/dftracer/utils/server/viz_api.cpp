@@ -590,8 +590,12 @@ static coro::CoroTask<HttpResponse> handle_viz_events(const HttpRequest& req,
     // Overlap, bounded: look back at most `lookback` (the longest event's
     // duration, supplied by the client) so events that started before the
     // window but extend into it are included, without scanning to time 0.
+    // lookback is in us; convert to native so scan_begin (native) is right.
     double lookback = params.get_double("lookback", 0);
     if (lookback < 0) lookback = 0;
+    if (lookback > 0 && index.time_metric() != TraceIndex::TimeMetric::US)
+        lookback = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(lookback)));
     double scan_begin = begin - lookback;
     if (scan_begin < 0) scan_begin = 0;
 
@@ -838,12 +842,16 @@ static double json_number(simdjson::dom::element el) {
     return 0;
 }
 
+// Composite group-value separator: joins the per-column values of a multi-key
+// group_by ("cat,fhash") into one lane key. Never appears in field values.
+static constexpr char GROUP_SEP = '\x1f';
+
 // Value of `col` in the event for group_by, as a display string. Dotted paths
 // walk nested objects; bare names fall back into "args" (the canonical home of
 // domain fields). Anything missing or non-scalar yields "" so events are never
 // dropped - the client renders those under "(none)".
-static std::string extract_group_value(simdjson::dom::element root,
-                                       std::string_view col) {
+static std::string extract_one_group_value(simdjson::dom::element root,
+                                           std::string_view col) {
     auto scalar = [](simdjson::dom::element el) -> std::string {
         if (el.is_string()) return std::string(el.get_string().value_unsafe());
         if (el.is_int64()) return std::to_string(el.get_int64().value_unsafe());
@@ -882,6 +890,31 @@ static std::string extract_group_value(simdjson::dom::element root,
         if (!nested.error()) return scalar(nested.value_unsafe());
     }
     return "";
+}
+
+// Group value for one or more columns. A comma-separated `col` ("cat,fhash")
+// yields the per-column values joined by GROUP_SEP so lanes split by the tuple;
+// each component keeps its raw value (hashes stay hashes) for client-side
+// resolution.
+static std::string extract_group_value(simdjson::dom::element root,
+                                       std::string_view col) {
+    if (col.find(',') == std::string_view::npos)
+        return extract_one_group_value(root, col);
+    std::string out;
+    std::size_t start = 0;
+    bool first = true;
+    while (start <= col.size()) {
+        auto comma = col.find(',', start);
+        auto part = col.substr(start, comma == std::string_view::npos
+                                          ? col.size() - start
+                                          : comma - start);
+        if (!first) out.push_back(GROUP_SEP);
+        first = false;
+        out += extract_one_group_value(root, part);
+        if (comma == std::string_view::npos) break;
+        start = comma + 1;
+    }
+    return out;
 }
 
 static std::string extract_group_from_line(std::string_view event,
@@ -1332,6 +1365,11 @@ struct SumBuild {
     std::vector<ankerl::unordered_dense::map<std::int64_t, std::string>>
         app_start, app_end;
 
+    // Per-pid application name from the CM "app" config record. Traces that put
+    // the app name in CM (not the start event's exec_hash) rely on this for the
+    // synthetic app-span label.
+    std::vector<ankerl::unordered_dense::map<std::int64_t, std::string>> cm_app;
+
     // Per-worker events at least one finest-level bucket wide, kept whole (see
     // VizSummary::long_events).
     std::vector<std::vector<VizSummary::AppSpan>> long_evs;
@@ -1535,6 +1573,17 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     if (name0 == "FH" || name0 == "SH" || name0 == "HH") {
         auto args = root["args"];
         if (!args.error() && args.is_object()) {
+            // Data events on some traces carry no args, so metadata records are
+            // the only source of a process's host hash; capture it here.
+            auto pp = root["pid"];
+            auto hr = args["hhash"];
+            if (!pp.error() && !hr.error() && hr.is_string()) {
+                auto pid =
+                    static_cast<std::int64_t>(json_number(pp.value_unsafe()));
+                auto& row = b.proc_of(w, pid);
+                if (row.hhash.empty())
+                    row.hhash = std::string(hr.get_string().value_unsafe());
+            }
             auto v = args["value"];
             auto n = args["name"];
             if (!v.error() && v.is_string() && !n.error() && n.is_string()) {
@@ -1561,6 +1610,23 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
                 auto& row = b.proc_of(w, pid);
                 if (row.rank.empty())
                     row.rank = std::string(av.get_string().value_unsafe());
+            }
+        }
+        return;
+    }
+    if (name0 == "CM") {
+        auto args = root["args"];
+        auto pp = root["pid"];
+        if (!args.error() && args.is_object() && !pp.error()) {
+            auto an = args["name"];
+            auto av = args["value"];
+            if (!an.error() && an.is_string() &&
+                an.get_string().value_unsafe() == "app" && !av.error() &&
+                av.is_string()) {
+                auto pid =
+                    static_cast<std::int64_t>(json_number(pp.value_unsafe()));
+                b.cm_app[w].emplace(
+                    pid, std::string(av.get_string().value_unsafe()));
             }
         }
         return;
@@ -1793,6 +1859,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     b.sh_parts.resize(slots);
     b.app_start.resize(slots);
     b.app_end.resize(slots);
+    b.cm_app.resize(slots);
     b.long_evs.resize(slots);
     b.cols.resize(slots);
     b.col_seen.resize(slots);
@@ -1805,6 +1872,9 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     ViewDefinition view;
     view.name = "viz_summary";
     view.description = "Activity summary build";
+    // The summary aggregates all hash metadata (hosts, file paths); traces
+    // whose data events carry no hash args would otherwise never surface it.
+    view.with_emit_all_metadata(true);
     std::vector<const TraceIndex::FileInfo*> files;
     files.reserve(index.files().size());
     for (const auto& f : index.files()) files.push_back(&f);
@@ -2015,6 +2085,9 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             for (auto& kv : part) starts.emplace(kv.first, kv.second);
         for (auto& part : b.app_end)
             for (auto& kv : part) ends.emplace(kv.first, kv.second);
+        ankerl::unordered_dense::map<std::int64_t, std::string> cm_apps;
+        for (auto& part : b.cm_app)
+            for (auto& kv : part) cm_apps.emplace(kv.first, kv.second);
 
         auto resolve = [](dftracer::utils::StringViewMap<std::string>& tbl,
                           const std::string& h) -> std::string {
@@ -2063,6 +2136,10 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             std::string date = sarg(se, "date");
             auto ppid = static_cast<std::int64_t>(narg(se, "ppid"));
             auto num_events = static_cast<std::int64_t>(narg(ee, "num_events"));
+            if (app.empty()) {
+                auto ci = cm_apps.find(pid);
+                if (ci != cm_apps.end()) app = ci->second;
+            }
             if (app.empty()) app = "app " + std::to_string(pid);
 
             auto& jb = scratch_json_builder();
@@ -2272,6 +2349,10 @@ static coro::CoroTask<const VizSummary*> ensure_viz_summary(TraceIndex& index) {
     co_return s;
 }
 
+coro::CoroTask<void> prewarm_viz_summary(TraceIndex& index) {
+    co_await ensure_viz_summary(index);
+}
+
 // One aggregate row, uniform over the live-scan and summary paths.
 struct StatRow {
     const std::string* key;
@@ -2410,6 +2491,11 @@ static coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
 
     GroupBy group = parse_group_by(params.get("group"));
 
+    const std::string cache_key =
+        std::string(req.path) + "?" + params.canonical_key();
+    if (auto hit = index.viz_cache().get(cache_key))
+        co_return HttpResponse::ok(std::move(*hit));
+
     // Whole-trace, unfiltered Analyze: answer from the prebuilt summary (built
     // lazily here). Concurrent builds fall through to the live scan below.
     if (viz_stats_summary_eligible(params, begin, end, index)) {
@@ -2434,6 +2520,7 @@ static coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
 
     // Full detail for stats: no min-duration threshold.
     ViewDefinition view = build_viz_view(params, begin, end, 0);
+    view.with_include_metadata(false);  // aggregate only; skip ph=M records
 
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
@@ -2481,9 +2568,10 @@ static coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     });
 
     scale_stat_durations(rows, total_dur, index.time_metric());
-    co_return HttpResponse::ok(
-        serialize_stats_body(total_count, total_dur,
-                             original_end - original_begin, truncated, rows));
+    std::string body = serialize_stats_body(
+        total_count, total_dur, original_end - original_begin, truncated, rows);
+    if (!req.cancel_token.cancelled()) index.viz_cache().put(cache_key, body);
+    co_return HttpResponse::ok(std::move(body));
 }
 
 // GET /api/v1/viz/layers: whole-trace reference data - the operation-name ->
@@ -2540,9 +2628,7 @@ struct FlameNode {
 
 static bool parse_flame_ev(std::string_view event, FlameEv& out) {
     thread_local simdjson::dom::parser parser;
-    thread_local std::string buf;
-    buf.assign(event);
-    auto res = parser.parse(buf);
+    auto res = parser.parse(event.data(), event.size());
     if (res.error()) return false;
     auto root = res.value_unsafe();
     if (!root.is_object()) return false;
@@ -2791,6 +2877,9 @@ static coro::CoroTask<HttpResponse> handle_viz_calltree(
     }
 
     ViewDefinition view = build_viz_view(params, begin, end, 0);
+    // The flame tree keys on ts/dur containment and ignores ph=M metadata, so
+    // drop it at the reader to engage the no-metadata fast path.
+    view.with_include_metadata(false);
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
 
@@ -2802,6 +2891,11 @@ static coro::CoroTask<HttpResponse> handle_viz_calltree(
     bool scan_all_chunks = !params.get("file").empty();
     const std::int64_t cap =
         limit > 0 ? limit : std::numeric_limits<std::int64_t>::max();
+
+    const std::string cache_key =
+        std::string(req.path) + "?" + params.canonical_key();
+    if (auto hit = index.viz_cache().get(cache_key))
+        co_return HttpResponse::ok(std::move(*hit));
 
     static constexpr const char* CANCELLED_TREE =
         R"({"truncated":true,"tree":{"name":"all","total":0,"self":0,"count":0,"children":[]}})";
@@ -2890,7 +2984,9 @@ static coro::CoroTask<HttpResponse> handle_viz_calltree(
     b.append_colon();
     serialize_flame_node(b, arena, 0);
     b.end_object();
-    co_return HttpResponse::ok(std::string(b));
+    std::string body(b);
+    index.viz_cache().put(cache_key, body);
+    co_return HttpResponse::ok(std::move(body));
 }
 
 // One log-spaced duration bucket of the histogram response.
@@ -2950,10 +3046,16 @@ static coro::CoroTask<HttpResponse> handle_viz_histogram(
     }
 
     ViewDefinition view = build_viz_view(params, begin, end, 0);
+    view.with_include_metadata(false);  // aggregate only; skip ph=M records
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
     int nbuckets = params.get_int("buckets", 40);
     nbuckets = std::clamp(nbuckets, 4, 200);
+
+    const std::string cache_key =
+        std::string(req.path) + "?" + params.canonical_key();
+    if (auto hit = index.viz_cache().get(cache_key))
+        co_return HttpResponse::ok(std::move(*hit));
 
     std::vector<const TraceIndex::FileInfo*> target_files =
         select_viz_target_files(index, params, begin, end);
@@ -3008,7 +3110,10 @@ static coro::CoroTask<HttpResponse> handle_viz_histogram(
         sb.append_comma();
         sb.append_key_value("truncated", truncated);
         sb.end_object();
-        co_return HttpResponse::ok(std::string(sb));
+        std::string body(sb);
+        if (!req.cancel_token.cancelled())
+            index.viz_cache().put(cache_key, body);
+        co_return HttpResponse::ok(std::move(body));
     }
 
     std::size_t n = all.size();
@@ -3068,7 +3173,9 @@ static coro::CoroTask<HttpResponse> handle_viz_histogram(
     }
     sb.append_key_value("buckets", buckets);
     sb.end_object();
-    co_return HttpResponse::ok(std::string(sb));
+    std::string body(sb);
+    if (!req.cancel_token.cancelled()) index.viz_cache().put(cache_key, body);
+    co_return HttpResponse::ok(std::move(body));
 }
 
 // A density block as it appears in the response: the map key/aggregate pair
@@ -3240,6 +3347,13 @@ static std::string serve_density_from_summary(
     double original_begin, double original_end, double threshold,
     bool ts_normalized, std::uint64_t display_global_min,
     TraceIndex::TimeMetric metric) {
+    // normalize_event_ts subtracts a NATIVE-unit offset from the (native) event
+    // ts, but display_global_min is in us; recover the native value so long
+    // events aren't shifted off-screen on non-us traces (the us round-trip
+    // loses at most sub-us, invisible on the timeline).
+    const std::uint64_t native_global_min =
+        dftracer::utils::utilities::composites::dft::scale_between(
+            TraceIndex::TimeMetric::US, metric, display_global_min);
     auto pid_s = params.get("pid");
     auto tid_s = params.get("tid");
     bool has_pid = !pid_s.empty();
@@ -3354,7 +3468,7 @@ static std::string serve_density_from_summary(
         span_lanes.insert((sp.pid << 20) ^ sp.tid);
         spans.push_back(
             ts_normalized && display_global_min > 0
-                ? normalize_event_ts(sp.json, display_global_min, metric)
+                ? normalize_event_ts(sp.json, native_global_min, metric)
                 : sp.json);
     }
     // App spans get an injected depth 0; long events after them do not, so the
@@ -3365,7 +3479,7 @@ static std::string serve_density_from_summary(
         span_lanes.insert((sp->pid << 20) ^ sp->tid);
         spans.push_back(
             ts_normalized && display_global_min > 0
-                ? normalize_event_ts(sp->json, display_global_min, metric)
+                ? normalize_event_ts(sp->json, native_global_min, metric)
                 : sp->json);
     }
     // Folded child activity sits one row below its app span, matching the
@@ -3379,6 +3493,37 @@ static std::string serve_density_from_summary(
         spans, dens, original_begin, original_end, threshold, 0, false,
         ts_normalized, display_global_min, static_cast<double>(s.max_dur),
         metric, &span_depth);
+}
+
+// Canonicalize one group column: resolved.*/r.* aliases map to their hash
+// column and "args.x" to "x". Sets `rt` to the hash type when the canonical
+// column is a hash (so its values can be resolved to names for display).
+static std::string canonicalize_group_col(
+    std::string col,
+    std::optional<utilities::indexer::IndexDatabase::HashType>& rt) {
+    using HashType = utilities::indexer::IndexDatabase::HashType;
+    if (col.rfind("args.", 0) == 0 && col.find('.', 5) == std::string::npos)
+        col = col.substr(5);
+    auto is = [&](std::string_view a) { return col == a; };
+    if (is("resolved.fpath") || is("r.fpath"))
+        col = "fhash";
+    else if (is("resolved.cwd") || is("r.cwd"))
+        col = "cwd";
+    else if (is("resolved.hostname") || is("r.hostname") ||
+             is("resolved.host") || is("r.host"))
+        col = "hhash";
+    else if (is("resolved.exec") || is("r.exec"))
+        col = "exec_hash";
+    else if (is("resolved.cmd") || is("r.cmd"))
+        col = "cmd_hash";
+    rt = std::nullopt;
+    if (col == "fhash" || col == "cwd")
+        rt = HashType::FILE;
+    else if (col == "hhash")
+        rt = HashType::HOST;
+    else if (col == "shash" || col == "exec_hash" || col == "cmd_hash")
+        rt = HashType::STRING;
+    return col;
 }
 
 // GET /api/v1/viz/density: like /viz/events, but instead of dropping sub-pixel
@@ -3408,45 +3553,42 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
     // event field is fine (all blocks land in the client's "(none)" group);
     // only malformed names are rejected.
     std::string group_col(params.get("group_by"));
-    if (group_col.size() > 64)
+    if (group_col.size() > 128)
         co_return HttpResponse::bad_request("group_by too long");
     for (char c : group_col) {
         if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' &&
-            c != '.' && c != '-')
+            c != '.' && c != '-' && c != ',')
             co_return HttpResponse::bad_request("Invalid group_by column");
     }
 
     // Hash columns auto-resolve for display: group values stay raw hashes, and
     // a group_names map (hash -> resolved name) rides along in the metadata.
-    // resolved.*/r.* aliases from the query DSL map to their hash columns.
+    // resolved.*/r.* aliases map to their hash columns. group_by may list
+    // several comma-separated columns; canonicalize each and record its hash
+    // type so the composite value's components resolve independently.
     using HashType = utilities::indexer::IndexDatabase::HashType;
-    std::optional<HashType> resolve_type;
+    std::vector<std::optional<HashType>> resolve_types;
     {
-        // "args.fhash" behaves like "fhash": bare names fall back into args
-        // during extraction, and the resolve mapping matches either spelling.
-        if (group_col.rfind("args.", 0) == 0 &&
-            group_col.find('.', 5) == std::string::npos)
-            group_col = group_col.substr(5);
-        auto is = [&](std::string_view a) { return group_col == a; };
-        if (is("resolved.fpath") || is("r.fpath"))
-            group_col = "fhash";
-        else if (is("resolved.cwd") || is("r.cwd"))
-            group_col = "cwd";
-        else if (is("resolved.hostname") || is("r.hostname") ||
-                 is("resolved.host") || is("r.host"))
-            group_col = "hhash";
-        else if (is("resolved.exec") || is("r.exec"))
-            group_col = "exec_hash";
-        else if (is("resolved.cmd") || is("r.cmd"))
-            group_col = "cmd_hash";
-        if (group_col == "fhash" || group_col == "cwd")
-            resolve_type = HashType::FILE;
-        else if (group_col == "hhash")
-            resolve_type = HashType::HOST;
-        else if (group_col == "shash" || group_col == "exec_hash" ||
-                 group_col == "cmd_hash")
-            resolve_type = HashType::STRING;
+        std::string rebuilt;
+        std::size_t start = 0;
+        while (start <= group_col.size()) {
+            auto comma = group_col.find(',', start);
+            std::string part(group_col.substr(
+                start, comma == std::string::npos ? group_col.size() - start
+                                                  : comma - start));
+            std::optional<HashType> rt;
+            std::string canon = canonicalize_group_col(std::move(part), rt);
+            if (!rebuilt.empty()) rebuilt.push_back(',');
+            rebuilt += canon;
+            resolve_types.push_back(rt);
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+        group_col = std::move(rebuilt);
     }
+    bool any_resolve = false;
+    for (const auto& rt : resolve_types)
+        if (rt) any_resolve = true;
 
     auto ts_norm_param = params.get("ts_normalize");
     bool normalize = ts_norm_param.empty() || ts_norm_param != "0";
@@ -3476,6 +3618,11 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
         duration_threshold(begin, end, static_cast<unsigned>(summary),
                            static_cast<unsigned>(width));
 
+    const std::string cache_key =
+        std::string(req.path) + "?" + params.canonical_key();
+    if (auto hit = index.viz_cache().get(cache_key))
+        co_return HttpResponse::ok(std::move(*hit));
+
     // Unfiltered views come from the prebuilt summary pyramid (no event cap),
     // built lazily here; concurrent requests fall through to a live scan, as do
     // zooms finer than the pyramid's finest level.
@@ -3502,9 +3649,15 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
         threshold = (end - begin) / static_cast<double>(width);
 
     // Enclosing events are fetched by a separate pass (below) so a large
-    // `lookback` can never starve the in-window scan's budget.
+    // `lookback` can never starve the in-window scan's budget. lookback arrives
+    // in us; convert to the trace's native unit so scan_begin (native) is right
+    // - otherwise on non-us traces the scan-back is off by the unit scale and
+    // long events that enclose the window are never read.
     double lookback = params.get_double("lookback", 0);
     if (lookback < 0) lookback = 0;
+    if (lookback > 0 && index.time_metric() != TraceIndex::TimeMetric::US)
+        lookback = static_cast<double>(
+            index.us_to_native(static_cast<std::uint64_t>(lookback)));
 
     // The client feeds back the longest event in the trace as `lookback`, so
     // honoring it literally rescans everything before the window. Anything that
@@ -3551,6 +3704,7 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
         }
     };
     ViewDefinition win_view = build_viz_view(params, begin, end, 0);
+    win_view.with_include_metadata(false);  // aggregate only; skip ph=M records
     std::vector<const TraceIndex::FileInfo*> win_files =
         select_viz_target_files(index, params, begin, end);
     bool single_file = !params.get("file").empty();
@@ -3581,6 +3735,7 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
             }
         };
         ViewDefinition enc_view = build_viz_view(params, scan_begin, begin, 0);
+        enc_view.with_include_metadata(false);  // aggregate only; skip ph=M
         std::vector<const TraceIndex::FileInfo*> enc_files =
             select_viz_target_files(index, params, scan_begin, begin);
         bool enc_trunc = co_await scan_view_events(
@@ -3658,19 +3813,34 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
     // groups actually present; unresolvable hashes fall back to the raw value
     // on the client.
     ankerl::unordered_dense::map<std::string, std::string> group_names;
-    if (resolve_type && !group_col.empty()) {
-        ankerl::unordered_dense::set<std::string> raw_groups;
+    if (any_resolve && !group_col.empty()) {
+        // Split each composite group key into its per-column components and
+        // collect the ones from hash columns; resolve each distinct hash once.
+        ankerl::unordered_dense::map<std::string, HashType> to_resolve;
+        auto collect = [&](std::string_view composite) {
+            std::size_t start = 0, idx = 0;
+            while (start <= composite.size() && idx < resolve_types.size()) {
+                auto sep = composite.find(GROUP_SEP, start);
+                auto part =
+                    composite.substr(start, sep == std::string_view::npos
+                                                ? composite.size() - start
+                                                : sep - start);
+                if (resolve_types[idx] && !part.empty())
+                    to_resolve.emplace(std::string(part), *resolve_types[idx]);
+                ++idx;
+                if (sep == std::string_view::npos) break;
+                start = sep + 1;
+            }
+        };
         for (const auto& [k, a] : dens)
-            if (!k.group.empty()) raw_groups.insert(k.group);
+            if (!k.group.empty()) collect(k.group);
         for (const auto& e : big) {
             auto g = extract_group_from_line(e, group_col);
-            if (!g.empty()) raw_groups.insert(std::move(g));
+            if (!g.empty()) collect(g);
         }
-        // One lookup per group value: reading whole hash tables costs the
-        // trace's entire file list.
-        for (const auto& g : raw_groups) {
-            auto name = index.resolve_hash(*resolve_type, g);
-            if (!name.empty()) group_names.emplace(g, std::move(name));
+        for (const auto& [hash, type] : to_resolve) {
+            auto name = index.resolve_hash(type, hash);
+            if (!name.empty()) group_names.emplace(hash, std::move(name));
         }
     }
 
@@ -3683,11 +3853,13 @@ static coro::CoroTask<HttpResponse> handle_viz_density(
             e = normalize_event_ts(e, global_min, index.time_metric());
     }
 
-    co_return HttpResponse::ok(serialize_density_body(
+    std::string body = serialize_density_body(
         big, dens, original_begin, original_end, threshold, limit, truncated,
         global_min > 0, index.native_to_us(index.global_min_timestamp_us()),
         max_dur, index.time_metric(), &big_depth,
-        group_names.empty() ? nullptr : &group_names));
+        group_names.empty() ? nullptr : &group_names);
+    if (!req.cancel_token.cancelled()) index.viz_cache().put(cache_key, body);
+    co_return HttpResponse::ok(std::move(body));
 }
 
 static std::string serialize_counters_body(const std::vector<double>& read,
@@ -3794,6 +3966,11 @@ static coro::CoroTask<HttpResponse> handle_viz_counters(
     double bucket_us = (end - begin) / static_cast<double>(buckets);
     if (bucket_us <= 0) bucket_us = 1;
 
+    const std::string cache_key =
+        std::string(req.path) + "?" + params.canonical_key();
+    if (auto hit = index.viz_cache().get(cache_key))
+        co_return HttpResponse::ok(std::move(*hit));
+
     // Zoomed-out, unfiltered counter tracks come from the activity summary.
     if (viz_summary_eligible(params)) {
         const VizSummary* s = co_await ensure_viz_summary(index);
@@ -3807,6 +3984,7 @@ static coro::CoroTask<HttpResponse> handle_viz_counters(
     }
 
     ViewDefinition view = build_viz_view(params, begin, end, 0);
+    view.with_include_metadata(false);  // aggregate only; skip ph=M records
     // No cap: only zoomed-in or filtered counter queries reach the live path.
     int limit = params.get_int("limit", 0);
     if (limit < 0) limit = 0;
@@ -3834,13 +4012,15 @@ static coro::CoroTask<HttpResponse> handle_viz_counters(
     total.init(static_cast<std::size_t>(buckets));
     for (auto& a : accs) total.merge_from(a);
 
-    co_return HttpResponse::ok(serialize_counters_body(
+    std::string body = serialize_counters_body(
         total.read_bytes, total.write_bytes, total.ops, original_begin,
         original_end, buckets,
         bucket_us *
             dftracer::utils::utilities::composites::dft::time_metric_us_scale(
                 index.time_metric()),
-        truncated));
+        truncated);
+    if (!req.cancel_token.cancelled()) index.viz_cache().put(cache_key, body);
+    co_return HttpResponse::ok(std::move(body));
 }
 
 // Process-spawning calls: dftracer POSIX (exact "fork"/"clone"/...) and kernel
@@ -4161,7 +4341,7 @@ static coro::CoroTask<HttpResponse> handle_viz_proctree(
         auto ib = io_busy.find(pid);
         auto rk = rank.find(pid);
         nodes.push_back({pid, parent, index.native_to_us(spawn_ts),
-                         index.native_to_us(fts - base), host,
+                         index.native_to_us(fts > base ? fts - base : 0), host,
                          bp != bytes.end() ? bp->second : 0,
                          op != io_ops.end() ? op->second : 0,
                          (ib != io_busy.end() ? ib->second : 0.0) * proc_dur_us,

@@ -2,6 +2,8 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_ROLLUP_STORE_H
 
 #include <dftracer/utils/core/rocksdb/database.h>
+#include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 
 #include <cstdint>
@@ -21,35 +23,34 @@ namespace dftracer::utils::trace::views::detail {
 std::string rollup_row_key(std::uint64_t sig, std::string_view group_key);
 std::string rollup_desc_key(std::uint64_t sig);
 
-/// Combine `sa` into `da` positionally (no plan): rows under one signature
-/// share a schema, so field/argmax/sketch vectors align by index; an empty `da`
-/// adopts `sa`. Reduces distributed partials app-side before they are written.
-void merge_accum_free(AggAccum& da, const AggAccum& sa);
-
 /// Open (or reuse) the index DB at `index_path` for rollup access. The rollup
 /// CF has no merge operator, so the index's standard open serves it.
 std::shared_ptr<dftracer::utils::rocksdb::RocksDatabase> open_rollup_db(
     const std::string& index_path,
     dftracer::utils::rocksdb::RocksDatabase::OpenMode mode);
 
-/// Persist `map` as the rollup identified by `sig`: one Put per group, plus a
-/// descriptor recording the view's shape (`rest_sig` = the plan hash excluding
-/// group_by, `time_bucket_us` = the rollup's time grain for coarsening, and
-/// `group_by` itself) so the planner can test subsumption. `map` must already
-/// be the complete, merged result - distributed callers reduce partials with
-/// merge_accum_free first.
+/// Persist the engine partial `state` as the rollup identified by `sig`: one
+/// Put per group holding that group's serialized AggState (agg_extract_group +
+/// agg_serialize, the same blob spill writes), plus a descriptor recording the
+/// view's shape (`rest_sig` = the plan hash excluding group_by,
+/// `time_bucket_us` = the rollup's time grain for coarsening, and `group_by`
+/// itself) so the planner can test subsumption. `state`'s key layout must be
+/// [time_bucket?, group_by...]; a read-back re-aggregates the per-group
+/// partials with agg_merge / agg_regroup.
 void persist_rollup(dftracer::utils::rocksdb::RocksDatabase& db,
                     std::uint64_t sig, std::uint64_t rest_sig,
                     std::uint64_t time_bucket_us,
-                    const std::vector<GroupKey>& group_by, const GroupMap& map);
+                    const std::vector<GroupKey>& group_by,
+                    const dftracer::utils::dataframe::AggState& state);
 
 /// True if a rollup for `sig` has been persisted.
 bool rollup_exists(const dftracer::utils::rocksdb::RocksDatabase& db,
                    std::uint64_t sig);
 
-/// Read the rollup for `sig` back into a GroupMap (empty if absent).
-GroupMap read_rollup(const dftracer::utils::rocksdb::RocksDatabase& db,
-                     std::uint64_t sig);
+/// Read every per-group blob for `sig` back into one merged fine-grain AggState
+/// (key layout [time_bucket?, group_by...]), or null if the rollup is empty.
+dftracer::utils::dataframe::AggStatePtr read_rollup(
+    const dftracer::utils::rocksdb::RocksDatabase& db, std::uint64_t sig);
 
 /// A materialized view's identity: a stable hash over the plan's file set and
 /// query shape. Per-rank scans of the same plan share it, so their partials
@@ -61,12 +62,14 @@ std::uint64_t plan_signature(const ViewPlan& plan);
 /// the other by re-aggregating (and re-bucketing to a coarser grain).
 std::uint64_t rest_signature(const ViewPlan& plan);
 
-/// Find a stored rollup that subsumes `plan` and return its rows re-aggregated
-/// to `plan`'s grouping, or nullopt. A rollup R subsumes plan Q when they share
-/// a rest_signature (same files/filter/agg/window) and Q's group keys are a
-/// subset of R's - then Q is R rolled up over the dropped dimensions. Exact
-/// match is the identity case. This is the materialized-view query rewrite.
-std::optional<GroupMap> find_subsuming_rollup(
+/// Find a stored rollup that subsumes `plan`, re-aggregate its AggState
+/// partials to `plan`'s grouping (agg_regroup + agg_merge), and finalize to the
+/// result DataFrame (finalize_engine_result), or nullopt. A rollup R subsumes
+/// plan Q when they share a rest_signature (same files/filter/agg/window) and
+/// Q's group keys are a subset of R's - then Q is R rolled up over the dropped
+/// dimensions. Exact match is the identity case. This is the materialized-view
+/// query rewrite.
+std::optional<dftracer::utils::dataframe::DataFrame> find_subsuming_rollup(
     const dftracer::utils::rocksdb::RocksDatabase& db, const ViewPlan& plan);
 
 /// The index that anchors `plan`'s rollup: its shared aggregation index (all

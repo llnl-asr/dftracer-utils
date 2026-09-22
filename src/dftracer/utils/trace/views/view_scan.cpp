@@ -72,9 +72,16 @@ ViewDefinition make_vdef(const ViewPlan& plan, bool for_aggregation) {
         const bool wants_metadata = plan.phase == Phase::Metadata;
         vdef.include_metadata = wants_rank || wants_metadata;
         vdef.emit_all_metadata = wants_rank || wants_metadata;
+        // Never filter metadata during a rank harvest: its PR records must
+        // survive the event query to build the pid -> rank map.
+        vdef.filter_metadata = wants_metadata && !wants_rank;
     } else {
+        // phase("metadata") reads the metadata records as rows: emit every one
+        // (hash records included) and apply the query to them.
+        const bool wants_metadata = plan.phase == Phase::Metadata;
         vdef.include_metadata = plan.include_metadata;
-        vdef.emit_all_metadata = plan.emit_all_metadata;
+        vdef.emit_all_metadata = plan.emit_all_metadata || wants_metadata;
+        vdef.filter_metadata = wants_metadata;
     }
     return vdef;
 }

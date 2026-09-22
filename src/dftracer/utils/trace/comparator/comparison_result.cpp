@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/hash_combine.h>
+#include <dftracer/utils/core/common/hash/hash_combine.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -40,7 +40,7 @@ TraceMetadata extract_metadata(const StringIntern& intern,
         // 0 means no associated file (e.g. metadata events).
         if (key.fhash != 0) {
             fhashes.insert(key.fhash);
-            pid_fhashes.insert(key.fhash ^ (key.pid * 0x9E3779B97F4A7C15ULL));
+            pid_fhashes.insert(key.fhash ^ (key.pid * hash::GOLDEN_RATIO));
         }
 
         meta.total_io_time_us += static_cast<double>(metrics.duration.total());

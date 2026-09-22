@@ -4,7 +4,6 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/coro/when_all.h>
 #include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstddef>
@@ -50,8 +49,8 @@ class CompareView {
     coro::CoroTask<dataframe::DataFrame> collect() const {
         // Both sides aggregate concurrently: two pruned scans, one when_all.
         auto [base, variant] = co_await coro::when_all(
-            baseline_.group_by(group_by_).agg(agg_).collect(),
-            variant_.group_by(group_by_).agg(agg_).collect());
+            baseline_.group_by(group_by_).agg(agg_).collect().collect(),
+            variant_.group_by(group_by_).agg(agg_).collect().collect());
         co_return compare_batches(base, variant,
                                   static_cast<std::int64_t>(group_by_.size()));
     }
@@ -62,49 +61,12 @@ class CompareView {
     static dataframe::DataFrame compare_batches(
         const dataframe::DataFrame& base, const dataframe::DataFrame& variant,
         std::int64_t n_key) {
-        dataframe::DataFrame joined =
-            views::join_batches(base, variant, n_key, views::JoinType::FULL);
-
-        // Each numeric metric shows up as an l_<m>/r_<m> pair after the join
-        // (the group-key columns keep their names). Derive the metrics from the
-        // join output rather than the agg spec, whose out_name may be empty.
-        std::vector<std::string> metrics;
-        for (const std::string& name : joined.names) {
-            if (name.rfind("l_", 0) != 0) continue;
-            const std::string m = name.substr(2);
-            if (joined.column_index("r_" + m) >= 0) metrics.push_back(m);
-        }
-
-        for (const std::string& m : metrics) {
-            // The join's output columns are selections; the numeric kernels
-            // need flat inputs. Skip non-numeric metrics (e.g. set_union).
-            dataframe::Series l = joined.column("l_" + m).materialize();
-            if (l.type() == dataframe::TypeId::String) continue;
-            dataframe::Series r = joined.column("r_" + m).materialize();
-            dataframe::Series delta = r.sub(l);
-            dataframe::Series pct = percent_change(delta, l, joined.num_rows());
-            joined = joined.with_column("delta_" + m, delta);
-            joined = joined.with_column("pct_" + m, pct);
-        }
-        return joined;
+        return base.compare_agg(variant, n_key);
     }
 
    private:
     CompareView(views::View baseline, views::View variant)
         : baseline_(std::move(baseline)), variant_(std::move(variant)) {}
-
-    // 100 * (delta / baseline), columnwise in Float64; a zero baseline yields
-    // inf/nan per the division, the honest signal for "new in the variant".
-    static dataframe::Series percent_change(const dataframe::Series& delta,
-                                            const dataframe::Series& baseline,
-                                            std::int64_t n) {
-        std::vector<double> hundred(static_cast<std::size_t>(n), 100.0);
-        dataframe::Series scale =
-            dataframe::Series::flat_f64(hundred.data(), n);
-        dataframe::Series d = delta.cast(dataframe::TypeId::Float64);
-        dataframe::Series b = baseline.cast(dataframe::TypeId::Float64);
-        return d.div(b).mul(scale);
-    }
 
     views::View baseline_;
     views::View variant_;

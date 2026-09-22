@@ -9,8 +9,10 @@ namespace dftracer::utils::trace::views::detail {
 /// pre-folded per-key MetricStats), folding CF rows onto the plan's group_by.
 /// Returns false with `out` untouched when the tier cannot answer the plan
 /// exactly, so the caller scans instead. Event-exact: dur/size carry the stored
-/// power sum (m2) as sumsq. Requires plan.schema to be built.
-bool agg_tier_collect(const ViewPlan& plan, GroupMap& out);
+/// power sum (m2) as sumsq. `out` is the mergeable engine AggState (finalize
+/// with finalize_engine_result). Requires plan.schema to be built.
+bool agg_tier_collect(const ViewPlan& plan,
+                      dftracer::utils::dataframe::AggStatePtr& out);
 
 /// One-pass unified read of the EVENT and PROFILE maps from the aggregation
 /// tier. Profiles are events with extra epoch/step key dims (grouped via Arg

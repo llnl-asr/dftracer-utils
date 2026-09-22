@@ -1,9 +1,11 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_H
 
+#include <dftracer/utils/core/coro/async_generator.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field.h>
+#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/query/query.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/trace/views/result_join.h>
@@ -19,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -126,11 +129,10 @@ enum class AggOp {
     SetUnion,  ///< distinct string values of `field`, emitted as a delimiter-
                ///< joined text column (sorted)
     Busy,      ///< occupancy: wall-clock us at least one event was active
-               ///< (interval union via the per-bucket coverage mask)
+               ///< (exact interval union)
     Concurrency,  ///< average parallelism: sum(dur) / busy
     Utilization,  ///< busy / makespan (max_end - min_ts)
-    Active        ///< peak concurrent headcount: max over buckets of the number
-            ///< of events overlapping a bucket (resolution = bucket width)
+    Active        ///< peak concurrent headcount (exact max overlap depth)
 };
 
 /// True for the occupancy ops (busy/concurrency/utilization/active): time-
@@ -264,9 +266,20 @@ namespace detail {
 /// templates below build on are private members of View/ViewSession, defined
 /// in the .cpp - no engine surface is exposed in this public header.
 struct ViewPlan;
-class PartialSource;
 class Fold;
+class DynamicPrune;
 struct ViewSessionState;
+
+/// Phase 1 of the View -> dataframe engine aggregation convergence
+/// (view_agg_engine.h/.cpp); needs View's private constructor to build the
+/// raw row-query LazyFrame the streaming group_by runs over.
+coro::CoroTask<dftracer::utils::dataframe::DataFrame> run_collect_via_engine(
+    const ViewPlan& plan);
+
+// Builds the engine group-by inputs (and the raw scan View) for a plan; needs
+// View's private constructor.
+struct EnginePrep;
+coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan);
 }  // namespace detail
 
 /// A result handle from a ViewSession op, resolved when execute() completes.
@@ -298,6 +311,7 @@ class Deferred {
 };
 
 class View;
+class ViewSource;
 
 /// The two handles a single containment branch yields from one buffered fold.
 struct ContainmentHandles {
@@ -319,7 +333,7 @@ class ViewSession {
         std::vector<AggSpec> agg);
 
     /// Aggregate ALL of the base view's events (no per-branch predicate) into a
-    /// /// Batch. For a branch that wants every scanned event, so several
+    /// DataFrame. For a branch that wants every scanned event, so several
     /// distinct group_by/agg aggregations share the one scan.
     Deferred<dftracer::utils::dataframe::DataFrame> collect(
         std::vector<GroupKey> group_by, std::vector<AggSpec> agg);
@@ -389,9 +403,9 @@ class ViewSession {
         Deferred<dftracer::utils::dataframe::DataFrame> variant,
         std::int64_t n_key = -1);
 
-    /// Fold the branch's matching events into a caller partial `P`, reduced
-    /// across slots by `combine`. The fold gets the parsed event (no re-parse)
-    /// and its raw JSON bytes (for verbatim passthrough). `P` must be
+    /// Fold the branch's matching events into a caller partial `P`, one per
+    /// scan worker, reduced by `combine`. The fold gets the parsed event (no
+    /// re-parse) and its raw JSON bytes (for verbatim passthrough). `P` must be
     /// default-constructible and a default `P` the identity of combine.
     template <class P>
     Deferred<P> fold(
@@ -399,16 +413,20 @@ class ViewSession {
         std::function<void(P&, const json::JsonValue&, std::string_view)> f,
         std::function<P(P&&, P&&)> combine) {
         auto out = std::make_shared<P>();
-        auto partials = std::make_shared<std::vector<P>>(num_slots_);
+        auto partials = std::make_shared<std::vector<std::shared_ptr<P>>>();
         attach_fold(
             std::move(predicate),
-            [f = std::move(f), partials](
-                std::size_t slot, const json::JsonValue& jv,
-                std::string_view raw) { f((*partials)[slot], jv, raw); },
+            [f, partials]() {
+                auto p = std::make_shared<P>();
+                partials->push_back(p);
+                return [f, p](const json::JsonValue& jv, std::string_view raw) {
+                    f(*p, jv, raw);
+                };
+            },
             [partials, out, combine = std::move(combine)]() {
-                P acc = std::move((*partials)[0]);
-                for (std::size_t i = 1; i < partials->size(); ++i)
-                    acc = combine(std::move(acc), std::move((*partials)[i]));
+                P acc{};
+                for (const auto& p : *partials)
+                    acc = combine(std::move(acc), std::move(*p));
                 *out = std::move(acc);
             });
         return {out, executed_};
@@ -433,6 +451,13 @@ class ViewSession {
                                  make,
                              std::function<void()> finalize);
 
+    /// Offer `q` as a narrowing of this session's shared scan, so the index can
+    /// skip chunks the attached fold does not want. APPLIED ONLY when no other
+    /// branch is registered: the scan feeds every branch, so narrowing it for
+    /// one would starve the rest. execute() decides, because branches may be
+    /// added after this call and only it knows the final set.
+    void propose_base_prune(Query q);
+
     /// Scan the base once and run every attached branch, resolving every
     /// Deferred handle returned above.
     coro::CoroTask<ExportStats> execute();
@@ -441,12 +466,14 @@ class ViewSession {
     friend class View;
     explicit ViewSession(std::shared_ptr<const detail::ViewPlan> plan);
     /// Type-erased seam behind fold(): attach one branch to the run. The engine
-    /// (BranchHooks etc.) stays internal; defined in the .cpp.
-    void attach_fold(Query predicate,
-                     std::function<void(std::size_t, const json::JsonValue&,
-                                        std::string_view)>
-                         consume,
-                     std::function<void()> finalize);
+    /// (BranchHooks etc.) stays internal; defined in the .cpp. `make_consumer`
+    /// is called once per scan worker, serially, before the scan starts.
+    void attach_fold(
+        Query predicate,
+        std::function<
+            std::function<void(const json::JsonValue&, std::string_view)>()>
+            make_consumer,
+        std::function<void()> finalize);
     /// Look up the leading key-column count recorded for a collect branch's
     /// output, or -1 if that output was not a collect() of this session.
     std::int64_t key_count_of(const void* out) const;
@@ -455,7 +482,6 @@ class ViewSession {
         const std::string& ts, const std::string& dur, const std::string& name,
         std::shared_ptr<dftracer::utils::dataframe::DataFrame> out_ct,
         std::shared_ptr<dftracer::utils::dataframe::DataFrame> out_fg);
-    std::size_t num_slots_;
     std::shared_ptr<detail::ViewSessionState> state_;
     std::shared_ptr<bool> executed_ = std::make_shared<bool>(false);
     /// Leading key-column count per collect branch, keyed by its output
@@ -584,9 +610,6 @@ class View {
     /// Harvest every hash-metadata (FH/HH/SH) record even when no scanned event
     /// references it (default: off). For whole-trace metadata collection.
     View emit_all_metadata(bool v) const;
-    /// Use a materialized-aggregate source for collect() when the
-    /// aggregation is reducible (covered chunks answered without decode).
-    View with_partial_source(const detail::PartialSource* source) const;
     /// Override the root directory for the aggregation cache (persist/
     /// reconstruct); empty derives it from the files' index location.
     View rollup_root(std::string dir) const;
@@ -647,9 +670,35 @@ class View {
     /// column from a pre-v12 index that stored no type reads as "string".
     std::vector<ColumnInfo> schema() const;
 
-    /// Run group_by + agg, returning a columnar dataframe::DataFrame. No agg
-    /// counts per group; no group_by folds the whole set into one row.
-    coro::CoroTask<dftracer::utils::dataframe::DataFrame> collect() const;
+    /// As schema(), keyed by name with the full dataframe::TypeId rather than
+    /// schema()'s type-name string. Used internally so a flattened
+    /// "args.<key>" column can report its concrete harvested type instead of
+    /// TypeId::Unknown.
+    std::unordered_map<std::string, dataframe::TypeId> column_types() const;
+
+    /// The trace's native time unit, from the CM metadata record: a head-read
+    /// of the first file only, no scan. US when the view has no files or the
+    /// first file carries no CM record.
+    TimeMetric time_metric() const;
+
+    /// Run group_by + agg, returning a LazyFrame over the deferred scan. No
+    /// agg counts per group; no group_by folds the whole set into one row.
+    /// Builds the plan only; the scan runs on the LazyFrame's collect().
+    dftracer::utils::dataframe::LazyFrame collect() const;
+
+    /// Streaming terminal over collect()'s LazyFrame: each yielded DataFrame
+    /// is a standalone chunk of at most `morsel_rows` rows (<= 0 means auto).
+    /// One-shot; re-call to restart. Drains this to get collect()'s result.
+    coro::AsyncGenerator<dftracer::utils::dataframe::DataFrame> stream(
+        std::int64_t morsel_rows = 0) const;
+
+    /// The eager scan behind collect(). Public for ViewSource; prefer
+    /// collect() otherwise.
+    coro::CoroTask<dftracer::utils::dataframe::DataFrame> collect_frame() const;
+
+    /// True when collect() answers a raw-event row query (no group_by/agg),
+    /// as opposed to an aggregation. Public for ViewSource.
+    bool is_row_query() const;
 
     /// Containment terminals over one scan. `partition` names the lane keys;
     /// `ts`/`dur`/`name` name the interval and label fields (any field - a POD
@@ -782,9 +831,20 @@ class View {
 
     /// Run caller-owned folds over one fused scan, sharing `intern` so their
     /// ids agree and per-worker slices merge. The seam behind the plugin host.
+    /// `dyn_prune` (optional) is the narrowing state behind
+    /// dataframe::Cursor::narrow(); a fold has no reason to pass one itself -
+    /// it is for a scan-owning Cursor (ViewSource's streaming cursor) that
+    /// wants a later narrow() call to prune units this scan has not claimed
+    /// yet.
     coro::CoroTask<ExportStats> run_folds(
         std::span<detail::Fold* const> folds,
-        dftracer::utils::StringIntern& intern) const;
+        dftracer::utils::StringIntern& intern,
+        detail::DynamicPrune* dyn_prune = nullptr) const;
+
+    /// The built plan. Exposes the internal representation so a caller can
+    /// drive the dataframe-engine collection paths directly
+    /// (see view_executor.h / view_agg_engine.h); not otherwise needed.
+    const detail::ViewPlan& plan() const { return *plan_; }
 
    protected:
     /// Rollup terminals, reachable only through AggregatedView (which promotes
@@ -802,6 +862,11 @@ class View {
 
    private:
     friend class ViewSession;
+    friend class ViewSource;
+    friend coro::CoroTask<dftracer::utils::dataframe::DataFrame>
+    detail::run_collect_via_engine(const detail::ViewPlan& plan);
+    friend coro::CoroTask<detail::EnginePrep> detail::prepare_engine_group(
+        const detail::ViewPlan& plan);
     explicit View(std::shared_ptr<const detail::ViewPlan> plan);
 };
 
@@ -897,10 +962,6 @@ class AggregatedView : public View {
     }
     AggregatedView emit_all_metadata(bool v) const {
         return {View::emit_all_metadata(v)};
-    }
-    AggregatedView with_partial_source(
-        const detail::PartialSource* source) const {
-        return {View::with_partial_source(source)};
     }
     AggregatedView rollup_root(std::string dir) const {
         return {View::rollup_root(std::move(dir))};

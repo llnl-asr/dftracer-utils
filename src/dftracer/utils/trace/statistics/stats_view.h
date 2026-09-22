@@ -82,7 +82,7 @@ class StatsView {
     }
 
     coro::CoroTask<std::vector<StatCount>> pid_tid_counts() const {
-        dataframe::DataFrame b = co_await pid_agg().collect();
+        dataframe::DataFrame b = co_await pid_agg().collect().collect();
         const dataframe::Series& n = b.columns[col(b, "n")];
         const dataframe::Series& pid = b.columns[0];
         const dataframe::Series& tid = b.columns[1];
@@ -266,7 +266,7 @@ class StatsView {
     }
 
     coro::CoroTask<std::vector<StatCount>> group_counts(views::View v) const {
-        dataframe::DataFrame b = co_await v.collect();
+        dataframe::DataFrame b = co_await v.collect().collect();
         const dataframe::Series& n = b.columns[col(b, "n")];
         std::vector<StatCount> out;
         out.reserve(static_cast<std::size_t>(b.num_rows()));

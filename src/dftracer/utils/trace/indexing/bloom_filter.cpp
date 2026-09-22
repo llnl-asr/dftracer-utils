@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/hash/constants.h>
 #include <dftracer/utils/core/common/little_endian.h>
 #include <dftracer/utils/trace/indexing/bloom_filter.h>
 
@@ -107,12 +108,12 @@ void BloomFilter::compute_hashes(std::string_view value, std::uint64_t& h1,
     // breaks Lemire reduction in the blocked path. Run a SplitMix64-style
     // finisher to fully avalanche, then derive a second hash for masking.
     h1 = raw;
-    h1 = (h1 ^ (h1 >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    h1 = (h1 ^ (h1 >> 27)) * 0x94d049bb133111ebULL;
+    h1 = (h1 ^ (h1 >> 30)) * hash::SPLITMIX64_MUL1;
+    h1 = (h1 ^ (h1 >> 27)) * hash::SPLITMIX64_MUL2;
     h1 ^= (h1 >> 31);
-    h2 = raw + 0x9e3779b97f4a7c15ULL;
-    h2 = (h2 ^ (h2 >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    h2 = (h2 ^ (h2 >> 27)) * 0x94d049bb133111ebULL;
+    h2 = raw + hash::GOLDEN_RATIO;
+    h2 = (h2 ^ (h2 >> 30)) * hash::SPLITMIX64_MUL1;
+    h2 = (h2 ^ (h2 >> 27)) * hash::SPLITMIX64_MUL2;
     h2 ^= (h2 >> 31);
 }
 

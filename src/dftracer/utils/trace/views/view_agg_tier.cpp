@@ -4,9 +4,12 @@
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/core/common/no_destructor.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/rocksdb/db_manager.h>
+#include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/query/ast.h>
 #include <dftracer/utils/query/evaluator.h>
 #include <dftracer/utils/query/query.h>
@@ -15,6 +18,7 @@
 #include <dftracer/utils/trace/aggregators/aggregation_serialization.h>
 #include <dftracer/utils/trace/aggregators/system_metrics_serialization.h>
 #include <dftracer/utils/trace/internal/utils.h>
+#include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
@@ -131,11 +135,40 @@ bool query_answerable(const query::Query& q) {
     return cat_foldable(q.root());
 }
 
+// Ops the seed path can reconstruct from stored FieldStat + optional DDSketch.
+// Occupancy and ArgMax/SetUnion keep no such state, so they decline to the
+// scan. No default: -Wswitch flags a newly added op.
+bool tier_serves_op(AggOp op) {
+    switch (op) {
+        case AggOp::Count:
+        case AggOp::Sum:
+        case AggOp::Min:
+        case AggOp::Max:
+        case AggOp::Mean:
+        case AggOp::Var:
+        case AggOp::Std:
+        case AggOp::Skew:
+        case AggOp::Kurt:
+        case AggOp::SumSq:
+        case AggOp::Pct:
+        case AggOp::Hist:
+            return true;
+        case AggOp::ArgMax:
+        case AggOp::SetUnion:
+        case AggOp::Busy:
+        case AggOp::Concurrency:
+        case AggOp::Utilization:
+        case AggOp::Active:
+            return false;
+    }
+    return false;
+}
+
 // Agg ops + reduced fields the tier can serve, shared by the EVENT-only and the
 // unified events+profiles paths (which differ only on group-key allowances).
 bool aggs_and_fields_answerable(const ViewPlan& plan, const AggSchema& sch) {
     for (const auto& s : plan.agg) {
-        if (s.op == AggOp::ArgMax) return false;
+        if (!tier_serves_op(s.op)) return false;
         // Only dur/size persist m3/m4 and a DDSketch; skew/kurtosis,
         // percentiles and histograms on any other field must scan.
         if ((s.op == AggOp::Skew || s.op == AggOp::Kurt || s.op == AggOp::Pct ||
@@ -145,6 +178,12 @@ bool aggs_and_fields_answerable(const ViewPlan& plan, const AggSchema& sch) {
         if (s.op == AggOp::Count && !s.field.empty()) return false;
         if (s.field == "ts" && s.op != AggOp::Min) return false;
         if (s.field == "te" && s.op != AggOp::Max) return false;
+        // The scan scales ts/dur/te by time_scale; the tier stores raw metrics,
+        // so a scaled-field agg would diverge. Decline it.
+        if (plan.time_scale != 1.0 &&
+            (s.field == "ts" || s.field == "dur" || s.field == "te" ||
+             s.by == "ts" || s.by == "dur" || s.by == "te"))
+            return false;
     }
     for (const auto& f : sch.fields)
         if (!answerable_field(f)) return false;
@@ -337,7 +376,18 @@ std::shared_ptr<const TierCache> build_tier_cache(const std::string& index_path,
 }
 
 std::shared_mutex g_tier_mtx;
-std::unordered_map<std::string, std::shared_ptr<const TierCache>> g_tier_cache;
+
+// Never destructed: entries hold open RocksDB handles, and running this map's
+// destructor at process exit races RocksDB's own static teardown (SyncPoint)
+// -> heap-use-after-free. clear_tier_cache() (a rocksdb pre-exit hook) empties
+// it cleanly during orderly shutdown instead.
+std::unordered_map<std::string, std::shared_ptr<const TierCache>>&
+tier_cache_map() {
+    static dftracer::utils::NoDestructor<
+        std::unordered_map<std::string, std::shared_ptr<const TierCache>>>
+        m;
+    return *m;
+}
 
 // The cache holds each index's read-only agg DB open for reuse. It is dropped
 // from a rocksdb pre-exit cleanup (see register_pre_exit_cleanup) so the DBs
@@ -345,12 +395,12 @@ std::unordered_map<std::string, std::shared_ptr<const TierCache>> g_tier_cache;
 // plain std::atexit would run too late and leak them via that abandon path.
 void clear_tier_cache() {
     std::unique_lock<std::shared_mutex> lk(g_tier_mtx);
-    g_tier_cache.clear();
+    tier_cache_map().clear();
 }
 
 void evict_tier_cache(const std::string& index_path) {
     std::unique_lock<std::shared_mutex> lk(g_tier_mtx);
-    g_tier_cache.erase(index_path);
+    tier_cache_map().erase(index_path);
 }
 
 std::shared_ptr<const TierCache> tier_cache(const std::string& index_path) {
@@ -366,8 +416,8 @@ std::shared_ptr<const TierCache> tier_cache(const std::string& index_path) {
     const std::int64_t mtime = current_mtime(index_path);
     {
         std::shared_lock<std::shared_mutex> rlk(g_tier_mtx);
-        if (auto it = g_tier_cache.find(index_path);
-            it != g_tier_cache.end() && it->second->mtime == mtime)
+        if (auto it = tier_cache_map().find(index_path);
+            it != tier_cache_map().end() && it->second->mtime == mtime)
             return it->second;
     }
     // Build outside the lock: build_tier_cache -> open_agg_db may reset() the
@@ -377,10 +427,11 @@ std::shared_ptr<const TierCache> tier_cache(const std::string& index_path) {
     // insert; last write wins and both hold the same data for this mtime.
     auto tc = build_tier_cache(index_path, mtime);
     std::unique_lock<std::shared_mutex> wlk(g_tier_mtx);
-    if (auto it = g_tier_cache.find(index_path);
-        it != g_tier_cache.end() && it->second->mtime == mtime)
+    if (auto it = tier_cache_map().find(index_path);
+        it != tier_cache_map().end() && it->second->mtime == mtime)
         return it->second;
-    g_tier_cache[index_path] = tc;  // replaces stale; old readers keep theirs
+    tier_cache_map()[index_path] =
+        tc;  // replaces stale; old readers keep theirs
     return tc;
 }
 
@@ -418,24 +469,82 @@ std::shared_ptr<const TierCache> covering_tier(const ViewPlan& plan) {
 
 }  // namespace
 
-static void fill_accum(AggAccum& a, const AggSchema& sch,
-                       const AggMetricsFullView& mv) {
-    a.count = mv.count;
-    a.fields.resize(sch.fields.size());
-    a.sketches.resize(sch.sketch_count);
-    for (std::size_t fi = 0; fi < sch.fields.size(); ++fi) {
-        fill_field(a.fields[fi], sch.fields[fi], mv);
-        const int sk = sch.field_sketch[fi];
-        if (sk < 0) continue;
-        const std::string_view blob =
-            sch.fields[fi] == "dur" ? mv.dur_sketch : mv.size_sketch;
-        if (!blob.empty())
-            a.sketches[sk] =
+namespace {
+
+// A value column the tier can fill from a stored MetricStats row: its AggState
+// value_col index and the base field (dur/size/offset/ts/te) whose stat feeds
+// it. Derived once per collect from the engine's lowered value column names.
+struct TierValueCol {
+    std::int32_t value_col;
+    std::string field;
+};
+
+std::vector<TierValueCol> tier_value_cols(
+    const std::vector<std::string>& value_names) {
+    std::vector<TierValueCol> out;
+    for (std::size_t vc = 0; vc < value_names.size(); ++vc) {
+        std::string field = agg_value_base_field(value_names[vc]);
+        if (!answerable_field(field)) continue;  // e.g. a SetUnion text column
+        out.push_back({static_cast<std::int32_t>(vc), std::move(field)});
+    }
+    return out;
+}
+
+// One CF row's reduced stats as engine seed values, one per fillable value
+// column (an absent field stays a default n==0 FieldStat so the finalized
+// column domain matches the scan). A dur/size column carries its stored
+// DDSketch.
+std::vector<dataframe::AggSeedValue> row_seed_values(
+    const std::vector<TierValueCol>& cols, const AggMetricsFullView& mv,
+    std::vector<utilities::common::statistics::DDSketch>& sketch_store) {
+    std::vector<dataframe::AggSeedValue> out;
+    out.reserve(cols.size());
+    sketch_store.clear();
+    sketch_store.resize(cols.size());
+    for (std::size_t i = 0; i < cols.size(); ++i) {
+        dataframe::AggSeedValue v;
+        v.value_col = cols[i].value_col;
+        fill_field(v.stat, cols[i].field, mv);
+        const std::string_view blob = cols[i].field == "dur" ? mv.dur_sketch
+                                      : cols[i].field == "size"
+                                          ? mv.size_sketch
+                                          : std::string_view();
+        if (!blob.empty()) {
+            sketch_store[i] =
                 utilities::common::statistics::DDSketch::deserialize(
                     reinterpret_cast<const std::uint8_t*>(blob.data()),
                     blob.size());
+            v.sketch = &sketch_store[i];
+        }
+        out.push_back(std::move(v));
+    }
+    return out;
+}
+
+// Whether a group key relabels an opaque hash to a name post-aggregation
+// (finalize_engine_result resolves these), matching key_is_resolved in the
+// engine tail.
+bool tier_key_is_resolved(GroupKey::Kind kind) {
+    return kind == GroupKey::Kind::FilePath ||
+           kind == GroupKey::Kind::FileName ||
+           kind == GroupKey::Kind::HostName || kind == GroupKey::Kind::Rank;
+}
+
+void build_tier_keys(std::vector<std::string>& keys, const ViewPlan& plan,
+                     const AggKeyView& kv, const GroupResolver* resolver,
+                     char (&fbuf)[::dftracer::utils::hash::HEX64_DIGITS]) {
+    for (const auto& gk : plan.group_by) {
+        std::string v = key_value(kv, gk, fbuf);
+        if (gk.transform != GroupKey::Transform::None) {
+            if (resolver && tier_key_is_resolved(gk.kind))
+                v = resolve_group_value(*resolver, gk.kind, v);
+            v = apply_group_transform(gk, std::move(v));
+        }
+        keys.push_back(std::move(v));
     }
 }
+
+}  // namespace
 
 // `eval_root` is the cat-lowered clone of plan.query's AST (see
 // clone_cat_lowered), built once by the caller; the tier's cat values are
@@ -462,7 +571,7 @@ static bool key_passes_query(
     return query::evaluate(*eval_root, vm);
 }
 
-bool agg_tier_collect(const ViewPlan& plan, GroupMap& out) {
+bool agg_tier_collect(const ViewPlan& plan, dataframe::AggStatePtr& out) {
     const AggSchema& sch = ensure_schema(plan);
     if (!answerable(plan, sch)) return false;
 
@@ -475,12 +584,33 @@ bool agg_tier_collect(const ViewPlan& plan, GroupMap& out) {
         for (const auto& s : plan.agg)
             if (s.op == AggOp::Pct || s.op == AggOp::Hist) return false;
 
+    // Build the same engine AggState the scan would, so finalize_engine_result
+    // renders it byte-for-byte identically; seed each group from the stored
+    // per-key MetricStats instead of scanning events.
+    AggInputSpec spec = make_agg_input_spec(plan);
+    dataframe::LoweredGroupAggs lowered =
+        dataframe::lower_group_aggs(spec.gaggs);
+    auto state = dataframe::agg_new(lowered.specs, spec.dyn_specs);
+    dataframe::agg_seed_begin(*state, plan.group_by.size());
+    const std::vector<TierValueCol> vcols =
+        tier_value_cols(lowered.value_names);
+
+    // A transformed key needs the resolved+transformed value at seed time
+    // (finalize_engine_result skips resolver for transformed keys); a plain
+    // resolved key is seeded as its raw hash and resolved at finalize.
+    bool any_transform = false;
+    for (const auto& gk : plan.group_by)
+        if (gk.transform != GroupKey::Transform::None) any_transform = true;
+    const GroupResolver* resolver =
+        any_transform ? ensure_resolver(plan) : nullptr;
+
     const auto cfg_key = std::string_view(
         agg::AGG_GLOBAL_CONFIG_KEY, sizeof(agg::AGG_GLOBAL_CONFIG_KEY) - 1);
     const StringIntern& intern = tc->handle->agg->intern();
     auto it = tc->handle->db->new_iterator(rocksdb::cf::AGGREGATION);
-    std::string keybuf;
     char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
+    std::vector<std::string> keys;
+    std::vector<utilities::common::statistics::DDSketch> sketch_store;
     const auto eval_root =
         plan.query ? clone_cat_lowered(plan.query->root()) : nullptr;
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
@@ -496,18 +626,14 @@ bool agg_tier_collect(const ViewPlan& plan, GroupMap& out) {
                 std::string_view(it->value().data(), it->value().size()), mv))
             continue;
 
-        AggAccum a;
-        a.keys.reserve(plan.group_by.size());
-        keybuf.clear();
-        for (const auto& gk : plan.group_by) {
-            std::string v = key_value(kv, gk, fbuf);
-            keybuf += v;
-            keybuf += GROUP_SEP;
-            a.keys.push_back(std::move(v));
-        }
-        fill_accum(a, sch, mv);
-        merge_accum(out[keybuf], a, plan);
+        keys.clear();
+        keys.reserve(plan.group_by.size());
+        build_tier_keys(keys, plan, kv, resolver, fbuf);
+        dataframe::agg_seed_group(*state, keys, mv.count,
+                                  row_seed_values(vcols, mv, sketch_store));
     }
+    dataframe::agg_seed_finalize(*state);
+    out = std::move(state);
     return true;
 }
 
@@ -553,17 +679,35 @@ bool events_profiles_collect(const ViewPlan& plan,
     bool want_extra = false;
     for (const auto& gk : plan.group_by)
         if (gk.kind == GroupKey::Kind::Arg) want_extra = true;
-    // FileName/HostName group values are stored as hashes; resolve to names so
-    // downstream consumers (e.g. dfanalyzer POSIX rules, proc_name) get paths.
-    const GroupResolver* resolver = ensure_resolver(plan);
+    // A transformed key needs its resolved+transformed value at seed time
+    // (finalize resolves the plain resolved keys itself).
+    bool any_transform = false;
+    for (const auto& gk : plan.group_by)
+        if (gk.transform != GroupKey::Transform::None) any_transform = true;
+    const GroupResolver* resolver =
+        any_transform ? ensure_resolver(plan) : nullptr;
+
+    // Two engine AggStates (events, profiles); each keyed [time_bucket?,
+    // group_by...] and finalized like a fresh scan. Seed from the stored
+    // MetricStats rows, split by map type.
+    const std::size_t nkeys = (has_bucket ? 1u : 0u) + plan.group_by.size();
+    AggInputSpec ispec = make_agg_input_spec(plan);
+    dataframe::LoweredGroupAggs lowered =
+        dataframe::lower_group_aggs(ispec.gaggs);
+    const std::vector<TierValueCol> vcols =
+        tier_value_cols(lowered.value_names);
+    auto ev_state = dataframe::agg_new(lowered.specs, ispec.dyn_specs);
+    auto prof_state = dataframe::agg_new(lowered.specs, ispec.dyn_specs);
+    dataframe::agg_seed_begin(*ev_state, nkeys);
+    dataframe::agg_seed_begin(*prof_state, nkeys);
 
     const auto cfg_key = std::string_view(
         agg::AGG_GLOBAL_CONFIG_KEY, sizeof(agg::AGG_GLOBAL_CONFIG_KEY) - 1);
     const StringIntern& intern = tc->handle->agg->intern();
     auto it = tc->handle->db->new_iterator(rocksdb::cf::AGGREGATION);
-    std::string keybuf;
     char fbuf[::dftracer::utils::hash::HEX64_DIGITS];
-    GroupMap gm;
+    std::vector<std::string> keys;
+    std::vector<utilities::common::statistics::DDSketch> sketch_store;
     if (shard_end <= 0) shard_end = agg::AGG_KEY_NUM_SHARDS;
     const std::size_t total_shards =
         static_cast<std::size_t>(shard_end - shard_begin);
@@ -599,47 +743,23 @@ bool events_profiles_collect(const ViewPlan& plan,
                 std::string_view(it->value().data(), it->value().size()), mv))
             continue;
 
-        AggAccum a;
-        a.keys.reserve(plan.group_by.size() + 1);
-        // Leading "type" key keeps events and profiles in distinct groups even
-        // when the caller does not group on epoch/step.
-        const char* type_str = is_profile ? "profile" : "event";
-        keybuf.clear();
-        keybuf += type_str;
-        keybuf += GROUP_SEP;
-        a.keys.emplace_back(type_str);
-        if (has_bucket) {
-            std::string b = std::to_string(tier_time_bucket(kv, plan));
-            keybuf += b;
-            keybuf += GROUP_SEP;
-            a.keys.push_back(std::move(b));
-        }
-        for (const auto& gk : plan.group_by) {
-            std::string v = key_value(kv, gk, fbuf);
-            if (resolver) v = resolve_group_value(*resolver, gk.kind, v);
-            v = apply_group_transform(gk, std::move(v));
-            keybuf += v;
-            keybuf += GROUP_SEP;
-            a.keys.push_back(std::move(v));
-        }
-        fill_accum(a, sch, mv);
-        merge_accum(gm[keybuf], a, plan);
+        keys.clear();
+        keys.reserve(nkeys);
+        // Key layout [time_bucket?, group_by...]: a plain resolved key is
+        // seeded as its raw hash (finalize resolves it); a transformed key is
+        // resolved+transformed here since finalize skips the resolver for it.
+        if (has_bucket)
+            keys.push_back(std::to_string(tier_time_bucket(kv, plan)));
+        build_tier_keys(keys, plan, kv, resolver, fbuf);
+        dataframe::agg_seed_group(is_profile ? *prof_state : *ev_state, keys,
+                                  mv.count,
+                                  row_seed_values(vcols, mv, sketch_store));
     }
 
-    // Split the folded map into events and profiles by the leading "type" key,
-    // strip that key, and materialize each half through to_batch (the same
-    // typed builder collect() uses) so the typed path emits collect()'s exact
-    // integer columns. Once "type" is removed, each accum's keys line up with
-    // to_batch's [time_bucket?, group_by...] column order.
-    GroupMap ev, prof;
-    for (auto& [k, a] : gm) {
-        const bool is_profile = !a.keys.empty() && a.keys.front() == "profile";
-        AggAccum moved = std::move(a);
-        if (!moved.keys.empty()) moved.keys.erase(moved.keys.begin());
-        (is_profile ? prof : ev).emplace(k, std::move(moved));
-    }
-    out_regular = to_batch(ev, plan);
-    out_aggregated = to_batch(prof, plan);
+    dataframe::agg_seed_finalize(*ev_state);
+    dataframe::agg_seed_finalize(*prof_state);
+    out_regular = finalize_engine_result(*ev_state, plan);
+    out_aggregated = finalize_engine_result(*prof_state, plan);
     if (progress && *progress) (*progress)(total_shards, total_shards);
     return true;
 }
@@ -731,7 +851,10 @@ bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
 #else  // !DFTRACER_UTILS_ENABLE_ARROW
 
 namespace dftracer::utils::trace::views::detail {
-bool agg_tier_collect(const ViewPlan&, GroupMap&) { return false; }
+bool agg_tier_collect(const ViewPlan&,
+                      dftracer::utils::dataframe::AggStatePtr&) {
+    return false;
+}
 bool events_profiles_collect(const ViewPlan&,
                              dftracer::utils::dataframe::DataFrame&,
                              dftracer::utils::dataframe::DataFrame&, int, int,

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_COUNTER_FORMAT_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_COUNTER_FORMAT_H
 
+#include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -19,11 +20,12 @@ std::string counter_line(const std::vector<std::string>& group_cols,
                          const std::vector<std::string>& value_cols,
                          const std::vector<double>& values);
 
-// One merged group -> one ph="C" counter event written to `sink`. Each event
-// carries its own args (its own dynamic columns), so no global schema is
-// needed.
-void emit_group_counter(const std::string& key, const AggAccum& a,
-                        const ViewPlan& plan, ExportSink& sink);
+// Emit ph="C" counter events from a merged engine AggState (the distributed
+// counter-partial merge). Byte-matches emit_group_counter: finalizes the state,
+// then writes one event per group with its own args (spec value columns then
+// the present dyn columns, skipping args a group did not see).
+void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
+                              const ViewPlan& plan, ExportSink& sink);
 
 }  // namespace dftracer::utils::trace::views::detail
 

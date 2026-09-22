@@ -3,16 +3,21 @@
 
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // A plugin fold stashes the dftu_task* its on_batch returned for the async
@@ -40,6 +45,11 @@ class FoldPortBus {
     /// NULL if `key` was not published since the last clear.
     const void* consume(std::uint64_t key, std::uint32_t* out_len) const;
     void clear();
+
+    /// The batch as a frame after the last transforming fold, for every fold
+    /// stepped after it in the same batch; unset until a fold rewrites it,
+    /// and each later fold then reads this instead of the events.
+    std::optional<dftracer::utils::dataframe::DataFrame> frame;
 
    private:
     struct Entry {
@@ -102,15 +112,51 @@ class Fold {
     virtual void bind_port_bus(FoldPortBus*) {}
 };
 
+/// Advisory, mutable narrowing state a running fuse() scan consults before
+/// claiming each remaining unit: once populated, fuse_worker skips an
+/// excluded file or checkpoint without decompressing it. This is the backing
+/// state behind dataframe::Cursor::narrow() - a source (ViewSource's
+/// streaming cursor) writes exclusions into it, computed with the same
+/// bloom/dictionary chunk-pruning path gather_units uses for the static
+/// prune, while the scan gather_units already started is still draining
+/// `units`. Thread-safe: writers (the cursor's narrow() calls) and readers
+/// (every fuse worker) run concurrently.
+class DynamicPrune {
+   public:
+    /// Excludes every checkpoint of `file_path` from the remaining scan.
+    void exclude_file(const std::string& file_path);
+    /// Excludes `checkpoints` of `file_path`; merges into any prior
+    /// exclusion for the same file.
+    void exclude_checkpoints(const std::string& file_path,
+                             std::vector<std::uint64_t> checkpoints);
+    bool is_excluded(const std::string& file_path,
+                     std::uint64_t checkpoint_idx) const;
+    /// Called by a fuse worker for each unit it skips because of this prune.
+    void record_skip() { skipped_.fetch_add(1, std::memory_order_relaxed); }
+    std::uint64_t skipped() const {
+        return skipped_.load(std::memory_order_relaxed);
+    }
+
+   private:
+    mutable std::mutex mu_;
+    std::unordered_set<std::string> excluded_files_;
+    std::unordered_map<std::string, std::unordered_set<std::uint64_t>>
+        excluded_checkpoints_;
+    std::atomic<std::uint64_t> skipped_{0};
+};
+
 /// One traversal driving every fold with per-worker slices merged at the end.
 /// `intern` is shared across workers and caller-owned; every fold must resolve
 /// ids through it. Units `covered` already accounts for are skipped.
+/// `dyn_prune` (optional), when non-null, is polled per unit so a cursor's
+/// narrow() call mid-scan can still take effect on units not yet claimed.
 coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
                                  const ViewDefinition& vdef,
                                  std::span<Fold* const> folds,
                                  dftracer::utils::StringIntern& intern,
                                  const CoverageSet* covered = nullptr,
-                                 std::uint64_t limit = 0);
+                                 std::uint64_t limit = 0,
+                                 DynamicPrune* dyn_prune = nullptr);
 
 /// Fields the scanner must capture into each event's args for this plan: the
 /// non-scalar Field group keys and nested agg fields the POD does not natively

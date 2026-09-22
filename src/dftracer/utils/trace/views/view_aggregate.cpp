@@ -1,108 +1,17 @@
-#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/dataframe.h>
-#include <dftracer/utils/trace/aggregators/reserved_args.h>
-#include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/trace/views/agg_fold.h>
-#include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_resolver.h>
 
+#include <algorithm>
 #include <cctype>
-#include <cmath>
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
 
 namespace dftracer::utils::trace::views::detail {
-
-// Occupancy grid defaults: target cell (busy quantum) when the query sets no
-// occ_cell_us, and the per-window mask-cell cap that coarsens the cell on wide
-// windows so occ_buckets stays bounded.
-static constexpr std::uint64_t DEFAULT_OCC_CELL_US = 64;
-static constexpr std::uint64_t MAX_OCC_BUCKETS = 65536;
-
-std::optional<double> to_number(simdjson::dom::element e) {
-    double d;
-    if (e.get_double().get(d) == simdjson::SUCCESS) return d;
-    std::int64_t i;
-    if (e.get_int64().get(i) == simdjson::SUCCESS)
-        return static_cast<double>(i);
-    std::uint64_t u;
-    if (e.get_uint64().get(u) == simdjson::SUCCESS)
-        return static_cast<double>(u);
-    return std::nullopt;
-}
-
-std::string to_str(simdjson::dom::element e) {
-    std::string_view s;
-    if (e.get_string().get(s) == simdjson::SUCCESS) return std::string(s);
-    std::int64_t i;
-    if (e.get_int64().get(i) == simdjson::SUCCESS) return std::to_string(i);
-    std::uint64_t u;
-    if (e.get_uint64().get(u) == simdjson::SUCCESS) return std::to_string(u);
-    double d;
-    if (e.get_double().get(d) == simdjson::SUCCESS) return std::to_string(d);
-    bool b;
-    if (e.get_bool().get(b) == simdjson::SUCCESS) return b ? "true" : "false";
-    return {};
-}
-
-std::string top_or_args_str(simdjson::dom::element root,
-                            const std::string& key) {
-    auto r = root[key];
-    if (!r.error()) return to_str(r.value_unsafe());
-    auto args = root["args"];
-    if (!args.error() && args.is_object()) {
-        auto rr = args[key];
-        if (!rr.error()) return to_str(rr.value_unsafe());
-    }
-    return {};
-}
-
-// Byte size of an event, derived with the reader's io-cat rule (ret is the
-// byte count for POSIX/STDIO read|write) so "size" aggregates match dfanalyzer.
-static std::optional<double> derived_size(simdjson::dom::element root) {
-    namespace dfi = trace::internal;
-    auto num_of = [&](const char* key) -> std::optional<std::int64_t> {
-        auto r = root[key];
-        if (!r.error())
-            if (auto n = to_number(r.value_unsafe()))
-                return static_cast<std::int64_t>(*n);
-        auto args = root["args"];
-        if (!args.error() && args.is_object()) {
-            auto rr = args[key];
-            if (!rr.error())
-                if (auto n = to_number(rr.value_unsafe()))
-                    return static_cast<std::int64_t>(*n);
-        }
-        return std::nullopt;
-    };
-    auto s = dfi::derive_io_size(
-        top_or_args_str(root, "cat"), top_or_args_str(root, "name"),
-        num_of("size_sum"), num_of("ret"), num_of("image_size"));
-    return s ? std::optional<double>(static_cast<double>(*s)) : std::nullopt;
-}
-
-std::optional<double> agg_field(simdjson::dom::element root,
-                                const std::string& field) {
-    // "size" is the io-cat-derived byte size, not a raw field lookup.
-    if (field == "size") return derived_size(root);
-    auto r = root[field];
-    if (!r.error()) return to_number(r.value_unsafe());
-    auto args = root["args"];
-    if (!args.error() && args.is_object()) {
-        auto rr = args[field];
-        if (!rr.error()) return to_number(rr.value_unsafe());
-    }
-    // "te" is the event end time; derive it from ts + dur when not stored.
-    if (field == "te") {
-        auto ts = agg_field(root, "ts");
-        auto dur = agg_field(root, "dur");
-        if (ts && dur) return *ts + *dur;
-    }
-    return std::nullopt;
-}
 
 AggSchema make_agg_schema(const ViewPlan& plan) {
     AggSchema s;
@@ -148,27 +57,7 @@ AggSchema make_agg_schema(const ViewPlan& plan) {
         if (fi >= 0 && s.field_sketch[fi] < 0)
             s.field_sketch[fi] = static_cast<int>(s.sketch_count++);
     }
-    // Size the grid off a fixed cell, not the output time_bucket - pinning the
-    // cell to the bucket rounds a short event up to bucket/64 and inflates
-    // busy. Per-window cap bounds the mask cells; unknown window falls back to
-    // 1s.
-    if (s.want_occupancy) {
-        const std::uint64_t cell =
-            plan.occ_cell_us > 0 ? plan.occ_cell_us : DEFAULT_OCC_CELL_US;
-        std::uint64_t bucket = cell * OCC_SUB_SLOTS;
-        if (plan.time_range &&
-            plan.time_range->second > plan.time_range->first) {
-            const std::uint64_t window = static_cast<std::uint64_t>(
-                plan.time_range->second - plan.time_range->first);
-            const std::uint64_t min_bucket =
-                (window + MAX_OCC_BUCKETS - 1) / MAX_OCC_BUCKETS;
-            if (bucket < min_bucket) bucket = min_bucket;
-        } else if (bucket < 1000000) {
-            bucket = 1000000;
-        }
-        if (bucket < OCC_SUB_SLOTS) bucket = OCC_SUB_SLOTS;
-        s.occ_bucket_us = bucket;
-    }
+    if (s.want_occupancy) s.occ_cell_us = plan.occ_cell_us;
     for (const auto& r : plan.numeric_arg_aggs)
         if (r.op == AggOp::Pct) {
             s.dyn_sketch = true;
@@ -181,239 +70,6 @@ const AggSchema& ensure_schema(const ViewPlan& plan) {
     if (!plan.schema)
         plan.schema = std::make_shared<AggSchema>(make_agg_schema(plan));
     return *plan.schema;
-}
-
-void fold_event(GroupMap& map, simdjson::dom::element root,
-                const ViewPlan& plan, std::string& keybuf) {
-    DomSource src(root);
-    fold_event_over(map, src, plan, keybuf);
-}
-
-int schema_field_index(const AggSchema& s, const std::string& field) {
-    for (std::size_t i = 0; i < s.fields.size(); ++i)
-        if (s.fields[i] == field) return static_cast<int>(i);
-    return -1;
-}
-
-// Occupancy summary from the per-bucket masks: busy (sum over buckets of
-// popcount * bucket/64, i.e. the interval union to bucket/64 resolution),
-// active (peak concurrency = max over buckets of the overlap headcount), total
-// (sum of raw dur, for concurrency) and span (max_end - min_start, for
-// utilization). Empty when the group had no timed events.
-struct OccSummary {
-    std::uint64_t busy = 0;
-    std::uint64_t active = 0;
-    std::uint64_t total = 0;
-    std::uint64_t span = 0;
-};
-
-static OccSummary occupancy_summary(const AggAccum& a) {
-    OccSummary o;
-    if (a.occ_bucket_us == 0) return o;
-    std::uint64_t slots = 0;
-    for (const auto& [b, ob] : a.occ_buckets) {
-        (void)b;
-        slots += static_cast<std::uint64_t>(std::popcount(ob.mask));
-        if (ob.active > o.active) o.active = ob.active;
-    }
-    o.total = a.occ_total;
-    o.span = a.occ_te > a.occ_ts ? a.occ_te - a.occ_ts : 0;
-    // A coverage bitmap can only overshoot: clamp busy to sum(dur) (keeps
-    // concurrency = total/busy >= 1) and to the makespan (keeps utilization =
-    // busy/span <= 1; the span clamp is load-bearing, do not drop it).
-    o.busy = slots * a.occ_bucket_us / OCC_SUB_SLOTS;
-    if (o.busy > o.total) o.busy = o.total;
-    if (o.span && o.busy > o.span) o.busy = o.span;
-    return o;
-}
-
-double finalize_value(const AggAccum& a, const ViewPlan& plan, std::size_t i) {
-    const AggSchema& sch = *plan.schema;
-    const auto& spec = plan.agg[i];
-    const int fi = sch.spec_field[i];
-    const FieldStat* fs = fi >= 0 ? &a.fields[fi] : nullptr;
-    const double N = static_cast<double>(a.count);
-    switch (spec.op) {
-        case AggOp::Count:
-            // Count() counts rows; Count(field) the field-present events.
-            return spec.field.empty() ? N
-                                      : (fs ? static_cast<double>(fs->n) : 0.0);
-        case AggOp::Sum:
-            return fs ? fs->sum : 0.0;
-        case AggOp::Min:
-            return fs ? fs->min : 0.0;
-        case AggOp::Max:
-            return fs ? fs->max : 0.0;
-        case AggOp::SumSq:
-            return fs ? fs->sumsq : 0.0;
-        case AggOp::Mean:
-            // Mean/Var/Std/Skew/Kurt delegate to the shared FieldStat (over the
-            // field-present count, sample variance) so the View matches the
-            // dataframe engine and pandas/polars exactly.
-            return fs ? fs->mean() : 0.0;
-        case AggOp::Var:
-            return fs ? fs->variance(true) : 0.0;
-        case AggOp::Std:
-            return fs ? fs->stddev(true) : 0.0;
-        case AggOp::Pct: {
-            const int sk = fi >= 0 ? sch.field_sketch[fi] : -1;
-            return sk >= 0 ? a.sketches[sk].quantile(spec.q) : 0.0;
-        }
-        case AggOp::Skew:
-            return fs ? fs->skewness() : 0.0;
-        case AggOp::Kurt:
-            return fs ? fs->kurtosis() : 0.0;
-        case AggOp::ArgMax:
-            return 0.0;  // emitted as a text column
-        case AggOp::Hist:
-            return 0.0;  // emitted as a list<struct> column via finalize_hist
-        case AggOp::SetUnion:
-            return 0.0;  // emitted as a joined text column
-        case AggOp::Busy:
-            return static_cast<double>(occupancy_summary(a).busy);
-        case AggOp::Concurrency: {
-            const OccSummary o = occupancy_summary(a);
-            return o.busy ? static_cast<double>(o.total) /
-                                static_cast<double>(o.busy)
-                          : 0.0;
-        }
-        case AggOp::Utilization: {
-            const OccSummary o = occupancy_summary(a);
-            return (o.busy && o.span) ? static_cast<double>(o.busy) /
-                                            static_cast<double>(o.span)
-                                      : 0.0;
-        }
-        case AggOp::Active:
-            return static_cast<double>(occupancy_summary(a).active);
-    }
-    return 0.0;
-}
-
-// Like finalize_value but keeps the exact integer domain for Count/Sum/Min/Max
-// so an integer field's aggregate is not rounded through a double. Every other
-// op (Mean/Var/Std/quantiles/...) is inherently double.
-static dftracer::utils::dataframe::FieldNum finalize_value_typed(
-    const AggAccum& a, const ViewPlan& plan, std::size_t i) {
-    using dftracer::utils::dataframe::FieldNum;
-    using dftracer::utils::dataframe::FieldStatDomain;
-    const AggSchema& sch = *plan.schema;
-    const auto& spec = plan.agg[i];
-    const int fi = sch.spec_field[i];
-    const FieldStat* fs = fi >= 0 ? &a.fields[fi] : nullptr;
-
-    auto exact = [&](std::int64_t bits, double dbl) -> FieldNum {
-        if (!fs) return FieldNum::of(dbl);
-        switch (fs->domain) {
-            case FieldStatDomain::I64:
-                return FieldNum::of(bits);
-            case FieldStatDomain::U64:
-                return FieldNum::of(std::bit_cast<std::uint64_t>(bits));
-            default:
-                return FieldNum::of(dbl);
-        }
-    };
-    switch (spec.op) {
-        case AggOp::Count:
-            return FieldNum::of(static_cast<std::int64_t>(
-                spec.field.empty() ? a.count : (fs ? fs->n : 0)));
-        case AggOp::Sum:
-            return fs ? exact(fs->esum, fs->sum) : FieldNum::of(0.0);
-        case AggOp::Min:
-            return fs ? exact(fs->emin, fs->min) : FieldNum::of(0.0);
-        case AggOp::Max:
-            return fs ? exact(fs->emax, fs->max) : FieldNum::of(0.0);
-        default:
-            return FieldNum::of(finalize_value(a, plan, i));
-    }
-}
-
-// The distinct values of a SetUnion spec joined into one text cell (sorted;
-// empty when the spec has no set slot).
-static std::string finalize_set(const AggAccum& a, const ViewPlan& plan,
-                                std::size_t i) {
-    const int si = plan.schema->spec_set[i];
-    if (si < 0 || static_cast<std::size_t>(si) >= a.sets.size()) return {};
-    std::string out;
-    for (const auto& v : a.sets[si]) {
-        if (!out.empty()) out.push_back(SET_SEP);
-        out += v;
-    }
-    return out;
-}
-
-std::vector<utilities::common::statistics::HistogramBin> finalize_hist(
-    const AggAccum& a, const ViewPlan& plan, std::size_t i) {
-    const AggSchema& sch = *plan.schema;
-    const int fi = sch.spec_field[i];
-    const int sk = fi >= 0 ? sch.field_sketch[fi] : -1;
-    if (sk < 0) return {};
-    return a.sketches[sk].bins();
-}
-
-std::pair<std::string, bool> source_agg_field(const ViewPlan& plan) {
-    std::string field;
-    for (const auto& spec : plan.agg) {
-        // ArgMax reduces over `by`; the others over `field`. Count() is
-        // neutral.
-        const std::string& f = spec.op == AggOp::ArgMax ? spec.by : spec.field;
-        if (f.empty()) continue;
-        if (field.empty())
-            field = f;
-        else if (field != f)
-            return {"", false};
-    }
-    return {field, true};
-}
-
-const AggSpec* find_argmax(const ViewPlan& plan) {
-    for (const auto& spec : plan.agg)
-        if (spec.op == AggOp::ArgMax) return &spec;
-    return nullptr;
-}
-
-void merge_accum(AggAccum& da, const AggAccum& sa, const ViewPlan& plan) {
-    // plan.schema is prebuilt by the terminal (merge runs concurrently across
-    // shards, so it must not lazily build here).
-    const AggSchema& sch = *plan.schema;
-    if (da.count == 0) {
-        da.keys = sa.keys;
-        da.fields.resize(sch.fields.size());
-        da.argmax.resize(sch.argmax_count);
-        da.sketches.resize(sch.sketch_count);
-        da.sets.resize(sch.set_count);
-    }
-    da.count += sa.count;
-    for (std::size_t i = 0; i < da.fields.size() && i < sa.fields.size(); ++i)
-        da.fields[i].merge(sa.fields[i]);
-    for (std::size_t i = 0; i < da.argmax.size() && i < sa.argmax.size(); ++i) {
-        const auto& s = sa.argmax[i];
-        if (!s.has) continue;
-        auto& d = da.argmax[i];
-        if (!d.has || s.by > d.by) d = s;
-    }
-    for (std::size_t i = 0; i < da.sketches.size() && i < sa.sketches.size();
-         ++i)
-        da.sketches[i].merge(sa.sketches[i]);
-    for (std::size_t i = 0; i < da.sets.size() && i < sa.sets.size(); ++i)
-        da.sets[i].insert(sa.sets[i].begin(), sa.sets[i].end());
-    for (const auto& [name, sm] : sa.dyn) da.dyn[name].merge(sm);
-    for (const auto& [name, sk] : sa.dyn_sketches)
-        da.dyn_sketches[name].merge(sk);
-    if (sa.occ_bucket_us) {
-        da.occ_bucket_us = sa.occ_bucket_us;
-        da.occ_total += sa.occ_total;
-        if (sa.occ_ts < da.occ_ts) da.occ_ts = sa.occ_ts;
-        if (sa.occ_te > da.occ_te) da.occ_te = sa.occ_te;
-        for (const auto& [b, ob] : sa.occ_buckets) {
-            auto& d = da.occ_buckets[b];
-            d.mask |= ob.mask;
-            d.active += ob.active;
-        }
-    }
-}
-
-void merge_maps(GroupMap& dst, const GroupMap& src, const ViewPlan& plan) {
-    for (const auto& [k, sa] : src) merge_accum(dst[k], sa, plan);
 }
 
 const GroupResolver* ensure_resolver(const ViewPlan& plan) {
@@ -494,39 +150,6 @@ std::string apply_group_transform(const GroupKey& gk, std::string v) {
     return v;
 }
 
-void resolve_group_keys(GroupMap& map, const ViewPlan& plan) {
-    const GroupResolver* r = ensure_resolver(plan);
-    // Transforms coarsen keys that need no resolver at all (lower(cat)), so a
-    // missing resolver must not skip them.
-    const bool any_transform = std::any_of(
-        plan.group_by.begin(), plan.group_by.end(),
-        [](const auto& g) { return g.transform != GroupKey::Transform::None; });
-    if (!r && !any_transform) return;
-    // AggAccum.keys layout is [time_bucket?] + group_by, so the bucket takes
-    // index 0 when present.
-    const std::size_t off = plan.time_bucket_us > 0 ? 1 : 0;
-    GroupMap out;
-    std::string newkey;
-    for (auto& [k, accum] : map) {
-        (void)k;
-        for (std::size_t j = 0; j < plan.group_by.size(); ++j) {
-            const std::size_t idx = off + j;
-            if (idx >= accum.keys.size()) continue;
-            std::string v = std::move(accum.keys[idx]);
-            if (r) v = resolve_group_value(*r, plan.group_by[j].kind, v);
-            accum.keys[idx] =
-                apply_group_transform(plan.group_by[j], std::move(v));
-        }
-        newkey.clear();
-        for (const auto& part : accum.keys) {
-            newkey += part;
-            newkey += GROUP_SEP;
-        }
-        merge_accum(out[newkey], accum, plan);
-    }
-    map = std::move(out);
-}
-
 std::string group_col_name(const GroupKey& gk) {
     switch (gk.kind) {
         case GroupKey::Kind::Name:
@@ -560,45 +183,11 @@ std::string group_col_name(const GroupKey& gk) {
     return {};
 }
 
-// A discovered numeric arg reduces over the values that were present (N =
-// fs.n), matching the legacy bare-mean (sum/n). Only FieldStat-derivable ops
-// are reachable here; a Pct/Hist over a dyn arg needs a per-arg sketch and is
-// rejected at the builder.
-static double reduce_dyn(const FieldStat& fs, AggOp op, double /*q*/) {
-    switch (op) {
-        case AggOp::Count:
-            return static_cast<double>(fs.n);
-        case AggOp::Sum:
-            return fs.sum;
-        case AggOp::Min:
-            return fs.n ? fs.min : 0.0;
-        case AggOp::Max:
-            return fs.n ? fs.max : 0.0;
-        case AggOp::SumSq:
-            return fs.sumsq;
-        // Moment reductions delegate to the shared FieldStat (field-present n,
-        // sample variance) so the dyn path matches the named-field path, the
-        // dataframe engine, and pandas/polars.
-        case AggOp::Mean:
-            return fs.mean();
-        case AggOp::Var:
-            return fs.variance(true);
-        case AggOp::Std:
-            return fs.stddev(true);
-        case AggOp::Skew:
-            return fs.skewness();
-        case AggOp::Kurt:
-            return fs.kurtosis();
-        default:
-            return 0.0;
-    }
-}
-
 // Column name for a per-arg reduction: `<op>_<arg>`, matching the named-field
 // convention (sum_field). The legacy mean path keeps the bare arg name. Pct
 // uses the spec's out_name prefix (e.g. "p90_" from the pNN shorthand) so the
 // quantile is legible; otherwise it falls back to "pct_".
-static std::string dyn_col_name(const AggSpec& spec, const std::string& key) {
+std::string dyn_col_name(const AggSpec& spec, const std::string& key) {
     switch (spec.op) {
         case AggOp::Count:
             return "count_" + key;
@@ -673,192 +262,6 @@ std::string agg_col_name(const AggSpec& spec) {
     return {};
 }
 
-// Materialize the group map straight into a columnar dataframe::DataFrame.
-// Column order: group keys (time_bucket first when bucketing), value columns
-// (count or per-agg, then dyn), text columns, hist columns. Types: count is
-// Int64, integer Sum/Min/Max exact as Int64/Uint64, other value columns
-// Float64; text is String; hist is list<struct<lo, hi, count>>.
-dataframe::DataFrame to_batch(const GroupMap& map, const ViewPlan& plan) {
-    std::vector<std::string> group_cols, value_cols, text_cols, hist_cols;
-    if (plan.time_bucket_us > 0) group_cols.push_back("time_bucket");
-    for (const auto& gk : plan.group_by)
-        group_cols.push_back(group_col_name(gk));
-    const bool count_col = plan.agg.empty();
-    if (count_col) {
-        value_cols.push_back("count");
-    } else {
-        for (const auto& spec : plan.agg) {
-            if (spec.op == AggOp::ArgMax || spec.op == AggOp::SetUnion)
-                text_cols.push_back(agg_col_name(spec));
-            else if (spec.op == AggOp::Hist)
-                hist_cols.push_back(agg_col_name(spec));
-            else
-                value_cols.push_back(agg_col_name(spec));
-        }
-    }
-    struct DynCol {
-        std::string key;
-        AggSpec spec;
-    };
-    std::vector<DynCol> dyn_cols;
-    if (plan.auto_numeric_metrics) {
-        std::set<std::string> names;
-        for (const auto& [k, a] : map) {
-            (void)k;
-            for (const auto& [name, m] : a.dyn) names.insert(name);
-        }
-        if (plan.numeric_arg_aggs.empty()) {
-            // Legacy: one bare-named per-arg mean column.
-            for (const auto& n : names) {
-                dyn_cols.push_back({n, AggSpec(AggOp::Mean)});
-                value_cols.push_back(n);
-            }
-        } else {
-            for (const auto& n : names)
-                for (const auto& spec : plan.numeric_arg_aggs) {
-                    dyn_cols.push_back({n, spec});
-                    value_cols.push_back(dyn_col_name(spec, n));
-                }
-        }
-    }
-    // Effective grid resolution, so a caller can tell a grid-derived busy from
-    // a clamped one.
-    bool occ_cell_col = false;
-    for (const auto& spec : plan.agg)
-        if (spec.op == AggOp::Busy || spec.op == AggOp::Concurrency ||
-            spec.op == AggOp::Utilization) {
-            occ_cell_col = true;
-            break;
-        }
-    if (occ_cell_col) value_cols.push_back("busy_cell_us");
-
-    const std::size_t ng = map.size();
-    std::vector<std::vector<std::string>> gk(group_cols.size());
-    for (auto& v : gk) v.reserve(ng);
-    // One typed cell per (group, value column); reconciled to a single column
-    // type at build time, so Sum/Min/Max of an integer field emit an exact
-    // Int64/Uint64 column rather than a rounded Float64.
-    std::vector<std::vector<dftracer::utils::dataframe::FieldNum>> vcells(
-        value_cols.size());
-    for (auto& v : vcells) v.reserve(ng);
-    std::vector<std::vector<std::string>> tvals(text_cols.size());
-    for (auto& v : tvals) v.reserve(ng);
-    struct HistBuild {
-        std::vector<std::int32_t> off{0};
-        std::vector<double> lo, hi;
-        std::vector<std::uint64_t> cnt;
-    };
-    std::vector<HistBuild> hvals(hist_cols.size());
-
-    const AggSchema& sch = ensure_schema(plan);
-    for (const auto& [k, a] : map) {
-        (void)k;
-        for (std::size_t i = 0; i < group_cols.size(); ++i)
-            gk[i].push_back(a.keys[i]);
-        std::size_t vc = 0, ti = 0, hi = 0;
-        if (count_col) {
-            vcells[vc++].push_back(dftracer::utils::dataframe::FieldNum::of(
-                static_cast<std::int64_t>(a.count)));
-        } else {
-            for (std::size_t i = 0; i < plan.agg.size(); ++i) {
-                const AggOp op = plan.agg[i].op;
-                if (op == AggOp::ArgMax) {
-                    tvals[ti++].push_back(a.argmax[sch.spec_argmax[i]].repr);
-                } else if (op == AggOp::SetUnion) {
-                    tvals[ti++].push_back(finalize_set(a, plan, i));
-                } else if (op == AggOp::Hist) {
-                    auto bins = finalize_hist(a, plan, i);
-                    auto& h = hvals[hi++];
-                    for (const auto& b : bins) {
-                        h.lo.push_back(b.lower);
-                        h.hi.push_back(b.upper);
-                        h.cnt.push_back(b.count);
-                    }
-                    h.off.push_back(static_cast<std::int32_t>(h.lo.size()));
-                } else {
-                    vcells[vc++].push_back(finalize_value_typed(a, plan, i));
-                }
-            }
-        }
-        for (const auto& dc : dyn_cols) {
-            double v = 0.0;
-            if (dc.spec.op == AggOp::Pct) {
-                auto it = a.dyn_sketches.find(dc.key);
-                if (it != a.dyn_sketches.end())
-                    v = it->second.quantile(dc.spec.q);
-            } else if (auto it = a.dyn.find(dc.key); it != a.dyn.end()) {
-                v = reduce_dyn(it->second, dc.spec.op, dc.spec.q);
-            }
-            vcells[vc++].push_back(dftracer::utils::dataframe::FieldNum::of(v));
-        }
-        if (occ_cell_col)
-            vcells[vc++].push_back(dftracer::utils::dataframe::FieldNum::of(
-                static_cast<std::int64_t>(sch.occ_bucket_us / OCC_SUB_SLOTS)));
-    }
-
-    dataframe::DataFrame batch;
-    const std::int64_t nrows = static_cast<std::int64_t>(ng);
-    for (std::size_t i = 0; i < group_cols.size(); ++i) {
-        batch.names.push_back(group_cols[i]);
-        batch.columns.push_back(dataframe::Series::strings(gk[i]));
-    }
-    // A value column is Int64/Uint64 only if every group shares that integer
-    // domain; a single float (or mixed) cell makes the whole column Float64.
-    auto build_value_column =
-        [&](const std::vector<dftracer::utils::dataframe::FieldNum>& cells) {
-            using dftracer::utils::dataframe::FieldStatDomain;
-            FieldStatDomain dom =
-                cells.empty() ? FieldStatDomain::F64 : cells[0].domain;
-            for (const auto& c : cells)
-                if (c.domain != dom) {
-                    dom = FieldStatDomain::F64;
-                    break;
-                }
-            if (dom == FieldStatDomain::I64) {
-                std::vector<std::int64_t> v;
-                v.reserve(cells.size());
-                for (const auto& c : cells) v.push_back(c.i);
-                return dataframe::Series::flat(dataframe::TypeId::Int64,
-                                               v.data(), nrows);
-            }
-            if (dom == FieldStatDomain::U64) {
-                std::vector<std::uint64_t> v;
-                v.reserve(cells.size());
-                for (const auto& c : cells) v.push_back(c.u);
-                return dataframe::Series::flat(dataframe::TypeId::Uint64,
-                                               v.data(), nrows);
-            }
-            std::vector<double> v;
-            v.reserve(cells.size());
-            for (const auto& c : cells) v.push_back(c.as_double());
-            return dataframe::Series::flat_f64(v.data(), nrows);
-        };
-    for (std::size_t i = 0; i < value_cols.size(); ++i) {
-        batch.names.push_back(value_cols[i]);
-        batch.columns.push_back(build_value_column(vcells[i]));
-    }
-    for (std::size_t i = 0; i < text_cols.size(); ++i) {
-        batch.names.push_back(text_cols[i]);
-        batch.columns.push_back(dataframe::Series::strings(tvals[i]));
-    }
-    for (std::size_t i = 0; i < hist_cols.size(); ++i) {
-        auto& h = hvals[i];
-        const auto n = static_cast<std::int64_t>(h.lo.size());
-        std::vector<dataframe::Series> fields;
-        fields.push_back(dataframe::Series::flat(dataframe::TypeId::Float64,
-                                                 h.lo.data(), n));
-        fields.push_back(dataframe::Series::flat(dataframe::TypeId::Float64,
-                                                 h.hi.data(), n));
-        fields.push_back(dataframe::Series::flat(dataframe::TypeId::Uint64,
-                                                 h.cnt.data(), n));
-        dataframe::Series st = dataframe::Series::structs({"lo", "hi", "count"},
-                                                          std::move(fields));
-        batch.names.push_back(hist_cols[i]);
-        batch.columns.push_back(dataframe::Series::list(h.off, std::move(st)));
-    }
-    return batch;
-}
-
 void project_columns(dftracer::utils::dataframe::DataFrame& batch,
                      const std::vector<std::string>& select) {
     if (select.empty()) return;
@@ -875,20 +278,21 @@ void project_columns(dftracer::utils::dataframe::DataFrame& batch,
     batch.columns = std::move(columns);
 }
 
-dataframe::DataFrame finalize_collect_batch(const GroupMap& map,
-                                            const ViewPlan& plan) {
-    dataframe::DataFrame b = to_batch(map, plan);
-    if (!plan.sort_col.empty()) b = b.sort_by(plan.sort_col, plan.sort_desc);
+dataframe::DataFrame apply_agg_post_ops(dataframe::DataFrame batch,
+                                        const ViewPlan& plan) {
+    if (!plan.sort_col.empty())
+        batch = batch.sort_by(plan.sort_col, plan.sort_desc);
     if (!plan.topk_col.empty())
-        b = b.topk(plan.topk_col, plan.topk_k, plan.topk_largest);
+        batch = batch.topk(plan.topk_col, plan.topk_k, plan.topk_largest);
     if (plan.offset || plan.limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan.offset);
-        const std::int64_t len =
-            plan.limit ? static_cast<std::int64_t>(plan.limit) : b.num_rows();
-        b = b.slice(off, len);
+        const std::int64_t len = plan.limit
+                                     ? static_cast<std::int64_t>(plan.limit)
+                                     : batch.num_rows();
+        batch = batch.slice(off, len);
     }
-    project_columns(b, plan.select);
-    return b;
+    project_columns(batch, plan.select);
+    return batch;
 }
 
 }  // namespace dftracer::utils::trace::views::detail

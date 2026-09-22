@@ -1,12 +1,14 @@
-/* Example dftracer-utils plugin in pure C: the extremum-witness aggregates,
- * which take a second input column through `by`. Keyed by {pid}, ARGMAX and
- * ARGMIN report the event name at the row maximizing and minimizing dur, and
- * VAR/STD the spread of dur itself. The finalized dataframe is [pid, slowest,
- * fastest, dur_var, dur_std], returned from run() under
- * "process_pid_argstats".
+/* Example dftracer-utils plugin in pure C: the set-valued and list-valued
+ * aggregates, all in one accumulator keyed by {pid}. SET_UNION gives the
+ * distinct event names a process ran, DISTINCT their approximate cardinality
+ * (a KMV sketch, `param` = k) and LIST_SORTED the whole name sequence ordered
+ * by the `by` column ts. The host merges the accumulator across workers and
+ * finalizes it to [pid, names, n_names, name_seq], where names is a joined
+ * string and name_seq a list<string> column, returned from run() under
+ * "process_collections".
  *
  * Build: cc -std=c99 -shared -fPIC -I<repo>/include \
- *           -o process_pid_argstats.so process_pid_argstats.c
+ *           -o process_collections.so process_collections.c
  */
 
 #include <dftracer/utils/plugins/abi.h>
@@ -23,15 +25,14 @@ static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
     const dftu_svc_agg* agg =
         (const dftu_svc_agg*)host->get_service(host->h, DFTU_SVC_AGG);
     static const char* const keys[1] = {"pid"};
-    static const dftu_agg_col specs[4] = {
-        {DFTU_AGG_ARGMAX, "name", "slowest", 0.0, "dur"},
-        {DFTU_AGG_ARGMIN, "name", "fastest", 0.0, "dur"},
-        {DFTU_AGG_VAR, "dur", "dur_var", 0.0, NULL},
-        {DFTU_AGG_STD, "dur", "dur_std", 0.0, NULL}};
+    static const dftu_agg_col specs[3] = {
+        {DFTU_AGG_SET_UNION, "name", "names", 0.0, NULL},
+        {DFTU_AGG_DISTINCT, "name", "n_names", 1024.0, NULL},
+        {DFTU_AGG_LIST_SORTED, "name", "name_seq", 0.0, "ts"}};
     dftu_agg* a;
     (void)slice;
     if (!agg || !agg->agg_new) return NULL;
-    a = agg->agg_new(host->h, "process_pid_argstats", keys, 1, specs, 4);
+    a = agg->agg_new(host->h, "process_collections", keys, 1, specs, 3);
     if (a) agg->agg_accumulate(host->h, a, df);
     return NULL;
 }

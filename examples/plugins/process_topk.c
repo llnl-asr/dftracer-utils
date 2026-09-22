@@ -1,11 +1,12 @@
-/* Example dftracer-utils plugin in pure C: the top-3 FILES by duration each
- * process touched. Each event contributes (by=e->dur, payload=e->fhash) to a
- * TOPK_STR value at key {pid} with k=3; the monoid keeps only the three
- * fhash payloads at the three largest durations, bounded to k on every add. The
- * host merges the bounded top-k across workers and materializes it to an Arrow
- * table [k0 : int64 (pid), value : list<string> (the file labels, largest
- * duration first)]. PluginHost::run returns it to Python as a pyarrow.Table
- * under "process_topk".
+/* Example dftracer-utils plugin in pure C: the bounded-size aggregates, whose
+ * `param` carries k. Keyed by {pid}: TOPK and BOTTOMK keep the 3 event names
+ * with the largest and smallest dur (ordered by the `by` column), APPROX_TOPK
+ * the 5 most frequent names from a SpaceSaving sketch, and SAMPLE a
+ * deterministic 5-name bottom-k-by-hash sample. Each stays bounded per group,
+ * so the accumulator merges across workers in constant space. The finalized
+ * dataframe is [pid, slowest3, fastest3, hottest5, sample5], returned from
+ * run() under "process_topk"; hottest5 is a list<struct{value, count}> and the
+ * rest are list<string>.
  *
  * Build: cc -std=c99 -shared -fPIC -I<repo>/include \
  *           -o process_topk.so process_topk.c
@@ -15,39 +16,26 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define TOPK 3u
-
-static uint32_t needs(void* self) {
-    (void)self;
-    return 0u;
-}
-
 static void* make_slice(void* self) {
     (void)self;
     return calloc(1, 1);
 }
 
-static dftu_task* on_batch(void* slice, const dftu_batch* b,
-                           const dftu_host* host) {
-    const dftu_ext_map* map =
-        (const dftu_ext_map*)host->get_extension(host->h, DFTU_EXT_MAP);
-    static const dftu_type key_types[1] = {DFTU_T_I64};
-    dftu_map* m;
-    uint32_t i;
+static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
+                           const dftu_plugin_host* host) {
+    const dftu_svc_agg* agg =
+        (const dftu_svc_agg*)host->get_service(host->h, DFTU_SVC_AGG);
+    static const char* const keys[1] = {"pid"};
+    static const dftu_agg_col specs[4] = {
+        {DFTU_AGG_TOPK, "name", "slowest3", 3.0, "dur"},
+        {DFTU_AGG_BOTTOMK, "name", "fastest3", 3.0, "dur"},
+        {DFTU_AGG_APPROX_TOPK, "name", "hottest5", 5.0, NULL},
+        {DFTU_AGG_SAMPLE, "name", "sample5", 5.0, NULL}};
+    dftu_agg* a;
     (void)slice;
-    if (!map || !map->map_new || !map->map_add_topk_at) return NULL;
-    m = map->map_new(host->h, "process_topk", key_types, 1,
-                     DFTU_MONOID_TOPK_STR);
-    if (!m) return NULL;
-    for (i = 0; i < b->count; ++i) {
-        const dftu_event* e = &b->events[i];
-        int64_t key[1];
-        if (e->fhash == DFTU_STR_NONE) continue;
-        key[0] = (int64_t)e->pid;
-        /* k is passed on every add; the monoid records it and stays bounded. */
-        map->map_add_topk_at(host->h, m, key, 0, TOPK, (double)e->dur,
-                             (int64_t)e->fhash);
-    }
+    if (!agg || !agg->agg_new) return NULL;
+    a = agg->agg_new(host->h, "process_topk", keys, 1, specs, 4);
+    if (a) agg->agg_accumulate(host->h, a, df);
     return NULL;
 }
 
@@ -56,7 +44,7 @@ static void merge(void* into, void* other) {
     (void)other;
 }
 
-static dftu_task* on_finalize(void* slice, const dftu_host* host) {
+static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {
     (void)slice;
     (void)host;
     return NULL;
@@ -68,17 +56,17 @@ static void destroy(void* self) { (void)self; }
 
 static dftu_plugin g_plugin;
 
-DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(const dftu_value* config) {
+DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+    (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
     g_plugin.self = NULL;
-    g_plugin.needs = needs;
     g_plugin.plan_query = NULL;
     g_plugin.make_slice = make_slice;
-    g_plugin.on_batch = on_batch;
     g_plugin.merge = merge;
     g_plugin.on_finalize = on_finalize;
     g_plugin.destroy_slice = destroy_slice;
     g_plugin.destroy = destroy;
+    g_plugin.on_batch = on_batch;
     return &g_plugin;
 }

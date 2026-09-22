@@ -11,9 +11,16 @@
 #include <utility>
 #include <vector>
 
+// The columnar handles (defined in dftracer/utils/dataframe/abi.h). Forward
+// declared so a column/table crosses a compose pipe as a first-class typed
+// value (DFTU_T_SERIES / DFTU_T_TABLE) without this header depending on the
+// dataframe ABI; the value is the handle pointer, so it is zero-copy.
+struct dftu_series;
+struct dftu_dataframe;
+
 // Ranges-style composition of already-spawned dftu_task handles, mirroring the
 // in-tree compose.h combinators but lowering to the host coro vtable
-// (dftu_ext_coro: when_all / when_any). This is the SDK sugar over the C ABI's
+// (dftu_svc_coro: when_all / when_any). This is the SDK sugar over the C ABI's
 // task combinators; `Host::all` / `Host::any` are the same lowering as method
 // calls.
 //
@@ -32,11 +39,11 @@ namespace dftracer::utils::plugins {
 /// immediately.
 class Composed {
    public:
-    Composed(const dftu_host* host, dftu_task* task)
+    Composed(const dftu_plugin_host* host, dftu_task* task)
         : host_(host), task_(task) {}
 
     dftu_task* task() const noexcept { return task_; }
-    const dftu_host* host() const noexcept { return host_; }
+    const dftu_plugin_host* host() const noexcept { return host_; }
 
     bool await_ready() const noexcept { return task_ == nullptr; }
     void await_suspend(
@@ -46,31 +53,31 @@ class Composed {
     void await_resume() const noexcept {}
 
    private:
-    const dftu_host* host_;
+    const dftu_plugin_host* host_;
     dftu_task* task_;
 };
 
 namespace detail {
-inline const dftu_ext_coro* coro_ext(const dftu_host* h) {
-    return h && h->get_extension ? static_cast<const dftu_ext_coro*>(
-                                       h->get_extension(h->h, DFTU_EXT_CORO))
-                                 : nullptr;
+inline const dftu_svc_coro* coro_ext(const dftu_plugin_host* h) {
+    return h && h->get_service ? static_cast<const dftu_svc_coro*>(
+                                     h->get_service(h->h, DFTU_SVC_CORO))
+                               : nullptr;
 }
-inline const dftu_ext_compose* compose_ext(const dftu_host* h) {
-    return h && h->get_extension ? static_cast<const dftu_ext_compose*>(
-                                       h->get_extension(h->h, DFTU_EXT_COMPOSE))
-                                 : nullptr;
+inline const dftu_svc_compose* compose_ext(const dftu_plugin_host* h) {
+    return h && h->get_service ? static_cast<const dftu_svc_compose*>(
+                                     h->get_service(h->h, DFTU_SVC_COMPOSE))
+                               : nullptr;
 }
 }  // namespace detail
 
 /// Lift a task into the composable wrapper.
-inline Composed compose(const dftu_host* host, dftu_task* task) {
+inline Composed compose(const dftu_plugin_host* host, dftu_task* task) {
     return Composed{host, task};
 }
 
 /// Join (`&&`): run both, await both. Lowers to when_all.
 inline Composed operator&&(Composed a, Composed b) {
-    const dftu_ext_coro* c = detail::coro_ext(a.host());
+    const dftu_svc_coro* c = detail::coro_ext(a.host());
     dftu_task* ts[2] = {a.task(), b.task()};
     return Composed{
         a.host(), c && c->when_all ? c->when_all(a.host()->h, ts, 2) : nullptr};
@@ -78,7 +85,7 @@ inline Composed operator&&(Composed a, Composed b) {
 
 /// Race (`||`): first to finish wins. Lowers to when_any.
 inline Composed operator||(Composed a, Composed b) {
-    const dftu_ext_coro* c = detail::coro_ext(a.host());
+    const dftu_svc_coro* c = detail::coro_ext(a.host());
     dftu_task* ts[2] = {a.task(), b.task()};
     return Composed{
         a.host(), c && c->when_any ? c->when_any(a.host()->h, ts, 2) : nullptr};
@@ -87,8 +94,8 @@ inline Composed operator||(Composed a, Composed b) {
 /// map: build one task per item with `make_task(item) -> dftu_task*` and join
 /// them all concurrently (when_all). Mirrors compose.h's map over the C ABI.
 template <class Range, class MakeTask>
-Composed map(const dftu_host* host, Range&& items, MakeTask make_task) {
-    const dftu_ext_coro* c = detail::coro_ext(host);
+Composed map(const dftu_plugin_host* host, Range&& items, MakeTask make_task) {
+    const dftu_svc_coro* c = detail::coro_ext(host);
     std::vector<dftu_task*> ts;
     for (auto&& item : items) ts.push_back(make_task(item));
     return Composed{host,
@@ -100,7 +107,7 @@ Composed map(const dftu_host* host, Range&& items, MakeTask make_task) {
 
 // ---- Typed compose ---------------------------------------------------------
 //
-// A compile-time-typed layer over dftu_ext_compose so a C++ plugin author
+// A compile-time-typed layer over dftu_svc_compose so a C++ plugin author
 // writes real values instead of void*+size, and a mismatched pipe is a compile
 // error instead of a runtime null. Values are POD (they cross the C ABI as
 // bytes).
@@ -135,6 +142,10 @@ constexpr dftu_type type_tag() {
         return DFTU_T_U8;
     else if constexpr (std::is_same_v<T, float>)
         return DFTU_T_F32;
+    else if constexpr (std::is_same_v<T, dftu_series*>)
+        return DFTU_T_SERIES;
+    else if constexpr (std::is_same_v<T, dftu_dataframe*>)
+        return DFTU_T_TABLE;
     else
         return DFTU_T_BYTES;
 }
@@ -144,13 +155,13 @@ constexpr dftu_type type_tag() {
 template <class In, class Out>
 class Op {
    public:
-    Op(const dftu_host* host, dftu_op* op) : host_(host), op_(op) {}
-    const dftu_host* host() const noexcept { return host_; }
+    Op(const dftu_plugin_host* host, dftu_op* op) : host_(host), op_(op) {}
+    const dftu_plugin_host* host() const noexcept { return host_; }
     dftu_op* raw() const noexcept { return op_; }
     bool valid() const noexcept { return op_ != nullptr; }
 
    private:
-    const dftu_host* host_;
+    const dftu_plugin_host* host_;
     dftu_op* op_;
 };
 
@@ -176,8 +187,8 @@ Op<In, Out> make_op(Host host, Fn fn) {
         std::is_trivially_copyable_v<In> && std::is_trivially_copyable_v<Out>,
         "compose Op values cross the C ABI as bytes; In/Out must be "
         "trivially copyable");
-    const dftu_host* raw = host.raw();
-    const dftu_ext_compose* c = detail::compose_ext(raw);
+    const dftu_plugin_host* raw = host.raw();
+    const dftu_svc_compose* c = detail::compose_ext(raw);
     if (!c) return {raw, nullptr};
     Fn* state = new Fn(std::move(fn));
     dftu_op* op = c->make_op(
@@ -191,24 +202,11 @@ Op<In, Out> make_op(Host host, Fn fn) {
     return {raw, op};
 }
 
-/// A typed leaf wrapping a registered host utility `Tag` (a single-value
-/// utility), so it can be piped with `|` alongside plain make_op leaves. The
-/// value crosses as the utility's generated C in/out struct; an invalid op
-/// (`!valid()`) means the host lacks the compose group or the id is a
-/// stream-only/unknown utility. Runs asynchronously on the executor.
-template <class Tag>
-Op<typename Tag::in, typename Tag::out> util_op(Host host) {
-    const dftu_host* raw = host.raw();
-    const dftu_ext_compose* c = detail::compose_ext(raw);
-    if (!c || !c->util_op) return {raw, nullptr};
-    return {raw, c->util_op(raw->h, static_cast<std::uint32_t>(Tag::id))};
-}
-
 /// Optional early release of an op's resources; ops are otherwise freed at fold
 /// teardown, so this is only needed to reclaim a large op mid-scan.
 template <class In, class Out>
 void free_op(Op<In, Out> op) {
-    const dftu_ext_compose* c = detail::compose_ext(op.host());
+    const dftu_svc_compose* c = detail::compose_ext(op.host());
     if (c && c->free_op && op.raw()) c->free_op(op.host()->h, op.raw());
 }
 
@@ -216,7 +214,7 @@ void free_op(Op<In, Out> op) {
 /// when B==C - a mismatch is a compile error, not a runtime null.
 template <class In, class Mid, class Out>
 Op<In, Out> operator|(Op<In, Mid> a, Op<Mid, Out> b) {
-    const dftu_ext_compose* c = detail::compose_ext(a.host());
+    const dftu_svc_compose* c = detail::compose_ext(a.host());
     return {a.host(), c ? c->then(a.host()->h, a.raw(), b.raw()) : nullptr};
 }
 
@@ -229,7 +227,7 @@ Op<In, std::array<Out, 1 + sizeof...(Ops)>> when_all(Op<In, Out> first,
                                                      Ops... rest) {
     static_assert((std::is_same_v<Ops, Op<In, Out>> && ...),
                   "when_all ops must share In and Out");
-    const dftu_ext_compose* c = detail::compose_ext(first.host());
+    const dftu_svc_compose* c = detail::compose_ext(first.host());
     dftu_op* ops[] = {first.raw(), rest.raw()...};
     return {first.host(), c && c->when_all ? c->when_all(first.host()->h, ops,
                                                          1 + sizeof...(Ops))
@@ -242,7 +240,7 @@ template <class In, class Out, class... Ops>
 Op<In, Out> when_any(Op<In, Out> first, Ops... rest) {
     static_assert((std::is_same_v<Ops, Op<In, Out>> && ...),
                   "when_any ops must share In and Out");
-    const dftu_ext_compose* c = detail::compose_ext(first.host());
+    const dftu_svc_compose* c = detail::compose_ext(first.host());
     dftu_op* ops[] = {first.raw(), rest.raw()...};
     return {first.host(), c && c->when_any ? c->when_any(first.host()->h, ops,
                                                          1 + sizeof...(Ops))
@@ -253,7 +251,7 @@ Op<In, Out> when_any(Op<In, Out> first, Ops... rest) {
 /// and `out` are borrowed for the await, so they must outlive it.
 template <class In, class Out>
 Composed run(Op<In, Out> op, const In& in, Out& out, int& rc) {
-    const dftu_ext_compose* c = detail::compose_ext(op.host());
+    const dftu_svc_compose* c = detail::compose_ext(op.host());
     return {op.host(),
             c ? c->run(op.host()->h, op.raw(), &in, &out, &rc) : nullptr};
 }

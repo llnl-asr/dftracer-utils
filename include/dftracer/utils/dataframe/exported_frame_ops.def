@@ -1,0 +1,95 @@
+/* Built-in dataframe frame ops (table -> table) seeded into the op registry
+ * under the "dftu.frame." prefix (so they neither clash with the same-named
+ * column ops nor need a separate registry). APPEND ONLY.
+ *
+ *   DFTU_FRAME_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6)
+ *     name        - registry key suffix; registered as "dftu.frame.<name>".
+ *     fn          - the dftu_dataframe_* (or dftu_series_*) C ABI function.
+ *     ret,o0..o6  - signature tokens (DFTU_TOK_* suffixes), packed by
+ *                   DFTU_OP_SIG8. A frame op reads its dftu_dataframe operands
+ *                   from frames[]; every other operand rides dftu_op_arg
+ *                   (SERIES -> series0/series1, STR -> s0..s3, STRLIST ->
+ *                   slist/slist2, I64 -> i0/i1, I32/enum -> op_code, SCALAR ->
+ *                   scalar).
+ */
+
+#ifndef DFTU_FRAME_OP
+#define DFTU_FRAME_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6)
+#endif
+
+/* table -> table, no extra operand. */
+DFTU_FRAME_OP(drop_nulls, dftu_dataframe_drop_nulls, FRAME, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(unique, dftu_dataframe_unique, FRAME, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(drop_duplicates, dftu_dataframe_drop_duplicates, FRAME, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(reverse, dftu_dataframe_reverse, FRAME, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(describe, dftu_dataframe_describe, FRAME, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(null_count, dftu_dataframe_null_count, FRAME, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
+
+/* table + int64(s). */
+DFTU_FRAME_OP(head, dftu_dataframe_head, FRAME, FRAME, I64, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(tail, dftu_dataframe_tail, FRAME, FRAME, I64, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(slice, dftu_dataframe_slice, FRAME, FRAME, I64, I64, NONE, NONE, NONE, NONE)
+
+/* table + scalar / mask. */
+DFTU_FRAME_OP(fill_null, dftu_dataframe_fill_null, FRAME, FRAME, SCALAR, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(filter, dftu_dataframe_filter, FRAME, FRAME, SERIES, NONE, NONE, NONE, NONE, NONE)
+
+/* table + column name(s). */
+DFTU_FRAME_OP(with_row_index, dftu_dataframe_with_row_index, FRAME, FRAME, STR, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(explode, dftu_dataframe_explode, FRAME, FRAME, STR, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(to_dummies, dftu_dataframe_to_dummies, FRAME, FRAME, STR, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(sort_by, dftu_dataframe_sort_by, FRAME, FRAME, STR, I32, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(select, dftu_dataframe_select, FRAME, FRAME, STRLIST, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(rename, dftu_dataframe_rename, FRAME, FRAME, STRLIST, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(sort_by_multi, dftu_dataframe_sort_by_multi, FRAME, FRAME, STRLIST, I32, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(sort_by_multi_per_col, dftu_dataframe_sort_by_multi_per_col, FRAME, FRAME, STRLIST, I32LIST, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(with_column, dftu_dataframe_with_column, FRAME, FRAME, STR, SERIES, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(unpivot, dftu_dataframe_unpivot, FRAME, FRAME, STRLIST, STRLIST, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(topk, dftu_dataframe_topk, FRAME, FRAME, STR, I64, I32, NONE, NONE, NONE)
+DFTU_FRAME_OP(pivot, dftu_dataframe_pivot, FRAME, FRAME, STR, STR, STR, STR, NONE, NONE)
+
+/* series -> table. */
+DFTU_FRAME_OP(value_counts, dftu_series_value_counts, FRAME, SERIES, NONE, NONE, NONE, NONE, NONE, NONE)
+
+/* table -> series (kind SERIES: the frame is not the primary operand of a
+ * FRAME-kind op, so it rides args[0].frame rather than frames[]). */
+DFTU_FRAME_OP(is_duplicated, dftu_dataframe_is_duplicated, SERIES, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(is_unique, dftu_dataframe_is_unique, SERIES, FRAME, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(mask, dftu_dataframe_mask_frame, SERIES, FRAME, QUERY, NONE, NONE, NONE, NONE, NONE)
+
+/* table + int64-index list / sampling / dynamic windowed aggregation. */
+DFTU_FRAME_OP(take, dftu_dataframe_take_i32, FRAME, FRAME, I64LIST, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(sample, dftu_dataframe_sample, FRAME, FRAME, I64, U64, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(group_by_dynamic, dftu_dataframe_group_by_dynamic, FRAME, FRAME, STR, I64, I64, AGGLIST, NONE, NONE)
+DFTU_FRAME_OP(group_by, dftu_dataframe_group_by, FRAME, FRAME, STRLIST, AGGLIST, NONE, NONE, NONE, NONE)
+
+/* table + table + key lists + join kind + suffix. */
+DFTU_FRAME_OP(join, dftu_dataframe_join, FRAME, FRAME, FRAME, STRLIST, STRLIST, I32, STR, NONE)
+
+/* table + table (+ concat kind / key count). */
+DFTU_FRAME_OP(concat, dftu_dataframe_concat2, FRAME, FRAME, FRAME, I32, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(union, dftu_dataframe_union, FRAME, FRAME, FRAME, NONE, NONE, NONE, NONE, NONE)
+DFTU_FRAME_OP(compare_agg, dftu_dataframe_compare_agg, FRAME, FRAME, FRAME, I64, NONE, NONE, NONE, NONE)
+
+/* table + column name + keep_empty. */
+DFTU_FRAME_OP(unnest, dftu_dataframe_unnest, FRAME, FRAME, STR, I32, NONE, NONE, NONE, NONE)
+
+/* table -> series: the shuffle bucket per row. */
+DFTU_FRAME_OP(partition_id, dftu_dataframe_partition_id, SERIES, FRAME, STRLIST, I64, NONE, NONE, NONE, NONE)
+
+/* table + key subset. */
+DFTU_FRAME_OP(unique_by, dftu_dataframe_unique_by, FRAME, FRAME, STRLIST, NONE, NONE, NONE, NONE, NONE)
+
+/* table + aggregate code (dftu_agg_op): the per-column reductions, df.sum();
+ * the grouped form is the group_by row with reduce_specs. */
+DFTU_FRAME_OP(reduce, dftu_dataframe_reduce, FRAME, FRAME, I32, NONE, NONE, NONE, NONE, NONE)
+
+/* table + keys + transform code (dftu_groupwise_op) + n + rank method +
+ * ascending: the group-wise transforms, groupby(k).cumsum() and kin. */
+DFTU_FRAME_OP(group_transform, dftu_dataframe_group_transform, FRAME, FRAME, STRLIST, I32, I64, I32, I32, NONE)
+
+/* A registered column op run over one column of the table, the other columns
+ * passing through; the lazy plan's breaker for a whole-column op. */
+DFTU_FRAME_OP(column_op, dftu_dataframe_column_op, FRAME, FRAME, STR, STR, STR, SCALAR, SCALAR, STR)
+
+#undef DFTU_FRAME_OP

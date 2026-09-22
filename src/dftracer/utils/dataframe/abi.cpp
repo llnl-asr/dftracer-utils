@@ -28,8 +28,9 @@ dftu_series* dftu_series_new_flat(dftu_dtype type, const void* data, int64_t n,
                                   const uint8_t* validity) {
     TypeId t = static_cast<TypeId>(type);
     // Fixed-width only; String/Binary are offset+data and need their own
-    // builder.
-    if (byte_width(t) == 0) return nullptr;
+    // builder. FixedSizeBinary also has no builder here: this signature has
+    // no fixed_size parameter to record on the result.
+    if (!byte_width(t)) return nullptr;
 
     auto* col = new dftu_series();
     col->type = t;
@@ -56,7 +57,8 @@ dftu_series* dftu_series_new_flat_borrowed(dftu_dtype type, const void* data,
                                            void (*release)(void* ctx),
                                            void* release_ctx) {
     TypeId t = static_cast<TypeId>(type);
-    if (byte_width(t) == 0) {
+    // Same fixed_size limitation as dftu_series_new_flat above.
+    if (!byte_width(t)) {
         if (release != nullptr) release(release_ctx);
         return nullptr;
     }
@@ -158,6 +160,15 @@ int32_t dftu_series_encoding(const dftu_series* col) {
 int64_t dftu_series_length(const dftu_series* col) { return col->length; }
 
 int64_t dftu_series_null_count(const dftu_series* col) {
+    // A SELECTION view holds no count of its own; its nulls are the base's
+    // at the selected rows plus the outer-fill sentinels.
+    if (col->encoding == dftracer::utils::dataframe::Encoding::Selection &&
+        col->child) {
+        std::int64_t n = 0;
+        for (std::int64_t i = 0; i < col->length; ++i)
+            n += dftu_series_is_null(col, i);
+        return n;
+    }
     return col->null_count;
 }
 
@@ -171,20 +182,41 @@ const int32_t* dftu_series_offsets(const dftu_series* col) {
     return reinterpret_cast<const int32_t*>(col->offsets->data());
 }
 
+const int64_t* dftu_series_offsets64(const dftu_series* col) {
+    if (!col->offsets64) return nullptr;
+    return reinterpret_cast<const int64_t*>(col->offsets64->data());
+}
+
 int32_t dftu_series_is_null(const dftu_series* col, int64_t i) {
+    // A SELECTION view carries no bitmap of its own: the row is null when its
+    // index is the outer-fill sentinel or the selected base row is null.
+    if (col->encoding == dftracer::utils::dataframe::Encoding::Selection &&
+        col->child) {
+        const std::int64_t idx =
+            reinterpret_cast<const std::int64_t*>(col->data->data())[i];
+        if (idx < 0) return 1;
+        return dftu_series_is_null(col->child.get(), idx);
+    }
     if (!col->validity) return 0;
     const std::uint8_t* bm = col->validity->data();
     return ((bm[i >> 3] >> (i & 7)) & 1) ? 0 : 1;
 }
 
+namespace {
+bool is_single_child_container(TypeId t) {
+    return t == TypeId::List || t == TypeId::LargeList ||
+           t == TypeId::FixedSizeList || t == TypeId::Map;
+}
+}  // namespace
+
 int32_t dftu_series_num_children(const dftu_series* col) {
-    if (col->type == TypeId::List) return col->child ? 1 : 0;
+    if (is_single_child_container(col->type)) return col->child ? 1 : 0;
     return static_cast<int32_t>(col->children.size());
 }
 
 dftu_series* dftu_series_child(const dftu_series* col, int32_t i) {
     const std::shared_ptr<dftu_series>* ch = nullptr;
-    if (col->type == TypeId::List) {
+    if (is_single_child_container(col->type)) {
         if (i == 0 && col->child) ch = &col->child;
     } else if (i >= 0 && static_cast<std::size_t>(i) < col->children.size()) {
         ch = &col->children[static_cast<std::size_t>(i)];
@@ -192,6 +224,36 @@ dftu_series* dftu_series_child(const dftu_series* col, int32_t i) {
     if (!ch || !*ch) return nullptr;
     // Owned copy sharing the child's buffers (shared_ptr members).
     return new dftu_series(**ch);
+}
+
+const char* dftu_series_field_name(const dftu_series* col, int32_t i) {
+    if (!col || col->type != TypeId::Struct) return nullptr;
+    if (i < 0 || static_cast<std::size_t>(i) >= col->field_names.size())
+        return nullptr;
+    return col->field_names[static_cast<std::size_t>(i)].c_str();
+}
+
+int32_t dftu_series_time_unit(const dftu_series* col) {
+    return col ? static_cast<int32_t>(col->time_unit)
+               : static_cast<int32_t>(
+                     dftracer::utils::dataframe::TimeUnit::Micro);
+}
+
+const char* dftu_series_timezone(const dftu_series* col) {
+    static const char empty[] = "";
+    return col ? col->timezone.c_str() : empty;
+}
+
+int32_t dftu_series_decimal_precision(const dftu_series* col) {
+    return col ? col->decimal_precision : 0;
+}
+
+int32_t dftu_series_decimal_scale(const dftu_series* col) {
+    return col ? col->decimal_scale : 0;
+}
+
+int32_t dftu_series_fixed_size(const dftu_series* col) {
+    return col ? col->fixed_size : 0;
 }
 
 dftu_series* dftu_series_share(const dftu_series* col) {
@@ -203,21 +265,65 @@ dftu_series* dftu_series_share(const dftu_series* col) {
 
 dftu_series* dftu_series_slice(const dftu_series* col, int64_t offset,
                                int64_t len) {
-    if (!col || col->encoding != Encoding::Flat) return nullptr;
-    const std::size_t w = byte_width(col->type);
+    if (!col) return nullptr;
+    if (byte_width(col->type, col->fixed_size).value_or(0) == 0)
+        return nullptr;  // variable-width unsupported
+    if (col->encoding == Encoding::Selection && col->child) {
+        // A SELECTION slices by its index buffer: still a view over the base.
+        if (offset < 0) offset = 0;
+        if (offset > col->length) offset = col->length;
+        if (len < 0 || len > col->length - offset) len = col->length - offset;
+        auto* out = new dftu_series();
+        dftracer::utils::dataframe::adopt_type_from(*out, *col);
+        out->encoding = Encoding::Selection;
+        out->length = len;
+        out->data = Buffer::allocate(static_cast<std::size_t>(len) *
+                                     sizeof(std::int64_t));
+        std::memcpy(out->data->data(),
+                    col->data->data() +
+                        static_cast<std::size_t>(offset) * sizeof(std::int64_t),
+                    static_cast<std::size_t>(len) * sizeof(std::int64_t));
+        out->child = col->child;
+        return out;
+    }
+    if (col->encoding != Encoding::Flat) {
+        dftu_series* flat = dftu_series_materialize(col);
+        if (!flat) return nullptr;
+        dftu_series* out = dftu_series_slice(flat, offset, len);
+        dftu_series_free(flat);
+        return out;
+    }
+    const std::size_t w = byte_width(col->type, col->fixed_size).value_or(0);
     if (w == 0 || !col->data) return nullptr;  // variable-width unsupported
     if (offset < 0) offset = 0;
     if (offset > col->length) offset = col->length;
     if (len < 0 || len > col->length - offset) len = col->length - offset;
 
     auto* out = new dftu_series();
-    out->type = col->type;
+    dftracer::utils::dataframe::adopt_type_from(*out, *col);
     out->encoding = Encoding::Flat;
     out->length = len;
     auto parent = col->data;  // shared_ptr copy keeps the buffer alive
-    std::uint8_t* base = parent->data() + static_cast<std::size_t>(offset) * w;
-    out->data = Buffer::wrap(base, static_cast<std::size_t>(len) * w,
-                             [parent](void*) { /* view: parent owns it */ });
+    if (col->type == TypeId::Bool) {
+        // Bool is bit-packed ((n+7)/8 bytes)
+        const std::size_t nbytes = static_cast<std::size_t>((len + 7) / 8);
+        auto dbuf = Buffer::allocate(nbytes);
+        std::memset(dbuf->data(), 0, nbytes);
+        const std::uint8_t* src = parent->data();
+        std::uint8_t* dst = dbuf->data();
+        for (int64_t i = 0; i < len; ++i) {
+            const int64_t p = offset + i;
+            if ((src[p >> 3] >> (p & 7)) & 1u)
+                dst[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        }
+        out->data = std::move(dbuf);
+    } else {
+        std::uint8_t* base =
+            parent->data() + static_cast<std::size_t>(offset) * w;
+        out->data =
+            Buffer::wrap(base, static_cast<std::size_t>(len) * w,
+                         [parent](void*) { /* view: parent owns it */ });
+    }
 
     // Carry the validity bitmap so nulls survive into the expression engine.
     // The bitmap is indexed from bit 0, so a byte-aligned offset can share the

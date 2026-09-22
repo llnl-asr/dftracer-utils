@@ -74,6 +74,27 @@ std::int64_t CompactF32(const void* p, std::int64_t n, dftu_scalar thr,
     return compact_gt_lanes<float>(static_cast<const float*>(p), n,
                                    scalar_as<float>(thr), out);
 }
+std::int64_t CompactI16(const void* p, std::int64_t n, dftu_scalar thr,
+                        std::int64_t* out) {
+    return compact_gt_lanes<std::int16_t>(static_cast<const std::int16_t*>(p),
+                                          n, scalar_as<std::int16_t>(thr), out);
+}
+std::int64_t CompactU16(const void* p, std::int64_t n, dftu_scalar thr,
+                        std::int64_t* out) {
+    return compact_gt_lanes<std::uint16_t>(static_cast<const std::uint16_t*>(p),
+                                           n, scalar_as<std::uint16_t>(thr),
+                                           out);
+}
+std::int64_t CompactI8(const void* p, std::int64_t n, dftu_scalar thr,
+                       std::int64_t* out) {
+    return compact_gt_lanes<std::int8_t>(static_cast<const std::int8_t*>(p), n,
+                                         scalar_as<std::int8_t>(thr), out);
+}
+std::int64_t CompactU8(const void* p, std::int64_t n, dftu_scalar thr,
+                       std::int64_t* out) {
+    return compact_gt_lanes<std::uint8_t>(static_cast<const std::uint8_t*>(p),
+                                          n, scalar_as<std::uint8_t>(thr), out);
+}
 
 }  // namespace HWY_NAMESPACE
 }  // namespace dftracer::utils::dataframe
@@ -88,6 +109,10 @@ HWY_EXPORT(CompactF64);
 HWY_EXPORT(CompactI32);
 HWY_EXPORT(CompactU32);
 HWY_EXPORT(CompactF32);
+HWY_EXPORT(CompactI16);
+HWY_EXPORT(CompactU16);
+HWY_EXPORT(CompactI8);
+HWY_EXPORT(CompactU8);
 
 std::int64_t compact_gt(const dftu_series& v, dftu_scalar threshold,
                         std::int64_t* out) {
@@ -107,8 +132,16 @@ std::int64_t compact_gt(const dftu_series& v, dftu_scalar threshold,
             return HWY_DYNAMIC_DISPATCH(CompactU32)(p, n, threshold, out);
         case TypeId::Float32:
             return HWY_DYNAMIC_DISPATCH(CompactF32)(p, n, threshold, out);
+        case TypeId::Int16:
+            return HWY_DYNAMIC_DISPATCH(CompactI16)(p, n, threshold, out);
+        case TypeId::Uint16:
+            return HWY_DYNAMIC_DISPATCH(CompactU16)(p, n, threshold, out);
+        case TypeId::Int8:
+            return HWY_DYNAMIC_DISPATCH(CompactI8)(p, n, threshold, out);
+        case TypeId::Uint8:
+            return HWY_DYNAMIC_DISPATCH(CompactU8)(p, n, threshold, out);
         default:
-            return -1;  // 1/2-byte or non-numeric: scalar path
+            return -1;  // non-numeric: scalar path
     }
 }
 

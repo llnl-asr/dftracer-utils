@@ -1,0 +1,98 @@
+/* Built-in dataframe lazy ops (lazy plan -> lazy plan) seeded into the op
+ * registry under the "dftu.lazy." prefix. APPEND ONLY.
+ *
+ *   DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6)
+ *     name        - registry key suffix; registered as "dftu.lazy.<name>".
+ *     fn          - the dftu_lazyframe_* C ABI function.
+ *     ret,o0..o6  - signature tokens (DFTU_TOK_* suffixes), packed by
+ *                   DFTU_OP_SIG8. A lazy op reads its dftu_lazyframe operand
+ *                   from in[]; every other operand rides dftu_op_arg (STR ->
+ *                   s0, STRLIST -> slist/slist2, I64LIST -> i64list, EXPR ->
+ *                   expr, AGGLIST -> agglist, I64 -> i0/i1, I32 -> op_code,
+ *                   SCALAR -> scalar).
+ *
+ * dftu_lazyframe_sample's seed and dftu_lazyframe_memory_budget's bytes are
+ * uint64_t and ride the dedicated U64 token (dftu_op_val::u64) directly - both
+ * functions already take a uint64_t, so no trampoline is needed.
+ *
+ * collect/schema/explain/free are terminal accessors (they return a
+ * dataframe, a string, or nothing, not a lazyframe), not plan nodes, so they
+ * stay out of this table; use the dftu_lazyframe_* ABI / LazyFrame methods.
+ */
+
+#ifndef DFTU_LAZY_OP
+#define DFTU_LAZY_OP(name, fn, ret, o0, o1, o2, o3, o4, o5, o6)
+#endif
+
+/* lazy -> lazy, no extra operand. */
+DFTU_LAZY_OP(auto_spill, dftu_lazyframe_auto_spill, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(describe, dftu_lazyframe_describe, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(drop_duplicates, dftu_lazyframe_drop_duplicates, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(drop_nulls, dftu_lazyframe_drop_nulls, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(is_duplicated, dftu_lazyframe_is_duplicated, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(is_unique, dftu_lazyframe_is_unique, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(null_count, dftu_lazyframe_null_count, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(unique, dftu_lazyframe_unique, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(reverse, dftu_lazyframe_reverse, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE, NONE)
+
+/* lazy + column name. */
+DFTU_LAZY_OP(explode, dftu_lazyframe_explode, LAZY, LAZY, STR, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(to_dummies, dftu_lazyframe_to_dummies, LAZY, LAZY, STR, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(with_row_index, dftu_lazyframe_with_row_index, LAZY, LAZY, STR, NONE, NONE, NONE, NONE, NONE)
+
+/* lazy + series. */
+DFTU_LAZY_OP(filter_mask, dftu_lazyframe_filter_mask, LAZY, LAZY, SERIES, NONE, NONE, NONE, NONE, NONE)
+
+/* lazy + scalar / expr. */
+DFTU_LAZY_OP(fill_null, dftu_lazyframe_fill_null, LAZY, LAZY, SCALAR, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(filter, dftu_lazyframe_filter, LAZY, LAZY, EXPR, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(with_column, dftu_lazyframe_with_column, LAZY, LAZY, STR, EXPR, NONE, NONE, NONE, NONE)
+
+/* lazy + int64(s). */
+DFTU_LAZY_OP(head, dftu_lazyframe_head, LAZY, LAZY, I64, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(tail, dftu_lazyframe_tail, LAZY, LAZY, I64, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(memory_budget, dftu_lazyframe_memory_budget, LAZY, LAZY, U64, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(slice, dftu_lazyframe_slice, LAZY, LAZY, I64, I64, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(sample, dftu_lazyframe_sample, LAZY, LAZY, I64, U64, NONE, NONE, NONE, NONE)
+
+/* lazy + int64-index list. */
+DFTU_LAZY_OP(take, dftu_lazyframe_take, LAZY, LAZY, I64LIST, NONE, NONE, NONE, NONE, NONE)
+
+/* lazy + column name list(s). */
+DFTU_LAZY_OP(select, dftu_lazyframe_select, LAZY, LAZY, STRLIST, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(rename, dftu_lazyframe_rename, LAZY, LAZY, STRLIST, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(unpivot, dftu_lazyframe_unpivot, LAZY, LAZY, STRLIST, STRLIST, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(melt, dftu_lazyframe_melt, LAZY, LAZY, STRLIST, STRLIST, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(group_by, dftu_lazyframe_group_by, LAZY, LAZY, STRLIST, AGGLIST, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(sort_by_multi, dftu_lazyframe_sort_by_multi, LAZY, LAZY, STRLIST, I32, NONE, NONE, NONE, NONE)
+
+/* lazy + column name + int64/enum. */
+DFTU_LAZY_OP(sort_by, dftu_lazyframe_sort_by, LAZY, LAZY, STR, I32, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(topk, dftu_lazyframe_topk, LAZY, LAZY, STR, I64, I32, NONE, NONE, NONE)
+
+/* lazy + 4 strings. */
+DFTU_LAZY_OP(pivot, dftu_lazyframe_pivot, LAZY, LAZY, STR, STR, STR, STR, NONE, NONE)
+
+/* lazy + time column + window spec + aggs + origin. */
+DFTU_LAZY_OP(group_by_dynamic, dftu_lazyframe_group_by_dynamic, LAZY, LAZY, STR, I64, I64, AGGLIST, I64, I32)
+
+/* lazy + lazy + key lists + join kind + suffix. */
+DFTU_LAZY_OP(join, dftu_lazyframe_join, LAZY, LAZY, LAZY, STRLIST, STRLIST, I32, STR, NONE)
+
+/* lazy + lazy (+ key count). */
+DFTU_LAZY_OP(concat, dftu_lazyframe_concat, LAZY, LAZY, LAZY, NONE, NONE, NONE, NONE, NONE)
+DFTU_LAZY_OP(compare_agg, dftu_lazyframe_compare_agg, LAZY, LAZY, LAZY, I64, NONE, NONE, NONE, NONE)
+
+/* lazy + column name + keep_empty. */
+DFTU_LAZY_OP(unnest, dftu_lazyframe_unnest, LAZY, LAZY, STR, I32, NONE, NONE, NONE, NONE)
+
+/* lazy + key subset. */
+DFTU_LAZY_OP(unique_by, dftu_lazyframe_unique_by, LAZY, LAZY, STRLIST, NONE, NONE, NONE, NONE, NONE)
+
+/* lazy + aggregate code (dftu_agg_op). */
+DFTU_LAZY_OP(reduce, dftu_lazyframe_reduce, LAZY, LAZY, I32, NONE, NONE, NONE, NONE, NONE)
+
+/* lazy + keys + transform code + n + rank method + ascending. */
+DFTU_LAZY_OP(group_transform, dftu_lazyframe_group_transform, LAZY, LAZY, STRLIST, I32, I64, I32, I32, NONE)
+
+#undef DFTU_LAZY_OP

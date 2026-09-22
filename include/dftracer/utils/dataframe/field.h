@@ -498,7 +498,8 @@ class FieldExpr {
                                    to_value_expr(*n.a, index),
                                    to_value_expr(*n.b, index));
             case FKind::Prim:
-                return expr_prim(n.op, to_value_expr(*n.a, index));
+                return expr_prim(static_cast<PrimOp>(n.op),
+                                 to_value_expr(*n.a, index));
             case FKind::Cmp:
                 return expr_cmp(
                     cmp_code(static_cast<query::CompareOp>(n.op)),
@@ -509,11 +510,10 @@ class FieldExpr {
                         : ::dftracer::utils::dataframe::detail::expr_scalar_i(
                               n.ival));
             case FKind::And:
-                return expr_logical(DFTU_LOGICAL_AND,
-                                    to_value_expr(*n.a, index),
+                return expr_logical(LogicalOp::And, to_value_expr(*n.a, index),
                                     to_value_expr(*n.b, index));
             case FKind::Or:
-                return expr_logical(DFTU_LOGICAL_OR, to_value_expr(*n.a, index),
+                return expr_logical(LogicalOp::Or, to_value_expr(*n.a, index),
                                     to_value_expr(*n.b, index));
             case FKind::Not:
                 return expr_not(to_value_expr(*n.a, index));
@@ -524,22 +524,22 @@ class FieldExpr {
         }
     }
 
-    static int cmp_code(query::CompareOp op) {
+    static CmpOp cmp_code(query::CompareOp op) {
         switch (op) {
             case query::CompareOp::EQ:
-                return DFTU_CMP_EQ;
+                return CmpOp::Eq;
             case query::CompareOp::NE:
-                return DFTU_CMP_NE;
+                return CmpOp::Ne;
             case query::CompareOp::GT:
-                return DFTU_CMP_GT;
+                return CmpOp::Gt;
             case query::CompareOp::LT:
-                return DFTU_CMP_LT;
+                return CmpOp::Lt;
             case query::CompareOp::GE:
-                return DFTU_CMP_GE;
+                return CmpOp::Ge;
             case query::CompareOp::LE:
-                return DFTU_CMP_LE;
+                return CmpOp::Le;
         }
-        return DFTU_CMP_EQ;
+        return CmpOp::Eq;
     }
 };
 

@@ -39,6 +39,33 @@ inline Series div_scalar(const Series& a, T value) {
     return Series{dftu_series_div_scalar(a.handle(), to_scalar(value))};
 }
 
+/// Python-semantics floor division, remainder and power (kernels/
+/// arithmetic_extra.cpp): Int64 when both operands are integral, else
+/// Float64; a zero divisor and a negative integer exponent are null.
+Series floordiv(const Series& a, const Series& b);
+Series mod(const Series& a, const Series& b);
+Series pow(const Series& a, const Series& b);
+template <class T>
+inline Series floordiv_scalar(const Series& a, T value, bool reverse = false) {
+    return Series{
+        dftu_series_floordiv_scalar(a.handle(), to_scalar(value), reverse)};
+}
+template <class T>
+inline Series mod_scalar(const Series& a, T value, bool reverse = false) {
+    return Series{
+        dftu_series_mod_scalar(a.handle(), to_scalar(value), reverse)};
+}
+template <class T>
+inline Series pow_scalar(const Series& a, T value, bool reverse = false) {
+    return Series{
+        dftu_series_pow_scalar(a.handle(), to_scalar(value), reverse)};
+}
+
+/// Nulls filled from the nearest present value before (ffill) or after
+/// (bfill) them; a leading (trailing) run with none stays null.
+Series ffill(const Series& v);
+Series bfill(const Series& v);
+
 }  // namespace dftracer::utils::dataframe
 
 #endif  // DFTRACER_UTILS_DATAFRAME_KERNELS_ARITHMETIC_H

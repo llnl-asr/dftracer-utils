@@ -25,6 +25,17 @@ using ParallelForFn = void (*)(void* ctx, std::int64_t n, std::int64_t grain,
 /// Install the backend (nullptr restores serial). Set once at startup.
 void set_parallel_backend(ParallelForFn fn, void* ctx);
 
+/// Whether a backend is installed. Lets an op skip a parallel algorithm whose
+/// extra work (a merge pass) is pure overhead when everything would run serial.
+bool parallel_backend_installed();
+
+/// Install a backend that fans work out through the core coroutine runtime's
+/// thread pool (default_runtime()). One call at startup makes the data-parallel
+/// dataframe kernels (group-by, expr eval, ...) run multi-threaded on the C++
+/// path, mirroring what the Python extension installs. Opt-in: the engine stays
+/// serial until this (or another backend) is set.
+void install_runtime_parallel_backend();
+
 namespace detail {
 /// Dispatch through the backend, or run serial when none is installed or
 /// `n <= grain` (so small work never pays the fan-out cost).
@@ -60,6 +71,38 @@ T parallel_reduce(std::int64_t n, std::int64_t grain, T identity, Map&& map,
     T acc = std::move(identity);
     for (T& p : partials) acc = combine(std::move(acc), std::move(p));
     return acc;
+}
+
+/// Two-pass parallel prefix scan over [0, n) for an associative op (cumsum,
+/// cummax, cummin, cumprod, ...). `local(begin, end)` computes the chunk's
+/// local scan (as if it were the whole array, seeded from `identity`) and
+/// returns the chunk's final accumulated value. `apply(begin, end, offset)`
+/// folds the preceding chunks' combined result into an already-scanned chunk.
+/// `combine` folds two chunk totals together and must share the same
+/// identity element as `local`'s seed. Falls back to one `local(0, n)` call
+/// when no backend is installed or `n <= grain`.
+template <class T, class Local, class Apply, class Combine>
+void parallel_prefix_scan(std::int64_t n, std::int64_t grain, T identity,
+                          Local&& local, Apply&& apply, Combine&& combine) {
+    if (n <= 0) return;
+    if (!parallel_backend_installed() || n <= grain) {
+        local(0, n);
+        return;
+    }
+    const std::int64_t chunks = (n + grain - 1) / grain;
+    std::vector<T> totals(static_cast<std::size_t>(chunks));
+    parallel_for(n, grain, [&](std::int64_t b, std::int64_t e) {
+        totals[static_cast<std::size_t>(b / grain)] = local(b, e);
+    });
+    std::vector<T> offsets(static_cast<std::size_t>(chunks));
+    T acc = identity;
+    for (std::int64_t c = 0; c < chunks; ++c) {
+        offsets[static_cast<std::size_t>(c)] = acc;
+        acc = combine(acc, totals[static_cast<std::size_t>(c)]);
+    }
+    parallel_for(n, grain, [&](std::int64_t b, std::int64_t e) {
+        apply(b, e, offsets[static_cast<std::size_t>(b / grain)]);
+    });
 }
 
 }  // namespace dftracer::utils::dataframe

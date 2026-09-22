@@ -162,6 +162,93 @@ void CompareU8(const void* p, std::int64_t n, dftu_scalar r, std::int32_t op,
                                scalar_as<std::uint8_t>(r), op, out);
 }
 
+// Monotonicity: scan adjacent pairs (p[i], p[i+1]) a vector at a time and bail
+// on the first strict inversion (a > b ascending, a < b descending). Using the
+// strict test, not Le/Ge, keeps float exact: a NaN makes both Gt and Lt false,
+// so it never counts as an inversion, matching the scalar `p[i] > p[i+1]` rule.
+template <class T>
+std::int32_t sorted_impl(const void* vp, std::int64_t n,
+                         std::int32_t descending) {
+    const T* p = static_cast<const T*>(vp);
+    if (n < 2) return 1;
+    const hn::ScalableTag<T> d;
+    const std::int64_t lanes = static_cast<std::int64_t>(hn::Lanes(d));
+    const std::int64_t last = n - 1;  // last valid pair index is n-2
+    std::int64_t i = 0;
+    for (; i + lanes <= last; i += lanes) {
+        const auto a = hn::LoadU(d, p + i);
+        const auto b = hn::LoadU(d, p + i + 1);
+        const auto bad = descending ? hn::Lt(a, b) : hn::Gt(a, b);
+        if (!hn::AllFalse(d, bad)) return 0;
+    }
+    for (; i < last; ++i)
+        if (descending ? p[i] < p[i + 1] : p[i] > p[i + 1]) return 0;
+    return 1;
+}
+
+std::int32_t SortedI64(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<std::int64_t>(p, n, desc);
+}
+std::int32_t SortedU64(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<std::uint64_t>(p, n, desc);
+}
+std::int32_t SortedF64(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<double>(p, n, desc);
+}
+std::int32_t SortedF32(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<float>(p, n, desc);
+}
+std::int32_t SortedI32(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<std::int32_t>(p, n, desc);
+}
+std::int32_t SortedU32(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<std::uint32_t>(p, n, desc);
+}
+std::int32_t SortedI16(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<std::int16_t>(p, n, desc);
+}
+std::int32_t SortedU16(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<std::uint16_t>(p, n, desc);
+}
+std::int32_t SortedI8(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<std::int8_t>(p, n, desc);
+}
+std::int32_t SortedU8(const void* p, std::int64_t n, std::int32_t desc) {
+    return sorted_impl<std::uint8_t>(p, n, desc);
+}
+
+// is_in over a small needle set: each row is set if it equals any needle. Per
+// block, OR the equality masks of every needle, packed 64 bits at a time. Small
+// nn keeps the O(n * nn) broadcast cheaper than a hash probe.
+void is_in_f64(const double* p, std::int64_t n, const double* needles, int nn,
+               std::uint8_t* out) {
+    const hn::ScalableTag<double> d;
+    const std::size_t lanes = hn::Lanes(d);
+    const std::uint64_t lane_mask =
+        lanes >= 64 ? ~std::uint64_t{0} : ((std::uint64_t{1} << lanes) - 1);
+    std::int64_t i = 0;
+    for (; i + 64 <= n; i += 64) {
+        std::uint64_t bits = 0;
+        for (std::size_t c = 0; c < 64; c += lanes) {
+            const auto v = hn::LoadU(d, p + i + static_cast<std::int64_t>(c));
+            auto m = hn::Eq(v, hn::Set(d, needles[0]));
+            for (int k = 1; k < nn; ++k)
+                m = hn::Or(m, hn::Eq(v, hn::Set(d, needles[k])));
+            std::uint64_t cb = 0;
+            hn::StoreMaskBits(d, m, reinterpret_cast<std::uint8_t*>(&cb));
+            bits |= (cb & lane_mask) << c;
+        }
+        std::memcpy(out + (i >> 3), &bits, 8);
+    }
+    for (; i < n; ++i) {
+        for (int k = 0; k < nn; ++k)
+            if (p[i] == needles[k]) {
+                out[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+                break;
+            }
+    }
+}
+
 }  // namespace HWY_NAMESPACE
 }  // namespace dftracer::utils::dataframe
 HWY_AFTER_NAMESPACE();
@@ -180,16 +267,90 @@ HWY_EXPORT(CompareU16);
 HWY_EXPORT(CompareI8);
 HWY_EXPORT(CompareU8);
 HWY_EXPORT(PackFlags);
+HWY_EXPORT(SortedI64);
+HWY_EXPORT(SortedU64);
+HWY_EXPORT(SortedF64);
+HWY_EXPORT(SortedF32);
+HWY_EXPORT(SortedI32);
+HWY_EXPORT(SortedU32);
+HWY_EXPORT(SortedI16);
+HWY_EXPORT(SortedU16);
+HWY_EXPORT(SortedI8);
+HWY_EXPORT(SortedU8);
+HWY_EXPORT(is_in_f64);
 
 void pack_flags(const char* flags, std::int64_t n, std::uint8_t* out) {
     if (n > 0) HWY_DYNAMIC_DISPATCH(PackFlags)(flags, n, out);
 }
 
+bool is_in_f64_simd(const dftu_series& v, const dftu_series& values,
+                    std::uint8_t* out) {
+    // Only the clean case: both FLAT Float64 with no nulls (read_f64 is
+    // identity there, so equality is exact), and a small needle set worth
+    // broadcasting.
+    if (v.encoding != Encoding::Flat || v.type != TypeId::Float64 || v.validity)
+        return false;
+    if (values.encoding != Encoding::Flat || values.type != TypeId::Float64 ||
+        values.validity)
+        return false;
+    const std::int64_t nn = values.length;
+    if (nn <= 0 || nn > 32) return false;
+    HWY_DYNAMIC_DISPATCH(is_in_f64)
+    (reinterpret_cast<const double*>(v.data->data()), v.length,
+     reinterpret_cast<const double*>(values.data->data()), static_cast<int>(nn),
+     out);
+    return true;
+}
+
+bool is_sorted_numeric(const dftu_series& v, bool descending, bool* out) {
+    if (v.encoding != Encoding::Flat || v.validity) return false;
+    const void* p = v.data->data();
+    const std::int64_t n = v.length;
+    const std::int32_t desc = descending ? 1 : 0;
+    switch (v.type) {
+        case TypeId::Int64:
+            *out = HWY_DYNAMIC_DISPATCH(SortedI64)(p, n, desc) != 0;
+            return true;
+        case TypeId::Uint64:
+            *out = HWY_DYNAMIC_DISPATCH(SortedU64)(p, n, desc) != 0;
+            return true;
+        case TypeId::Float64:
+            *out = HWY_DYNAMIC_DISPATCH(SortedF64)(p, n, desc) != 0;
+            return true;
+        case TypeId::Float32:
+            *out = HWY_DYNAMIC_DISPATCH(SortedF32)(p, n, desc) != 0;
+            return true;
+        case TypeId::Int32:
+            *out = HWY_DYNAMIC_DISPATCH(SortedI32)(p, n, desc) != 0;
+            return true;
+        case TypeId::Uint32:
+            *out = HWY_DYNAMIC_DISPATCH(SortedU32)(p, n, desc) != 0;
+            return true;
+        case TypeId::Int16:
+            *out = HWY_DYNAMIC_DISPATCH(SortedI16)(p, n, desc) != 0;
+            return true;
+        case TypeId::Uint16:
+            *out = HWY_DYNAMIC_DISPATCH(SortedU16)(p, n, desc) != 0;
+            return true;
+        case TypeId::Int8:
+            *out = HWY_DYNAMIC_DISPATCH(SortedI8)(p, n, desc) != 0;
+            return true;
+        case TypeId::Uint8:
+            *out = HWY_DYNAMIC_DISPATCH(SortedU8)(p, n, desc) != 0;
+            return true;
+        default:
+            return false;  // non-numeric (e.g. string): scalar path
+    }
+}
+
 bool compare(const dftu_series& v, std::int32_t op, dftu_scalar rhs,
              std::uint8_t* out) {
-    const void* p = v.data->data();
-    std::int64_t n = v.length;
-    switch (v.type) {
+    return compare(v.type, v.data->data(), v.length, op, rhs, out);
+}
+
+bool compare(TypeId type, const void* p, std::int64_t n, std::int32_t op,
+             dftu_scalar rhs, std::uint8_t* out) {
+    switch (type) {
         case TypeId::Int64:
             HWY_DYNAMIC_DISPATCH(CompareI64)(p, n, rhs, op, out);
             return true;

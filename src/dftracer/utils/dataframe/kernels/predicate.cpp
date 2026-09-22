@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -108,6 +109,9 @@ dftu_series* predicate_mask(const dftu_series* v, std::int32_t mode) {
         std::memset(out->data->data(), 0xFF, out->data->size());
     }
     // mode 0/2 on an integer column: all false, already zeroed.
+    // A null value has a null answer, as every elementwise op.
+    out->validity = v->validity;
+    out->null_count = v->null_count;
     return out;
 }
 
@@ -116,13 +120,65 @@ dftu_series* predicate_mask(const dftu_series* v, std::int32_t mode) {
 extern "C" {
 
 dftu_series* dftu_series_is_nan(const dftu_series* v) {
-    return v ? predicate_mask(v, 0) : nullptr;
+    if (!v) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_nan(flat_v));
+    return predicate_mask(v, 0);
 }
 dftu_series* dftu_series_is_finite(const dftu_series* v) {
-    return v ? predicate_mask(v, 1) : nullptr;
+    if (!v) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_finite(flat_v));
+    return predicate_mask(v, 1);
 }
 dftu_series* dftu_series_is_infinite(const dftu_series* v) {
-    return v ? predicate_mask(v, 2) : nullptr;
+    if (!v) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_infinite(flat_v));
+    return predicate_mask(v, 2);
+}
+
+// The validity bitmap as a Bool column (inverted for null_mask). A SELECTION
+// view has no bitmap of its own, so it is read row by row through is_null;
+// on every other layout validity is per row. A column with no bitmap has no
+// nulls.
+dftu_series* dftu_series_valid_mask(const dftu_series* v) {
+    if (!v) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_valid_mask(flat_v));
+    dftu_series* out = new_bool(v->length);
+    if (v->encoding == Encoding::Selection) {
+        std::uint8_t* dst = out->data->data();
+        for (std::int64_t i = 0; i < v->length; ++i)
+            if (!dftu_series_is_null(v, i))
+                dst[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        return out;
+    }
+    if (!v->validity) {
+        std::memset(out->data->data(), 0xFF, out->data->size());
+        return out;
+    }
+    std::memcpy(
+        out->data->data(), v->validity->data(),
+        std::min(buffer_bytes(TypeId::Bool, v->length), v->validity->size()));
+    return out;
+}
+
+dftu_series* dftu_series_null_mask(const dftu_series* v) {
+    if (!v) return nullptr;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_null_mask(flat_v));
+    dftu_series* out = new_bool(v->length);
+    if (v->encoding == Encoding::Selection) {
+        std::uint8_t* dst = out->data->data();
+        for (std::int64_t i = 0; i < v->length; ++i)
+            if (dftu_series_is_null(v, i))
+                dst[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        return out;
+    }
+    if (!v->validity) return out;
+    const std::uint8_t* bm = v->validity->data();
+    std::uint8_t* dst = out->data->data();
+    const std::size_t bytes =
+        std::min(buffer_bytes(TypeId::Bool, v->length), v->validity->size());
+    for (std::size_t i = 0; i < bytes; ++i)
+        dst[i] = static_cast<std::uint8_t>(~bm[i]);
+    return out;
 }
 
 }  // extern "C"

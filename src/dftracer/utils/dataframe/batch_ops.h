@@ -16,6 +16,8 @@ namespace dftracer::utils::dataframe {
 /// Gather the rows of every column at `indices` into a new DataFrame (same
 /// names).
 DataFrame take(const DataFrame& b, const std::vector<std::int64_t>& indices);
+/// The same by an Int64 index column (an argsort's output), read in place.
+DataFrame take(const DataFrame& b, const Series& indices);
 
 /// Keep the rows where the bit-packed Bool `mask` (length == b.num_rows()) is
 /// true, across every column.
@@ -50,14 +52,14 @@ DataFrame sort_by(const DataFrame& b, const std::string& name, bool descending);
 DataFrame topk(const DataFrame& b, const std::string& name, std::int64_t k,
                bool largest);
 
-/// How concat aligns the parts' columns.
-enum class ConcatHow {
-    Vertical,  ///< Parts must share a schema (same names/types/order); throws
-               ///< std::invalid_argument on a mismatch.
-    Diagonal   ///< Union the parts' columns: a column absent from a part is
-               ///< null-filled, and a column whose type differs across parts is
-               ///< promoted (mixed numeric -> Float64). A numeric/String or
-               ///< Bool/other-type clash throws.
+/// How concat aligns the parts' columns. Mirrors dftu_concat_how.
+enum class ConcatHow : std::int32_t {
+    Vertical = 0,  ///< Parts must share a schema (same names/types/order);
+                   ///< throws std::invalid_argument on a mismatch.
+    Diagonal = 1   ///< Union the parts' columns: a column absent from a part
+                   ///< is null-filled, and a column whose type differs across
+                   ///< parts is promoted (mixed numeric -> Float64). A
+                   ///< numeric/String or Bool/other-type clash throws.
 };
 
 /// Vertically concatenate batches into one DataFrame. `how` picks strict
@@ -76,15 +78,48 @@ Series concat_columns(const std::vector<const Series*>& parts);
 /// std::out_of_range on an unknown column/op.
 DataFrame group_by(const DataFrame& b, const std::string& key,
                    const std::vector<GroupAgg>& aggs);
+/// N-key form: a composite key over `keys` (hashed and compared
+/// column-by-column, each keeping its own type).
+DataFrame group_by(const DataFrame& b, const std::vector<std::string>& keys,
+                   const std::vector<GroupAgg>& aggs);
 
-/// Partition the rows into `n_parts` batches by a stable hash of the `keys`
-/// columns (rows with equal keys always land in the same part). The shuffle
+/// Int32 column (length num_rows): the part in [0, n_parts) each row lands in
+/// under a stable hash of the `keys` columns (rows with equal keys share a
+/// part). Throws std::out_of_range on an unknown column; std::invalid_argument
+/// if `keys` is empty or `n_parts < 1`.
+Series partition_id(const DataFrame& b, const std::vector<std::string>& keys,
+                    std::int64_t n_parts);
+
+/// Partition the rows into `n_parts` batches by partition_id. The shuffle
 /// primitive for distributed group_by/join: hash-partition, ship parts, then
-/// group_by/join each part locally. Throws std::out_of_range on an unknown
-/// column; std::invalid_argument if `keys` is empty or `n_parts < 1`.
+/// group_by/join each part locally. Throws as partition_id.
 std::vector<DataFrame> hash_partition(const DataFrame& b,
                                       const std::vector<std::string>& keys,
                                       std::int64_t n_parts);
+
+/// Hash join `left` with `right` on the key pairs `left_on[i]` = `right_on[i]`
+/// (exact match; a null key never matches; each pair must share a type).
+/// Output: every left column, then every right column except a key sharing
+/// its left key's name (emitted once, carrying the right value on an Outer
+/// row with no left match); any other right column colliding with a left
+/// name gets `suffix` ("" = "_right"). Matched rows keep left order; a
+/// right-preserving `how` appends the unmatched right rows. Semi / Anti
+/// return left columns only; Cross ignores the keys. Throws std::out_of_range
+/// on an absent key column, std::invalid_argument on an empty or uneven key
+/// list, a key type mismatch, or an unknown `how`.
+DataFrame join(const DataFrame& left, const DataFrame& right,
+               const std::vector<std::string>& left_on,
+               const std::vector<std::string>& right_on, JoinHow how,
+               const std::string& suffix);
+
+/// Compare two aggregation results that share their first `n_key` columns as
+/// group keys: outer-join on the keys (sorted ascending), keep every other
+/// column of `base` as `l_<m>` and of `variant` as `r_<m>`, then append
+/// `delta_<m>` (r - l) and `pct_<m>` (100 * delta / l, Float64) for each
+/// numeric metric `m` present on both sides. Throws std::invalid_argument if
+/// `n_key < 1`, exceeds a frame's width, or a key name differs.
+DataFrame compare_agg(const DataFrame& base, const DataFrame& variant,
+                      std::int64_t n_key);
 
 /// Drop every row that is null in ANY column (a combined not-null mask, then
 /// filter).
@@ -95,15 +130,24 @@ DataFrame drop_nulls(const DataFrame& b);
 /// are shared unchanged.
 DataFrame fill_null(const DataFrame& b, dftu_scalar value);
 
-/// Distinct ROWS (keep first), hashing all columns as the composite key.
-/// `drop_duplicates` is an alias.
-DataFrame unique(const DataFrame& b);
+/// Distinct ROWS (keep first), hashing all columns as the composite key, or
+/// only the `subset` columns (empty = all). `drop_duplicates` is an alias.
+/// Throws std::out_of_range for a subset name the frame lacks.
+DataFrame unique(const DataFrame& b,
+                 const std::vector<std::string>& subset = {});
 
 /// Stable lexicographic sort by several key columns, ascending or `descending`
 /// (nulls last in both directions). Throws std::out_of_range if a name is
 /// absent.
 DataFrame sort_by_multi(const DataFrame& b,
                         const std::vector<std::string>& names, bool descending);
+
+/// Per-column direction form: `descending[i]` applies to `names[i]`. A single
+/// flag broadcasts to every key. Throws std::out_of_range if a name is absent;
+/// std::invalid_argument if `descending` is neither size 1 nor `names.size()`.
+DataFrame sort_by_multi(const DataFrame& b,
+                        const std::vector<std::string>& names,
+                        const std::vector<bool>& descending);
 
 /// The last `n` rows (clamped), across every column.
 DataFrame tail(const DataFrame& b, std::int64_t n);
@@ -126,6 +170,32 @@ DataFrame describe(const DataFrame& b);
 /// A one-row frame with one Int64 column per input column giving that column's
 /// null count.
 DataFrame null_count(const DataFrame& b);
+
+/// The whole frame as one group: `aggs` as group_by takes them (any op,
+/// including the two-column and parameterized ones), one output row.
+DataFrame reduce(const DataFrame& b, const std::vector<GroupAgg>& aggs);
+
+/// Whether `agg` is a one-column, parameter-free aggregate reduce(b, agg)
+/// can broadcast over every column (Sum, Min, Max, CountValid, Mean, Var,
+/// Std, Skew, Kurt, SumSq, First, Last, BitOr, Prod).
+bool reduce_broadcasts(Agg agg) noexcept;
+
+/// The specs that broadcast `agg` over a frame with these names and types:
+/// every non-key column for CountValid / First / Last, the numeric (or as yet
+/// unknown-typed) non-key columns for the rest, each under its own name. The
+/// one rule behind reduce(b, agg) (`keys` empty) and the grouped
+/// group_by(b, keys, reduce_specs(b, agg, keys)) (pandas
+/// `df.groupby(keys).sum()`). Throws std::invalid_argument for an `agg`
+/// reduce_broadcasts refuses.
+std::vector<GroupAgg> reduce_specs(const std::vector<std::string>& names,
+                                   const std::vector<TypeId>& types, Agg agg,
+                                   const std::vector<std::string>& keys = {});
+std::vector<GroupAgg> reduce_specs(const DataFrame& b, Agg agg,
+                                   const std::vector<std::string>& keys = {});
+
+/// One row reducing each eligible column with `agg` under its own name (the
+/// pandas `df.sum()` family): reduce(b, reduce_specs(b, agg)).
+DataFrame reduce(const DataFrame& b, Agg agg);
 
 /// Bit-packed Bool mask (length num_rows): true where the whole ROW is
 /// duplicated (occurs more than once), hashing all columns.
@@ -155,6 +225,12 @@ DataFrame unpivot(const DataFrame& b, const std::vector<std::string>& id_vars,
 /// std::out_of_range if `column` is absent; std::invalid_argument if it is not
 /// a List column.
 DataFrame explode(const DataFrame& b, const std::string& column);
+
+/// UNNEST a List column: as explode, but an empty or null list drops the row
+/// unless `keep_empty` (then one null-exploded row), and a List<Struct>
+/// column is replaced by one column per struct field, named by the field.
+DataFrame unnest(const DataFrame& b, const std::string& column,
+                 bool keep_empty);
 
 /// One-hot encode `column`: replace it in place with one Int8 column per
 /// distinct non-null value (sorted ascending for a stable column order), named

@@ -1,4 +1,5 @@
 #include <dftracer/utils/dataframe/kernels/cast.h>
+#include <dftracer/utils/dataframe/parallel.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -122,7 +123,23 @@ bool cast_simd(std::int32_t src, std::int32_t dst, const void* sv, void* dv,
         return true;
     }
     if (s == TypeId::Int64 && d == TypeId::Float64) {
-        HWY_DYNAMIC_DISPATCH(CastI64F64)(sv, dv, n);
+        // EXPERIMENT (op 2 measurement, see dataframe_parallel_bench.cpp):
+        // fan out across row ranges to measure whether this bandwidth-bound
+        // cast is worth parallelizing on this machine.
+        constexpr std::size_t CAST_PARALLEL_GRAIN = 1 << 20;
+        if (parallel_backend_installed() && n >= CAST_PARALLEL_GRAIN) {
+            const auto* s64 = static_cast<const std::int64_t*>(sv);
+            auto* d64 = static_cast<double*>(dv);
+            parallel_for(static_cast<std::int64_t>(n),
+                         static_cast<std::int64_t>(CAST_PARALLEL_GRAIN),
+                         [&](std::int64_t beg, std::int64_t end) {
+                             HWY_DYNAMIC_DISPATCH(CastI64F64)
+                             (s64 + beg, d64 + beg,
+                              static_cast<std::size_t>(end - beg));
+                         });
+        } else {
+            HWY_DYNAMIC_DISPATCH(CastI64F64)(sv, dv, n);
+        }
         return true;
     }
     if (s == TypeId::Int32 && d == TypeId::Float64) {

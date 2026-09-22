@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/hash/constants.h>
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/core/common/transparent_string_hash.h>
@@ -12,9 +13,9 @@
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/signal_handler.h>
 #include <dftracer/utils/server/trace_index.h>
+#include <dftracer/utils/server/viz/internal.h>
+#include <dftracer/utils/server/viz/summary_build.h>
 #include <dftracer/utils/server/viz_api.h>
-#include <dftracer/utils/server/viz_internal.h>
-#include <dftracer/utils/server/viz_summary_build.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_definition.h>
@@ -63,9 +64,11 @@ struct PidTid {
 
 struct PidTidHash {
     std::uint64_t operator()(const PidTid& k) const noexcept {
-        std::uint64_t h = 1469598103934665603ULL;
-        h = (h ^ static_cast<std::uint64_t>(k.pid)) * 1099511628211ULL;
-        h = (h ^ static_cast<std::uint64_t>(k.tid)) * 1099511628211ULL;
+        std::uint64_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
+        h = (h ^ static_cast<std::uint64_t>(k.pid)) *
+            dftracer::utils::hash::FNV1A_PRIME;
+        h = (h ^ static_cast<std::uint64_t>(k.tid)) *
+            dftracer::utils::hash::FNV1A_PRIME;
         return h;
     }
 };

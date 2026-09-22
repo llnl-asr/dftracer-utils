@@ -22,7 +22,7 @@ using dataframe::deserialize_flame_arena;
 using dataframe::FlameNode;
 
 // Emit one arena node (and its subtree) as JSON, children sorted by total.
-static void serialize_flame_node(simdjson::builder::string_builder& sb,
+inline void serialize_flame_node(simdjson::builder::string_builder& sb,
                                  std::vector<FlameNode>& arena,
                                  std::uint32_t idx) {
     FlameNode& n = arena[idx];

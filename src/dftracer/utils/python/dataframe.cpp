@@ -6,6 +6,8 @@
 
 #include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/python/dataframe.h>
+#include <dftracer/utils/python/py_frame_op_helpers.h>
+#include <dftracer/utils/utilities/common/arrow/frame_ops.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
@@ -16,16 +18,19 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/kernels/kernels.h>
+#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/plan.h>
 #include <dftracer/utils/python/columnar_eval.h>
+#include <dftracer/utils/python/lazyframe.h>
+#include <dftracer/utils/python/py_agg_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
+#include <dftracer/utils/python/py_join_helpers.h>
 #include <dftracer/utils/python/py_method.h>
+#include <dftracer/utils/python/py_scalar_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/series.h>
 #include <dftracer/utils/query/errc.h>
 #include <dftracer/utils/query/query.h>
-#include <dftracer/utils/trace/comparator/compare_view.h>
-#include <dftracer/utils/trace/views/result_join.h>
 
 #include <cstdint>
 #include <cstring>
@@ -43,6 +48,14 @@ namespace {
 
 using dataframe::DataFrame;
 using dataframe::Series;
+using dftracer::utils::python::aggs_from_seq;
+using dftracer::utils::python::group_agg_from_spec;
+using dftracer::utils::python::join_how_from_str;
+using dftracer::utils::python::join_keys_from_objs;
+using dftracer::utils::python::parse_int_seq;
+using dftracer::utils::python::parse_seq;
+using dftracer::utils::python::parse_string_seq;
+using dftracer::utils::python::strings_from_str_or_seq;
 
 // A DataFrame owns its columns as one STRUCT column: child(i) hands out a
 // column sharing the struct's buffers (O(1)), and the struct exports to Arrow
@@ -101,25 +114,13 @@ template <class Fn>
 PyObject* run_batch_op(Fn&& fn) {
     try {
         return make_dataframe(fn());
+    } catch (const std::out_of_range& e) {
+        PyErr_SetString(PyExc_KeyError, e.what());
+        return nullptr;
     } catch (const std::exception& e) {
         PyErr_SetString(PyExc_ValueError, e.what());
         return nullptr;
     }
-}
-
-// Parse an "op[:column]" aggregate spec; throws std::out_of_range on a bad op.
-dataframe::GroupAgg group_agg_from_spec(const std::string& spec) {
-    std::size_t colon = spec.find(':');
-    std::string op = spec.substr(0, colon);
-    dataframe::GroupAgg a;
-    a.op = dataframe::agg_from_string(op);
-    if (colon == std::string::npos) {
-        a.out = op;
-    } else {
-        a.column = spec.substr(colon + 1);
-        a.out = op + "_" + a.column;
-    }
-    return a;
 }
 
 PyObject* DataFrame_subscript(PyObject* self, PyObject* key) {
@@ -141,8 +142,11 @@ PyObject* DataFrame_subscript(PyObject* self, PyObject* key) {
 int DataFrame_contains(PyObject* self, PyObject* key) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return -1;
+    // Only a name can be a column; anything else is simply not in the
+    // frame, with no error left behind.
+    if (!PyUnicode_Check(key)) return 0;
     const char* name = PyUnicode_AsUTF8(key);
-    if (!name) return 0;
+    if (!name) return -1;
     return index_of(b, name) >= 0 ? 1 : 0;
 }
 
@@ -214,36 +218,21 @@ PyObject* DataFrame_query(PyObject* self, PyObject* args, PyObject* kwds) {
         }
         if (group_by && *group_by) plan.group_by = group_by;
         if (aggs_obj && aggs_obj != Py_None) {
-            PyObject* seq =
-                PySequence_Fast(aggs_obj, "aggs must be a sequence of strings");
-            if (!seq) return nullptr;
-            Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-            for (Py_ssize_t i = 0; i < n; ++i) {
-                const char* s =
-                    PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(seq, i));
-                if (!s) {
-                    Py_DECREF(seq);
-                    return nullptr;
-                }
-                plan.aggs.push_back(group_agg_from_spec(s));
-            }
-            Py_DECREF(seq);
+            if (!parse_seq<dataframe::GroupAgg>(
+                    aggs_obj, "aggs must be a sequence of strings", plan.aggs,
+                    [](PyObject* item, std::vector<dataframe::GroupAgg>& o) {
+                        const char* s = PyUnicode_AsUTF8(item);
+                        if (!s) return false;
+                        o.push_back(group_agg_from_spec(s));
+                        return true;
+                    }))
+                return nullptr;
         }
         if (select_obj && select_obj != Py_None) {
-            PyObject* seq = PySequence_Fast(
-                select_obj, "select must be a sequence of column names");
-            if (!seq) return nullptr;
-            Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-            for (Py_ssize_t i = 0; i < n; ++i) {
-                const char* s =
-                    PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(seq, i));
-                if (!s) {
-                    Py_DECREF(seq);
-                    return nullptr;
-                }
-                plan.select.emplace_back(s);
-            }
-            Py_DECREF(seq);
+            if (!parse_string_seq(select_obj,
+                                  "select must be a sequence of column names",
+                                  plan.select))
+                return nullptr;
         }
         if (order_by && *order_by) plan.order_by = order_by;
         plan.descending = descending != 0;
@@ -320,20 +309,9 @@ PyObject* DataFrame_with_column(PyObject* self, PyObject* args) {
 PyObject* DataFrame_take(PyObject* self, PyObject* seq) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    PyObject* fast = PySequence_Fast(seq, "take() expects a sequence of ints");
-    if (!fast) return nullptr;
-    Py_ssize_t n = PySequence_Fast_GET_SIZE(fast);
     std::vector<std::int64_t> idx;
-    idx.reserve(static_cast<std::size_t>(n));
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        long long v = PyLong_AsLongLong(PySequence_Fast_GET_ITEM(fast, i));
-        if (v == -1 && PyErr_Occurred()) {
-            Py_DECREF(fast);
-            return nullptr;
-        }
-        idx.push_back(static_cast<std::int64_t>(v));
-    }
-    Py_DECREF(fast);
+    if (!parse_int_seq(seq, "take() expects a sequence of ints", idx))
+        return nullptr;
     return run_batch_op([&] { return to_dataframe(b).take(idx); });
 }
 
@@ -361,24 +339,36 @@ PyObject* DataFrame_fill_null(PyObject* self, PyObject* value) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     dftu_scalar s{};
-    if (PyFloat_Check(value)) {
-        s.kind = DFTU_SCALAR_TAG_F64;
-        s.value.d = PyFloat_AsDouble(value);
-        if (s.value.d == -1.0 && PyErr_Occurred()) return nullptr;
-    } else {
-        long long v = PyLong_AsLongLong(value);
-        if (v == -1 && PyErr_Occurred()) return nullptr;
-        s.kind = DFTU_SCALAR_TAG_I64;
-        s.value.i = v;
-    }
+    if (!py_to_scalar(value, &s)) return nullptr;
     return run_batch_op(
         [&] { return dataframe::fill_null(to_dataframe(b), s); });
 }
 
-PyObject* DataFrame_unique(PyObject* self, PyObject*) {
+// Read a sequence (or single str) of column names into `out`. Returns false and
+// sets a Python error on a non-string element.
+bool names_from_obj(PyObject* obj, std::vector<std::string>& out) {
+    if (PyUnicode_Check(obj)) {
+        out.emplace_back(PyUnicode_AsUTF8(obj));
+        return true;
+    }
+    return parse_string_seq(obj, "expected a str or sequence of str", out);
+}
+
+// unique(subset=None): subset is a name or a sequence of names; None or an
+// empty sequence keys on every column.
+PyObject* DataFrame_unique(PyObject* self, PyObject* args, PyObject* kwds) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    return run_batch_op([&] { return dataframe::unique(to_dataframe(b)); });
+    PyObject* subset_obj = Py_None;
+    static const char* kwlist[] = {"subset", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O",
+                                     const_cast<char**>(kwlist), &subset_obj))
+        return nullptr;
+    std::vector<std::string> subset;
+    if (subset_obj != Py_None && !names_from_obj(subset_obj, subset))
+        return nullptr;
+    return run_batch_op(
+        [&] { return dataframe::unique(to_dataframe(b), subset); });
 }
 
 PyObject* DataFrame_sort_by_multi(PyObject* self, PyObject* args,
@@ -386,28 +376,41 @@ PyObject* DataFrame_sort_by_multi(PyObject* self, PyObject* args,
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     PyObject* names_obj = nullptr;
-    int descending = 0;
+    PyObject* descending_obj = nullptr;
     static const char* kwlist[] = {"names", "descending", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|p",
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O",
                                      const_cast<char**>(kwlist), &names_obj,
-                                     &descending))
+                                     &descending_obj))
         return nullptr;
-    PyObject* seq = PySequence_Fast(names_obj, "names must be a sequence");
-    if (!seq) return nullptr;
     std::vector<std::string> names;
-    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        const char* s = PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(seq, i));
-        if (!s) {
-            Py_DECREF(seq);
-            return nullptr;
+    if (!parse_string_seq(names_obj, "names must be a sequence", names))
+        return nullptr;
+
+    // `descending` is either a single bool (broadcasts) or a sequence of bool,
+    // one per name; a bare Python list is never truthy-coerced (that was the
+    // old "any non-empty list sorts descending" bug).
+    std::vector<bool> descending;
+    if (!descending_obj) {
+        descending.push_back(false);
+    } else if (PyBool_Check(descending_obj) || PyLong_Check(descending_obj)) {
+        descending.push_back(PyObject_IsTrue(descending_obj) != 0);
+    } else {
+        PyObject* dseq = PySequence_Fast(
+            descending_obj, "descending must be a bool or a sequence of bool");
+        if (!dseq) return nullptr;
+        Py_ssize_t dn = PySequence_Fast_GET_SIZE(dseq);
+        for (Py_ssize_t i = 0; i < dn; ++i) {
+            int truth = PyObject_IsTrue(PySequence_Fast_GET_ITEM(dseq, i));
+            if (truth < 0) {
+                Py_DECREF(dseq);
+                return nullptr;
+            }
+            descending.push_back(truth != 0);
         }
-        names.emplace_back(s);
+        Py_DECREF(dseq);
     }
-    Py_DECREF(seq);
     return run_batch_op([&] {
-        return dataframe::sort_by_multi(to_dataframe(b), names,
-                                        descending != 0);
+        return dataframe::sort_by_multi(to_dataframe(b), names, descending);
     });
 }
 
@@ -448,6 +451,70 @@ PyObject* DataFrame_null_count(PyObject* self, PyObject*) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     return run_batch_op([&] { return dataframe::null_count(to_dataframe(b)); });
+}
+
+// reduce(agg): `agg` is an aggregate name (sum, mean, ...) broadcast over
+// every eligible column, one row.
+PyObject* DataFrame_reduce(PyObject* self, PyObject* arg) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    const char* agg = PyUnicode_AsUTF8(arg);
+    if (!agg) return nullptr;
+    return run_batch_op([&] {
+        return dataframe::reduce(to_dataframe(b),
+                                 dataframe::agg_from_string(agg));
+    });
+}
+
+PyObject* DataFrame_group_transform(PyObject* self, PyObject* args,
+                                    PyObject* kwds) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    dftracer::utils::python::GroupwiseArgs a;
+    if (!dftracer::utils::python::parse_groupwise_args(args, kwds,
+                                                       names_from_obj, a))
+        return nullptr;
+    return run_batch_op([&] {
+        return dataframe::GroupBy(to_dataframe(b), a.keys)
+            .transform(static_cast<dataframe::GroupwiseOp>(a.kind), a.n,
+                       static_cast<dataframe::RankMethod>(a.method),
+                       a.ascending != 0);
+    });
+}
+
+// reduce_specs(agg, keys) -> list[str]: the "op:column:out" specs that
+// broadcast `agg` over every eligible non-key column, for group_by.
+PyObject* DataFrame_reduce_specs(PyObject* self, PyObject* args) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    const char* agg = nullptr;
+    PyObject* keys_obj = Py_None;
+    if (!PyArg_ParseTuple(args, "s|O", &agg, &keys_obj)) return nullptr;
+    std::vector<std::string> keys;
+    if (keys_obj != Py_None && !names_from_obj(keys_obj, keys)) return nullptr;
+    std::vector<std::string> specs;
+    try {
+        specs = dftracer::utils::python::reduce_spec_strings(
+            dataframe::reduce_specs(to_dataframe(b),
+                                    dataframe::agg_from_string(agg), keys));
+    } catch (const std::out_of_range& e) {
+        PyErr_SetString(PyExc_KeyError, e.what());
+        return nullptr;
+    } catch (const std::exception& e) {
+        PyErr_SetString(PyExc_ValueError, e.what());
+        return nullptr;
+    }
+    PyObject* list = PyList_New(static_cast<Py_ssize_t>(specs.size()));
+    if (!list) return nullptr;
+    for (std::size_t i = 0; i < specs.size(); ++i) {
+        PyObject* s = PyUnicode_FromString(specs[i].c_str());
+        if (!s) {
+            Py_DECREF(list);
+            return nullptr;
+        }
+        PyList_SET_ITEM(list, static_cast<Py_ssize_t>(i), s);
+    }
+    return list;
 }
 
 PyObject* DataFrame_is_duplicated(PyObject* self, PyObject*) {
@@ -533,6 +600,31 @@ PyObject* DataFrame_topk(PyObject* self, PyObject* args, PyObject* kwds) {
     });
 }
 
+PyObject* DataFrame_partition_id(PyObject* self, PyObject* args) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    PyObject* keys_obj = nullptr;
+    Py_ssize_t n_parts = 0;
+    if (!PyArg_ParseTuple(args, "On", &keys_obj, &n_parts)) return nullptr;
+    std::vector<std::string> keys;
+    if (PyUnicode_Check(keys_obj)) {
+        keys.emplace_back(PyUnicode_AsUTF8(keys_obj));
+    } else if (!parse_string_seq(keys_obj, "keys must be a str or list",
+                                 keys)) {
+        return nullptr;
+    }
+    try {
+        return dftracer::utils::python::wrap_vec_column(dataframe::partition_id(
+            to_dataframe(b), keys, static_cast<std::int64_t>(n_parts)));
+    } catch (const std::out_of_range& e) {
+        PyErr_SetString(PyExc_KeyError, e.what());
+        return nullptr;
+    } catch (const std::exception& e) {
+        PyErr_SetString(PyExc_ValueError, e.what());
+        return nullptr;
+    }
+}
+
 // hash_partition(keys, n_parts) -> list[DataFrame]; keys is a name or a
 // sequence of names. The shuffle primitive for distributed group_by/join.
 PyObject* DataFrame_hash_partition(PyObject* self, PyObject* args) {
@@ -545,19 +637,9 @@ PyObject* DataFrame_hash_partition(PyObject* self, PyObject* args) {
     std::vector<std::string> keys;
     if (PyUnicode_Check(keys_obj)) {
         keys.emplace_back(PyUnicode_AsUTF8(keys_obj));
-    } else {
-        PyObject* seq = PySequence_Fast(keys_obj, "keys must be a str or list");
-        if (!seq) return nullptr;
-        Py_ssize_t m = PySequence_Fast_GET_SIZE(seq);
-        for (Py_ssize_t i = 0; i < m; ++i) {
-            const char* s = PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(seq, i));
-            if (!s) {
-                Py_DECREF(seq);
-                return nullptr;
-            }
-            keys.emplace_back(s);
-        }
-        Py_DECREF(seq);
+    } else if (!parse_string_seq(keys_obj, "keys must be a str or list",
+                                 keys)) {
+        return nullptr;
     }
 
     std::vector<DataFrame> parts;
@@ -581,30 +663,40 @@ PyObject* DataFrame_hash_partition(PyObject* self, PyObject* args) {
     return list;
 }
 
-// _group_agg_expr(key, specs): the expression-aggregate workhorse. `specs` is a
-// list of (op_int, value_ast_or_None, out_name); value ASTs reference this
-// batch's columns by index. All value expressions compile in one CSE'd, pruned
-// pass (dataframe::group_agg_expr). The Python GroupBy serializes to this.
+// _group_agg_expr(key, specs): the expression-aggregate workhorse. `key` is a
+// column name or a sequence of names (composite key). `specs` is a list of
+// (op_int, value_ast_or_None, out_name[, param[, by_ast]]); value ASTs
+// reference this batch's columns by index. `by_ast` is ArgMax's maximized
+// value. All value expressions compile in one CSE'd, pruned pass
+// (dataframe::group_agg_expr). The Python GroupBy serializes to this.
 PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
-    const char* key = nullptr;
+    PyObject* key_obj = nullptr;
     PyObject* specs = nullptr;
-    if (!PyArg_ParseTuple(args, "sO", &key, &specs)) return nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &key_obj, &specs)) return nullptr;
+    std::vector<std::string> keys;
+    if (!strings_from_str_or_seq(key_obj, keys)) return nullptr;
     PyObject* seq = PySequence_Fast(specs, "specs must be a sequence");
     if (!seq) return nullptr;
 
     DataFrame bat = to_dataframe(b);
-    std::int32_t ki = -1;
-    for (std::size_t i = 0; i < bat.names.size(); ++i)
-        if (bat.names[i] == key) {
-            ki = static_cast<std::int32_t>(i);
-            break;
+    std::vector<dataframe::Expr> key_exprs;
+    key_exprs.reserve(keys.size());
+    for (const std::string& key : keys) {
+        std::int32_t ki = -1;
+        for (std::size_t i = 0; i < bat.names.size(); ++i)
+            if (bat.names[i] == key) {
+                ki = static_cast<std::int32_t>(i);
+                break;
+            }
+        if (ki < 0) {
+            Py_DECREF(seq);
+            PyErr_Format(PyExc_KeyError, "group_by: no column named %s",
+                         key.c_str());
+            return nullptr;
         }
-    if (ki < 0) {
-        Py_DECREF(seq);
-        PyErr_Format(PyExc_KeyError, "group_by: no column named %s", key);
-        return nullptr;
+        key_exprs.push_back(dataframe::expr_col(ki));
     }
 
     std::vector<dataframe::AggExprSpec> aggs;
@@ -613,16 +705,16 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
     for (Py_ssize_t i = 0; i < ns; ++i) {
         PyObject* t = PySequence_Fast_GET_ITEM(seq, i);
         const Py_ssize_t tn = PyTuple_Check(t) ? PyTuple_GET_SIZE(t) : 0;
-        if (tn != 3 && tn != 4) {
+        if (tn != 3 && tn != 4 && tn != 5) {
             Py_DECREF(seq);
             PyErr_SetString(PyExc_TypeError,
-                            "each spec is (op, ast, out[, param])");
+                            "each spec is (op, ast, out[, param[, by_ast]])");
             return nullptr;
         }
         dataframe::AggExprSpec s;
         s.op = static_cast<dataframe::AggOp>(
             PyLong_AsLong(PyTuple_GET_ITEM(t, 0)));
-        if (tn == 4) {
+        if (tn >= 4) {
             s.param = PyFloat_AsDouble(PyTuple_GET_ITEM(t, 3));
             if (s.param == -1.0 && PyErr_Occurred()) {
                 Py_DECREF(seq);
@@ -638,6 +730,18 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
             }
             s.value = std::move(v);
         }
+        if (tn == 5) {
+            PyObject* by_ast = PyTuple_GET_ITEM(t, 4);
+            if (by_ast != Py_None) {
+                dataframe::Expr by;
+                if (!dftracer::utils::python::build_expr_from_ast(by_ast,
+                                                                  &by)) {
+                    Py_DECREF(seq);
+                    return nullptr;
+                }
+                s.by = std::move(by);
+            }
+        }
         const char* out = PyUnicode_AsUTF8(PyTuple_GET_ITEM(t, 2));
         if (!out) {
             Py_DECREF(seq);
@@ -652,27 +756,32 @@ PyObject* DataFrame_group_agg_expr(PyObject* self, PyObject* args) {
     inputs.reserve(bat.columns.size());
     for (const Series& c : bat.columns) inputs.push_back(&c);
     return run_batch_op([&] {
-        return dataframe::group_agg_expr(dataframe::expr_col(ki), aggs, inputs,
-                                         key);
+        return dataframe::group_agg_expr(key_exprs, aggs, inputs, keys);
     });
 }
 
 // Two-step / expression forms delegate to the Python GroupBy, which serializes
-// each spec and calls _group_agg_expr. `args` is (key, *specs).
-PyObject* delegate_groupby(PyObject* self, PyObject* args) {
+// each spec and calls _group_agg_expr. `args[0:nk]` are the key names (a tuple,
+// even for one key); `args[nk:]` are the specs.
+PyObject* delegate_groupby(PyObject* self, PyObject* args, Py_ssize_t nk) {
     PyObject* mod = PyImport_ImportModule("dftracer.utils.columnar");
     if (!mod) return nullptr;
     PyObject* gb_type = PyObject_GetAttrString(mod, "GroupBy");
     Py_DECREF(mod);
     if (!gb_type) return nullptr;
-    PyObject* gb = PyObject_CallFunctionObjArgs(
-        gb_type, self, PyTuple_GET_ITEM(args, 0), nullptr);
+    PyObject* keys = PyTuple_GetSlice(args, 0, nk);
+    if (!keys) {
+        Py_DECREF(gb_type);
+        return nullptr;
+    }
+    PyObject* gb = PyObject_CallFunctionObjArgs(gb_type, self, keys, nullptr);
+    Py_DECREF(keys);
     Py_DECREF(gb_type);
     if (!gb) return nullptr;
     Py_ssize_t n = PyTuple_GET_SIZE(args);
-    if (n == 1) return gb;             // two-step: hand back the GroupBy
+    if (n == nk) return gb;             // two-step: hand back the GroupBy
     PyObject* rest =
-        PyTuple_GetSlice(args, 1, n);  // the specs, as an arg tuple
+        PyTuple_GetSlice(args, nk, n);  // the specs, as an arg tuple
     PyObject* aggm = rest ? PyObject_GetAttrString(gb, "agg") : nullptr;
     Py_DECREF(gb);
     PyObject* res = aggm ? PyObject_Call(aggm, rest, nullptr) : nullptr;
@@ -681,31 +790,44 @@ PyObject* delegate_groupby(PyObject* self, PyObject* args) {
     return res;
 }
 
-// group_by(key, *specs). Two forms: legacy string specs ("count" /
-// "<op>:<column>", op in sum|min|max|mean|var|std|skew|kurt) run inline; a call
-// with no specs (two-step .agg(...)) or any expression spec delegates to the
-// Python GroupBy and the expression-aggregate path (CSE + pruner).
+// group_by(*keys_and_specs). The leading run of plain column-name strings
+// (not "count" and not containing ':') are the (possibly composite) key; a
+// trailing run of legacy "op[:column]" strings runs inline, anything else
+// (no specs, or an expression/Agg spec) delegates to the Python GroupBy and
+// the expression-aggregate path (CSE + pruner).
 PyObject* DataFrame_group_by(PyObject* self, PyObject* args) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     Py_ssize_t n = PyTuple_GET_SIZE(args);
     if (n < 1) {
-        PyErr_SetString(PyExc_TypeError, "group_by(key, *aggs) needs a key");
+        PyErr_SetString(PyExc_TypeError, "group_by(*keys, *aggs) needs a key");
         return nullptr;
     }
-    const char* key = PyUnicode_AsUTF8(PyTuple_GET_ITEM(args, 0));
-    if (!key) return nullptr;
-    bool all_str = n >= 2;
-    for (Py_ssize_t i = 1; i < n; ++i)
-        if (!PyUnicode_Check(PyTuple_GET_ITEM(args, i))) {
-            all_str = false;
-            break;
-        }
-    if (n == 1 || !all_str) return delegate_groupby(self, args);
+    Py_ssize_t nk = 0;
+    for (; nk < n; ++nk) {
+        PyObject* a = PyTuple_GET_ITEM(args, nk);
+        if (!PyUnicode_Check(a)) break;
+        const char* s = PyUnicode_AsUTF8(a);
+        if (!s) return nullptr;
+        const std::string sv(s);
+        if (sv == "count" || sv.find(':') != std::string::npos) break;
+    }
+    if (nk == 0) nk = 1;  // args[0] is always at least one key
+    bool rest_legacy = n > nk;
+    for (Py_ssize_t i = nk; i < n && rest_legacy; ++i)
+        rest_legacy = PyUnicode_Check(PyTuple_GET_ITEM(args, i)) != 0;
+    if (n == nk || !rest_legacy) return delegate_groupby(self, args, nk);
 
+    std::vector<std::string> keys;
+    keys.reserve(static_cast<std::size_t>(nk));
+    for (Py_ssize_t i = 0; i < nk; ++i) {
+        const char* s = PyUnicode_AsUTF8(PyTuple_GET_ITEM(args, i));
+        if (!s) return nullptr;
+        keys.emplace_back(s);
+    }
     std::vector<std::string> specs;
-    specs.reserve(static_cast<std::size_t>(n - 1));
-    for (Py_ssize_t i = 1; i < n; ++i) {
+    specs.reserve(static_cast<std::size_t>(n - nk));
+    for (Py_ssize_t i = nk; i < n; ++i) {
         const char* s = PyUnicode_AsUTF8(PyTuple_GET_ITEM(args, i));
         if (!s) return nullptr;
         specs.emplace_back(s);
@@ -715,59 +837,41 @@ PyObject* DataFrame_group_by(PyObject* self, PyObject* args) {
         aggs.reserve(specs.size());
         for (const std::string& spec : specs)
             aggs.push_back(group_agg_from_spec(spec));
-        return dataframe::group_by(to_dataframe(b), key, aggs);
+        return dataframe::group_by(to_dataframe(b), keys, aggs);
     });
 }
 
 // join(other, how="inner", on=1): equi-join on the first `on` (leading) key
 // columns; how is inner|left|right|full|semi|anti.
 PyObject* DataFrame_join(PyObject* self, PyObject* args, PyObject* kwds) {
-    namespace views = dftracer::utils::trace::views;
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     PyObject* other = nullptr;
+    PyObject* on = nullptr;
     const char* how = "inner";
-    Py_ssize_t on = 1;
-    static const char* kwlist[] = {"other", "how", "on", nullptr};
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "O|sn", const_cast<char**>(kwlist), &other, &how, &on))
+    PyObject* left_on = nullptr;
+    PyObject* right_on = nullptr;
+    const char* suffix = "_right";
+    static const char* kwlist[] = {"other",    "on",     "how",  "left_on",
+                                   "right_on", "suffix", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|OsOOs",
+                                     const_cast<char**>(kwlist), &other, &on,
+                                     &how, &left_on, &right_on, &suffix))
         return nullptr;
     DataFrameObject* o = as_dataframe(other);
     if (!o) return nullptr;
-    const std::string h(how);
-    views::JoinType type;
-    if (h == "inner")
-        type = views::JoinType::INNER;
-    else if (h == "left")
-        type = views::JoinType::LEFT;
-    else if (h == "right")
-        type = views::JoinType::RIGHT;
-    else if (h == "full")
-        type = views::JoinType::FULL;
-    else if (h == "semi")
-        type = views::JoinType::LEFT_SEMI;
-    else if (h == "anti")
-        type = views::JoinType::LEFT_ANTI;
-    else {
-        PyErr_Format(PyExc_ValueError,
-                     "join() how must be inner|left|right|full|semi|anti, "
-                     "got '%s'",
-                     how);
-        return nullptr;
-    }
+    dataframe::JoinHow jh;
+    if (!join_how_from_str(how, jh)) return nullptr;
+    std::vector<std::string> l;
+    std::vector<std::string> r;
+    if (!join_keys_from_objs(on, left_on, right_on, jh, l, r)) return nullptr;
     return run_batch_op([&] {
-        DataFrame joined =
-            views::join_batches(to_dataframe(b), to_dataframe(o),
-                                static_cast<std::int64_t>(on), type);
-        if (joined.num_columns() == 0)
-            throw std::invalid_argument(
-                "join requires both batches to share a key-column schema");
-        return joined;
+        return dataframe::join(to_dataframe(b), to_dataframe(o), l, r, jh,
+                               suffix);
     });
 }
 
 PyObject* DataFrame_compare_agg(PyObject* self, PyObject* args) {
-    namespace comparator = dftracer::utils::trace::comparator;
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
     PyObject* other = nullptr;
@@ -776,31 +880,9 @@ PyObject* DataFrame_compare_agg(PyObject* self, PyObject* args) {
     DataFrameObject* o = as_dataframe(other);
     if (!o) return nullptr;
     return run_batch_op([&] {
-        return comparator::CompareView::compare_batches(
-            to_dataframe(b), to_dataframe(o), static_cast<std::int64_t>(n_key));
+        return dataframe::compare_agg(to_dataframe(b), to_dataframe(o),
+                                      static_cast<std::int64_t>(n_key));
     });
-}
-
-// Read a sequence (or single str) of column names into `out`. Returns false and
-// sets a Python error on a non-string element.
-bool names_from_obj(PyObject* obj, std::vector<std::string>& out) {
-    if (PyUnicode_Check(obj)) {
-        out.emplace_back(PyUnicode_AsUTF8(obj));
-        return true;
-    }
-    PyObject* seq = PySequence_Fast(obj, "expected a str or sequence of str");
-    if (!seq) return false;
-    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        const char* s = PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(seq, i));
-        if (!s) {
-            Py_DECREF(seq);
-            return false;
-        }
-        out.emplace_back(s);
-    }
-    Py_DECREF(seq);
-    return true;
 }
 
 // unpivot(id_vars, value_vars) / melt: reshape wide -> long.
@@ -833,6 +915,161 @@ PyObject* DataFrame_explode(PyObject* self, PyObject* arg) {
         [&] { return dataframe::explode(to_dataframe(b), name); });
 }
 
+namespace arr = dftracer::utils::utilities::common::arrow;
+
+PyObject* DataFrame_window(PyObject* self, PyObject* args, PyObject* kwds) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    static const char* kwlist[] = {"partition_by", "order_by", "specs",
+                                   nullptr};
+    PyObject* part = nullptr;
+    PyObject* order = nullptr;
+    PyObject* specs = nullptr;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO",
+                                     const_cast<char**>(kwlist), &part, &order,
+                                     &specs))
+        return nullptr;
+    std::vector<std::string> pcols;
+    std::vector<std::string> ocols;
+    if (!parse_string_seq(part, "window: partition_by must be names", pcols) ||
+        !parse_string_seq(order, "window: order_by must be names", ocols))
+        return nullptr;
+    dftracer::utils::python::WindowSpecs parsed;
+    if (!dftracer::utils::python::parse_window_specs(specs, parsed))
+        return nullptr;
+    std::vector<arr::WindowColumn> specv;
+    specv.reserve(parsed.specs.size());
+    for (const dftu_window_spec& w : parsed.specs) {
+        arr::WindowColumn c;
+        c.func = static_cast<arr::WindowFunc>(w.func);
+        if (w.value) c.value = std::string(w.value);
+        if (w.time) c.time = std::string(w.time);
+        c.out = w.out;
+        c.offset = w.offset;
+        c.threshold = w.threshold;
+        c.counter = w.counter != 0;
+        c.preceding = w.preceding;
+        c.following = w.following;
+        specv.push_back(std::move(c));
+    }
+    return run_batch_op(
+        [&] { return arr::window(to_dataframe(b), pcols, ocols, specv); });
+}
+
+PyObject* DataFrame_gap_fill(PyObject* self, PyObject* args, PyObject* kwds) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    static const char* kwlist[] = {"partition_by", "time",  "bucket", "values",
+                                   "mode",         "start", "end",    nullptr};
+    PyObject* part = nullptr;
+    const char* time = nullptr;
+    long long bucket = 0;
+    PyObject* values = nullptr;
+    const char* mode = nullptr;
+    PyObject* start_obj = Py_None;
+    PyObject* end_obj = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "OsLOs|OO", const_cast<char**>(kwlist), &part, &time,
+            &bucket, &values, &mode, &start_obj, &end_obj))
+        return nullptr;
+    dftu_gap_fill_mode mode_code;
+    if (!dftracer::utils::python::gap_fill_mode_from_str(mode, &mode_code))
+        return nullptr;
+    const auto m = static_cast<arr::GapFillMode>(mode_code);
+    std::vector<std::string> pcols;
+    std::vector<std::string> vcols;
+    if (!parse_string_seq(part, "gap_fill: partition_by must be names",
+                          pcols) ||
+        !parse_string_seq(values, "gap_fill: values must be names", vcols))
+        return nullptr;
+    std::optional<std::pair<std::int64_t, std::int64_t>> range;
+    if (start_obj != Py_None) {
+        const long long s = PyLong_AsLongLong(start_obj);
+        const long long e = PyLong_AsLongLong(end_obj);
+        if (PyErr_Occurred()) return nullptr;
+        range = std::make_pair(static_cast<std::int64_t>(s),
+                               static_cast<std::int64_t>(e));
+    }
+    return run_batch_op([&] {
+        return arr::gap_fill(to_dataframe(b), pcols, time,
+                             static_cast<std::int64_t>(bucket), vcols, m,
+                             range);
+    });
+}
+
+PyObject* DataFrame_asof(PyObject* self, PyObject* args, PyObject* kwds) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    static const char* kwlist[] = {"other",     "on",        "by",
+                                   "direction", "tolerance", nullptr};
+    PyObject* other = nullptr;
+    const char* on = nullptr;
+    PyObject* by = nullptr;
+    const char* direction = nullptr;
+    PyObject* tol_obj = Py_None;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OsOsO",
+                                     const_cast<char**>(kwlist), &other, &on,
+                                     &by, &direction, &tol_obj))
+        return nullptr;
+    DataFrameObject* o = as_dataframe(other);
+    if (!o) return nullptr;
+    dftu_asof_direction dir_code;
+    if (!dftracer::utils::python::asof_direction_from_str(direction, &dir_code))
+        return nullptr;
+    const auto dir = static_cast<arr::AsofDirection>(dir_code);
+    std::vector<std::string> equi;
+    if (!parse_string_seq(by, "asof: by must be names", equi)) return nullptr;
+    std::optional<std::int64_t> tol;
+    if (tol_obj != Py_None) {
+        const long long t = PyLong_AsLongLong(tol_obj);
+        if (PyErr_Occurred()) return nullptr;
+        tol = static_cast<std::int64_t>(t);
+    }
+    return run_batch_op([&] {
+        return arr::asof(to_dataframe(b), to_dataframe(o), on, equi, dir, tol);
+    });
+}
+
+PyObject* DataFrame_interval(PyObject* self, PyObject* args, PyObject* kwds) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    static const char* kwlist[] = {"other", "point", "lo",   "hi",
+                                   "by",    "outer", nullptr};
+    PyObject* other = nullptr;
+    const char* point = nullptr;
+    const char* lo = nullptr;
+    const char* hi = nullptr;
+    PyObject* by = nullptr;
+    int outer = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OsssOp",
+                                     const_cast<char**>(kwlist), &other, &point,
+                                     &lo, &hi, &by, &outer))
+        return nullptr;
+    DataFrameObject* o = as_dataframe(other);
+    if (!o) return nullptr;
+    std::vector<std::string> equi;
+    if (!parse_string_seq(by, "interval: by must be names", equi))
+        return nullptr;
+    return run_batch_op([&] {
+        return arr::interval(to_dataframe(b), to_dataframe(o), point, lo, hi,
+                             equi, outer != 0);
+    });
+}
+
+PyObject* DataFrame_unnest(PyObject* self, PyObject* args, PyObject* kwds) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    const char* name = nullptr;
+    int keep_empty = 0;
+    static const char* kwlist[] = {"column", "keep_empty", nullptr};
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "s|p", const_cast<char**>(kwlist), &name, &keep_empty))
+        return nullptr;
+    return run_batch_op([&] {
+        return dataframe::unnest(to_dataframe(b), name, keep_empty != 0);
+    });
+}
+
 PyObject* DataFrame_to_dummies(PyObject* self, PyObject* arg) {
     DataFrameObject* b = as_dataframe(self);
     if (!b) return nullptr;
@@ -862,30 +1099,6 @@ PyObject* DataFrame_pivot(PyObject* self, PyObject* args, PyObject* kwds) {
     return run_batch_op([&] {
         return dataframe::pivot(to_dataframe(b), index, columns, values, agg);
     });
-}
-
-// Parse a sequence of agg spec strings ("count" or "<op>:<column>") into
-// GroupAgg records, mirroring the group_by string-spec form.
-bool aggs_from_seq(PyObject* obj, std::vector<dataframe::GroupAgg>& out) {
-    PyObject* seq = PySequence_Fast(obj, "aggs must be a sequence of str");
-    if (!seq) return false;
-    Py_ssize_t m = PySequence_Fast_GET_SIZE(seq);
-    for (Py_ssize_t i = 0; i < m; ++i) {
-        const char* s = PyUnicode_AsUTF8(PySequence_Fast_GET_ITEM(seq, i));
-        if (!s) {
-            Py_DECREF(seq);
-            return false;
-        }
-        try {
-            out.push_back(group_agg_from_spec(s));
-        } catch (const std::exception& e) {
-            PyErr_SetString(PyExc_ValueError, e.what());
-            Py_DECREF(seq);
-            return false;
-        }
-    }
-    Py_DECREF(seq);
-    return true;
 }
 
 // group_by_dynamic(time_col, every, period=None, aggs=[...]): tumbling/sliding
@@ -1123,7 +1336,22 @@ PyObject* DataFrame_get_column_names(PyObject* self, void*) {
     return DataFrame_keys(self, nullptr);
 }
 
+// lazy() -> _LazyFrame: start a deferred query over a copy of this batch.
+PyObject* DataFrame_lazy(PyObject* self, PyObject*) {
+    DataFrameObject* b = as_dataframe(self);
+    if (!b) return nullptr;
+    try {
+        return dftracer::utils::python::wrap_lazyframe(
+            dataframe::lazy(to_dataframe(b)));
+    } catch (const std::exception& e) {
+        PyErr_SetString(PyExc_ValueError, e.what());
+        return nullptr;
+    }
+}
+
 PyMethodDef DataFrame_methods[] = {
+    {"lazy", DataFrame_lazy, METH_NOARGS,
+     "lazy() -> _LazyFrame, a deferred query over this batch."},
     {"keys", DataFrame_keys, METH_NOARGS, "Series names, in order."},
     {"filter", DataFrame_filter, METH_O,
      "filter(mask) -> DataFrame keeping rows where the Bool mask is true."},
@@ -1147,11 +1375,13 @@ PyMethodDef DataFrame_methods[] = {
      "drop_nulls() -> DataFrame dropping rows null in any column."},
     {"fill_null", DataFrame_fill_null, METH_O,
      "fill_null(value) -> DataFrame with nulls filled in every column."},
-    {"unique", DataFrame_unique, METH_NOARGS,
-     "unique() -> DataFrame with duplicate rows removed (keep first)."},
-    {"drop_duplicates", DataFrame_unique, METH_NOARGS,
-     "drop_duplicates() -> DataFrame with duplicate rows removed (alias of "
-     "unique)."},
+    {"unique", DFTU_PYCFUNCTION(DataFrame_unique), METH_VARARGS | METH_KEYWORDS,
+     "unique(subset=None) -> DataFrame with duplicate rows removed (keep "
+     "first), keyed on every column or on the subset names."},
+    {"drop_duplicates", DFTU_PYCFUNCTION(DataFrame_unique),
+     METH_VARARGS | METH_KEYWORDS,
+     "drop_duplicates(subset=None) -> DataFrame with duplicate rows removed "
+     "(alias of unique)."},
     {"sort_by_multi", DFTU_PYCFUNCTION(DataFrame_sort_by_multi),
      METH_VARARGS | METH_KEYWORDS,
      "sort_by_multi(names, descending=False) -> DataFrame stably sorted "
@@ -1164,6 +1394,18 @@ PyMethodDef DataFrame_methods[] = {
      "describe() -> DataFrame of per-column summary statistics."},
     {"null_count", DataFrame_null_count, METH_NOARGS,
      "null_count() -> 1-row DataFrame of each column's null count."},
+    {"reduce", DataFrame_reduce, METH_O,
+     "reduce(agg) -> one-row DataFrame: the aggregate named `agg` over every "
+     "eligible column."},
+    {"group_transform", DFTU_PYCFUNCTION(DataFrame_group_transform),
+     METH_VARARGS | METH_KEYWORDS,
+     "group_transform(keys, kind, n=0, method='average', ascending=True) -> "
+     "DataFrame: the group-wise transform `kind` (cumsum, cummax, cummin, "
+     "cumcount, shift, diff, pct_change, rank, ngroup, head, tail, nth) over "
+     "the groups of `keys`, one value per input row in input order."},
+    {"reduce_specs", DataFrame_reduce_specs, METH_VARARGS,
+     "reduce_specs(agg, keys=None) -> list[str]: the 'op:column:out' specs "
+     "that broadcast `agg` over every eligible non-key column, for group_by."},
     {"is_duplicated", DataFrame_is_duplicated, METH_NOARGS,
      "is_duplicated() -> Bool Series, true where the whole row is duplicated."},
     {"is_unique", DataFrame_is_unique, METH_NOARGS,
@@ -1188,6 +1430,25 @@ PyMethodDef DataFrame_methods[] = {
     {"explode", DataFrame_explode, METH_O,
      "explode(column) -> DataFrame expanding a List column, one row per "
      "element (empty/null list -> one null row)."},
+    {"window", DFTU_PYCFUNCTION(DataFrame_window), METH_VARARGS | METH_KEYWORDS,
+     "window(partition_by, order_by, specs) -> DataFrame: SQL window "
+     "functions; specs are normalized 9-tuples."},
+    {"gap_fill", DFTU_PYCFUNCTION(DataFrame_gap_fill),
+     METH_VARARGS | METH_KEYWORDS,
+     "gap_fill(partition_by, time, bucket, values, mode, start=None, "
+     "end=None) -> DataFrame: a regular time grid with none/locf/linear "
+     "fills."},
+    {"asof", DFTU_PYCFUNCTION(DataFrame_asof), METH_VARARGS | METH_KEYWORDS,
+     "asof(other, on, by, direction, tolerance) -> DataFrame: temporal "
+     "nearest-match join."},
+    {"interval", DFTU_PYCFUNCTION(DataFrame_interval),
+     METH_VARARGS | METH_KEYWORDS,
+     "interval(other, point, lo, hi, by, outer) -> DataFrame: point-in-range "
+     "join."},
+    {"unnest", DFTU_PYCFUNCTION(DataFrame_unnest), METH_VARARGS | METH_KEYWORDS,
+     "unnest(column, keep_empty=False) -> DataFrame expanding a List column "
+     "one row per element; an empty/null list drops the row unless "
+     "keep_empty, and a List<Struct> flattens into one column per field."},
     {"to_dummies", DataFrame_to_dummies, METH_O,
      "to_dummies(column) -> DataFrame one-hot encoding a column into one Int8 "
      "column per distinct value, named <column>_<value>."},
@@ -1211,16 +1472,19 @@ PyMethodDef DataFrame_methods[] = {
      "expressions (F.x.sum(), ...); no aggs returns a GroupBy for .agg(...)."},
     {"_group_agg_expr", DataFrame_group_agg_expr, METH_VARARGS,
      "_group_agg_expr(key, specs) -> DataFrame; specs is a list of "
-     "(op_int, value_ast|None, out_name). Internal: the GroupBy expression "
-     "path (CSE across value expressions + pruner)."},
+     "(op_int, value_ast|None, out_name[, param[, by_ast]]). Internal: the "
+     "GroupBy expression path (CSE across value expressions + pruner)."},
     {"join", DFTU_PYCFUNCTION(DataFrame_join), METH_VARARGS | METH_KEYWORDS,
-     "join(other, how='inner', on=1) -> DataFrame equi-joined on the first "
-     "`on` "
-     "key columns; how=inner|left|right|full|semi|anti."},
+     "join(other, on=None, how='inner', left_on=None, right_on=None, "
+     "suffix='_right') -> DataFrame hash-joined on the key columns; "
+     "how=inner|left|right|outer|full|semi|anti|cross."},
     {"compare_agg", DataFrame_compare_agg, METH_VARARGS,
      "compare_agg(variant, n_key) -> DataFrame: FULL-join two aggregation "
      "results on the first n_key group-key columns and append delta_/pct_ per "
      "numeric metric (the CompareView result)."},
+    {"partition_id", DataFrame_partition_id, METH_VARARGS,
+     "partition_id(keys, n_parts) -> Int32 Series: the part in [0, n_parts) "
+     "each row lands in under a stable hash of the key columns."},
     {"hash_partition", DataFrame_hash_partition, METH_VARARGS,
      "hash_partition(keys, n_parts) -> list[DataFrame] partitioned by a stable "
      "hash of the key columns (the distributed shuffle primitive)."},

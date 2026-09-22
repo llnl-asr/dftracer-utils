@@ -207,4 +207,4 @@ class ArrowTable:
         table = self._to_pa_table()
         if table.num_rows == 0:
             return pl.DataFrame()
-        return pl.from_arrow(table)
+        return pl.DataFrame(pl.from_arrow(table))

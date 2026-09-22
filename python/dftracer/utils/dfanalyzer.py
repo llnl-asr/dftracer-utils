@@ -207,8 +207,11 @@ def _typed_event_frame(
     out["size_sq"] = df["sumsq_size"].astype("float64")
     out["time_min"] = df["min_dur"] / tr
     out["time_max"] = df["max_dur"] / tr
-    out["size_min"] = df["min_size"].astype("int64")
-    out["size_max"] = df["max_size"].astype("int64")
+    # A group with no transfer size has no minimum or maximum (null from the
+    # engine); the nullable Int64 keeps it, and the profile coercion maps it
+    # to NA as dfanalyzer expects.
+    out["size_min"] = df["min_size"].astype("Int64")
+    out["size_max"] = df["max_size"].astype("Int64")
     # Folded-shape per-call columns the distributed HLM combines (min/max across
     # keys) instead of deriving; the derive path seeds them from the group total.
     out["time_call_min"] = out["time"]
@@ -216,8 +219,8 @@ def _typed_event_frame(
     out["size_call_min"] = out["size"]
     out["size_call_max"] = out["size"]
     if "min_offset" in df.columns:
-        out["offset_min"] = df["min_offset"].astype("int64")
-        out["offset_max"] = df["max_offset"].astype("int64")
+        out["offset_min"] = df["min_offset"].astype("Int64")
+        out["offset_max"] = df["max_offset"].astype("Int64")
     out["acc_pat"] = 0  # constant placeholder, matching the C++ scan
     out["file_nunique"] = 0  # declared by the scan meta; unused downstream
     origin = int(time_origin)
@@ -989,7 +992,7 @@ class DFAnalyzerAggregatedTraceViewer(DaskAggregatedTraceViewer):
         if temporal:
             agg_view = agg_view.time_bucket(bucket_us)
         if family == "regular":
-            tbl = agg_view.agg(*aggs).collect()
+            tbl = agg_view.agg(*aggs).collect().collect()
         else:
             tbl = agg_view.agg(*aggs).collect_typed().get(family)
 

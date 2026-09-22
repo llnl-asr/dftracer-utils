@@ -1,43 +1,45 @@
-"""Load and run compiled DFTracer analysis plugins from Python.
+"""Build and run compiled DFTracer analysis plugins from Python.
 
 A plugin is a compiled shared library exporting the ``dftracer_plugin`` ABI
-symbol. :class:`PluginHost` loads one or more, resolves their capabilities, and
-runs them as folds over a single fused parallel scan of a trace set.
+symbol. :class:`Plugins` builds a fixed set of them (dlopen, ABI gate,
+capability resolution) at construction, then runs the set as folds over a
+single fused parallel scan of a trace set.
 
 Example::
 
-    from dftracer.utils.plugins import PluginHost
+    from dftracer.utils.plugins import Plugins
 
-    host = PluginHost()
-    host.load("process_counts.so")     # a compiled .so path
-    host.load(MyPlugin)                 # or a @jit.plugin class (compiled + cached)
-    assert host.resolve()
-    results = host.run("./traces")
-    print(results["process_counts"])          # the plugin's emitted bytes
-    print(host.stats["events_scanned"])
+    plugins = Plugins(["process_counts.so", MyPlugin])  # .so path, or a
+                                                          # @jit.plugin class
+    run = plugins.run("./traces")
+    print(run.results["process_counts"])   # the plugin's emitted bytes
+    print(run.stats["events_scanned"])
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 from .dataframe import DataFrame
-from .dftracer_utils_ext import PluginHost as _NativePluginHost
+from .dftracer_utils_ext import Plugins as _NativePlugins
+from .dftracer_utils_ext import _DataFrame
 
 if TYPE_CHECKING:
     import pyarrow as pa  # ty: ignore[unresolved-import]
 
+    from .lazyframe import LazyFrame
     from .runtime import Runtime
 
-__all__ = ["PluginHost", "unnest"]
+__all__ = ["Plugins", "PluginRun", "unnest"]
 
 # A JSON-serializable value tree (config is handed straight to json.dumps).
 JSONValue = Union[str, int, float, bool, None, List["JSONValue"], Dict[str, "JSONValue"]]
 
-# A run() map result value: emitted bytes, an eager Arrow table, or a pull-based
-# reader when the map streamed to multiple batches.
-_RunResult = Union[bytes, "DataFrame", "pa.Table", "pa.RecordBatchReader"]
+# One run() result value per emit kind: bytes, a native frame, a lazy plan, or
+# an Arrow table.
+_RunResult = Union[bytes, "DataFrame", "LazyFrame", "pa.Table"]
 
 
 def unnest(
@@ -47,7 +49,7 @@ def unnest(
 ) -> "pa.Table":
     """Explode a list-typed ``column`` of a ``run()`` map result into one row per
     element, repeating the other columns; the inverse of the set/list/top-k
-    monoids.
+    aggregates.
 
     ``result`` is any ``run()`` map value (an eager Arrow table, a
     ``pyarrow.RecordBatchReader``, or a ``pyarrow.RecordBatch``). ``column`` names
@@ -61,109 +63,110 @@ def unnest(
     """
     import pyarrow as pa
 
-    from .dftracer_utils_ext import unnest as _unnest
-
     if isinstance(result, pa.RecordBatchReader):
         result = result.read_all()
-    if isinstance(result, pa.RecordBatch):
-        batch = result
-    else:
-        tbl = pa.table(result).combine_chunks()
-        batches = tbl.to_batches()
-        batch = (
-            batches[0]
-            if batches
-            else pa.RecordBatch.from_arrays(
-                [pa.array([], type=f.type) for f in tbl.schema], schema=tbl.schema
-            )
-        )
-    return pa.table(_unnest(batch, column, keep_empty))
+    return DataFrame.from_arrow(pa.table(result)).unnest(column, keep_empty).to_arrow()
 
 
-class PluginHost:
-    """Load and run compiled DFTracer plugins over trace files."""
+def _plugin_key(plugin: Union[str, type]) -> str:
+    """The name a caller's ``config`` mapping keys this plugin by: a compiled
+    ``.so``'s stem, or a ``@jit.plugin`` class's name."""
+    if isinstance(plugin, str):
+        return Path(plugin).stem
+    return getattr(plugin, "__name__", str(plugin))
 
-    __slots__ = ("_native", "_renames")
 
-    def __init__(self, runtime: "Optional[Runtime]" = None) -> None:
-        """Create a host bound to ``runtime`` (a ``Runtime`` or None for the
-        module default)."""
-        self._native = _NativePluginHost(runtime)
-        self._renames: Dict[str, List[str]] = {}
+class PluginRun:
+    """The named results and scan counters of one :meth:`Plugins.run` call.
 
-    # config values are an arbitrary JSON-serializable object tree (json.dumps'd).
-    def load(self, path: Union[str, type], config: Optional[Dict[str, JSONValue]] = None) -> None:
-        """dlopen the compiled plugin at ``path``.
+    ``results`` is ``{name: value}`` of every plugin's emitted results;
+    ``stats`` is the scan counters ``{"events_scanned", "events_matched"}``.
+    """
 
-        ``path`` is either a compiled ``.so`` path or a ``@jit.plugin`` class,
-        which is AST-compiled to a cached native ``.so`` first. ``config`` is an
-        optional JSON-serializable dict handed to the plugin factory. Raises
-        ImportError on load/symbol/ABI failure, DFTUtilsValueError on a bad
-        config, or jit.JitError on a compile failure.
+    __slots__ = ("results", "stats")
+
+    def __init__(self, results: "Dict[str, _RunResult]", stats: Dict[str, int]) -> None:
+        self.results = results
+        self.stats = stats
+
+
+class Plugins:
+    """A fixed, built set of compiled DFTracer plugins.
+
+    Construction builds the set immediately: dlopen, the ABI gate, and
+    capability resolution all run in ``__init__``, so a bad path, an ABI
+    mismatch, or a name collision raises ImportError there rather than from
+    :meth:`run`. The set is immutable once built.
+    """
+
+    __slots__ = ("_native",)
+
+    def __init__(
+        self,
+        plugins: "List[Union[str, type]]",
+        config: "Optional[Dict[str, Dict[str, JSONValue]]]" = None,
+        runtime: "Optional[Runtime]" = None,
+    ) -> None:
+        """Build ``plugins`` (each a compiled ``.so`` path or a ``@jit.plugin``
+        class, AST-compiled to a cached native ``.so`` first) into one set bound
+        to ``runtime`` (or the module default).
+
+        ``config`` is an optional ``{plugin_key: {...}}`` mapping, keyed by
+        :func:`_plugin_key` (a ``.so``'s filename stem, or a jit class's name);
+        each value is a JSON-serializable dict handed to that plugin's factory.
+        Raises ImportError on a load/symbol/ABI/capability failure, or
+        DFTUtilsValueError on a bad config.
         """
-        if not isinstance(path, str):
-            from . import jit
+        config = config or {}
+        result_names: Dict[str, str] = {}
+        specs = []
+        for plugin in plugins:
+            if isinstance(plugin, str):
+                path = plugin
+            else:
+                from . import jit
 
-            self._renames.update(jit.plugin_renames(path))
-            path = jit.compile_class(path)
-        self._native.load(path, json.dumps(config) if config is not None else None)
-
-    def resolve(self) -> bool:
-        """Wire plugin capabilities. False on an unmet or reserved capability
-        (the reason is already logged)."""
-        return bool(self._native.resolve())
+                result_names.update(jit.plugin_result_names(plugin))
+                path = jit.compile_class(plugin)
+            cfg = config.get(_plugin_key(plugin))
+            specs.append((path, json.dumps(cfg) if cfg is not None else None))
+        self._native = _NativePlugins(specs, result_names or None, runtime)
 
     def run(
         self,
         traces: Union[str, List[str]],
         index_dir: Optional[str] = None,
         auto_index: bool = True,
-    ) -> "Dict[str, _RunResult]":
-        """Fold every loaded plugin over one fused scan of ``traces`` (a file, a
-        directory, or a list of paths).
+    ) -> PluginRun:
+        """Fold every plugin in the set over one fused scan of ``traces`` (a
+        file, a directory, or a list of paths).
 
-        With ``auto_index`` the traces are normalized and indexed first. Returns
-        the emitted named results as ``{name: value}``; the scan counters are on
-        :attr:`stats`.
+        With ``auto_index`` the traces are normalized and indexed first.
+        Returns a :class:`PluginRun` holding the named results and the scan
+        counters.
 
         A result's type depends on what the plugin emitted:
 
-        - An in-memory map (the default) -> our
-          :class:`~dftracer.utils.DataFrame`, zero-copy from the plugin's Arrow
-          output. Call ``.to_arrow()`` / ``.to_pandas()`` for other shapes.
-        - A map with a nested value the columnar engine cannot import yet -> a
-          ``pyarrow.Table`` fallback.
-        - A streamed map (``DFTRACER_PLUGIN_MAP_STREAM=1``, spilled to several
-          batches) -> a pull-based ``pyarrow.RecordBatchReader``, left lazy.
-          Call ``.read_all()`` for a table.
+        - ``emit_frame`` -> our :class:`~dftracer.utils.DataFrame`, zero-copy.
+          Call ``.to_arrow()`` / ``.to_pandas()`` for other shapes.
+        - ``emit_arrow`` -> a ``pyarrow.Table`` as emitted, nested types
+          included.
+        - ``emit_lazyframe`` -> a :class:`~dftracer.utils.LazyFrame`.
         - ``emit_result`` bytes -> ``bytes``.
         """
-        raw = self._native.run(traces, index_dir, auto_index)
-        return {name: self._shape(name, obj) for name, obj in raw.items()}
+        raw_results, stats = self._native.run(traces, index_dir, auto_index)
+        results = {name: self._shape(obj) for name, obj in raw_results.items()}
+        return PluginRun(results, stats)
 
-    def _shape(self, name: str, obj: object) -> "_RunResult":
-        """Wrap an in-memory tabular result as a DataFrame, renaming jit v0..
-        columns to the declared field names. Readers and bytes pass through."""
-        import pyarrow as pa
+    def _shape(self, obj: object) -> "_RunResult":
+        """Return one native result in the shape its emit kind implies.
 
-        if isinstance(obj, bytes) or isinstance(obj, pa.RecordBatchReader):
+        The native layer already hands back one Python type per emit kind and
+        has already applied the plugin's wire-id -> attribute-name result
+        renaming, so this only distinguishes a native frame from bytes/Arrow.
+        """
+        if isinstance(obj, bytes):
             return obj
-        table = pa.table(obj)
-        fields = self._renames.get(name)
-        if fields:
-            cols = list(table.column_names)
-            for i, field in enumerate(fields):
-                v = f"v{i}"
-                if v in cols:
-                    cols[cols.index(v)] = field
-            table = table.rename_columns(cols)
-        try:
-            return DataFrame.from_arrow(table)
-        except ValueError:
-            return table  # nested Arrow type the engine cannot import yet
-
-    @property
-    def stats(self) -> Optional[Dict[str, int]]:
-        """The last run's scan counters ``{"events_scanned", "events_matched"}``,
-        or ``None`` before the first :meth:`run`."""
-        return self._native.stats
+        if isinstance(obj, _DataFrame):
+            return DataFrame(obj)
+        return obj

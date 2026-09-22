@@ -4,6 +4,7 @@
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
 #include <dftracer/utils/python/py_runtime_mixin.h>
+#include <dftracer/utils/python/py_seq_helpers.h>
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
@@ -34,6 +35,7 @@
 #include <vector>
 
 using dftracer::utils::Runtime;
+using dftracer::utils::python::parse_string_seq;
 using dftracer::utils::utilities::filesystem::FileEntry;
 using dftracer::utils::utilities::filesystem::PatternDirectoryScannerUtility;
 using dftracer::utils::utilities::filesystem::
@@ -271,20 +273,9 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
 
     std::vector<std::string> patterns;
     if (patterns_obj && patterns_obj != Py_None) {
-        PyObject *seq =
-            PySequence_Fast(patterns_obj, "patterns must be a sequence");
-        if (!seq) return NULL;
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-        patterns.reserve(n);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            const char *s = as_utf8(PySequence_Fast_GET_ITEM(seq, i));
-            if (!s) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-            patterns.emplace_back(s);
-        }
-        Py_DECREF(seq);
+        if (!parse_string_seq(patterns_obj, "patterns must be a sequence",
+                              patterns))
+            return NULL;
     }
 
     Runtime *rt = nullptr;
@@ -451,19 +442,8 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     // Unpack files.
     std::vector<std::string> files;
     {
-        PyObject *seq = PySequence_Fast(files_obj, "files must be a sequence");
-        if (!seq) return NULL;
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-        files.reserve(n);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            const char *s = as_utf8(PySequence_Fast_GET_ITEM(seq, i));
-            if (!s) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-            files.emplace_back(s);
-        }
-        Py_DECREF(seq);
+        if (!parse_string_seq(files_obj, "files must be a sequence", files))
+            return NULL;
     }
     if (files.empty()) {
         return PyDict_New();
@@ -497,20 +477,10 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     // Optional bloom dimensions override.
     std::vector<std::string> bloom_dims;
     if (bloom_dims_obj && bloom_dims_obj != Py_None) {
-        PyObject *seq = PySequence_Fast(bloom_dims_obj,
-                                        "bloom_dimensions must be a sequence");
-        if (!seq) return NULL;
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-        bloom_dims.reserve(n);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            const char *s = as_utf8(PySequence_Fast_GET_ITEM(seq, i));
-            if (!s) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-            bloom_dims.emplace_back(s);
-        }
-        Py_DECREF(seq);
+        if (!parse_string_seq(bloom_dims_obj,
+                              "bloom_dimensions must be a sequence",
+                              bloom_dims))
+            return NULL;
     }
 
     // Resolve Runtime (matching CheckpointIndexer pattern).
@@ -869,19 +839,8 @@ static PyObject *enumerate_gzip_members_fn(PyObject * /*self*/, PyObject *args,
 
     std::vector<std::string> files;
     {
-        PyObject *seq = PySequence_Fast(files_obj, "files must be a sequence");
-        if (!seq) return NULL;
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-        files.reserve(n);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            const char *s = as_utf8(PySequence_Fast_GET_ITEM(seq, i));
-            if (!s) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-            files.emplace_back(s);
-        }
-        Py_DECREF(seq);
+        if (!parse_string_seq(files_obj, "files must be a sequence", files))
+            return NULL;
     }
 
     Runtime *rt = nullptr;
@@ -1000,6 +959,14 @@ static PyObject *plan_work_units_fn(PyObject * /*self*/, PyObject *args,
             for (Py_ssize_t j = 0; j < ni; ++j) {
                 PyObject *t = PySequence_Fast_GET_ITEM(iseq, j);
                 unsigned long long c_offset = 0, c_size = 0;
+                if (!PyTuple_Check(t)) {
+                    PyErr_SetString(
+                        PyExc_TypeError,
+                        "each member must be an (offset, size) tuple");
+                    Py_DECREF(iseq);
+                    Py_DECREF(seq);
+                    return NULL;
+                }
                 if (!PyArg_ParseTuple(t, "KK", &c_offset, &c_size)) {
                     Py_DECREF(iseq);
                     Py_DECREF(seq);

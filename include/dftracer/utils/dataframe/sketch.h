@@ -47,8 +47,8 @@ class DDSketch {
     void add(double value, double weight = 1.0);
     /// Add a value whose DDSketch bucket key was precomputed by
     /// `sketch_bucket_keys` (the SIMD bulk path). `key == INT32_MIN` marks an
-    /// exact zero, matching the kernel's sentinel.
-    void add_key(std::int32_t key, std::uint16_t weight = 1);
+    /// exact zero, matching the kernel's sentinel; `value` keeps min / max.
+    void add_key(std::int32_t key, double value, std::uint32_t weight = 1);
     void merge(const DDSketch& other);
     double quantile(double q) const;
     void reset();
@@ -79,8 +79,8 @@ class DDSketch {
     /// Collapsing dense store: fixed-size array with offset.
     /// Logical bin index `k` maps to store_[k - offset_].
     /// When the key range exceeds MAX_BINS, lowest bins are
-    /// collapsed into store_[0].
-    std::array<std::uint16_t, MAX_BINS> store_{};
+    /// collapsed into store_[0]. A bin saturates at UINT32_MAX.
+    std::array<std::uint32_t, MAX_BINS> store_{};
     int offset_ = 0;
     int min_key_ = 0;
     int max_key_ = 0;
@@ -88,7 +88,7 @@ class DDSketch {
     bool collapsed_ = false;
     int num_bins_ = 0;
 
-    void add_to_bin(int index, std::uint16_t count);
+    void add_to_bin(int index, std::uint32_t count);
     double bin_lower_bound(int index) const;
     double bin_upper_bound(int index) const;
     void collapse_to_fit(int new_max_key);

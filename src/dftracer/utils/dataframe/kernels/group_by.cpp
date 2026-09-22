@@ -1,6 +1,8 @@
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
+#include <dftracer/utils/dataframe/internal/varwidth_offsets.h>
 #include <dftracer/utils/dataframe/kernels/group_by.h>
 
 #include <cstring>
@@ -13,6 +15,9 @@ namespace {
 
 using dftracer::utils::dataframe::byte_width;
 using dftracer::utils::dataframe::Encoding;
+using dftracer::utils::dataframe::is_wide_offset_type;
+using dftracer::utils::dataframe::narrow_varwidth_type;
+using dftracer::utils::dataframe::offsets_of;
 using dftracer::utils::dataframe::TypeId;
 
 bool is_valid(const dftu_series& v, std::int64_t i) {
@@ -57,9 +62,30 @@ struct Groups {
     dftu_series* keys = nullptr;
 };
 
+// String/Binary(/Large) key hashing at offset width `Off`: assigns each row
+// its first-seen distinct-value group index.
+template <class Off>
+void hash_string_keys(const dftu_series& k, std::vector<std::int32_t>& group_of,
+                      std::vector<std::string>& distinct) {
+    const Off* offsets =
+        reinterpret_cast<const Off*>(offsets_of<Off>(k)->data());
+    const char* data = reinterpret_cast<const char*>(k.data->data());
+    std::unordered_map<std::string, std::int32_t> idx;
+    for (std::int64_t i = 0; i < k.length; ++i) {
+        std::string key(data + offsets[i],
+                        static_cast<std::size_t>(offsets[i + 1] - offsets[i]));
+        auto [it, ins] = idx.try_emplace(
+            std::move(key), static_cast<std::int32_t>(distinct.size()));
+        if (ins) distinct.push_back(it->first);
+        group_of[static_cast<std::size_t>(i)] = it->second;
+    }
+}
+
 // Assign each row to a group by hashing the key's raw bytes (numeric value or
 // string). Returns the assignment and a distinct-key column in first-seen
-// order.
+// order. A String/Binary key column's distinct-value output is always
+// narrow: the group key set is bounded by the row count, a fresh sizing
+// question independent of the source column's own offset width.
 Groups build_groups(const dftu_series* keys_in) {
     const dftu_series* k = keys_in;
     dftu_series* materialized = nullptr;
@@ -68,28 +94,29 @@ Groups build_groups(const dftu_series* keys_in) {
         k = materialized;
     }
 
-    bool str = (k->type == TypeId::String || k->type == TypeId::Binary);
-    std::size_t width = str ? 0 : byte_width(k->type);
+    const TypeId key_kind = narrow_varwidth_type(k->type);
+    bool str = (key_kind == TypeId::String || key_kind == TypeId::Binary);
+    std::size_t width =
+        str ? 0 : byte_width(k->type, k->fixed_size).value_or(0);
 
-    std::unordered_map<std::string, std::int32_t> idx;
     std::vector<std::string> distinct;
     Groups g;
     g.group_of.resize(static_cast<std::size_t>(k->length));
-    const char* data = reinterpret_cast<const char*>(k->data->data());
-    const std::int32_t* offsets =
-        str ? reinterpret_cast<const std::int32_t*>(k->offsets->data())
-            : nullptr;
-    for (std::int64_t i = 0; i < k->length; ++i) {
-        std::string key;
-        if (str)
-            key.assign(data + offsets[i],
-                       static_cast<std::size_t>(offsets[i + 1] - offsets[i]));
+    if (str) {
+        if (is_wide_offset_type(k->type))
+            hash_string_keys<std::int64_t>(*k, g.group_of, distinct);
         else
-            key.assign(data + static_cast<std::size_t>(i) * width, width);
-        auto [it, ins] = idx.try_emplace(
-            std::move(key), static_cast<std::int32_t>(distinct.size()));
-        if (ins) distinct.push_back(it->first);
-        g.group_of[static_cast<std::size_t>(i)] = it->second;
+            hash_string_keys<std::int32_t>(*k, g.group_of, distinct);
+    } else {
+        std::unordered_map<std::string, std::int32_t> idx;
+        const char* data = reinterpret_cast<const char*>(k->data->data());
+        for (std::int64_t i = 0; i < k->length; ++i) {
+            std::string key(data + static_cast<std::size_t>(i) * width, width);
+            auto [it, ins] = idx.try_emplace(
+                std::move(key), static_cast<std::int32_t>(distinct.size()));
+            if (ins) distinct.push_back(it->first);
+            g.group_of[static_cast<std::size_t>(i)] = it->second;
+        }
     }
     g.num_groups = static_cast<std::int32_t>(distinct.size());
 
@@ -100,14 +127,34 @@ Groups build_groups(const dftu_series* keys_in) {
             bytes += s;
             off.push_back(static_cast<std::int32_t>(bytes.size()));
         }
-        g.keys =
-            dftu_series_new_string(static_cast<dftu_dtype>(k->type), off.data(),
-                                   bytes.data(), g.num_groups, nullptr);
+        g.keys = dftu_series_new_string(static_cast<dftu_dtype>(key_kind),
+                                        off.data(), bytes.data(), g.num_groups,
+                                        nullptr);
+    } else if (k->type == TypeId::FixedSizeBinary) {
+        // dftu_series_new_flat validates via byte_width(type), which is 0 for
+        // FixedSizeBinary (its width is a DataType parameter, not a per-TypeId
+        // constant); build the column directly instead.
+        auto* out = new dftu_series();
+        out->type = TypeId::FixedSizeBinary;
+        out->encoding = Encoding::Flat;
+        out->length = g.num_groups;
+        out->fixed_size = k->fixed_size;
+        std::string bytes;
+        for (const std::string& s : distinct) bytes += s;
+        out->data = dftracer::utils::dataframe::Buffer::allocate(bytes.size());
+        std::memcpy(out->data->data(), bytes.data(), bytes.size());
+        g.keys = out;
     } else {
         std::string bytes;
         for (const std::string& s : distinct) bytes += s;
-        g.keys = dftu_series_new_flat(static_cast<dftu_dtype>(k->type),
-                                      bytes.data(), g.num_groups, nullptr);
+        auto* out = new dftu_series();
+        dftracer::utils::dataframe::adopt_type_from(*out, *k);
+        out->encoding = Encoding::Flat;
+        out->length = g.num_groups;
+        out->data = dftracer::utils::dataframe::Buffer::allocate(bytes.size());
+        if (!bytes.empty())
+            std::memcpy(out->data->data(), bytes.data(), bytes.size());
+        g.keys = out;
     }
     if (materialized) dftu_series_free(materialized);
     return g;
@@ -162,16 +209,21 @@ void aggregate(const dftu_series& v, const std::vector<std::int32_t>& group_of,
 
 }  // namespace
 
-int32_t dftu_dataframe_group_by(const dftu_series* keys,
-                                const dftu_series* values, int32_t op_mask,
-                                dftu_series** out_keys,
-                                dftu_series** out_values, int32_t max_values) {
+int32_t dftu_series_group_by(const dftu_series* keys, const dftu_series* values,
+                             int32_t op_mask, dftu_series** out_keys,
+                             dftu_series** out_values, int32_t max_values) {
     *out_keys = nullptr;
     if (keys->length != values->length) return 0;
     if (values->encoding != Encoding::Flat) return 0;
     if (values->type == TypeId::Bool || values->type == TypeId::String ||
         values->type == TypeId::Binary)
         return 0;
+    if (!dftracer::utils::dataframe::is_orderable_type(keys->type)) {
+        DFTRACER_UTILS_LOG_ERROR(
+            "group_by: key type '%s' has no per-row value to group on",
+            dftracer::utils::dataframe::type_name(keys->type));
+        return 0;
+    }
 
     Groups g = build_groups(keys);
     *out_keys = g.keys;
@@ -186,8 +238,8 @@ namespace dftracer::utils::dataframe {
 DataFrame group_by(const Series& keys, const Series& values, std::int32_t ops) {
     dftu_series* k = nullptr;
     dftu_series* vals[5] = {};
-    std::int32_t n = dftu_dataframe_group_by(keys.handle(), values.handle(),
-                                             ops, &k, vals, 5);
+    std::int32_t n =
+        dftu_series_group_by(keys.handle(), values.handle(), ops, &k, vals, 5);
 
     DataFrame b;
     b.names.push_back("key");

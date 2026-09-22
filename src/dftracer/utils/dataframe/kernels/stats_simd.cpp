@@ -84,6 +84,30 @@ void BetweenF32(const void* p, std::int64_t n, dftu_scalar lo, dftu_scalar hi,
     between_bits<float>(static_cast<const float*>(p), n, scalar_as<float>(lo),
                         scalar_as<float>(hi), out);
 }
+void BetweenI16(const void* p, std::int64_t n, dftu_scalar lo, dftu_scalar hi,
+                std::uint8_t* out) {
+    between_bits<std::int16_t>(static_cast<const std::int16_t*>(p), n,
+                               scalar_as<std::int16_t>(lo),
+                               scalar_as<std::int16_t>(hi), out);
+}
+void BetweenU16(const void* p, std::int64_t n, dftu_scalar lo, dftu_scalar hi,
+                std::uint8_t* out) {
+    between_bits<std::uint16_t>(static_cast<const std::uint16_t*>(p), n,
+                                scalar_as<std::uint16_t>(lo),
+                                scalar_as<std::uint16_t>(hi), out);
+}
+void BetweenI8(const void* p, std::int64_t n, dftu_scalar lo, dftu_scalar hi,
+               std::uint8_t* out) {
+    between_bits<std::int8_t>(static_cast<const std::int8_t*>(p), n,
+                              scalar_as<std::int8_t>(lo),
+                              scalar_as<std::int8_t>(hi), out);
+}
+void BetweenU8(const void* p, std::int64_t n, dftu_scalar lo, dftu_scalar hi,
+               std::uint8_t* out) {
+    between_bits<std::uint8_t>(static_cast<const std::uint8_t*>(p), n,
+                               scalar_as<std::uint8_t>(lo),
+                               scalar_as<std::uint8_t>(hi), out);
+}
 
 // Two accumulators over a fused multiply-add break the serial dependency of the
 // scalar dot loop; the horizontal ReduceSum folds them at the end.
@@ -118,13 +142,18 @@ HWY_EXPORT(BetweenF64);
 HWY_EXPORT(BetweenI32);
 HWY_EXPORT(BetweenU32);
 HWY_EXPORT(BetweenF32);
+HWY_EXPORT(BetweenI16);
+HWY_EXPORT(BetweenU16);
+HWY_EXPORT(BetweenI8);
+HWY_EXPORT(BetweenU8);
 HWY_EXPORT(dot_f64);
 
 namespace {
 
+// Exactly the types read_f64 decodes to a real value; anything else must
+// refuse rather than compare against its default-case 0.
 bool between_numeric(TypeId t) {
-    return t != TypeId::Bool && t != TypeId::String && t != TypeId::Binary &&
-           t != TypeId::List && t != TypeId::Struct;
+    return is_arithmetic_type(t) || is_temporal_type(t);
 }
 
 }  // namespace
@@ -133,6 +162,8 @@ extern "C" {
 
 dftu_series* dftu_series_is_between(const dftu_series* v, dftu_scalar lo,
                                     dftu_scalar hi) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_is_between(flat_v, lo, hi));
+
     if (!v || v->encoding != Encoding::Flat || !between_numeric(v->type))
         return nullptr;
     auto* out = new dftu_series();
@@ -166,8 +197,21 @@ dftu_series* dftu_series_is_between(const dftu_series* v, dftu_scalar lo,
         case TypeId::Float32:
             HWY_DYNAMIC_DISPATCH(BetweenF32)(p, n, lo, hi, bits);
             break;
+        case TypeId::Int16:
+            HWY_DYNAMIC_DISPATCH(BetweenI16)(p, n, lo, hi, bits);
+            break;
+        case TypeId::Uint16:
+            HWY_DYNAMIC_DISPATCH(BetweenU16)(p, n, lo, hi, bits);
+            break;
+        case TypeId::Int8:
+            HWY_DYNAMIC_DISPATCH(BetweenI8)(p, n, lo, hi, bits);
+            break;
+        case TypeId::Uint8:
+            HWY_DYNAMIC_DISPATCH(BetweenU8)(p, n, lo, hi, bits);
+            break;
         default: {
-            // 1/2-byte columns: scalar in the widened double domain.
+            // Any remaining numeric encoding: scalar in the widened double
+            // domain.
             Series c{const_cast<dftu_series*>(v)};
             const double dlo = scalar_as<double>(lo);
             const double dhi = scalar_as<double>(hi);
@@ -188,6 +232,20 @@ dftu_scalar dftu_series_dot(const dftu_series* v, const dftu_series* other) {
     out.kind = DFTU_SCALAR_TAG_F64;
     out.value.d = 0.0;
     if (!v || !other || v->length != other->length) return out;
+    if (v->encoding != Encoding::Flat) {
+        dftu_series* flat = dftu_series_materialize(v);
+        if (!flat) return out;
+        out = dftu_series_dot(flat, other);
+        dftu_series_free(flat);
+        return out;
+    }
+    if (other->encoding != Encoding::Flat) {
+        dftu_series* flat = dftu_series_materialize(other);
+        if (!flat) return out;
+        out = dftu_series_dot(v, flat);
+        dftu_series_free(flat);
+        return out;
+    }
     if (v->encoding == Encoding::Flat && other->encoding == Encoding::Flat &&
         v->type == TypeId::Float64 && other->type == TypeId::Float64 &&
         !v->validity && !other->validity) {

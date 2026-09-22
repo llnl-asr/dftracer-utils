@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_DATAFRAME_AGG_EXPR_H
 
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/dataframe/agg_op_codes.h>
 #include <dftracer/utils/dataframe/expr.h>
 
 #include <string>
@@ -22,6 +23,8 @@ struct AggExprSpec {
     Expr value;
     std::string out;
     double param = 0.0;  ///< Pct: the quantile level q in [0, 1]
+    Expr by{};           ///< ArgMax: the value maximized (value is the field
+                         ///< represented); unused otherwise
 
     /// Rename the output column (fluent), e.g. `agg_sum(a + b).as("sum_ab")`.
     AggExprSpec as(std::string name) const {
@@ -48,11 +51,24 @@ AggExprSpec agg_kurt(Expr value, std::string out = "kurt");
 AggExprSpec agg_pct(Expr value, double q, std::string out = "pct");
 /// The DDSketch histogram of `value`, a list<struct{lo,hi,count}> per group.
 AggExprSpec agg_hist(Expr value, std::string out = "hist");
+/// Sum of squares of `value` (Float64), from the shared FieldStat.
+AggExprSpec agg_sumsq(Expr value, std::string out = "sumsq");
+/// The String repr of `value` at the row maximizing `by`, per group.
+AggExprSpec agg_argmax(Expr value, Expr by, std::string out = "argmax");
+/// Distinct String values of `value`, sorted and joined (see AggOp::SetUnion).
+AggExprSpec agg_set_union(Expr value, std::string out = "set_union");
 
-/// Group `inputs` by `key` and compute each spec, evaluating the key and value
-/// expressions in one fused, CSE'd, pruned pass. Identical value expressions
-/// share a single evaluated column (and thus one accumulator). The result is
-/// the key column (named `key_name`) plus one column per spec, in spec order.
+/// Group `inputs` by `keys` (N expressions) and compute each spec, evaluating
+/// the keys and values in one fused, CSE'd, pruned pass. Identical value
+/// expressions share a single evaluated column (and thus one accumulator). A
+/// bare column-ref key shares that input column directly (any type); a
+/// computed key routes through the numeric expr evaluator. The result is one
+/// key column per `key_names` (in order) plus one column per spec.
+DataFrame group_agg_expr(const std::vector<Expr>& keys,
+                         const std::vector<AggExprSpec>& specs,
+                         const std::vector<const Series*>& inputs,
+                         const std::vector<std::string>& key_names);
+/// Single-key convenience: forwards to the N-key form.
 DataFrame group_agg_expr(const Expr& key, const std::vector<AggExprSpec>& specs,
                          const std::vector<const Series*>& inputs,
                          const std::string& key_name);
@@ -66,30 +82,16 @@ DataFrame group_agg_expr(const Expr& key, const std::vector<AggExprSpec>& specs,
 // expressions are borrowed (not freed).
 extern "C" {
 
-enum {
-    DFTU_AGG_COUNT = 0,
-    DFTU_AGG_SUM = 1,
-    DFTU_AGG_MIN = 2,
-    DFTU_AGG_MAX = 3,
-    DFTU_AGG_MEAN = 4,
-    DFTU_AGG_VAR = 5,
-    DFTU_AGG_STD = 6,
-    DFTU_AGG_SKEW = 7,
-    DFTU_AGG_KURT = 8,
-    DFTU_AGG_FIRST = 9,
-    DFTU_AGG_LAST = 10,
-    DFTU_AGG_PCT = 11,
-    DFTU_AGG_HIST = 12
-};
-
 /** One aggregate: `op` is a DFTU_AGG_* code, `value` the value expression
  * (borrowed; NULL for COUNT), `out` the result column name (borrowed), `param`
- * the quantile level for DFTU_AGG_PCT (0 otherwise). */
+ * the quantile level for DFTU_AGG_PCT (0 otherwise), `by` the value maximized
+ * for DFTU_AGG_ARGMAX (borrowed; NULL otherwise). */
 typedef struct dftu_agg_spec {
     int32_t op;
     const dftu_expr* value;
     const char* out;
     double param;
+    const dftu_expr* by;
 } dftu_agg_spec;
 
 dftu_agg_spec dftu_agg_count(const char* out);
@@ -105,6 +107,10 @@ dftu_agg_spec dftu_agg_first(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_last(const dftu_expr* value, const char* out);
 dftu_agg_spec dftu_agg_pct(const dftu_expr* value, double q, const char* out);
 dftu_agg_spec dftu_agg_hist(const dftu_expr* value, const char* out);
+dftu_agg_spec dftu_agg_sumsq(const dftu_expr* value, const char* out);
+dftu_agg_spec dftu_agg_argmax(const dftu_expr* value, const dftu_expr* by,
+                              const char* out);
+dftu_agg_spec dftu_agg_set_union(const dftu_expr* value, const char* out);
 
 /** Group `n_inputs` columns by `key` (an expression; a bare column ref, e.g. a
  * string category, is taken directly) and compute each of `n_specs` aggregates.

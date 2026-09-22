@@ -1,0 +1,55 @@
+/* Aggregate op table: one row per aggregate, the single source binding the
+ * three parallel enums (dataframe::Agg, dataframe::AggOp, dftu_agg_op) to a
+ * canonical name. APPEND ONLY - each name and enum value is stable ABI.
+ *
+ *   DFTU_AGG_OP(id, code, name)
+ *     id    - the shared enumerator, spelled the same in Agg and AggOp
+ *             (Agg::id and AggOp::id).
+ *     code  - the dftu_agg_op C code (DFTU_AGG_*) mirroring AggOp::id.
+ *     name  - canonical lowercase string (the C ABI / to_string form).
+ *
+ * The enum bodies stay hand-written in agg.h / dataframe.h / agg_op_codes.h
+ * (they carry per-op API docs); this table generates the conversions and the
+ * cross-enum static_asserts that keep the three in lockstep.
+ */
+
+#ifndef DFTU_AGG_OP
+#define DFTU_AGG_OP(id, code, name)
+#endif
+
+DFTU_AGG_OP(Sum, DFTU_AGG_SUM, "sum")
+DFTU_AGG_OP(Min, DFTU_AGG_MIN, "min")
+DFTU_AGG_OP(Max, DFTU_AGG_MAX, "max")
+DFTU_AGG_OP(Count, DFTU_AGG_COUNT, "count")
+DFTU_AGG_OP(Mean, DFTU_AGG_MEAN, "mean")
+DFTU_AGG_OP(Var, DFTU_AGG_VAR, "var")
+DFTU_AGG_OP(Std, DFTU_AGG_STD, "std")
+DFTU_AGG_OP(Skew, DFTU_AGG_SKEW, "skew")
+DFTU_AGG_OP(Kurt, DFTU_AGG_KURT, "kurt")
+DFTU_AGG_OP(First, DFTU_AGG_FIRST, "first")
+DFTU_AGG_OP(Last, DFTU_AGG_LAST, "last")
+DFTU_AGG_OP(Pct, DFTU_AGG_PCT, "pct")
+DFTU_AGG_OP(Hist, DFTU_AGG_HIST, "hist")
+DFTU_AGG_OP(ArgMax, DFTU_AGG_ARGMAX, "argmax")
+DFTU_AGG_OP(SumSq, DFTU_AGG_SUMSQ, "sumsq")
+DFTU_AGG_OP(SetUnion, DFTU_AGG_SET_UNION, "set_union")
+DFTU_AGG_OP(Busy, DFTU_AGG_BUSY, "busy")
+DFTU_AGG_OP(Concurrency, DFTU_AGG_CONCURRENCY, "concurrency")
+DFTU_AGG_OP(Utilization, DFTU_AGG_UTILIZATION, "utilization")
+DFTU_AGG_OP(Active, DFTU_AGG_ACTIVE, "active")
+DFTU_AGG_OP(CountValid, DFTU_AGG_COUNT_VALID, "count_valid")
+DFTU_AGG_OP(ArgMin, DFTU_AGG_ARGMIN, "argmin")
+DFTU_AGG_OP(BitOr, DFTU_AGG_BIT_OR, "bit_or")
+DFTU_AGG_OP(Distinct, DFTU_AGG_DISTINCT, "distinct")
+DFTU_AGG_OP(ListSorted, DFTU_AGG_LIST_SORTED, "list_sorted")
+DFTU_AGG_OP(TopK, DFTU_AGG_TOPK, "topk")
+DFTU_AGG_OP(BottomK, DFTU_AGG_BOTTOMK, "bottomk")
+DFTU_AGG_OP(ApproxTopK, DFTU_AGG_APPROX_TOPK, "approx_topk")
+DFTU_AGG_OP(Sample, DFTU_AGG_SAMPLE, "sample")
+DFTU_AGG_OP(Corr, DFTU_AGG_CORR, "corr")
+DFTU_AGG_OP(CovarPop, DFTU_AGG_COVAR_POP, "covar_pop")
+DFTU_AGG_OP(CovarSamp, DFTU_AGG_COVAR_SAMP, "covar_samp")
+DFTU_AGG_OP(RegrSlope, DFTU_AGG_REGR_SLOPE, "regr_slope")
+DFTU_AGG_OP(RegrIntercept, DFTU_AGG_REGR_INTERCEPT, "regr_intercept")
+DFTU_AGG_OP(RegrR2, DFTU_AGG_REGR_R2, "regr_r2")
+DFTU_AGG_OP(Prod, DFTU_AGG_PROD, "prod")

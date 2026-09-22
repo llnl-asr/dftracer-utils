@@ -66,11 +66,11 @@ struct FieldNum {
 /// or mixed signedness, demotes `domain` to F64 and the exact accumulators are
 /// ignored.
 struct FieldStat {
+    // The fields a count / sum / mean / min / max accumulation touches sit
+    // in the first 64 bytes, one cache line per add; the higher moments
+    // follow.
     std::uint64_t n = 0;  ///< events where the field was present
     double sum = 0;
-    double sumsq = 0;
-    double m3 = 0;
-    double m4 = 0;
     double min = 0;
     double max = 0;
 
@@ -80,6 +80,10 @@ struct FieldStat {
     std::int64_t esum = 0;
     std::int64_t emin = 0;
     std::int64_t emax = 0;
+
+    double sumsq = 0;
+    double m3 = 0;
+    double m4 = 0;
 
     void add(const FieldNum& v) {
         switch (v.domain) {
@@ -98,6 +102,62 @@ struct FieldStat {
         add_double(x);
         domain =
             FieldStatDomain::F64;  // a float value makes the field non-integral
+    }
+
+    /// The `add` overloads without the higher moments (sumsq, m3, m4): for
+    /// an accumulation whose reducers are count, sum, mean, min and max only,
+    /// which is most group-bys. The moments then stay zero, so a state built
+    /// this way must not be read for a variance or a skew; the caller that
+    /// chose this path knows its reducers.
+    template <bool Moments = true>
+    void add_with(double x) {
+        if constexpr (Moments) {
+            add_double(x);
+        } else {
+            add_light(x);
+        }
+        domain = FieldStatDomain::F64;
+    }
+    template <bool Moments = true>
+    void add_with(std::int64_t x) {
+        const bool first = n == 0;
+        if constexpr (Moments) {
+            add_double(static_cast<double>(x));
+        } else {
+            add_light(static_cast<double>(x));
+        }
+        if (first) {
+            domain = FieldStatDomain::I64;
+            esum = emin = emax = x;
+        } else if (domain == FieldStatDomain::I64) {
+            esum += x;
+            if (x < emin) emin = x;
+            if (x > emax) emax = x;
+        } else {
+            domain = FieldStatDomain::F64;
+        }
+    }
+    template <bool Moments = true>
+    void add_with(std::uint64_t x) {
+        const bool first = n == 0;
+        if constexpr (Moments) {
+            add_double(static_cast<double>(x));
+        } else {
+            add_light(static_cast<double>(x));
+        }
+        if (first) {
+            domain = FieldStatDomain::U64;
+            esum = emin = emax = std::bit_cast<std::int64_t>(x);
+        } else if (domain == FieldStatDomain::U64) {
+            esum = std::bit_cast<std::int64_t>(
+                std::bit_cast<std::uint64_t>(esum) + x);
+            if (x < std::bit_cast<std::uint64_t>(emin))
+                emin = std::bit_cast<std::int64_t>(x);
+            if (x > std::bit_cast<std::uint64_t>(emax))
+                emax = std::bit_cast<std::int64_t>(x);
+        } else {
+            domain = FieldStatDomain::F64;
+        }
     }
 
     void add(std::int64_t x) {
@@ -220,6 +280,16 @@ struct FieldStat {
         sumsq += x2;
         m3 += x2 * x;
         m4 += x2 * x2;
+        ++n;
+    }
+    void add_light(double x) {
+        if (n == 0) {
+            min = max = x;
+        } else {
+            if (x < min) min = x;
+            if (x > max) max = x;
+        }
+        sum += x;
         ++n;
     }
 };

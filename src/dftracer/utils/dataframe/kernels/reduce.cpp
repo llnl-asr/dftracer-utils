@@ -1,12 +1,17 @@
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/numeric_dispatch.h>
+#include <dftracer/utils/dataframe/internal/radix_dedup.h>  // parallel dedup
 #include <dftracer/utils/dataframe/internal/reduce_simd.h>
+#include <dftracer/utils/dataframe/internal/type_promotion.h>
 #include <dftracer/utils/dataframe/kernels/reduce.h>
+#include <dftracer/utils/dataframe/parallel.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <type_traits>
-#include <unordered_map>
+#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -170,61 +175,170 @@ void argextreme_one(const dftu_series& v, bool is_min, std::int64_t& out_idx) {
     }
 }
 
+// Serial fallback (and reference algorithm): strictly-greater keeps the value
+// that first reached the top count, so ties resolve to whichever value's
+// count first attains the eventual maximum.
 template <class T>
-void mode_one(const dftu_series& v, dftu_scalar& out) {
-    const T* p = reinterpret_cast<const T*>(v.data->data());
-    const std::int64_t n = v.length;
-    const bool has_null = v.validity != nullptr;
-    std::unordered_map<T, std::int64_t> counts;
+void mode_serial(const T* p, const std::vector<std::int64_t>& idx,
+                 dftu_scalar& out) {
+    ankerl::unordered_dense::map<T, std::int64_t> counts;
     T best{};
     std::int64_t best_count = 0;
-    for (std::int64_t i = 0; i < n; ++i) {
-        if (has_null && !is_valid(v, i)) continue;
-        const std::int64_t c = ++counts[p[i]];
-        // Strictly-greater keeps the value that first reached the top count,
-        // so ties resolve to the earlier-appearing value.
+    for (std::int64_t j : idx) {
+        const std::int64_t c = ++counts[p[j]];
         if (c > best_count) {
             best_count = c;
-            best = p[i];
+            best = p[j];
         }
     }
     store_domain<T>(out, best);
 }
 
+template <class T>
+void mode_one(const dftu_series& v, dftu_scalar& out) {
+    using dftracer::utils::dataframe::radix_counts_by;
+    const T* p = reinterpret_cast<const T*>(v.data->data());
+    const std::int64_t n = v.length;
+    const bool has_null = v.validity != nullptr;
+
+    std::vector<std::int64_t> idx;
+    idx.reserve(static_cast<std::size_t>(n));
+    for (std::int64_t i = 0; i < n; ++i)
+        if (!has_null || is_valid(v, i)) idx.push_back(i);
+    const std::int64_t m = static_cast<std::int64_t>(idx.size());
+
+    if (m == 0) {
+        store_domain<T>(out, T{});
+        return;
+    }
+    if (!dftracer::utils::dataframe::parallel_backend_installed() ||
+        m < dftracer::utils::dataframe::RADIX_DEDUP_MIN_ROWS) {
+        mode_serial<T>(p, idx, out);
+        return;
+    }
+
+    // Frequency of each valid position's value, radix-partitioned and merged
+    // (the same shape as group_agg Count). A unique highest-frequency value
+    // wins outright; a tie in the final count falls back to a bounded serial
+    // rescan restricted to the tied candidates, to reproduce the sequential
+    // "first-reaching-top" tie-break exactly (the last event on the winning
+    // path can only ever be caused by a value at the eventual maximum count,
+    // so skipping non-candidate rows cannot change the outcome).
+    std::vector<std::int64_t> counts = radix_counts_by<T>(
+        m, [&](std::int64_t j) { return p[idx[static_cast<std::size_t>(j)]]; });
+    std::int64_t best_count = 0;
+    for (std::int64_t c : counts) best_count = std::max(best_count, c);
+
+    ankerl::unordered_dense::set<T> candidates;
+    for (std::int64_t j = 0; j < m; ++j)
+        if (counts[static_cast<std::size_t>(j)] == best_count)
+            candidates.insert(p[idx[static_cast<std::size_t>(j)]]);
+
+    if (candidates.size() == 1) {
+        store_domain<T>(out, *candidates.begin());
+        return;
+    }
+
+    std::vector<std::int64_t> tied;
+    tied.reserve(idx.size());
+    for (std::int64_t j : idx)
+        if (candidates.count(p[j]) != 0) tied.push_back(j);
+    mode_serial<T>(p, tied, out);
+}
+
 }  // namespace
 
 dftu_scalar dftu_series_reduce(const dftu_series* v, dftu_reduce_op op) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_reduce(flat_v, op));
+
+    using dftracer::utils::dataframe::is_arithmetic_type;
+    using dftracer::utils::dataframe::is_temporal_type;
+    using dftracer::utils::dataframe::physical_type;
+    using dftracer::utils::dataframe::promote_for_arithmetic;
+    using dftracer::utils::dataframe::type_name;
     using dftracer::utils::dataframe::TypeId;
     dftu_scalar out{};
     out.kind = DFTU_SCALAR_TAG_I64;
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return out;
-    if (v->type == TypeId::Bool || v->type == TypeId::String ||
-        v->type == TypeId::Binary)
-        return out;
 
-    if (dftracer::utils::dataframe::reduce(*v, op, out)) return out;
+    // MIN/MAX on any temporal column dispatch on its physical Int32/Int64
+    // layout. SUM is additionally defined for Duration (a sum of durations
+    // is a duration, in the same unit); every other temporal type has no
+    // meaningful SUM (summing instants or times-of-day is not a rule this
+    // engine defines) and every other op stays refused.
+    if (is_temporal_type(v->type)) {
+        const bool sum_ok =
+            op == DFTU_REDUCE_SUM && v->type == TypeId::Duration;
+        if (op != DFTU_REDUCE_MIN && op != DFTU_REDUCE_MAX && !sum_ok) {
+            DFTRACER_UTILS_LOG_ERROR(
+                "reduce: op %d is not defined for temporal type '%s'",
+                static_cast<int>(op), type_name(v->type));
+            return out;
+        }
+        DF_NUMERIC_DISPATCH(physical_type(v->type), reduce_one, *v, op, out)
+        return out;
+    }
+
+    if (!is_arithmetic_type(v->type)) {
+        DFTRACER_UTILS_LOG_ERROR("reduce: op %d has no meaning for type '%s'",
+                                 static_cast<int>(op), type_name(v->type));
+        return out;
+    }
+
+    // Float16 has no reduction kernel; Decimal128/256 have no exact one. Both
+    // promote here, once, before any dispatch below sees them.
+    dftu_series* promoted = nullptr;
+    v = promote_for_arithmetic(v, promoted);
+
+    if (dftracer::utils::dataframe::reduce(*v, op, out)) {
+        if (promoted) dftu_series_free(promoted);
+        return out;
+    }
     DF_NUMERIC_DISPATCH(v->type, reduce_one, *v, op, out)
+    if (promoted) dftu_series_free(promoted);
     return out;
 }
 
 int64_t dftu_series_count(const dftu_series* v) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_count(flat_v));
+
     return v->length - v->null_count;
 }
 
 dftu_scalar dftu_series_product(const dftu_series* v) {
-    using dftracer::utils::dataframe::TypeId;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_product(flat_v));
+
+    using dftracer::utils::dataframe::is_arithmetic_type;
+    using dftracer::utils::dataframe::is_temporal_type;
+    using dftracer::utils::dataframe::promote_for_arithmetic;
+    using dftracer::utils::dataframe::type_name;
     dftu_scalar out{};
     out.kind = DFTU_SCALAR_TAG_I64;
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return out;
-    if (v->type == TypeId::Bool || v->type == TypeId::String ||
-        v->type == TypeId::Binary)
+    if (is_temporal_type(v->type)) {
+        DFTRACER_UTILS_LOG_ERROR("product: not defined for temporal type '%s'",
+                                 type_name(v->type));
         return out;
-    if (dftracer::utils::dataframe::product_simd(*v, out)) return out;
+    }
+    if (!is_arithmetic_type(v->type)) {
+        DFTRACER_UTILS_LOG_ERROR("product: no meaning for type '%s'",
+                                 type_name(v->type));
+        return out;
+    }
+    dftu_series* promoted = nullptr;
+    v = promote_for_arithmetic(v, promoted);
+    if (dftracer::utils::dataframe::product_simd(*v, out)) {
+        if (promoted) dftu_series_free(promoted);
+        return out;
+    }
     DF_NUMERIC_DISPATCH(v->type, product_one, *v, out)
+    if (promoted) dftu_series_free(promoted);
     return out;
 }
 
 int32_t dftu_series_all(const dftu_series* v) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_all(flat_v));
+
     using dftracer::utils::dataframe::TypeId;
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat ||
         v->type != TypeId::Bool)
@@ -233,6 +347,8 @@ int32_t dftu_series_all(const dftu_series* v) {
 }
 
 int32_t dftu_series_any(const dftu_series* v) {
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_any(flat_v));
+
     using dftracer::utils::dataframe::TypeId;
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat ||
         v->type != TypeId::Bool)
@@ -241,38 +357,86 @@ int32_t dftu_series_any(const dftu_series* v) {
 }
 
 int64_t dftu_series_arg_min(const dftu_series* v) {
-    using dftracer::utils::dataframe::TypeId;
-    if (v->encoding != dftracer::utils::dataframe::Encoding::Flat ||
-        v->type == TypeId::Bool || v->type == TypeId::String ||
-        v->type == TypeId::Binary)
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_arg_min(flat_v));
+
+    using dftracer::utils::dataframe::is_arithmetic_type;
+    using dftracer::utils::dataframe::is_temporal_type;
+    using dftracer::utils::dataframe::physical_type;
+    using dftracer::utils::dataframe::promote_for_arithmetic;
+    using dftracer::utils::dataframe::type_name;
+    if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return -1;
+    if (is_temporal_type(v->type)) {
+        std::int64_t idx = -1;
+        DF_NUMERIC_DISPATCH(physical_type(v->type), argextreme_one, *v, true,
+                            idx)
+        return idx;
+    }
+    if (!is_arithmetic_type(v->type)) {
+        DFTRACER_UTILS_LOG_ERROR("arg_min: no meaning for type '%s'",
+                                 type_name(v->type));
         return -1;
+    }
+    dftu_series* promoted = nullptr;
+    v = promote_for_arithmetic(v, promoted);
     std::int64_t idx = -1;
-    if (dftracer::utils::dataframe::arg_extreme_simd(*v, true, idx)) return idx;
-    DF_NUMERIC_DISPATCH(v->type, argextreme_one, *v, true, idx)
+    if (!dftracer::utils::dataframe::arg_extreme_simd(*v, true, idx))
+        DF_NUMERIC_DISPATCH(v->type, argextreme_one, *v, true, idx)
+    if (promoted) dftu_series_free(promoted);
     return idx;
 }
 
 int64_t dftu_series_arg_max(const dftu_series* v) {
-    using dftracer::utils::dataframe::TypeId;
-    if (v->encoding != dftracer::utils::dataframe::Encoding::Flat ||
-        v->type == TypeId::Bool || v->type == TypeId::String ||
-        v->type == TypeId::Binary)
-        return -1;
-    std::int64_t idx = -1;
-    if (dftracer::utils::dataframe::arg_extreme_simd(*v, false, idx))
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_arg_max(flat_v));
+
+    using dftracer::utils::dataframe::is_arithmetic_type;
+    using dftracer::utils::dataframe::is_temporal_type;
+    using dftracer::utils::dataframe::physical_type;
+    using dftracer::utils::dataframe::promote_for_arithmetic;
+    using dftracer::utils::dataframe::type_name;
+    if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return -1;
+    if (is_temporal_type(v->type)) {
+        std::int64_t idx = -1;
+        DF_NUMERIC_DISPATCH(physical_type(v->type), argextreme_one, *v, false,
+                            idx)
         return idx;
-    DF_NUMERIC_DISPATCH(v->type, argextreme_one, *v, false, idx)
+    }
+    if (!is_arithmetic_type(v->type)) {
+        DFTRACER_UTILS_LOG_ERROR("arg_max: no meaning for type '%s'",
+                                 type_name(v->type));
+        return -1;
+    }
+    dftu_series* promoted = nullptr;
+    v = promote_for_arithmetic(v, promoted);
+    std::int64_t idx = -1;
+    if (!dftracer::utils::dataframe::arg_extreme_simd(*v, false, idx))
+        DF_NUMERIC_DISPATCH(v->type, argextreme_one, *v, false, idx)
+    if (promoted) dftu_series_free(promoted);
     return idx;
 }
 
 dftu_scalar dftu_series_mode(const dftu_series* v) {
-    using dftracer::utils::dataframe::TypeId;
+    DFTU_FLAT_OPERAND(v, flat_v, dftu_series_mode(flat_v));
+
+    using dftracer::utils::dataframe::is_arithmetic_type;
+    using dftracer::utils::dataframe::is_temporal_type;
+    using dftracer::utils::dataframe::physical_type;
+    using dftracer::utils::dataframe::promote_for_arithmetic;
+    using dftracer::utils::dataframe::type_name;
     dftu_scalar out{};
     out.kind = DFTU_SCALAR_TAG_I64;
     if (v->encoding != dftracer::utils::dataframe::Encoding::Flat) return out;
-    if (v->type == TypeId::Bool || v->type == TypeId::String ||
-        v->type == TypeId::Binary)
+    if (is_temporal_type(v->type)) {
+        DF_NUMERIC_DISPATCH(physical_type(v->type), mode_one, *v, out)
         return out;
+    }
+    if (!is_arithmetic_type(v->type)) {
+        DFTRACER_UTILS_LOG_ERROR("mode: no meaning for type '%s'",
+                                 type_name(v->type));
+        return out;
+    }
+    dftu_series* promoted = nullptr;
+    v = promote_for_arithmetic(v, promoted);
     DF_NUMERIC_DISPATCH(v->type, mode_one, *v, out)
+    if (promoted) dftu_series_free(promoted);
     return out;
 }

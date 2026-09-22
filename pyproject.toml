@@ -36,6 +36,7 @@ dftracer_plugin = "dftracer.utils.plugin_cli:main"
 [project.optional-dependencies]
 dev = [
   "pytest>=6.0",
+  "hypothesis>=6.0",
   "ruff",
   "pyarrow>=14.0",
   "numpy",
@@ -76,7 +77,6 @@ build-dir = "build/{wheel_tag}"
 wheel.packages = ["python/dftracer"]
 
 wheel.exclude = [
-  "dftracer/include/**",
   "dftracer/lib/cmake/**",
   "dftracer/lib/pkgconfig/**",
   "dftracer/lib/*.a",
@@ -151,12 +151,15 @@ ignore = ["E501"]
 
 [[tool.ty.overrides]]
 include = [
+  "python/dftracer/utils/_pandas_frame.py",
+  "python/dftracer/utils/_polars_frame.py",
   "python/dftracer/utils/arrow.py",
   "python/dftracer/utils/columnar.py",
   "python/dftracer/utils/dask.py",
   "python/dftracer/utils/dataframe.py",
   "python/dftracer/utils/dfanalyzer.py",
   "python/dftracer/utils/dftracer_utils_ext.pyi",
+  "python/dftracer/utils/jit_op.py",
   "python/dftracer/utils/plugins.py",
   "python/dftracer/utils/series.py",
 ]

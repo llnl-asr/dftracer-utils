@@ -201,11 +201,6 @@ void ThreadPoolExecutor::shutdown() {
     DFTRACER_UTILS_LOG_DEBUG("%s", "Executor shutdown complete");
 }
 
-void ThreadPoolExecutor::reset() {
-    // Queue will be reset by caller if needed
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Executor reset");
-}
-
 bool ThreadPoolExecutor::spawn_worker(std::size_t cap, bool best_effort) {
     std::unique_lock<std::mutex> lock(workers_mutex_, std::defer_lock);
     if (best_effort) {
@@ -681,20 +676,6 @@ void ThreadPoolExecutor::mark_activity() {
     last_activity_ns_.store(
         std::chrono::steady_clock::now().time_since_epoch().count(),
         std::memory_order_release);
-}
-
-void ThreadPoolExecutor::update_task_location(TaskIndex task_id,
-                                              TaskInfo::Location location,
-                                              std::size_t worker_id) {
-    std::unique_lock<std::shared_mutex> lock(registry_mutex_);
-    auto it = task_registry_.find(task_id);
-    if (it != task_registry_.end()) {
-        it->second.location = location;
-        if (location == TaskInfo::LOCAL_QUEUE ||
-            location == TaskInfo::EXECUTING) {
-            it->second.worker_id = worker_id;
-        }
-    }
 }
 
 ExecutorProgress ThreadPoolExecutor::get_progress() const {

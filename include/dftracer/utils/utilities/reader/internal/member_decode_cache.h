@@ -3,6 +3,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/core/cache/eviction_policy.h>
+#include <dftracer/utils/core/common/hash/constants.h>
 #include <dftracer/utils/core/coro/async_mutex.h>
 #include <dftracer/utils/core/coro/task.h>
 
@@ -42,8 +43,9 @@ struct hash<dftracer::utils::utilities::reader::internal::MemberKey> {
     std::size_t operator()(
         const dftracer::utils::utilities::reader::internal::MemberKey& k)
         const noexcept {
-        std::uint64_t h = k.file * 0x9E3779B97F4A7C15ull;
-        h ^= k.member + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+        std::uint64_t h = k.file * dftracer::utils::hash::GOLDEN_RATIO;
+        h ^= k.member + dftracer::utils::hash::GOLDEN_RATIO + (h << 6) +
+             (h >> 2);
         return static_cast<std::size_t>(h);
     }
 };

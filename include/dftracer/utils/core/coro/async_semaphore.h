@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_ASYNC_SEMAPHORE_H
 #define DFTRACER_UTILS_CORE_CORO_ASYNC_SEMAPHORE_H
 
-#include <dftracer/utils/core/coro/yield.h>
+#include <dftracer/utils/core/coro/resumption_helper.h>
 
 #include <coroutine>
 #include <cstddef>
@@ -38,12 +38,19 @@ class CoroSemaphore {
         bool await_ready() const noexcept { return false; }
 
         bool await_suspend(std::coroutine_handle<> h) noexcept {
+            // Captured on the acquirer's worker (acquire is only co_awaited
+            // from a coroutine already running on an executor), so release()
+            // can resume through a known-valid executor instead of the
+            // releaser's current thread, which may be off-executor (an
+            // io-completion thread) where yield_to_executor would silently drop
+            // the resume.
+            dftracer::utils::Executor* exec = resume_executor_for(nullptr);
             std::lock_guard<std::mutex> lock(sem_.mtx_);
             if (sem_.waiters_.empty() && sem_.available_ >= need_) {
                 sem_.available_ -= need_;
                 return false;
             }
-            sem_.waiters_.push_back(Waiter{need_, h});
+            sem_.waiters_.push_back(Waiter{need_, h, exec});
             return true;
         }
 
@@ -59,31 +66,35 @@ class CoroSemaphore {
 
     /// Return `n` permits and wake any waiters that now fit, in FIFO order.
     void release(std::uint64_t n) {
-        std::coroutine_handle<> wake_local[8];
+        Waiter wake_local[8];
         std::size_t wake_n = 0;
-        std::deque<std::coroutine_handle<>> wake_overflow;
+        std::deque<Waiter> wake_overflow;
         {
             std::lock_guard<std::mutex> lock(mtx_);
             available_ += n;
             while (!waiters_.empty() && available_ >= waiters_.front().need) {
                 available_ -= waiters_.front().need;
-                auto h = waiters_.front().handle;
+                Waiter w = waiters_.front();
                 waiters_.pop_front();
                 if (wake_n < 8)
-                    wake_local[wake_n++] = h;
+                    wake_local[wake_n++] = w;
                 else
-                    wake_overflow.push_back(h);
+                    wake_overflow.push_back(w);
             }
         }
         for (std::size_t i = 0; i < wake_n; ++i)
-            yield_to_executor(wake_local[i]);
-        for (auto h : wake_overflow) yield_to_executor(h);
+            dftracer::utils::schedule_coroutine_resumption_helper(
+                wake_local[i].executor, wake_local[i].handle);
+        for (const Waiter& w : wake_overflow)
+            dftracer::utils::schedule_coroutine_resumption_helper(w.executor,
+                                                                  w.handle);
     }
 
    private:
     struct Waiter {
         std::uint64_t need;
         std::coroutine_handle<> handle;
+        dftracer::utils::Executor* executor;
     };
 
     const std::uint64_t capacity_;

@@ -9,6 +9,11 @@
 #include <string>
 #include <vector>
 
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <sys/sysctl.h>
+#endif
+
 namespace dftracer::utils {
 
 static constexpr std::size_t FALLBACK_AVAILABLE_BYTES =
@@ -141,12 +146,34 @@ static std::size_t try_proc_meminfo() {
     return 0;
 }
 
+// macOS: the free, inactive and speculative pages, which is what the
+// kernel would hand out without swapping.
+static std::size_t try_darwin() {
+#ifdef __APPLE__
+    vm_statistics64_data_t vm{};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64,
+                          reinterpret_cast<host_info64_t>(&vm),
+                          &count) != KERN_SUCCESS)
+        return 0;
+    vm_size_t page = 0;
+    if (host_page_size(mach_host_self(), &page) != KERN_SUCCESS) return 0;
+    const std::uint64_t pages = static_cast<std::uint64_t>(vm.free_count) +
+                                vm.inactive_count + vm.speculative_count;
+    return static_cast<std::size_t>(pages * page);
+#else
+    return 0;
+#endif
+}
+
 std::size_t detect_available_memory() {
     std::size_t avail = try_cgroups_v2();
     if (avail > 0) return avail;
     avail = try_cgroups_v1();
     if (avail > 0) return avail;
     avail = try_proc_meminfo();
+    if (avail > 0) return avail;
+    avail = try_darwin();
     if (avail > 0) return avail;
     return FALLBACK_AVAILABLE_BYTES;
 }
@@ -156,6 +183,15 @@ std::size_t compute_memory_budget(std::size_t user_override_bytes) {
     std::size_t avail = detect_available_memory();
     std::size_t budget = avail * DEFAULT_MEMORY_BUDGET_FRACTION_PERCENT / 100;
     return std::max(budget, MIN_MEMORY_BUDGET_BYTES);
+}
+
+std::uint64_t resolve_spill_budget(std::uint64_t configured) {
+    if (configured == 0) {
+        const std::uint64_t b =
+            static_cast<std::uint64_t>(detect_available_memory() / 3);
+        return b < MIN_MEMORY_BUDGET_BYTES ? MIN_MEMORY_BUDGET_BYTES : b;
+    }
+    return configured;  // explicit bytes, or NO_SPILL_BUDGET passthrough
 }
 
 std::size_t estimate_per_file_bytes(const std::vector<std::size_t> &file_sizes,

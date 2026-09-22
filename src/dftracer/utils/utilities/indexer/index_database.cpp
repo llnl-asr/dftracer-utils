@@ -12,6 +12,8 @@
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/batch_scan.h>
+#include <dftracer/utils/utilities/indexer/internal/column_type_codec.h>
+#include <dftracer/utils/utilities/indexer/internal/count_map_scan.h>
 #include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
@@ -281,38 +283,6 @@ NameSummaryResult decode_name_summary_value(std::string_view value) {
         result.counts.emplace(std::move(key), cursor.u64());
     }
     return result;
-}
-
-template <typename Callback>
-void for_each_count_map_entry(std::string_view value, Callback&& callback) {
-    Cursor cursor(value);
-    auto num_entries = cursor.u32();
-    for (std::uint32_t i = 0; i < num_entries; ++i) {
-        auto key = cursor.str_view();
-        auto count = cursor.u64();
-        callback(key, count);
-    }
-}
-
-template <typename Callback>
-void for_each_name_summary_entry(std::string_view value, Callback&& callback) {
-    Cursor cursor(value);
-    auto num_entries = cursor.u32();
-    (void)cursor.u64();  // other_count
-    (void)cursor.u64();  // unique_count
-    for (std::uint32_t i = 0; i < num_entries; ++i) {
-        auto key = cursor.str_view();
-        auto count = cursor.u64();
-        callback(key, count);
-    }
-}
-
-template <typename Fn>
-void scan_prefix(const rocks::RocksDatabase& db, std::string_view column_family,
-                 std::string_view prefix, Fn&& fn) {
-    internal::scan_prefix_iterator(
-        "Failed to scan RocksDB prefix", prefix,
-        [&] { return db.new_iterator(column_family); }, std::forward<Fn>(fn));
 }
 
 }  // namespace
@@ -881,27 +851,52 @@ std::vector<std::string> IndexDatabase::query_all_columns() const {
     return out;
 }
 
+namespace {
+
+// Decodes a "c|" column record value: schema v15+ stores the TLV-encoded
+// DataType, a pre-v15 record stores the one-byte ColumnType. An undecodable
+// (corrupt) value degrades to Unknown rather than throwing, since this scans
+// arbitrary on-disk bytes.
+dataframe::DataType decode_column_record(std::string_view value) {
+    if (value.empty()) return dataframe::scalar(dataframe::TypeId::Unknown);
+    if (value.size() == 1) {
+        return column_type_to_data_type(
+            static_cast<ColumnType>(static_cast<std::uint8_t>(value[0])));
+    }
+    if (auto decoded = decode_data_type(value)) return *decoded;
+    return dataframe::scalar(dataframe::TypeId::Unknown);
+}
+
+}  // namespace
+
 std::vector<std::pair<std::string, ColumnType>>
 IndexDatabase::query_all_column_types() const {
-    // As query_all_columns, but the record value carries the one-byte
-    // ColumnType (empty for a pre-v12 record). Fold the type across files.
+    auto typed = query_all_column_data_types();
+    std::vector<std::pair<std::string, ColumnType>> out;
+    out.reserve(typed.size());
+    for (auto& [name, type] : typed)
+        out.emplace_back(std::move(name), data_type_to_column_type(type));
+    return out;
+}
+
+std::vector<std::pair<std::string, dataframe::DataType>>
+IndexDatabase::query_all_column_data_types() const {
+    // As query_all_columns, but the record value carries the TLV-encoded
+    // DataType (schema v15+; a pre-v15 record decodes via the legacy
+    // one-byte ColumnType path). Fold the type across files.
     constexpr std::size_t HEADER = 2 + sizeof(std::uint32_t);
-    ankerl::unordered_dense::map<std::string, ColumnType> cols;
+    ankerl::unordered_dense::map<std::string, dataframe::DataType> cols;
     scan_prefix(
         *impl_->db_, cf::DIMENSIONS, "c|", [&](::rocksdb::Iterator& it) {
             auto key = iterator_key(it);
             if (key.size() <= HEADER) return;
-            auto value = iterator_value(it);
-            ColumnType t = value.empty()
-                               ? ColumnType::Unknown
-                               : static_cast<ColumnType>(
-                                     static_cast<std::uint8_t>(value[0]));
+            dataframe::DataType t = decode_column_record(iterator_value(it));
             std::string name(key.substr(HEADER));
             auto [pos, inserted] = cols.emplace(std::move(name), t);
-            if (!inserted) pos->second = merge_column_type(pos->second, t);
+            if (!inserted) pos->second = merge_data_type(pos->second, t);
         });
-    std::vector<std::pair<std::string, ColumnType>> out(cols.begin(),
-                                                        cols.end());
+    std::vector<std::pair<std::string, dataframe::DataType>> out(cols.begin(),
+                                                                 cols.end());
     std::sort(out.begin(), out.end(),
               [](const auto& a, const auto& b) { return a.first < b.first; });
     return out;
@@ -1108,37 +1103,6 @@ IndexDatabase::query_file_category_counts_batch(
     return results;
 }
 
-void IndexDatabase::merge_file_category_counts_batch_into(
-    const std::vector<int>& file_ids,
-    std::unordered_map<int, ChunkStatistics*>& targets) const {
-    for (const auto file_id : file_ids) {
-        auto target_it = targets.find(file_id);
-        if (target_it == targets.end() || target_it->second == nullptr) {
-            continue;
-        }
-
-        std::string value;
-        auto status = impl_->db_->get(file_category_counts_key(file_id), &value,
-                                      cf::FILE_CAT_COUNTS);
-        if (status.IsNotFound()) {
-            continue;
-        }
-        if (!status.ok()) {
-            throw_db_error("Failed to read file category counts", status);
-        }
-
-        auto* stats = target_it->second;
-        DecodeContextGuard ctx("file_cat_counts merge file_id=%d size=%zu",
-                               file_id, value.size());
-        for_each_count_map_entry(
-            value, [stats](std::string_view key, std::uint64_t count) {
-                auto entry =
-                    stats->category_counts.try_emplace(std::string(key), 0);
-                entry.first->second += count;
-            });
-    }
-}
-
 std::unordered_map<int, StringViewMap<std::uint64_t>>
 IndexDatabase::query_file_pid_tid_counts_batch(
     const std::vector<int>& file_ids) const {
@@ -1199,66 +1163,6 @@ IndexDatabase::query_file_name_summaries_batch(
     return results;
 }
 
-void IndexDatabase::merge_file_pid_tid_counts_batch_into(
-    const std::vector<int>& file_ids,
-    std::unordered_map<int, ChunkStatistics*>& targets) const {
-    for (const auto file_id : file_ids) {
-        auto target_it = targets.find(file_id);
-        if (target_it == targets.end() || target_it->second == nullptr) {
-            continue;
-        }
-
-        std::string value;
-        auto status = impl_->db_->get(file_pid_tid_counts_key(file_id), &value,
-                                      cf::FILE_PID_TID_COUNTS);
-        if (status.IsNotFound()) {
-            continue;
-        }
-        if (!status.ok()) {
-            throw_db_error("Failed to read file pid_tid counts", status);
-        }
-
-        auto* stats = target_it->second;
-        DecodeContextGuard ctx("file_pid_tid_counts merge file_id=%d size=%zu",
-                               file_id, value.size());
-        for_each_count_map_entry(value, [stats](std::string_view key,
-                                                std::uint64_t count) {
-            auto entry = stats->pid_tid_counts.try_emplace(std::string(key), 0);
-            entry.first->second += count;
-        });
-    }
-}
-
-void IndexDatabase::merge_file_name_counts_batch_into(
-    const std::vector<int>& file_ids,
-    std::unordered_map<int, ChunkStatistics*>& targets) const {
-    for (const auto file_id : file_ids) {
-        auto target_it = targets.find(file_id);
-        if (target_it == targets.end() || target_it->second == nullptr) {
-            continue;
-        }
-
-        std::string value;
-        auto status = impl_->db_->get(file_name_counts_key(file_id), &value,
-                                      cf::FILE_NAME_COUNTS);
-        if (status.IsNotFound()) {
-            continue;
-        }
-        if (!status.ok()) {
-            throw_db_error("Failed to read file name counts", status);
-        }
-
-        auto* stats = target_it->second;
-        DecodeContextGuard ctx("file_name_counts merge file_id=%d size=%zu",
-                               file_id, value.size());
-        for_each_name_summary_entry(value, [stats](std::string_view key,
-                                                   std::uint64_t count) {
-            auto entry = stats->name_counts.try_emplace(std::string(key), 0);
-            entry.first->second += count;
-        });
-    }
-}
-
 std::optional<RootStatisticsResult> IndexDatabase::query_root_scalar_stats()
     const {
     std::string value;
@@ -1280,117 +1184,97 @@ std::optional<RootStatisticsResult> IndexDatabase::query_root_scalar_stats()
     }
 }
 
-StringViewMap<std::uint64_t> IndexDatabase::query_root_category_counts() const {
+namespace {
+
+// Read a root count-map CF value, returning an empty map when absent. Throws
+// `read_error` on a non-NotFound read failure and a Corrupt-payload error
+// (tagged `name`) on a decode failure.
+StringViewMap<std::uint64_t> query_root_count_map(
+    const rocks::RocksDatabase& db, std::string_view count_key,
+    std::string_view column_family, std::string_view read_error,
+    const char* name) {
     std::string value;
-    auto status = impl_->db_->get(root_category_counts_key(), &value,
-                                  cf::ROOT_CAT_COUNTS);
+    auto status = db.get(count_key, &value, column_family);
     if (status.IsNotFound()) {
         return {};
     }
     if (!status.ok()) {
-        throw_db_error("Failed to read root category counts", status);
+        throw_db_error(read_error, status);
     }
     try {
-        DecodeContextGuard ctx("root_cat_counts size=%zu", value.size());
+        DecodeContextGuard ctx("%s size=%zu", name, value.size());
         return decode_count_map_value(value);
     } catch (const std::exception& e) {
         throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Corrupt root_cat_counts payload size=" +
+                           "Corrupt " + std::string(name) + " payload size=" +
                                std::to_string(value.size()) + ": " + e.what());
     }
+}
+
+}  // namespace
+
+StringViewMap<std::uint64_t> IndexDatabase::query_root_category_counts() const {
+    return query_root_count_map(
+        *impl_->db_, root_category_counts_key(), cf::ROOT_CAT_COUNTS,
+        "Failed to read root category counts", "root_cat_counts");
 }
 
 StringViewMap<std::uint64_t> IndexDatabase::query_root_pid_tid_counts() const {
-    std::string value;
-    auto status = impl_->db_->get(root_pid_tid_counts_key(), &value,
-                                  cf::ROOT_PID_TID_COUNTS);
-    if (status.IsNotFound()) {
-        return {};
-    }
-    if (!status.ok()) {
-        throw_db_error("Failed to read root pid_tid counts", status);
-    }
-    try {
-        DecodeContextGuard ctx("root_pid_tid_counts size=%zu", value.size());
-        return decode_count_map_value(value);
-    } catch (const std::exception& e) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Corrupt root_pid_tid_counts payload size=" +
-                               std::to_string(value.size()) + ": " + e.what());
-    }
+    return query_root_count_map(
+        *impl_->db_, root_pid_tid_counts_key(), cf::ROOT_PID_TID_COUNTS,
+        "Failed to read root pid_tid counts", "root_pid_tid_counts");
 }
 
 StringViewMap<std::uint64_t> IndexDatabase::query_root_name_counts() const {
-    std::string value;
-    auto status =
-        impl_->db_->get(root_name_counts_key(), &value, cf::ROOT_NAME_COUNTS);
-    if (status.IsNotFound()) {
-        return {};
-    }
-    if (!status.ok()) {
-        throw_db_error("Failed to read root name counts", status);
-    }
-    try {
-        DecodeContextGuard ctx("root_name_counts size=%zu", value.size());
-        return decode_count_map_value(value);
-    } catch (const std::exception& e) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
-                           "Corrupt root_name_counts payload size=" +
-                               std::to_string(value.size()) + ": " + e.what());
-    }
+    return query_root_count_map(
+        *impl_->db_, root_name_counts_key(), cf::ROOT_NAME_COUNTS,
+        "Failed to read root name counts", "root_name_counts");
 }
 
-void IndexDatabase::merge_root_category_counts_into(
-    ChunkStatistics& target) const {
+namespace {
+
+// Read a root count-map CF value (absent is a no-op) and fold its entries into
+// `target`, throwing `error_message` on a non-NotFound read failure.
+void merge_root_counts_into(const rocks::RocksDatabase& db,
+                            std::string_view count_key,
+                            std::string_view column_family,
+                            std::string_view error_message,
+                            StringViewMap<std::uint64_t>& target) {
     std::string value;
-    auto status = impl_->db_->get(root_category_counts_key(), &value,
-                                  cf::ROOT_CAT_COUNTS);
+    auto status = db.get(count_key, &value, column_family);
     if (status.IsNotFound()) {
         return;
     }
     if (!status.ok()) {
-        throw_db_error("Failed to read root category counts", status);
+        throw_db_error(error_message, status);
     }
-    for_each_count_map_entry(value, [&target](std::string_view key,
-                                              std::uint64_t count) {
-        auto entry = target.category_counts.try_emplace(std::string(key), 0);
-        entry.first->second += count;
-    });
+    for_each_count_map_entry(
+        value, [&target](std::string_view key, std::uint64_t count) {
+            auto entry = target.try_emplace(std::string(key), 0);
+            entry.first->second += count;
+        });
+}
+
+}  // namespace
+
+void IndexDatabase::merge_root_category_counts_into(
+    ChunkStatistics& target) const {
+    merge_root_counts_into(
+        *impl_->db_, root_category_counts_key(), cf::ROOT_CAT_COUNTS,
+        "Failed to read root category counts", target.category_counts);
 }
 
 void IndexDatabase::merge_root_pid_tid_counts_into(
     ChunkStatistics& target) const {
-    std::string value;
-    auto status = impl_->db_->get(root_pid_tid_counts_key(), &value,
-                                  cf::ROOT_PID_TID_COUNTS);
-    if (status.IsNotFound()) {
-        return;
-    }
-    if (!status.ok()) {
-        throw_db_error("Failed to read root pid_tid counts", status);
-    }
-    for_each_count_map_entry(
-        value, [&target](std::string_view key, std::uint64_t count) {
-            auto entry = target.pid_tid_counts.try_emplace(std::string(key), 0);
-            entry.first->second += count;
-        });
+    merge_root_counts_into(
+        *impl_->db_, root_pid_tid_counts_key(), cf::ROOT_PID_TID_COUNTS,
+        "Failed to read root pid_tid counts", target.pid_tid_counts);
 }
 
 void IndexDatabase::merge_root_name_counts_into(ChunkStatistics& target) const {
-    std::string value;
-    auto status =
-        impl_->db_->get(root_name_counts_key(), &value, cf::ROOT_NAME_COUNTS);
-    if (status.IsNotFound()) {
-        return;
-    }
-    if (!status.ok()) {
-        throw_db_error("Failed to read root name counts", status);
-    }
-    for_each_count_map_entry(
-        value, [&target](std::string_view key, std::uint64_t count) {
-            auto entry = target.name_counts.try_emplace(std::string(key), 0);
-            entry.first->second += count;
-        });
+    merge_root_counts_into(
+        *impl_->db_, root_name_counts_key(), cf::ROOT_NAME_COUNTS,
+        "Failed to read root name counts", target.name_counts);
 }
 
 std::vector<int> IndexDatabase::query_name_file_postings(
@@ -1598,40 +1482,34 @@ IndexDatabase::query_all_file_pids() const {
     return result;
 }
 
-std::uint64_t IndexDatabase::get_checkpoint_size(int file_id) const {
+namespace {
+
+// Read metadata record field `idx` for `file_id`, 0 when the record is absent.
+std::uint64_t get_metadata_field(const rocks::RocksDatabase& db, int file_id,
+                                 std::size_t idx) {
     std::string value;
-    auto status = impl_->db_->get(metadata_key(file_id), &value, cf::METADATA);
+    auto status = db.get(metadata_key(file_id), &value, cf::METADATA);
     if (status.IsNotFound()) {
         return 0;
     }
     if (!status.ok()) {
         throw_db_error("Failed to read metadata", status);
     }
-    return decode_metadata_record(value)[0];
+    return decode_metadata_record(value)[idx];
+}
+
+}  // namespace
+
+std::uint64_t IndexDatabase::get_checkpoint_size(int file_id) const {
+    return get_metadata_field(*impl_->db_, file_id, 0);
 }
 
 std::uint64_t IndexDatabase::get_num_lines(int file_id) const {
-    std::string value;
-    auto status = impl_->db_->get(metadata_key(file_id), &value, cf::METADATA);
-    if (status.IsNotFound()) {
-        return 0;
-    }
-    if (!status.ok()) {
-        throw_db_error("Failed to read metadata", status);
-    }
-    return decode_metadata_record(value)[1];
+    return get_metadata_field(*impl_->db_, file_id, 1);
 }
 
 std::uint64_t IndexDatabase::get_max_bytes(int file_id) const {
-    std::string value;
-    auto status = impl_->db_->get(metadata_key(file_id), &value, cf::METADATA);
-    if (status.IsNotFound()) {
-        return 0;
-    }
-    if (!status.ok()) {
-        throw_db_error("Failed to read metadata", status);
-    }
-    return decode_metadata_record(value)[2];
+    return get_metadata_field(*impl_->db_, file_id, 2);
 }
 
 void IndexDatabase::ensure_hash_tables_cached() const {

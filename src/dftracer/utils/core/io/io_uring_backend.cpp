@@ -140,13 +140,6 @@ struct io_uring_sqe* Ring::get_sqe() {
     return sqe;
 }
 
-int Ring::submit() {
-    // Legacy single-submit path. Used only by stop() for NOP wakeup.
-    // For batched submission, use mark_pending() + flush().
-    pending_count_ = 1;
-    return flush();
-}
-
 int Ring::flush() {
     if (pending_count_ == 0) return 0;
     unsigned to_submit = pending_count_;

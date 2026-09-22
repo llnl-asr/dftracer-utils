@@ -7,6 +7,7 @@
 // interface in transport.h keeps core buildable without MPI.
 
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/platform_compat.h>
 #include <dftracer/utils/core/distributed/transport.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI
@@ -16,7 +17,6 @@
 #include <algorithm>
 #include <cstdlib>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace dftracer::utils::distributed {
@@ -73,8 +73,7 @@ inline void set_local_thread_budget(MPI_Comm comm = MPI_COMM_WORLD) {
     MPI_Comm_size(local, &local_size);
     MPI_Comm_free(&local);
 
-    unsigned cores = std::thread::hardware_concurrency();
-    if (cores == 0) cores = 1;
+    const auto cores = static_cast<unsigned>(hardware_concurrency());
     unsigned per_rank =
         std::max(1u, cores / static_cast<unsigned>(std::max(1, local_size)));
     const std::string n = std::to_string(per_rank);

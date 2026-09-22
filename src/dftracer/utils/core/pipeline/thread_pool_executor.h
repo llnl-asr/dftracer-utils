@@ -78,7 +78,6 @@ class ThreadPoolExecutor : public TaskExecutor {
     std::atomic<std::size_t> live_workers_{0};    // current live worker threads
     std::atomic<std::size_t> idle_workers_{0};    // currently parked in wait()
     std::atomic<std::size_t> next_worker_id_{0};  // monotonic ids, churn-safe
-    std::atomic<std::size_t> next_worker_{0};     // For round-robin submission
 
     std::atomic<bool> running_{false};
     std::size_t num_threads_;                     // the running cap
@@ -201,8 +200,6 @@ class ThreadPoolExecutor : public TaskExecutor {
 
     void shutdown() override;
 
-    void reset();
-
     // Spawns one worker up to the num_threads_ cap.
     void add_worker();
     // Asks one worker to exit and joins it. Safe while
@@ -310,9 +307,6 @@ class ThreadPoolExecutor : public TaskExecutor {
      * retire one per keep-alive of sustained idle down to min_workers_.
      */
     void monitor_loop();
-
-    void update_task_location(TaskIndex task_id, TaskInfo::Location location,
-                              std::size_t worker_id);
 
     TaskProgress build_task_progress_tree(
         TaskIndex task_id, std::unordered_set<TaskIndex>& processed) const;

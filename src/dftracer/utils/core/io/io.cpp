@@ -35,149 +35,113 @@ int iov_max_entries() noexcept {
     return value;
 }
 
+// Every free op has the same shape: if the current executor has an I/O backend,
+// forward to its submit_* member (async); otherwise run the blocking syscall,
+// fold a failure to -errno, and hand back a ready awaitable. Submit is the
+// backend member selected as a template argument; sync is the syscall wrapper.
+template <auto Submit, class Sync, class... Args>
+IoAwaitable io_dispatch(Sync sync, Args... args) noexcept {
+    auto* exec = Executor::current();
+    if (exec && exec->has_io_backend()) {
+        return (exec->io_backend().*Submit)(args...);
+    }
+    auto result = sync(args...);
+    if (result < 0) result = -errno;
+    return IoAwaitable::ready(static_cast<ssize_t>(result));
+}
+
 }  // namespace
 
 IoAwaitable read(int fd, void* buf, std::size_t len) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_read(fd, buf, len);
-    }
-    ssize_t result = ::read(fd, buf, len);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_read>(
+        [](int f, void* b, std::size_t n) { return ::read(f, b, n); }, fd, buf,
+        len);
 }
 
 IoAwaitable write(int fd, const void* buf, std::size_t len) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_write(fd, buf, len);
-    }
-    ssize_t result = ::write(fd, buf, len);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_write>(
+        [](int f, const void* b, std::size_t n) { return ::write(f, b, n); },
+        fd, buf, len);
 }
 
 IoAwaitable pread(int fd, void* buf, std::size_t len, off_t offset) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_pread(fd, buf, len, offset);
-    }
-    ssize_t result = ::pread(fd, buf, len, offset);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_pread>(
+        [](int f, void* b, std::size_t n, off_t o) {
+            return ::pread(f, b, n, o);
+        },
+        fd, buf, len, offset);
 }
 
 IoAwaitable pwrite(int fd, const void* buf, std::size_t len,
                    off_t offset) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_pwrite(fd, buf, len, offset);
-    }
-    ssize_t result = ::pwrite(fd, buf, len, offset);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_pwrite>(
+        [](int f, const void* b, std::size_t n, off_t o) {
+            return ::pwrite(f, b, n, o);
+        },
+        fd, buf, len, offset);
 }
 
 IoAwaitable open(const char* path, int flags, mode_t mode) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_open(path, flags, mode);
-    }
-    int result = ::open(path, flags, mode);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(static_cast<ssize_t>(result));
+    return io_dispatch<&IoBackend::submit_open>(
+        [](const char* p, int fl, mode_t m) { return ::open(p, fl, m); }, path,
+        flags, mode);
 }
 
 IoAwaitable close(int fd) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_close(fd);
-    }
-    int result = ::close(fd);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(static_cast<ssize_t>(result));
+    return io_dispatch<&IoBackend::submit_close>(
+        [](int f) { return ::close(f); }, fd);
 }
 
 IoAwaitable fsync(int fd) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_fsync(fd);
-    }
-    int result = ::fsync(fd);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(static_cast<ssize_t>(result));
+    return io_dispatch<&IoBackend::submit_fsync>(
+        [](int f) { return ::fsync(f); }, fd);
 }
 
 IoAwaitable ftruncate(int fd, off_t length) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_ftruncate(fd, length);
-    }
-    int result = ::ftruncate(fd, length);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(static_cast<ssize_t>(result));
+    return io_dispatch<&IoBackend::submit_ftruncate>(
+        [](int f, off_t l) { return ::ftruncate(f, l); }, fd, length);
 }
 
 IoAwaitable fstat(int fd, struct stat* buf) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_fstat(fd, buf);
-    }
-    int result = ::fstat(fd, buf);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(static_cast<ssize_t>(result));
+    return io_dispatch<&IoBackend::submit_fstat>(
+        [](int f, struct stat* b) { return ::fstat(f, b); }, fd, buf);
 }
 
 IoAwaitable accept(int listen_fd, struct sockaddr* addr,
                    socklen_t* addrlen) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_accept(listen_fd, addr, addrlen);
-    }
-    // Sync fallback
-    int result = ::accept(listen_fd, addr, addrlen);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(static_cast<ssize_t>(result));
+    return io_dispatch<&IoBackend::submit_accept>(
+        [](int lf, struct sockaddr* a, socklen_t* al) {
+            return ::accept(lf, a, al);
+        },
+        listen_fd, addr, addrlen);
 }
 
 IoAwaitable recv(int fd, void* buf, std::size_t len, int flags) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_recv(fd, buf, len, flags);
-    }
-    ssize_t result = ::recv(fd, buf, len, flags);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_recv>(
+        [](int f, void* b, std::size_t n, int fl) {
+            return ::recv(f, b, n, fl);
+        },
+        fd, buf, len, flags);
 }
 
 IoAwaitable send(int fd, const void* buf, std::size_t len, int flags) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_send(fd, buf, len, flags);
-    }
-    ssize_t result = ::send(fd, buf, len, flags);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_send>(
+        [](int f, const void* b, std::size_t n, int fl) {
+            return ::send(f, b, n, fl);
+        },
+        fd, buf, len, flags);
 }
 
 IoAwaitable readv(int fd, const struct iovec* iov, int iovcnt) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_readv(fd, iov, iovcnt);
-    }
-    ssize_t result = ::readv(fd, iov, iovcnt);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_readv>(
+        [](int f, const struct iovec* v, int c) { return ::readv(f, v, c); },
+        fd, iov, iovcnt);
 }
 
 IoAwaitable writev(int fd, const struct iovec* iov, int iovcnt) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_writev(fd, iov, iovcnt);
-    }
-    ssize_t result = ::writev(fd, iov, iovcnt);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_writev>(
+        [](int f, const struct iovec* v, int c) { return ::writev(f, v, c); },
+        fd, iov, iovcnt);
 }
 
 coro::CoroTask<ssize_t> writev_all(int fd, struct iovec* iov, int iovcnt) {
@@ -207,45 +171,35 @@ coro::CoroTask<ssize_t> writev_all(int fd, struct iovec* iov, int iovcnt) {
 
 IoAwaitable preadv(int fd, const struct iovec* iov, int iovcnt,
                    off_t offset) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_preadv(fd, iov, iovcnt, offset);
-    }
-    ssize_t result = ::preadv(fd, iov, iovcnt, offset);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_preadv>(
+        [](int f, const struct iovec* v, int c, off_t o) {
+            return ::preadv(f, v, c, o);
+        },
+        fd, iov, iovcnt, offset);
 }
 
 IoAwaitable pwritev(int fd, const struct iovec* iov, int iovcnt,
                     off_t offset) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_pwritev(fd, iov, iovcnt, offset);
-    }
-    ssize_t result = ::pwritev(fd, iov, iovcnt, offset);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_pwritev>(
+        [](int f, const struct iovec* v, int c, off_t o) {
+            return ::pwritev(f, v, c, o);
+        },
+        fd, iov, iovcnt, offset);
 }
 
 IoAwaitable lseek(int fd, off_t offset, int whence) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_lseek(fd, offset, whence);
-    }
-    off_t result = ::lseek(fd, offset, whence);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(static_cast<ssize_t>(result));
+    return io_dispatch<&IoBackend::submit_lseek>(
+        [](int f, off_t o, int w) { return ::lseek(f, o, w); }, fd, offset,
+        whence);
 }
 
 IoAwaitable sendfile(int out_fd, int in_fd, off_t offset,
                      std::size_t count) noexcept {
-    auto* exec = Executor::current();
-    if (exec && exec->has_io_backend()) {
-        return exec->io_backend().submit_sendfile(out_fd, in_fd, offset, count);
-    }
-    ssize_t result = platform_sendfile(out_fd, in_fd, offset, count);
-    if (result < 0) result = -errno;
-    return IoAwaitable::ready(result);
+    return io_dispatch<&IoBackend::submit_sendfile>(
+        [](int of, int inf, off_t o, std::size_t c) {
+            return platform_sendfile(of, inf, o, c);
+        },
+        out_fd, in_fd, offset, count);
 }
 
 }  // namespace dftracer::utils::io

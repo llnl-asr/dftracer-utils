@@ -1487,13 +1487,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
 }
 
 int main(int argc, char** argv) {
-    // Guard stays at main() scope so its destructor runs at true process exit.
-    struct RocksDbExitGuard {
-        ~RocksDbExitGuard() {
-            dftracer::utils::rocksdb::mark_process_exiting_for_rocksdb();
-        }
-    } rocksdb_exit_guard;
-
+    // RocksDB process-exit cleanup is handled by cli::cli_main's own guard.
     return cli::cli_main<StatsArgParse>(
         argc, argv, "dftracer_stats",
         "Display statistics for DFTracer trace files from pre-built "

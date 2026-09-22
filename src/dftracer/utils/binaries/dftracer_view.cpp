@@ -1,6 +1,8 @@
 #include <dftracer/utils/binaries/common_cli.h>
+#include <dftracer/utils/binaries/json_cell_printer.h>
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/core/common/memory_budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
@@ -10,7 +12,6 @@
 #include <dftracer/utils/trace/indexing/resolve_and_build.h>
 #include <dftracer/utils/trace/indexing/shard_manifest.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/trace/views/chunk_stats_source.h>
 #include <dftracer/utils/trace/views/result_batch.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -40,6 +41,35 @@ using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
 using namespace dftracer::utils::utilities::filesystem;
+
+namespace {
+// Owns a FILE* opened for output and closes it on scope exit, so a throw from
+// the export ladder cannot leak it. A null handle closes nothing; stdout is
+// written through the raw pointer and never owned here.
+class FileHandle {
+   public:
+    FileHandle() = default;
+    explicit FileHandle(std::FILE* f) noexcept : f_(f) {}
+    ~FileHandle() {
+        if (f_) std::fclose(f_);
+    }
+    FileHandle(FileHandle&& o) noexcept : f_(o.f_) { o.f_ = nullptr; }
+    FileHandle& operator=(FileHandle&& o) noexcept {
+        if (this != &o) {
+            if (f_) std::fclose(f_);
+            f_ = o.f_;
+            o.f_ = nullptr;
+        }
+        return *this;
+    }
+    FileHandle(const FileHandle&) = delete;
+    FileHandle& operator=(const FileHandle&) = delete;
+    std::FILE* get() const noexcept { return f_; }
+
+   private:
+    std::FILE* f_ = nullptr;
+};
+}  // namespace
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI
 // The files owned by `rank` of `size`: a deterministic round-robin split, so
@@ -378,18 +408,6 @@ static coro::CoroTask<void> verify_output(
     }
 }
 
-static std::vector<std::string> split_csv(const std::string& spec) {
-    std::vector<std::string> out;
-    std::size_t pos = 0;
-    while (pos < spec.size()) {
-        auto comma = spec.find(',', pos);
-        std::string tok = spec.substr(pos, comma - pos);
-        pos = (comma == std::string::npos) ? spec.size() : comma + 1;
-        if (!tok.empty()) out.push_back(std::move(tok));
-    }
-    return out;
-}
-
 static bool parse_group_by(const std::string& spec,
                            std::vector<GroupKey>& out) {
     std::size_t pos = 0;
@@ -502,34 +520,6 @@ static bool parse_agg(const std::string& spec, std::vector<AggSpec>& out) {
     return true;
 }
 
-// Append one Batch cell as a JSON value (strings quoted, numerics bare). List
-// and struct columns (histograms) are not emitted by the CLI.
-static void append_cell_json(std::string& s, const dataframe::Series& c,
-                             std::int64_t i) {
-    switch (c.type()) {
-        case dataframe::TypeId::String:
-        case dataframe::TypeId::Binary:
-            s += "\"" + std::string(c.string_at(i)) + "\"";
-            break;
-        case dataframe::TypeId::Int64:
-            s += std::to_string(c.data<std::int64_t>()[i]);
-            break;
-        case dataframe::TypeId::Uint64:
-            s += std::to_string(c.data<std::uint64_t>()[i]);
-            break;
-        default: {
-            const double v = c.data<double>()[i];
-            s += (v == static_cast<double>(static_cast<std::int64_t>(v)))
-                     ? std::to_string(static_cast<std::int64_t>(v))
-                     : std::to_string(v);
-        }
-    }
-}
-
-static bool cli_emittable(dataframe::TypeId t) {
-    return t != dataframe::TypeId::List && t != dataframe::TypeId::Struct;
-}
-
 // Print a collect() result as one JSON object per row.
 static void print_table(FILE* out, const dataframe::DataFrame& table) {
     const std::int64_t nrows = table.num_rows();
@@ -537,11 +527,11 @@ static void print_table(FILE* out, const dataframe::DataFrame& table) {
         std::string s = "{";
         bool first = true;
         for (std::size_t c = 0; c < table.columns.size(); ++c) {
-            if (!cli_emittable(table.columns[c].type())) continue;
+            if (!binaries::cli_emittable(table.columns[c].type())) continue;
             if (!first) s += ",";
             first = false;
             s += "\"" + table.names[c] + "\":";
-            append_cell_json(s, table.columns[c], r);
+            binaries::append_cell_json(s, table.columns[c], r);
         }
         s += "}\n";
         std::fwrite(s.data(), 1, s.size(), out);
@@ -685,7 +675,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     const bool counters = cli->counters;
     const bool ct_mode = cli->call_tree;
     const bool fg_mode = cli->flamegraph;
-    const std::vector<std::string> ct_partition = split_csv(cli->ct_partition);
+    const std::vector<std::string> ct_partition =
+        cli::split_csv(cli->ct_partition);
     const bool aggregate = !group_keys.empty() || !agg_specs.empty() ||
                            counters || time_bucket > 0 || cli->agg_numeric_args;
     const bool typed_mode = cli->collect_typed;
@@ -859,6 +850,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             co_return 1;
         }
     }
+    FileHandle out_owner(out_file);  // closes out_file on any exit; not stdout
     FILE* out_target = out_file ? out_file : stdout;
     FileSink sink(out_target);
     bool verify_failed = false;
@@ -878,7 +870,6 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         cli::build_pipeline_config("DFTracer View", cli->pipeline);
     Pipeline pipeline(pipeline_config);
 
-    ChunkStatsSource source;
     ExportStats stats;
     // Apply the parsed view options to a base View; shared by the single-node
     // and distributed paths so both aggregate identically.
@@ -893,11 +884,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         if (!group_keys.empty()) v = v.group_by(group_keys);
         if (!agg_specs.empty()) v = v.agg(agg_specs);
         if (cli->agg_numeric_args) v = v.agg_numeric_args();
-        if (!cli->select.empty()) v = v.select(split_csv(cli->select));
-        if (cli->memory_budget > 0)
+        if (!cli->select.empty()) v = v.select(cli::split_csv(cli->select));
+        if (cli->no_spill)
+            v = v.memory_budget(NO_SPILL_BUDGET);
+        else if (cli->memory_budget > 0)
             v = v.memory_budget(cli->memory_budget);
-        else if (!cli->no_spill)
-            v = v.auto_spill();
+        // else: leave the plan default (0), which resolves to auto (~1/3 RAM).
         if (cli->offset > 0) v = v.offset(cli->offset);
         if (cli->limit > 0) v = v.limit(cli->limit);
         return v;
@@ -919,11 +911,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 // clutter (or get scanned from) the trace directory. An
                 // explicit
                 // --index-dir is used verbatim.
-                std::string idx_base =
-                    index_dir.empty() ? (fs::path(files.front()).parent_path() /
-                                         SHARD_SET_DIRNAME)
-                                            .string()
-                                      : index_dir;
+                // Not a conditional expression: GCC 12 frees its temporaries
+                // twice in a coroutine.
+                std::string idx_base = index_dir;
+                if (idx_base.empty())
+                    idx_base = (fs::path(files.front()).parent_path() /
+                                SHARD_SET_DIRNAME)
+                                   .string();
                 std::string rank_idx =
                     idx_base + "/rank_" + std::to_string(transport.rank());
                 if (!no_auto_index) {
@@ -959,10 +953,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 }
                 View shard_view =
                     configure(View::from_files(std::move(shard_files_vf)));
-                std::string partial =
-                    fg_mode
-                        ? co_await shard_view.flamegraph_partial(ct_partition)
-                        : co_await shard_view.aggregate_partial();
+                std::string partial;
+                if (fg_mode)
+                    partial =
+                        co_await shard_view.flamegraph_partial(ct_partition);
+                else
+                    partial = co_await shard_view.aggregate_partial();
                 auto partials = transport.all_gather(partial);
                 if (transport.rank() == 0) {
                     std::vector<std::string_view> pv(partials.begin(),
@@ -1008,10 +1004,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             if (write_trace && transport.size() > 1) {
                 auto shard =
                     shard_files(files, transport.rank(), transport.size());
-                std::string idx_base =
-                    index_dir.empty()
-                        ? fs::path(files.front()).parent_path().string()
-                        : index_dir;
+                std::string idx_base = index_dir;
+                if (idx_base.empty())
+                    idx_base = fs::path(files.front()).parent_path().string();
                 std::string rank_idx =
                     idx_base + "/rank_" + std::to_string(transport.rank());
                 if (!no_auto_index) {
@@ -1069,8 +1064,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 co_return;
             }
 
-            View v = configure(
-                View::from_files(view_files).with_partial_source(&source));
+            View v = configure(View::from_files(view_files));
 
             // Skip the eager pre-build when the query would take the raw-gzip
             // bootstrap (answer the query and build the index in one pass);
@@ -1086,9 +1080,11 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             }
 
             if (ct_mode || fg_mode) {
-                dataframe::DataFrame table =
-                    fg_mode ? co_await v.flamegraph(ct_partition)
-                            : co_await v.call_tree(ct_partition);
+                dataframe::DataFrame table;
+                if (fg_mode)
+                    table = co_await v.flamegraph(ct_partition);
+                else
+                    table = co_await v.call_tree(ct_partition);
                 print_table(out_target, table);
                 stats.events_matched = table.num_rows();
             } else if (mv_mode) {
@@ -1141,11 +1137,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         pipeline.execute();
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Pipeline failed: %s", e.what());
-        if (out_file) std::fclose(out_file);
         co_return 1;
     }
-
-    if (out_file) std::fclose(out_file);
 
     std::fprintf(stderr,
                  "View: %s | Files: %zu | Chunks: scanned=%llu skipped=%llu | "

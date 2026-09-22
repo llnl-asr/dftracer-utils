@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_DATABASE_H
 #define DFTRACER_UTILS_UTILITIES_INDEXER_INDEX_DATABASE_H
 
+#include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/utilities/indexer/types/types.h>
 
 #include <cstdint>
@@ -26,9 +27,12 @@ class SstArtifactRegistry;
 /// the RocksDB layer.
 enum class IndexOpenMode { ReadOnly, ReadWrite };
 
-/// The value type harvested for a groupable column at index build, stored as a
-/// one-byte tag on each column record. Unknown marks a record from an index
-/// built before schema v12 (no type persisted).
+/// The value type harvested for a groupable column at index build: what the
+/// JSON scan observed (a scalar's shape), not what is stored on disk. Unknown
+/// marks a record from an index built before schema v12 (no type persisted).
+/// The on-disk column record stores the richer `dataframe::DataType` (schema
+/// v15+); ColumnType stays the harvest-time vocabulary since a JSON arg value
+/// is always one of these three scalar shapes or absent.
 enum class ColumnType : std::uint8_t {
     Unknown = 0,
     Int64 = 1,
@@ -101,7 +105,17 @@ class IndexDatabase {
     /// records), so an older rollup lacks those bytes and would misparse.
     /// v11 -> v12 gave each harvested column record a one-byte value type
     /// (ColumnType), so an older index's columns read back with type Unknown.
-    static constexpr std::uint32_t SCHEMA_VERSION = 12;
+    /// v12 -> v13 changed the persisted rollup from serialized
+    /// GroupMap/AggAccum records to per-group engine AggState blobs
+    /// (agg_serialize), so an older rollup's rows are an incompatible layout.
+    /// v13 -> v14 appended the name-keyed dyn side-table to the AggState blob
+    /// (a trailing has_dyn byte plus, when set, the dyn specs/domain/stats), so
+    /// an older rollup blob lacks those bytes and would misparse.
+    /// v14 -> v15 widened each harvested column record's value from a single
+    /// ColumnType byte to a variable-length TLV encoding of the full
+    /// `dataframe::DataType` (column_type_codec.h), so an older record's
+    /// single byte would decode as a truncated/malformed type.
+    static constexpr std::uint32_t SCHEMA_VERSION = 15;
 
     /// True if the stored schema predates the current build's layout.
     bool schema_outdated() const;
@@ -178,6 +192,16 @@ class IndexDatabase {
     std::vector<std::pair<std::string, ColumnType>> query_all_column_types()
         const;
 
+    /// As query_all_column_types, but each name is paired with the full
+    /// stored `dataframe::DataType` rather than the coarser ColumnType.
+    /// Folded across files via the same rule as query_all_column_types
+    /// (numeric widens to Float64, any other mismatch - including two
+    /// different nested shapes - widens to a scalar String). A pre-v15
+    /// record decodes to a scalar DataType matching its old ColumnType byte;
+    /// an undecodable (corrupt) record is treated as Unknown. Sorted by name.
+    std::vector<std::pair<std::string, dataframe::DataType>>
+    query_all_column_data_types() const;
+
     std::vector<ChunkStatisticsResult> query_chunk_statistics(
         int file_id) const;
     std::unordered_map<int, std::vector<ChunkStatisticsResult>>
@@ -198,15 +222,6 @@ class IndexDatabase {
     StringViewMap<std::uint64_t> query_root_category_counts() const;
     StringViewMap<std::uint64_t> query_root_pid_tid_counts() const;
     StringViewMap<std::uint64_t> query_root_name_counts() const;
-    void merge_file_category_counts_batch_into(
-        const std::vector<int>& file_ids,
-        std::unordered_map<int, ChunkStatistics*>& targets) const;
-    void merge_file_pid_tid_counts_batch_into(
-        const std::vector<int>& file_ids,
-        std::unordered_map<int, ChunkStatistics*>& targets) const;
-    void merge_file_name_counts_batch_into(
-        const std::vector<int>& file_ids,
-        std::unordered_map<int, ChunkStatistics*>& targets) const;
     void merge_root_category_counts_into(ChunkStatistics& target) const;
     void merge_root_pid_tid_counts_into(ChunkStatistics& target) const;
     void merge_root_name_counts_into(ChunkStatistics& target) const;

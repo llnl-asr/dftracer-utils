@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_UTILITIES_HASH_FNV1A_HASHER_UTILITY_H
 
 #include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/hash_combine.h>
+#include <dftracer/utils/core/common/hash/hash_combine.h>
 #include <dftracer/utils/utilities/hash/types.h>
 
 #include <cstddef>

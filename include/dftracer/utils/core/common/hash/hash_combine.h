@@ -1,15 +1,16 @@
 #ifndef DFTRACER_UTILS_CORE_COMMON_HASH_COMBINE_H
 #define DFTRACER_UTILS_CORE_COMMON_HASH_COMBINE_H
 
+#include <dftracer/utils/core/common/hash/constants.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 
 namespace dftracer::utils {
 
-/// 64-bit golden ratio. The 32-bit variant (0x9e3779b9) mixes poorly when
-/// size_t is 64-bit, so prefer this everywhere hashes are combined.
-inline constexpr std::uint64_t HASH_GOLDEN_RATIO = 0x9e3779b97f4a7c15ULL;
+/// Alias for dftracer::utils::hash::GOLDEN_RATIO, kept for existing callers.
+inline constexpr std::uint64_t HASH_GOLDEN_RATIO = hash::GOLDEN_RATIO;
 
 /// Boost-style hash combine: fold value into seed.
 inline void hash_combine(std::size_t& seed, std::size_t value) {

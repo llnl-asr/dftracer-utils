@@ -14,6 +14,7 @@
 // Both forms merge (sparse pairs union, dense registers take the maximum), so
 // per-file and per-worker sketches combine without keeping the values.
 
+#include <dftracer/utils/core/common/bits.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <algorithm>
@@ -110,7 +111,8 @@ class BasicDistinctSketch {
     void apply_dense(std::uint64_t h) {
         auto idx = static_cast<std::uint32_t>(h >> (64 - PRECISION));
         std::uint64_t rest = (h << PRECISION) | (1ULL << (PRECISION - 1));
-        auto rank = static_cast<std::uint8_t>(leading_zeros(rest) + 1);
+        auto rank =
+            static_cast<std::uint8_t>(dftracer::utils::bits::clz_u64(rest) + 1);
         if (rank > dense_[idx]) dense_[idx] = rank;
     }
 
@@ -129,20 +131,6 @@ class BasicDistinctSketch {
         for (std::uint64_t h : sparse_) apply_dense(h);
         sparse_.clear();
         sparse_.shrink_to_fit();
-    }
-
-    static std::uint32_t leading_zeros(std::uint64_t v) {
-        if (v == 0) return 64;
-#if defined(__GNUC__) || defined(__clang__)
-        return static_cast<std::uint32_t>(__builtin_clzll(v));
-#else
-        std::uint32_t n = 0;
-        while ((v & (1ULL << 63)) == 0) {
-            v <<= 1;
-            ++n;
-        }
-        return n;
-#endif
     }
 
     static std::uint64_t hash64(std::string_view s) {

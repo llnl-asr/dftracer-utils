@@ -206,6 +206,9 @@ class RecordBatchBuilder {
 
     void init_column(ColumnData& col, ColumnType type, std::string_view name);
     void backfill_nulls(ColumnData& col, std::size_t target_count);
+    // Dynamic-mode first-touch tracking for column col_idx (no-op once the
+    // schema is declared or locked).
+    void mark_touched(std::size_t col_idx);
 };
 
 }  // namespace dftracer::utils::utilities::common::arrow

@@ -136,6 +136,11 @@ class IndexDatabaseWriterContext : public IndexBatchSink {
     explicit IndexDatabaseWriterContext(
         std::shared_ptr<dftracer::utils::rocksdb::RocksDatabase> db);
 
+    // Stage a put into the pending batch; throw with `error_message` on
+    // failure.
+    void put_encoded(std::string_view column_family, std::string_view key,
+                     std::string_view value, std::string_view error_message);
+
     std::shared_ptr<dftracer::utils::rocksdb::RocksDatabase> db_;
     dftracer::utils::rocksdb::RocksDatabase::Batch batch_;
     bool committed_ = false;

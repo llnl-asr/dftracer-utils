@@ -1,16 +1,13 @@
 #ifndef DFTRACER_UTILS_CORE_COMMON_HASH_FNV1A_H
 #define DFTRACER_UTILS_CORE_COMMON_HASH_FNV1A_H
 
+#include <dftracer/utils/core/common/hash/constants.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
 namespace dftracer::utils::hash {
-
-// FNV-1a, 64-bit, by Glenn Fowler, Landon Curt Noll, and Phong Vo (public
-// domain): http://www.isthe.com/chongo/tech/comp/fnv/
-inline constexpr std::uint64_t FNV1A_OFFSET_BASIS = 0xcbf29ce484222325ULL;
-inline constexpr std::uint64_t FNV1A_PRIME = 0x00000100000001B3ULL;
 
 inline std::uint64_t fnv1a_hash(const void* data, std::size_t len) {
     std::uint64_t hash = FNV1A_OFFSET_BASIS;

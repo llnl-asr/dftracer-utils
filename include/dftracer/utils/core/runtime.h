@@ -215,6 +215,17 @@ bool elastic_default_enabled();
 std::shared_ptr<Runtime> peek_default_runtime();
 void set_default_runtime(std::shared_ptr<Runtime> rt);
 
+/// Install `rt` as the default only if no default is set or the current
+/// default is the lazily-created fallback; a user-installed default (set here
+/// or via set_default_runtime) is left in place. Returns true if `rt` became
+/// the default.
+bool try_install_default_runtime(std::shared_ptr<Runtime> rt);
+
+/// Clear the default runtime if it is currently `rt` (identity check),
+/// reverting later NULL-means-default lookups to the lazy fallback. No-op if
+/// `rt` is not the current default.
+void clear_default_runtime_if(Runtime* rt);
+
 template <typename T>
 TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {

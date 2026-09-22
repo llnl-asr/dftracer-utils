@@ -4,7 +4,7 @@
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/common/arrow/attribution.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
-#include <dftracer/utils/utilities/common/arrow/explode.h>
+#include <dftracer/utils/utilities/common/arrow/frame_ops.h>
 #include <dftracer/utils/utilities/common/arrow/gapfill.h>
 #include <dftracer/utils/utilities/common/arrow/join.h>
 #include <dftracer/utils/utilities/common/arrow/window.h>

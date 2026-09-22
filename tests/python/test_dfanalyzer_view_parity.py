@@ -101,7 +101,7 @@ def test_view_agg_tier_matches_raw_scan(tmp_path):
 
     def collect(idx):
         tv = TraceViewer(files, index_path=idx).group_by(*keys).agg(*metrics)
-        return pa.table(tv.collect()).to_pandas().sort_values(keys).reset_index(drop=True)
+        return pa.table(tv.collect().collect()).to_pandas().sort_values(keys).reset_index(drop=True)
 
     tier, raw = collect(agg), collect(noagg)
     assert tier.shape == raw.shape and len(tier) > 0
@@ -137,7 +137,9 @@ def test_view_agg_tier_skew_kurt_pct_match_raw_scan(tmp_path):
 
     def collect(idx):
         tv = TraceViewer(files, index_path=idx).group_by("name").agg(*metrics)
-        return pa.table(tv.collect()).to_pandas().sort_values("name").reset_index(drop=True)
+        return (
+            pa.table(tv.collect().collect()).to_pandas().sort_values("name").reset_index(drop=True)
+        )
 
     tier, raw = collect(agg), collect(noagg)
     assert tier.shape == raw.shape and len(tier) > 0
@@ -174,7 +176,9 @@ def test_view_histogram_tier_matches_raw_scan(tmp_path):
 
     def collect(idx):
         tv = TraceViewer(files, index_path=idx).group_by("name").agg("count", "hist:dur")
-        return pa.table(tv.collect()).to_pandas().sort_values("name").reset_index(drop=True)
+        return (
+            pa.table(tv.collect().collect()).to_pandas().sort_values("name").reset_index(drop=True)
+        )
 
     tier, raw = collect(agg), collect(noagg)
     assert tier["hist_dur"].dtype == object and len(tier) > 0
@@ -264,7 +268,7 @@ def test_collect_typed_cat_filter_matches_collect(tmp_path):
 
     def count(q):
         tv = TraceViewer([p], index_path=idx).filter(q).group_by("name").agg("count")
-        c = tv.collect()
+        c = tv.collect().collect()
         reg = tv.collect_typed()["regular"]
         cn = 0 if c is None else int(pa.compute.sum(pa.table(c)["count"]).as_py())
         rn = 0 if reg is None else int(pa.compute.sum(pa.table(reg)["count"]).as_py())
@@ -401,7 +405,7 @@ def test_resolved_name_group_keys(tmp_path):
 
     def g(key):
         tv = TraceViewer(files, index_path=idx).group_by(key).agg("count", "sum:dur")
-        return pa.table(tv.collect()).to_pandas().set_index(key).sort_index()
+        return pa.table(tv.collect().collect()).to_pandas().set_index(key).sort_index()
 
     fp, fn, fh = g("file_path"), g("file_name"), g("fhash")
     assert list(fp.index) == ["/data/dir/file1.dat", "/data/dir/file2.dat"]
@@ -458,6 +462,7 @@ def test_percentiles_from_view(tmp_path):
         .group_by("name")
         .agg("count", "p50:dur", "p90:dur", "p99:dur")
         .collect()
+        .collect()
     ).to_pandas()
     assert list(df.columns) == ["name", "count", "p50_dur", "p90_dur", "p99_dur"]
     for col, exp in [("p50_dur", 500), ("p90_dur", 900), ("p99_dur", 990)]:
@@ -486,7 +491,11 @@ def test_skew_kurtosis_from_view(tmp_path):
     with dftu_utils.Indexer(files=[p], index_dir=idx) as ix:
         ix.ensure_indexed()
     df = pa.table(
-        TraceViewer([p], index_path=idx).group_by("name").agg("skew:dur", "kurt:dur").collect()
+        TraceViewer([p], index_path=idx)
+        .group_by("name")
+        .agg("skew:dur", "kurt:dur")
+        .collect()
+        .collect()
     ).to_pandas()
     a = np.array(vals, dtype=float)
     mu = a.mean()
@@ -636,7 +645,7 @@ def test_group_key_transforms_coarsen_without_losing_totals(tmp_path):
 
     def group(expr):
         tv = TraceViewer([p], index_path=idx).group_by(expr).agg("count")
-        df = pa.table(tv.collect()).to_pandas()
+        df = pa.table(tv.collect().collect()).to_pandas()
         return sorted(df[df.columns[0]].tolist()), int(df["count"].sum())
 
     plain, total = group("file_path")
@@ -682,7 +691,7 @@ def test_group_key_transform_applies_on_both_read_paths(tmp_path):
 
     def group(idx):
         tv = TraceViewer([p], index_path=idx).group_by("dirname(file_path)").agg("count")
-        df = pa.table(tv.collect()).to_pandas()
+        df = pa.table(tv.collect().collect()).to_pandas()
         return sorted(df[df.columns[0]].tolist()), int(df["count"].sum())
 
     assert group(scan_idx) == group(tier_idx)

@@ -9,6 +9,7 @@
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
 #include <testing_utilities.h>
 
 #include <fstream>
@@ -19,16 +20,9 @@ using dftracer::utils::trace::aggregators::AggregationConfig;
 using dftracer::utils::trace::indexing::resolve_and_build_index;
 using dftracer::utils::trace::indexing::ResolveAndBuildInput;
 using dftracer::utils::utilities::indexer::IndexDatabase;
+using dftu_utils_test::run_coro;
 
 namespace {
-
-template <typename Fn>
-void run_coro(Fn&& fn) {
-    Runtime rt(4);
-    auto task = run_coro_scope(rt.executor(), std::forward<Fn>(fn));
-    rt.submit(std::move(task), "test").wait();
-    rt.shutdown();
-}
 
 void write_single_member(const std::string& path, const std::string& content) {
     using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;

@@ -70,13 +70,25 @@ PARITY_OPS = [
 
 @pytest.mark.parametrize("name,view_op,vec_op", PARITY_OPS, ids=[o[0] for o in PARITY_OPS])
 def test_view_vec_op_parity(indexed_trace, name, view_op, vec_op):
-    on_view = view_op(_view(indexed_trace)).collect()
-    on_vec = vec_op(_view(indexed_trace).collect())
+    on_view = view_op(_view(indexed_trace)).collect().collect()
+    on_vec = vec_op(_view(indexed_trace).collect().collect())
     assert _dict(on_view) == _dict(on_vec)
 
 
 def test_view_vec_chained_parity(indexed_trace):
     # A chain of ops must also agree end to end.
-    on_view = _view(indexed_trace).sort_by("sum_dur", descending=True).topk("count", 2).collect()
-    on_vec = _view(indexed_trace).collect().sort_by("sum_dur", descending=True).topk("count", 2)
+    on_view = (
+        _view(indexed_trace)
+        .sort_by("sum_dur", descending=True)
+        .topk("count", 2)
+        .collect()
+        .collect()
+    )
+    on_vec = (
+        _view(indexed_trace)
+        .collect()
+        .collect()
+        .sort_by("sum_dur", descending=True)
+        .topk("count", 2)
+    )
     assert _dict(on_view) == _dict(on_vec)

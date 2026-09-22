@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <memory>
@@ -23,62 +24,14 @@ static std::vector<FileEntry> run_scan(Scanner& scanner, const Input& input) {
     return result;
 }
 
-// Helper to create a test directory structure
-class TestDirectoryFixture {
-   public:
-    fs::path test_root;
-
-    TestDirectoryFixture() {
-        // Create a unique test directory
-        test_root =
-            fs::temp_directory_path() / "dftracer_test_directory_scanner";
-
-        // Clean up if it exists from a previous run
-        if (fs::exists(test_root)) {
-            fs::remove_all(test_root);
-        }
-
-        fs::create_directories(test_root);
-    }
-
-    ~TestDirectoryFixture() {
-        // Clean up test directory
-        if (fs::exists(test_root)) {
-            fs::remove_all(test_root);
-        }
-    }
-
-    void create_file(const std::string& relative_path,
-                     const std::string& content = "test") {
-        fs::path file_path = test_root / relative_path;
-
-        // Create parent directories if needed
-        fs::create_directories(file_path.parent_path());
-
-        std::ofstream ofs(file_path);
-        ofs << content;
-        ofs.close();
-    }
-
-    void create_directory(const std::string& relative_path) {
-        fs::path dir_path = test_root / relative_path;
-        fs::create_directories(dir_path);
-    }
-
-    fs::path get_path(const std::string& relative_path = "") const {
-        if (relative_path.empty()) {
-            return test_root;
-        }
-        return test_root / relative_path;
-    }
-};
+using dftu_utils_test::ScopedTestDir;
 
 TEST_CASE("DirectoryScannerUtility - Basic Operations") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_directory_scanner");
     auto scanner = std::make_shared<DirectoryScannerUtility>();
 
     SUBCASE("Scan empty directory") {
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
         CHECK(result.empty());
     }
@@ -88,7 +41,7 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
         fixture.create_file("file2.txt", "content2");
         fixture.create_file("file3.dat", "content3");
 
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -103,11 +56,11 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
 
     SUBCASE("Scan directory with subdirectories (non-recursive)") {
         fixture.create_file("file1.txt", "content");
-        fixture.create_directory("subdir1");
-        fixture.create_directory("subdir2");
+        fixture.create_dir("subdir1");
+        fixture.create_dir("subdir2");
         fixture.create_file("subdir1/file2.txt", "content");
 
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
 
         // Should find: file1.txt, subdir1, subdir2
@@ -126,7 +79,7 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
     }
 
     SUBCASE("Error - directory does not exist") {
-        fs::path nonexistent = fixture.test_root / "nonexistent";
+        fs::path nonexistent = fixture.path() / "nonexistent";
         DirectoryScannerUtilityInput input{nonexistent, false};
 
         CHECK_THROWS_AS(run_scan(*scanner, input), fs::filesystem_error);
@@ -134,7 +87,7 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
 
     SUBCASE("Error - path is not a directory") {
         fixture.create_file("regular_file.txt");
-        fs::path file_path = fixture.get_path("regular_file.txt");
+        fs::path file_path = (fixture.path() / "regular_file.txt");
         DirectoryScannerUtilityInput input{file_path, false};
 
         CHECK_THROWS_AS(run_scan(*scanner, input), fs::filesystem_error);
@@ -142,17 +95,17 @@ TEST_CASE("DirectoryScannerUtility - Basic Operations") {
 }
 
 TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_directory_scanner");
     auto scanner = std::make_shared<DirectoryScannerUtility>();
 
     SUBCASE("Recursive scan - simple hierarchy") {
         fixture.create_file("file1.txt");
         fixture.create_file("subdir1/file2.txt");
         fixture.create_file("subdir1/file3.txt");
-        fixture.create_directory("subdir2");
+        fixture.create_dir("subdir2");
         fixture.create_file("subdir2/file4.txt");
 
-        DirectoryScannerUtilityInput input{fixture.test_root, true};
+        DirectoryScannerUtilityInput input{fixture.path(), true};
         auto result = run_scan(*scanner, input);
 
         // Should find:
@@ -180,7 +133,7 @@ TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
         fixture.create_file("level1/level2/mid_file.txt");
         fixture.create_file("level1/shallow_file.txt");
 
-        DirectoryScannerUtilityInput input{fixture.test_root, true};
+        DirectoryScannerUtilityInput input{fixture.path(), true};
         auto result = run_scan(*scanner, input);
 
         // Should find all files and directories
@@ -200,11 +153,11 @@ TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
         fixture.create_file("subdir/nested/file3.txt");
 
         // Non-recursive scan
-        DirectoryScannerUtilityInput non_recursive{fixture.test_root, false};
+        DirectoryScannerUtilityInput non_recursive{fixture.path(), false};
         auto non_recursive_result = run_scan(*scanner, non_recursive);
 
         // Recursive scan
-        DirectoryScannerUtilityInput recursive{fixture.test_root, true};
+        DirectoryScannerUtilityInput recursive{fixture.path(), true};
         auto recursive_result = run_scan(*scanner, recursive);
 
         // Non-recursive should find less than recursive
@@ -225,7 +178,7 @@ TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
         fixture.create_file("split/trace.pfw.gz");
         fixture.create_file(".dftindex/view.pfw.gz");
 
-        DirectoryScannerUtilityInput input{fixture.test_root, true};
+        DirectoryScannerUtilityInput input{fixture.path(), true};
         auto result = run_scan(*scanner, input);
 
         for (const auto& entry : result) {
@@ -246,14 +199,14 @@ TEST_CASE("DirectoryScannerUtility - Recursive Scanning") {
 }
 
 TEST_CASE("DirectoryScannerUtility - FileEntry Metadata") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_directory_scanner");
     auto scanner = std::make_shared<DirectoryScannerUtility>();
 
     SUBCASE("FileEntry contains correct metadata") {
         std::string content = "This is test content with some length";
         fixture.create_file("test_file.txt", content);
 
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
 
         REQUIRE(result.size() == 1);
@@ -266,9 +219,9 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Metadata") {
     }
 
     SUBCASE("Directory entries have zero size") {
-        fixture.create_directory("test_dir");
+        fixture.create_dir("test_dir");
 
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
 
         REQUIRE(result.size() == 1);
@@ -284,7 +237,7 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Metadata") {
         fixture.create_file("medium.txt", std::string(100, 'y'));
         fixture.create_file("large.txt", std::string(1000, 'z'));
 
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -311,7 +264,7 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Metadata") {
 }
 
 TEST_CASE("DirectoryScannerUtility - Directory Struct") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_directory_scanner");
 
     SUBCASE("Directory equality operator") {
         DirectoryScannerUtilityInput dir1{"/path/to/dir", false};
@@ -334,14 +287,14 @@ TEST_CASE("DirectoryScannerUtility - Directory Struct") {
 }
 
 TEST_CASE("DirectoryScannerUtility - Edge Cases") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_directory_scanner");
     auto scanner = std::make_shared<DirectoryScannerUtility>();
 
     SUBCASE("Empty files") {
         fixture.create_file("empty1.txt", "");
         fixture.create_file("empty2.txt", "");
 
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 2);
@@ -355,7 +308,7 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
         fixture.create_file(".hidden_file");
         fixture.create_file("visible_file");
 
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
 
         // Should find both files
@@ -367,7 +320,7 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
         fixture.create_file("file-with-dashes.txt");
         fixture.create_file("file_with_underscores.txt");
 
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -379,7 +332,7 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
             fixture.create_file("file" + std::to_string(i) + ".txt");
         }
 
-        DirectoryScannerUtilityInput input{fixture.test_root, false};
+        DirectoryScannerUtilityInput input{fixture.path(), false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == num_files);
@@ -387,7 +340,7 @@ TEST_CASE("DirectoryScannerUtility - Edge Cases") {
 }
 
 TEST_CASE("DirectoryScannerUtility - FileEntry Construction") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_directory_scanner");
 
     SUBCASE("FileEntry default constructor") {
         FileEntry entry;
@@ -399,7 +352,7 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Construction") {
 
     SUBCASE("FileEntry with existing file") {
         fixture.create_file("test.txt", "content");
-        fs::path file_path = fixture.get_path("test.txt");
+        fs::path file_path = (fixture.path() / "test.txt");
 
         FileEntry entry{file_path};
 
@@ -410,8 +363,8 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Construction") {
     }
 
     SUBCASE("FileEntry with existing directory") {
-        fixture.create_directory("test_dir");
-        fs::path dir_path = fixture.get_path("test_dir");
+        fixture.create_dir("test_dir");
+        fs::path dir_path = (fixture.path() / "test_dir");
 
         FileEntry entry{dir_path};
 
@@ -422,7 +375,7 @@ TEST_CASE("DirectoryScannerUtility - FileEntry Construction") {
     }
 
     SUBCASE("FileEntry with nonexistent path") {
-        fs::path nonexistent = fixture.get_path("nonexistent");
+        fs::path nonexistent = (fixture.path() / "nonexistent");
 
         FileEntry entry{nonexistent};
 

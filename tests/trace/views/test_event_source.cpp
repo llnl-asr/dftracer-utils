@@ -6,12 +6,14 @@
 #include <simdjson.h>
 
 #include <map>
+#include <optional>
 #include <string>
 
 using dftracer::utils::StringIntern;
 
-// DomSource must reproduce the existing extractors (top_or_args_str, agg_field)
-// byte-for-byte, so the coming hot-path rewire is identical by construction.
+// DomSource must reproduce a raw top-then-args simdjson extraction
+// byte-for-byte (the same contract the old view_aggregate helpers gave), so the
+// hot-path rewire is identical by construction.
 using namespace dftracer::utils::trace::views::detail;
 
 namespace {
@@ -26,6 +28,58 @@ simdjson::dom::element parse(simdjson::dom::parser& p, std::string& buf,
     buf = padded(json);
     return p.parse(buf.data(), buf.size() - simdjson::SIMDJSON_PADDING, false)
         .value_unsafe();
+}
+
+// Independent references: a top-then-args string / number extraction straight
+// over the simdjson element, mirroring the contract EventSource must satisfy.
+std::string to_str_ref(simdjson::dom::element e) {
+    std::string_view s;
+    if (e.get_string().get(s) == simdjson::SUCCESS) return std::string(s);
+    std::int64_t i;
+    if (e.get_int64().get(i) == simdjson::SUCCESS) return std::to_string(i);
+    std::uint64_t u;
+    if (e.get_uint64().get(u) == simdjson::SUCCESS) return std::to_string(u);
+    double d;
+    if (e.get_double().get(d) == simdjson::SUCCESS) return std::to_string(d);
+    bool b;
+    if (e.get_bool().get(b) == simdjson::SUCCESS) return b ? "true" : "false";
+    return {};
+}
+
+std::optional<double> to_number_ref(simdjson::dom::element e) {
+    double d;
+    if (e.get_double().get(d) == simdjson::SUCCESS) return d;
+    std::int64_t i;
+    if (e.get_int64().get(i) == simdjson::SUCCESS)
+        return static_cast<double>(i);
+    std::uint64_t u;
+    if (e.get_uint64().get(u) == simdjson::SUCCESS)
+        return static_cast<double>(u);
+    return std::nullopt;
+}
+
+std::string top_or_args_str(simdjson::dom::element root,
+                            const std::string& key) {
+    auto r = root[key];
+    if (!r.error()) return to_str_ref(r.value_unsafe());
+    auto args = root["args"];
+    if (!args.error() && args.is_object()) {
+        auto rr = args[key];
+        if (!rr.error()) return to_str_ref(rr.value_unsafe());
+    }
+    return {};
+}
+
+std::optional<double> agg_field(simdjson::dom::element root,
+                                const std::string& field) {
+    auto r = root[field];
+    if (!r.error()) return to_number_ref(r.value_unsafe());
+    auto args = root["args"];
+    if (!args.error() && args.is_object()) {
+        auto rr = args[field];
+        if (!rr.error()) return to_number_ref(rr.value_unsafe());
+    }
+    return std::nullopt;
 }
 
 }  // namespace

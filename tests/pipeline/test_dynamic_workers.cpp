@@ -29,7 +29,7 @@ coro::CoroTask<void> bump(std::atomic<int>* done) {
 // enough for the elastic monitor (2ms tick) to grow it.
 coro::CoroTask<void> spin(std::atomic<int>* done) {
     volatile int x = 0;
-    for (int i = 0; i < 4000; ++i) x += i;
+    for (int i = 0; i < 4000; ++i) x = x + i;
     done->fetch_add(1, std::memory_order_relaxed);
     co_return;
 }

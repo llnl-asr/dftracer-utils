@@ -141,7 +141,7 @@ TEST_SUITE("viz_aggregated") {
         for (auto e : est) {
             double ts = e["ts"].get_double().value_unsafe();
             CHECK(ts >= 100000);
-            CHECK(ts < 100000 + 4 * INTERVAL + INTERVAL);
+            CHECK(ts < static_cast<double>(100000 + 5 * INTERVAL));
             CHECK(e["dur"].get_double().value_unsafe() > 0);
             auto args = e["args"];
             REQUIRE(!args.error());

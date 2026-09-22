@@ -47,7 +47,8 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
     dftracer::utils::logger::init();
 
     // Create a temporary trace file with sample data
-    fs::path temp_dir = fs::temp_directory_path() / "dftracer_replay_test";
+    fs::path temp_dir =
+        dftu_utils_test::make_unique_test_path("dftracer_replay_test");
     fs::create_directories(temp_dir);
 
     std::string trace_file = (temp_dir / "test_trace.pfw.gz").string();

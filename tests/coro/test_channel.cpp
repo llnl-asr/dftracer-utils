@@ -19,15 +19,15 @@ using namespace dftracer::utils::coro;
 namespace {
 
 #if defined(__SANITIZE_THREAD__)
-constexpr bool kTsanBuild = true;
+constexpr bool TSAN_BUILD = true;
 #elif defined(__has_feature)
 #if __has_feature(thread_sanitizer)
-constexpr bool kTsanBuild = true;
+constexpr bool TSAN_BUILD = true;
 #else
-constexpr bool kTsanBuild = false;
+constexpr bool TSAN_BUILD = false;
 #endif
 #else
-constexpr bool kTsanBuild = false;
+constexpr bool TSAN_BUILD = false;
 #endif
 
 template <typename ChannelT, typename ItemT>
@@ -791,7 +791,7 @@ TEST_CASE("Channel - send_async resumes false when closed") {
 TEST_CASE("Channel - async bounded handoff on single compute thread") {
     Channel<int> channel(1);
 
-    const int num_items = kTsanBuild ? 1000 : 5000;
+    const int num_items = TSAN_BUILD ? 1000 : 5000;
     std::atomic<int> produced{0};
     std::atomic<int> consumed{0};
 

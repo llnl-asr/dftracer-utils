@@ -102,36 +102,13 @@ std::string create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
 }
 
 std::string find_binary() {
-    const char* env_path = std::getenv("DFTRACER_GEN_DLIO_CONFIG_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_gen_dlio_config",         "../dftracer_gen_dlio_config",
-        "../../dftracer_gen_dlio_config",     "../bin/dftracer_gen_dlio_config",
-        "../../bin/dftracer_gen_dlio_config",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_GEN_DLIO_CONFIG_PATH",
+                                                "dftracer_gen_dlio_config");
 }
 
 int run_binary(const std::string& binary,
                const std::vector<std::string>& args) {
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& a : args) argv.push_back(a.c_str());
-    argv.push_back(nullptr);
-    pid_t pid = ::fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return -1;
+    return dftu_utils_test::run_process(binary, args);
 }
 
 std::string read_file(const std::string& path) {

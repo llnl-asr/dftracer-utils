@@ -558,6 +558,9 @@ run_py() {
     [[ -e "$f" ]] || continue
     IFS=$'\t' read -r rc fname <"$f"
     ((rc == 0)) && continue
+    # A module with nothing collected (an optional dep the venv lacks) is
+    # neither passed nor failed; it was logged as skipped above.
+    ((rc == 5)) && continue
     failed=$((failed + 1))
     if ((rc == 124 || rc == 137)); then
       failed_names+=("$fname (TIMEOUT ${py_timeout}s)")

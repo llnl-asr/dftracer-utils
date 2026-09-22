@@ -1,18 +1,17 @@
-// In-process coverage for the plugin ABI surface the reflected-utility and
-// host-service suites leave untested: the config tree, query compile/match and
-// plan_query event routing, the coroutine control ops, the async on_batch
-// take_pending/drive path, and the scalar functors.
+// In-process coverage for the plugin ABI surface the host-service suite leaves
+// untested: the config tree, query compile/match and plan_query event routing,
+// and the coroutine control ops (drive path).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/plugins/config.h>
-#include <dftracer/utils/plugins/dftu_generated_utilities.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 
 #include <memory>
 // After plugin.h/fold_adapter.h so nanoarrow is already set up for arrow_abi.h.
+#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/compose.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -49,10 +48,6 @@ coro::CoroTask<void>* as_coro(::dftu_task* t) {
     return reinterpret_cast<coro::CoroTask<void>*>(t);
 }
 
-dftu_bytes bytes_of(const std::string& s) {
-    return dftu_bytes{s.data(), static_cast<std::uint32_t>(s.size())};
-}
-
 struct ConfigSlice {
     std::int64_t threshold = 0;
     double ratio = 0.0;
@@ -74,7 +69,7 @@ struct ConfigSlice {
             for (std::uint32_t i = 0; i < arr->count; ++i)
                 buckets.push_back(dftu_as_i64(&arr->as.items[i], 0));
     }
-    void step(const dftu_batch&, dftracer::utils::plugins::Host) {}
+    void step(const dftu_dataframe*, dftracer::utils::plugins::Host) {}
     void merge(ConfigSlice&) {}
     void finalize(dftracer::utils::plugins::Host) {}
 };
@@ -89,11 +84,11 @@ CountState g_count;
 struct CountSlice {
     explicit CountSlice(const dftracer::utils::plugins::Config&) {}
     void step(const dftracer::utils::plugins::Batch& b,
-              dftracer::utils::plugins::Host h) {
+              dftracer::utils::plugins::Host) {
         g_count.seen += b.size();
         for (const dftracer::utils::plugins::Event& e : b) {
-            g_count.fhashes.emplace_back(h.str(e.fhash_id()));
-            g_count.hhashes.emplace_back(h.str(e.hhash_id()));
+            g_count.fhashes.emplace_back(e.fhash());
+            g_count.hhashes.emplace_back(e.hhash());
         }
     }
     void merge(CountSlice&) {}
@@ -118,14 +113,14 @@ void inc_fn(void* p) { static_cast<std::atomic<int>*>(p)->fetch_add(1); }
 void append1_fn(void* p) { static_cast<std::vector<int>*>(p)->push_back(1); }
 void append2_fn(void* p) { static_cast<std::vector<int>*>(p)->push_back(2); }
 
-const dftu_ext_coro* coro_ext(dftracer::utils::plugins::Host h) {
-    return static_cast<const dftu_ext_coro*>(
-        h.raw()->get_extension(h.raw()->h, DFTU_EXT_CORO));
+const dftu_svc_coro* coro_ext(dftracer::utils::plugins::Host h) {
+    return static_cast<const dftu_svc_coro*>(
+        h.raw()->get_service(h.raw()->h, DFTU_SVC_CORO));
 }
 
 dftracer::utils::plugins::Task fanout_all(dftracer::utils::plugins::Host h,
                                           std::atomic<int>* ran, int n) {
-    const dftu_ext_coro* c = coro_ext(h);
+    const dftu_svc_coro* c = coro_ext(h);
     std::vector<::dftu_task*> kids;
     for (int i = 0; i < n; ++i)
         kids.push_back(c->spawn(h.raw()->h, inc_fn, ran));
@@ -136,7 +131,7 @@ dftracer::utils::plugins::Task fanout_all(dftracer::utils::plugins::Host h,
 
 dftracer::utils::plugins::Task fanout_any(dftracer::utils::plugins::Host h,
                                           std::atomic<int>* ran) {
-    const dftu_ext_coro* c = coro_ext(h);
+    const dftu_svc_coro* c = coro_ext(h);
     ::dftu_task* a = c->spawn(h.raw()->h, inc_fn, ran);
     ::dftu_task* b = c->spawn(h.raw()->h, inc_fn, ran);
     ::dftu_task* kids[2] = {a, b};
@@ -145,14 +140,14 @@ dftracer::utils::plugins::Task fanout_any(dftracer::utils::plugins::Host h,
 
 dftracer::utils::plugins::Task chain(dftracer::utils::plugins::Host h,
                                      std::vector<int>* order) {
-    const dftu_ext_coro* c = coro_ext(h);
+    const dftu_svc_coro* c = coro_ext(h);
     ::dftu_task* t = c->spawn(h.raw()->h, append1_fn, order);
     co_await h.await(c->then(h.raw()->h, t, append2_fn, order));
 }
 
 dftracer::utils::plugins::Task compose_all(dftracer::utils::plugins::Host h,
                                            std::atomic<int>* ran) {
-    const dftu_ext_coro* c = coro_ext(h);
+    const dftu_svc_coro* c = coro_ext(h);
     ::dftu_task* a = c->spawn(h.raw()->h, inc_fn, ran);
     ::dftu_task* b = c->spawn(h.raw()->h, inc_fn, ran);
     co_await (dftracer::utils::plugins::compose(h.raw(), a) &&
@@ -161,7 +156,7 @@ dftracer::utils::plugins::Task compose_all(dftracer::utils::plugins::Host h,
 
 dftracer::utils::plugins::Task compose_any(dftracer::utils::plugins::Host h,
                                            std::atomic<int>* ran) {
-    const dftu_ext_coro* c = coro_ext(h);
+    const dftu_svc_coro* c = coro_ext(h);
     ::dftu_task* a = c->spawn(h.raw()->h, inc_fn, ran);
     ::dftu_task* b = c->spawn(h.raw()->h, inc_fn, ran);
     co_await (dftracer::utils::plugins::compose(h.raw(), a) ||
@@ -170,17 +165,17 @@ dftracer::utils::plugins::Task compose_any(dftracer::utils::plugins::Host h,
 
 dftracer::utils::plugins::Task compose_map(dftracer::utils::plugins::Host h,
                                            std::atomic<int>* ran) {
-    const dftu_ext_coro* c = coro_ext(h);
+    const dftu_svc_coro* c = coro_ext(h);
     std::vector<int> items = {0, 1, 2, 3};
     co_await dftracer::utils::plugins::map(
         h.raw(), items, [&](int) { return c->spawn(h.raw()->h, inc_fn, ran); });
 }
 
-// dftu_op / dftu_ext_compose: leaf value transforms (int64 -> int64), run
+// dftu_op / dftu_svc_compose: leaf value transforms (int64 -> int64), run
 // inline.
-const dftu_ext_compose* compose_ext(dftracer::utils::plugins::Host h) {
-    return static_cast<const dftu_ext_compose*>(
-        h.raw()->get_extension(h.raw()->h, DFTU_EXT_COMPOSE));
+const dftu_svc_compose* compose_ext(dftracer::utils::plugins::Host h) {
+    return static_cast<const dftu_svc_compose*>(
+        h.raw()->get_service(h.raw()->h, DFTU_SVC_COMPOSE));
 }
 ::dftu_task* op_double(void*, const void* in, void* out, int* rc) {
     *static_cast<std::int64_t*>(out) =
@@ -198,7 +193,7 @@ const dftu_ext_compose* compose_ext(dftracer::utils::plugins::Host h) {
 // (in*2) then (+10): value threaded through the pipe.
 dftracer::utils::plugins::Task op_pipe(dftracer::utils::plugins::Host h,
                                        std::int64_t* result) {
-    const dftu_ext_compose* c = compose_ext(h);
+    const dftu_svc_compose* c = compose_ext(h);
     void* hh = h.raw()->h;
     ::dftu_op* a = c->make_op(hh, op_double, nullptr, nullptr, DFTU_T_I64, 8,
                               DFTU_T_I64, 8);
@@ -232,24 +227,34 @@ dftracer::utils::plugins::Task typed_pipe(dftracer::utils::plugins::Host h,
     *result = (rc == 0) ? out : -1;
 }
 
-// A registered host utility as a compose leaf: pipe fnv1a (bytes -> u64) into
-// hex64_format (u64 -> hex16), so `then` chains two host utilities.
-dftracer::utils::plugins::Task util_pipe(dftracer::utils::plugins::Host h,
-                                         dftu_hex16* result, int* rc) {
-    const dftu_ext_compose* c = compose_ext(h);
-    void* hh = h.raw()->h;
-    ::dftu_op* hash = c->util_op(hh, DFTU_UTIL_FNV1A);
-    ::dftu_op* fmt = c->util_op(hh, DFTU_UTIL_HEX64_FORMAT);
-    ::dftu_op* pipe = c->then(hh, hash, fmt);
-    std::string data = "hello-world";
-    dftu_bytes in{data.data(), static_cast<std::uint32_t>(data.size())};
-    co_await h.await(c->run(hh, pipe, &in, result, rc));
+// A real column rides the pipe as a first-class DFTU_T_SERIES value: the source
+// [1,2,3,4] is doubled twice via a real SIMD add, so the output is [4,8,12,16].
+// Only the `dftu_series*` handle crosses each op (zero-copy); `a` borrows its
+// input (the caller keeps `src`), `b` consumes the intermediate.
+dftracer::utils::plugins::Task series_pipe(dftracer::utils::plugins::Host h,
+                                           dftu_series** result) {
+    using SOp = dftracer::utils::plugins::Op<dftu_series*, dftu_series*>;
+    std::int64_t vals[4] = {1, 2, 3, 4};
+    dftu_series* src = dftu_series_new_flat(DFTU_TYPE_INT64, vals, 4, nullptr);
+    SOp a = dftracer::utils::plugins::make_op<dftu_series*, dftu_series*>(
+        h, [](dftu_series* s) { return dftu_series_add(s, s); });
+    SOp b = dftracer::utils::plugins::make_op<dftu_series*, dftu_series*>(
+        h, [](dftu_series* s) {
+            dftu_series* r = dftu_series_add(s, s);
+            dftu_series_free(s);
+            return r;
+        });
+    dftu_series* out = nullptr;
+    int rc = -1;
+    co_await dftracer::utils::plugins::run(a | b, src, out, rc);
+    dftu_series_free(src);
+    *result = (rc == 0) ? out : nullptr;
 }
 
 // when_any: both racers compute the same value, so the winner is deterministic.
 dftracer::utils::plugins::Task op_any(dftracer::utils::plugins::Host h,
                                       std::int64_t* result) {
-    const dftu_ext_compose* c = compose_ext(h);
+    const dftu_svc_compose* c = compose_ext(h);
     void* hh = h.raw()->h;
     ::dftu_op* ops[2] = {c->make_op(hh, op_plus10, nullptr, nullptr, DFTU_T_I64,
                                     8, DFTU_T_I64, 8),
@@ -266,7 +271,7 @@ dftracer::utils::plugins::Task op_any(dftracer::utils::plugins::Host h,
 // concatenated.
 dftracer::utils::plugins::Task op_all(dftracer::utils::plugins::Host h,
                                       std::int64_t* out0, std::int64_t* out1) {
-    const dftu_ext_compose* c = compose_ext(h);
+    const dftu_svc_compose* c = compose_ext(h);
     void* hh = h.raw()->h;
     ::dftu_op* ops[2] = {c->make_op(hh, op_double, nullptr, nullptr, DFTU_T_I64,
                                     8, DFTU_T_I64, 8),
@@ -281,27 +286,6 @@ dftracer::utils::plugins::Task op_all(dftracer::utils::plugins::Host h,
     *out1 = out[1];
 }
 
-struct AsyncState {
-    std::atomic<int> done{0};
-    std::uint64_t batch_count = 0;
-};
-AsyncState g_async;
-
-void mark_done_fn(void* p) { static_cast<AsyncState*>(p)->done.fetch_add(1); }
-
-struct AsyncSlice {
-    explicit AsyncSlice(const dftracer::utils::plugins::Config&) {}
-    dftracer::utils::plugins::Task on_batch(const dftu_batch& b,
-                                            dftracer::utils::plugins::Host h) {
-        g_async.batch_count += b.count;
-        const dftu_ext_coro* c = static_cast<const dftu_ext_coro*>(
-            h.raw()->get_extension(h.raw()->h, DFTU_EXT_CORO));
-        co_await h.await(c->spawn(h.raw()->h, mark_done_fn, &g_async));
-    }
-    void merge(AsyncSlice&) {}
-    void finalize(dftracer::utils::plugins::Host) {}
-};
-
 // Owns a PluginFold plus its backing plugin; the fold references the plugin, so
 // it is destroyed first.
 template <class Slice>
@@ -312,14 +296,102 @@ struct FoldFixture {
     explicit FoldFixture(const dftu_value* config)
         : plugin(dftracer::utils::plugins::make_plugin<Slice>(config)),
           fold(std::make_unique<PluginFold>(plugin, intern)) {}
-    dftu_host& host() { return fold->host(); }
+    dftu_plugin_host& host() { return fold->host(); }
     ~FoldFixture() {
         fold.reset();
         if (plugin && plugin->destroy) plugin->destroy(plugin->self);
     }
 };
 
+// A raw columnar plugin: on_batch gets the batch as a dftu_dataframe and
+// SIMD-reduces its `dur` column. Mirrors the slice total into a global so the
+// test can read it.
+struct ColState {
+    std::int64_t dur_sum = 0;
+};
+ColState g_col_state;
+
+void* col_make_slice(void*) { return new ColState(); }
+void col_destroy_slice(void* s) { delete static_cast<ColState*>(s); }
+void col_destroy(void*) {}
+void col_merge(void* into, void* other) {
+    static_cast<ColState*>(into)->dur_sum +=
+        static_cast<ColState*>(other)->dur_sum;
+}
+const char* col_plan_query(void*) { return nullptr; }
+::dftu_task* col_on_finalize(void*, const dftu_plugin_host*) { return nullptr; }
+::dftu_task* col_on_batch(void* slice, const dftu_dataframe* df,
+                          const dftu_plugin_host*) {
+    dftu_series* col = dftu_dataframe_column(df, "dur");
+    if (col) {
+        dftu_scalar s = dftu_series_reduce(col, DFTU_REDUCE_SUM);
+        auto* st = static_cast<ColState*>(slice);
+        st->dur_sum += s.kind == DFTU_SCALAR_TAG_U64
+                           ? static_cast<std::int64_t>(s.value.u)
+                           : s.value.i;
+        g_col_state.dur_sum = st->dur_sum;
+        dftu_series_free(col);
+    }
+    return nullptr;
+}
+
+// Owning wrapper for a hand-built [cat, name] test dataframe (freed on scope
+// exit), for dftu_svc_query::query_matches tests outside an on_batch call.
+struct QueryFrame {
+    dftu_dataframe* df = nullptr;
+    ~QueryFrame() {
+        if (df) dftu_dataframe_free(df);
+    }
+    QueryFrame(const QueryFrame&) = delete;
+    QueryFrame& operator=(const QueryFrame&) = delete;
+    QueryFrame() = default;
+    QueryFrame(QueryFrame&& o) noexcept : df(o.df) { o.df = nullptr; }
+};
+
+dftu_series* string_column(const std::vector<std::string>& vals) {
+    std::vector<std::int32_t> offsets(vals.size() + 1, 0);
+    std::string data;
+    for (std::size_t i = 0; i < vals.size(); ++i) {
+        data += vals[i];
+        offsets[i + 1] = static_cast<std::int32_t>(data.size());
+    }
+    return dftu_series_new_string(DFTU_TYPE_STRING, offsets.data(), data.data(),
+                                  static_cast<std::int64_t>(vals.size()),
+                                  nullptr);
+}
+
+QueryFrame cat_name_frame(const std::vector<std::string>& cats,
+                          const std::vector<std::string>& names) {
+    const char* col_names[2] = {"cat", "name"};
+    dftu_series* cols[2] = {string_column(cats), string_column(names)};
+    QueryFrame f;
+    f.df = dftu_dataframe_new(col_names, cols, 2);
+    return f;
+}
+
 }  // namespace
+
+TEST_CASE("plugin ABI: on_batch hands the batch as columns") {
+    g_col_state = {};
+    dftu_plugin p{};
+    p.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
+    p.plan_query = col_plan_query;
+    p.make_slice = col_make_slice;
+    p.merge = col_merge;
+    p.on_finalize = col_on_finalize;
+    p.destroy_slice = col_destroy_slice;
+    p.destroy = col_destroy;
+    p.on_batch = col_on_batch;
+
+    StringIntern intern;
+    PluginFold fold(&p, intern);
+    std::vector<FoldEvent> evs = {make_event(intern, "f", "h"),
+                                  make_event(intern, "f", "h"),
+                                  make_event(intern, "f", "h")};
+    ScanUnit unit{};
+    fold.step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});
+    CHECK(g_col_state.dur_sum == 15);  // 3 events x dur 5, SIMD-reduced
+}
 
 TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
     dftu_utils_test::TestEnvironment env(0);
@@ -352,13 +424,10 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
 
 TEST_CASE("plugin ABI: query_compile then query_matches on known events") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
-    dftu_str posix = host.intern(host.h, "POSIX", 5);
-    dftu_str stdio = host.intern(host.h, "STDIO", 5);
-    dftu_str read = host.intern(host.h, "read", 4);
+    dftu_plugin_host& host = fx.host();
 
-    const auto* qx = static_cast<const dftu_ext_query*>(
-        host.get_extension(host.h, DFTU_EXT_QUERY));
+    const auto* qx = static_cast<const dftu_svc_query*>(
+        host.get_service(host.h, DFTU_SVC_QUERY));
     REQUIRE(qx != nullptr);
 
     std::string src = "cat == \"POSIX\"";
@@ -366,15 +435,11 @@ TEST_CASE("plugin ABI: query_compile then query_matches on known events") {
                                       static_cast<std::uint32_t>(src.size()));
     REQUIRE(q != nullptr);
 
-    dftu_event match{};
-    match.cat = posix;
-    match.name = read;
-    CHECK(qx->query_matches(host.h, q, &match) == 1);
-
-    dftu_event miss{};
-    miss.cat = stdio;
-    miss.name = read;
-    CHECK(qx->query_matches(host.h, q, &miss) == 0);
+    // Row 0 is the hit (cat=POSIX), row 1 the miss (cat=STDIO); both name
+    // "read".
+    QueryFrame frame = cat_name_frame({"POSIX", "STDIO"}, {"read", "read"});
+    CHECK(qx->query_matches(host.h, q, frame.df, 0) == 1);
+    CHECK(qx->query_matches(host.h, q, frame.df, 1) == 0);
 
     SUBCASE("malformed query source does not compile and match is safe") {
         std::string bad = "cat ==";
@@ -382,7 +447,7 @@ TEST_CASE("plugin ABI: query_compile then query_matches on known events") {
             host.h, bad.data(), static_cast<std::uint32_t>(bad.size()));
         CHECK(bq == nullptr);
         // A null query must yield a defined 0, never a throw across the ABI.
-        CHECK(qx->query_matches(host.h, nullptr, &match) == 0);
+        CHECK(qx->query_matches(host.h, nullptr, frame.df, 0) == 0);
     }
 }
 
@@ -431,7 +496,7 @@ TEST_CASE("plugin ABI: plan_query on fhash delivers only matching events") {
 
 TEST_CASE("plugin ABI: spawn fan-out joined by when_all runs every child") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::atomic<int> ran{0};
@@ -447,7 +512,7 @@ TEST_CASE("plugin ABI: spawn fan-out joined by when_all runs every child") {
 
 TEST_CASE("plugin ABI: when_any returns after the first child") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::atomic<int> ran{0};
@@ -462,7 +527,7 @@ TEST_CASE("plugin ABI: when_any returns after the first child") {
 
 TEST_CASE("plugin ABI: compose && joins both tasks (when_all)") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::atomic<int> ran{0};
@@ -477,7 +542,7 @@ TEST_CASE("plugin ABI: compose && joins both tasks (when_all)") {
 
 TEST_CASE("plugin ABI: compose || races the tasks (when_any)") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::atomic<int> ran{0};
@@ -492,7 +557,7 @@ TEST_CASE("plugin ABI: compose || races the tasks (when_any)") {
 
 TEST_CASE("plugin ABI: compose map joins one task per item (when_all)") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::atomic<int> ran{0};
@@ -507,7 +572,7 @@ TEST_CASE("plugin ABI: compose map joins one task per item (when_all)") {
 
 TEST_CASE("plugin ABI: compose dftu_op then threads a value through the pipe") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::int64_t result = 0;
@@ -522,7 +587,7 @@ TEST_CASE("plugin ABI: compose dftu_op then threads a value through the pipe") {
 
 TEST_CASE("plugin ABI: compose dftu_op when_all concatenates outputs") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::int64_t a = 0, b = 0;
@@ -538,7 +603,7 @@ TEST_CASE("plugin ABI: compose dftu_op when_all concatenates outputs") {
 
 TEST_CASE("plugin ABI: compose dftu_op when_any yields the winner's value") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::int64_t result = 0;
@@ -553,7 +618,7 @@ TEST_CASE("plugin ABI: compose dftu_op when_any yields the winner's value") {
 
 TEST_CASE("plugin ABI: typed compose Op pipes real values") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::int64_t result = 0;
@@ -567,37 +632,60 @@ TEST_CASE("plugin ABI: typed compose Op pipes real values") {
     CHECK(result == 20);  // (5*2)+10, fully typed
 }
 
-TEST_CASE("plugin ABI: compose util_op pipes two host utilities") {
+TEST_CASE(
+    "plugin ABI: a column rides the compose pipe as a DFTU_T_SERIES value") {
+    static_assert(
+        dftracer::utils::plugins::type_tag<dftu_series*>() == DFTU_T_SERIES,
+        "a dftu_series* handle tags as DFTU_T_SERIES");
+    static_assert(
+        dftracer::utils::plugins::type_tag<dftu_dataframe*>() == DFTU_T_TABLE,
+        "a dftu_dataframe* handle tags as DFTU_T_TABLE");
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
-
-    // Expected: fnv1a("hello-world") formatted as 16 hex digits.
-    std::string data = "hello-world";
-    dftu_bytes bin{data.data(), static_cast<std::uint32_t>(data.size())};
-    std::uint64_t hash = 0;
-    REQUIRE(dftu_util_fnv1a(&host, &bin, &hash) == 0);
-    dftu_hex16 expected{};
-    REQUIRE(dftu_util_hex64_format(&host, &hash, &expected) == 0);
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
-    dftu_hex16 got{};
-    int rc = -1;
+    dftu_series* out = nullptr;
     rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
           ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host,
-              util_pipe(dftracer::utils::plugins::Host{&host}, &got, &rc));
+              &host, series_pipe(dftracer::utils::plugins::Host{&host}, &out));
           co_await *as_coro(d);
       }).wait();
     rt.shutdown();
 
-    CHECK(rc == 0);
-    CHECK(std::string(got.c, 16) == std::string(expected.c, 16));
+    REQUIRE(out != nullptr);
+    REQUIRE(dftu_series_length(out) == 4);
+    const std::int64_t* d =
+        static_cast<const std::int64_t*>(dftu_series_data(out));
+    CHECK(d[0] == 4);
+    CHECK(d[1] == 8);
+    CHECK(d[2] == 12);
+    CHECK(d[3] == 16);
+    dftu_series_free(out);
+}
+
+TEST_CASE(
+    "plugin ABI: DFTU_T_SERIES and DFTU_T_TABLE are distinct handle tags") {
+    FoldFixture<CountSlice> fx(nullptr);
+    dftracer::utils::plugins::Host h{&fx.host()};
+    const dftu_svc_compose* c = compose_ext(h);
+    void* hh = h.raw()->h;
+    // Both are 8-byte handle values; as opaque DFTU_T_BYTES they would have
+    // piped. A distinct tag makes a column-out reject a table-in, and accept a
+    // column-in. (Bodies never run; `then` only checks the type + size seam.)
+    ::dftu_op* col_out = c->make_op(hh, op_double, nullptr, nullptr, DFTU_T_I64,
+                                    8, DFTU_T_SERIES, 8);
+    ::dftu_op* tbl_in = c->make_op(hh, op_double, nullptr, nullptr,
+                                   DFTU_T_TABLE, 8, DFTU_T_I64, 8);
+    CHECK(c->then(hh, col_out, tbl_in) == nullptr);  // SERIES out != TABLE in
+    ::dftu_op* col_in = c->make_op(hh, op_double, nullptr, nullptr,
+                                   DFTU_T_SERIES, 8, DFTU_T_I64, 8);
+    CHECK(c->then(hh, col_out, col_in) != nullptr);  // SERIES out -> SERIES in
 }
 
 TEST_CASE("plugin ABI: compose dftu_op then rejects a type mismatch") {
     FoldFixture<CountSlice> fx(nullptr);
     dftracer::utils::plugins::Host h{&fx.host()};
-    const dftu_ext_compose* c = compose_ext(h);
+    const dftu_svc_compose* c = compose_ext(h);
     void* hh = h.raw()->h;
     ::dftu_op* a = c->make_op(hh, op_double, nullptr, nullptr, DFTU_T_I64, 8,
                               DFTU_T_I64, 8);
@@ -613,7 +701,7 @@ TEST_CASE("plugin ABI: compose dftu_op then rejects a type mismatch") {
 
 TEST_CASE("plugin ABI: then chains a continuation after its task") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
 
     Runtime rt(1);
     std::vector<int> order;
@@ -628,63 +716,35 @@ TEST_CASE("plugin ABI: then chains a continuation after its task") {
     CHECK(order[1] == 2);
 }
 
-TEST_CASE("plugin ABI: async on_batch drives to completion via take_pending") {
-    g_async.done.store(0);
-    g_async.batch_count = 0;
-    FoldFixture<AsyncSlice> fx(nullptr);
-
-    std::vector<FoldEvent> evs;
-    evs.push_back(make_event(fx.intern, "fh1", "hh1"));
-    evs.push_back(make_event(fx.intern, "fh2", "hh2"));
-    ScanUnit unit{};
-    FoldBatch batch{std::span<const FoldEvent>(evs), unit};
-
-    Runtime rt(1);
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          fx.fold->step(batch);
-          ::dftu_task* t = fx.fold->take_pending();
-          REQUIRE(t != nullptr);
-          co_await *as_coro(t);
-      }).wait();
-    rt.shutdown();
-
-    CHECK(g_async.batch_count == 2);
-    CHECK(g_async.done.load() == 1);
-}
-
-TEST_CASE("plugin ABI: scalar functors fnv1a and hex64 round-trip") {
+TEST_CASE("plugin ABI: host utility ops fnv1a and hex64_parse") {
     FoldFixture<CountSlice> fx(nullptr);
-    dftu_host& host = fx.host();
+    dftu_plugin_host& host = fx.host();
+    dftracer::utils::plugins::Host h{&host};
 
-    std::string posix = "POSIX";
-    dftu_bytes in = bytes_of(posix);
-    std::uint64_t h = 0;
-    CHECK(dftu_util_fnv1a(&host, &in, &h) == 0);
-    CHECK(h == 5527563327133061832ULL);
+    const char data[] = "POSIXabc0123456789abcdefnothexnothex1234";
+    const std::int32_t offsets[] = {0, 5, 8, 24, 40};
+    dftu_series* in =
+        dftu_series_new_string(DFTU_TYPE_STRING, offsets, data, 4, nullptr);
+    REQUIRE(in != nullptr);
 
-    std::string empty;
-    dftu_bytes ein = bytes_of(empty);
-    std::uint64_t he = 0;
-    CHECK(dftu_util_fnv1a(&host, &ein, &he) == 0);
-    CHECK(he == 14695981039346656037ULL);  // FNV-1a offset basis
+    dftu_series* hashed = h.run_op("dftu.hash.fnv1a", {in});
+    REQUIRE(hashed != nullptr);
+    const auto* hv =
+        static_cast<const std::uint64_t*>(dftu_series_data(hashed));
+    REQUIRE(hv != nullptr);
+    CHECK(hv[0] == 5527563327133061832ULL);  // fnv1a("POSIX")
 
-    std::uint64_t v = 0x0123456789abcdefULL;
-    dftu_hex16 hx{};
-    CHECK(dftu_util_hex64_format(&host, &v, &hx) == 0);
-    std::string hex(hx.c, 16);
-    CHECK(hex == "0123456789abcdef");
+    dftu_series* parsed = h.run_op("dftu.hex.parse64", {in});
+    REQUIRE(parsed != nullptr);
+    const auto* pv =
+        static_cast<const std::uint64_t*>(dftu_series_data(parsed));
+    REQUIRE(pv != nullptr);
+    CHECK(pv[2] == 0x0123456789abcdefULL);
+    CHECK(dftu_series_is_null(parsed, 0));  // "POSIX" is not 16 hex digits
+    CHECK(dftu_series_is_null(parsed, 1));  // "abc" is too short
+    CHECK(dftu_series_is_null(parsed, 3));  // 16 chars, not all hex
 
-    dftu_bytes hb = bytes_of(hex);
-    std::uint64_t back = 0;
-    CHECK(dftu_util_hex64_parse(&host, &hb, &back) == 0);
-    CHECK(back == v);
-
-    std::string bad = "nothexnothex1234";
-    dftu_bytes badb = bytes_of(bad);
-    std::uint64_t bo = 123;
-    CHECK(dftu_util_hex64_parse(&host, &badb, &bo) == -1);
-
-    std::string short_hex = "abc";
-    dftu_bytes sb = bytes_of(short_hex);
-    CHECK(dftu_util_hex64_parse(&host, &sb, &bo) == -1);
+    dftu_series_free(parsed);
+    dftu_series_free(hashed);
+    dftu_series_free(in);
 }

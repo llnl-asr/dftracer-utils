@@ -29,55 +29,14 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 }
 
 std::string find_event_count_binary() {
-    const char* env_path = std::getenv("DFTRACER_EVENT_COUNT_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_event_count",         "../dftracer_event_count",
-        "../../dftracer_event_count",     "../bin/dftracer_event_count",
-        "../../bin/dftracer_event_count",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_EVENT_COUNT_PATH",
+                                                "dftracer_event_count");
 }
 
 // Run binary, capture stdout, return it as a string.
 std::string run_event_count_capture(const std::string& binary,
                                     const std::vector<std::string>& args) {
-    int pipefd[2];
-    if (::pipe(pipefd) < 0) return "";
-
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& arg : args) argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    pid_t pid = ::fork();
-    if (pid < 0) {
-        ::close(pipefd[0]);
-        ::close(pipefd[1]);
-        return "";
-    }
-    if (pid == 0) {
-        ::close(pipefd[0]);
-        ::dup2(pipefd[1], STDOUT_FILENO);
-        ::close(pipefd[1]);
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    ::close(pipefd[1]);
-
-    std::string output;
-    char buf[4096];
-    ssize_t n;
-    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0)
-        output.append(buf, static_cast<std::size_t>(n));
-    ::close(pipefd[0]);
-
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    return output;
+    return dftu_utils_test::run_process_capture(binary, args);
 }
 
 // Extract the last non-empty line from a string and parse it as int.

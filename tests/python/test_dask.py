@@ -191,6 +191,7 @@ class TestDaskTraceViewer:
                     .group_by("cat")
                     .agg("count", "mean:dur", "std:dur")
                     .collect()
+                    .collect()
                 ).sort_by("cat")
                 assert dist.to_pandas().round(4).equals(whole.to_pandas().round(4))
             finally:

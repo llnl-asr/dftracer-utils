@@ -3,40 +3,52 @@
 Common test utilities for  Python bindings tests
 """
 
-import ctypes
 import gc
 import glob
 import gzip
 import os
 import shutil
 import tempfile
+from pathlib import Path
 
 import pytest
 
+import dftracer.utils.dftracer_utils_ext as _dftracer_utils_ext
 from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
 
 def find_example_plugin(name: str, env_var: str, repo_root) -> str:
-    """Locate a built example plugin `.so`: env var override, else the first
-    one under any build tree that dlopens here. The load is the validity check;
-    it rules out a cross-arch object left by another build that a header guess
-    would miss. Empty string when none is found."""
+    """Locate a built example plugin `.so` that matches the currently-loaded
+    dftracer_utils_ext: env var override; else the plugin installed alongside
+    that extension module (same install tree, so built against the same ABI
+    headers by construction); else, for a source checkout with no install, the
+    most recently built one under any build tree in the repo. A dlopen()
+    success is NOT a validity check: a plugin built against a stale ABI shape
+    dlopens fine and only crashes once the host calls a deleted vtable slot.
+    Empty string when none is found."""
     env = os.environ.get(env_var)
     if env and os.access(env, os.R_OK):
         return env
+
+    ext_file = getattr(_dftracer_utils_ext, "__file__", None)
+    if ext_file:
+        # Installed layout (see src/CMakeLists.txt): <prefix>/dftracer/utils/
+        # dftracer_utils_ext*.so next to <prefix>/dftracer/bin/examples/plugins/.
+        install_root = Path(ext_file).resolve().parent.parent
+        for suffix in ("so", "dylib"):
+            candidate = install_root / "bin" / "examples" / "plugins" / f"{name}.{suffix}"
+            if candidate.is_file():
+                return str(candidate)
+
     candidates = []
     for suffix in ("so", "dylib"):
         candidates += glob.glob(
             os.path.join(str(repo_root), "**", "examples", "plugins", f"{name}.{suffix}"),
             recursive=True,
         )
-    for path in candidates:
-        try:
-            ctypes.CDLL(path)
-            return path
-        except OSError:
-            continue
-    return candidates[0] if candidates else ""
+    if not candidates:
+        return ""
+    return max(candidates, key=os.path.getmtime)
 
 
 def valgrind_scale(n: int, divisor: int = 10) -> int:

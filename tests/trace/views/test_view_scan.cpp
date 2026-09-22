@@ -85,6 +85,7 @@ TEST_SUITE("View") {
         auto full = View::from_file(s.gz, s.idx)
                         .group_by({GroupKey::name()})
                         .collect()
+                        .collect()
                         .get();
         REQUIRE(full.num_rows() == 2);  // read (POSIX), fwrite (STDIO)
 
@@ -92,12 +93,14 @@ TEST_SUITE("View") {
                        .group_by({GroupKey::name()})
                        .limit(1)
                        .collect()
+                       .collect()
                        .get();
         CHECK(one.num_rows() == 1);
 
         auto rest = View::from_file(s.gz, s.idx)
                         .group_by({GroupKey::name()})
                         .offset(1)
+                        .collect()
                         .collect()
                         .get();
         CHECK(rest.num_rows() == 1);
@@ -292,6 +295,7 @@ TEST_SUITE("View") {
                                {AggOp::Max, "dur", "max_dur"},
                                {AggOp::Mean, "dur", "mean_dur"}})
                          .collect()
+                         .collect()
                          .get();
 
         CHECK(bhas(table, "cat"));
@@ -312,8 +316,11 @@ TEST_SUITE("View") {
 
     TEST_CASE("View - collect with no group_by returns the matching events") {
         const auto& s = shared_trace();  // 30 POSIX + 20 STDIO = 50 events
-        auto table =
-            View::from_file(s.gz, s.idx).metadata(false).collect().get();
+        auto table = View::from_file(s.gz, s.idx)
+                         .metadata(false)
+                         .collect()
+                         .collect()
+                         .get();
         REQUIRE(table.num_rows() == 50);
         // Every event row carries the top-level columns.
         for (const char* c : {"name", "cat", "pid", "tid", "ts", "dur", "ph"})
@@ -327,11 +334,69 @@ TEST_SUITE("View") {
                          .query(R"(cat == "POSIX")")
                          .select({"name", "dur"})
                          .collect()
+                         .collect()
                          .get();
         CHECK(posix.num_rows() == 30);
         REQUIRE(posix.num_columns() == 2);
         CHECK(bhas(posix, "name"));
         CHECK(bhas(posix, "dur"));
+    }
+
+    TEST_CASE(
+        "View - a flattened arg named like a top-level field stays a "
+        "distinct args.<key> column") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        // Each event's top-level "name" is "read"/"write"; its arg "name" is a
+        // different string, so the row frame must carry both "name" (top-level)
+        // and "args.name" (the arg) without a schema collision.
+        std::string pfw = env.get_dir() + "/collide.pfw";
+        {
+            std::ofstream ofs(pfw);
+            ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
+                   R"("ts":1000,"dur":10,"args":{"name":"inner_read"}})"
+                << "\n";
+            ofs << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,)"
+                   R"("ts":1100,"dur":10,"args":{"name":"inner_write"}})"
+                << "\n";
+        }
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        std::string idx = determine_index_path(gz, "");
+
+        // Empty select: every column, including both "name" and "args.name".
+        dataframe::DataFrame all =
+            View::from_file(gz, idx).metadata(false).collect().collect().get();
+        REQUIRE(bhas(all, "name"));
+        REQUIRE(bhas(all, "args.name"));
+        std::map<std::string, std::string> top_by_arg;
+        for (std::int64_t i = 0; i < all.num_rows(); ++i)
+            top_by_arg[bstr(all, i, "name")] = bstr(all, i, "args.name");
+        CHECK(top_by_arg["read"] == "inner_read");
+        CHECK(top_by_arg["write"] == "inner_write");
+
+        // A bare "name" select still resolves to the top-level field; the arg
+        // is only reachable via its "args." prefix.
+        dataframe::DataFrame bare_name = View::from_file(gz, idx)
+                                             .metadata(false)
+                                             .select({"name"})
+                                             .collect()
+                                             .collect()
+                                             .get();
+        REQUIRE(bare_name.num_columns() == 1);
+        CHECK(bhas(bare_name, "name"));
+        CHECK_FALSE(bhas(bare_name, "args.name"));
+
+        dataframe::DataFrame arg_name = View::from_file(gz, idx)
+                                            .metadata(false)
+                                            .select({"args.name"})
+                                            .collect()
+                                            .collect()
+                                            .get();
+        REQUIRE(arg_name.num_columns() == 1);
+        CHECK(bhas(arg_name, "args.name"));
+        CHECK_FALSE(bhas(arg_name, "name"));
     }
 
     TEST_CASE(
@@ -346,6 +411,7 @@ TEST_SUITE("View") {
                          .phase(Phase::Counters)
                          .group_by({GroupKey::name()})
                          .agg_numeric_args()
+                         .collect()
                          .collect()
                          .get();
 
@@ -379,6 +445,7 @@ TEST_SUITE("View") {
                 .agg_numeric_args({AggSpec(AggOp::Sum), AggSpec(AggOp::Max),
                                    AggSpec(AggOp::Mean)})
                 .collect()
+                .collect()
                 .get();
 
         REQUIRE(table.num_rows() == 1);
@@ -390,6 +457,109 @@ TEST_SUITE("View") {
         CHECK(bnum(table, 0, "sum_idle_pct") == doctest::Approx(80));   // 60+20
         CHECK(bnum(table, 0, "max_idle_pct") == doctest::Approx(60));
         CHECK(bnum(table, 0, "mean_idle_pct") == doctest::Approx(40));
+    }
+
+    TEST_CASE(
+        "View - select a counter arg then group_by/agg over it (expr path)") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        // ph="X" events with no "cycles", plus ph="C" counters whose "cycles"
+        // arg is a string, so the selected column is String-typed. The Python
+        // two-step .group_by(k).agg("count:cycles"/"sum:cycles") lowers to
+        // group_agg_expr, which used to feed an invalid (non-numeric) evaluated
+        // column into the aggregator and segfault.
+        std::string pfw = env.get_dir() + "/cyc.pfw";
+        {
+            std::ofstream ofs(pfw);
+            for (int i = 0; i < 4; ++i)
+                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+                    << (1000 + i * 100) << R"(,"dur":10,"args":{}})" << "\n";
+            const char* vals[] = {"lots", "few", "some"};
+            for (int i = 0; i < 6; ++i) {
+                const char* nm = (i % 2 == 0) ? "cpu" : "gpu";
+                ofs << R"({"ph":"C","name":")" << nm
+                    << R"(","cat":"sys","pid":0,"tid":0,"ts":)"
+                    << (2000 + i * 10) << R"(,"args":{"cycles":")"
+                    << vals[i % 3] << R"("}})"
+                    << "\n";
+            }
+        }
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        std::string idx = determine_index_path(gz, "");
+
+        // Non-deterministic corruption: repeat so an uninitialized/garbage read
+        // has several chances to surface.
+        for (int rep = 0; rep < 8; ++rep) {
+            dataframe::DataFrame rows = View::from_file(gz, idx)
+                                            .metadata(false)
+                                            .select({"name", "cycles"})
+                                            .collect()
+                                            .collect()
+                                            .get();
+            REQUIRE(rows.num_columns() == 2);
+            REQUIRE(bhas(rows, "args.cycles"));
+            REQUIRE(rows.num_rows() == 10);
+            REQUIRE(rows.columns[static_cast<std::size_t>(
+                                     bcol(rows, "args.cycles"))]
+                        .type() == dataframe::TypeId::String);
+
+            // Tally (name, cycles) pairs; a null cycles reads as empty.
+            std::map<std::string, int> name_counts, cyc_counts;
+            int nnull = 0;
+            for (std::int64_t i = 0; i < rows.num_rows(); ++i) {
+                name_counts[bstr(rows, i, "name")]++;
+                const std::string c = bstr(rows, i, "args.cycles");
+                if (c.empty())
+                    nnull++;
+                else
+                    cyc_counts[c]++;
+            }
+            CHECK(name_counts["read"] == 4);
+            CHECK(name_counts["cpu"] == 3);
+            CHECK(name_counts["gpu"] == 3);
+            CHECK(nnull == 4);  // the 4 ph="X" rows lack "cycles"
+            CHECK(cyc_counts["lots"] == 2);
+            CHECK(cyc_counts["few"] == 2);
+            CHECK(cyc_counts["some"] == 2);
+
+            // The expr-aggregate path the Python GroupBy uses: count carries a
+            // value expr (ignored), count_valid counts the present strings,
+            // and a numeric sum over the String value is refused rather than
+            // reported as a number.
+            std::vector<const dataframe::Series*> inputs;
+            for (const auto& col : rows.columns) inputs.push_back(&col);
+            const auto cyc = dataframe::expr_col(
+                static_cast<std::int32_t>(bcol(rows, "args.cycles")));
+            const auto key = dataframe::expr_col(
+                static_cast<std::int32_t>(bcol(rows, "name")));
+            std::vector<dataframe::AggExprSpec> specs = {
+                dataframe::agg_count("count_cycles")};
+            specs[0].value = cyc;
+            dataframe::AggExprSpec present;
+            present.op = dataframe::AggOp::CountValid;
+            present.value = cyc;
+            present.out = "present_cycles";
+            specs.push_back(present);
+            dataframe::DataFrame g =
+                dataframe::group_agg_expr(key, specs, inputs, "name");
+
+            REQUIRE(bhas(g, "count_cycles"));
+            REQUIRE(bhas(g, "present_cycles"));
+            REQUIRE(g.num_rows() == 3);  // read, cpu, gpu
+            for (std::int64_t i = 0; i < g.num_rows(); ++i) {
+                const std::string nm = bstr(g, i, "name");
+                CHECK(bnum(g, i, "count_cycles") ==
+                      doctest::Approx(nm == "read" ? 4 : 3));
+                CHECK(bnum(g, i, "present_cycles") ==
+                      doctest::Approx(nm == "read" ? 0 : 3));
+            }
+            CHECK_THROWS_AS(dataframe::group_agg_expr(
+                                key, {dataframe::agg_sum(cyc, "sum_cycles")},
+                                inputs, "name"),
+                            std::invalid_argument);
+        }
     }
 
     TEST_CASE("View - export_counters emits a ph=C event per group") {
@@ -441,6 +611,7 @@ TEST_SUITE("View") {
         auto table = v.phase(Phase::Events)
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Count, "", "count"}})
+                         .collect()
                          .collect()
                          .get();
 

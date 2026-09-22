@@ -77,7 +77,15 @@ struct FoldHolder {
 std::vector<FoldEvent> make_events(std::uint64_t with_dur,
                                    std::uint64_t total) {
     std::vector<FoldEvent> evs(total);
-    for (std::uint64_t i = 0; i < total; ++i) evs[i].has_dur = i < with_dur;
+    for (std::uint64_t i = 0; i < total; ++i) {
+        // step() drops METADATA/UNKNOWN-phase events before it ever reaches
+        // on_batch, and plugins::Event::has_dur() is phase() == Complete;
+        // COUNTER survives the filter without counting as "has a duration".
+        evs[i].has_dur = i < with_dur;
+        evs[i].phase = evs[i].has_dur
+                           ? dftracer::utils::trace::RecordPhase::COMPLETE
+                           : dftracer::utils::trace::RecordPhase::COUNTER;
+    }
     return evs;
 }
 

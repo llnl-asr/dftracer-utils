@@ -6,6 +6,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <zlib.h>
 
 #include <cstdio>
@@ -22,7 +23,7 @@ namespace {
 constexpr std::size_t STRIPE = 1 * 1024 * 1024;  // 1 MB stripe for the test
 
 std::string tmp_path(const char* name) {
-    return (fs::temp_directory_path() / name).string();
+    return dftu_utils_test::make_unique_test_path(name).string();
 }
 
 // Compress `data` into a standalone gzip member with zlib.

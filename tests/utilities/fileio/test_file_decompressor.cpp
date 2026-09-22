@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/file_decompressor_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <cstddef>
 #include <fstream>
@@ -22,7 +23,8 @@ static std::string read_file_content(const std::string& path) {
 }
 
 static fs::path create_test_dir() {
-    auto dir = fs::temp_directory_path() / "dftracer_test_decompressor";
+    auto dir =
+        dftu_utils_test::make_unique_test_path("dftracer_test_decompressor");
     fs::create_directories(dir);
     return dir;
 }

@@ -44,57 +44,15 @@ std::string make_bad_pfw(const fs::path& dir, int id) {
 }
 
 std::string find_validate_binary() {
-    const char* env_path = std::getenv("DFTRACER_VALIDATE_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_validate",         "../dftracer_validate",
-        "../../dftracer_validate",     "../bin/dftracer_validate",
-        "../../bin/dftracer_validate",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_VALIDATE_PATH",
+                                                "dftracer_validate");
 }
 
 // Run the binary, capture stdout, and report the exit code via *rc.
 std::string run_validate_capture(const std::string& binary,
                                  const std::vector<std::string>& args,
                                  int* rc) {
-    int pipefd[2];
-    if (::pipe(pipefd) < 0) return "";
-
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& arg : args) argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    pid_t pid = ::fork();
-    if (pid < 0) {
-        ::close(pipefd[0]);
-        ::close(pipefd[1]);
-        return "";
-    }
-    if (pid == 0) {
-        ::close(pipefd[0]);
-        ::dup2(pipefd[1], STDOUT_FILENO);
-        ::close(pipefd[1]);
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    ::close(pipefd[1]);
-
-    std::string output;
-    char buf[4096];
-    ssize_t n;
-    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0)
-        output.append(buf, static_cast<std::size_t>(n));
-    ::close(pipefd[0]);
-
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (rc != nullptr) *rc = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-    return output;
+    return dftu_utils_test::run_process_capture(binary, args, false, rc);
 }
 
 bool contains(const std::string& hay, const char* needle) {

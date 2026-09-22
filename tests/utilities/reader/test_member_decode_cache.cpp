@@ -6,6 +6,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
 
 #include <atomic>
 #include <cstdint>
@@ -14,17 +15,10 @@
 
 using namespace dftracer::utils;
 using dftracer::utils::utilities::reader::internal::MemberDecodeCache;
+using dftu_utils_test::run_coro;
 using Bytes = MemberDecodeCache::Bytes;
 
 namespace {
-
-template <typename Fn>
-void run_coro(Fn&& fn) {
-    Runtime rt(4);
-    auto task = run_coro_scope(rt.executor(), std::forward<Fn>(fn));
-    rt.submit(std::move(task), "test").wait();
-    rt.shutdown();
-}
 
 // Producer that counts invocations and yields a few times so concurrent
 // callers pile up on the in-flight entry before it completes.

@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """Inter-plugin communication for @jit.plugin authoring.
 
-A jit plugin declares a batch-scoped publish port with jit.publish and another a
-consume port with jit.consume under the same capability id; the host orders the
-producer before the consumer and hands the per-batch published value across via
-the DFTU_EXT_PORTS / DFTU_EXT_COMMS machinery. These tests cover the generated C
-(provides/requires + publish/consume scaffolding) without a compiler, and the
-end-to-end data crossing (plus the absent-producer fallback) with one.
+A jit plugin declares a batch-scoped publish port with jit.publish (its wire id
+is package-derived, see JitPackage) and a consume port wired to it with
+jit.consume(Producer.port); the host hands the per-batch published value across
+via DFTU_SVC_PORTS, running the producer first from the provides/consumes the
+JIT derives from the two bodies. These tests cover the generated C
+(publish/consume scaffolding and the derived name lists) without a compiler,
+and the end-to-end data crossing - in either load order, plus the
+absent-producer build error - with one.
 """
 
 import gzip
+import re
 import shutil
 
 import pytest
 
 from dftracer.utils import jit
-from dftracer.utils.plugins import PluginHost
+from dftracer.utils.plugins import Plugins
 
 pa = pytest.importorskip("pyarrow")
 
@@ -32,14 +35,21 @@ def _write_trace(path: str, n: int, pids) -> None:
             )
 
 
+def _names(src: str, slot: str):
+    """The quoted entries of `_<slot>_names[...]` in generated source."""
+    m = re.search(rf"_{slot}_names\[\d+\] = \{{(.*?)\}};", src)
+    assert m, f"no _{slot}_names array in source"
+    return {tok.strip().strip('"') for tok in m.group(1).split(",") if tok.strip() != "NULL"}
+
+
 # --- codegen-only checks (no C++ compiler needed) ---------------------------
 
 
-def test_jit_publish_emits_provides_and_flush():
+def test_jit_publish_emits_flush():
     @jit.plugin
     class Producer:
         counts = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.publish("com.example.batchsig", of=jit.u64)
+        sig = jit.publish(of=jit.u64)
 
         @jit.each_event
         def step(self, e):
@@ -47,19 +57,27 @@ def test_jit_publish_emits_provides_and_flush():
             self.sig += 1
 
     src = Producer._jit_plugin.source
-    assert "comms_provides" in src
-    assert "com.example.batchsig" in src
-    assert "g_plugin.get_extension = plugin_get_extension;" in src
+    assert Producer.sig.name in src  # the derived wire id, e.g. "<pkg>/...producer.sig"
     assert "_pub_sig += (uint64_t)" in src
     assert "_ports->publish(" in src
-    assert "DFTU_EXT_PORTS" in src and "DFTU_EXT_COMMS" in src
+    assert "DFTU_SVC_PORTS" in src
 
 
-def test_jit_consume_emits_requires_and_read():
+def test_jit_consume_emits_read():
+    @jit.plugin
+    class Producer:
+        counts = jit.map(key=(jit.i64,), value=jit.count())
+        sig = jit.publish(of=jit.u64)
+
+        @jit.each_event
+        def step(self, e):
+            self.counts[(e.pid,)] += 1
+            self.sig += 1
+
     @jit.plugin
     class Consumer:
         got = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.consume("com.example.batchsig", of=jit.u64, required=True)
+        sig = jit.consume(Producer.sig, of=jit.u64)
 
         @jit.each_event
         def step(self, e):
@@ -67,9 +85,7 @@ def test_jit_consume_emits_requires_and_read():
                 self.got[(e.pid,)] += 1
 
     src = Consumer._jit_plugin.source
-    assert "comms_require" in src
-    assert "out[i].required = reqd[i];" in src
-    assert "reqd[1] = {1}" in src  # required=True
+    assert Producer.sig.name in src
     assert "_sub_sig" in src
     assert "_ports->consume(" in src
 
@@ -78,7 +94,7 @@ def test_jit_f64_publish_uses_double():
     @jit.plugin
     class P:
         m = jit.map(key=(jit.i64,), value=jit.count())
-        tot = jit.publish("com.example.durtot", of=jit.f64)
+        tot = jit.publish(of=jit.f64)
 
         @jit.each_event
         def step(self, e):
@@ -90,9 +106,182 @@ def test_jit_f64_publish_uses_double():
     assert "_pub_tot += (double)" in src
 
 
+def test_jit_derives_provides_and_consumes():
+    @jit.plugin
+    class Upstream:
+        counts = jit.map(key=(jit.i64,), value=jit.count())
+        feed = jit.publish(of=jit.u64)
+
+        @jit.each_event
+        def step(self, e):
+            self.counts[(e.pid,)] += 1
+            self.feed += 1
+
+    @jit.plugin
+    class Both:
+        counts = jit.map(key=(jit.i64,), value=jit.count())
+        out = jit.publish(of=jit.u64)
+        inp = jit.consume(Upstream.feed, of=jit.u64)
+
+        @jit.each_event
+        def step(self, e):
+            if self.inp > 0:
+                self.counts[(e.pid,)] += 1
+            self.out += 1
+
+    src = Both._jit_plugin.source
+    counts_id = Both._jit_plugin.result_names  # {wire id: attr}; one entry, "counts"
+    (counts_wire_id,) = [wid for wid, attr in counts_id.items() if attr == "counts"]
+    # Produced: the published port and the accumulator this plugin creates.
+    assert _names(src, "provides") == {Both.out.name, counts_wire_id}
+    assert _names(src, "consumes") == {Upstream.feed.name}
+    assert "g_plugin.provides = provides;" in src
+    assert "g_plugin.consumes = consumes;" in src
+
+
+def test_jit_derives_no_consumes_without_a_consume_port():
+    @jit.plugin
+    class Solo:
+        counts = jit.map(key=(jit.i64,), value=jit.count())
+
+        @jit.each_event
+        def step(self, e):
+            self.counts[(e.pid,)] += 1
+
+    src = Solo._jit_plugin.source
+    (counts_wire_id,) = Solo._jit_plugin.result_names.keys()
+    assert "g_plugin.consumes = NULL;" in src
+    assert _names(src, "provides") == {counts_wire_id}
+
+
+def test_map_and_port_wire_ids_are_package_qualified_and_lowercase():
+    @jit.plugin
+    class Wide:
+        edges = jit.map(key=(jit.i64,), value=jit.count())
+        sig = jit.publish(of=jit.u64)
+
+        @jit.each_event
+        def step(self, e):
+            self.edges[(e.pid,)] += 1
+            self.sig += 1
+
+    (edges_wire_id,) = Wide._jit_plugin.result_names.keys()
+    assert edges_wire_id == edges_wire_id.lower()
+    assert edges_wire_id.endswith(".wide.edges")
+    assert "/" in edges_wire_id
+    assert Wide.sig.name.endswith(".wide.sig")
+
+
+def test_identity_matches_the_worked_example_and_is_stable_across_a_file_move():
+    # Identity comes from __module__/__qualname__ (the import path), never
+    # __file__ - so moving the file that defines the class to a new location
+    # (same import path) produces the same identity.
+    class A:
+        pass
+
+    A.__module__ = "acme.stats.io"
+    A.__qualname__ = "Wide"
+
+    class B:
+        pass
+
+    B.__module__ = "acme.stats.io"
+    B.__qualname__ = "Wide"
+
+    default_pkg = jit.JitPackage()
+    id_a = default_pkg.identity(A, "edges")
+    id_b = default_pkg.identity(B, "edges")
+    assert id_a == id_b == "acme/stats.io.wide.edges"
+
+
+def test_two_classes_in_one_module_with_the_same_attr_do_not_collide():
+    @jit.plugin
+    class Wide:
+        edges = jit.map(key=(jit.i64,), value=jit.count())
+
+        @jit.each_event
+        def step(self, e):
+            self.edges[(e.pid,)] += 1
+
+    @jit.plugin
+    class Narrow:
+        edges = jit.map(key=(jit.i64,), value=jit.count())
+
+        @jit.each_event
+        def step(self, e):
+            self.edges[(e.pid,)] += 1
+
+    (wide_id,) = Wide._jit_plugin.result_names.keys()
+    (narrow_id,) = Narrow._jit_plugin.result_names.keys()
+    assert wide_id != narrow_id
+    assert Wide._jit_plugin.result_names[wide_id] == "edges"
+    assert Narrow._jit_plugin.result_names[narrow_id] == "edges"
+
+
+def test_jit_package_matching_the_default_namespace_changes_no_identity():
+    class Sample:
+        pass
+
+    top_level = __name__.split(".", 1)[0]
+    default_id = jit.JitPackage().identity(Sample, "edges")
+    explicit_id = jit.JitPackage(top_level).identity(Sample, "edges")
+    # An explicit namespace equal to the module's own top-level package
+    # produces the identical identity a bare jit.plugin/jit.map would.
+    assert default_id == explicit_id
+
+
+def test_jit_package_explicit_namespace_renames_only_the_leading_segment():
+    pkg = jit.JitPackage("acme")
+
+    @pkg.plugin
+    class Renamed:
+        edges = jit.map(key=(jit.i64,), value=jit.count())
+
+        @jit.each_event
+        def step(self, e):
+            self.edges[(e.pid,)] += 1
+
+    (renamed_id,) = Renamed._jit_plugin.result_names.keys()
+    assert renamed_id.startswith("acme/")
+    assert renamed_id.endswith(".renamed.edges")
+
+
+def _undecorated_edges_class():
+    class ScriptPlugin:
+        edges = jit.map(key=(jit.i64,), value=jit.count())
+
+        @jit.each_event
+        def step(self, e):
+            self.edges[(e.pid,)] += 1
+
+    return ScriptPlugin
+
+
+def test_main_module_refuses_a_shippable_build_without_a_package():
+    # A script/notebook has no import path, so decorating from __main__ (here
+    # simulated by overriding __module__) with the bare decorator leaves the
+    # plugin usable, but not shippable.
+    ScriptPlugin = _undecorated_edges_class()
+    ScriptPlugin.__module__ = "__main__"
+    ScriptPlugin = jit.plugin(ScriptPlugin)
+    assert not ScriptPlugin._jit_plugin.shippable
+    with pytest.raises(jit.JitError, match="__main__"):
+        jit.build(ScriptPlugin)
+
+
+def test_main_module_with_a_jit_package_is_shippable():
+    ScriptPlugin = _undecorated_edges_class()
+    ScriptPlugin.__module__ = "__main__"
+    pkg = jit.JitPackage("acme")
+    ScriptPlugin = pkg.plugin(ScriptPlugin)
+    assert ScriptPlugin._jit_plugin.shippable
+
+
 def test_jit_port_rejects_reserved_namespace():
-    with pytest.raises(jit.JitError, match="reserved dftu. namespace"):
-        jit.publish("dftu.cap.events")
+    with pytest.raises(jit.JitError, match="reserved dftu"):
+        jit.consume("dftu.cap.events")
+    with pytest.raises(jit.JitError, match="reserved dftu"):
+        jit.JitPackage("dftu")
 
 
 def test_jit_port_rejects_bad_charset():
@@ -102,7 +291,12 @@ def test_jit_port_rejects_bad_charset():
 
 def test_jit_port_rejects_bad_width():
     with pytest.raises(jit.JitError, match="must be jit.u64"):
-        jit.publish("ok.id", of=jit.str_)
+        jit.publish(of=jit.str_)
+
+
+def test_jit_consume_rejects_a_non_publish_object():
+    with pytest.raises(jit.JitError, match="jit.publish attribute"):
+        jit.consume(jit.consume("a.b"))
 
 
 def test_jit_rejects_reading_a_publish_port():
@@ -111,7 +305,7 @@ def test_jit_rejects_reading_a_publish_port():
         @jit.plugin
         class Bad:
             m = jit.map(key=(jit.i64,), value=jit.sum())
-            p = jit.publish("a.b")
+            p = jit.publish()
 
             @jit.each_event
             def step(self, e):
@@ -131,149 +325,6 @@ def test_jit_rejects_writing_a_consume_port():
                 self.c += 1
 
 
-# --- versioned capability negotiation codegen -------------------------------
-
-
-def test_jit_publish_emits_declared_version():
-    @jit.plugin
-    class Producer:
-        m = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.publish("com.example.tag", of=jit.u64, version="2.1.3")
-
-        @jit.each_event
-        def step(self, e):
-            self.m[(e.pid,)] += 1
-            self.sig += 1
-
-    src = Producer._jit_plugin.source
-    assert "static const dftu_version vers[1] = {{2, 1, 3}};" in src
-    assert "out[i].ver = vers[i];" in src
-
-
-def test_jit_consume_emits_version_constraint():
-    @jit.plugin
-    class Consumer:
-        got = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.consume(
-            "com.example.tag", of=jit.u64, required=True, min_version="1.2.0", version_op="^"
-        )
-
-        @jit.each_event
-        def step(self, e):
-            if self.sig > 0:
-                self.got[(e.pid,)] += 1
-
-    src = Consumer._jit_plugin.source
-    assert "static const dftu_ver_op ops[1] = {DFTU_VER_CARET};" in src
-    assert "static const dftu_version vers[1] = {{1, 2, 0}};" in src
-    assert "out[i].op = ops[i];" in src
-
-
-def test_jit_consume_min_version_defaults_to_ge():
-    @jit.plugin
-    class Consumer:
-        got = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.consume("com.example.tag", min_version="1.0.0")
-
-        @jit.each_event
-        def step(self, e):
-            if self.sig > 0:
-                self.got[(e.pid,)] += 1
-
-    src = Consumer._jit_plugin.source
-    assert "static const dftu_ver_op ops[1] = {DFTU_VER_GE};" in src
-    assert "static const dftu_version vers[1] = {{1, 0, 0}};" in src
-
-
-def test_jit_publish_rejects_bad_version():
-    with pytest.raises(jit.JitError, match="version"):
-        jit.publish("ok.id", version="1.x")
-
-
-def test_jit_consume_rejects_version_op_without_min_version():
-    with pytest.raises(jit.JitError, match="version_op requires min_version"):
-        jit.consume("ok.id", version_op=">=")
-
-
-def test_jit_consume_rejects_unknown_version_op():
-    with pytest.raises(jit.JitError, match="version_op must be one of"):
-        jit.consume("ok.id", min_version="1.0.0", version_op="!!")
-
-
-# --- @jit.on_resolve codegen ------------------------------------------------
-
-
-def test_jit_on_resolve_emits_provider_best_and_flags():
-    @jit.plugin
-    class Consumer:
-        got = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.consume("com.example.tag", of=jit.u64, min_version="2.0.0")
-
-        @jit.on_resolve
-        def on_resolve(self):
-            self.wired = self.sig.resolved
-            self.modern = self.sig.resolved and (self.sig.version >= (2, 1, 0))
-
-        @jit.each_event
-        def step(self, e):
-            if self.wired > 0:
-                self.got[(e.pid,)] += 1
-            if self.modern > 0:
-                self.got[(e.pid,)] += 1
-
-    src = Consumer._jit_plugin.source
-    # resolve queries provider_best against the requirement and records the result
-    assert "DFTU_EXT_COMMS" in src
-    assert "_c->provider_best(host->h, &_req, &_bv)" in src
-    assert "static int _resolved_sig = 0;" in src
-    assert "static uint64_t _resolved_ver_sig = 0;" in src
-    # the author flags are set from the resolved state and read in each_event
-    assert "_rflag_wired = (_resolved_sig);" in src
-    # 2.1.0 packs to (2<<32)|(1<<16) = 8590000128
-    assert "_resolved_ver_sig >= 8590000128ULL" in src
-    assert "_rflag_wired" in src and "_rflag_modern" in src
-    comms_resolve = src[
-        src.find("static void comms_resolve") : src.find("static const dftu_plugin_comms")
-    ]
-    assert comms_resolve.strip() and "provider_best" in comms_resolve
-
-
-def test_jit_on_resolve_requires_a_consume_port():
-    with pytest.raises(jit.JitError, match="needs at least one jit.consume port"):
-
-        @jit.plugin
-        class Bad:
-            m = jit.map(key=(jit.i64,), value=jit.count())
-            sig = jit.publish("com.example.tag")
-
-            @jit.on_resolve
-            def on_resolve(self):
-                self.wired = 1
-
-            @jit.each_event
-            def step(self, e):
-                self.m[(e.pid,)] += 1
-                self.sig += 1
-
-
-def test_jit_on_resolve_rejects_arbitrary_body():
-    with pytest.raises(jit.JitError, match="unsupported in @jit.on_resolve"):
-
-        @jit.plugin
-        class Bad:
-            got = jit.map(key=(jit.i64,), value=jit.count())
-            sig = jit.consume("com.example.tag")
-
-            @jit.on_resolve
-            def on_resolve(self):
-                for _ in range(3):
-                    self.wired = 1
-
-            @jit.each_event
-            def step(self, e):
-                self.got[(e.pid,)] += 1
-
-
 # --- end-to-end data-crossing checks (need a C++ compiler) ------------------
 
 
@@ -283,7 +334,7 @@ def _producer():
         # A results map keeps the producer's own output; the port carries the
         # per-batch event count (>= 1 for any non-empty batch) to a consumer.
         seen = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.publish("com.example.batchsig", of=jit.u64)
+        sig = jit.publish(of=jit.u64)
 
         @jit.each_event
         def step(self, e):
@@ -293,11 +344,11 @@ def _producer():
     return Producer
 
 
-def _consumer(required=False):
+def _consumer(producer):
     @jit.plugin
     class Consumer:
         got = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.consume("com.example.batchsig", of=jit.u64, required=required)
+        sig = jit.consume(producer.sig, of=jit.u64)
 
         @jit.each_event
         def step(self, e):
@@ -318,11 +369,10 @@ def test_jit_ports_data_crosses_producer_to_consumer(tmp_path):
     pids = [1, 2, 3]
     _write_trace(str(tmp_path / "trace.pfw.gz"), n, pids)
 
-    host = PluginHost()
-    host.load(_producer())
-    host.load(_consumer())
-    assert host.resolve()
-    results = host.run(str(tmp_path))
+    producer = _producer()
+    consumer = _consumer(producer)
+    plugins = Plugins([producer, consumer])
+    results = plugins.run(str(tmp_path)).results
 
     seen = _pid_counts(pa.table(results["seen"]))
     got = _pid_counts(pa.table(results["got"]))
@@ -333,109 +383,59 @@ def test_jit_ports_data_crosses_producer_to_consumer(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available for the jit backend")
-def test_jit_ports_resolve_orders_producer_first(tmp_path):
-    # Load the consumer BEFORE the producer; resolve() must still order the
-    # producer first so the value is present when the consumer reads it.
-    n = 60
-    pids = [1, 2]
+def test_jit_ports_cross_in_either_load_order(tmp_path):
+    # The consumer is listed first; the publish/consume names the JIT derives
+    # decide the fold order, not the Plugins([...]) list order.
+    n = 80
+    pids = [1, 2, 3]
     _write_trace(str(tmp_path / "trace.pfw.gz"), n, pids)
 
-    host = PluginHost()
-    host.load(_consumer())
-    host.load(_producer())
-    assert host.resolve()
-    results = host.run(str(tmp_path))
+    producer = _producer()
+    consumer = _consumer(producer)
+    plugins = Plugins([consumer, producer])
+    results = plugins.run(str(tmp_path)).results
 
-    assert sum(_pid_counts(pa.table(results["got"])).values()) == n
-
-
-@pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available for the jit backend")
-def test_jit_ports_absent_producer_reads_zero(tmp_path):
-    # An optional consume port with no producer degrades to reading 0, so the
-    # guard never fires and nothing is counted.
-    n = 40
-    _write_trace(str(tmp_path / "trace.pfw.gz"), n, [1, 2])
-
-    host = PluginHost()
-    host.load(_consumer(required=False))
-    assert host.resolve()
-    results = host.run(str(tmp_path))
-
-    got = pa.table(results["got"])
-    assert got.num_rows == 0
+    seen = _pid_counts(pa.table(results["seen"]))
+    got = _pid_counts(pa.table(results["got"]))
+    assert got == seen
+    assert sum(got.values()) == n
 
 
 @pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available for the jit backend")
-def test_jit_ports_required_missing_producer_fails_resolve(tmp_path):
-    host = PluginHost()
-    host.load(_consumer(required=True))
-    # A required capability with no provider must fail resolve.
-    assert host.resolve() is False
+def test_jit_consume_without_a_producer_fails_the_build():
+    # A consume port no loaded plugin publishes is a load error, not a whole
+    # scan that quietly reads zero.
+    producer = _producer()
+    consumer = _consumer(producer)
+    with pytest.raises(Exception, match=re.escape(producer.sig.name)):
+        Plugins([consumer])
 
 
-# --- end-to-end resolve-time adaptation (need a C++ compiler) ----------------
+@pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available for the jit backend")
+def test_results_key_stays_the_attr_name_with_and_without_jit_package(tmp_path):
+    # The wire id a jit.map sends the host is package-qualified, but a caller
+    # still indexes run()'s results by the plain attribute name.
+    _write_trace(str(tmp_path / "trace.pfw.gz"), 20, [1])
 
-
-def _versioned_producer(version):
     @jit.plugin
-    class Producer:
-        seen = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.publish("com.example.tag", of=jit.u64, version=version)
+    class Bare:
+        edges = jit.map(key=(jit.i64,), value=jit.count())
 
         @jit.each_event
         def step(self, e):
-            self.seen[(e.pid,)] += 1
-            self.sig += 1
+            self.edges[(e.pid,)] += 1
 
-    return Producer
+    pkg = jit.JitPackage("acme")
 
-
-def _adaptive_consumer(min_version):
-    @jit.plugin
-    class Consumer:
-        got = jit.map(key=(jit.i64,), value=jit.count())
-        sig = jit.consume("com.example.tag", of=jit.u64, min_version=min_version)
-
-        @jit.on_resolve
-        def on_resolve(self):
-            self.wired = self.sig.resolved
+    @pkg.plugin
+    class Packaged:
+        edges = jit.map(key=(jit.i64,), value=jit.count())
 
         @jit.each_event
         def step(self, e):
-            # Adapts to resolve: only counts when a compatible producer exists.
-            if self.wired > 0:
-                self.got[(e.pid,)] += 1
+            self.edges[(e.pid,)] += 1
 
-    return Consumer
-
-
-@pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available for the jit backend")
-def test_jit_on_resolve_adapts_to_compatible_producer(tmp_path):
-    n = 60
-    _write_trace(str(tmp_path / "trace.pfw.gz"), n, [1, 2])
-
-    host = PluginHost()
-    host.load(_versioned_producer("2.1.0"))
-    host.load(_adaptive_consumer(min_version="2.0.0"))
-    assert host.resolve()
-    results = host.run(str(tmp_path))
-
-    # The provider satisfies >=2.0.0, so on_resolve wires the consumer and it
-    # counts every event.
-    assert sum(_pid_counts(pa.table(results["got"])).values()) == n
-
-
-@pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler available for the jit backend")
-def test_jit_on_resolve_stands_down_for_incompatible_version(tmp_path):
-    n = 40
-    _write_trace(str(tmp_path / "trace.pfw.gz"), n, [1, 2])
-
-    host = PluginHost()
-    host.load(_versioned_producer("1.0.0"))
-    host.load(_adaptive_consumer(min_version="2.0.0"))
-    assert host.resolve()
-    results = host.run(str(tmp_path))
-
-    # The only provider is version 1.0.0, below the >=2.0.0 constraint, so
-    # on_resolve leaves the consumer unwired and it counts nothing.
-    assert pa.table(results["got"]).num_rows == 0
+    for cls in (Bare, Packaged):
+        plugins = Plugins([cls])
+        results = plugins.run(str(tmp_path)).results
+        assert "edges" in results

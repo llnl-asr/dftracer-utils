@@ -29,35 +29,12 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 }
 
 std::string find_split_binary() {
-    const char* env_path = std::getenv("DFTRACER_SPLIT_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_split",         "../dftracer_split",
-        "../../dftracer_split",     "../bin/dftracer_split",
-        "../../bin/dftracer_split",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_SPLIT_PATH",
+                                                "dftracer_split");
 }
 
 int run_split(const std::string& binary, const std::vector<std::string>& args) {
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& arg : args) argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    pid_t pid = ::fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return -1;
+    return dftu_utils_test::run_process(binary, args);
 }
 
 // Count non-empty lines across all .pfw.gz files in a directory by

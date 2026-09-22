@@ -78,24 +78,8 @@ std::string create_ns_pfw_gz(const std::string& dir) {
 /// Find the dftracer_server binary. Checks DFTRACER_SERVER_PATH env first,
 /// then common build paths relative to the test binary.
 std::string find_server_binary() {
-    const char* env_path = std::getenv("DFTRACER_SERVER_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) {
-        return env_path;
-    }
-
-    std::vector<std::string> candidates = {
-        "./dftracer_server",         "../dftracer_server",
-        "../../dftracer_server",     "../bin/dftracer_server",
-        "../../bin/dftracer_server",
-    };
-
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) {
-            return path;
-        }
-    }
-
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_SERVER_PATH",
+                                                "dftracer_server");
 }
 
 /// Check if a TCP port is accepting connections.
@@ -309,7 +293,22 @@ struct ServerProcess {
 
     ~ServerProcess() { stop(); }
 
-    bool start(const std::string& binary, const std::string& data_dir, int p) {
+    // pick_port() reserves an ephemeral port then closes it, so under parallel
+    // load another process can claim it in the long gap before the child (which
+    // indexes first) binds. Retry on a fresh port rather than fail; `port` is
+    // updated to the port the server actually came up on.
+    bool start(const std::string& binary, const std::string& data_dir,
+               int& port_io) {
+        for (int attempt = 0; attempt < 5; ++attempt) {
+            if (attempt > 0) port_io = pick_port();
+            if (start_once(binary, data_dir, port_io)) return true;
+            stop();
+        }
+        return false;
+    }
+
+    bool start_once(const std::string& binary, const std::string& data_dir,
+                    int p) {
         port = p;
         // Build before fork: the child may only call async-signal-safe
         // functions until execl, and std::to_string allocates.
@@ -816,7 +815,10 @@ TEST_CASE("DFTracer Server - graceful shutdown via SIGTERM") {
 
     int status = 0;
     bool exited = false;
-    for (int i = 0; i < 150; ++i) {
+    // A generous exit budget: the graceful teardown (close listen fd, drain the
+    // async runtime + RocksDB) can be CPU-starved when the full suite runs many
+    // process-spawning tests unbounded-parallel, so 15s occasionally flaked.
+    for (int i = 0; i < 600; ++i) {
         if (::waitpid(server.pid, &status, WNOHANG) > 0) {
             exited = true;
             server.pid = -1;

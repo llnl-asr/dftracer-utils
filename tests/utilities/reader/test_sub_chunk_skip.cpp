@@ -13,6 +13,7 @@
 #include <dftracer/utils/utilities/indexer/index_builder_utility.h>
 #include <dftracer/utils/utilities/reader/internal/chunk_geometry.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
+#include <testing_runtime.h>
 #include <testing_utilities.h>
 
 #include <fstream>
@@ -25,16 +26,9 @@ using dftracer::utils::utilities::reader::ReadConfig;
 using dftracer::utils::utilities::reader::TraceReader;
 using dftracer::utils::utilities::reader::TraceReaderConfig;
 using dftracer::utils::utilities::reader::internal::enumerate_work_items;
+using dftu_utils_test::run_coro;
 
 namespace {
-
-template <typename Fn>
-void run_coro(Fn&& fn) {
-    Runtime rt(4);
-    auto task = run_coro_scope(rt.executor(), std::forward<Fn>(fn));
-    rt.submit(std::move(task), "test").wait();
-    rt.shutdown();
-}
 
 // One event per line; ts = 1000 + i, dur = 100. Returns "[\n" + lines.
 std::string make_trace(int n) {

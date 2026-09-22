@@ -2,16 +2,28 @@
 #include <dftracer/utils/core/common/error.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/core/rocksdb/database.h>
+#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/trace/aggregators/aggregator_utility.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
+#include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/rollup_store.h>
+#include <dftracer/utils/trace/views/view_agg_engine.h>
+#include <dftracer/utils/trace/views/view_aggregate.h>
+#include <dftracer/utils/trace/views/view_executor.h>
+#include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <functional>
 #include <map>
+#include <utility>
 
+#include "groupmap_oracle.h"
 #include "test_view_common.h"
 
 namespace {
@@ -74,6 +86,106 @@ std::vector<HistBin> hist_bins(const dataframe::DataFrame& b, std::int64_t row,
     return out;
 }
 
+using gmoracle::groupmap_oracle;
+
+// The engine collect path (run_collect_via_engine + post-ops), the production
+// aggregation path every non-row-query View::collect() takes.
+dataframe::DataFrame engine_collect(const View& v) {
+    namespace detail = dftracer::utils::trace::views::detail;
+    Runtime rt;
+    dataframe::DataFrame result;
+    rt.run_blocking("engine-collect", [&](CoroScope&) -> coro::CoroTask<void> {
+        result = co_await detail::run_collect_via_engine(v.plan());
+    });
+    return detail::apply_agg_post_ops(std::move(result), v.plan());
+}
+
+// The engine scan with the tier/rollup fast paths bypassed:
+// build_engine_agg_state always folds events, so this is the ground-truth full
+// scan a tier answer must match.
+dataframe::DataFrame scan_only(const View& v) {
+    namespace detail = dftracer::utils::trace::views::detail;
+    Runtime rt;
+    dataframe::DataFrame result;
+    rt.run_blocking("scan-only", [&](CoroScope&) -> coro::CoroTask<void> {
+        auto st = co_await detail::build_engine_agg_state(v.plan());
+        result = detail::finalize_engine_result(*st, v.plan());
+    });
+    return detail::apply_agg_post_ops(std::move(result), v.plan());
+}
+
+// Build the sidecar aggregation tier the way the aggregator does, so
+// agg_tier_collect can answer without a scan.
+void build_tier_index(const std::string& gz) {
+    namespace aggregators = dftracer::utils::trace::aggregators;
+    aggregators::AggregatorInput input;
+    input.directory = fs::path(gz).parent_path().string();
+    input.force_rebuild = true;
+    Runtime rt(4);
+    rt.run_blocking("build-tier", [&](CoroScope& ctx) -> coro::CoroTask<void> {
+        aggregators::AggregatorUtility agg;
+        auto gen = agg(ctx, input);
+        while (auto batch = co_await gen.next()) (void)batch;
+        co_return;
+    });
+}
+
+// A trace with a numeric arg ("level") and overlapping durations, so one trace
+// exercises numeric reductions, per-arg dyn, sketches (Pct/Hist), SetUnion, and
+// occupancy at once. Two names per cat make SetUnion(name) non-trivial.
+std::string write_agg_trace(TestEnvironment& env) {
+    std::string pfw = env.get_dir() + "/agg_parity.pfw";
+    {
+        std::ofstream ofs(pfw);
+        for (int i = 0; i < 30; ++i)
+            ofs << R"({"ph":"X","name":")" << (i % 2 ? "pread" : "read")
+                << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << (1000 + i)
+                << R"(,"dur":500,"args":{"level":)" << i << R"(}})" << "\n";
+        for (int i = 0; i < 20; ++i)
+            ofs << R"({"ph":"X","name":"fwrite","cat":"STDIO","pid":2,"tid":2,"ts":)"
+                << (2000 + i * 5) << R"(,"dur":300,"args":{"level":)"
+                << (100 + i) << R"(}})" << "\n";
+    }
+    std::string gz = pfw + ".gz";
+    dftu_utils_test::compress_file_to_gzip(pfw, gz);
+    fs::remove(pfw);
+    return gz;
+}
+
+// Two aggregation frames equal, pairing rows by their composite key text so a
+// differently-ordered group set still compares row for row.
+void frames_equal(const dataframe::DataFrame& a, const dataframe::DataFrame& b,
+                  const std::vector<std::string>& keys) {
+    REQUIRE(a.names.size() == b.names.size());
+    for (std::size_t i = 0; i < a.names.size(); ++i) {
+        CHECK(a.names[i] == b.names[i]);
+        CHECK(a.columns[i].type() == b.columns[i].type());
+    }
+    REQUIRE(a.num_rows() == b.num_rows());
+    auto keyed = [&](const dataframe::DataFrame& df) {
+        std::vector<std::pair<std::string, std::int64_t>> rows;
+        for (std::int64_t r = 0; r < df.num_rows(); ++r) {
+            std::string s;
+            for (const auto& k : keys) s += bstr(df, r, k) + '\x1f';
+            rows.emplace_back(std::move(s), r);
+        }
+        std::sort(rows.begin(), rows.end());
+        return rows;
+    };
+    const auto ar = keyed(a);
+    const auto br = keyed(b);
+    for (std::size_t i = 0; i < ar.size(); ++i)
+        for (const auto& name : a.names) {
+            const auto c = static_cast<std::size_t>(bcol(a, name));
+            if (a.columns[c].type() == dataframe::TypeId::String)
+                CHECK(bstr(a, ar[i].second, name) ==
+                      bstr(b, br[i].second, name));
+            else
+                CHECK(bnum(a, ar[i].second, name) ==
+                      doctest::Approx(bnum(b, br[i].second, name)));
+        }
+}
+
 }  // namespace
 
 TEST_SUITE("View") {
@@ -89,12 +201,12 @@ TEST_SUITE("View") {
                 .agg({{AggOp::Count, "", "n"}});
         };
 
-        dataframe::DataFrame base = make().collect().get();
+        dataframe::DataFrame base = make().collect().collect().get();
 
         // sort_by(n desc): the View plan must equal dataframe::sort_by on the
         // batch.
         dataframe::DataFrame on_view =
-            make().sort_by("n", true).collect().get();
+            make().sort_by("n", true).collect().collect().get();
         dataframe::DataFrame on_vec = dataframe::sort_by(base, "n", true);
         REQUIRE(on_view.num_rows() == on_vec.num_rows());
         for (std::int64_t i = 0; i < on_view.num_rows(); ++i) {
@@ -104,7 +216,8 @@ TEST_SUITE("View") {
         CHECK(bnum(on_view, 0, "n") == 30);  // posix first, descending
 
         // topk(n, 1): the single largest-count group.
-        dataframe::DataFrame tk_view = make().topk("n", 1).collect().get();
+        dataframe::DataFrame tk_view =
+            make().topk("n", 1).collect().collect().get();
         dataframe::DataFrame tk_vec = dataframe::topk(base, "n", 1, true);
         REQUIRE(tk_view.num_rows() == 1);
         CHECK(bnum(tk_view, 0, "n") == bnum(tk_vec, 0, "n"));
@@ -195,11 +308,13 @@ TEST_SUITE("View") {
                       .group_by(by_cat())
                       .agg(count())
                       .collect()
+                      .collect()
                       .get();
         auto rb = View::from_file(gz, idx)
                       .filter(posix)
                       .group_by(by_cat())
                       .agg(count())
+                      .collect()
                       .collect()
                       .get();
         auto rj = join_batches(ra, rb, 1, JoinType::INNER);
@@ -250,12 +365,14 @@ TEST_SUITE("View") {
                            .group_by({GroupKey::cat()})
                            .agg(F("dur").sum(), F("dur").mean(), F.any.count())
                            .collect()
+                           .collect()
                            .get();
         auto by_spec =
             View::from_file(gz, idx)
                 .group_by({GroupKey::cat()})
                 .agg(
                     {{AggOp::Sum, "dur"}, {AggOp::Mean, "dur"}, {AggOp::Count}})
+                .collect()
                 .collect()
                 .get();
         REQUIRE(by_expr.num_rows() == by_spec.num_rows());
@@ -302,6 +419,7 @@ TEST_SUITE("View") {
                        .group_by({GroupKey::cat()})
                        .agg(F.any.mean(), F.any.count())
                        .collect()
+                       .collect()
                        .get();
         REQUIRE(
             bhas(any, "level"));  // discovered numeric arg -> per-group mean
@@ -321,6 +439,7 @@ TEST_SUITE("View") {
                           .group_by({GroupKey::cat()})
                           .agg(F.any.sum())
                           .collect()
+                          .collect()
                           .get();
         REQUIRE(bhas(anysum, "sum_level"));
         std::map<std::string, double> slevel;
@@ -335,6 +454,7 @@ TEST_SUITE("View") {
             View::from_file(gz, idx)
                 .group_by({GroupKey::cat()})
                 .agg_numeric_args({AggSpec(AggOp::Pct, "", "p90", "", 0.9)})
+                .collect()
                 .collect()
                 .get();
         REQUIRE(bhas(anypct, "p90_level"));
@@ -365,6 +485,7 @@ TEST_SUITE("View") {
                      .agg({{AggOp::Count, "", "n"},
                            {AggOp::SetUnion, "name", "names"}})
                      .collect()
+                     .collect()
                      .get();
         CHECK(bhas(t, "names"));
         std::map<std::string, std::string> got;
@@ -376,6 +497,7 @@ TEST_SUITE("View") {
         // No grouping: one row unioning both names, sorted + SET_SEP-joined.
         auto whole = View::from_file(gz, idx)
                          .agg({{AggOp::SetUnion, "name", "names"}})
+                         .collect()
                          .collect()
                          .get();
         REQUIRE(whole.num_rows() == 1);
@@ -407,7 +529,7 @@ TEST_SUITE("View") {
                 .agg({{AggOp::SetUnion, "name", "names"}});
         };
         make().materialize().run().get();
-        auto back = make().collect().get();
+        auto back = make().collect().collect().get();
         std::map<std::string, std::string> rb;
         for (std::int64_t i = 0; i < back.num_rows(); ++i)
             rb[bstr(back, i, "cat")] = bstr(back, i, "names");
@@ -475,6 +597,7 @@ TEST_SUITE("View") {
                                {AggOp::Kurt, "dur", "ku"}})
                          .memory_budget(budget)
                          .collect()
+                         .collect()
                          .get();
             REQUIRE(t.num_rows() == 1);
             return std::vector<double>{bnum(t, 0, "m"), bnum(t, 0, "v"),
@@ -506,6 +629,7 @@ TEST_SUITE("View") {
                            {AggOp::Max, "dur", "mx"},
                            {AggOp::Sum, "dur", "sm"}})
                      .collect()
+                     .collect()
                      .get();
         REQUIRE(t.num_rows() == 1);
         // dur is a non-negative integer field, so the aggregates come back as
@@ -536,7 +660,7 @@ TEST_SUITE("View") {
         };
 
         // Direct fold path.
-        dataframe::DataFrame direct = make().collect().get();
+        dataframe::DataFrame direct = make().collect().collect().get();
         // Partial + merge path (serializes the accumulator and back).
         std::string p = make().aggregate_partial().get();
         dataframe::DataFrame merged = make().merge_partials_to_table({p});
@@ -576,6 +700,7 @@ TEST_SUITE("View") {
                          .agg({{AggOp::Pct, "dur", "p99", "", 0.99}})
                          .memory_budget(budget)
                          .collect()
+                         .collect()
                          .get();
             REQUIRE(t.num_rows() == 1);
             return bnum(t, 0, "p99");
@@ -600,6 +725,7 @@ TEST_SUITE("View") {
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Hist, "dur", "h"}})
                          .memory_budget(budget)
+                         .collect()
                          .collect()
                          .get();
             REQUIRE(t.num_rows() == 1);
@@ -639,6 +765,7 @@ TEST_SUITE("View") {
                          .agg({{AggOp::Count, "", "n"},
                                {AggOp::Sum, "dur", "total"}})
                          .memory_budget(budget)
+                         .collect()
                          .collect()
                          .get();
             std::vector<std::string> rows;
@@ -699,7 +826,7 @@ TEST_SUITE("View") {
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
-        auto expect = canon(make().collect().get());
+        auto expect = canon(make().collect().collect().get());
         REQUIRE(expect.size() >= 1);
 
         namespace detail = dftracer::utils::trace::views::detail;
@@ -707,7 +834,7 @@ TEST_SUITE("View") {
 
         // materialize() persists the result into the index's ROLLUP CF as a
         // byproduct of answering it.
-        CHECK(canon(make().materialize().collect().get()) == expect);
+        CHECK(canon(make().materialize().collect().collect().get()) == expect);
         {
             auto db = detail::open_rollup_db(
                 idx, rdb::RocksDatabase::OpenMode::ReadOnly);
@@ -718,7 +845,7 @@ TEST_SUITE("View") {
         }
 
         // A repeat query - even without materialize() - reads the rollup back.
-        CHECK(canon(make().collect().get()) == expect);
+        CHECK(canon(make().collect().collect().get()) == expect);
     }
 
     TEST_CASE("View - run() materializes the rollup without a table") {
@@ -761,7 +888,8 @@ TEST_SUITE("View") {
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
-        auto expect = canon(make().collect().get());  // fresh, no rollup yet
+        auto expect =
+            canon(make().collect().collect().get());  // fresh, no rollup yet
         REQUIRE(expect.size() >= 1);
 
         make().run().get();  // build-only terminal: materialize the rollup
@@ -773,7 +901,8 @@ TEST_SUITE("View") {
             it->SeekToFirst();
             CHECK(it->Valid());
         }
-        CHECK(canon(make().collect().get()) == expect);  // now reads the rollup
+        CHECK(canon(make().collect().collect().get()) ==
+              expect);  // now reads the rollup
     }
 
     TEST_CASE("View - a coarser query is served by rolling up a finer view") {
@@ -821,13 +950,14 @@ TEST_SUITE("View") {
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
-        auto expect = canon(coarse().collect().get());  // fresh, no rollup
+        auto expect =
+            canon(coarse().collect().collect().get());  // fresh, no rollup
         REQUIRE(expect.size() >= 1);
 
         fine().run().get();  // materialize only the finer rollup
 
         // The coarse query is answered by re-aggregating the finer rollup.
-        CHECK(canon(coarse().collect().get()) == expect);
+        CHECK(canon(coarse().collect().collect().get()) == expect);
     }
 
     TEST_CASE(
@@ -872,8 +1002,8 @@ TEST_SUITE("View") {
         };
 
         // Baselines from fresh scans, before any rollup exists.
-        auto expect_coarse = canon(at_bucket(1000).collect().get());
-        auto expect_fine = canon(at_bucket(100).collect().get());
+        auto expect_coarse = canon(at_bucket(1000).collect().collect().get());
+        auto expect_fine = canon(at_bucket(100).collect().collect().get());
         REQUIRE(expect_coarse.size() >= 1);
         REQUIRE(expect_coarse.size() <= expect_fine.size());  // coarser folds
 
@@ -881,8 +1011,9 @@ TEST_SUITE("View") {
 
         // The coarse query re-buckets the finer rollup; the fine query reads it
         // back exactly.
-        CHECK(canon(at_bucket(1000).collect().get()) == expect_coarse);
-        CHECK(canon(at_bucket(100).collect().get()) == expect_fine);
+        CHECK(canon(at_bucket(1000).collect().collect().get()) ==
+              expect_coarse);
+        CHECK(canon(at_bucket(100).collect().collect().get()) == expect_fine);
     }
 
     TEST_CASE(
@@ -926,8 +1057,8 @@ TEST_SUITE("View") {
         };
         const std::vector<ViewFile> both{{a, shared}, {b, shared}};
 
-        auto expect =
-            canon(view(both).collect().get());  // single-node baseline
+        auto expect = canon(
+            view(both).collect().collect().get());  // single-node baseline
         REQUIRE(expect.size() >= 1);
 
         // Each rank aggregates its shard; the coordinator reduces +
@@ -937,7 +1068,7 @@ TEST_SUITE("View") {
         view(both).materialize_partials({pa, pb}).get();
 
         // The full query now reads the distributed-built rollup.
-        CHECK(canon(view(both).collect().get()) == expect);
+        CHECK(canon(view(both).collect().collect().get()) == expect);
     }
 
     TEST_CASE("View - distributed partials merge like a single aggregation") {
@@ -975,6 +1106,146 @@ TEST_SUITE("View") {
         CHECK(ml[0].find(R"("user_pct":60)") != std::string::npos);
     }
 
+    TEST_CASE(
+        "View - fused multi-branch session collect matches per-branch engine "
+        "scan") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = write_agg_trace(env);
+        std::string idx = determine_index_path(gz, "");
+        View base = View::from_file(gz, idx);
+
+        // Mixed keys/ops over one shared scan: numeric + a sketch + SetUnion,
+        // an auto-numeric dyn branch, and an occupancy branch.
+        View va = base.group_by({GroupKey::cat()})
+                      .agg({{AggOp::Count, "", "n"},
+                            {AggOp::Mean, "dur", "md"},
+                            {AggOp::Pct, "dur", "p90", "", 0.9},
+                            {AggOp::SetUnion, "name", "names"}});
+        View vb = base.group_by({GroupKey::name()})
+                      .agg({{AggOp::Count, "", "n"}})
+                      .agg_numeric_args();
+        View vc = base.group_by({GroupKey::cat()})
+                      .agg({{AggOp::Sum, "dur", "sd"},
+                            {AggOp::Busy, "", "busy"},
+                            {AggOp::Active, "", "active"}});
+
+        auto run = base.session();
+        auto a = run.collect(va);
+        auto b = run.collect(vb);
+        auto c = run.collect(vc);
+        run.execute().get();
+
+        frames_equal(*a, engine_collect(va), {"cat"});
+        frames_equal(*b, engine_collect(vb), {"name"});
+        frames_equal(*c, engine_collect(vc), {"cat"});
+    }
+
+    TEST_CASE(
+        "View - distributed AggState partial round-trip matches a single "
+        "scan") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = write_agg_trace(env);
+        std::string idx = determine_index_path(gz, "");
+        View base = View::from_file(gz, idx);
+
+        auto check = [&](View v, const std::vector<std::string>& keys) {
+            std::string p = v.aggregate_partial().get();
+            dataframe::DataFrame merged = v.merge_partials_to_table({p});
+            frames_equal(merged, engine_collect(v), keys);
+        };
+        // Numeric reductions, a percentile sketch, and SetUnion survive the
+        // serialize/merge/finalize round-trip.
+        check(base.group_by({GroupKey::cat()})
+                  .agg({{AggOp::Sum, "dur", "s"},
+                        {AggOp::Mean, "dur", "m"},
+                        {AggOp::Pct, "dur", "p90", "", 0.9},
+                        {AggOp::SetUnion, "name", "names"}}),
+              {"cat"});
+        // Occupancy delta-map survives the wire.
+        check(base.group_by({GroupKey::cat()})
+                  .agg({{AggOp::Busy, "", "busy"}, {AggOp::Active, "", "act"}}),
+              {"cat"});
+        // Auto-numeric dyn survives the name-union across the round-trip.
+        check(base.group_by({GroupKey::name()})
+                  .agg({{AggOp::Count, "", "n"}})
+                  .agg_numeric_args(),
+              {"name"});
+
+        // Hist (a list<struct> column) round-trips bin for bin.
+        View vh =
+            base.group_by({GroupKey::cat()}).agg({{AggOp::Hist, "dur", "h"}});
+        dataframe::DataFrame mh =
+            vh.merge_partials_to_table({vh.aggregate_partial().get()});
+        dataframe::DataFrame eh = engine_collect(vh);
+        REQUIRE(mh.num_rows() == eh.num_rows());
+        std::map<std::string, std::int64_t> mrow, erow;
+        for (std::int64_t r = 0; r < mh.num_rows(); ++r)
+            mrow[bstr(mh, r, "cat")] = r;
+        for (std::int64_t r = 0; r < eh.num_rows(); ++r)
+            erow[bstr(eh, r, "cat")] = r;
+        for (const auto& [cat, r] : mrow) {
+            auto mb = hist_bins(mh, r, "h");
+            auto eb = hist_bins(eh, erow[cat], "h");
+            REQUIRE(mb.size() == eb.size());
+            for (std::size_t i = 0; i < mb.size(); ++i) {
+                CHECK(mb[i].lower == doctest::Approx(eb[i].lower));
+                CHECK(mb[i].upper == doctest::Approx(eb[i].upper));
+                CHECK(mb[i].count == eb[i].count);
+            }
+        }
+    }
+
+    TEST_CASE(
+        "View - counter AggState partial merge matches a single-scan export") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string a = create_counter_file(env, "a", {40, 40});
+        std::string b = create_counter_file(env, "b", {80, 80});
+        std::string ia = determine_index_path(a, "");
+        std::string ib = determine_index_path(b, "");
+        auto view = [](std::vector<ViewFile> files) {
+            return View::from_files(std::move(files))
+                .phase(Phase::Counters)
+                .group_by({GroupKey::name()})
+                .agg_numeric_args();
+        };
+
+        std::string pa = view({{a, ia}}).aggregate_partial().get();
+        std::string pb = view({{b, ib}}).aggregate_partial().get();
+        StringSink merged;
+        view({}).merge_counter_partials({pa, pb}, merged);
+
+        StringSink single;
+        view({{a, ia}, {b, ib}}).export_counters(single).get();
+
+        auto ml = merged.lines();
+        auto sl = single.lines();
+        std::sort(ml.begin(), ml.end());
+        std::sort(sl.begin(), sl.end());
+        CHECK(ml == sl);
+    }
+
+    TEST_CASE("View - an aggregate partial with a bad wire tag is rejected") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = write_agg_trace(env);
+        std::string idx = determine_index_path(gz, "");
+        View v = View::from_file(gz, idx)
+                     .group_by({GroupKey::cat()})
+                     .agg({{AggOp::Count, "", "n"}});
+
+        std::string good = v.aggregate_partial().get();
+        REQUIRE(!good.empty());
+        std::string bad = good;
+        bad[0] = static_cast<char>(0x7e);  // wrong version tag
+        CHECK_THROWS_AS(v.merge_partials_to_table({bad}), DFTUtilsException);
+        // A present-but-empty partial (no tag byte) is also rejected loudly.
+        CHECK_THROWS_AS(v.merge_partials_to_table({std::string_view()}),
+                        DFTUtilsException);
+    }
+
     TEST_CASE("View - group_by + time_bucket yields per-interval rows") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
@@ -987,6 +1258,7 @@ TEST_SUITE("View") {
                          .group_by({GroupKey::cat()})
                          .time_bucket(1000)
                          .agg({{AggOp::Count, "", "n"}})
+                         .collect()
                          .collect()
                          .get();
 
@@ -1012,7 +1284,7 @@ TEST_SUITE("View") {
         std::string idx = determine_index_path(gz, "");
 
         auto first_bucket = [&](AggregatedView v) {
-            auto t = v.agg({{AggOp::Count, "", "n"}}).collect().get();
+            auto t = v.agg({{AggOp::Count, "", "n"}}).collect().collect().get();
             std::int64_t lo = std::numeric_limits<std::int64_t>::max();
             for (std::int64_t i = 0; i < t.num_rows(); ++i)
                 lo = std::min<std::int64_t>(
@@ -1043,6 +1315,7 @@ TEST_SUITE("View") {
         auto table = View::from_file(gz, idx)
                          .agg({{AggOp::Count, "", "n"}})
                          .collect()
+                         .collect()
                          .get();
 
         REQUIRE(table.num_rows() == 1);
@@ -1072,6 +1345,7 @@ TEST_SUITE("View") {
                          .group_by({GroupKey::cat()})
                          .agg({{AggOp::Max, "dur", "max_dur"},
                                {AggOp::ArgMax, "name", "longest", "dur"}})
+                         .collect()
                          .collect()
                          .get();
 
@@ -1109,6 +1383,7 @@ TEST_SUITE("View") {
         auto table = View::from_file(gz, idx)
                          .group_by({GroupKey::rank()})
                          .agg({{AggOp::Count, "", "n"}})
+                         .collect()
                          .collect()
                          .get();
 
@@ -1264,100 +1539,6 @@ TEST_SUITE("View") {
         CHECK(stats.truncated == false);
     }
 
-    TEST_CASE("View - ChunkStatsSource matches a full scan (A/B)") {
-        TestEnvironment env(200);
-        REQUIRE(env.is_valid());
-        std::string gz = create_mixed_trace(env, 30, 20);
-        std::string idx = determine_index_path(gz, "");
-
-        View base = View::from_file(gz, idx)
-                        .group_by({GroupKey::cat()})
-                        .agg({{AggOp::Count, "dur", "n"},
-                              {AggOp::Sum, "dur", "sum_dur"},
-                              {AggOp::Min, "dur", "min_dur"},
-                              {AggOp::Max, "dur", "max_dur"}});
-
-        auto slow = base.collect().get();
-        ChunkStatsSource source;
-        auto fast = base.with_partial_source(&source).collect().get();
-
-        auto row_of = [](const dataframe::DataFrame& b,
-                         const std::string& cat) -> std::int64_t {
-            for (std::int64_t i = 0; i < b.num_rows(); ++i)
-                if (bstr(b, i, "cat") == cat) return i;
-            return -1;
-        };
-        REQUIRE(slow.num_rows() == fast.num_rows());
-        for (const char* c : {"posix", "stdio"}) {
-            const std::int64_t s = row_of(slow, c);
-            const std::int64_t f = row_of(fast, c);
-            REQUIRE(s >= 0);
-            REQUIRE(f >= 0);
-            for (const char* col : {"n", "sum_dur", "min_dur", "max_dur"})
-                CHECK(bnum(fast, f, col) ==
-                      doctest::Approx(bnum(slow, s, col)));
-        }
-    }
-
-    TEST_CASE("View - ChunkStatsSource reads stored per-key sketches") {
-        using dftracer::utils::trace::indexing::ChunkStatistics;
-        using dftracer::utils::utilities::indexer::IndexDatabase;
-        using dftracer::utils::utilities::indexer::internal::get_logical_path;
-
-        auto dir = make_unique_test_path("source");
-        fs::create_directories(dir);
-        const std::string index_path = (dir / "idx").string();
-        const std::string file_path = (dir / "trace.pfw.gz").string();
-        {
-            IndexDatabase db(index_path);
-            auto w = db.begin_write();
-            w->init_schema();
-            int fid =
-                w->get_or_create_file_info(get_logical_path(file_path), 10000);
-            ChunkStatistics stats;
-            for (std::uint64_t dur : {10u, 20u, 30u})
-                stats.update_from_event("read", "POSIX", 1, 1, 1000, dur, true);
-            stats.min_timestamp_us = 1000;
-            stats.max_timestamp_us = 2000;
-            w->insert_chunk_statistics(fid, 0, stats);
-            w->commit();
-        }
-
-        namespace vdetail = dftracer::utils::trace::views::detail;
-        vdetail::ViewPlan plan;
-        plan.group_by = {GroupKey::cat()};
-        plan.agg = {{AggOp::Count, "", "n"},
-                    {AggOp::Sum, "dur", "total"},
-                    {AggOp::Min, "dur", "mn"},
-                    {AggOp::Max, "dur", "mx"}};
-        vdetail::ensure_schema(plan);
-
-        ChunkStatsSource source;
-        vdetail::PartialRequest req;
-        req.files.push_back(ViewFile{file_path, index_path, 0, 0, 0});
-        req.schema = plan.schema.get();
-        req.group_by = plan.group_by;
-        req.agg_field = "dur";
-
-        std::vector<vdetail::AggAccum> got;
-        auto res = source.lookup(
-            req, [&](vdetail::AggAccum&& a) { got.push_back(std::move(a)); });
-
-        CHECK(res.handled);
-        REQUIRE(got.size() == 1);
-        REQUIRE(got[0].keys.size() == 1);
-        CHECK(got[0].keys[0] == "posix");
-        CHECK(got[0].count == 3);
-        const int fi = vdetail::schema_field_index(*plan.schema, "dur");
-        REQUIRE(fi >= 0);
-        CHECK(got[0].fields[fi].n == 3);
-        CHECK(got[0].fields[fi].sum == doctest::Approx(60));
-        CHECK(got[0].fields[fi].min == doctest::Approx(10));
-        CHECK(got[0].fields[fi].max == doctest::Approx(30));
-        REQUIRE(res.covered_chunks.size() == 1);
-        CHECK(res.covered_chunks[0].second == 0);
-    }
-
     TEST_CASE(
         "View - phase(Events) vs phase(Counters) separate ph=X and ph=C") {
         TestEnvironment env(200);
@@ -1429,10 +1610,8 @@ TEST_SUITE("View") {
         "View - occupancy busy holds its invariants and honors occ_cell") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        // "overlap" has two overlapping intervals (union 150 < sum 200), so
-        // busy clamps to the makespan; "serial" has two disjoint ones, so busy
-        // clamps to sum(dur). occ_cell divides every ts/dur, so the grid is
-        // exact.
+        // "overlap" has two overlapping intervals (exact union 150 < sum
+        // 200); "serial" has two disjoint ones (union == sum(dur)).
         std::string pfw = env.get_dir() + "/occ.pfw";
         {
             std::ofstream ofs(pfw);
@@ -1461,6 +1640,7 @@ TEST_SUITE("View") {
                       {AggOp::Concurrency, "", "concurrency"},
                       {AggOp::Utilization, "", "utilization"}})
                 .collect()
+                .collect()
                 .get();
 
         REQUIRE(bhas(b, "busy_cell_us"));
@@ -1475,13 +1655,13 @@ TEST_SUITE("View") {
         REQUIRE(se >= 0);
 
         CHECK(bnum(b, ov, "busy_cell_us") == 5);
-        // overlap: union 150 == makespan, so busy is clamped to 150.
+        // overlap: exact union == 150 (< sum(dur) == 200); the old bitmap
+        // regression drifted this toward 200 as input grew.
         CHECK(bnum(b, ov, "sum_dur") == 200);
         CHECK(bnum(b, ov, "busy") == 150);
         CHECK(bnum(b, ov, "concurrency") == doctest::Approx(200.0 / 150.0));
         CHECK(bnum(b, ov, "utilization") == doctest::Approx(1.0));
-        // serial: disjoint, so busy is clamped to sum(dur) and concurrency
-        // is 1.
+        // serial: disjoint, so busy == sum(dur) and concurrency == 1.
         CHECK(bnum(b, se, "busy") == 200);
         CHECK(bnum(b, se, "concurrency") == doctest::Approx(1.0));
 
@@ -1490,6 +1670,258 @@ TEST_SUITE("View") {
             CHECK(bnum(b, i, "concurrency") >= 1.0 - 1e-9);
             CHECK(bnum(b, i, "utilization") <= 1.0 + 1e-9);
         }
+    }
+
+    // Exact interval union of half-open [ts, ts+dur) events.
+    static std::uint64_t exact_union(
+        const std::vector<std::pair<long, long>>& iv) {
+        std::vector<std::pair<long, long>> spans;
+        for (const auto& [ts, dur] : iv) spans.emplace_back(ts, ts + dur);
+        std::sort(spans.begin(), spans.end());
+        std::uint64_t total = 0;
+        long cur_s = 0, cur_e = 0;
+        bool open = false;
+        for (const auto& [s, e] : spans) {
+            if (!open) {
+                cur_s = s;
+                cur_e = e;
+                open = true;
+            } else if (s <= cur_e) {
+                if (e > cur_e) cur_e = e;
+            } else {
+                total += static_cast<std::uint64_t>(cur_e - cur_s);
+                cur_s = s;
+                cur_e = e;
+            }
+        }
+        if (open) total += static_cast<std::uint64_t>(cur_e - cur_s);
+        return total;
+    }
+
+    static void write_occ_trace(const std::string& pfw,
+                                const std::vector<std::pair<long, long>>& iv,
+                                const char* name = "e") {
+        std::ofstream ofs(pfw);
+        for (const auto& [ts, dur] : iv) {
+            ofs << R"({"ph":"X","name":")" << name
+                << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
+                << R"(,"dur":)" << dur << R"(,"args":{}})" << "\n";
+        }
+    }
+
+    TEST_CASE("View - occupancy busy is the exact union, not sum(dur)") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        // Heavy overlap: many events over the same window; the old per-bucket
+        // coverage bitmap coarsened cells on a wide window and drifted busy
+        // toward sum(dur). The exact delta-map sweep must not.
+        std::vector<std::pair<long, long>> iv;
+        for (int i = 0; i < 50; ++i) iv.emplace_back(1000 + i, 500);
+        const std::uint64_t expect_union = exact_union(iv);
+        std::uint64_t sum_dur = 0;
+        for (const auto& [s, d] : iv) sum_dur += static_cast<std::uint64_t>(d);
+        REQUIRE(expect_union < sum_dur);
+
+        std::string pfw = env.get_dir() + "/occ_dense.pfw";
+        write_occ_trace(pfw, iv);
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        std::string idx = determine_index_path(gz, "");
+        dataframe::DataFrame b = View::from_file(gz, idx)
+                                     .time_range(0, 1000000)
+                                     .group_by({GroupKey::name()})
+                                     .agg({{AggOp::Sum, "dur", "sum_dur"},
+                                           {AggOp::Busy, "", "busy"}})
+                                     .collect()
+                                     .collect()
+                                     .get();
+        REQUIRE(b.num_rows() == 1);
+        CHECK(bnum(b, 0, "sum_dur") == static_cast<double>(sum_dur));
+        CHECK(bnum(b, 0, "busy") == static_cast<double>(expect_union));
+        CHECK(bnum(b, 0, "busy") < bnum(b, 0, "sum_dur"));
+    }
+
+    TEST_CASE("View - occupancy active is the exact peak concurrency") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        // 4 events all overlapping at t=1150: peak depth is exactly 4.
+        std::vector<std::pair<long, long>> iv = {
+            {1000, 300}, {1050, 300}, {1100, 300}, {1149, 300}};
+        const std::uint64_t expect_union = exact_union(iv);
+
+        std::string pfw = env.get_dir() + "/occ_peak.pfw";
+        write_occ_trace(pfw, iv);
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        std::string idx = determine_index_path(gz, "");
+        dataframe::DataFrame b =
+            View::from_file(gz, idx)
+                .time_range(0, 1000000)
+                .group_by({GroupKey::name()})
+                .agg({{AggOp::Busy, "", "busy"}, {AggOp::Active, "", "active"}})
+                .collect()
+                .collect()
+                .get();
+        REQUIRE(b.num_rows() == 1);
+        CHECK(bnum(b, 0, "busy") == static_cast<double>(expect_union));
+        CHECK(bnum(b, 0, "active") == 4.0);
+    }
+
+    TEST_CASE(
+        "View - occupancy on non-overlapping intervals is exact and serial") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::vector<std::pair<long, long>> iv = {
+            {1000, 100}, {2000, 100}, {3000, 100}};
+        std::uint64_t sum_dur = 300;
+
+        std::string pfw = env.get_dir() + "/occ_serial.pfw";
+        write_occ_trace(pfw, iv);
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        std::string idx = determine_index_path(gz, "");
+        dataframe::DataFrame b = View::from_file(gz, idx)
+                                     .time_range(0, 1000000)
+                                     .group_by({GroupKey::name()})
+                                     .agg({{AggOp::Sum, "dur", "sum_dur"},
+                                           {AggOp::Busy, "", "busy"},
+                                           {AggOp::Active, "", "active"}})
+                                     .collect()
+                                     .collect()
+                                     .get();
+        REQUIRE(b.num_rows() == 1);
+        CHECK(bnum(b, 0, "sum_dur") == static_cast<double>(sum_dur));
+        CHECK(bnum(b, 0, "busy") == static_cast<double>(sum_dur));
+        CHECK(bnum(b, 0, "active") == 1.0);
+    }
+
+    TEST_CASE("View - occ_cell tolerance bounds busy over the exact union") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        // Two intervals with a small gap; a coarse cell can merge them into
+        // one covered span, so busy sits in [exact, exact + cell].
+        std::vector<std::pair<long, long>> iv = {{1000, 90}, {1100, 90}};
+        const std::uint64_t expect_exact = exact_union(iv);
+
+        std::string pfw = env.get_dir() + "/occ_tol.pfw";
+        write_occ_trace(pfw, iv);
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        std::string idx = determine_index_path(gz, "");
+
+        {
+            dataframe::DataFrame b0 = View::from_file(gz, idx)
+                                          .time_range(0, 1000000)
+                                          .group_by({GroupKey::name()})
+                                          .agg({{AggOp::Busy, "", "busy"}})
+                                          .collect()
+                                          .collect()
+                                          .get();
+            REQUIRE(bhas(b0, "busy_cell_us"));
+            CHECK(bnum(b0, 0, "busy_cell_us") == 0);
+            CHECK(bnum(b0, 0, "busy") == static_cast<double>(expect_exact));
+        }
+        {
+            const std::uint64_t cell = 50;
+            dataframe::DataFrame b1 = View::from_file(gz, idx)
+                                          .time_range(0, 1000000)
+                                          .occ_cell(cell)
+                                          .group_by({GroupKey::name()})
+                                          .agg({{AggOp::Busy, "", "busy"}})
+                                          .collect()
+                                          .collect()
+                                          .get();
+            REQUIRE(bhas(b1, "busy_cell_us"));
+            CHECK(bnum(b1, 0, "busy_cell_us") == static_cast<double>(cell));
+            CHECK(bnum(b1, 0, "busy") >= static_cast<double>(expect_exact));
+            CHECK(bnum(b1, 0, "busy") <=
+                  static_cast<double>(expect_exact + 2 * cell));
+        }
+    }
+
+    TEST_CASE(
+        "View - occupancy over a built tier declines the tier and matches the "
+        "scan") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = write_agg_trace(env);
+        std::string idx = determine_index_path(gz, "");
+        build_tier_index(gz);  // an EVENT tier answerable() would try
+
+        auto make = [&] {
+            return View::from_file(gz, idx)
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Busy, "", "busy"},
+                      {AggOp::Active, "", "active"},
+                      {AggOp::Count, "", "n"}});
+        };
+        // No time_range: answerable() would previously serve occupancy from the
+        // tier's per-key stats, which carry no per-event intervals -> zeros.
+        dataframe::DataFrame tier = engine_collect(make());
+        dataframe::DataFrame scan = scan_only(make());
+        frames_equal(tier, scan, {"cat"});
+        double max_busy = 0;
+        for (std::int64_t r = 0; r < tier.num_rows(); ++r)
+            max_busy = std::max(max_busy, bnum(tier, r, "busy"));
+        CHECK(max_busy > 0);  // a tier-zeroed answer would fail here
+    }
+
+    TEST_CASE(
+        "View - session occupancy branch declines the tier and matches the "
+        "scan") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = write_agg_trace(env);
+        std::string idx = determine_index_path(gz, "");
+        build_tier_index(gz);
+        View base = View::from_file(gz, idx);
+
+        auto occ = [&](View v) {
+            return v.group_by({GroupKey::cat()})
+                .agg({{AggOp::Busy, "", "busy"},
+                      {AggOp::Active, "", "active"},
+                      {AggOp::Count, "", "n"}});
+        };
+        auto run = base.session();
+        auto got = run.collect(occ(base));
+        run.execute().get();
+
+        dataframe::DataFrame scan = scan_only(occ(base));
+        frames_equal(*got, scan, {"cat"});
+        double max_busy = 0;
+        for (std::int64_t r = 0; r < got->num_rows(); ++r)
+            max_busy = std::max(max_busy, bnum(*got, r, "busy"));
+        CHECK(max_busy > 0);
+    }
+
+    TEST_CASE(
+        "View - a scaled-field tier agg declines so time_scale matches the "
+        "scan") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = write_agg_trace(env);
+        std::string idx = determine_index_path(gz, "");
+        build_tier_index(gz);
+
+        auto make = [&] {
+            return View::from_file(gz, idx)
+                .time_scale(0.001)
+                .group_by({GroupKey::cat()})
+                .agg({{AggOp::Sum, "dur", "total"},
+                      {AggOp::Mean, "dur", "avg"},
+                      {AggOp::Count, "", "n"}});
+        };
+        // The tier stores raw dur; without declining it would answer an
+        // unscaled Sum/Mean while the scan scales dur by time_scale.
+        dataframe::DataFrame tier = engine_collect(make());
+        dataframe::DataFrame scan = scan_only(make());
+        frames_equal(tier, scan, {"cat"});
+        CHECK(bnum(tier, 0, "total") ==
+              doctest::Approx(bnum(scan, 0, "total")));
     }
 
     TEST_CASE("View - group_by resolves any field, top-level and nested") {
@@ -1520,6 +1952,7 @@ TEST_SUITE("View") {
                                          .group_by({gk})
                                          .agg({{AggOp::Count, "", "n"}})
                                          .collect()
+                                         .collect()
                                          .get();
             std::map<std::string, double> m;
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
@@ -1548,6 +1981,7 @@ TEST_SUITE("View") {
             View::from_file(gz, idx)
                 .group_by({GroupKey::field("args.meta.host")})
                 .agg({{AggOp::Mean, "args.n.v", "mv"}})
+                .collect()
                 .collect()
                 .get();
         std::map<std::string, double> mv;
@@ -1583,6 +2017,7 @@ TEST_SUITE("View") {
                                          .group_by({gk})
                                          .agg({{AggOp::Count, "", "n"}})
                                          .collect()
+                                         .collect()
                                          .get();
             std::map<std::string, double> m;
             for (std::int64_t i = 0; i < b.num_rows(); ++i)
@@ -1602,5 +2037,30 @@ TEST_SUITE("View") {
         auto by_arg = counts("type", GroupKey::of_arg("type"));
         CHECK(by_arg["1"] == 1);
         CHECK(by_arg.count("mpi") == 0);
+    }
+
+    TEST_CASE("View - time_metric reads the CM record, no scan") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string pfw = env.get_dir() + "/time_metric.pfw";
+        {
+            std::ofstream ofs(pfw);
+            ofs << R"({"name":"CM","ph":"M","cat":"dftracer","pid":0,"tid":0,)"
+                   R"("args":{"name":"time_metric","value":"NS"}})"
+                << "\n";
+            int ts = 1000;
+            for (int i = 0; i < 20; ++i) {
+                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                       R"("tid":10,"ts":)"
+                    << ts << R"(,"dur":5,"args":{}})" << "\n";
+                ts += 100;
+            }
+        }
+        std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        std::string idx = determine_index_path(gz, "");
+
+        CHECK(View::from_file(gz, idx).time_metric() == trace::TimeMetric::NS);
     }
 }

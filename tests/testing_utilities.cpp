@@ -302,6 +302,72 @@ std::string TestEnvironment::create_dft_test_gzip_file(int num_events) {
 
     return gz_file;
 }
+
+void set_test_library_path(const std::string& binary) {
+    const fs::path build_root =
+        fs::absolute(binary).parent_path().parent_path();
+    const std::string libs = (build_root / "lib").string() + ":" +
+                             (build_root / "_deps" / "rocksdb-build").string();
+    ::setenv("LD_LIBRARY_PATH", libs.c_str(), 1);
+}
+
+std::string run_process_capture(const std::string& binary,
+                                const std::vector<std::string>& args,
+                                bool capture_stderr, int* exit_code) {
+    if (exit_code) *exit_code = -1;
+    int fds[2];
+    if (::pipe(fds) != 0) return "";
+
+    std::vector<const char*> argv;
+    argv.push_back(binary.c_str());
+    for (const auto& a : args) argv.push_back(a.c_str());
+    argv.push_back(nullptr);
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(fds[0]);
+        ::close(fds[1]);
+        return "";
+    }
+    if (pid == 0) {
+        ::close(fds[0]);
+        ::dup2(fds[1], STDOUT_FILENO);
+        if (capture_stderr) ::dup2(fds[1], STDERR_FILENO);
+        ::close(fds[1]);
+        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
+        ::_exit(127);
+    }
+
+    ::close(fds[1]);
+    // Drain to EOF before waiting: a child writing more than one pipe buffer
+    // blocks until it is read, so waiting first would deadlock.
+    std::string out;
+    char buf[4096];
+    ssize_t n;
+    while ((n = ::read(fds[0], buf, sizeof(buf))) > 0)
+        out.append(buf, static_cast<std::size_t>(n));
+    ::close(fds[0]);
+
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    if (exit_code) *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    return out;
+}
+
+std::string gz_first_line(const std::string& gz_path) {
+    gzFile f = ::gzopen(gz_path.c_str(), "rb");
+    if (!f) return "";
+    std::string line;
+    char buf[65536];
+    while (::gzgets(f, buf, sizeof(buf)) != nullptr) {
+        line = buf;
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+            line.pop_back();
+        if (!line.empty()) break;
+    }
+    ::gzclose(f);
+    return line;
+}
 }  // namespace dftu_utils_test
 
 // C API implementations

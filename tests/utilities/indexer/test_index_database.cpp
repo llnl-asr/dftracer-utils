@@ -472,4 +472,24 @@ TEST_SUITE("IndexDatabase staleness") {
         CHECK(db.check_freshness(a) ==
               IndexDatabase::Freshness::SchemaOutdated);
     }
+
+    TEST_CASE("a pre-v15 (v14) index is detected stale, not misread") {
+        auto root = dftu_utils_test::make_unique_test_path("stale_v14");
+        fs::create_directories(root);
+        auto a = write_file(root / "a.pfw", "aaa");
+
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        db.register_files({a});
+
+        db.db()->put("_schema_version",
+                     dftracer::utils::rocksdb::KeyCodec::encode_be32(14));
+
+        CHECK(db.schema_outdated());
+        CHECK(db.check_freshness(a) ==
+              IndexDatabase::Freshness::SchemaOutdated);
+        auto result = db.find_stale_files({a});
+        CHECK(result.schema_outdated);
+        CHECK(result.stale());
+    }
 }

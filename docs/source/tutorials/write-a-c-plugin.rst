@@ -47,12 +47,12 @@ That is 100 events for ``pid`` 2 (every third event) and 200 for ``pid`` 1.
    events_per_pid.cpp
 
 The generated file already compiles and links: a struct with a constructor
-taking ``const Config&``, a ``step(const dftu_batch&, Host)`` that counts
-events by ``pid`` into a host map, an empty ``merge`` (the host owns and
-merges the map for you), and the ``dftracer_plugin`` factory that
-``make_plugin<Slice>`` fills in. The rest of this lesson replaces its body
-with the ergonomic ``Batch``/``Event``/``Map`` surface instead of the raw
-``dftu_batch`` it starts with.
+taking ``const Config&``, a ``step(const dftu_dataframe*, Host)`` that counts
+events by ``pid`` into a host accumulator, an empty ``merge`` (the host owns
+and merges the accumulator for you), and the ``dftracer_plugin`` factory that
+``make_plugin<Slice>`` fills in. The rest of this lesson
+replaces its body with the ergonomic ``Batch``/``Event`` row cursor instead of
+reading the raw ``dftu_dataframe`` columns by hand.
 
 3. Write the fold
 ---------------------
@@ -72,28 +72,31 @@ Replace ``events_per_pid.cpp`` with:
    struct EventsPerPid {
        explicit EventsPerPid(const Config&) {}
 
-       void step(const Batch& b, Host h) {
-           auto hits = h.counter_map("hits", Key<std::uint64_t>{});
-           for (const Event& e : b) hits[e.pid()] += 1;
+       void step(const dftu_dataframe* df, Host h) {
+           h.agg("hits", {"pid"}, {agg::count("events")}).accumulate(df);
        }
 
        void merge(EventsPerPid&) {}
        void finalize(Host) {}
    };
 
-   extern "C" dftu_plugin* dftracer_plugin(const dftu_value* config) {
+   extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h,
+                                           const dftu_value* config) {
+       (void)h;
        return make_plugin<EventsPerPid>(config);
    }
 
-``Batch`` and ``Event`` (over the same ``plugin.h``) are zero-copy typed views
-that make ``for (const Event& e : b)`` and ``e.pid()`` read like normal C++
-instead of indexing the raw ``dftu_batch``/``dftu_event`` C structs.
-``h.counter_map(name, Key<KeyTs...>{})`` is shorthand for
-``h.map(name, Monoid::Counter, Key<KeyTs...>{})``: it get-or-creates a
-host-owned mergeable map with a one-``uint64_t`` key schema and a counter
-value. ``hits[e.pid()] += 1`` is a write-only accumulator - the host owns the
-map and merges every worker's contributions, so ``merge`` stays empty exactly
-as in the scaffold. ``plugin.h`` is header-only; nothing links against it.
+A ``step`` taking a ``const dftu_dataframe*`` reads straight off the columns:
+the host materializes each scanned batch into columns and hands the whole
+batch over at once, N rows in scan order being N events.
+``h.agg(name, keys, cols)`` get-or-creates the host-owned mergeable accumulator
+behind that name, grouping by the named key columns and computing one output
+column per ``AggCol``; the ``agg::`` namespace has a factory per aggregate
+(``count``, ``sum``, ``mean``, ``pct``, ``argmax``, ``busy``, ...), each taking
+exactly the arguments its op consumes. The accumulator is write-only - the host
+merges every worker's contributions and finalizes the result, so ``merge``
+stays empty exactly as in the scaffold. ``plugin.h`` is header-only; nothing
+links against it.
 
 4. Compile it
 -----------------
@@ -128,11 +131,11 @@ and reports the scan on stderr:
 
 The 300 scanned events are the fold's input; the per-``pid`` counts (200 for
 ``pid`` 1, 100 for ``pid`` 2) are merged in-process by the host, inside the
-``hits`` map - ``dftracer_run`` itself only reports the scan, not the map
-contents. Use ``-d <directory>`` in place of ``--files`` to fold over a whole
-tree instead of one file. To read the merged map values programmatically, load
-the same ``.so`` through Python's ``PluginHost`` - see
-:doc:`extending-the-engine` and :doc:`../plugins`.
+``hits`` accumulator - ``dftracer_run`` itself only reports the scan, not the
+result. Use ``-d <directory>`` in place of ``--files`` to fold over a whole
+tree instead of one file. To read the merged result programmatically, load the
+same ``.so`` through Python's ``Plugins`` - see :doc:`extending-the-engine`
+and :doc:`../plugins`.
 
 What you learned
 -------------------
@@ -140,12 +143,12 @@ What you learned
 - ``dftracer_plugin new <name> --cpp`` scaffolds a compiling plugin source
   against ``plugin.h``; ``dftracer_plugin cflags`` prints the exact compile
   flags, and ``dftracer_plugin build <src>`` runs them for you.
-- The ergonomic surface - ``Batch``/``Event`` for zero-copy typed iteration,
-  ``Host::counter_map``/``Map``/``Ref`` for a mergeable per-key accumulator -
-  reads like ordinary C++ over the same ABI the raw ``dftu_batch`` scaffold
-  uses.
+- The ergonomic surface - ``Batch``/``Event`` for zero-copy typed row
+  iteration, ``Host::agg``/``Agg``/``agg::`` for a mergeable per-key
+  accumulator - reads like ordinary C++ over the same ``dftu_dataframe`` ABI
+  the raw scaffold uses.
 - ``dftracer_run --plugin <so> --files <trace>`` (or ``-d <dir>``) runs the
   compiled plugin over one shared scan with no Python involved.
 
-For the plugin ABI in full (needs flags, all ``Monoid`` kinds, nested maps,
-handles, ports), see :doc:`../plugins`.
+For the plugin ABI in full (the ``reads`` column projection, the whole
+aggregate op table, ports), see :doc:`../plugins`.

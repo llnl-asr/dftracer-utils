@@ -139,9 +139,11 @@ Data routes
 Visualization routes
 ~~~~~~~~~~~~~~~~~~~~~
 
-The ``/api/viz/*`` routes back the trace viewer. Most take a shared time window:
-``begin`` (default ``0``), ``end`` (default ``999999999``), and ``summary`` (the
-level-of-detail level, ``1`` = full detail).
+The ``/api/viz/*`` routes back the trace viewer. Most take a shared time window
+- ``begin`` and ``end`` (required; pass ``0``/``999999999`` for the whole
+trace) - and a ``summary`` level-of-detail knob (``1`` = full detail).
+``/api/viz/breaks`` and ``/api/viz/proctree`` need no time window; they look at
+the whole trace.
 
 .. list-table::
    :header-rows: 1

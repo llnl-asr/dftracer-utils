@@ -76,19 +76,20 @@ Task Naming
 
 ``submit()`` takes only the callable and its positional/keyword arguments;
 there is no ``name`` parameter. The task name is derived automatically from
-the callable and its call-site source location:
+the callable's qualified name plus, when available, its definition's source
+location (``file:line``):
 
 .. code-block:: python
 
    def my_function(): ...
-   rt.submit(my_function)           # name = "my_function"
+   rt.submit(my_function)           # name = "my_function (script.py:1)"
 
    class Pipeline:
        def run(self): ...
    p = Pipeline()
-   rt.submit(p.run)                 # name = "Pipeline.run"
+   rt.submit(p.run)                 # name = "Pipeline.run (script.py:5)"
 
-   rt.submit(lambda: None)          # name = "<lambda>" (with source location)
+   rt.submit(lambda: None)          # name = "<lambda> (script.py:8)"
 
 Composing Tasks
 ~~~~~~~~~~~~~~~

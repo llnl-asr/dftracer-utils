@@ -84,7 +84,7 @@ the chance to skip chunks:
 
       .. code-block:: cpp
 
-         view.time_range(1e6, 2e6).filter(Field("pid") == 1234);
+         view.time_range(1e6, 2e6).filter(F("pid") == 1234);
 
 ``.select({...})`` also cuts work once a query is not fully aggregated: it
 projects columns before materializing, so a wide row query does not pay to
@@ -135,15 +135,21 @@ spill instead of scaling threads further:
 
       .. code-block:: python
 
-         result = view.memory_budget(4 * 1024**3).group_by("cat").sum("dur")
-         # or: view.auto_spill().group_by("cat").sum("dur")
+         result = (view.memory_budget(4 * 1024**3)
+                       .group_by("cat").agg("sum:dur")
+                       .collect().collect())
+         # or: view.auto_spill().group_by("cat").agg("sum:dur").collect().collect()
 
    .. tab-item:: C++
 
       .. code-block:: cpp
 
          auto result = view.memory_budget(4ull * 1024 * 1024 * 1024)
-                            .group_by({"cat"}).sum("dur");
+                            .group_by({GroupKey::cat()})
+                            .agg({{AggOp::Sum, "dur", "sum_dur"}})
+                            .collect()
+                            .collect()
+                            .get();
 
 Check a footprint before committing to a run with ``memory_budget_advice`` -
 it tells you whether a required byte footprint fits and how many nodes to

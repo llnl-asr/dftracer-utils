@@ -17,7 +17,7 @@ Two headers cover the pieces most programs need:
   query as a mask.
 
 A third header, ``dftracer/utils/plugins/abi.h``, is the C ABI for writing a
-plugin that rides the engine's fused scan (a ``dftu_host`` vtable, interned
+plugin that rides the engine's fused scan (a ``dftu_plugin_host`` vtable, interned
 strings, typed extension tables); see :doc:`../../plugins` if you are extending
 the engine rather than consuming its output.
 
@@ -140,6 +140,46 @@ not free them afterward); every frame op below returns a new owned frame:
    dftu_series_free(dur_col);
    dftu_dataframe_free(filtered);
    dftu_dataframe_free(df);
+
+Run any op by name
+------------------
+
+Every ``Series`` / ``DataFrame`` / ``LazyFrame`` method is a registered op
+with a name and a packed signature, so a C caller is not limited to the
+``dftu_series_*`` entry points: ``dftu_op_find(name)`` looks one up
+(built-in or a plugin's) and ``dftu_op_run`` / ``dftu_op_run_frame`` /
+``dftu_op_run_aggregate`` / ``dftu_op_run_lazy`` run it on handles, the
+other operands in a ``dftu_op_arg`` bag. ``dftu_op_count`` / ``dftu_op_at``
+list the registry, ``dftu_op_signature`` spells a signature
+(``"(series, scalar) -> series"``).
+
+.. code-block:: c
+
+   const dftu_op_desc* op = dftu_op_find("dftu.series.cumsum");
+   const dftu_series* in[1] = {dur};
+   dftu_series* running = dftu_op_run(op, in, 1, NULL);
+
+Errors and results
+------------------
+
+A call that can fail in more than one way returns a tagged result
+(``DFTU_RESULT_DECL``): ``DFTU_RESULT_OK(r)`` says which half of the union is
+live, ``DFTU_RESULT_VALUE(r)`` is the owned handle, ``DFTU_RESULT_ERROR(r)``
+a ``dftu_error`` with a ``(domain, code)`` identity, a portable
+``condition`` (``DFTU_COND_NOT_FOUND``, ``INVALID_ARGUMENT``, ...) and a
+borrowed ``message``. No exception ever crosses the C boundary. The simpler
+``dftu_series_*`` calls return NULL on failure.
+
+Plans from C
+------------
+
+``dftu_dataframe_lazy(df)`` starts a plan over a frame,
+``dftu_lazyframe_from_provider(name)`` one over a source registered with
+``dftu_provider_register``; every builder step is a ``dftu_lazyframe_*``
+call, ``dftu_lazyframe_op(lf, name, args)`` appends a node registered with
+``dftu_node_register``, ``dftu_lazyframe_explain`` prints the plan and
+``dftu_lazyframe_collect`` runs it. :doc:`../data/lazyframe` has the
+contract a source and a node fill.
 
 Clean up
 --------

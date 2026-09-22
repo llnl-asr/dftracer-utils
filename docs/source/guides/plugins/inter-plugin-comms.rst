@@ -1,4 +1,4 @@
-:description: Have plugins share data within one scan: publish and consume batch-scoped ports, and negotiate producer capabilities before wiring up.
+:description: Have plugins share data within one scan by publishing and consuming batch-scoped ports.
 
 How to communicate between plugins
 ====================================
@@ -7,28 +7,20 @@ How to communicate between plugins
    :class: goal
 
    Have one plugin publish a value during a batch and another plugin
-   consume it, within the one shared scan ``--plugin a --plugin b`` already runs,
-   and (optionally) have a plugin discover whether a compatible producer is
-   even loaded. See :doc:`../../plugins` for the plugin model this builds on.
+   consume it, within the one shared scan ``--plugin a --plugin b`` already
+   runs. See :doc:`../../plugins` for the plugin model this builds on.
 
-Two mechanisms cover this, and both are keyed by the same capability id
-strings (the ``dftu.`` prefix is reserved for the host, see below):
-
-- **Ports** (``DFTU_EXT_PORTS``) are the data channel: a producer publishes a
-  value during a batch, a consumer reads it back in the same batch.
-- **Capability negotiation** (``DFTU_EXT_COMMS``) is discovery: does a
-  compatible producer exist at all, and at what version, so a consumer can
-  adapt its behavior before wiring itself to a port.
-
-Most plugins only need ports; reach for capability negotiation when a
-consumer should behave differently depending on whether its producer was
-loaded.
+**Ports** (``DFTU_SVC_PORTS``) are the one mechanism: a producer publishes a
+value during a batch and a consumer reads it back in the same batch. A port is
+a name, and the two ends are wired by naming the same one. The ``dftu.``
+prefix is reserved for the host; a port that ever needs a version carries it
+in the name.
 
 Ports: publish and consume
 ----------------------------
 
-A port is a batch-scoped slot, identified by a capability id string, that
-resets between batches. A producer writes to it during the batch fold; a
+A port is a batch-scoped slot, identified by its name, that resets between
+batches. A producer writes to it during the batch fold; a
 consumer reads it back during the same batch.
 
 .. tab-set::
@@ -37,7 +29,7 @@ consumer reads it back during the same batch.
 
       The ``Host`` wrapper (``dftracer/utils/plugins/plugin.h``) exposes ports
       as a typed pair, ``publish_port<T>``/``consume_port<T>``, built once from
-      a capability id and used every batch through ``send``/``recv``:
+      a port name and used every batch through ``send``/``recv``:
 
       .. code-block:: cpp
 
@@ -49,7 +41,7 @@ consumer reads it back during the same batch.
 
       ``T`` must be trivially copyable; the host copies ``sizeof(T)`` bytes per
       publish. A producer built with ``dftracer::utils::plugins::make_plugin<Slice>``
-      publishes from its ``step``:
+      publishes from its ``step`` and names the port in a static ``provides()``:
 
       .. code-block:: cpp
 
@@ -58,6 +50,10 @@ consumer reads it back during the same batch.
          constexpr const char* PORT_CAP = "com.example.perbatch";
 
          struct ProducerSlice {
+             static auto provides() {
+                 return std::array<const char*, 1>{PORT_CAP};
+             }
+
              explicit ProducerSlice(const dftracer::utils::plugins::Config&) {}
              void step(const dftracer::utils::plugins::Batch& b, dftracer::utils::plugins::Host h) {
                  std::uint64_t with_dur = 0;
@@ -69,15 +65,21 @@ consumer reads it back during the same batch.
              void finalize(dftracer::utils::plugins::Host) {}
          };
 
-         dftu_plugin* dftracer_plugin(const dftu_value* config) {
+         dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {
+             (void)h;
              return dftracer::utils::plugins::make_plugin<ProducerSlice>(config);
          }
 
-      A consumer reads it back with the same capability id:
+      A consumer reads it back with the same port name, named in its own
+      static ``consumes()`` so the host runs the producer first:
 
       .. code-block:: cpp
 
          struct ConsumerSlice {
+             static auto consumes() {
+                 return std::array<const char*, 1>{PORT_CAP};
+             }
+
              explicit ConsumerSlice(const dftracer::utils::plugins::Config&) {}
              void step(const dftracer::utils::plugins::Batch&, dftracer::utils::plugins::Host h) {
                  if (auto with_dur = h.consume_port<std::uint64_t>(PORT_CAP).recv()) {
@@ -91,34 +93,42 @@ consumer reads it back during the same batch.
    .. tab-item:: C (raw ABI)
 
       A plugin fetches the raw port channel from the host through
-      ``host->get_extension(host->h, DFTU_EXT_PORTS)``:
+      ``host->get_service(host->h, DFTU_SVC_PORTS)``:
 
       .. code-block:: c
 
-         typedef struct dftu_ext_ports {
+         typedef struct dftu_svc_ports {
              uint64_t (*port_key)(void* h, const char* cap_id);
              void (*publish)(void* h, uint64_t key, const void* data, uint32_t len);
              const void* (*consume)(void* h, uint64_t key, uint32_t* out_len);
-         } dftu_ext_ports;
+         } dftu_svc_ports;
 
-      ``port_key`` interns a capability id string once (cache the returned
+      ``port_key`` interns a port name once (cache the returned
       ``uint64_t``); ``publish`` copies ``len`` bytes into the batch-scoped
       slot; ``consume`` returns a borrowed pointer valid only until the
       current ``on_batch`` returns (NULL if nothing was published this batch).
-      A producer's ``on_batch`` looks like:
+      A producer's ``on_batch`` reads the ``ph`` column to mirror
+      ``Event::has_dur()`` (a duration means ``phase() == Complete``):
 
       .. code-block:: c
 
-         static dftu_task* on_batch(void* slice, const dftu_batch* b,
-                                    const dftu_host* host) {
+         static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
+                                    const dftu_plugin_host* host) {
              MyState* s = (MyState*)slice;
-             const dftu_ext_ports* ports =
-                 (const dftu_ext_ports*)host->get_extension(host->h, DFTU_EXT_PORTS);
+             const dftu_svc_ports* ports =
+                 (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);
              if (!s->port_key) s->port_key = ports->port_key(host->h, "com.example.perbatch");
 
+             int64_t n = dftu_dataframe_num_rows(df);
+             dftu_series* ph_col = dftu_dataframe_column(df, "ph");
+             const int64_t* ph = (ph_col && dftu_series_type(ph_col) == DFTU_TYPE_INT64)
+                 ? (const int64_t*)dftu_series_data(ph_col) : NULL;
              uint64_t with_dur = 0;
-             for (uint32_t i = 0; i < b->count; ++i)
-                 if (b->events[i].has_dur) ++with_dur;
+             int64_t i;
+             if (ph)
+                 for (i = 0; i < n; ++i)
+                     if (ph[i] == DFTU_PH_COMPLETE) ++with_dur;
+             if (ph_col) dftu_series_free(ph_col);
              ports->publish(host->h, s->port_key, &with_dur, sizeof(with_dur));
              return NULL;  /* synchronous */
          }
@@ -127,13 +137,14 @@ consumer reads it back during the same batch.
 
       .. code-block:: c
 
-         static dftu_task* on_batch(void* slice, const dftu_batch* b,
-                                    const dftu_host* host) {
+         static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
+                                    const dftu_plugin_host* host) {
              MyState* s = (MyState*)slice;
-             const dftu_ext_ports* ports =
-                 (const dftu_ext_ports*)host->get_extension(host->h, DFTU_EXT_PORTS);
+             const dftu_svc_ports* ports =
+                 (const dftu_svc_ports*)host->get_service(host->h, DFTU_SVC_PORTS);
              if (!s->port_key) s->port_key = ports->port_key(host->h, "com.example.perbatch");
 
+             (void)df;
              uint32_t len = 0;
              const void* v = ports->consume(host->h, s->port_key, &len);
              if (v && len == sizeof(uint64_t)) {
@@ -167,7 +178,7 @@ consumer reads it back during the same batch.
 
          @jit.plugin
          class Consumer:
-             sig = jit.consume("com.example.perbatch", of=jit.u64, required=True)
+             sig = jit.consume("com.example.perbatch", of=jit.u64)
 
              @jit.each_event
              def step(self, e):
@@ -178,22 +189,23 @@ consumer reads it back during the same batch.
       / ``jit.f64``); it must match on both the publisher and the consumer. A
       consume port is read-only and a publish port is write-only; writing to a
       consume port (or reading a publish port) raises ``JitError`` at
-      decoration time. ``required=True`` makes a missing producer fail
-      ``PluginHost.resolve()``; the default (``required=False``) degrades to
-      reading ``0``. A JIT producer and a hand-written C++ or C consumer (or
+      decoration time. A missing producer degrades to reading ``0``. A JIT
+      producer and a hand-written C++ or C consumer (or
       vice versa) interoperate freely: all three compile down to the same
-      ``DFTU_EXT_PORTS`` machinery.
+      ``DFTU_SVC_PORTS`` machinery.
 
 The ordering rule
 -------------------
 
 A consumer sees nothing published (``std::nullopt`` in C++, NULL in C, ``0``
 in JIT) whenever the producer has not published for the current batch - most
-commonly because it runs after the consumer. A producer must run before its
-consumer in the fold order, which by default is the order plugins were
-registered (``--plugin a --plugin b`` on the command line, or the injection
-order into ``PluginHost``). Order your ``--plugin`` flags accordingly, or use
-capability requirements (below) to have the host order them for you.
+commonly because it runs after the consumer. Name the port in the consumer's
+``consumes`` and the producer's ``provides`` (a single NULL-terminated name
+array per plugin, one namespace shared with accumulator names, section 6 of
+:doc:`../../plugins`): the host orders the fold from that declaration, running
+every provider of a consumed name first, and refuses to run the set at all if
+no loaded plugin provides it. There is no ``--plugin`` flag order to get
+right.
 
 A value published in one batch does not carry over to the next: the host
 clears every port between batches, so a consumer sees nothing published until
@@ -205,193 +217,42 @@ In C++, ``recv()`` copies the published bytes into the returned
 returns a pointer that is only valid until ``on_batch`` returns; copy it out
 if you need it longer.
 
-Discovering a producer: capabilities
----------------------------------------
+Rewriting the batch for the plugins after you
+-----------------------------------------------
 
-Ports alone assume both plugins are loaded and agree out of band on a
-capability id. When a consumer should adapt to whether a compatible producer
-is present - and at what version - a plugin declares what it **provides** and
-**requires**.
+A port carries a value beside the batch. To change the batch itself, so
+that every plugin after yours reads your rows instead of the scanned ones,
+give the plugin a ``transform`` in place of ``on_batch``:
 
 .. tab-set::
 
-   .. tab-item:: C++ (SDK)
-
-      A ``Slice`` declares the three hooks as optional ``static`` members and
-      ``dftracer::utils::plugins::make_plugin<Slice>`` wires ``get_extension`` to a
-      per-Slice ``dftu_plugin_comms`` for you (nothing is emitted for a Slice
-      that declares none). Build the entries with
-      ``dftracer::utils::plugins::capability`` / ``dftracer::utils::plugins::requirement``;
-      the consumer hook is ``requires_caps`` because ``requires`` is a C++20
-      keyword, and the resolve hook is ``on_resolve(Host)``:
+   .. tab-item:: C++
 
       .. code-block:: cpp
 
-         struct ConsumerSlice {
-             explicit ConsumerSlice(const dftracer::utils::plugins::Config&) {}
-             void step(const dftracer::utils::plugins::Batch&, dftracer::utils::plugins::Host) {}
-             void merge(ConsumerSlice&) {}
-             void finalize(dftracer::utils::plugins::Host) {}
-
-             static std::array<dftu_requirement, 1> requires_caps() {
-                 return {dftracer::utils::plugins::requirement("com.example.tag", DFTU_VER_CARET,
-                                                  1, 0, 0, /*required=*/false)};
-             }
-             static void on_resolve(dftracer::utils::plugins::Host h) {
-                 if (auto ver = h.provider_best(requires_caps()[0])) {
-                     // wired: a compatible provider exists at version *ver
-                 } else {
-                     // standalone fallback
-                 }
-             }
+         struct Sessionize {
+             explicit Sessionize(const Config&) {}
+             // The rewritten batch (the host frees it), or nullptr for
+             // "unchanged". Takes the place of step().
+             dftu_dataframe* transform(const dftu_dataframe* df, Host h);
+             void merge(Sessionize&) {}
+             void finalize(Host) {}
+             static auto provides() { return std::array{"sessions.batch"}; }
          };
 
-      A provider mirrors this with a ``static provides()`` returning a range
-      of ``dftu_capability``, built with ``dftracer::utils::plugins::capability(...)``.
-      ``Host::provider_count`` / ``Host::provider_best`` (used above) query the
-      registry from inside ``on_resolve``.
-
-   .. tab-item:: C (raw ABI)
-
-      A plugin declares what it provides and requires through
-      ``dftu_plugin_comms``, fetched by the host from the plugin's own
-      ``get_extension``:
+   .. tab-item:: C
 
       .. code-block:: c
 
-         typedef struct dftu_plugin_comms {
-             uint32_t (*provides)(void* self, dftu_capability* out, uint32_t max);
-             uint32_t (*require_caps)(void* self, dftu_requirement* out, uint32_t max);
-             void (*resolve)(void* self, const dftu_host* host);
-         } dftu_plugin_comms;
+         g_plugin.transform = sessionize;   /* dftu_dataframe* (slice, df, host) */
 
-      ``provides`` lists the capability ids (and semantic versions) this
-      plugin offers; ``require_caps`` lists what it wants, each with a version
-      constraint (``DFTU_VER_GE`` / ``GT`` / ``LE`` / ``LT`` / ``EQ`` /
-      ``CARET`` / ``TILDE``) and whether it is required or optional. The host
-      calls every plugin's ``resolve`` once, after every plugin has declared,
-      passing the ``dftu_host`` so ``resolve`` can query the registry through
-      ``DFTU_EXT_COMMS``:
-
-      .. code-block:: c
-
-         typedef struct dftu_ext_comms {
-             uint32_t (*provider_count)(void* h, const char* cap_id);
-             int (*provider_best)(void* h, const dftu_requirement* req,
-                                  dftu_version* out_ver);
-         } dftu_ext_comms;
-
-      A consumer's ``resolve`` typically calls ``provider_best`` for each of
-      its requirements and switches behavior (wired vs. standalone) based on
-      whether a compatible provider was found:
-
-      .. code-block:: c
-
-         static void resolve(void* self, const dftu_host* host) {
-             MyState* s = (MyState*)self;
-             const dftu_ext_comms* c =
-                 (const dftu_ext_comms*)host->get_extension(host->h, DFTU_EXT_COMMS);
-             if (!c) return;
-             dftu_version best;
-             if (c->provider_best(host->h, &s->requirement, &best) == 0) {
-                 s->wired = 1;         /* a compatible provider exists: use the port */
-             } else {
-                 s->wired = 0;         /* fall back to standalone behavior */
-             }
-         }
-
-         static const dftu_plugin_comms g_comms = { my_provides, my_require_caps, resolve };
-
-         static const void* get_extension(void* self, const char* ext_id) {
-             if (strcmp(ext_id, DFTU_EXT_COMMS) == 0) return &g_comms;
-             return NULL;
-         }
-
-   .. tab-item:: Python (JIT)
-
-      ``jit.publish`` and ``jit.consume`` put a plugin into the same
-      provides/requires graph as the C and C++ sides, and both carry a
-      semantic version. A producer declares the version it **provides** with
-      ``version=``; a consumer declares a version **constraint** on its
-      provider with ``min_version=`` (a ``>=`` constraint by default, or pass
-      ``version_op=`` for one of ``>= > <= < = ^ ~``, the ABI's ``DFTU_VER_*``
-      operators):
-
-      .. code-block:: python
-
-         from dftracer.utils import jit
-
-         @jit.plugin
-         class Producer:
-             seen = jit.map(key=(jit.i64,), value=jit.count())
-             tag = jit.publish("com.example.tag", of=jit.u64, version="2.1.0")
-
-             @jit.each_event
-             def step(self, e):
-                 self.seen[(e.pid,)] += 1
-                 self.tag += 1
-
-      A consumer adapts at resolve time with a ``@jit.on_resolve`` method. It
-      runs once, after every plugin has declared, and reads for each consume
-      port whether a provider satisfying its constraint was found
-      (``self.<port>.resolved``) and that provider's version
-      (``self.<port>.version``, comparable to a ``(major, minor, patch)``
-      tuple). It assigns the outcome to plugin **flags** that ``each_event``
-      then branches on:
-
-      .. code-block:: python
-
-         @jit.plugin
-         class Consumer:
-             got = jit.map(key=(jit.i64,), value=jit.count())
-             tag = jit.consume("com.example.tag", of=jit.u64, min_version="2.0.0")
-
-             @jit.on_resolve
-             def on_resolve(self):
-                 self.wired = self.tag.resolved
-                 self.modern = self.tag.resolved and (self.tag.version >= (2, 1, 0))
-
-             @jit.each_event
-             def step(self, e):
-                 if self.wired > 0:          # a compatible provider exists
-                     self.got[(e.pid,)] += 1
-                 if self.modern > 0:         # ... and it is >= 2.1.0
-                     self.got[(e.pid,)] += 1
-
-      Under the hood ``on_resolve`` compiles to the same ``comms_resolve`` /
-      ``provider_best`` machinery as the C and C++ tabs: the host always
-      records each consume port's ``resolved`` / ``version`` before the body
-      runs, so even an empty ``on_resolve`` (or none at all) captures provider
-      presence. The flags are file-scope state written once at resolve and
-      read by every batch, so ``each_event`` reads them but does not write
-      them.
-
-      **What the resolve body can and cannot express.** It is a sequence of
-      ``self.<flag> = <expr>`` assignments; the expression may read a consume
-      port's ``.resolved`` (a 0/1 int) and ``.version`` (compared to a version
-      tuple), combined with ``and`` / ``or`` / ``not``, integer comparisons,
-      and integer literals. It cannot run arbitrary Python, call host services
-      other than the automatic ``provider_best`` query, or set per-worker (as
-      opposed to per-plugin) state - the same shape as a C++ ``on_resolve``
-      that sets a flag. For logic beyond that, author the plugin in C or C++
-      with ``dftu_plugin_comms`` / ``Slice::on_resolve`` above. A guard reads a
-      flag as an integer, so write ``if self.wired > 0:`` rather than a bare
-      ``if self.wired:``.
-
-Two more rules govern the registry:
-
-- **The dftu. id prefix is reserved for the host.** A plugin declaring a
-  ``dftu.*`` capability (or providing one of the host's blessed ids such as
-  ``DFTU_CAP_EVENTS``) fails ``resolve()`` for the whole run. Requiring a
-  blessed id is fine - only providing one is rejected.
-- **An unmet required capability fails resolve.** A requirement with
-  ``required = 1`` and no satisfying provider makes ``PluginHost::resolve()``
-  return false; an optional one (``required = 0``) just leaves the consumer
-  unwired, as in the examples above.
-- **A provide/require edge orders the fold**: when plugin B requires
-  something plugin A provides, the host's resolved fold order runs A before
-  B (matching the ports ordering rule) regardless of ``--plugin`` order. A
-  provide/require cycle falls back to declaration order rather than failing.
+The rewrite may drop rows, add rows, and add, drop or change columns. A
+transform sees the whole batch (its ``reads`` is ignored); a plugin after it
+gets its own ``reads`` projection of the rewritten frame, by name, and its
+``plan_query`` is applied again to the rewritten rows. A plugin before it in
+fold order still sees the scan as it was. Order it the same way as a port:
+a plugin that must see the rewrite ``consumes`` a name the transform
+``provides``. Two transforms chain, each seeing the previous one's output.
 
 See also
 --------

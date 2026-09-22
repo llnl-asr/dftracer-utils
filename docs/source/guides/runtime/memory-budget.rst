@@ -22,7 +22,8 @@ things during a run, both intermediate memory, never the returned result:
 - **Scan decode.** The bytes decompressed concurrently across worker slices are
   always held under the ceiling, so a large trace cannot OOM the box. This bound
   is always on: with no explicit budget it defaults to a RAM fraction (about one
-  third of detected, cgroup-aware memory), and a single unit larger than the
+  third of detected memory: the cgroup limit, ``/proc/meminfo``, or the free
+  and inactive pages on macOS; 1 GB where none can be read), and a single unit larger than the
   whole ceiling still runs once the scan is otherwise idle rather than
   deadlocking. A scan that cannot make progress fails loudly instead of hanging.
 - **Group-map spill.** Set an explicit non-zero ``bytes`` and each worker's
@@ -70,10 +71,34 @@ unset to rely on the always-on scan-decode default.
              tv.memory_budget(2 * 1024**3)   # 2 GiB per worker
                .group_by("cat")
                .agg("sum:dur")
-               .collect()
+               .collect()                    # -> LazyFrame
+               .collect()                    # -> DataFrame
          )
 
-         spilled = tv.auto_spill().group_by("cat").agg("count").collect()
+         spilled = tv.auto_spill().group_by("cat").agg("count").collect().collect()
+
+Hold a plugin to the budget
+---------------------------
+
+The same ceiling reaches a plugin's own state. A registered state
+(``dftu_svc_agg``) is spilled by the host through its ``serialize`` pair.
+A plugin's fold slice and a plan node it registers are measured and asked
+to shrink instead:
+
+- ``dftu_plugin::bytes(slice)`` reports the slice's size; after a step or a
+  merge that leaves it past the budget the host calls
+  ``dftu_plugin::reclaim(slice, want)``, which frees what it can (writes a
+  part out, compacts, drops a cache) and returns the bytes freed. On the
+  C++ facade a Slice with ``bytes() const`` and ``reclaim(std::uint64_t)``
+  gets both slots from ``make_plugin``.
+- ``dftu_cursor_vt::bytes`` and ``::reclaim`` do the same for a plan node's
+  cursor: after every morsel the driver sums the resident bytes of the
+  chain's stages against the plan's ``memory_budget`` and asks the largest
+  holders to reclaim until it fits.
+
+Both are advisory. A slice or node that declares no size is never asked; one
+that measures itself but frees nothing is logged once, and the run goes on
+over budget rather than stopping, since the result is not in question.
 
 Check a footprint before you run
 --------------------------------

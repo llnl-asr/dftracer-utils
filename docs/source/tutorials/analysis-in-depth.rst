@@ -59,6 +59,7 @@ by name so the output is stable.
              .agg("count", "sum:dur", "mean:dur")
              .sort_by("name")
              .collect()
+             .collect()
          )
          print(df.to_pandas())
 
@@ -89,6 +90,7 @@ by name so the output is stable.
                                  AggSpec(AggOp::Sum, "dur"),
                                  AggSpec(AggOp::Mean, "dur")})
                            .sort_by("name")
+                           .collect()
                            .collect()
                            .get();
 
@@ -141,6 +143,7 @@ duration is at least 100 microseconds.
              .agg("count", "sum:dur", "mean:dur")
              .sort_by("name")
              .collect()
+             .collect()
          )
          print(df.to_pandas())
 
@@ -186,6 +189,7 @@ duration is at least 100 microseconds.
                                  AggSpec(AggOp::Sum, "dur"),
                                  AggSpec(AggOp::Mean, "dur")})
                            .sort_by("name")
+                           .collect()
                            .collect()
                            .get();
 
@@ -240,6 +244,7 @@ see it match.
              .agg("count", "sum:dur")
              .sort_by("name")
              .collect()
+             .collect()
          )
 
          avg = df.apply(F.sum_dur / F.count)     # a Series
@@ -270,7 +275,8 @@ see it match.
          #include <cstdio>
 
          using namespace dftracer::utils::trace::views;
-         using namespace dftracer::utils::dataframe;
+         using dftracer::utils::dataframe::Series;
+         using dftracer::utils::dataframe::TypeId;
 
          int main() {
              auto df = View::from_file("app.pfw.gz")
@@ -278,6 +284,7 @@ see it match.
                            .agg({AggSpec(AggOp::Count),
                                  AggSpec(AggOp::Sum, "dur")})
                            .sort_by("name")
+                           .collect()
                            .collect()
                            .get();
 
@@ -356,7 +363,9 @@ total duration in milliseconds.
          #include <cstdio>
 
          using namespace dftracer::utils::trace::views;
-         using namespace dftracer::utils::dataframe;
+         using dftracer::utils::dataframe::DataFrame;
+         using dftracer::utils::dataframe::Series;
+         using dftracer::utils::dataframe::TypeId;
 
          int main() {
              auto df = View::from_file("app.pfw.gz")
@@ -364,6 +373,7 @@ total duration in milliseconds.
                            .agg({AggSpec(AggOp::Count),
                                  AggSpec(AggOp::Sum, "dur")})
                            .sort_by("name")
+                           .collect()
                            .collect()
                            .get();
 

@@ -5,11 +5,13 @@ TraceViewer (Querying Traces)
 
 ``TraceViewer`` is the primary API for querying DFTracer traces. It is an
 Arrow-first, lazy, composable view: builder methods (``filter``, ``group_by``,
-``agg``, ...) each return a new view and do no work, and a terminal
-(``collect``, ``collect_typed``, ``stream``, ``export_trace``) executes the
-whole chain in a single pass. When an index exists next to the traces, the
-same query is served from the index (chunk pruning, aggregation tiers,
-summaries) instead of a full decompress.
+``agg``, ...) each return a new view and do no work. ``collect`` builds the
+query plan into a :class:`~dftracer.utils.LazyFrame` (still no scan); its own
+``.collect()`` runs the plan in a single pass and returns a
+:class:`~dftracer.utils.DataFrame`. Other terminals (``collect_typed``,
+``stream``, ``export_trace``) run the scan directly. When an index exists next
+to the traces, the same query is served from the index (chunk pruning,
+aggregation tiers, summaries) instead of a full decompress.
 
 .. code-block:: python
 
@@ -23,7 +25,8 @@ summaries) instead of a full decompress.
        view.filter('cat == "POSIX"')
            .group_by("name")
            .agg("count", "sum:dur", "max:dur")
-           .collect()                       # -> DataFrame
+           .collect()                       # -> LazyFrame (no scan yet)
+           .collect()                       # -> DataFrame (runs the plan)
    )
    pdf = df.to_pandas()
 
@@ -109,8 +112,10 @@ Aggregation specs are ``op:field`` (or bare ``count``):
 Reading the result
 -------------------
 
-``collect`` returns a single native :class:`~dftracer.utils.DataFrame` (a set of
-typed :class:`~dftracer.utils.Series`); convert with ``to_arrow()`` /
+``collect`` builds the query plan into a :class:`~dftracer.utils.LazyFrame`;
+call its own ``.collect()`` to run the plan and get a native
+:class:`~dftracer.utils.DataFrame` (a set of typed
+:class:`~dftracer.utils.Series`). Convert with ``to_arrow()`` /
 ``to_pandas()`` / ``to_polars()`` only at the edge, or keep computing on it in
 the columnar engine (see :doc:`../columnar-engine`):
 
@@ -123,7 +128,8 @@ the columnar engine (see :doc:`../columnar-engine`):
        .time_bucket(1_000_000)          # 1 s windows (microseconds)
        .group_by("name", "time_bucket")
        .agg("count", "sum:size")
-       .collect()                        # AggregatedTraceViewer caches by default
+       .collect()                        # -> LazyFrame
+       .collect()                        # -> DataFrame
    )
 
 ``collect_typed`` does a single pass over an aggregation index and returns its
@@ -149,8 +155,8 @@ Inspecting the schema
 ``columns()`` lists the columns discoverable from the index and ``schema()``
 maps each to its type (``"int64"`` / ``"float64"`` / ``"string"``). Both read
 index metadata only - no trace scan - so they are cheap and do not need the
-whole trace materialized the way ``collect().keys()`` does (which also only
-sees the columns present in the collected rows).
+whole trace materialized the way ``collect().collect().keys()`` does (which
+also only sees the columns present in the collected rows).
 
 .. code-block:: python
 

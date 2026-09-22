@@ -19,7 +19,8 @@ Get a DataFrame
 
          from dftracer.utils import TraceViewer
 
-         df = TraceViewer("traces/").group_by("cat").agg("count", "sum:dur").collect()
+         df = TraceViewer("traces/").group_by("cat").agg("count", "sum:dur").collect().collect()
+         # collect() builds the plan (-> LazyFrame); its own .collect() runs it (-> DataFrame)
          # or ingest one: DataFrame.from_pandas(pdf) / from_arrow(tbl) / from_numpy(a, columns=...)
 
    .. tab-item:: C++
@@ -33,7 +34,8 @@ Get a DataFrame
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "count"},
                              {AggOp::Sum, "dur", "sum_dur"}})
-                       .collect()
+                       .collect()   // -> LazyFrame
+                       .collect()   // -> coro::CoroTask<DataFrame>
                        .get();
 
 Derived columns
@@ -77,11 +79,12 @@ members under the same names. For side-by-side C++ and Python tabs of each op se
 :doc:`../data/reshape`, and :doc:`../data/time-windows`.
 
 - **project**: ``select("cat", "count")``, ``rename({"count": "n"})``, ``with_column("avg", series)``
-- **rows**: ``filter(mask)``, ``head(n)`` / ``tail(n)``, ``slice(off, len)``, ``reverse()``, ``sample(n, seed)``, ``sort_by("count", descending=True)``, ``topk("count", 10)``
-- **reshape**: ``unique()`` / ``drop_duplicates()``, ``drop_nulls()``, ``fill_null(v)``, ``unpivot(...)`` / ``melt(...)``, ``explode("col")``, ``to_dummies("cat")``, ``pivot(index, on, values)``
-- **summarize**: ``group_by("cat", aggs)``, ``describe()``, ``null_count()``, ``value_counts`` (on a Series)
-- **relational**: ``join(other, how="inner", on=...)``
-- **windowed**: ``group_by_dynamic(time_col, every, period, aggs)``
+- **rows**: ``filter(mask)``, ``filter_mask(series)``, ``head(n)`` / ``tail(n)``, ``slice(off, len)``, ``reverse()``, ``take(indices)``, ``sample(n, seed)``, ``sort_by("count", descending=True)``, ``sort_by_multi(...)``, ``topk("count", 10)``, ``with_row_index("i")``
+- **reshape**: ``unique()`` / ``drop_duplicates()``, ``is_duplicated()`` / ``is_unique()``, ``drop_nulls()``, ``fill_null(v)``, ``unpivot(...)`` / ``melt(...)``, ``explode("col")``, ``unnest("col")``, ``to_dummies("cat")``, ``pivot(index, on, values)``
+- **summarize**: ``group_by("cat", aggs)`` (every ``DFTU_AGG_*`` op, ``prod`` and exact ``median`` / ``quantile`` included), ``describe()``, ``null_count()``, ``value_counts`` (on a Series); the group-wise transforms ``cumsum`` / ``cumprod`` / ``shift`` / ``rank`` / ``ffill`` / ``bfill`` / ``rolling`` / ``ewm`` / ``take`` / ``sample`` / ``resample`` (:doc:`../data/pandas-polars`)
+- **relational**: ``join(other, how="inner", on=...)``, ``asof`` / ``join_asof``, ``concat(other)`` / ``vstack``, ``hstack``
+- **windowed**: ``group_by_dynamic(time_col, every, period, aggs)``, ``window(...)``, ``gap_fill``, ``interval``
+- **column ops in an expression**: ``col("x").cum_sum()``, ``.shift(1)``, ``.rolling_mean(3)``, ``.rank()``, ``.forward_fill()``, ``.sort()``, ``.str.pad_start(5, "0")``, ``.dt.hour()``, each ``.over("k")`` for the group-wise form; eagerly through ``df.apply(expr)``, in a plan as its own step (``dftu.frame.column_op``)
 
 .. code-block:: python
 
@@ -94,11 +97,12 @@ Series operations
 A ``Series`` is NumPy-like: ``a + b``, ``a * 2``, ``s[0]``, ``s[2:5]``,
 ``np.asarray(s)``, plus reducers and kernels.
 
-- **reduce**: ``sum() min() max() mean() product() count() arg_min() arg_max() mode() all() any()``, ``quantile(q) median() stddev() variance() skewness() kurtosis()``
-- **element-wise**: ``abs() clip(lo, hi) round() ceil() floor() trunc() sign() sqrt() exp() log() fillna(v)``
-- **scan / window**: ``cumsum() cummax() cummin() diff() pct_change() shift(n) rolling(w, op)``
-- **select / test**: ``sort() head(n) reverse() top_k(k) unique() drop_nulls() is_in(values) is_nan() is_finite() is_sorted()``
-- **strings**: ``str_contains() str_starts_with() str_ends_with() str_like() str_matches(re) to_lowercase() str_len_bytes() str_split(sep)`` ...
+- **reduce**: ``sum() min() max() mean() product() prod() count() nunique() arg_min() arg_max() mode() all() any()``, ``quantile(q) median() stddev() variance() sem() skewness() kurtosis()``
+- **element-wise**: ``abs() clip(lo, hi) round() ceil() floor() trunc() sign() sqrt() exp() log() fillna(v) where(cond, other) mask(cond, other) astype(t) / cast(t) full_like(v)``
+- **scan / window**: ``cumsum() cumprod() cummax() cummin() cum_count() diff() pct_change() shift(n) rank(method) ffill() bfill() interpolate()``, ``rolling(w)`` / ``expanding()`` / ``ewm(alpha | span | com | halflife)`` with ``.sum() .mean() .min() .max() .var() .std() .median() .quantile(q)``
+- **select / test**: ``sort() head(n) reverse() top_k(k) unique() drop_nulls() is_in(values) is_nan() is_finite() is_infinite() is_duplicated() is_unique() is_sorted() compare(other)``
+- **strings**: ``str_contains() str_starts_with() str_ends_with() str_like() str_matches(re) to_lowercase() str_len_bytes() str_split(sep)`` ..., and the ``.str`` / ``.dt`` / ``.list`` accessors (``pad``, ``zfill``, ``replace``, ``extract``; ``year`` .. ``nanosecond``, ``floor`` / ``ceil`` / ``round(freq)``, ``tz_localize`` / ``tz_convert``; ``len``, ``get``, ``join``)
+- **registry**: ``ops.run(name, *columns)`` runs any registered op by name (built-in or a plugin's, a ``@jit.series``), ``ops.info(name)`` describes its signature; ``s.ops.<module>.<name>()`` is the same as a method
 
 .. code-block:: python
 

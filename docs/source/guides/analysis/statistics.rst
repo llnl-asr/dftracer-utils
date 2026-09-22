@@ -45,7 +45,8 @@ field from a DDSketch; a histogram aggregate emits the raw sketch bins.
          df = (TraceViewer("traces/")
                .group_by("cat")
                .agg("p50:dur", "p99:dur", "hist:dur")
-               .collect())
+               .collect()      # -> LazyFrame
+               .collect())     # -> DataFrame
 
       ``"pNN:<field>"`` is percentile shorthand (``"p999:dur"`` is the 99.9th);
       ``"pct:<field>:<q>"`` takes an explicit quantile.

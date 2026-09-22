@@ -21,10 +21,10 @@ repeated in each tool's section.
    unit suffix (``64MB``, ``1.5GiB``, ``512KB``, ``8kb``); byte units are
    1024-based, so ``KB`` == ``KiB``, ``B`` is bytes and ``b`` is bits (divided
    by 8). Every ``<s>`` flag also accepts a duration suffix (``30s``, ``5m``,
-   ``1.5h``, ``500ms``, ``200us``). A **bare number keeps the flag's legacy
-   unit** for back-compat: a ``<bytes>`` flag reads it as bytes, an MB-scaled
-   flag (e.g. ``--chunk-size <MB>``) reads it as MB, and a ``<s>`` flag reads
-   it as seconds. The same coercion is available from the Python API, whose
+   ``1.5h``, ``500ms``, ``200us``). A **bare number keeps the flag's native
+   unit**: a ``<bytes>`` flag reads it as bytes, an MB-scaled flag (e.g.
+   ``--chunk-size <MB>``) reads it as MB, and a ``<s>`` flag reads it as
+   seconds. The same coercion is available from the Python API, whose
    byte/duration arguments accept either a number or a unit string.
 
 **Pipeline** (``PipelineArgs``)
@@ -128,7 +128,7 @@ dftracer_info
 - ``-d, --directory <path>`` - Directory containing files to inspect
 - ``--query <type>`` - Query type: ``summary`` (aggregate all files, default) or ``detailed`` (per-file output including detailed statistics)
 - ``-f, --force-rebuild`` - Force rebuild index files
-- ``-c, --checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
+- ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 
@@ -166,7 +166,8 @@ dftracer_split
 - ``-o, --output <dir>`` - Output directory for split files (default: ./split)
 - ``-s, --chunk-size <MB>`` - Output file size in MB, approximate **compressed** on-disk size (default: 4)
 - ``-f, --force`` - Override existing files and force index recreation
-- ``-c, --compress`` - Compress output files with gzip (default: true)
+- ``-c, --compress`` - Compress output files with gzip (a value-less flag;
+  output is gzip-compressed by default)
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes; also
   the gzip member size (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
@@ -194,8 +195,8 @@ dftracer_split
    # Larger chunks with a fine-grained 4 MB checkpoint size for more read parallelism
    dftracer_split -d ./traces -s 256 --checkpoint-size 4194304 -o ./chunks
 
-   # Split without compression and verify output
-   dftracer_split -d ./data -c false --verify -o ./output
+   # Verify that split output matches the input event IDs
+   dftracer_split -d ./data --verify -o ./output
 
 dftracer_event_count
 --------------------
@@ -212,7 +213,7 @@ dftracer_event_count
 
 - ``-d, --directory <path>`` - Directory containing .pfw.gz files (default: .)
 - ``-f, --force`` - Force index recreation
-- ``-c, --checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
+- ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 
@@ -328,6 +329,9 @@ dftracer_server
 - ``--member-cache-size <bytes>`` - Bytes of decoded gzip members retained to
   share across concurrent queries (0 disables retention but still coalesces
   in-flight decodes; default: 1073741824 B / 1 GB)
+- ``--timeout <s>`` - Auto-shutdown after this much uptime (0 disables,
+  default). Useful to stop lingering processes when a client such as the
+  VSCode extension closes without killing the server
 - ``--executor-threads <count>`` - Number of worker threads (default: number of CPU cores)
 
 **Example:**
@@ -463,8 +467,10 @@ dftracer_view
 
 - ``--call-tree`` - Emit the containment call tree as NDJSON
 - ``--flamegraph`` - Emit the folded flamegraph as NDJSON. Distributes under
-  ``mpirun`` (each rank folds an arena partial, ranks all-gather, rank 0
-  merges), so there is no separate ``_mpi`` binary.
+  ``mpirun``: each rank folds an arena partial, ranks all-gather, and rank 0
+  merges.
+- ``--ct-partition <keys>`` - Comma-separated lane keys for
+  ``--call-tree``/``--flamegraph`` (default: ``pid,tid``)
 
 **Example:**
 
@@ -542,6 +548,8 @@ plugins run, unless ``--no-auto-index`` is given.
 - ``--index-dir <path>`` - Directory where ``.dftindex`` stores are created
 - ``--checkpoint-size <bytes>`` - Checkpoint size for gzip indexing in bytes (default: 33554432 B / 32 MB)
 - ``--no-auto-index`` - Disable automatic index building for files missing ``.dftindex``
+- ``--describe`` - Load ``--plugin`` libraries, print what each provides/consumes,
+  and exit without scanning
 - ``--plugin <path>`` - Path to a plugin shared object. Repeatable; each
   occurrence starts a new plugin block that the following ``--parg``/``--pconfig``
   apply to

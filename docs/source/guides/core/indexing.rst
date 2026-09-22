@@ -151,7 +151,7 @@ eager build:
          from dftracer.utils import TraceViewer
 
          # No prior Indexer call needed: the first touch builds the index.
-         df = TraceViewer("traces/").group_by("cat").agg("count").collect()
+         df = TraceViewer("traces/").group_by("cat").agg("count").collect().collect()
 
    .. tab-item:: C++
 
@@ -166,7 +166,8 @@ eager build:
          View view = View::from_directory("traces/").get();
          auto df = view.group_by({GroupKey::cat()})
                        .agg({AggSpec(AggOp::Count)})
-                       .collect()
+                       .collect()   // -> LazyFrame
+                       .collect()   // -> coro::CoroTask<DataFrame>
                        .get();
 
 This bootstrap only fires for that clean-first-touch case. Once an index

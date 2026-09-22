@@ -19,8 +19,10 @@ Pick group keys, pick aggregates, collect.
    .. tab-item:: C++
 
       Group keys are ``GroupKey`` values; aggregates are ``AggSpec`` values.
-      ``group_by``/``agg`` return an ``AggregatedView``; ``collect()`` is a
-      coroutine - ``.get()`` drives it to completion for a non-coroutine caller.
+      ``group_by``/``agg`` return an ``AggregatedView``; ``collect()`` builds
+      the plan and returns a ``LazyFrame``, whose own ``collect()`` is the
+      coroutine that runs the scan - ``.get()`` drives it to completion for a
+      non-coroutine caller.
 
       .. code-block:: cpp
 
@@ -34,6 +36,7 @@ Pick group keys, pick aggregates, collect.
                              {AggOp::Sum, "dur", "sum_dur"},
                              {AggOp::Mean, "dur", "mean_dur"}})
                        .collect()
+                       .collect()
                        .get();
 
       Scan a whole directory with ``View::from_directory`` (itself a coroutine):
@@ -44,11 +47,14 @@ Pick group keys, pick aggregates, collect.
          auto df = v.group_by({GroupKey::cat()})
                     .agg({{AggOp::Count, "", "count"}})
                     .collect()
+                    .collect()
                     .get();
 
    .. tab-item:: Python
 
-      Group keys and aggregates are strings.
+      Group keys and aggregates are strings. ``collect()`` builds the plan
+      and returns a ``LazyFrame``; call its own ``collect()`` for the
+      ``DataFrame``.
 
       .. code-block:: python
 
@@ -57,6 +63,7 @@ Pick group keys, pick aggregates, collect.
          df = (TraceViewer("traces/")
                .group_by("cat")
                .agg("count", "sum:dur", "mean:dur")
+               .collect()
                .collect())
 
 Both produce a frame with one row per distinct category and the columns
@@ -83,6 +90,7 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
                        .group_by({GroupKey::cat()})
                        .agg(F("dur").sum(), F("dur").mean(), F.any.count())
                        .collect()
+                       .collect()
                        .get();
 
    .. tab-item:: Python
@@ -95,6 +103,7 @@ top-level and ``args.*`` alike (``F("args.level").mean()``).
          df = (TraceViewer("trace.pfw.gz")
                .group_by("cat")
                .agg(F.dur.sum(), F("dur").mean(), F.any.count())
+               .collect()
                .collect())
 
 The reductions are ``sum`` / ``min`` / ``max`` / ``mean`` / ``var`` / ``std`` /
@@ -276,6 +285,7 @@ the number of concurrent ``pread`` calls per file is a ``concurrency`` (or
                        .agg({{AggOp::Concurrency, "dur", "concurrency"},
                              {AggOp::Active, "dur", "active"}})
                        .collect()
+                       .collect()
                        .get();
 
    .. tab-item:: Python
@@ -287,6 +297,7 @@ the number of concurrent ``pread`` calls per file is a ``concurrency`` (or
          df = (TraceViewer("trace.pfw.gz")
                .group_by("name")
                .agg("concurrency", "active")   # or AggOp.CONCURRENCY, AggOp.ACTIVE
+               .collect()
                .collect())
 
 Occupancy is computed during the parallel scan from a bounded per-bucket
@@ -377,18 +388,24 @@ reduction): the ``FieldStat`` ones - ``sum`` / ``min`` / ``max`` / ``mean`` /
                        .group_by({GroupKey::cat()})
                        .agg_numeric_args()
                        .collect()
+                       .collect()
                        .get();
 
    .. tab-item:: Python
 
       .. code-block:: python
 
-         df = TraceViewer("counters.pfw.gz").group_by("cat").agg_numeric_args().collect()
+         df = (TraceViewer("counters.pfw.gz")
+               .group_by("cat")
+               .agg_numeric_args()
+               .collect()
+               .collect())
 
          # sum + p90 per numeric counter arg (sum_<arg>, p90_<arg>):
          bands = (TraceViewer("counters.pfw.gz")
                   .group_by("cat")
                   .agg_numeric_args("sum", "p90")
+                  .collect()
                   .collect())
 
 ``F.any.mean()`` in an ``agg`` call is the same as the no-argument form
@@ -413,7 +430,7 @@ use.
                      .get();
 
 This is a C++ / native surface; there is no Python equivalent. From Python, use
-the plugin host (see :doc:`../../plugins`) or aggregate with the built-in specs
+``Plugins`` (see :doc:`../../plugins`) or aggregate with the built-in specs
 above.
 
 Sharing one scan across branches

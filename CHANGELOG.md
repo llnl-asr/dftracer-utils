@@ -11,6 +11,79 @@ and this project aims to adhere to [Semantic Versioning](https://semver.org/spec
 
 ### Added
 
+- A columnar `DataFrame` / `Series` / `LazyFrame` engine that is a drop-in for
+  pandas and polars: `import dftracer.utils.pandas as pd` (or `.polars as pl`)
+  and most code runs unchanged on the SIMD kernels. The pandas surface covers
+  `loc` / `iloc` / `at` / `iat` and `set_index` (the index is a named column,
+  copy-on-write assignment), `groupby` objects with the `agg` forms, column
+  selection (`groupby(k)["v"]`), a Series key, group-wise transforms
+  (`cumsum`, `shift`, `rank`, `head`, `nth`, `ffill`, `bfill`, `rolling`,
+  `expanding`, `ewm`, `take`, `sample`, `resample`), `apply` / `map` compiled
+  into the engine (Python per row only as a last resort, with a warning), the
+  `str` and `dt` accessors, `tz_localize` / `tz_convert`, `merge`, `nlargest`,
+  `value_counts`, `mode`, `compare`, `pivot_table` and `describe`; the polars
+  spellings sit alongside (`select(Expr)`, `with_columns`, `over`, the `str`
+  namespace). `Series` masks combine with `&`, `|` and `~`; `==` / `!=` return
+  a mask (a Series is unhashable, as in pandas and polars).
+- A hash join on `DataFrame`, `LazyFrame`, the C ABI and Python (`join` /
+  `merge`; inner, left, right, outer, semi, anti and cross). A plan's join sends its
+  build keys to the scan, which prunes the chunks that cannot match.
+- Plans (`LazyFrame`): `explain()`, `schema()` and `output_schema()` without
+  running; `memory_budget` / `auto_spill` bounding every breaker; a source of
+  your own (`Source` / `dftu_source_vt`, registered by name); a plugin's own
+  plan step (`dftu_node_register`, `LazyFrame.op`); a `frame_op` step for
+  every registry table op (`unnest`, `partition_id`, `compare_agg`, `window`,
+  `gap_fill`, `asof`, `interval`, `concat`, `union`, `pivot` and `to_dummies`).
+- Aggregates: `prod`, `cumprod`, exact group `median` / `quantile`,
+  `unique(subset)`, a per-column `reduce`, a whole-frame `group_by()`,
+  `first` / `last` exact across a parallel merge; group keys of any type
+  (Binary, Float16, null keys as their own group with `dropna=False`).
+- Plugin ABI: a plugin transforms the batch every later plugin receives
+  (`transform`), reports and releases what it holds against the memory
+  budget (`bytes` / `reclaim`), and a plugin node or slice under a plan is
+  measured by the same budget; `abi_version` is a hash of the header, so a
+  plugin built against another version is refused at load.
+- `benchmarks/dataframe_vs_pandas_polars.py`: the engine against pandas,
+  polars and DuckDB on the same Arrow tables, eagerly and as a plan, with a
+  correctness check of every result against ours, the cores each engine kept
+  busy and `--memory` for the peak resident set per op.
+
+### Changed
+
+- The dataframe engine is measured (10M rows, Apple M4 Pro): ahead of pandas
+  on every benchmark row, of polars on every row but two at the noise floor,
+  of DuckDB on every row but one within a millisecond of it. The group-by
+  runs a plain loop over batches of rows with a direct table for dense
+  integer keys, a word table for string keys and, with many groups on a
+  string key, a scatter into per-thread partitions; the join uses a
+  direct-address table and 32-bit index lists; the sort is a sample sort;
+  filters, comparisons, string predicates, casts, gathers, rolling windows,
+  `//` / `%` / `**` and the dictionary encoder run in parallel; a quantile
+  reads its column in place and sorts one bucket.
+- A plan over a resident frame runs whole-column for every op (an op with no
+  eager form runs its own cursor over the frame as one morsel); it no longer
+  streams through a spool or spills to disk.
+- Memory detection reads the free and inactive pages on macOS (the auto
+  budget assumed 1 GB there).
+- `Series.rolling(...).mean()` and the other windows write their output in
+  place and run a chunk per thread.
+
+### Removed
+
+- **Breaking:** the previous plugin ABI. A plugin built against it does not
+  load; rebuild against `dftracer/utils/plugins/abi/plugin.h`.
+
+### Fixed
+
+- A sketch quantile (`pct` in a plan, `DDSketch`) returned `-inf` once a
+  bucket held more than 65535 values; buckets are 32-bit now.
+- Column-column arithmetic dropped nulls; a Bool column was gathered by
+  byte instead of by bit; `group_by` returned groups out of first-seen order
+  after a parallel run; a plugin node was answered asynchronously when the
+  data was resident.
+- `df.groupby(series)` raised a `SystemError`: the frame's `in` test left a
+  pending error for a non-string key.
+
 - Interactive web trace viewer gains a counter timeline track (with malformed-value
   handling), per-counter pid/tid breakdown, bounded-density serving, and active-time
   statistics.

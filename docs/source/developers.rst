@@ -49,6 +49,54 @@ C++ Tests
    cmake --build --preset tests
    ctest --preset tests --output-on-failure
 
+Both suites are the gate for every commit; run them one after the other,
+not side by side (the two builds compete for cores and the slow tests time
+out).
+
+Sanitizers, Valgrind and a second compiler
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ``asan``, ``ubsan``, ``asan-ubsan`` and ``tsan`` presets build the C++
+suite under the sanitizer and run it the same way (``cmake --preset
+asan-ubsan && cmake --build --preset asan-ubsan && ctest --preset
+asan-ubsan``). ASan plus UBSan is the fuzzing harness: the Hypothesis
+properties below and the byte-mutation loop in the ``agg_deserialize``
+tests reach every C entry point, so a sanitized run of the suite is the
+fuzz run, with no separate framework or corpus.
+
+Valgrind and gcc 12 run in Docker (the host's Docker, any platform):
+
+.. code-block:: bash
+
+   make valgrind-cpp        # memcheck over the C++ suite
+   make valgrind-py         # memcheck over the Python suite, our frames only
+   make docker-test-gcc12   # build and test with gcc 12 (C++ scope)
+   scripts/docker-test.sh gcc12 both -j 4   # C++ and Python under gcc 12
+
+``VALGRIND_CTEST_FILTER`` and ``VALGRIND_PYTEST_FILES`` narrow a Valgrind
+run to a subset; ``tests/valgrind/ours_only.py`` keeps only findings whose
+stack passes through our code. The gcc 12 run is there to catch an ICE or
+a diagnostic clang does not give; ``-j`` also caps the Python extension
+build (``CMAKE_BUILD_PARALLEL_LEVEL``), since the pip build in the
+container runs out of memory at the default.
+
+Property tests and the op matrix
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``tests/python/test_properties.py`` runs `Hypothesis
+<https://hypothesis.readthedocs.io/>`_ properties (a dev dependency) over
+random typed columns with nulls at random lengths: a view equals its flat
+twin under every column op, arithmetic / windows / group-by agree with
+pandas, a serialized aggregate merges to the same answer.
+``tests/python/test_op_encoding_matrix.py`` runs every registry op
+(``op_info`` / ``op_run``) against every column encoding, so a kernel that
+assumes FLAT fails there rather than in a plugin.
+``scripts/check_op_parity_doxygen.py`` is the parity gate: every public
+``Series`` / ``DataFrame`` / ``LazyFrame`` method, C++ (read from the
+Doxygen XML) and Python (``tests/python/test_op_parity.py`` runs that half
+under pytest), is backed by a registered op, and every registered op is
+reachable from Python, so the three surfaces cannot drift apart.
+
 Code Coverage
 -------------
 
@@ -478,9 +526,9 @@ Avoid querying the database for every event. Use bloom filters and per-chunk sta
     }
     
     // CORRECT: batch statistics with bloom filters
-    BloomIndex bloom;
+    ScalableBloomFilter bloom;
     for (const auto& chunk : chunks) {
-        bloom.add_chunk_stats(chunk);
+        bloom.add(chunk.key);
     }
 
 **Concurrency**

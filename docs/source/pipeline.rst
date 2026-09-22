@@ -214,8 +214,8 @@ Chain operations using combinators:
        .tap([](int x) { log("value: {}", x); })
        .then([](int x) { return x * 2; });
 
-   // Fallback with operator|
-   auto result = co_await (primary() | fallback());
+   // Fallback with or_else()
+   auto result = co_await primary().or_else(fallback());
 
 See :doc:`cpp_api/coro` for full API.
 
@@ -831,7 +831,7 @@ Control execution duration and cooperative cancellation using ``PipelineConfig``
             process(*item);
 
             // Yield frequently to allow cancellation checks
-            co_await scope.maybe_yield();
+            co_await coro::maybe_yield();
         }
 
         if (scope.is_cancellation_requested()) {
@@ -858,10 +858,11 @@ Control execution duration and cooperative cancellation using ``PipelineConfig``
 
         // Race: cache (fast) vs. disk (slow), with 100ms timeout
         auto timeout_duration = std::chrono::milliseconds(100);
+        auto& timer_service = scope.get_executor()->get_timer_service();
         auto result = co_await when_any({
             std::move(cache_future),
             std::move(disk_future),
-            timeout(timeout_duration),
+            timeout(timeout_duration, &timer_service),
         });
 
         if (result.index == 0) {

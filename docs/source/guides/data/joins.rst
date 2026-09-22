@@ -1,13 +1,22 @@
-:description: Equi-join two frames on their leading key columns: inner, left, right, full, and semi joins over frames sharing key names in order.
+:description: Hash-join two frames on one or more key columns: inner, left, right, outer, semi, anti and cross joins, eager or lazy, from C++, C and Python.
 
 Join frames
 ===========
 
 Combine two frames row-wise on a shared key: line up a per-file summary against a
 baseline, attach resolved names to an aggregate, or intersect two result sets.
-The join key is a *leading-key-count*: both frames must already carry the join
-columns first, in the same order, with the same names. The engine equi-joins on
-the first ``n`` columns and matches nothing when the two key schemas disagree.
+The join is a hash join keyed by name: ``on`` names the key column(s) both
+frames carry, or ``left_on`` / ``right_on`` name each side's keys when they
+differ. Keys compare exactly, each pair must share a type, and a null key never
+matches (SQL semantics).
+
+The output is the left frame's columns, then the right frame's, except a right
+key that shares its left key's name (emitted once). Any other right column whose
+name collides with a left column gets a suffix (``_right`` by default). Matched
+rows keep the left frame's order; ``right`` / ``outer`` append the unmatched
+right rows at the end. ``semi`` / ``anti`` return the left frame's columns only,
+one row per left row with / without a match. ``cross`` pairs every left row with
+every right row and takes no keys.
 
 Join two DataFrames
 -------------------
@@ -16,45 +25,93 @@ Join two DataFrames
 
    .. tab-item:: C++
 
-      ``join_batches`` is a free function in
-      ``dftracer/utils/trace/views/result_join.h``.
-
       .. code-block:: cpp
 
-         #include <dftracer/utils/trace/views/result_join.h>
-
-         using namespace dftracer::utils::trace::views;
+         #include <dftracer/utils/dataframe/dataframe.h>
          using dftracer::utils::dataframe::DataFrame;
+         using dftracer::utils::dataframe::JoinHow;
 
-         // Equi-join on the first n_key columns (shared names, in order).
-         DataFrame joined = join_batches(left, right, /*n_key=*/1, JoinType::INNER);
+         DataFrame joined = left.join(right, {"fid"});                     // inner
+         DataFrame lj = left.join(right, {"pid", "tid"}, JoinHow::Left);
+         DataFrame keyed = left.join(right, {"k"}, {"rk"}, JoinHow::Outer, "_r");
 
-      ``JoinType`` is ``INNER``, ``LEFT``, ``RIGHT``, ``FULL``, ``LEFT_SEMI``, or
-      ``LEFT_ANTI``.
+      ``JoinHow`` is ``Inner``, ``Left``, ``Right``, ``Outer``, ``Semi``, ``Anti``
+      or ``Cross``. An absent key throws ``std::out_of_range``; an empty or
+      uneven key list, or a key type mismatch, throws ``std::invalid_argument``.
 
    .. tab-item:: Python
 
       .. code-block:: python
 
-         # on = number of leading key columns, or the shared key name(s).
-         joined = df.join(other, on=1, how="inner")
-         joined = df.join(other, on="fid", how="left")
-         joined = df.join(other, on=["pid", "tid"], how="inner")
+         joined = df.join(other, on="fid")                       # inner
+         joined = df.join(other, on=["pid", "tid"], how="left")
+         joined = df.join(other, left_on="k", right_on="rk", how="outer", suffix="_r")
+         joined = df.merge(other, how="left", on="fid")          # pandas order
 
-      ``on`` is either an int count of leading key columns (both frames must
-      carry them first, in order, with the same names) or the shared key column
-      name(s). ``how`` is one of ``inner`` / ``left`` / ``right`` / ``full`` /
-      ``semi`` / ``anti`` (use ``full``, not ``outer``). ``on`` defaults to
-      ``1``.
+      ``on`` is the shared key column name(s), or an int count of this frame's
+      leading columns. ``how`` is ``inner`` / ``left`` / ``right`` / ``outer``
+      (``full`` is an alias) / ``semi`` / ``anti`` / ``cross``. ``merge`` is the
+      pandas spelling of the same call (``right`` first, then ``how``); only the
+      right side's colliding columns are suffixed. A missing key column raises
+      ``KeyError``.
 
-The result keeps the key columns under their own names, then the non-key
-**left** columns prefixed ``l_``, then (unless the join is ``SEMI`` / ``ANTI``)
-the non-key **right** columns prefixed ``r_``. An outer join (``LEFT`` /
-``RIGHT`` / ``FULL``) nulls the absent side. If the two frames do not share the
-leading key schema the result is an empty frame.
+   .. tab-item:: C
 
-There is no ``dftu_dataframe_join`` in the C ABI; from C, drive the join through
-the C++ or Python surface above.
+      .. code-block:: c
+
+         const char* on[] = {"fid"};
+         dftu_dataframe* joined =
+             dftu_dataframe_join(left, right, on, on, 1, DFTU_JOIN_INNER, NULL);
+
+      ``dftu_dataframe_join`` returns NULL on an absent key, a key type mismatch,
+      an empty key list for a keyed join, or an unknown ``dftu_join_how``. The
+      same op is registered as ``dftu.frame.join`` (two frame operands, then
+      the two key lists, the join kind and the suffix).
+
+Join lazily
+-----------
+
+``LazyFrame::join`` takes another ``LazyFrame`` as the right side. When the plan
+runs, the right plan is collected in full (the hash build side, bounded by the
+right row count) and the left plan streams through it morsel by morsel: inner,
+left, semi, anti and cross hold no left state, and right / outer add one match
+bit per right row. The join is an optimizer barrier: no filter or projection
+moves across it.
+
+Once the build side is in hand, an inner, right or semi join narrows the
+left scan to the keys it will keep: the set of build keys (or their range,
+for a large numeric key) goes up the left chain as a ``Cursor::narrow``
+offer, through the streaming ops between (filter, select, with_column,
+rename, sort, drop_nulls, with_row_index, a plugin node that forwards it)
+to the source. A trace scan turns it into an index prune of the chunks not
+yet read; any source may ignore it. The offer is advisory: the join still
+probes every row the source yields, so honouring it only changes how much
+is read, never the result.
+
+.. tab-set::
+
+   .. tab-item:: C++
+
+      .. code-block:: cpp
+
+         LazyFrame plan = left.lazy().join(right.lazy(), {"fid"}, JoinHow::Left);
+         DataFrame out = co_await plan.collect();
+
+   .. tab-item:: Python
+
+      .. code-block:: python
+
+         out = left.lazy().join(right.lazy(), on="fid", how="left").collect()
+
+   .. tab-item:: C
+
+      .. code-block:: c
+
+         dftu_lazyframe* plan =
+             dftu_lazyframe_join(left_lf, right_lf, on, on, 1, DFTU_JOIN_LEFT, NULL);
+
+      Registered as ``dftu.lazy.join``, so a plugin reaches it through
+      ``OwnedLazyFrame::join`` as well.
 
 Join two aggregated trace queries
 ---------------------------------

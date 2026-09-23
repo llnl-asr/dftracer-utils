@@ -1,9 +1,13 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/schema.h>
+#include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_counter_format.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 
+#include <cmath>
 #include <cstdint>
+#include <set>
+#include <string>
 #include <vector>
 
 namespace dftracer::utils::trace::views::detail {
@@ -85,31 +89,92 @@ std::string counter_line(const std::vector<std::string>& group_cols,
     return s;
 }
 
-void emit_group_counter(const std::string& /*key*/, const AggAccum& a,
-                        const ViewPlan& plan, ExportSink& sink) {
+namespace {
+
+double col_cell_double(const dftracer::utils::dataframe::Series& c,
+                       std::int64_t r) {
+    using dftracer::utils::dataframe::TypeId;
+    switch (c.type()) {
+        case TypeId::Int64:
+            return static_cast<double>(c.data<std::int64_t>()[r]);
+        case TypeId::Uint64:
+            return static_cast<double>(c.data<std::uint64_t>()[r]);
+        case TypeId::Float64:
+            return c.data<double>()[r];
+        default:
+            return 0.0;
+    }
+}
+
+}  // namespace
+
+void emit_counters_from_state(const dftracer::utils::dataframe::AggState& state,
+                              const ViewPlan& plan, ExportSink& sink) {
+    namespace df = dftracer::utils::dataframe;
+    df::DataFrame f = finalize_engine_result(state, plan);
+
     std::vector<std::string> group_cols;
     if (plan.time_bucket_us > 0) group_cols.push_back("time_bucket");
     for (const auto& gk : plan.group_by)
         group_cols.push_back(group_col_name(gk));
-    std::vector<std::string> value_cols;
-    std::vector<double> values;
+
+    // Columns that are group keys, spec values, or occupancy metadata are not
+    // dyn args; the rest of the frame is the per-arg dyn columns.
+    std::set<std::string> non_dyn(group_cols.begin(), group_cols.end());
+    non_dyn.insert("busy_cell_us");
+    std::vector<std::string> spec_cols;
     if (plan.agg.empty()) {
-        value_cols.push_back("count");
-        values.push_back(static_cast<double>(a.count));
+        spec_cols.push_back("count");
+        non_dyn.insert("count");
     } else {
-        for (std::size_t i = 0; i < plan.agg.size(); ++i) {
-            const auto& spec = plan.agg[i];
+        for (const auto& spec : plan.agg) {
+            const std::string nm = agg_col_name(spec);
+            non_dyn.insert(nm);
             if (spec.op == AggOp::ArgMax) continue;  // counter args are numeric
-            value_cols.push_back(agg_col_name(spec));
-            values.push_back(finalize_value(a, plan, i));
+            spec_cols.push_back(nm);
         }
     }
-    for (const auto& [name, m] : a.dyn) {
-        value_cols.push_back(name);
-        values.push_back(m.n ? m.sum / static_cast<double>(m.n) : 0.0);
+    std::vector<std::string> dyn_cols;
+    for (const std::string& nm : f.names)
+        if (!non_dyn.count(nm)) dyn_cols.push_back(nm);
+
+    std::vector<int> gi(group_cols.size());
+    for (std::size_t k = 0; k < group_cols.size(); ++k)
+        gi[k] = static_cast<int>(f.column_index(group_cols[k]));
+    std::vector<int> si(spec_cols.size());
+    for (std::size_t k = 0; k < spec_cols.size(); ++k)
+        si[k] = static_cast<int>(f.column_index(spec_cols[k]));
+    std::vector<int> di(dyn_cols.size());
+    for (std::size_t k = 0; k < dyn_cols.size(); ++k)
+        di[k] = static_cast<int>(f.column_index(dyn_cols[k]));
+
+    const std::int64_t nrows = f.num_rows();
+    for (std::int64_t r = 0; r < nrows; ++r) {
+        std::vector<std::string> keys(group_cols.size());
+        for (std::size_t k = 0; k < group_cols.size(); ++k) {
+            const df::Series& c = f.columns[static_cast<std::size_t>(gi[k])];
+            if (!c.is_null(r)) keys[k] = std::string(c.string_at(r));
+        }
+        std::vector<std::string> value_cols;
+        std::vector<double> values;
+        for (std::size_t k = 0; k < spec_cols.size(); ++k) {
+            value_cols.push_back(spec_cols[k]);
+            values.push_back(
+                col_cell_double(f.columns[static_cast<std::size_t>(si[k])], r));
+        }
+        // Sparse per group: emit only the args this group actually saw,
+        // matching emit_group_counter iterating a.dyn.
+        for (std::size_t k = 0; k < dyn_cols.size(); ++k) {
+            const df::Series& c = f.columns[static_cast<std::size_t>(di[k])];
+            if (c.is_null(r)) continue;
+            const double v = col_cell_double(c, r);
+            if (std::isnan(v)) continue;
+            value_cols.push_back(dyn_cols[k]);
+            values.push_back(v);
+        }
+        sink.write(counter_line(group_cols, keys, value_cols, values));
+        sink.write("\n");
     }
-    sink.write(counter_line(group_cols, a.keys, value_cols, values));
-    sink.write("\n");
 }
 
 }  // namespace dftracer::utils::trace::views::detail

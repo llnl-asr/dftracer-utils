@@ -256,6 +256,10 @@ coro::AsyncGenerator<ViewScannerBatch> ViewScannerUtility::operator()(
                                         }
                                     }
                                 }
+                            } else if (input.view.filter_metadata &&
+                                       use_query && !query->evaluate(json)) {
+                                // phase("metadata") filters the records too;
+                                // otherwise metadata bypasses the event query.
                             } else if (input.fold_intern) {
                                 // Fold mode: parse-once metadata for a
                                 // dictionary/bloom fold, no re-parse

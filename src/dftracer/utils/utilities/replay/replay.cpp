@@ -541,7 +541,7 @@ std::vector<std::string> glob_trace_files(const std::string& dir,
         suffix = suffix.substr(star + 1);
     std::vector<std::string> out;
     std::error_code ec;
-    std::filesystem::recursive_directory_iterator it(dir, ec), end;
+    fs::recursive_directory_iterator it(dir, ec), end;
     for (; !ec && it != end; it.increment(ec)) {
         if (!it->is_regular_file()) continue;
         const std::string s = it->path().string();
@@ -664,7 +664,8 @@ ReplayResult ReplayEngine::replay_with_call_tree(
         };
         auto end = [&](std::int64_t i) {
             const Trace& t = events[static_cast<std::size_t>(i)];
-            return static_cast<std::int64_t>(t.time_start + t.duration);
+            return static_cast<std::int64_t>(
+                t.time_start + static_cast<std::uint64_t>(t.duration));
         };
 
         // Lanes by (pid,tid); each is an independent nesting stack.

@@ -17,56 +17,13 @@
 namespace {
 
 std::string find_gen_fake_trace_binary() {
-    const char* env_path = std::getenv("DFTRACER_GEN_FAKE_TRACE_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_gen_fake_trace",         "../dftracer_gen_fake_trace",
-        "../../dftracer_gen_fake_trace",     "../bin/dftracer_gen_fake_trace",
-        "../../bin/dftracer_gen_fake_trace",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_GEN_FAKE_TRACE_PATH",
+                                                "dftracer_gen_fake_trace");
 }
 
 int run_gen_fake_trace(const std::string& binary,
                        const std::vector<std::string>& args) {
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& arg : args) argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    pid_t pid = ::fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return -1;
-}
-
-// Read the first non-empty line from a gzip file.
-std::string gz_first_line(const std::string& gz_path) {
-    gzFile gz = gzopen(gz_path.c_str(), "rb");
-    if (!gz) return "";
-
-    char buf[4096];
-    std::string result;
-    while (gzgets(gz, buf, sizeof(buf)) != nullptr) {
-        std::string line(buf);
-        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-            line.pop_back();
-        if (!line.empty()) {
-            result = line;
-            break;
-        }
-    }
-    gzclose(gz);
-    return result;
+    return dftu_utils_test::run_process(binary, args);
 }
 
 }  // namespace
@@ -152,7 +109,7 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         REQUIRE(fs::exists(rank0));
 
         // First line is the opening JSON array bracket.
-        auto first = gz_first_line(rank0);
+        auto first = dftu_utils_test::gz_first_line(rank0);
         REQUIRE(!first.empty());
         CHECK(first.front() == '[');
     }

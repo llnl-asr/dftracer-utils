@@ -1,3 +1,4 @@
+#include <dftracer/utils/core/common/bits.h>
 #include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
 #include <simdjson.h>
 
@@ -8,10 +9,8 @@
 namespace dftracer::utils::utilities::common::statistics {
 
 std::size_t Log2Histogram::bin_index(std::uint64_t value) {
-    if (value == 0) return 0;
-    // floor(log2(value)) + 1
-    // __builtin_clzll: count leading zeros for unsigned long long (64-bit)
-    return static_cast<std::size_t>(63 - __builtin_clzll(value)) + 1;
+    // floor(log2(value)) + 1, and 0 for value 0.
+    return static_cast<std::size_t>(bits::bit_width_u64(value));
 }
 
 std::uint64_t Log2Histogram::bin_lower(std::size_t bin) {

@@ -57,6 +57,56 @@ ArrowType to_nanoarrow_type(ColumnType t) noexcept {
     return NANOARROW_TYPE_UNINITIALIZED;
 }
 
+// Which backing storage a ColumnType uses. Collapses the fixed-width integer
+// and float variants onto their 64-bit accumulator, so the resize / push /
+// reserve switches classify once here instead of re-listing every width.
+enum class StorageKind {
+    INT64,
+    UINT64,
+    DOUBLE,
+    STRING,
+    BOOL,
+    DICT,
+    HIST,
+    STRING_LIST,
+    INT64_LIST,
+    STRUCT_LIST
+};
+
+constexpr StorageKind storage_kind(ColumnType t) noexcept {
+    switch (t) {
+        case ColumnType::INT64:
+        case ColumnType::INT8:
+        case ColumnType::INT16:
+        case ColumnType::INT32:
+            return StorageKind::INT64;
+        case ColumnType::UINT64:
+        case ColumnType::UINT8:
+        case ColumnType::UINT16:
+        case ColumnType::UINT32:
+            return StorageKind::UINT64;
+        case ColumnType::DOUBLE:
+        case ColumnType::FLOAT32:
+            return StorageKind::DOUBLE;
+        case ColumnType::STRING:
+        case ColumnType::BINARY:
+            return StorageKind::STRING;
+        case ColumnType::BOOL:
+            return StorageKind::BOOL;
+        case ColumnType::DICT_STRING:
+            return StorageKind::DICT;
+        case ColumnType::HIST:
+            return StorageKind::HIST;
+        case ColumnType::STRING_LIST:
+            return StorageKind::STRING_LIST;
+        case ColumnType::INT64_LIST:
+            return StorageKind::INT64_LIST;
+        case ColumnType::STRUCT_LIST:
+            return StorageKind::STRUCT_LIST;
+    }
+    return StorageKind::INT64;
+}
+
 }  // namespace
 
 void RecordBatchBuilder::init_column(ColumnData& col, ColumnType type,
@@ -78,51 +128,43 @@ void RecordBatchBuilder::backfill_nulls(ColumnData& col,
     }
     col.validity.resize(col.count + n, 0);
 
-    switch (col.type) {
-        case ColumnType::INT64:
-        case ColumnType::INT8:
-        case ColumnType::INT16:
-        case ColumnType::INT32:
+    switch (storage_kind(col.type)) {
+        case StorageKind::INT64:
             col.int64_values.resize(col.count + n, 0);
             break;
-        case ColumnType::UINT64:
-        case ColumnType::UINT8:
-        case ColumnType::UINT16:
-        case ColumnType::UINT32:
+        case StorageKind::UINT64:
             col.uint64_values.resize(col.count + n, 0);
             break;
-        case ColumnType::DOUBLE:
-        case ColumnType::FLOAT32:
+        case StorageKind::DOUBLE:
             col.double_values.resize(col.count + n, 0.0);
             break;
-        case ColumnType::STRING:
-        case ColumnType::BINARY:
+        case StorageKind::STRING:
             col.string_offsets.resize(
                 col.count + n,
                 static_cast<std::int32_t>(col.string_data.size()));
             break;
-        case ColumnType::BOOL:
+        case StorageKind::BOOL:
             col.bool_values.resize(col.count + n, 0);
             break;
-        case ColumnType::DICT_STRING:
+        case StorageKind::DICT:
             col.dict_indices.resize(col.count + n, -1);  // -1 = null
             break;
-        case ColumnType::HIST:
+        case StorageKind::HIST:
             // Null rows contribute no buckets: repeat the current end offset.
             col.hist_offsets.resize(
                 col.count + n, static_cast<std::int32_t>(col.hist_bins.size()));
             break;
-        case ColumnType::STRING_LIST:
+        case StorageKind::STRING_LIST:
             col.list_offsets.resize(
                 col.count + n,
                 static_cast<std::int32_t>(col.string_offsets.size()));
             break;
-        case ColumnType::INT64_LIST:
+        case StorageKind::INT64_LIST:
             col.list_offsets.resize(
                 col.count + n,
                 static_cast<std::int32_t>(col.int64_values.size()));
             break;
-        case ColumnType::STRUCT_LIST: {
+        case StorageKind::STRUCT_LIST: {
             const std::int32_t end = static_cast<std::int32_t>(
                 col.struct_children.empty() ? 0 : col.struct_children[0].count);
             col.list_offsets.resize(col.count + n, end);
@@ -191,15 +233,19 @@ ColumnType RecordBatchBuilder::column_type(std::size_t col_idx) const noexcept {
     return columns_[col_idx].type;
 }
 
+void RecordBatchBuilder::mark_touched(std::size_t col_idx) {
+    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
+        touched_[col_idx] = true;
+        ++row_touched_count_;
+    }
+}
+
 void RecordBatchBuilder::append_int64(std::size_t col_idx, std::int64_t value) {
     auto& col = columns_[col_idx];
     col.int64_values.push_back(value);
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_uint64(std::size_t col_idx,
@@ -208,10 +254,7 @@ void RecordBatchBuilder::append_uint64(std::size_t col_idx,
     col.uint64_values.push_back(value);
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_double(std::size_t col_idx, double value) {
@@ -219,10 +262,7 @@ void RecordBatchBuilder::append_double(std::size_t col_idx, double value) {
     col.double_values.push_back(value);
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_string(std::size_t col_idx,
@@ -233,10 +273,7 @@ void RecordBatchBuilder::append_string(std::size_t col_idx,
         static_cast<std::int32_t>(col.string_data.size()));
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_binary(std::size_t col_idx,
@@ -262,10 +299,7 @@ void RecordBatchBuilder::append_dict_string(std::size_t col_idx,
     col.dict_indices.push_back(idx);
     col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_bool(std::size_t col_idx, bool value) {
@@ -273,10 +307,7 @@ void RecordBatchBuilder::append_bool(std::size_t col_idx, bool value) {
     col.bool_values.push_back(value ? 1 : 0);
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_hist(
@@ -286,10 +317,7 @@ void RecordBatchBuilder::append_hist(
     col.hist_offsets.push_back(static_cast<std::int32_t>(col.hist_bins.size()));
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_string_list(
@@ -304,10 +332,7 @@ void RecordBatchBuilder::append_string_list(
         static_cast<std::int32_t>(col.string_offsets.size()));
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_int64_list(
@@ -319,10 +344,7 @@ void RecordBatchBuilder::append_int64_list(
         static_cast<std::int32_t>(col.int64_values.size()));
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_struct_list(
@@ -332,19 +354,14 @@ void RecordBatchBuilder::append_struct_list(
         for (std::size_t f = 0; f < col.struct_children.size(); ++f) {
             ColumnData& fc = col.struct_children[f];
             const StructCell& cell = inner[f];
-            switch (fc.type) {
-                case ColumnType::DOUBLE:
-                case ColumnType::FLOAT32:
+            switch (storage_kind(fc.type)) {
+                case StorageKind::DOUBLE:
                     fc.double_values.push_back(cell.f64);
                     break;
-                case ColumnType::UINT64:
-                case ColumnType::UINT8:
-                case ColumnType::UINT16:
-                case ColumnType::UINT32:
+                case StorageKind::UINT64:
                     fc.uint64_values.push_back(cell.u64);
                     break;
-                case ColumnType::STRING:
-                case ColumnType::BINARY:
+                case StorageKind::STRING:
                     fc.string_data.insert(fc.string_data.end(),
                                           cell.str.begin(), cell.str.end());
                     fc.string_offsets.push_back(
@@ -361,10 +378,7 @@ void RecordBatchBuilder::append_struct_list(
         col.struct_children.empty() ? 0 : col.struct_children[0].count));
     if (col.has_nulls) col.validity.push_back(1);
     ++col.count;
-    if (!schema_declared_ && !schema_locked_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::append_null(std::size_t col_idx) {
@@ -375,57 +389,46 @@ void RecordBatchBuilder::append_null(std::size_t col_idx) {
     }
     col.validity.push_back(0);
 
-    switch (col.type) {
-        case ColumnType::INT64:
-        case ColumnType::INT8:
-        case ColumnType::INT16:
-        case ColumnType::INT32:
+    switch (storage_kind(col.type)) {
+        case StorageKind::INT64:
             col.int64_values.push_back(0);
             break;
-        case ColumnType::UINT64:
-        case ColumnType::UINT8:
-        case ColumnType::UINT16:
-        case ColumnType::UINT32:
+        case StorageKind::UINT64:
             col.uint64_values.push_back(0);
             break;
-        case ColumnType::DOUBLE:
-        case ColumnType::FLOAT32:
+        case StorageKind::DOUBLE:
             col.double_values.push_back(0.0);
             break;
-        case ColumnType::STRING:
-        case ColumnType::BINARY:
+        case StorageKind::STRING:
             col.string_offsets.push_back(
                 static_cast<std::int32_t>(col.string_data.size()));
             break;
-        case ColumnType::BOOL:
+        case StorageKind::BOOL:
             col.bool_values.push_back(0);
             break;
-        case ColumnType::DICT_STRING:
+        case StorageKind::DICT:
             col.dict_indices.push_back(-1);  // -1 = null
             break;
-        case ColumnType::HIST:
+        case StorageKind::HIST:
             col.hist_offsets.push_back(
                 static_cast<std::int32_t>(col.hist_bins.size()));
             break;
-        case ColumnType::STRING_LIST:
+        case StorageKind::STRING_LIST:
             col.list_offsets.push_back(
                 static_cast<std::int32_t>(col.string_offsets.size()));
             break;
-        case ColumnType::INT64_LIST:
+        case StorageKind::INT64_LIST:
             col.list_offsets.push_back(
                 static_cast<std::int32_t>(col.int64_values.size()));
             break;
-        case ColumnType::STRUCT_LIST:
+        case StorageKind::STRUCT_LIST:
             col.list_offsets.push_back(static_cast<std::int32_t>(
                 col.struct_children.empty() ? 0
                                             : col.struct_children[0].count));
             break;
     }
     ++col.count;
-    if (!schema_declared_ && !touched_[col_idx]) {
-        touched_[col_idx] = true;
-        ++row_touched_count_;
-    }
+    mark_touched(col_idx);
 }
 
 void RecordBatchBuilder::end_row() {
@@ -450,25 +453,17 @@ void RecordBatchBuilder::end_row() {
 
 void RecordBatchBuilder::reserve(std::size_t num_rows) {
     for (auto& col : columns_) {
-        switch (col.type) {
-            case ColumnType::INT64:
-            case ColumnType::INT8:
-            case ColumnType::INT16:
-            case ColumnType::INT32:
+        switch (storage_kind(col.type)) {
+            case StorageKind::INT64:
                 col.int64_values.reserve(num_rows);
                 break;
-            case ColumnType::UINT64:
-            case ColumnType::UINT8:
-            case ColumnType::UINT16:
-            case ColumnType::UINT32:
+            case StorageKind::UINT64:
                 col.uint64_values.reserve(num_rows);
                 break;
-            case ColumnType::DOUBLE:
-            case ColumnType::FLOAT32:
+            case StorageKind::DOUBLE:
                 col.double_values.reserve(num_rows);
                 break;
-            case ColumnType::STRING:
-            case ColumnType::BINARY:
+            case StorageKind::STRING:
                 col.string_offsets.reserve(num_rows + 1);
                 // dftracer hash strings are 16 bytes; common strings
                 // (event names, categories) range 4-32. Bumping the
@@ -476,25 +471,25 @@ void RecordBatchBuilder::reserve(std::size_t num_rows) {
                 // visible in perf for moderate batch sizes.
                 col.string_data.reserve(num_rows * 32);
                 break;
-            case ColumnType::BOOL:
+            case StorageKind::BOOL:
                 col.bool_values.reserve(num_rows);
                 break;
-            case ColumnType::DICT_STRING:
+            case StorageKind::DICT:
                 col.dict_indices.reserve(num_rows);
                 break;
-            case ColumnType::HIST:
+            case StorageKind::HIST:
                 col.hist_offsets.reserve(num_rows);
                 break;
-            case ColumnType::STRING_LIST:
+            case StorageKind::STRING_LIST:
                 col.list_offsets.reserve(num_rows);
                 col.string_offsets.reserve(num_rows);
                 col.string_data.reserve(num_rows * 16);
                 break;
-            case ColumnType::INT64_LIST:
+            case StorageKind::INT64_LIST:
                 col.list_offsets.reserve(num_rows);
                 col.int64_values.reserve(num_rows);
                 break;
-            case ColumnType::STRUCT_LIST:
+            case StorageKind::STRUCT_LIST:
                 col.list_offsets.reserve(num_rows);
                 break;
         }

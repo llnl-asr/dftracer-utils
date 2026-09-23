@@ -23,12 +23,12 @@ using dftracer::utils::plugins::PluginFold;
 // only needs the host's compose extension and task machinery, never a scan.
 struct TrivialSlice {
     explicit TrivialSlice(const dftracer::utils::plugins::Config&) {}
-    void step(const dftu_batch&, dftracer::utils::plugins::Host) {}
+    void step(const dftu_dataframe*, dftracer::utils::plugins::Host) {}
     void merge(TrivialSlice&) {}
     void finalize(dftracer::utils::plugins::Host) {}
 };
 
-using build_op_fn = ::dftu_op* (*)(const ::dftu_host*);
+using build_op_fn = ::dftu_op* (*)(const ::dftu_plugin_host*);
 
 PyObject* jit_run_op(PyObject*, PyObject* args) {
     const char* so_path = nullptr;
@@ -68,10 +68,10 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
             dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
         {
             PluginFold fold(plugin, intern);
-            ::dftu_host& host = fold.host();
+            ::dftu_plugin_host& host = fold.host();
             ::dftu_op* op = build(&host);
-            const auto* compose = static_cast<const ::dftu_ext_compose*>(
-                host.get_extension(host.h, DFTU_EXT_COMPOSE));
+            const auto* compose = static_cast<const ::dftu_svc_compose*>(
+                host.get_service(host.h, DFTU_SVC_COMPOSE));
             if (op && compose && compose->run) {
                 ::dftu_task* task =
                     compose->run(host.h, op, in_data, out_buf.data(), &rc);

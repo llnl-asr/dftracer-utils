@@ -30,55 +30,12 @@ std::string create_plain_pfw(dftu_utils_test::TestEnvironment& env,
 }
 
 std::string find_pgzip_binary() {
-    const char* env_path = std::getenv("DFTRACER_PGZIP_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_pgzip",         "../dftracer_pgzip",
-        "../../dftracer_pgzip",     "../bin/dftracer_pgzip",
-        "../../bin/dftracer_pgzip",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_PGZIP_PATH",
+                                                "dftracer_pgzip");
 }
 
 int run_pgzip(const std::string& binary, const std::vector<std::string>& args) {
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& arg : args) argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    pid_t pid = ::fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return -1;
-}
-
-// Read the first non-empty line from a gzip file.
-std::string gz_first_line(const std::string& gz_path) {
-    gzFile gz = gzopen(gz_path.c_str(), "rb");
-    if (!gz) return "";
-
-    char buf[4096];
-    std::string result;
-    while (gzgets(gz, buf, sizeof(buf)) != nullptr) {
-        std::string line(buf);
-        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-            line.pop_back();
-        if (!line.empty()) {
-            result = line;
-            break;
-        }
-    }
-    gzclose(gz);
-    return result;
+    return dftu_utils_test::run_process(binary, args);
 }
 
 }  // namespace
@@ -140,7 +97,7 @@ TEST_SUITE("DFTracerPgzip") {
         std::string gz_path = pfw + ".gz";
         REQUIRE(fs::exists(gz_path));
 
-        auto first = gz_first_line(gz_path);
+        auto first = dftu_utils_test::gz_first_line(gz_path);
         REQUIRE(!first.empty());
         CHECK(first.front() == '[');
     }

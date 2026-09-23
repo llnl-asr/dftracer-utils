@@ -25,7 +25,7 @@ double DDSketch::bin_upper_bound(int index) const {
     return std::pow(gamma_, index);
 }
 
-void DDSketch::add_to_bin(int index, std::uint16_t count) {
+void DDSketch::add_to_bin(int index, std::uint32_t count) {
     if (!initialized_) {
         offset_ = index;
         min_key_ = index;
@@ -39,8 +39,8 @@ void DDSketch::add_to_bin(int index, std::uint16_t count) {
     if (index >= min_key_ && index <= max_key_) {
         int pos = index - offset_;
         if (pos >= 0 && pos < MAX_BINS) {
-            std::uint16_t old = store_[pos];
-            store_[pos] = (old > UINT16_MAX - count) ? UINT16_MAX : old + count;
+            std::uint32_t old = store_[pos];
+            store_[pos] = (old > UINT32_MAX - count) ? UINT32_MAX : old + count;
         }
         return;
     }
@@ -54,23 +54,23 @@ void DDSketch::add_to_bin(int index, std::uint16_t count) {
         num_bins_ = max_key_ - min_key_ + 1;
         int pos = index - offset_;
         if (pos >= 0 && pos < MAX_BINS) {
-            std::uint16_t old = store_[pos];
-            store_[pos] = (old > UINT16_MAX - count) ? UINT16_MAX : old + count;
+            std::uint32_t old = store_[pos];
+            store_[pos] = (old > UINT32_MAX - count) ? UINT32_MAX : old + count;
         }
         return;
     }
 
     // index < min_key_
     if (collapsed_) {
-        std::uint16_t old = store_[0];
-        store_[0] = (old > UINT16_MAX - count) ? UINT16_MAX : old + count;
+        std::uint32_t old = store_[0];
+        store_[0] = (old > UINT32_MAX - count) ? UINT32_MAX : old + count;
         return;
     }
 
     int needed = max_key_ - index + 1;
     if (needed > MAX_BINS) {
-        std::uint16_t old = store_[0];
-        store_[0] = (old > UINT16_MAX - count) ? UINT16_MAX : old + count;
+        std::uint32_t old = store_[0];
+        store_[0] = (old > UINT32_MAX - count) ? UINT32_MAX : old + count;
         collapsed_ = true;
         return;
     }
@@ -80,9 +80,9 @@ void DDSketch::add_to_bin(int index, std::uint16_t count) {
         std::memmove(
             &store_[shift], &store_[0],
             static_cast<std::size_t>(std::min(num_bins_, MAX_BINS - shift)) *
-                sizeof(std::uint16_t));
+                sizeof(std::uint32_t));
         std::memset(&store_[0], 0,
-                    static_cast<std::size_t>(shift) * sizeof(std::uint16_t));
+                    static_cast<std::size_t>(shift) * sizeof(std::uint32_t));
     }
     offset_ = index;
     min_key_ = index;
@@ -94,9 +94,9 @@ void DDSketch::collapse_to_fit(int new_max_key) {
     int new_min_key = new_max_key - MAX_BINS + 1;
 
     if (new_min_key >= max_key_) {
-        std::uint16_t total = 0;
+        std::uint32_t total = 0;
         for (int i = 0; i < num_bins_ && i < MAX_BINS; ++i) {
-            total = (total > UINT16_MAX - store_[i]) ? UINT16_MAX
+            total = (total > UINT32_MAX - store_[i]) ? UINT32_MAX
                                                      : total + store_[i];
         }
         store_.fill(0);
@@ -112,10 +112,10 @@ void DDSketch::collapse_to_fit(int new_max_key) {
     int collapse_count_bins = new_min_key - min_key_;
     if (collapse_count_bins > 0) {
         // Collapse bins below new_min_key into bin[0]
-        std::uint16_t collapsed = 0;
+        std::uint32_t collapsed = 0;
         for (int i = 0; i < collapse_count_bins && i < MAX_BINS; ++i) {
-            collapsed = (collapsed > UINT16_MAX - store_[i])
-                            ? UINT16_MAX
+            collapsed = (collapsed > UINT32_MAX - store_[i])
+                            ? UINT32_MAX
                             : collapsed + store_[i];
             store_[i] = 0;
         }
@@ -125,19 +125,19 @@ void DDSketch::collapse_to_fit(int new_max_key) {
             std::memmove(
                 &store_[0], &store_[collapse_count_bins],
                 static_cast<std::size_t>(std::min(remaining, MAX_BINS)) *
-                    sizeof(std::uint16_t));
+                    sizeof(std::uint32_t));
             int clear_start = std::min(remaining, MAX_BINS);
             int clear_count =
                 std::min(collapse_count_bins, MAX_BINS - clear_start);
             if (clear_count > 0) {
                 std::memset(&store_[clear_start], 0,
                             static_cast<std::size_t>(clear_count) *
-                                sizeof(std::uint16_t));
+                                sizeof(std::uint32_t));
             }
         }
 
-        store_[0] = (store_[0] > UINT16_MAX - collapsed)
-                        ? UINT16_MAX
+        store_[0] = (store_[0] > UINT32_MAX - collapsed)
+                        ? UINT32_MAX
                         : store_[0] + collapsed;
         offset_ = new_min_key;
         min_key_ = new_min_key;
@@ -150,11 +150,11 @@ void DDSketch::collapse_to_fit(int new_max_key) {
             if (to_move > 0) {
                 std::memmove(
                     &store_[shift], &store_[0],
-                    static_cast<std::size_t>(to_move) * sizeof(std::uint16_t));
+                    static_cast<std::size_t>(to_move) * sizeof(std::uint32_t));
             }
             std::memset(
                 &store_[0], 0,
-                static_cast<std::size_t>(shift) * sizeof(std::uint16_t));
+                static_cast<std::size_t>(shift) * sizeof(std::uint32_t));
         }
         offset_ = new_min_key;
         min_key_ = new_min_key;
@@ -183,8 +183,8 @@ std::vector<HistogramBin> DDSketch::bins() const {
 void DDSketch::add(double value, double weight) {
     if (weight <= 0.0) return;
 
-    std::uint16_t w = static_cast<std::uint16_t>(
-        std::min(weight, static_cast<double>(UINT16_MAX)));
+    auto w = static_cast<std::uint32_t>(
+        std::min(weight, static_cast<double>(UINT32_MAX)));
     if (w == 0) w = 1;
 
     if (value < min_) min_ = value;
@@ -202,8 +202,10 @@ void DDSketch::add(double value, double weight) {
     add_to_bin(idx, w);
 }
 
-void DDSketch::add_key(std::int32_t key, std::uint16_t weight) {
+void DDSketch::add_key(std::int32_t key, double value, std::uint32_t weight) {
     if (weight == 0) weight = 1;
+    if (value < min_) min_ = value;
+    if (value > max_) max_ = value;
     count_ += weight;
     if (key == SKETCH_ZERO_KEY) {
         zero_count_ += weight;
@@ -249,11 +251,11 @@ void DDSketch::merge(const DDSketch& other) {
             if (to_move > 0) {
                 std::memmove(
                     &store_[shift], &store_[0],
-                    static_cast<std::size_t>(to_move) * sizeof(std::uint16_t));
+                    static_cast<std::size_t>(to_move) * sizeof(std::uint32_t));
             }
             std::memset(
                 &store_[0], 0,
-                static_cast<std::size_t>(shift) * sizeof(std::uint16_t));
+                static_cast<std::size_t>(shift) * sizeof(std::uint32_t));
         }
         offset_ = merged_min;
         min_key_ = merged_min;
@@ -267,16 +269,16 @@ void DDSketch::merge(const DDSketch& other) {
     for (int k = other.min_key_; k <= other.max_key_; ++k) {
         int other_pos = k - other.offset_;
         if (other_pos < 0 || other_pos >= MAX_BINS) continue;
-        std::uint16_t v = other.store_[other_pos];
+        std::uint32_t v = other.store_[other_pos];
         if (v == 0) continue;
 
         int my_pos = k - offset_;
         if (my_pos < 0) {
             store_[0] =
-                (store_[0] > UINT16_MAX - v) ? UINT16_MAX : store_[0] + v;
+                (store_[0] > UINT32_MAX - v) ? UINT32_MAX : store_[0] + v;
         } else if (my_pos < MAX_BINS) {
-            store_[my_pos] = (store_[my_pos] > UINT16_MAX - v)
-                                 ? UINT16_MAX
+            store_[my_pos] = (store_[my_pos] > UINT32_MAX - v)
+                                 ? UINT32_MAX
                                  : store_[my_pos] + v;
         }
     }
@@ -335,11 +337,11 @@ std::vector<std::uint8_t> DDSketch::serialize() const {
 void DDSketch::serialize_into(std::vector<std::uint8_t>& buf) const {
     constexpr std::size_t HEADER_SIZE =
         sizeof(double) * 3 + sizeof(std::uint64_t) * 2 + sizeof(std::int32_t) +
-        sizeof(std::uint16_t);
+        sizeof(std::uint32_t);
 
     auto num = static_cast<std::uint32_t>(
         std::min(num_bins_, static_cast<int>(MAX_BINS)));
-    std::size_t total = HEADER_SIZE + num * sizeof(std::uint16_t);
+    std::size_t total = HEADER_SIZE + num * sizeof(std::uint32_t);
     buf.resize(total);
     std::uint8_t* p = buf.data();
 
@@ -357,16 +359,16 @@ void DDSketch::serialize_into(std::vector<std::uint8_t>& buf) const {
     auto off32 = static_cast<std::int32_t>(offset_);
     std::memcpy(p, &off32, sizeof(std::int32_t));
     p += sizeof(std::int32_t);
-    std::memcpy(p, &num, sizeof(std::uint16_t));
-    p += sizeof(std::uint16_t);
+    std::memcpy(p, &num, sizeof(std::uint32_t));
+    p += sizeof(std::uint32_t);
 
-    std::memcpy(p, store_.data(), num * sizeof(std::uint16_t));
+    std::memcpy(p, store_.data(), num * sizeof(std::uint32_t));
 }
 
 DDSketch DDSketch::deserialize(const std::uint8_t* data, std::size_t len) {
     constexpr std::size_t HEADER_SIZE =
         sizeof(double) * 3 + sizeof(std::uint64_t) * 2 + sizeof(std::int32_t) +
-        sizeof(std::uint16_t);
+        sizeof(std::uint32_t);
 
     if (len < HEADER_SIZE) {
         return DDSketch{};
@@ -393,16 +395,16 @@ DDSketch DDSketch::deserialize(const std::uint8_t* data, std::size_t len) {
     s.offset_ = static_cast<int>(off32);
 
     std::uint32_t num = 0;
-    std::memcpy(&num, p, sizeof(std::uint16_t));
-    p += sizeof(std::uint16_t);
+    std::memcpy(&num, p, sizeof(std::uint32_t));
+    p += sizeof(std::uint32_t);
 
     if (num > MAX_BINS) num = MAX_BINS;
-    if (len < HEADER_SIZE + num * sizeof(std::uint16_t)) {
+    if (len < HEADER_SIZE + num * sizeof(std::uint32_t)) {
         return DDSketch{};
     }
 
     s.store_.fill(0);
-    std::memcpy(s.store_.data(), p, num * sizeof(std::uint16_t));
+    std::memcpy(s.store_.data(), p, num * sizeof(std::uint32_t));
     s.min_key_ = s.offset_;
     s.max_key_ = s.offset_ + static_cast<int>(num) - 1;
     s.num_bins_ = static_cast<int>(num);

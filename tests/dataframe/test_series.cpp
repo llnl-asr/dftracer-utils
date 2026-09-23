@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/core/common/hash/fnv1a.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -12,10 +13,12 @@
 #include <dftracer/utils/dataframe/kernels/prims.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/kernels/stats.h>
+#include <dftracer/utils/dataframe/op.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <string>
@@ -126,6 +129,35 @@ TEST_SUITE("vec") {
         CHECK(pm[2] == 90);
     }
 
+    TEST_CASE("mixed-type arithmetic promotes instead of returning null") {
+        std::vector<std::uint64_t> ua{1, 2, 3};
+        std::vector<double> fb{0.5, 1.5, 2.5};
+        Series su = Series::flat(TypeId::Uint64, ua.data(), 3);
+        Series sf = Series::flat_f64(fb.data(), 3);
+
+        Series sum = add(su, sf);
+        REQUIRE(sum.valid());
+        CHECK(sum.type() == TypeId::Float64);
+        const double* p = sum.data<double>();
+        CHECK(p[0] == doctest::Approx(1.5));
+        CHECK(p[1] == doctest::Approx(3.5));
+        CHECK(p[2] == doctest::Approx(5.5));
+
+        std::vector<std::int64_t> ia{2, 4, 6};
+        Series si = Series::flat_i64(ia.data(), 3);
+        Series prod = mul_scalar(si, 1.0);
+        REQUIRE(prod.valid());
+        CHECK(prod.type() == TypeId::Float64);
+        const double* pp = prod.data<double>();
+        CHECK(pp[0] == doctest::Approx(2.0));
+        CHECK(pp[2] == doctest::Approx(6.0));
+
+        Series uprod = mul_scalar(su, 1.0);
+        REQUIRE(uprod.valid());
+        CHECK(uprod.type() == TypeId::Float64);
+        CHECK(uprod.data<double>()[2] == doctest::Approx(3.0));
+    }
+
     TEST_CASE("float64 div (SIMD) and int64 div zero guard") {
         std::vector<double> a{1.0, 3.0, 9.0};
         std::vector<double> b{2.0, 2.0, 3.0};
@@ -203,6 +235,200 @@ TEST_SUITE("vec") {
         CHECK(pm[0] != 1000);
     }
 
+    TEST_CASE(
+        "floordiv, mod, pow follow Python; ffill, bfill; cum scans keep "
+        "nulls; String parses to a number") {
+        // a = [7, -7, null, 5], b = [2, 2, 2, 0]
+        const std::int64_t av[4] = {7, -7, 0, 5};
+        const std::uint8_t valid[1] = {0x0b};
+        const std::int64_t bv[4] = {2, 2, 2, 0};
+        Series a = Series::flat_i64(av, 4, valid);
+        Series b = Series::flat_i64(bv, 4);
+        Series q = a.floordiv(b);
+        REQUIRE(q.valid());
+        CHECK(q.type() == TypeId::Int64);
+        CHECK(q.data<std::int64_t>()[0] == 3);
+        CHECK(q.data<std::int64_t>()[1] == -4);  // floor toward -inf
+        CHECK(q.is_null(2));                     // null in
+        CHECK(q.is_null(3));                     // zero divisor
+        Series r =
+            a.mod(Series{dftu_series_mul_scalar(b.handle(), dv::i64(-1))});
+        CHECK(r.data<std::int64_t>()[0] == -1);  // the divisor's sign
+        CHECK(r.data<std::int64_t>()[1] == -1);
+        Series p = Series{dftu_series_pow_scalar(a.handle(), dv::i64(2), 0)};
+        CHECK(p.data<std::int64_t>()[0] == 49);
+        CHECK(p.is_null(2));
+        Series rp = Series{dftu_series_pow_scalar(a.handle(), dv::i64(2), 1)};
+        CHECK(rp.data<std::int64_t>()[0] == 128);
+        CHECK(rp.is_null(1));  // 2 ** -7 is not an integer
+        const double fv[3] = {7.5, -7.5, 2.0};
+        Series f = Series::flat_f64(fv, 3);
+        Series fq =
+            Series{dftu_series_floordiv_scalar(f.handle(), dv::i64(2), 0)};
+        CHECK(fq.type() == TypeId::Float64);
+        CHECK(fq.data<double>()[1] == doctest::Approx(-4.0));
+        Series fm = Series{dftu_series_mod_scalar(f.handle(), dv::i64(2), 0)};
+        CHECK(fm.data<double>()[1] == doctest::Approx(0.5));
+        CHECK(dftu_series_floordiv(a.handle(), f.handle()) ==
+              nullptr);  // length
+        CHECK(Series::strings({"x"}).floordiv(Series::strings({"y"})).valid() ==
+              false);
+
+        Series ff = a.ffill();
+        CHECK(ff.null_count() == 0);
+        CHECK(ff.data<std::int64_t>()[2] == -7);
+        Series bf = a.bfill();
+        CHECK(bf.data<std::int64_t>()[2] == 5);
+        const std::uint8_t lead[1] = {0x0c};  // [null, null, 0, 5]
+        Series l = Series::flat_i64(av, 4, lead);
+        CHECK(l.ffill().null_count() == 2);
+        CHECK(l.bfill().null_count() == 0);
+        CHECK(l.bfill().data<std::int64_t>()[0] == 0);
+        Series sf = Series::strings({"a", "b"}).ffill();
+        CHECK(sf.string_at(1) == "b");
+
+        Series cs = a.cumsum();
+        CHECK(cs.is_null(2));
+        CHECK(cs.data<std::int64_t>()[3] == 5);
+        CHECK(a.cummax().is_null(2));
+        CHECK(a.cummin().is_null(2));
+        CHECK(a.cum_prod().is_null(2));
+
+        Series parsed =
+            Series::strings({"12", " 3 ", "x", "4.5"}).cast(TypeId::Int64);
+        REQUIRE(parsed.valid());
+        CHECK(parsed.data<std::int64_t>()[0] == 12);
+        CHECK(parsed.data<std::int64_t>()[1] == 3);
+        CHECK(parsed.is_null(2));
+        CHECK(parsed.is_null(3));
+        Series parsed_f =
+            Series::strings({"12", "4.5", "x"}).cast(TypeId::Float64);
+        CHECK(parsed_f.data<double>()[1] == doctest::Approx(4.5));
+        CHECK(parsed_f.is_null(2));
+        CHECK(Series::strings({"7"})
+                  .cast(TypeId::Int32)
+                  .data<std::int32_t>()[0] == 7);
+    }
+
+    TEST_CASE(
+        "the .str batch: case forms, classes, count, rfind, prefix, "
+        "suffix, repeat, center, cat, findall, partition, list_join") {
+        Series s =
+            Series::strings({"hello world", "Foo Bar", "ab1", "", "a-b-a"});
+        CHECK(s.str_case(DFTU_STR_CAPITALIZE).string_at(1) == "Foo bar");
+        CHECK(s.str_case(DFTU_STR_TITLE_CASE).string_at(0) == "Hello World");
+        CHECK(s.str_case(DFTU_STR_SWAPCASE).string_at(1) == "fOO bAR");
+        CHECK_FALSE(s.str_case(9).valid());
+        Series alpha = s.str_is(DFTU_STR_ALPHA);
+        const std::uint8_t* ab = alpha.data<std::uint8_t>();
+        CHECK(((ab[0] >> 0) & 1) == 0);  // a space is not a letter
+        CHECK(((ab[0] >> 2) & 1) == 0);  // ab1 holds a digit
+        CHECK(((ab[0] >> 3) & 1) == 0);  // empty is false
+        Series lower = s.str_is(DFTU_STR_LOWER);
+        CHECK(((lower.data<std::uint8_t>()[0] >> 0) & 1) == 1);
+        CHECK(((lower.data<std::uint8_t>()[0] >> 1) & 1) == 0);
+        Series title = s.str_is(DFTU_STR_TITLE);
+        CHECK(((title.data<std::uint8_t>()[0] >> 1) & 1) == 1);
+        CHECK_FALSE(s.str_is(42).valid());
+        CHECK(s.str_count("a").data<std::int64_t>()[4] == 2);
+        CHECK(s.str_count("").data<std::int64_t>()[2] == 4);
+        CHECK(s.str_rfind("a").data<std::int64_t>()[4] == 4);
+        CHECK(s.str_rfind("z").data<std::int64_t>()[0] == -1);
+        CHECK(s.str_remove_prefix("he").string_at(0) == "llo world");
+        CHECK(s.str_remove_prefix("he").string_at(1) == "Foo Bar");
+        CHECK(s.str_remove_suffix("a").string_at(4) == "a-b-");
+        CHECK(s.str_repeat(2).string_at(2) == "ab1ab1");
+        CHECK(s.str_repeat(0).string_at(2) == "");
+        CHECK_FALSE(s.str_repeat(-1).valid());
+        CHECK(s.str_center(7, '*').string_at(2) == "**ab1**");
+        CHECK(s.str_center(6, '*').string_at(2) == "*ab1**");
+        CHECK(s.str_center(2, '*').string_at(0) == "hello world");
+        Series cat = s.str_cat(Series::strings({"!", "!", "!", "!", "!"}));
+        CHECK(cat.string_at(0) == "hello world!");
+        CHECK_FALSE(s.str_cat(Series::strings({"x"})).valid());
+        Series found = s.str_findall("[a-z]+");
+        REQUIRE(found.valid());
+        CHECK(found.type() == TypeId::List);
+        CHECK(found.offsets()[1] == 2);  // hello, world
+        CHECK(found.offsets()[2] == 4);  // oo, ar
+        CHECK(found.offsets()[3] == 5);  // ab
+        CHECK(found.offsets()[4] == 5);  // "" adds none
+        CHECK(found.child(0).string_at(0) == "hello");
+        CHECK_FALSE(s.str_findall("(").valid());
+        Series part = s.str_partition("-");
+        CHECK(part.offsets()[5] == 15);  // three parts per row
+        CHECK(part.child(0).string_at(12) == "a");
+        CHECK(part.child(0).string_at(13) == "-");
+        CHECK(part.child(0).string_at(14) == "b-a");
+        CHECK(part.child(0).string_at(0) ==
+              "hello world");  // no sep: (row, "", "")
+        CHECK(part.child(0).string_at(2) == "");
+        Series rpart = s.str_partition("-", true);
+        CHECK(rpart.child(0).string_at(12) == "a-b");
+        CHECK(rpart.child(0).string_at(2) == "hello world");  // ("", "", row)
+        CHECK(rpart.child(0).string_at(0) == "");
+        Series joined = s.str_split("-").list_join("+");
+        CHECK(joined.string_at(4) == "a+b+a");
+        CHECK(joined.string_at(0) == "hello world");
+        CHECK_FALSE(s.list_join("+").valid());
+    }
+
+    TEST_CASE("dt_part and dt_round: calendar parts and bucket rounding") {
+        // 2023-11-14 22:13:20.123456 UTC (a Tuesday), the epoch, one
+        // microsecond before it, 2024-02-29.
+        const std::int64_t us[4] = {1'700'000'000'123'456, 0, -1,
+                                    1'709'164'800'000'000};
+        Series s = Series::flat_i64(us, 4);
+        std::vector<Series> keep;
+        auto part = [&](dftu_dt_part p) {
+            keep.push_back(s.dt_part(p, DFTU_TIME_UNIT_MICRO));
+            REQUIRE(keep.back().valid());
+            return keep.back().data<std::int64_t>();
+        };
+        CHECK(part(DFTU_DT_YEAR)[0] == 2023);
+        CHECK(part(DFTU_DT_MONTH)[0] == 11);
+        CHECK(part(DFTU_DT_DAY)[0] == 14);
+        CHECK(part(DFTU_DT_HOUR)[0] == 22);
+        CHECK(part(DFTU_DT_MINUTE)[0] == 13);
+        CHECK(part(DFTU_DT_SECOND)[0] == 20);
+        CHECK(part(DFTU_DT_MICROSECOND)[0] == 123456);
+        CHECK(part(DFTU_DT_MILLISECOND)[0] == 123);
+        CHECK(part(DFTU_DT_DAY_OF_WEEK)[0] == 1);  // Tuesday, Monday = 0
+        CHECK(part(DFTU_DT_DAY_OF_WEEK)[1] == 3);  // the epoch, a Thursday
+        CHECK(part(DFTU_DT_DAY_OF_YEAR)[0] == 318);
+        CHECK(part(DFTU_DT_QUARTER)[0] == 4);
+        CHECK(part(DFTU_DT_IS_LEAP_YEAR)[3] == 1);
+        CHECK(part(DFTU_DT_DAYS_IN_MONTH)[3] == 29);
+        CHECK(part(DFTU_DT_ISO_WEEK)[0] == 46);
+        CHECK(part(DFTU_DT_ISO_YEAR)[1] == 1970);
+        CHECK(part(DFTU_DT_EPOCH_DAYS)[2] == -1);  // floors before the epoch
+        CHECK(part(DFTU_DT_YEAR)[2] == 1969);
+        CHECK(part(DFTU_DT_HOUR)[2] == 23);
+        // The same instants read in seconds.
+        const std::int64_t secs[1] = {1'700'000'000};
+        Series in_s = Series::flat_i64(secs, 1);
+        CHECK(in_s.dt_part(DFTU_DT_HOUR, DFTU_TIME_UNIT_SECOND)
+                  .data<std::int64_t>()[0] == 22);
+        CHECK_FALSE(s.dt_part(99, DFTU_TIME_UNIT_MICRO).valid());
+        CHECK_FALSE(Series::strings({"x"}).dt_part(0, 2).valid());
+
+        const std::int64_t hour = 3'600'000'000;
+        Series fl = s.dt_round(hour, DFTU_DT_FLOOR);
+        CHECK(fl.data<std::int64_t>()[0] == 1'699'999'200'000'000);
+        CHECK(fl.data<std::int64_t>()[2] == -hour);
+        Series ce = s.dt_round(hour, DFTU_DT_CEIL);
+        CHECK(ce.data<std::int64_t>()[0] == 1'699'999'200'000'000 + hour);
+        CHECK(ce.data<std::int64_t>()[1] == 0);
+        const std::int64_t halves[3] = {2'500'000, 7'500'000, 12'500'000};
+        Series ro =
+            Series::flat_i64(halves, 3).dt_round(5'000'000, DFTU_DT_ROUND);
+        CHECK(ro.data<std::int64_t>()[0] == 0);  // half to even
+        CHECK(ro.data<std::int64_t>()[1] == 10'000'000);
+        CHECK(ro.data<std::int64_t>()[2] == 10'000'000);
+        CHECK_FALSE(s.dt_round(0, DFTU_DT_FLOOR).valid());
+        CHECK_FALSE(s.dt_round(hour, 7).valid());
+    }
+
     TEST_CASE("Series method wrappers: rank, rolling, prim") {
         // rank: default AVERAGE tie-break, ascending. Ties (two 2s at rows 1,3)
         // share the average of their ordinal positions.
@@ -224,6 +450,17 @@ TEST_SUITE("vec") {
         CHECK(pd[2] == doctest::Approx(1.0));
         CHECK(pd[1] == doctest::Approx(2.0));
         CHECK(pd[0] == doctest::Approx(3.0));
+
+        // Min and Max: the tied 2s take the first and the last of their
+        // ordinal positions (2 and 3).
+        Series mn = Series::flat_i64(r.data(), 4).rank(dv::RankMethod::Min);
+        Series mx = Series::flat_i64(r.data(), 4).rank(dv::RankMethod::Max);
+        CHECK(mn.data<double>()[1] == doctest::Approx(2.0));
+        CHECK(mn.data<double>()[3] == doctest::Approx(2.0));
+        CHECK(mx.data<double>()[1] == doctest::Approx(3.0));
+        CHECK(mx.data<double>()[3] == doctest::Approx(3.0));
+        CHECK(mx.data<double>()[0] == doctest::Approx(4.0));
+        CHECK(mx.data<double>()[2] == doctest::Approx(1.0));
 
         // rolling: trailing-window mean; first window-1 rows are null.
         std::vector<double> w{1.0, 2.0, 3.0, 4.0};
@@ -409,7 +646,7 @@ TEST_SUITE("vec") {
         std::vector<double> fd(n);
         std::vector<std::int64_t> vi(n);
         double ref_sum = 0.0, ref_min = 1e18, ref_max = -1e18;
-        std::int64_t imin = INT64_MAX, imax = INT64_MIN;
+        std::int64_t imin = INT64_MAX, imax = INT64_MIN, isum = 0;
         for (std::int64_t i = 0; i < n; ++i) {
             fd[i] = static_cast<double>((i * 37) % 101) - 50.0 + 0.25;
             vi[i] = (i * 91) % 200 - 100;
@@ -418,6 +655,7 @@ TEST_SUITE("vec") {
             ref_max = fd[i] > ref_max ? fd[i] : ref_max;
             imin = vi[i] < imin ? vi[i] : imin;
             imax = vi[i] > imax ? vi[i] : imax;
+            isum += vi[i];
         }
         Series fc = Series::flat_f64(fd.data(), n);
         CHECK(scalar_value<double>(sum(fc)) == doctest::Approx(ref_sum));
@@ -425,8 +663,25 @@ TEST_SUITE("vec") {
         CHECK(scalar_value<double>(max(fc)) == doctest::Approx(ref_max));
 
         Series ic = Series::flat_i64(vi.data(), n);
+        CHECK(scalar_value<std::int64_t>(sum(ic)) == isum);  // i64 sum
         CHECK(scalar_value<std::int64_t>(min(ic)) == imin);
         CHECK(scalar_value<std::int64_t>(max(ic)) == imax);
+
+        // Null-present sum, every 4th row null: exact skip-nulls result.
+        std::vector<std::uint8_t> bm(static_cast<std::size_t>((n + 7) / 8), 0);
+        std::int64_t isum_valid = 0;
+        double fsum_valid = 0.0;
+        for (std::int64_t i = 0; i < n; ++i) {
+            if (i % 4 != 0) {
+                bm[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+                isum_valid += vi[i];
+                fsum_valid += fd[i];
+            }
+        }
+        Series icn = Series::flat_i64(vi.data(), n, bm.data());
+        Series fcn = Series::flat_f64(fd.data(), n, bm.data());
+        CHECK(scalar_value<std::int64_t>(sum(icn)) == isum_valid);
+        CHECK(scalar_value<double>(sum(fcn)) == doctest::Approx(fsum_valid));
     }
 
     TEST_CASE("group_by aggregates values by a string key") {
@@ -708,9 +963,43 @@ TEST_SUITE("vec") {
         CHECK(chars.data<std::int64_t>()[0] == 3);
         CHECK(chars.data<std::int64_t>()[1] == 2);  // 3 bytes, 2 codepoints
 
+        // Long mixed ASCII + multibyte string exercises the vectorized counter
+        // body: 40 ASCII 'a' + 10 x 2-byte 'e-acute' = 80 bytes, 50 codepoints.
+        std::string longs(40, 'a');
+        for (int k = 0; k < 10; ++k) longs += "\xC3\xA9";
+        Series lc = Series::strings({longs}).str_len_chars();
+        CHECK(lc.data<std::int64_t>()[0] == 50);
+
         Series find = Series::strings({"hello/world", "nope"}).str_find("/");
         CHECK(find.data<std::int64_t>()[0] == 5);
         CHECK(find.data<std::int64_t>()[1] == -1);
+
+        Series hashed = Series::strings({"POSIX", "read"}).fnv1a();
+        CHECK(hashed.type() == TypeId::Uint64);
+        CHECK(hashed.data<std::uint64_t>()[0] ==
+              dftracer::utils::hash::fnv1a_hash(std::string_view{"POSIX"}));
+        CHECK(hashed.data<std::uint64_t>()[1] ==
+              dftracer::utils::hash::fnv1a_hash(std::string_view{"read"}));
+
+        Series parsed = Series::strings({"00000000000000ff", "00000000deadbeef",
+                                         "deadbeef"})
+                            .hex64_parse();
+        CHECK(parsed.type() == TypeId::Uint64);
+        CHECK(parsed.data<std::uint64_t>()[0] == 0xffull);
+        CHECK(parsed.data<std::uint64_t>()[1] == 0xdeadbeefull);
+        CHECK(parsed.is_null(2));  // not the 16-digit form
+
+        Series formatted = parsed.hex64_format();
+        CHECK(formatted.type() == TypeId::String);
+        CHECK(formatted.string_at(0) == "00000000000000ff");
+        CHECK(formatted.string_at(1) == "00000000deadbeef");
+        CHECK(formatted.is_null(2));
+        CHECK(formatted.hex64_parse().data<std::uint64_t>()[1] ==
+              0xdeadbeefull);
+        CHECK(Series::strings({"f07c4ebf132e3799"})
+                  .hex64_parse()
+                  .hex64_format()
+                  .string_at(0) == "f07c4ebf132e3799");
 
         // transforms
         Series lo = s.to_lowercase();
@@ -761,6 +1050,30 @@ TEST_SUITE("vec") {
         CHECK(vals.string_at(1) == "b");
         CHECK(vals.string_at(2) == "c");
         CHECK(vals.string_at(3) == "x");
+
+        // list: len and get (negative index from the end, short row null)
+        Series ln = sp.list_len();
+        REQUIRE(ln.valid());
+        CHECK(ln.type() == TypeId::Int64);
+        CHECK(ln.data<std::int64_t>()[0] == 3);
+        CHECK(ln.data<std::int64_t>()[1] == 1);
+        Series g1 = sp.list_get(1);
+        CHECK(g1.string_at(0) == "b");
+        CHECK(g1.is_null(1));
+        Series gl = sp.list_get(-1);
+        CHECK(gl.string_at(0) == "c");
+        CHECK(gl.string_at(1) == "x");
+
+        // regex capture group, null where there is no match
+        Series ex =
+            Series::strings({"a-b", "no", "c-d"}).str_extract("(\\w)-(\\w)", 2);
+        REQUIRE(ex.valid());
+        CHECK(ex.string_at(0) == "b");
+        CHECK(ex.is_null(1));
+        CHECK(ex.string_at(2) == "d");
+        CHECK(ex.null_count() == 1);
+        Series ex0 = Series::strings({"a-b"}).str_extract("(\\w)-(\\w)", 0);
+        CHECK(ex0.string_at(0) == "a-b");
     }
 
     TEST_CASE("nested list<struct> column (histogram shape)") {
@@ -867,6 +1180,81 @@ TEST_SUITE("vec") {
         CHECK(rt.columns[1].data<std::int64_t>()[0] == 3);
         CHECK(rt.columns[2].data<std::int64_t>()[0] == 60);
         CHECK(rt.columns[3].data<double>()[0] == doctest::Approx(20.0));
+    }
+
+    TEST_CASE("agg engine: native multi-key group_by (composite key, typed)") {
+        namespace ag = dftracer::utils::dataframe;
+        // Two key columns of different types: String "cat" and Int64 "pid".
+        // (cat, pid) = (io, 1), (cpu, 1), (io, 2), (cpu, 1), (io, 1)
+        Series cat = Series::strings({"io", "cpu", "io", "cpu", "io"});
+        std::vector<std::int64_t> pidv{1, 1, 2, 1, 1};
+        Series pid = Series::flat_i64(pidv.data(), 5);
+        std::vector<std::int64_t> durv{10, 5, 20, 15, 30};
+        Series dur = Series::flat_i64(durv.data(), 5);
+        std::vector<const Series*> keys{&cat, &pid};
+        std::vector<const Series*> vals{&dur};
+        std::vector<ag::AggSpec> specs{{ag::AggOp::Count, -1, "n"},
+                                       {ag::AggOp::Sum, 0, "sum_dur"}};
+
+        DataFrame g = ag::group_agg(keys, vals, specs, {"cat", "pid"});
+        REQUIRE(g.num_rows() == 3);  // (io,1) (cpu,1) (io,2) - first-seen order
+        REQUIRE(g.names ==
+                std::vector<std::string>{"cat", "pid", "n", "sum_dur"});
+        CHECK(g.columns[0].type() == TypeId::String);
+        CHECK(g.columns[1].type() == TypeId::Int64);
+
+        auto find = [&](const std::string& c, std::int64_t p) -> std::int64_t {
+            for (std::int64_t i = 0; i < g.num_rows(); ++i)
+                if (g.columns[0].string_at(i) == c &&
+                    g.columns[1].data<std::int64_t>()[i] == p)
+                    return i;
+            FAIL("group not found");
+            return -1;
+        };
+        const std::int64_t io1 = find("io", 1), cpu1 = find("cpu", 1),
+                           io2 = find("io", 2);
+        CHECK(g.columns[2].data<std::int64_t>()[io1] == 2);    // rows 0,4
+        CHECK(g.columns[3].data<std::int64_t>()[io1] == 40);   // 10+30
+        CHECK(g.columns[2].data<std::int64_t>()[cpu1] == 2);
+        CHECK(g.columns[3].data<std::int64_t>()[cpu1] == 20);  // 5+15
+        CHECK(g.columns[2].data<std::int64_t>()[io2] == 1);
+        CHECK(g.columns[3].data<std::int64_t>()[io2] == 20);
+
+        // Mergeable partials + serialize round-trip, split across the same
+        // composite key.
+        Series ck1 = Series::strings({"io", "cpu"});
+        std::vector<std::int64_t> pk1{1, 1};
+        Series pid1 = Series::flat_i64(pk1.data(), 2);
+        std::vector<std::int64_t> d1{10, 5};
+        Series c1 = Series::flat_i64(d1.data(), 2);
+        Series ck2 = Series::strings({"io", "cpu", "io"});
+        std::vector<std::int64_t> pk2{2, 1, 1};
+        Series pid2 = Series::flat_i64(pk2.data(), 3);
+        std::vector<std::int64_t> d2{20, 15, 30};
+        Series c2 = Series::flat_i64(d2.data(), 3);
+
+        auto s1 = ag::agg_new(specs);
+        auto s2 = ag::agg_new(specs);
+        std::vector<const Series*> keys1{&ck1, &pid1}, keys2{&ck2, &pid2};
+        std::vector<const Series*> v1{&c1}, v2{&c2};
+        ag::agg_accumulate(*s1, keys1, v1);
+        ag::agg_accumulate(*s2, keys2, v2);
+        std::string blob = ag::agg_serialize(*s2);
+        auto s2b = ag::agg_deserialize(blob);
+        ag::agg_merge(*s1, *s2b);
+        DataFrame merged =
+            ag::agg_finalize(*s1, std::vector<std::string>{"cat", "pid"});
+        REQUIRE(merged.num_rows() == 3);
+        const std::int64_t mio1 = [&] {
+            for (std::int64_t i = 0; i < merged.num_rows(); ++i)
+                if (merged.columns[0].string_at(i) == "io" &&
+                    merged.columns[1].data<std::int64_t>()[i] == 1)
+                    return i;
+            return std::int64_t(-1);
+        }();
+        REQUIRE(mio1 >= 0);
+        CHECK(merged.columns[2].data<std::int64_t>()[mio1] == 2);
+        CHECK(merged.columns[3].data<std::int64_t>()[mio1] == 40);
     }
 
     TEST_CASE("agg engine: moment aggregates match the stats kernels") {
@@ -1124,7 +1512,7 @@ TEST_SUITE("vec") {
         // comparison -> bool
         Series mask = ex::eval(
             ex::expr_cmp(
-                DFTU_CMP_GT, ex::expr_col(1),
+                ex::CmpOp::Gt, ex::expr_col(1),
                 dftracer::utils::dataframe::to_scalar<std::int64_t>(25)),
             in);
         CHECK(mask.type() == TypeId::Bool);
@@ -1246,6 +1634,37 @@ TEST_SUITE("vec") {
         CHECK(s[2] == 2);  // cherry
     }
 
+    // The degenerate ends of every ordering op. highway's vector sort is
+    // skipped on some targets (every SVE one), and its heap fallback loops
+    // forever on an empty range and runs past the end when it is asked for as
+    // many keys as it was given, so each of these hung or corrupted there
+    // while returning at once everywhere else.
+    TEST_CASE("ordering ops at their degenerate ends") {
+        std::vector<std::int64_t> vals{5, 3, 9, 1, 7};
+        for (std::int64_t n = 0; n <= 5; ++n) {
+            const Series v = Series::flat_i64(n ? vals.data() : nullptr, n);
+            REQUIRE(v.length() == n);
+            CHECK(argsort(v, false).length() == n);
+            CHECK(argsort(v, true).length() == n);
+            CHECK(v.sort().length() == n);
+            CHECK(dv::unique(v).length() <= n);
+            CHECK(dv::nunique(v) <= n);
+            for (std::int64_t k = 0; k <= n + 1; ++k) {
+                const std::int64_t want = std::min(k, n);
+                CHECK(dv::topk_indices(v, k, true).length() == want);
+                CHECK(dv::topk_indices(v, k, false).length() == want);
+            }
+        }
+        // The values, not just the lengths: the largest two of the five.
+        const Series five = Series::flat_i64(vals.data(), 5);
+        const Series top2 = dv::topk_indices(five, 2, true);
+        REQUIRE(top2.length() == 2);
+        CHECK(vals[static_cast<std::size_t>(top2.data<std::int64_t>()[0])] ==
+              9);
+        CHECK(vals[static_cast<std::size_t>(top2.data<std::int64_t>()[1])] ==
+              7);
+    }
+
     TEST_CASE("stats: rank / rolling / cummax / cummin / moments") {
         // rank (average ties): sorted 1,1,2,3 -> ranks by original index.
         std::vector<std::int64_t> rv{3, 1, 2, 1};
@@ -1341,10 +1760,18 @@ TEST_SUITE("vec") {
         std::vector<double> x{1, 2, 3, 4};
         Series em = dv::ewm_mean(Series::flat_f64(x.data(), 4), 0.5);
         REQUIRE(em.type() == TypeId::Float64);
-        // y0=1; y1=.5*2+.5*1=1.5; y2=.5*3+.5*1.5=2.25; y3=.5*4+.5*2.25=3.125.
+        // pandas adjust=True: y1 = (2 + .5*1) / 1.5; y3 = (4 + .5*3 + .25*2
+        // + .125*1) / 1.875 = 3.2666...
         CHECK(em.data<double>()[0] == doctest::Approx(1.0));
-        CHECK(em.data<double>()[1] == doctest::Approx(1.5));
-        CHECK(em.data<double>()[3] == doctest::Approx(3.125));
+        CHECK(em.data<double>()[1] == doctest::Approx(5.0 / 3.0));
+        CHECK(em.data<double>()[3] == doctest::Approx(3.2666666667));
+        // A null row repeats the previous value and decays the weights.
+        const double hx[3] = {1.0, 0.0, 3.0};
+        const std::uint8_t hv[1] = {0x05};
+        Series holes = dv::ewm_mean(Series::flat_f64(hx, 3, hv), 0.5);
+        CHECK(holes.data<double>()[1] == doctest::Approx(1.0));
+        CHECK(holes.data<double>()[2] == doctest::Approx(2.6));
+        CHECK_FALSE(holes.is_null(1));
         Series es = dv::ewm_std(Series::flat_f64(x.data(), 4), 0.5);
         CHECK(es.is_null(0));  // sample std of one point is undefined
         CHECK(es.data<double>()[1] == doctest::Approx(std::sqrt(0.5)));
@@ -1414,6 +1841,21 @@ TEST_SUITE("vec") {
             Series::flat_f64(a.data(), 4).dot(Series::flat_f64(b.data(), 4));
         CHECK(d.f64() ==
               doctest::Approx(1 * 10 + 2 * 20 + 3 * 30 + 4 * 40));  // 300
+
+        // Narrow (16-bit) type now takes the SIMD between / filter_gt path
+        // instead of the scalar widened-double fallback. Exercise >64 rows.
+        std::vector<std::int16_t> w(100);
+        for (std::size_t i = 0; i < w.size(); ++i)
+            w[i] = static_cast<std::int16_t>(i);
+        Series c16 = Series::flat(TypeId::Int16, w.data(), 100);
+        Series bm = c16.is_between<std::int16_t>(10, 20);
+        const std::uint8_t* bb = bm.data<std::uint8_t>();
+        auto b16 = [&](int i) { return (bb[i >> 3] >> (i & 7)) & 1; };
+        CHECK(b16(9) == 0);
+        CHECK(b16(10) == 1);
+        CHECK(b16(20) == 1);
+        CHECK(b16(21) == 0);
+        CHECK(filter_gt(c16, static_cast<std::int16_t>(89)).length() == 10);
     }
 
     TEST_CASE("batch group_by re-aggregates a materialized batch") {
@@ -1467,6 +1909,41 @@ TEST_SUITE("vec") {
         CHECK(total == 6);        // every row lands in exactly one part
         CHECK(colocated);         // rows with equal keys share a part
         CHECK(home.size() == 3);  // io, cpu, net
+
+        // partition_id is the per-row part each row of hash_partition landed
+        // in, and it is a registry op.
+        Series ids = dv::partition_id(b, {"cat"}, 4);
+        REQUIRE(ids.type() == TypeId::Int32);
+        REQUIRE(ids.length() == 6);
+        const std::int32_t* id = ids.data<std::int32_t>();
+        for (std::int64_t r = 0; r < 6; ++r) {
+            std::string k(b.columns[0].string_at(r));
+            CHECK(static_cast<std::size_t>(id[r]) == home[k]);
+        }
+        CHECK(id[0] == id[2]);
+        CHECK(id[1] == id[4]);
+        CHECK_THROWS_AS(dv::partition_id(b, {}, 4), std::invalid_argument);
+        CHECK_THROWS_AS(dv::partition_id(b, {"cat"}, 0), std::invalid_argument);
+        CHECK_THROWS_AS(dv::partition_id(b, {"nope"}, 4), std::out_of_range);
+        const char* keys[1] = {"cat"};
+        const dftu_dataframe* h = dftu_dataframe_new(
+            std::vector<const char*>{"cat", "dur"}.data(),
+            std::vector<dftu_series*>{b.columns[0].share().release(),
+                                      b.columns[1].share().release()}
+                .data(),
+            2);
+        REQUIRE(h);
+        const dftu_op_desc* op = dftu_op_find("dftu.frame.partition_id");
+        REQUIRE(op);
+        dv::OpArgs arg;
+        arg.frame(0, h).strlist(1, keys, 1).i64(2, 4);
+        dftu_series* via_op = dftu_op_run(op, nullptr, 0, arg);
+        REQUIRE(via_op);
+        CHECK(dftu_series_length(via_op) == 6);
+        CHECK(std::memcmp(dftu_series_data(via_op), id, 6 * sizeof(int32_t)) ==
+              0);
+        dftu_series_free(via_op);
+        dftu_dataframe_free(const_cast<dftu_dataframe*>(h));
     }
 
     TEST_CASE("topk: k largest/smallest via partial sort") {
@@ -1548,10 +2025,34 @@ TEST_SUITE("vec") {
         CHECK(m.columns[mi].data<double>()[2] == doctest::Approx(30.5));
     }
 
-    TEST_CASE("concat diagonal throws on an incompatible type clash") {
+    TEST_CASE("concat diagonal unifies a String/numeric clash on String") {
+        // A scalar column that is String in one part and numeric in another
+        // (build_row_frame infers an arg column's type per batch) unifies on
+        // String with numbers stringified, instead of aborting the concat.
         DataFrame a;
         a.names = {"v"};
         a.columns.push_back(Series::strings({"s"}));
+        DataFrame b;
+        b.names = {"v"};
+        std::vector<std::int64_t> bn{1};
+        b.columns.push_back(Series::flat_i64(bn.data(), 1));
+        DataFrame m = dv::concat({&a, &b}, dv::ConcatHow::Diagonal);
+        REQUIRE(m.columns.size() == 1);
+        CHECK(m.columns[0].type() ==
+              dftracer::utils::dataframe::TypeId::String);
+        REQUIRE(m.num_rows() == 2);
+        CHECK(m.columns[0].string_at(0) == "s");
+        CHECK(m.columns[0].string_at(1) == "1");
+    }
+
+    TEST_CASE("concat diagonal throws on a nested/scalar type clash") {
+        // A List column against a scalar has no meaningful unification.
+        DataFrame a;
+        a.names = {"v"};
+        std::vector<std::int32_t> offs{0, 1};
+        std::vector<std::int64_t> child{7};
+        a.columns.push_back(
+            Series::list(offs, Series::flat_i64(child.data(), 1)));
         DataFrame b;
         b.names = {"v"};
         std::vector<std::int64_t> bn{1};
@@ -1829,6 +2330,85 @@ TEST_SUITE("vec") {
         CHECK(sq.data<double>()[1] == doctest::Approx(3.0));
         Series lg = dv::log(dv::exp(cq));  // log(exp(x)) == x
         CHECK(lg.data<double>()[2] == doctest::Approx(16.0));
+
+        // Exercise the vectorized null-free diff / pct_change paths (>64 rows).
+        std::vector<std::int64_t> big(100);
+        for (std::size_t i = 0; i < big.size(); ++i)
+            big[i] = static_cast<std::int64_t>(i * 3);
+        Series bd = dv::diff(Series::flat_i64(big.data(), 100));
+        CHECK(bd.is_null(0));
+        CHECK(bd.data<std::int64_t>()[1] == 3);
+        CHECK(bd.data<std::int64_t>()[99] == 3);
+
+        std::vector<double> bf(100);
+        for (std::size_t i = 0; i < bf.size(); ++i)
+            bf[i] = static_cast<double>(i + 1);
+        Series bp = dv::pct_change(Series::flat_f64(bf.data(), 100));
+        CHECK(bp.is_null(0));
+        CHECK(bp.data<double>()[1] == doctest::Approx(1.0));  // (2-1)/1
+        CHECK(bp.data<double>()[99] ==
+              doctest::Approx(1.0 / 99));                     // (100-99)/99
+    }
+
+    TEST_CASE("A2 prefix scans (SIMD) match a scalar reference") {
+        // 250 rows: multiple full vector blocks (carry propagation) plus a
+        // scalar tail. Compare every scan against an independent scalar fold.
+        const std::int64_t n = 250;
+        std::vector<std::int64_t> vi(n);
+        std::vector<double> vf(n);
+        for (std::int64_t i = 0; i < n; ++i) {
+            vi[i] = (i * 7) % 13 - 6;  // small, mixed sign; sums stay exact
+            vf[i] = static_cast<double>((i * 5) % 11) - 5.0 + 0.5;
+        }
+        Series ci = Series::flat_i64(vi.data(), n);
+        Series cf = Series::flat_f64(vf.data(), n);
+
+        Series csum = dv::cumsum(ci), cmax = dv::cummax(ci),
+               cmin = dv::cummin(ci);
+        std::int64_t racc = 0, rmax = INT64_MIN, rmin = INT64_MAX;
+        for (std::int64_t i = 0; i < n; ++i) {
+            racc += vi[i];
+            rmax = vi[i] > rmax ? vi[i] : rmax;
+            rmin = vi[i] < rmin ? vi[i] : rmin;
+            CHECK(csum.data<std::int64_t>()[i] == racc);
+            CHECK(cmax.data<std::int64_t>()[i] == rmax);
+            CHECK(cmin.data<std::int64_t>()[i] == rmin);
+        }
+
+        // Integer cumulative product stays small (values in [-6,6], reset via
+        // zeros keeps it bounded); compare exactly.
+        std::vector<std::int64_t> vp(n);
+        for (std::int64_t i = 0; i < n; ++i) vp[i] = (i % 5 == 0) ? 0 : (i % 3);
+        Series cprod = dv::cum_prod(Series::flat_i64(vp.data(), n));
+        std::int64_t rp = 1;
+        for (std::int64_t i = 0; i < n; ++i) {
+            rp *= vp[i];
+            CHECK(cprod.data<std::int64_t>()[i] == rp);
+        }
+
+        // Float cumsum reassociates, so compare with a tolerance.
+        Series fsum = dv::cumsum(cf);
+        double facc = 0.0;
+        for (std::int64_t i = 0; i < n; ++i) {
+            facc += vf[i];
+            CHECK(fsum.data<double>()[i] == doctest::Approx(facc));
+        }
+    }
+
+    TEST_CASE("A2 fillna over the vectorized masked-blend path") {
+        // >64 rows with scattered nulls: the SIMD blend must match the fill.
+        std::vector<std::int64_t> v(100);
+        std::vector<std::uint8_t> bm((100 + 7) / 8, 0);
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            v[i] = static_cast<std::int64_t>(i);
+            if (i % 3 != 0)  // rows not divisible by 3 are valid
+                bm[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+        }
+        Series c = Series::flat_i64(v.data(), 100, bm.data());
+        Series f = c.fillna(dv::to_scalar<std::int64_t>(-7));
+        CHECK(f.null_count() == 0);
+        for (std::int64_t i = 0; i < 100; ++i)
+            CHECK(f.data<std::int64_t>()[i] == (i % 3 == 0 ? -7 : i));
     }
 
     TEST_CASE("A2 predicates: is_nan/is_finite/is_infinite") {
@@ -1889,6 +2469,24 @@ TEST_SUITE("vec") {
 
         std::vector<std::int64_t> one{7};
         CHECK(Series::flat_i64(one.data(), 1).is_sorted());
+
+        // Exercise the vectorized loop (>64 rows) plus a late inversion in the
+        // scalar tail.
+        std::vector<std::int64_t> big(200);
+        for (std::size_t i = 0; i < big.size(); ++i)
+            big[i] = static_cast<std::int64_t>(i);
+        CHECK(Series::flat_i64(big.data(), 200).is_sorted());
+        big[199] = 0;
+        CHECK_FALSE(Series::flat_i64(big.data(), 200).is_sorted());
+
+        // Float: a NaN is never an inversion, matching the scalar rule.
+        std::vector<double> f(100);
+        for (std::size_t i = 0; i < f.size(); ++i)
+            f[i] = static_cast<double>(i);
+        f[50] = std::numeric_limits<double>::quiet_NaN();
+        CHECK(Series::flat_f64(f.data(), 100).is_sorted());
+        f[10] = 999.0;  // real inversion before the NaN
+        CHECK_FALSE(Series::flat_f64(f.data(), 100).is_sorted());
     }
 
     TEST_CASE("A2 drop_nulls") {
@@ -1911,6 +2509,20 @@ TEST_SUITE("vec") {
         std::vector<bool> exp{false, true, false, true, false};
         for (std::int64_t i = 0; i < 5; ++i)
             CHECK(mask_bit(m, i) == exp[static_cast<std::size_t>(i)]);
+
+        // FLAT Float64 + small needle set takes the SIMD broadcast path; check
+        // parity against a scalar reference over >64 rows.
+        const std::int64_t n = 200;
+        std::vector<double> fv(n);
+        for (std::int64_t i = 0; i < n; ++i) fv[i] = static_cast<double>(i % 7);
+        std::vector<double> needles{1.0, 4.0, 6.0};
+        Series fm = Series::flat_f64(fv.data(), n)
+                        .is_in(Series::flat_f64(needles.data(), 3));
+        for (std::int64_t i = 0; i < n; ++i) {
+            const double x = fv[static_cast<std::size_t>(i)];
+            const bool want = (x == 1.0 || x == 4.0 || x == 6.0);
+            CHECK(mask_bit(fm, i) == want);
+        }
     }
 
     TEST_CASE("A2 sort / head / tail / reverse") {
@@ -2192,6 +2804,28 @@ TEST_SUITE("vec_arrow") {
         schema.release(&schema);
     }
 
+    // filter/take return a zero-copy SELECTION over a base, which carries no
+    // value buffer of its own. Reading it through string_at used to segfault.
+    TEST_CASE("string_at on a non-FLAT column is empty, not a crash") {
+        Series s = Series::strings({"alpha", "beta", "gamma"});
+        // Bool is bit-packed: keep rows 0 and 2.
+        std::vector<std::uint8_t> keep{0b0000'0101};
+        Series mask = Series::flat(TypeId::Bool, keep.data(), 3);
+        Series sel = s.filter(mask);
+
+        REQUIRE(sel.valid());
+        if (!sel.is_flat()) {
+            for (std::int64_t i = 0; i < sel.length(); ++i)
+                CHECK(sel.string_at(i).empty());
+        }
+
+        Series flat = sel.materialize();
+        REQUIRE(flat.is_flat());
+        REQUIRE(flat.length() == 2);
+        CHECK(flat.string_at(0) == "alpha");
+        CHECK(flat.string_at(1) == "gamma");
+    }
+
     TEST_CASE("bool round-trips through Arrow (bit-packed)") {
         std::vector<std::int64_t> v{5, 1, 9, 3, 7};
         Series b = gt(Series::flat_i64(v.data(), 5), 4);
@@ -2214,3 +2848,104 @@ TEST_SUITE("vec_arrow") {
     }
 }
 #endif  // DFTRACER_UTILS_ENABLE_ARROW
+
+TEST_CASE("slicing a Bool column respects bit packing") {
+    // Bool data is bit-packed ((n+7)/8 bytes) while byte_width(Bool) is 1, so
+    // a byte-stride slice both read the wrong bits and ran past the end of the
+    // buffer.
+    namespace df = dftracer::utils::dataframe;
+    std::vector<bool> vals;
+    for (int i = 0; i < 40; ++i) vals.push_back(i % 3 == 0);
+
+    std::vector<std::uint8_t> packed((vals.size() + 7) / 8, 0);
+    for (std::size_t i = 0; i < vals.size(); ++i)
+        if (vals[i]) packed[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+
+    df::Series col{dftu_series_new_flat(DFTU_TYPE_BOOL, packed.data(),
+                                        static_cast<std::int64_t>(vals.size()),
+                                        nullptr)};
+    REQUIRE(col.valid());
+
+    for (std::int64_t off : {std::int64_t{0}, std::int64_t{1}, std::int64_t{7},
+                             std::int64_t{8}, std::int64_t{13}}) {
+        const std::int64_t n = 11;
+        df::Series s{dftu_series_slice(col.handle(), off, n)};
+        REQUIRE(s.valid());
+        REQUIRE(s.length() == n);
+        const auto* bits =
+            static_cast<const std::uint8_t*>(dftu_series_data(s.handle()));
+        for (std::int64_t i = 0; i < n; ++i) {
+            const bool got = ((bits[i >> 3] >> (i & 7)) & 1u) != 0;
+            CHECK(got == vals[static_cast<std::size_t>(off + i)]);
+        }
+    }
+}
+
+TEST_CASE("Series::data_type() round-trips a List<Int64> column") {
+    namespace df = dftracer::utils::dataframe;
+    std::vector<std::int64_t> items{1, 2, 3, 4};
+    std::vector<std::int32_t> offsets{0, 2, 4};
+    df::Series list_col =
+        df::Series::list(offsets, df::Series::flat_i64(items.data(), 4));
+    REQUIRE(list_col.valid());
+
+    df::DataType dt = list_col.data_type();
+    CHECK(dt.id == df::TypeId::List);
+    REQUIRE(dt.fields.size() == 1);
+    CHECK(dt.fields[0].type.id == df::TypeId::Int64);
+    CHECK(dt.fields[0].type.fields.empty());
+}
+
+TEST_CASE("Series::data_type() round-trips a Struct{a:Int64,b:String}") {
+    namespace df = dftracer::utils::dataframe;
+    std::vector<std::int64_t> a{1, 2, 3};
+    std::vector<Series> fields;
+    fields.push_back(df::Series::flat_i64(a.data(), 3));
+    fields.push_back(df::Series::strings({"x", "y", "z"}));
+    df::Series st = df::Series::structs({"a", "b"}, std::move(fields));
+    REQUIRE(st.valid());
+
+    df::DataType dt = st.data_type();
+    CHECK(dt.id == df::TypeId::Struct);
+    REQUIRE(dt.fields.size() == 2);
+    CHECK(dt.fields[0].name == "a");
+    CHECK(dt.fields[0].type.id == df::TypeId::Int64);
+    CHECK(dt.fields[1].name == "b");
+    CHECK(dt.fields[1].type.id == df::TypeId::String);
+}
+
+TEST_CASE("List<Int64> and List<String> report different DataTypes") {
+    namespace df = dftracer::utils::dataframe;
+    std::vector<std::int32_t> offsets{0, 2};
+    std::vector<std::int64_t> ints{1, 2};
+    df::Series int_list =
+        df::Series::list(offsets, df::Series::flat_i64(ints.data(), 2));
+    df::Series str_list =
+        df::Series::list(offsets, df::Series::strings({"a", "b"}));
+
+    CHECK(int_list.data_type() != str_list.data_type());
+    CHECK(int_list.data_type() == df::list_of(df::scalar(df::TypeId::Int64)));
+    CHECK(str_list.data_type() == df::list_of(df::scalar(df::TypeId::String)));
+}
+
+TEST_CASE(
+    "dftu_series_field_name reports a struct's field names, NULL out of "
+    "range") {
+    namespace df = dftracer::utils::dataframe;
+    std::vector<std::int64_t> a{1};
+    std::vector<double> b{2.0};
+    std::vector<Series> fields;
+    fields.push_back(df::Series::flat_i64(a.data(), 1));
+    fields.push_back(df::Series::flat_f64(b.data(), 1));
+    df::Series st = df::Series::structs({"first", "second"}, std::move(fields));
+    REQUIRE(st.valid());
+
+    const char* n0 = dftu_series_field_name(st.handle(), 0);
+    const char* n1 = dftu_series_field_name(st.handle(), 1);
+    REQUIRE(n0 != nullptr);
+    REQUIRE(n1 != nullptr);
+    CHECK(std::string(n0) == "first");
+    CHECK(std::string(n1) == "second");
+    CHECK(dftu_series_field_name(st.handle(), 2) == nullptr);
+    CHECK(dftu_series_field_name(st.handle(), -1) == nullptr);
+}

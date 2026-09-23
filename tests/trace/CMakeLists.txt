@@ -29,23 +29,33 @@ set(TRACE_TEST_SOURCES
     views/test_view_planner.cpp
     views/test_view_scanner.cpp
     views/test_view_scan.cpp
+    views/test_view_lazy.cpp
+    views/test_view_stream_rows.cpp
+    views/test_dynamic_prune.cpp
+    views/test_metadata_query.cpp
     views/test_field_filter.cpp
     views/test_view_aggregate.cpp
+    views/test_view_agg_parity.cpp
+    views/test_view_agg_keys.cpp
+    views/test_view_agg_scan.cpp
     views/test_stats_view.cpp
     views/test_detail_stats_view.cpp
     views/test_view_mv.cpp
     views/test_coverage.cpp
     views/test_fold.cpp
+    views/test_pipeline_plan.cpp
+    views/test_stream_early_out.cpp
+    views/test_vectorized_fold.cpp
     views/test_rollup_store.cpp
     views/test_dict_fold.cpp
     views/test_bloom_fold.cpp
     views/test_raw_gzip_fuse.cpp
     views/test_event_source.cpp
-    views/test_aggfold.cpp
     views/test_sharded_view.cpp
     views/test_result_join.cpp
     views/test_view_join.cpp
     views/test_compare_view.cpp
+    views/test_view_c_abi.cpp
 
     # Statistics
     statistics/test_trace_statistics.cpp

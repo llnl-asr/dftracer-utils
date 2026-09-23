@@ -3,9 +3,11 @@
 #include <dftracer/utils/core/common/hash/fnv1a.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/core/rocksdb/db_manager.h>
+#include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/trace/views/rollup_store.h>
+#include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
-#include <dftracer/utils/trace/views/view_spill.h>
+#include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -19,6 +21,7 @@ namespace dftracer::utils::trace::views::detail {
 
 namespace rdb = dftracer::utils::rocksdb;
 namespace codec = utilities::common::serialization;
+namespace dataframe = dftracer::utils::dataframe;
 
 namespace {
 
@@ -89,67 +92,14 @@ void add_rest_fields(std::string& sig, const ViewPlan& plan) {
             break;
         }
     add(dyn_sketch ? "1" : "0");
-    // Serialized-accum format tag: bump when serialize_accum's layout changes
-    // so a persisted MV from an older layout is never misread (it lands in a
-    // different slug and is recomputed). v2 added the per-arg sketch block.
-    add("accumfmt2");
+    // On-disk rollup format tag: bump when the stored representation changes so
+    // a persisted rollup from an older layout is never misread (it lands under
+    // a different signature and is recomputed). accumfmt3 = per-group engine
+    // AggState blobs (agg_serialize), replacing the earlier serialized
+    // GroupMap/AggAccum layout. accumfmt4 appended the name-keyed dyn
+    // side-table to that blob.
+    add("accumfmt4");
     for (const auto& s : plan.select) add(s);
-}
-
-// Roll `src` (grouped by `src_gb` at `src_bucket` time grain, key layout
-// [time_bucket?] + dims) up to `dst`'s grouping, a subset, merging rows that
-// collapse to the same key. When `dst`'s bucket is coarser than `src_bucket`,
-// the retained bucket-start key is re-floored to `dst`'s grain so finer buckets
-// fold together. Empty if `dst`'s grouping is not a subset of `src_gb`.
-GroupMap reaggregate_to(const GroupMap& src,
-                        const std::vector<GroupKey>& src_gb,
-                        std::uint64_t src_bucket, const ViewPlan& dst) {
-    const std::size_t off = dst.time_bucket_us > 0 ? 1 : 0;
-    // src_bucket evenly divides dst.time_bucket_us (guaranteed by the matcher),
-    // and stored bucket-starts are multiples of src_bucket, so an integer floor
-    // to the coarser grain is exact - no re-scaling by time_scale needed.
-    const bool recut =
-        off && src_bucket > 0 && dst.time_bucket_us != src_bucket;
-    std::vector<std::size_t> pos;
-    pos.reserve(dst.group_by.size());
-    for (const auto& dg : dst.group_by) {
-        std::size_t at = src_gb.size();
-        for (std::size_t i = 0; i < src_gb.size(); ++i)
-            if (src_gb[i].kind == dg.kind && src_gb[i].arg == dg.arg) {
-                at = i;
-                break;
-            }
-        if (at == src_gb.size()) return {};
-        pos.push_back(at);
-    }
-    GroupMap out;
-    std::string newkey;
-    for (const auto& [k, accum] : src) {
-        AggAccum a = accum;
-        std::vector<std::string> keys;
-        keys.reserve(off + pos.size());
-        if (off && !accum.keys.empty()) {
-            if (recut) {
-                const std::int64_t b = std::stoll(accum.keys[0]);
-                const std::int64_t q =
-                    static_cast<std::int64_t>(dst.time_bucket_us);
-                keys.push_back(std::to_string((b / q) * q));
-            } else {
-                keys.push_back(accum.keys[0]);
-            }
-        }
-        for (std::size_t p : pos)
-            keys.push_back(off + p < accum.keys.size() ? accum.keys[off + p]
-                                                       : std::string());
-        a.keys = keys;
-        newkey.clear();
-        for (const auto& part : keys) {
-            newkey += part;
-            newkey += GROUP_SEP;
-        }
-        merge_accum(out[newkey], a, dst);
-    }
-    return out;
 }
 
 }  // namespace
@@ -171,32 +121,6 @@ std::string rollup_desc_key(std::uint64_t sig) {
     return key;
 }
 
-void merge_accum_free(AggAccum& da, const AggAccum& sa) {
-    if (da.count == 0 && da.fields.empty() && da.argmax.empty() &&
-        da.sketches.empty() && da.dyn.empty() && da.sets.empty()) {
-        da = sa;
-        return;
-    }
-    da.count += sa.count;
-    for (std::size_t i = 0; i < da.fields.size() && i < sa.fields.size(); ++i)
-        da.fields[i].merge(sa.fields[i]);
-    for (std::size_t i = 0; i < da.argmax.size() && i < sa.argmax.size(); ++i) {
-        const auto& s = sa.argmax[i];
-        if (!s.has) continue;
-        auto& d = da.argmax[i];
-        if (!d.has || s.by > d.by) d = s;
-    }
-    for (std::size_t i = 0; i < da.sketches.size() && i < sa.sketches.size();
-         ++i)
-        da.sketches[i].merge(sa.sketches[i]);
-    if (da.sets.size() < sa.sets.size()) da.sets.resize(sa.sets.size());
-    for (std::size_t i = 0; i < sa.sets.size(); ++i)
-        da.sets[i].insert(sa.sets[i].begin(), sa.sets[i].end());
-    for (const auto& [name, sm] : sa.dyn) da.dyn[name].merge(sm);
-    for (const auto& [name, sk] : sa.dyn_sketches)
-        da.dyn_sketches[name].merge(sk);
-}
-
 std::shared_ptr<rdb::RocksDatabase> open_rollup_db(
     const std::string& index_path, rdb::RocksDatabase::OpenMode mode) {
     return rdb::RocksDBManager::instance().get_or_open(index_path, mode);
@@ -205,13 +129,21 @@ std::shared_ptr<rdb::RocksDatabase> open_rollup_db(
 void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
                     std::uint64_t rest_sig, std::uint64_t time_bucket_us,
                     const std::vector<GroupKey>& group_by,
-                    const GroupMap& map) {
-    std::string val;
-    for (const auto& [group_key, accum] : map) {
-        val.clear();
-        serialize_accum(val, group_key, accum);
+                    const dataframe::AggState& state) {
+    const std::int64_t ng = dataframe::agg_num_groups(state);
+    std::string row_key;
+    for (std::int64_t g = 0; g < ng; ++g) {
+        // Row key = the group's composite key (unit-separated), a stable
+        // identity so a re-persist of the same group overwrites in place.
+        row_key.clear();
+        for (const auto& part : dataframe::agg_group_key(state, g)) {
+            row_key += part;
+            row_key += GROUP_SEP;
+        }
+        const std::string blob =
+            dataframe::agg_serialize(*dataframe::agg_extract_group(state, g));
         if (const auto st =
-                db.put(rollup_row_key(sig, group_key), val, rdb::cf::ROLLUP);
+                db.put(rollup_row_key(sig, row_key), blob, rdb::cf::ROLLUP);
             !st.ok())
             throw DFTUtilsException(ErrorCode::IO,
                                     "rollup persist: " + st.ToString());
@@ -238,22 +170,23 @@ bool rollup_exists(const rdb::RocksDatabase& db, std::uint64_t sig) {
     return db.get(rollup_desc_key(sig), &val, rdb::cf::ROLLUP).ok();
 }
 
-GroupMap read_rollup(const rdb::RocksDatabase& db, std::uint64_t sig) {
-    GroupMap out;
+dataframe::AggStatePtr read_rollup(const rdb::RocksDatabase& db,
+                                   std::uint64_t sig) {
     const std::string prefix = rollup_row_key(sig, "");  // 0x01 | sig
     auto it = db.new_iterator(rdb::cf::ROLLUP);
+    dataframe::AggStatePtr merged;
     for (it->Seek(prefix); it->Valid(); it->Next()) {
         const std::string_view k(it->key().data(), it->key().size());
         if (k.size() < prefix.size() || k.substr(0, prefix.size()) != prefix)
             break;
-        const std::string_view v(it->value().data(), it->value().size());
-        codec::BinaryReader br(v);
-        std::string row_key;
-        AggAccum a;
-        deserialize_accum(br, row_key, a);
-        out.emplace(std::string(k.substr(prefix.size())), std::move(a));
+        std::string blob(it->value().data(), it->value().size());
+        auto one = dataframe::agg_deserialize(blob);
+        if (!merged)
+            merged = std::move(one);
+        else
+            dataframe::agg_merge(*merged, *one);
     }
-    return out;
+    return merged;
 }
 
 std::uint64_t rest_signature(const ViewPlan& plan) {
@@ -276,8 +209,8 @@ std::uint64_t plan_signature(const ViewPlan& plan) {
     return dftracer::utils::hash::fnv1a_hash(sig);
 }
 
-std::optional<GroupMap> find_subsuming_rollup(const rdb::RocksDatabase& db,
-                                              const ViewPlan& plan) {
+std::optional<dataframe::DataFrame> find_subsuming_rollup(
+    const rdb::RocksDatabase& db, const ViewPlan& plan) {
     const std::uint64_t q_rest = rest_signature(plan);
     const char desc_tag = '\x00';
 
@@ -345,9 +278,35 @@ std::optional<GroupMap> find_subsuming_rollup(const rdb::RocksDatabase& db,
     }
 
     if (!have_best) return std::nullopt;
-    GroupMap rows = read_rollup(db, best_sig);
-    if (rows.empty()) return std::nullopt;
-    return reaggregate_to(rows, best_gb, best_bucket, plan);
+    auto fine = read_rollup(db, best_sig);
+    if (!fine) return std::nullopt;
+
+    // Map the query's grouping onto the stored state's key columns. The state
+    // key layout is [time_bucket?, best_gb...]; keep the query's keys in query
+    // order (dropping the bucket when the query has none, or re-flooring it to
+    // the query's coarser grain otherwise).
+    const std::size_t src_off = best_bucket > 0 ? 1 : 0;
+    std::vector<std::int32_t> keep;
+    keep.reserve((plan.time_bucket_us > 0 ? 1 : 0) + plan.group_by.size());
+    std::int64_t bucket_recut = 0;
+    if (plan.time_bucket_us > 0) {
+        keep.push_back(0);  // src bucket key
+        if (plan.time_bucket_us != best_bucket)
+            bucket_recut = static_cast<std::int64_t>(plan.time_bucket_us);
+    }
+    for (const auto& qg : plan.group_by) {
+        std::size_t at = best_gb.size();
+        for (std::size_t i = 0; i < best_gb.size(); ++i)
+            if (best_gb[i].kind == qg.kind && best_gb[i].arg == qg.arg) {
+                at = i;
+                break;
+            }
+        if (at == best_gb.size()) return std::nullopt;  // not subsumed
+        keep.push_back(static_cast<std::int32_t>(src_off + at));
+    }
+
+    auto coarse = dataframe::agg_regroup(*fine, keep, bucket_recut);
+    return finalize_engine_result(*coarse, plan);
 }
 
 std::string rollup_index_path(const ViewPlan& plan) {

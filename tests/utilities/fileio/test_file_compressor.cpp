@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <memory>
@@ -12,7 +13,8 @@
 using namespace dftracer::utils::utilities::fileio;
 
 static fs::path create_test_dir() {
-    auto dir = fs::temp_directory_path() / "dftracer_test_compressor";
+    auto dir =
+        dftu_utils_test::make_unique_test_path("dftracer_test_compressor");
     fs::create_directories(dir);
     return dir;
 }

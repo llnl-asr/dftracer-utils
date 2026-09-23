@@ -43,6 +43,7 @@ struct WState {
     bool sum_double = false;
     std::int64_t sum_i = 0;
     double sum_d = 0.0;
+    double prod_d = 1.0;
     std::int64_t ext_row = -1;
     std::int64_t rank_val = 0;
     const ArrowArrayView* tview = nullptr;
@@ -187,7 +188,8 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
         if (ws.func == WindowFunc::LAG || ws.func == WindowFunc::LEAD ||
             ws.func == WindowFunc::FIRST_VALUE ||
             ws.func == WindowFunc::LAST_VALUE ||
-            ws.func == WindowFunc::NTH_VALUE) {
+            ws.func == WindowFunc::NTH_VALUE ||
+            ws.func == WindowFunc::FILL_FORWARD) {
             ColumnSpec copy = out_specs[ws.value_col];
             copy.name = ws.name;
             out_specs.push_back(std::move(copy));
@@ -246,8 +248,9 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
         }
 
         auto kk = key_kind_from_storage(st.vview->storage_type);
-        if (!kk ||
-            (ws.func == WindowFunc::RUNNING_SUM && *kk == KeyKind::BYTES)) {
+        if (!kk || ((ws.func == WindowFunc::RUNNING_SUM ||
+                     ws.func == WindowFunc::RUNNING_PROD) &&
+                    *kk == KeyKind::BYTES)) {
             throw DFTUtilsException(
                 ErrorCode::INVALID_ARGUMENT,
                 "window: running aggregate over a non-numeric column");
@@ -257,6 +260,8 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
             st.sum_double = *kk == KeyKind::FLOAT;
             out_specs.push_back({ws.name, st.sum_double ? ColumnType::DOUBLE
                                                         : ColumnType::INT64});
+        } else if (ws.func == WindowFunc::RUNNING_PROD) {
+            out_specs.push_back({ws.name, ColumnType::DOUBLE});
         } else {  // RUNNING_MIN / RUNNING_MAX
             out_specs.push_back({ws.name, out_specs[ws.value_col].type});
         }
@@ -351,6 +356,7 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
     auto frame_deque_add = [&](WState& st, std::int64_t p, std::int64_t pos) {
         const std::int64_t g = idx[static_cast<std::size_t>(p + pos)];
         if (ArrowArrayViewIsNull(st.vview, g)) return;
+        ++st.frame_cnt;
         while (!st.dq.empty()) {
             const std::int64_t gb =
                 idx[static_cast<std::size_t>(p + st.dq.back())];
@@ -400,6 +406,7 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
         for (auto& st : states) {
             st.sum_i = 0;
             st.sum_d = 0.0;
+            st.prod_d = 1.0;
             st.ext_row = -1;
             st.rank_val = 0;
             st.session_id = 0;
@@ -499,6 +506,12 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
                             b.append_int64(st.out_col, st.sum_i);
                         break;
                     }
+                    case WindowFunc::RUNNING_PROD:
+                        if (!ArrowArrayViewIsNull(st.vview, g))
+                            st.prod_d *=
+                                ArrowArrayViewGetDoubleUnsafe(st.vview, g);
+                        b.append_double(st.out_col, st.prod_d);
+                        break;
                     case WindowFunc::RUNNING_MIN:
                     case WindowFunc::RUNNING_MAX: {
                         if (!ArrowArrayViewIsNull(st.vview, g)) {
@@ -624,6 +637,13 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
                         append_value(b, st.out_col, *st.vc,
                                      idx[static_cast<std::size_t>(q - 1)]);
                         break;
+                    case WindowFunc::FILL_FORWARD:
+                        if (!ArrowArrayViewIsNull(st.vview, g)) st.ext_row = g;
+                        if (st.ext_row >= 0)
+                            append_value(b, st.out_col, *st.vc, st.ext_row);
+                        else
+                            b.append_null(st.out_col);
+                        break;
                     case WindowFunc::NTH_VALUE: {
                         const std::int64_t k = st.offset;
                         if (k >= 1 && k <= q - p)
@@ -646,7 +666,7 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
                         st.win_hi = hi;
                         if (st.func == WindowFunc::FRAME_COUNT)
                             b.append_int64(st.out_col, st.frame_cnt);
-                        else if (st.frame_cnt == 0)
+                        else if (st.frame_cnt == 0 || st.frame_cnt < st.offset)
                             b.append_null(st.out_col);
                         else if (st.func == WindowFunc::FRAME_MEAN)
                             b.append_double(
@@ -663,11 +683,16 @@ ArrowExportResult window(const ArrowSchema* s, const ArrowArray* a,
                         auto [lo, hi] = frame_bounds(st, p, local, q - p, g);
                         for (std::int64_t pos = st.win_hi + 1; pos <= hi; ++pos)
                             frame_deque_add(st, p, pos);
+                        for (std::int64_t pos = st.win_lo; pos < lo; ++pos)
+                            if (!ArrowArrayViewIsNull(
+                                    st.vview,
+                                    idx[static_cast<std::size_t>(p + pos)]))
+                                --st.frame_cnt;
                         while (!st.dq.empty() && st.dq.front() < lo)
                             st.dq.pop_front();
                         st.win_lo = lo;
                         st.win_hi = hi;
-                        if (st.dq.empty())
+                        if (st.dq.empty() || st.frame_cnt < st.offset)
                             b.append_null(st.out_col);
                         else
                             append_value(b, st.out_col, *st.vc,

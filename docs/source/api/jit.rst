@@ -10,7 +10,7 @@ JIT Module
 
 Author a DFTracer plugin in Python: a class decorated with ``@jit.plugin`` is
 compiled to a native plugin against the stable plugin ABI. This module exposes
-the decorator, the typed-map declaration, the field types, and the monoid
+the decorator, the typed-map declaration, the field types, and the aggregate
 value constructors.
 
 .. automodule:: dftracer.utils.jit

@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <memory>
@@ -24,56 +25,10 @@ static std::vector<FileEntry> run_scan(Scanner& scanner, const Input& input) {
 }
 
 // Helper to create a test directory structure
-class TestDirectoryFixture {
-   public:
-    fs::path test_root;
-
-    TestDirectoryFixture() {
-        // Create a unique test directory
-        test_root = fs::temp_directory_path() / "dftracer_test_pattern_scanner";
-
-        // Clean up if it exists from a previous run
-        if (fs::exists(test_root)) {
-            fs::remove_all(test_root);
-        }
-
-        fs::create_directories(test_root);
-    }
-
-    ~TestDirectoryFixture() {
-        // Clean up test directory
-        if (fs::exists(test_root)) {
-            fs::remove_all(test_root);
-        }
-    }
-
-    void create_file(const std::string& relative_path,
-                     const std::string& content = "test") {
-        fs::path file_path = test_root / relative_path;
-
-        // Create parent directories if needed
-        fs::create_directories(file_path.parent_path());
-
-        std::ofstream ofs(file_path);
-        ofs << content;
-        ofs.close();
-    }
-
-    void create_directory(const std::string& relative_path) {
-        fs::path dir_path = test_root / relative_path;
-        fs::create_directories(dir_path);
-    }
-
-    std::string get_path(const std::string& relative_path = "") const {
-        if (relative_path.empty()) {
-            return test_root.string();
-        }
-        return (test_root / relative_path).string();
-    }
-};
+using dftu_utils_test::ScopedTestDir;
 
 TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Scan with no patterns - match all files") {
@@ -81,8 +36,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
         fixture.create_file("file2.dat");
         fixture.create_file("file3.log");
 
-        PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {}, false};
+        PatternDirectoryScannerUtilityInput input{fixture.str(), {}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -90,7 +44,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
 
     SUBCASE("Scan empty directory") {
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.empty());
@@ -103,7 +57,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
         fixture.create_file("file4.log");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 2);
@@ -119,7 +73,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
         fixture.create_file("file4.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt", ".dat"}, false};
+            fixture.str(), {".txt", ".dat"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -131,7 +85,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Extension pattern - single extension") {
@@ -140,7 +94,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
         fixture.create_file("text.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".pdf"}, false};
+            fixture.str(), {".pdf"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 1);
@@ -154,7 +108,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
         fixture.create_file("plain.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".tar.gz", ".pfw.gz"}, false};
+            fixture.str(), {".tar.gz", ".pfw.gz"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 2);
@@ -170,7 +124,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
         fixture.create_file("file3.dat");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {"*.txt"}, false};
+            fixture.str(), {"*.txt"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 2);
@@ -185,7 +139,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
         fixture.create_file("CHANGELOG");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {"README.md"}, false};
+            fixture.str(), {"README.md"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 1);
@@ -197,7 +151,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
         fixture.create_file("file2.dat");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".log"}, false};
+            fixture.str(), {".log"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.empty());
@@ -211,9 +165,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
         fixture.create_file("image.png");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(),
-            {".pfw", ".pfw.gz", "README.md", "*.txt"},
-            false};
+            fixture.str(), {".pfw", ".pfw.gz", "README.md", "*.txt"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 4);
@@ -221,7 +173,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Recursive scan with pattern") {
@@ -231,7 +183,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
         fixture.create_file("subdir/nested/file4.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, true};
+            fixture.str(), {".txt"}, true};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -247,12 +199,12 @@ TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
 
         // Non-recursive
         PatternDirectoryScannerUtilityInput non_recursive{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto non_recursive_result = run_scan(*scanner, non_recursive);
 
         // Recursive
         PatternDirectoryScannerUtilityInput recursive{
-            fixture.get_path(), {".txt"}, true};
+            fixture.str(), {".txt"}, true};
         auto recursive_result = run_scan(*scanner, recursive);
 
         CHECK(non_recursive_result.size() == 1);
@@ -266,7 +218,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
         fixture.create_file("level1/level2/level3/other.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".pfw"}, true};
+            fixture.str(), {".pfw"}, true};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -277,15 +229,15 @@ TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Directory Filtering") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Directories are not matched") {
-        fixture.create_directory("test.txt");  // Directory named like a file
+        fixture.create_dir("test.txt");  // Directory named like a file
         fixture.create_file("real_file.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
         // Should only find the real file, not the directory
@@ -296,12 +248,12 @@ TEST_CASE("PatternDirectoryScannerUtility - Directory Filtering") {
 
     SUBCASE("Mixed files and directories") {
         fixture.create_file("file1.txt");
-        fixture.create_directory("dir.txt");
+        fixture.create_dir("dir.txt");
         fixture.create_file("file2.txt");
-        fixture.create_directory("normal_dir");
+        fixture.create_dir("normal_dir");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
         // Should only match regular files
@@ -315,19 +267,19 @@ TEST_CASE("PatternDirectoryScannerUtility - Directory Filtering") {
 TEST_CASE(
     "PatternDirectoryScannerUtility - PatternDirectoryScannerUtilityInput "
     "Builder") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_pattern_scanner");
 
     SUBCASE("Builder pattern - from_path") {
         auto input =
-            PatternDirectoryScannerUtilityInput::from_path(fixture.get_path());
-        CHECK(input.path == fixture.get_path());
+            PatternDirectoryScannerUtilityInput::from_path(fixture.str());
+        CHECK(input.path == fixture.str());
         CHECK(input.patterns.empty());
         CHECK(input.recursive == false);
     }
 
     SUBCASE("Builder pattern - with_patterns") {
         auto input =
-            PatternDirectoryScannerUtilityInput::from_path(fixture.get_path())
+            PatternDirectoryScannerUtilityInput::from_path(fixture.str())
                 .with_patterns({".txt", ".dat"});
 
         CHECK(input.patterns.size() == 2);
@@ -337,7 +289,7 @@ TEST_CASE(
 
     SUBCASE("Builder pattern - with_recursive") {
         auto input =
-            PatternDirectoryScannerUtilityInput::from_path(fixture.get_path())
+            PatternDirectoryScannerUtilityInput::from_path(fixture.str())
                 .with_recursive(true);
 
         CHECK(input.recursive == true);
@@ -345,35 +297,34 @@ TEST_CASE(
 
     SUBCASE("Builder pattern - chained") {
         auto input =
-            PatternDirectoryScannerUtilityInput::from_path(fixture.get_path())
+            PatternDirectoryScannerUtilityInput::from_path(fixture.str())
                 .with_patterns({".pfw", ".pfw.gz"})
                 .with_recursive(true);
 
-        CHECK(input.path == fixture.get_path());
+        CHECK(input.path == fixture.str());
         CHECK(input.patterns.size() == 2);
         CHECK(input.recursive == true);
     }
 
     SUBCASE("Direct constructor") {
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt", ".dat"}, true};
+            fixture.str(), {".txt", ".dat"}, true};
 
-        CHECK(input.path == fixture.get_path());
+        CHECK(input.path == fixture.str());
         CHECK(input.patterns.size() == 2);
         CHECK(input.recursive == true);
     }
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Empty pattern string") {
         fixture.create_file("file1.txt");
         fixture.create_file("file2.dat");
 
-        PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {""}, false};
+        PatternDirectoryScannerUtilityInput input{fixture.str(), {""}, false};
         auto result = run_scan(*scanner, input);
 
         // Empty pattern should match all files
@@ -386,7 +337,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         fixture.create_file("Makefile");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {"README", "LICENSE"}, false};
+            fixture.str(), {"README", "LICENSE"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 2);
@@ -397,7 +348,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         fixture.create_file("other.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
         // Should match .txt files (behavior may be platform-dependent for case)
@@ -421,7 +372,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         fixture.create_file("data.backup.2024.dat");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 1);
@@ -434,7 +385,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         fixture.create_file("file.tx");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 1);
@@ -451,8 +402,8 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
             many_patterns.push_back(".ext" + std::to_string(i));
         }
 
-        PatternDirectoryScannerUtilityInput input{fixture.get_path(),
-                                                  many_patterns, false};
+        PatternDirectoryScannerUtilityInput input{fixture.str(), many_patterns,
+                                                  false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -464,7 +415,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         fixture.create_file("file 3.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -472,7 +423,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Performance") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("Many files with pattern matching") {
@@ -487,7 +438,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Performance") {
         }
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".txt"}, false};
+            fixture.str(), {".txt"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == num_txt_files);
@@ -505,7 +456,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Performance") {
         }
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".pfw"}, true};
+            fixture.str(), {".pfw"}, true};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 5);
@@ -513,7 +464,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Performance") {
 }
 
 TEST_CASE("PatternDirectoryScannerUtility - Real World Scenarios") {
-    TestDirectoryFixture fixture;
+    ScopedTestDir fixture("dftracer_test_pattern_scanner");
     auto scanner = std::make_shared<PatternDirectoryScannerUtility>();
 
     SUBCASE("DFTracer files - .pfw and .pfw.gz") {
@@ -524,7 +475,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Real World Scenarios") {
         fixture.create_file("readme.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".pfw", ".pfw.gz"}, false};
+            fixture.str(), {".pfw", ".pfw.gz"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -538,7 +489,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Real World Scenarios") {
         fixture.create_file("CMakeLists.txt");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".cpp", ".h"}, false};
+            fixture.str(), {".cpp", ".h"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);
@@ -551,7 +502,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Real World Scenarios") {
         fixture.create_file("error.log");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {"*.log"}, false};
+            fixture.str(), {"*.log"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 4);
@@ -564,7 +515,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Real World Scenarios") {
         fixture.create_file("archive.7z");
 
         PatternDirectoryScannerUtilityInput input{
-            fixture.get_path(), {".tar", ".tar.gz", ".zip"}, false};
+            fixture.str(), {".tar", ".tar.gz", ".zip"}, false};
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 3);

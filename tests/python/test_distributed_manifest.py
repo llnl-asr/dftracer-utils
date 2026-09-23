@@ -27,7 +27,7 @@ def _agg_event_count(files, index_dir):
     """Total aggregated event count read from the index via the View tier."""
     import pyarrow as pa
 
-    tbl = TraceViewer(files, index_path=index_dir).group_by("name").agg("count").collect()
+    tbl = TraceViewer(files, index_path=index_dir).group_by("name").agg("count").collect().collect()
     if tbl is None:
         return 0
     return int(pa.compute.sum(pa.table(tbl)["count"]).as_py() or 0)

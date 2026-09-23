@@ -12,17 +12,16 @@ from dftracer.utils.jit import Event
 class Wrong:
     hits = jit.map(key=(jit.i64,), value=jit.count())
     paths = jit.map(key=(jit.i64,), value=jit.list())
-    per_tid = jit.map(key=(jit.i64,), value=jit.nested(key=(jit.i64,), value=jit.count()))
+    per_tid = jit.map(key=(jit.i64, jit.i64), value=jit.count())
     hot = jit.map(key=(jit.i64,), value=jit.argmax(of=jit.str_))
     top_files = jit.map(key=(jit.i64,), value=jit.topk(3, of=jit.str_))
-    bad_join = jit.join(hits, top_files, how="leftt")  # how not in the Literal set
 
     @jit.each_event
     def step(self, e: Event) -> None:
         pid = e.pid
         self.hits[(pid,)] += "x"  # str into an int counter
         self.paths[(pid,)].append(e.name)  # missing required order_by
-        self.per_tid[(pid,)][(e.tid,)] += "y"  # str into a nested int counter
+        self.per_tid[(pid, e.tid)] += "y"  # str into an int counter
         self.hot[(pid,)].observe(e.fhash)  # argmax observe missing required by=
         self.hot[(pid,)].observe(e.fhash, by=e.name)  # by= must be a float, not Str
         self.top_files[(pid,)].observe(e.fhash)  # topk observe missing required by=

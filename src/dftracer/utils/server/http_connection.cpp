@@ -59,6 +59,16 @@ coro::CoroTask<void> handle_connection(int client_fd,
             CancelRegistry::instance().create(req_id, client_fd);
         req.cancel_token = token;
 
+        // Remove the registration on every exit path, including a throw from
+        // the streaming branch below, so a client-controlled req_id cannot leak
+        // a CancelState for the process lifetime.
+        struct CancelRegistrationGuard {
+            const std::string& id;
+            ~CancelRegistrationGuard() {
+                CancelRegistry::instance().remove(id);
+            }
+        } cancel_guard{req_id};
+
         HttpResponse resp;
         try {
             resp = co_await router.handle(req);
@@ -118,8 +128,6 @@ coro::CoroTask<void> handle_connection(int client_fd,
             auto out = resp.serialize();
             co_await io::send(client_fd, out.data(), out.size(), 0);
         }
-
-        CancelRegistry::instance().remove(req_id);
 
         // Consume parsed bytes; shift any remaining data.
         auto consumed = static_cast<std::size_t>(parsed);

@@ -49,12 +49,13 @@ from .dftracer_utils_ext import (
 from .dftracer_utils_ext import (
     set_default_runtime as _set_default_native_runtime,
 )
-from .enums import AggOp, GroupKey, Phase  # noqa: F401
+from .enums import AggOp, DType, GroupKey, Phase  # noqa: F401
 from .indexer import (  # noqa: F401
     AggregationConfig,
     Indexer,
     IndexStatus,
 )
+from .lazyframe import LazyFrame, lazy  # noqa: F401
 from .query import Expr, Field, resolved  # noqa: F401
 from .runtime import Runtime, TaskHandle  # noqa: F401
 from .series import Series  # noqa: F401
@@ -148,6 +149,8 @@ __all__ = [
     "SessionView",
     "Handle",
     "DataFrame",
+    "LazyFrame",
+    "lazy",
     "Series",
     "Runtime",
     "TaskHandle",

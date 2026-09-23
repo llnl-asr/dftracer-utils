@@ -78,7 +78,7 @@ you ask for it**, through a zero-copy edge conversion:
 
 .. code-block:: python
 
-   batch = view.group_by("cat").agg("count", "sum:dur").collect()  # -> DataFrame
+   batch = view.group_by("cat").agg("count", "sum:dur").collect().collect()  # -> DataFrame
 
    avg = (F.sum_dur / F.count).apply(batch)   # -> Series, all in the engine
    avg.to_arrow()                                      # pyarrow.Array, zero-copy
@@ -88,7 +88,8 @@ you ask for it**, through a zero-copy edge conversion:
    batch.to_pandas()   # pandas DataFrame  Arrow C stream interface)
    batch.to_polars()   # polars DataFrame
 
-``collect()`` (and ``collect_typed()`` / ``join()``) return a ``DataFrame``, so
+``collect_typed()`` / ``join()`` return a ``DataFrame`` directly, and
+``collect()`` returns a ``LazyFrame`` whose own ``.collect()`` does, so
 post-aggregation derived metrics stay entirely in the engine with no input Arrow.
 ``apply`` accepts a ``DataFrame`` (or a ``{name: Series}`` mapping) directly,
 or a ``pyarrow.Table``, whose columns are imported into the engine at the boundary.
@@ -201,7 +202,7 @@ float.
    * - Distinct / binning
      - :py:meth:`~dftracer.utils.Series.unique`, :py:meth:`~dftracer.utils.Series.value_counts`, :py:meth:`~dftracer.utils.Series.cut`, :py:meth:`~dftracer.utils.Series.qcut`, :py:meth:`~dftracer.utils.Series.sample`
    * - Masks / predicates
-     - :py:meth:`~dftracer.utils.Series.gt`, :py:meth:`~dftracer.utils.Series.ge`, :py:meth:`~dftracer.utils.Series.lt`, :py:meth:`~dftracer.utils.Series.le`, :py:meth:`~dftracer.utils.Series.eq`, :py:meth:`~dftracer.utils.Series.ne`, :py:meth:`~dftracer.utils.Series.compare`, :py:meth:`~dftracer.utils.Series.is_between`, :py:meth:`~dftracer.utils.Series.is_in`, :py:meth:`~dftracer.utils.Series.is_null`, :py:meth:`~dftracer.utils.Series.is_nan`, :py:meth:`~dftracer.utils.Series.is_finite`, :py:meth:`~dftracer.utils.Series.is_infinite`, :py:meth:`~dftracer.utils.Series.is_unique`, :py:meth:`~dftracer.utils.Series.is_duplicated`, :py:meth:`~dftracer.utils.Series.logical`, :py:meth:`~dftracer.utils.Series.logical_not`
+     - :py:meth:`~dftracer.utils.Series.gt`, :py:meth:`~dftracer.utils.Series.ge`, :py:meth:`~dftracer.utils.Series.lt`, :py:meth:`~dftracer.utils.Series.le`, :py:meth:`~dftracer.utils.Series.eq`, :py:meth:`~dftracer.utils.Series.ne`, :py:meth:`~dftracer.utils.Series.compare`, :py:meth:`~dftracer.utils.Series.is_between`, :py:meth:`~dftracer.utils.Series.is_in`, :py:meth:`~dftracer.utils.Series.is_null`, :py:meth:`~dftracer.utils.Series.is_nan`, :py:meth:`~dftracer.utils.Series.is_finite`, :py:meth:`~dftracer.utils.Series.is_infinite`, :py:meth:`~dftracer.utils.Series.is_unique`, :py:meth:`~dftracer.utils.Series.is_duplicated`, :py:meth:`~dftracer.utils.Series.logical`, :py:meth:`~dftracer.utils.Series.logical_not` (``&``, ``|`` and ``~`` between masks)
    * - Arithmetic
      - :py:meth:`~dftracer.utils.Series.add`, :py:meth:`~dftracer.utils.Series.sub`, :py:meth:`~dftracer.utils.Series.mul`, :py:meth:`~dftracer.utils.Series.div`, :py:meth:`~dftracer.utils.Series.add_scalar`, :py:meth:`~dftracer.utils.Series.sub_scalar`, :py:meth:`~dftracer.utils.Series.mul_scalar`, :py:meth:`~dftracer.utils.Series.div_scalar`
    * - Strings
@@ -223,11 +224,12 @@ kernels; ``rank`` reuses the SIMD ``argsort``; ``cumsum``/``cummax``/``cummin``
 and ``rolling`` are sequential scans (a running accumulator / monotonic deque).
 
 The relational and ordering ops have **parity on the View**: ``TraceViewer``
-exposes ``group_by``/``agg``/``join``/``limit`` and now ``sort_by(name,
-descending)`` / ``topk(name, k, largest)``. The View records them in its plan and
+exposes ``group_by``/``agg``/``join``/``limit``, ``sort_by(name,
+descending)`` and ``topk(name, k, largest)``. The View records them in its plan and
 applies the ordering to the aggregated result with the same SIMD kernels, so
 ``view.group_by(...).agg(...).topk("count", 10)`` and
-``view.group_by(...).agg(...).collect().topk("count", 10)`` return the same rows.
+``view.group_by(...).agg(...).collect().collect().topk("count", 10)`` return
+the same rows.
 
 ``sort_by`` / ``topk`` use a SIMD sort (Highway ``VQSort`` / ``VQPartialSort``
 over order-preserving-key + index packing) for fixed-width numeric columns, and
@@ -236,7 +238,7 @@ values with SIMD ``VQSort``; ``abs`` / ``clip`` / ``round`` are Highway kernels.
 
 .. code-block:: python
 
-   batch = view.group_by("cat").agg("count", "sum:dur").collect()
+   batch = view.group_by("cat").agg("count", "sum:dur").collect().collect()
    worst = batch.sort_by("sum_dur", descending=True).head(10)   # all in the engine
    p99 = batch["sum_dur"].quantile(0.99)
    merged = part_a.concat(part_b, part_c)                        # distributed merge

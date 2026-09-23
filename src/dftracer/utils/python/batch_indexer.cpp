@@ -1,6 +1,6 @@
 #include <dftracer/utils/core/common/constants.h>
 #include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash_combine.h>
+#include <dftracer/utils/core/common/hash/hash_combine.h>
 #include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/coro/when_all.h>

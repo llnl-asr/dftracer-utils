@@ -36,6 +36,37 @@ TEST_SUITE("View unified F filter") {
         CHECK(sink.lines().size() < 50);
     }
 
+    TEST_CASE("a negated predicate keeps the events its positive form drops") {
+        // Regression: the chunk pruner answered a NotNode with the set
+        // difference of its operand's MAY-match chunks, but a chunk holding
+        // events on both sides of `dur >= 30` is a may-match for the operand
+        // AND holds matches for the negation. The difference dropped every
+        // such chunk, so this exported nothing at all.
+        const auto& s = shared_trace();
+
+        StringSink pos;
+        View::from_file(s.gz, s.idx)
+            .metadata(false)
+            .filter(F("dur") >= 30)
+            .export_json(pos)
+            .get();
+
+        StringSink neg;
+        View::from_file(s.gz, s.idx)
+            .metadata(false)
+            .filter(!(F("dur") >= 30))
+            .export_json(neg)
+            .get();
+
+        StringSink all;
+        View::from_file(s.gz, s.idx).metadata(false).export_json(all).get();
+
+        CHECK(pos.lines().size() > 0);
+        CHECK(neg.lines().size() > 0);
+        // The two halves partition the trace exactly.
+        CHECK(pos.lines().size() + neg.lines().size() == all.lines().size());
+    }
+
     TEST_CASE("non-pushable F predicate raises at filter") {
         const auto& s = shared_trace();
         View base = View::from_file(s.gz, s.idx).metadata(false);

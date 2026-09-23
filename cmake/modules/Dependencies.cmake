@@ -212,63 +212,6 @@ function(link_tl_expected TARGET_NAME)
 endfunction()
 
 # ==============================================================================
-# pfr - non-Boost PFR: compile-time reflection of aggregates (plugin codegen)
-# ==============================================================================
-
-function(need_pfr)
-  if(NOT pfr_ADDED)
-    cpmaddpackage(
-      NAME
-      pfr
-      GITHUB_REPOSITORY
-      apolukhin/pfr_non_boost
-      VERSION
-      2.3.2
-      GIT_TAG
-      "2.3.2"
-      DOWNLOAD_ONLY
-      YES)
-  endif()
-
-  if(pfr_ADDED)
-    if(NOT TARGET pfr::pfr)
-      add_library(pfr INTERFACE)
-      # SYSTEM: pfr is a vendored header-only dep; keep its own warnings
-      # (e.g. -Wshadow in core_name20) out of our build.
-      target_include_directories(
-        pfr SYSTEM INTERFACE $<BUILD_INTERFACE:${pfr_SOURCE_DIR}/include>
-                             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      add_library(pfr::pfr ALIAS pfr)
-
-      install(
-        DIRECTORY ${pfr_SOURCE_DIR}/include/pfr/
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/pfr
-        FILES_MATCHING
-        PATTERN "*.hpp")
-      install(FILES ${pfr_SOURCE_DIR}/include/pfr.hpp
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-    endif()
-
-    dftracer_utils_ok("Added pfr (non-Boost) header-only library via CPM")
-  endif()
-endfunction()
-
-function(link_pfr TARGET_NAME)
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_pfr: TARGET_NAME is required")
-  endif()
-  if(NOT TARGET ${TARGET_NAME})
-    message(FATAL_ERROR "link_pfr: Target '${TARGET_NAME}' does not exist")
-  endif()
-  if(TARGET pfr::pfr)
-    target_link_libraries(${TARGET_NAME} PUBLIC pfr::pfr)
-    dftracer_utils_ok("Linked ${TARGET_NAME} to pfr::pfr")
-  else()
-    message(FATAL_ERROR "link_pfr: pfr not found! Call need_pfr() first.")
-  endif()
-endfunction()
-
-# ==============================================================================
 # simdjson - SIMD-accelerated JSON parser (On-Demand API for zero-copy)
 # ==============================================================================
 

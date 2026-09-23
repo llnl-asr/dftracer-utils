@@ -4,18 +4,22 @@
 #include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/core/rocksdb/column_families.h>
 #include <dftracer/utils/core/rocksdb/database.h>
+#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/trace/views/aggfold.h>
+#include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/trace/views/bloom_fold.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/dict_fold.h>
+#include <dftracer/utils/trace/views/engine_agg_fold.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/index_fold_driver.h>
 #include <dftracer/utils/trace/views/mv_store.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
+#include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/rollup_store.h>
 #include <dftracer/utils/trace/views/typed_collect_fold.h>
+#include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_agg_tier.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_counter_format.h>
@@ -24,7 +28,6 @@
 #include <dftracer/utils/trace/views/view_resolver.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
-#include <dftracer/utils/trace/views/view_spill.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
@@ -414,26 +417,13 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     co_return st;
 }
 
-// Aggregate the plan through the fused fold and invoke `on_group` once per
-// folded group (order unspecified). memory_budget bounds peak via AggFold
-// spill.
-static coro::CoroTask<ExportStats> fused_aggregate(
-    const ViewPlan& plan, const ViewDefinition& vdef,
-    const std::function<void(const std::string&, const AggAccum&)>& on_group) {
-    ensure_schema(plan);  // AggFold reads plan.schema; fuse does not build it
-    dftracer::utils::StringIntern intern;
-    AggFold agg(plan, intern);
-    std::array<Fold*, 1> folds{&agg};
-    auto stats = co_await fuse(plan, vdef, folds, intern);
-    agg.for_each_sorted_group(on_group);  // streaming, bounded memory
-    co_return stats;
-}
-
 coro::CoroTask<ExportStats> run_folds(const ViewPlan& plan,
                                       std::span<Fold* const> folds,
-                                      dftracer::utils::StringIntern& intern) {
+                                      dftracer::utils::StringIntern& intern,
+                                      DynamicPrune* dyn_prune) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    co_return co_await fuse(plan, vdef, folds, intern);
+    co_return co_await fuse(plan, vdef, folds, intern, /*covered=*/nullptr,
+                            /*limit=*/0, dyn_prune);
 }
 
 namespace {
@@ -444,7 +434,7 @@ namespace {
 // build. Returns false (caller falls through to the indexed path) unless every
 // file is a clean first touch and nothing materialized can answer instead.
 coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
-                                           GroupMap& merged) {
+                                           dataframe::AggStatePtr& merged) {
     namespace idx = utilities::indexer;
     namespace gzi = utilities::indexer::internal::gzip;
     // A time window still needs the indexed path (the bootstrap has no ts
@@ -452,9 +442,22 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
     // is POD-evaluable; otherwise defer to the scan, which filters properly.
     if (!collect_bootstrap_eligible(plan)) co_return false;
 
+    // A transform on a resolved (hash-backed) group key must resolve the hash
+    // to its name before transforming, but the name tables are still being
+    // built during this pass. Build the index in this pass, then re-aggregate
+    // through the normal engine scan (which reads the now-complete tables).
+    const bool resolved_transform = std::any_of(
+        plan.group_by.begin(), plan.group_by.end(), [](const GroupKey& g) {
+            return g.transform != GroupKey::Transform::None &&
+                   (g.kind == GroupKey::Kind::FilePath ||
+                    g.kind == GroupKey::Kind::FileName ||
+                    g.kind == GroupKey::Kind::HostName ||
+                    g.kind == GroupKey::Kind::Rank);
+        });
+
     for (const auto& f : plan.files) {
         dftracer::utils::StringIntern intern;
-        AggFold agg(plan, intern, /*apply_query=*/true);
+        EngineAggFold agg(plan, intern, /*apply_query=*/true);
         BloomFold bloom(intern);
         DictFold dict(intern);
         std::array<Fold*, 3> folds{&agg, &bloom, &dict};
@@ -480,16 +483,38 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
         if (!ok) co_return false;
         driver.seal();
         persist_bootstrap_index(f.index_path, f.file_path, arts, bloom, dict);
-        for (auto& [k, a] : agg.finish_map()) {
-            if (auto it = merged.find(k); it != merged.end())
-                merge_accum(it->second, a, plan);
-            else
-                merged.emplace(k, std::move(a));
-        }
+        if (resolved_transform) continue;  // index only; re-scan below
+        if (!merged)
+            merged = dataframe::agg_deserialize(
+                dataframe::agg_serialize(agg.state()));
+        else
+            dataframe::agg_merge(*merged, agg.state());
         apply_ranks(plan, agg.ranks());
+    }
+    // The index now carries the name tables; a normal engine scan resolves the
+    // transformed key correctly. Reset the resolver the per-file folds cached
+    // before the tables existed so the re-scan rebuilds it from the fresh
+    // index.
+    if (resolved_transform) {
+        ViewPlan rescan = plan;
+        rescan.resolver.reset();
+        merged = co_await build_engine_agg_state(rescan);
     }
     co_return true;
 }
+
+// Releases an MV directory lock (see lock_view_dir) on scope exit, so the
+// single-flight lock is dropped on every path including a throw from the build.
+class ViewDirLock {
+   public:
+    explicit ViewDirLock(int fd) noexcept : fd_(fd) {}
+    ~ViewDirLock() { unlock_view_dir(fd_); }
+    ViewDirLock(const ViewDirLock&) = delete;
+    ViewDirLock& operator=(const ViewDirLock&) = delete;
+
+   private:
+    int fd_;
+};
 
 }  // namespace
 
@@ -510,10 +535,8 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         // just finished.
         const int lock = lock_view_dir(dir);
         if (lock < 0) co_return ExportStats{};
-        if (view_is_fresh(plan)) {
-            unlock_view_dir(lock);
-            co_return ExportStats{};
-        }
+        ViewDirLock lock_guard(lock);
+        if (view_is_fresh(plan)) co_return ExportStats{};
         constexpr std::uint64_t DEFAULT_PART_SIZE = 128ull * 1024 * 1024;
         TraceWriteOptions opts;
         opts.output_path = (fs::path(dir) / "part.pfw.gz").string();
@@ -524,15 +547,9 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         opts.member_size = plan.mv_checkpoint_size;
         opts.part_size =
             plan.mv_part_size ? plan.mv_part_size : DEFAULT_PART_SIZE;
-        ExportStats stats;
-        try {
-            stats = co_await run_export_trace_indexed(plan, opts, progress);
-            register_view(dir, plan);
-        } catch (...) {
-            unlock_view_dir(lock);
-            throw;
-        }
-        unlock_view_dir(lock);
+        ExportStats stats =
+            co_await run_export_trace_indexed(plan, opts, progress);
+        register_view(dir, plan);
         co_return stats;
     }
 
@@ -549,82 +566,64 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         }
     }
 
-    // A build wants full coverage, so scan through the fused fold with no
-    // tier/agg_source fast path, then persist the complete raw-keyed result.
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/true);
-    dftracer::utils::StringIntern intern;
-    AggFold agg(plan, intern);
-    std::array<Fold*, 1> folds{&agg};
-    ExportStats stats = co_await fuse(plan, vdef, folds, intern, nullptr);
-
-    GroupMap merged = agg.finish_map();
+    // A build wants full coverage: scan through the engine group-by to a
+    // complete mergeable AggState, then persist its per-group partials.
+    auto state = co_await build_engine_agg_state(plan);
     if (!rdir.empty()) {
         try {
             auto db = open_rollup_db(
                 rdir, rocksdb::RocksDatabase::OpenMode::ReadWrite);
             if (db)
                 persist_rollup(*db, plan_signature(plan), rest_signature(plan),
-                               plan.time_bucket_us, plan.group_by, merged);
+                               plan.time_bucket_us, plan.group_by, *state);
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: %s", e.what());
         }
     }
-    co_return stats;
+    co_return ExportStats{};
 }
 
-// The no-scan aggregation fast paths, in order: a subsuming rollup, the
-// first-touch raw-gzip bootstrap, then the aggregation tier. On a hit fills
-// `out` (resolved) and returns true; false means the query must scan. Shared by
-// run_collect and the session so the two agree on what answers without a scan.
-static coro::CoroTask<bool> try_serve_aggregate_no_scan(const ViewPlan& plan,
-                                                        GroupMap& out) {
-    {
-        // A materialize() query opens ReadWrite so a miss reuses the handle to
-        // persist below (avoids a RO-then-RW conflict).
-        const std::string rdir = rollup_index_path(plan);
-        if (!rdir.empty() && fs::exists(fs::path(rdir) / "CURRENT")) {
-            const auto mode = plan.materialize
-                                  ? rocksdb::RocksDatabase::OpenMode::ReadWrite
-                                  : rocksdb::RocksDatabase::OpenMode::ReadOnly;
-            try {
-                auto db = open_rollup_db(rdir, mode);
-                if (db) {
-                    if (auto r = find_subsuming_rollup(*db, plan)) {
-                        resolve_group_keys(*r, plan);
-                        out = std::move(*r);
-                        co_return true;
-                    }
-                }
-            } catch (const std::exception& e) {
-                // A locked/unreadable rollup just falls through to a normal
-                // compute; never fail the query over the cache.
-                DFTRACER_UTILS_LOG_WARN("rollup read skipped: %s", e.what());
-            }
-        }
+// Serve `plan` from a subsuming persisted rollup with no scan: re-aggregate the
+// stored AggState partials to `plan`'s grouping and finalize. Shared by the
+// engine collect path and the session so the two agree on what a rollup
+// answers.
+std::optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
+    const std::string rdir = rollup_index_path(plan);
+    if (rdir.empty() || !fs::exists(fs::path(rdir) / "CURRENT"))
+        return std::nullopt;
+    // A materialize() query opens ReadWrite so a miss reuses the handle to
+    // persist below (avoids a RO-then-RW conflict).
+    const auto mode = plan.materialize
+                          ? rocksdb::RocksDatabase::OpenMode::ReadWrite
+                          : rocksdb::RocksDatabase::OpenMode::ReadOnly;
+    try {
+        auto db = open_rollup_db(rdir, mode);
+        if (db) return find_subsuming_rollup(*db, plan);
+    } catch (const std::exception& e) {
+        // A locked/unreadable rollup just falls through to a normal compute;
+        // never fail the query over the cache.
+        DFTRACER_UTILS_LOG_WARN("rollup read skipped: %s", e.what());
     }
-    if (co_await try_collect_bootstrap(plan, out)) {
-        resolve_group_keys(out, plan);
-        co_return true;
-    }
-    {
-        GroupMap tier;
-        if (agg_tier_collect(plan, tier)) {
-            resolve_group_keys(tier, plan);
-            out = std::move(tier);
-            co_return true;
-        }
-    }
+    return std::nullopt;
+}
+
+// The no-scan fast paths: the first-touch raw-gzip bootstrap, then the
+// aggregation tier. On a hit fills `out` (a mergeable engine AggState, finalize
+// with finalize_engine_result) and returns true; false means the query must
+// scan. The AggState rollup is served separately by try_serve_rollup.
+coro::CoroTask<bool> try_serve_aggregate_no_scan(const ViewPlan& plan,
+                                                 dataframe::AggStatePtr& out) {
+    if (co_await try_collect_bootstrap(plan, out)) co_return true;
+    if (agg_tier_collect(plan, out)) co_return true;
     co_return false;
 }
 
-// Aggregate `plan` by scanning: answer covered chunks from a materialized
-// aggregate source (if any), fold the rest through one spill-capable AggFold
 // Resolve a min-aligned bucket origin to the trace's minimum timestamp, read
 // from the index zone maps (no event scan), in the post-time_scale unit the
 // fold buckets in. Idempotent: a plan not requesting min alignment (or with no
 // bucket) is returned unchanged, so terminals can call it defensively. A
 // missing/locked index leaves the origin at 0 (absolute).
-static ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
+ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     if (!plan.bucket_origin_min || plan.time_bucket_us == 0) return plan;
     namespace idx = utilities::indexer;
     std::uint64_t global_min = std::numeric_limits<std::uint64_t>::max();
@@ -652,157 +651,6 @@ static ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     return p;
 }
 
-// over a subsuming filtered-trace MV where present, then persist the result as
-// a rollup when materialize() opted in. Assumes the no-scan fast paths already
-// missed. The single-aggregation scan engine shared by run_collect and a
-// single-branch session.
-static coro::CoroTask<GroupMap> run_scan_aggregate(const ViewPlan& plan_in) {
-    const ViewPlan plan = resolve_bucket_origin(plan_in);
-    ensure_schema(plan);
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/true);
-
-    GroupMap merged;
-    CoverageSet covered;
-
-    // Answer covered chunks from a materialized aggregate (per-chunk stats,
-    // summary, ...); scan only what it leaves behind. The source emits AggAccum
-    // partials, merged exactly like scanned groups. Skipped for occupancy:
-    // those partials carry no per-event intervals, so the union must see every
-    // event.
-    if (plan.agg_source && !plan.schema->want_occupancy) {
-        auto [field, single_field] = source_agg_field(plan);
-        // Materialized chunk aggregates cover ALL events in a chunk, so they
-        // are only valid when the query constrains nothing but ts (the window,
-        // handled by coverage). Any other predicate needs a real scan.
-        bool ts_only = true;
-        if (plan.query)
-            for (auto f : plan.query->fields())
-                if (f != "ts") {
-                    ts_only = false;
-                    break;
-                }
-        // Var/Std need a sum-of-squares and Pct a DDSketch the chunk aggregates
-        // do not carry, so a partial coverage would be wrong; full scan
-        // instead.
-        bool has_variance = false;
-        for (const auto& s : plan.agg)
-            if (s.op == AggOp::Var || s.op == AggOp::Std ||
-                s.op == AggOp::Pct || s.op == AggOp::Skew ||
-                s.op == AggOp::Kurt)
-                has_variance = true;
-        // A field-less (Count(*)) aggregation is a row count the dur-sketch
-        // a source cannot answer; only field-based aggregations.
-        if (ts_only && !has_variance && single_field && !field.empty()) {
-            PartialRequest req;
-            req.files = plan.files;
-            req.schema = plan.schema.get();
-            req.group_by = plan.group_by;
-            req.time_bucket_us = plan.time_bucket_us;
-            req.agg_field = field;
-            req.has_window = plan.time_range.has_value();
-            if (plan.time_range) {
-                req.begin = plan.time_range->first;
-                req.end = plan.time_range->second;
-            }
-            if (const AggSpec* am = find_argmax(plan)) {
-                req.needs_argmax = true;
-                req.argmax_value = am->field;
-                req.argmax_by = am->by;
-            }
-            std::string keybuf;
-            auto res = plan.agg_source->lookup(req, [&](AggAccum&& a) {
-                keybuf.clear();
-                for (const auto& k : a.keys) {
-                    keybuf += k;
-                    keybuf += GROUP_SEP;
-                }
-                merge_accum(merged[keybuf], a, plan);
-            });
-            if (res.handled)
-                for (const auto& [path, ckpt] : res.covered_chunks)
-                    covered.add(path, ckpt);
-        }
-    }
-
-    // Scan what the fast-path left uncovered through the fused fold, then merge
-    // its groups with any agg_source partials already in `merged`. When no
-    // rollup/tier answered and we must scan, aggregate over a subsuming
-    // filtered-trace MV instead of the base (the fold re-applies the predicate,
-    // so it is correct). Skipped for the agg_source path, whose covered chunks
-    // are keyed to base paths.
-    ViewPlan scan_plan = plan;
-    if (!plan.agg_source) {
-        if (auto mv = find_subsuming_view(plan))
-            scan_plan.files = std::move(*mv);
-    }
-    dftracer::utils::StringIntern intern;
-    AggFold agg(plan, intern);
-    std::array<Fold*, 1> folds{&agg};
-    co_await fuse(scan_plan, vdef, folds, intern, &covered);
-    for (auto& [k, a] : agg.finish_map()) {
-        if (auto it = merged.find(k); it != merged.end())
-            merge_accum(it->second, a, plan);
-        else
-            merged.emplace(k, std::move(a));
-    }
-
-    // materialize() persists this query's result as a rollup (opt-in), so a
-    // later matching query hits the fast path. Raw-keyed; a read-back
-    // re-resolves. Skipped for a paginated (partial) result.
-    if (plan.materialize && !plan.limit && !plan.offset) {
-        const std::string rdir = rollup_index_path(plan);
-        if (!rdir.empty()) {
-            try {
-                auto db = open_rollup_db(
-                    rdir, rocksdb::RocksDatabase::OpenMode::ReadWrite);
-                if (db)
-                    persist_rollup(*db, plan_signature(plan),
-                                   rest_signature(plan), plan.time_bucket_us,
-                                   plan.group_by, merged);
-            } catch (const std::exception& e) {
-                // A locked or read-only index persists nothing rather than
-                // failing the query; single-flight coordination comes later.
-                DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: %s",
-                                        e.what());
-            }
-        }
-    }
-
-    apply_ranks(plan, agg.ranks());
-    resolve_group_keys(merged, plan);
-    co_return std::move(merged);
-}
-
-coro::CoroTask<GroupMap> run_collect(const ViewPlan& plan_in) {
-    // Resolve a min-aligned origin up front so the rollup signature matches a
-    // previously materialized min-aligned result.
-    const ViewPlan plan = resolve_bucket_origin(plan_in);
-    ensure_schema(plan);
-
-    // Occupancy is an exact interval union computed in the scan, so it works
-    // for any window/filter/group_by and stays accurate for tiny events a
-    // coarse tier mask would overcount. Go straight to the scan: the
-    // rollup/bootstrap/ tier fast paths carry no per-event intervals. Disable
-    // spill - the intervals live in the accumulator, and the spill format does
-    // not serialize them.
-    const bool has_occupancy =
-        std::any_of(plan.agg.begin(), plan.agg.end(),
-                    [](const AggSpec& s) { return is_occupancy_op(s.op); });
-    if (has_occupancy) {
-        ViewPlan p = plan;
-        p.memory_budget = 0;
-        co_return co_await run_scan_aggregate(p);
-    }
-
-    {
-        GroupMap served;
-        if (co_await try_serve_aggregate_no_scan(plan, served))
-            co_return std::move(served);
-    }
-
-    co_return co_await run_scan_aggregate(plan);
-}
-
 coro::CoroTask<TypedResult> run_collect_typed(const ViewPlan& plan,
                                               int shard_begin, int shard_end,
                                               const ProgressFn* progress) {
@@ -814,7 +662,7 @@ coro::CoroTask<TypedResult> run_collect_typed(const ViewPlan& plan,
         co_return out;
     }
     // The tier could not answer (a ph/ts predicate it cannot key on, or no tier
-    // built); scan the raw trace like run_collect's fallback so collect_typed
+    // built); scan the raw trace so collect_typed
     // returns rows rather than silently empty.
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     dftracer::utils::StringIntern intern;
@@ -844,13 +692,19 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
         for (const auto& f : plan.files) index_paths.push_back(f.index_path);
         resolver = std::make_shared<const GroupResolver>(index_paths);
     }
-    NativeRowFold fold(intern, plan.select, plan.time_scale, resolver);
+    NativeRowFold fold(intern, plan.select, plan.time_scale, resolver,
+                       plan.phase == Phase::Metadata);
     std::array<Fold*, 1> folds{&fold};
-    co_await fuse(plan, vdef, folds, intern);
+    co_await execute(lower_fused_folds(plan, vdef, folds), intern);
     dataframe::DataFrame b = fold.build();
-    if (!plan.sort_col.empty()) b = b.sort_by(plan.sort_col, plan.sort_desc);
+    // sort_col/topk_col name a column the way a caller would select it (bare
+    // or "args."-prefixed); canonicalize to match build_row_frame's actual
+    // output name before resolving against the built frame.
+    if (!plan.sort_col.empty())
+        b = b.sort_by(canonical_row_column_name(plan.sort_col), plan.sort_desc);
     if (!plan.topk_col.empty())
-        b = b.topk(plan.topk_col, plan.topk_k, plan.topk_largest);
+        b = b.topk(canonical_row_column_name(plan.topk_col), plan.topk_k,
+                   plan.topk_largest);
     if (plan.offset || plan.limit) {
         const std::int64_t off = static_cast<std::int64_t>(plan.offset);
         const std::int64_t len =
@@ -860,83 +714,134 @@ coro::CoroTask<dataframe::DataFrame> run_collect_rows(const ViewPlan& plan) {
     co_return b;
 }
 
-coro::CoroTask<dataframe::DataFrame> run_call_tree(
+namespace {
+
+template <class R>
+coro::CoroTask<R> run_containment_terminal(
     const ViewPlan& plan, std::vector<std::string> partition,
-    std::string ts_field, std::string dur_field, std::string name_field) {
+    std::string ts_field, std::string dur_field, std::string name_field,
+    std::vector<std::string> group, R (ContainmentFold::*build)() const) {
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     dftracer::utils::StringIntern intern;
     ContainmentFold fold(intern, std::move(partition), std::move(ts_field),
                          std::move(dur_field), std::move(name_field),
-                         plan.time_scale);
+                         plan.time_scale, std::move(group));
     std::array<Fold*, 1> folds{&fold};
     co_await fuse(plan, vdef, folds, intern);
-    co_return fold.call_tree();
+    co_return (fold.*build)();
+}
+
+}  // namespace
+
+coro::CoroTask<dataframe::DataFrame> run_call_tree(
+    const ViewPlan& plan, std::vector<std::string> partition,
+    std::string ts_field, std::string dur_field, std::string name_field) {
+    return run_containment_terminal(
+        plan, std::move(partition), std::move(ts_field), std::move(dur_field),
+        std::move(name_field), {}, &ContainmentFold::call_tree);
 }
 
 coro::CoroTask<dataframe::DataFrame> run_flamegraph(
     const ViewPlan& plan, std::vector<std::string> partition,
     std::string ts_field, std::string dur_field, std::string name_field,
     std::vector<std::string> group) {
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
-    ContainmentFold fold(intern, std::move(partition), std::move(ts_field),
-                         std::move(dur_field), std::move(name_field),
-                         plan.time_scale, std::move(group));
-    std::array<Fold*, 1> folds{&fold};
-    co_await fuse(plan, vdef, folds, intern);
-    co_return fold.flamegraph();
+    return run_containment_terminal(
+        plan, std::move(partition), std::move(ts_field), std::move(dur_field),
+        std::move(name_field), std::move(group), &ContainmentFold::flamegraph);
 }
 
 coro::CoroTask<std::pair<dataframe::DataFrame, dataframe::DataFrame>>
 run_containment(const ViewPlan& plan, std::vector<std::string> partition,
                 std::string ts_field, std::string dur_field,
                 std::string name_field, std::vector<std::string> group) {
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
-    ContainmentFold fold(intern, std::move(partition), std::move(ts_field),
-                         std::move(dur_field), std::move(name_field),
-                         plan.time_scale, std::move(group));
-    std::array<Fold*, 1> folds{&fold};
-    co_await fuse(plan, vdef, folds, intern);
-    co_return fold.containment();
+    return run_containment_terminal(
+        plan, std::move(partition), std::move(ts_field), std::move(dur_field),
+        std::move(name_field), std::move(group), &ContainmentFold::containment);
 }
 
 coro::CoroTask<std::string> run_flamegraph_partial(
     const ViewPlan& plan, std::vector<std::string> partition,
     std::string ts_field, std::string dur_field, std::string name_field,
     std::vector<std::string> group) {
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    dftracer::utils::StringIntern intern;
-    ContainmentFold fold(intern, std::move(partition), std::move(ts_field),
-                         std::move(dur_field), std::move(name_field),
-                         plan.time_scale, std::move(group));
-    std::array<Fold*, 1> folds{&fold};
-    co_await fuse(plan, vdef, folds, intern);
-    co_return fold.flamegraph_partial();
+    return run_containment_terminal(plan, std::move(partition),
+                                    std::move(ts_field), std::move(dur_field),
+                                    std::move(name_field), std::move(group),
+                                    &ContainmentFold::flamegraph_partial);
 }
 
-static GroupMap merge_partials_into_map(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials);
+namespace {
 
-// Distributed materialize: reduce rank-local partials (from aggregate_partial)
-// app-side into one GroupMap and persist it as the rollup - the distributed
-// analog of run_materialize, with no re-scan.
+// One-byte wire tag prefixing every aggregate partial (distributed merge; never
+// persisted), so the merge side can reject a foreign blob. Every partial is now
+// a mergeable engine AggState (the scan path and the index-only tier fast path
+// both emit it); a partial with any other leading byte is rejected loudly.
+enum class AggWireTag : std::uint8_t { AggState = 2 };
+
+std::string encode_agg_partial(const dataframe::AggState& st) {
+    std::string out(1, static_cast<char>(AggWireTag::AggState));
+    out += dataframe::agg_serialize(st);
+    return out;
+}
+
+// Merge every partial into one AggState. An empty or unknown-tagged blob is
+// rejected, not misparsed.
+dataframe::AggStatePtr decode_partials(
+    const std::vector<std::string_view>& partials) {
+    dataframe::AggStatePtr state;
+    for (std::string_view p : partials) {
+        if (p.empty())
+            throw DFTUtilsException::cat(
+                ErrorCode::AGGREGATION,
+                "aggregate partial: empty (missing wire tag)");
+        if (static_cast<std::uint8_t>(p[0]) !=
+            static_cast<std::uint8_t>(AggWireTag::AggState))
+            throw DFTUtilsException::cat(ErrorCode::AGGREGATION,
+                                         "aggregate partial: unknown wire tag");
+        dataframe::AggStatePtr st =
+            dataframe::agg_deserialize(std::string(p.substr(1)));
+        if (!state)
+            state = std::move(st);
+        else
+            dataframe::agg_merge(*state, *st);
+    }
+    return state;
+}
+
+// An empty engine AggState shaped like `plan`'s aggregation (right specs and
+// key columns, zero groups), so a merge with no partials still finalizes to the
+// correct empty columns.
+dataframe::AggStatePtr empty_engine_state(const ViewPlan& plan) {
+    AggInputSpec spec = make_agg_input_spec(plan);
+    dataframe::LoweredGroupAggs lowered =
+        dataframe::lower_group_aggs(spec.gaggs);
+    auto st = dataframe::agg_new(lowered.specs, spec.dyn_specs);
+    const std::size_t nkeys =
+        (plan.time_bucket_us > 0 ? 1u : 0u) + plan.group_by.size();
+    dataframe::agg_seed_begin(*st, nkeys);
+    dataframe::agg_seed_finalize(*st);
+    return st;
+}
+
+}  // namespace
+
+// Distributed materialize: combine the rank-local partials and persist the
+// merged rollup.
 coro::CoroTask<void> run_materialize_partials(
     const ViewPlan& plan, const std::vector<std::string_view>& partials) {
     ensure_schema(plan);
-    GroupMap merged = merge_partials_into_map(plan, partials);
     const std::string rdir = rollup_index_path(plan);
-    if (!rdir.empty()) {
-        try {
-            auto db = open_rollup_db(
-                rdir, rocksdb::RocksDatabase::OpenMode::ReadWrite);
-            if (db)
-                persist_rollup(*db, plan_signature(plan), rest_signature(plan),
-                               plan.time_bucket_us, plan.group_by, merged);
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("rollup materialize (partials) skipped: %s",
-                                    e.what());
-        }
+    if (rdir.empty()) co_return;
+    dataframe::AggStatePtr state = decode_partials(partials);
+    if (!state) co_return;
+    try {
+        auto db =
+            open_rollup_db(rdir, rocksdb::RocksDatabase::OpenMode::ReadWrite);
+        if (db)
+            persist_rollup(*db, plan_signature(plan), rest_signature(plan),
+                           plan.time_bucket_us, plan.group_by, *state);
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_WARN("rollup materialize (partials) skipped: %s",
+                                e.what());
     }
     co_return;
 }
@@ -945,22 +850,7 @@ std::optional<dataframe::DataFrame> run_reconstruct_if_cached(
     const ViewPlan& plan) {
     if (plan.group_by.empty() && plan.agg.empty()) return std::nullopt;
     ensure_schema(plan);
-    const std::string rdir = rollup_index_path(plan);
-    if (rdir.empty() || !fs::exists(fs::path(rdir) / "CURRENT"))
-        return std::nullopt;
-    try {
-        auto db =
-            open_rollup_db(rdir, rocksdb::RocksDatabase::OpenMode::ReadOnly);
-        if (db) {
-            if (auto r = find_subsuming_rollup(*db, plan)) {
-                resolve_group_keys(*r, plan);
-                return to_batch(*r, plan);
-            }
-        }
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("rollup reconstruct skipped: %s", e.what());
-    }
-    return std::nullopt;
+    return try_serve_rollup(plan);
 }
 
 coro::CoroTask<ExportStats> run_scan_batches(
@@ -988,17 +878,24 @@ struct FoldFactory {
 
 struct ViewSessionState {
     std::shared_ptr<const ViewPlan> plan;
-    std::size_t num_slots = 1;
     std::vector<BranchHooks> branches;
     std::vector<FoldFactory> fold_factories;
+    /// A narrowing an attached fold offered for the shared scan, applied by
+    /// execute() only when no other branch exists. The scan feeds every
+    /// branch, so narrowing it for one would starve the rest; whether that
+    /// holds is knowable only here, after every branch has been added.
+    std::optional<query::Query> proposed_prune;
 };
 
 std::shared_ptr<ViewSessionState> make_view_session_state(
-    std::shared_ptr<const ViewPlan> plan, std::size_t num_slots) {
+    std::shared_ptr<const ViewPlan> plan) {
     auto st = std::make_shared<ViewSessionState>();
     st->plan = std::move(plan);
-    st->num_slots = num_slots ? num_slots : 1;
     return st;
+}
+
+void propose_base_prune(ViewSessionState& state, query::Query q) {
+    state.proposed_prune = std::move(q);
 }
 
 void add_branch(ViewSessionState& state, BranchHooks hooks) {
@@ -1012,55 +909,23 @@ void add_fold_factory(
     state.fold_factories.push_back({std::move(make), std::move(finalize)});
 }
 
-void add_fold_branch(
-    ViewSessionState& state, Query predicate,
-    std::function<void(std::size_t, const json::JsonValue&, std::string_view)>
-        consume,
-    std::function<void()> finalize) {
+void add_fold_branch(ViewSessionState& state, Query predicate,
+                     std::function<BranchConsumer()> make_consumer,
+                     std::function<void()> finalize) {
     BranchHooks h;
     h.predicate = std::move(predicate);
-    h.consume = std::move(consume);
+    h.make_consumer = std::move(make_consumer);
     h.finalize = std::move(finalize);
     add_branch(state, std::move(h));
 }
 
-void add_fold_branch(
-    ViewSessionState& state,
-    std::function<void(std::size_t, const json::JsonValue&, std::string_view)>
-        consume,
-    std::function<void()> finalize) {
+void add_fold_branch(ViewSessionState& state,
+                     std::function<BranchConsumer()> make_consumer,
+                     std::function<void()> finalize) {
     BranchHooks h;  // predicate unset = match all scanned events
-    h.consume = std::move(consume);
+    h.make_consumer = std::move(make_consumer);
     h.finalize = std::move(finalize);
     add_branch(state, std::move(h));
-}
-
-BranchHooks make_collect_branch(std::vector<GroupKey> group_by,
-                                std::vector<AggSpec> agg,
-                                std::shared_ptr<dataframe::DataFrame> out,
-                                std::size_t num_slots) {
-    auto plan = std::make_shared<ViewPlan>();
-    plan->group_by = std::move(group_by);
-    plan->agg = std::move(agg);
-    ensure_schema(*plan);  // before the per-slot consume callbacks fold
-    const std::size_t slots = num_slots ? num_slots : 1;
-    auto partials = std::make_shared<std::vector<GroupMap>>(slots);
-    // Per-slot key buffers: each slot folds single-threaded, so no sharing.
-    auto keybufs = std::make_shared<std::vector<std::string>>(slots);
-
-    BranchHooks h;
-    h.consume = [plan, partials, keybufs](std::size_t slot,
-                                          const json::JsonValue& jv,
-                                          std::string_view) {
-        fold_event((*partials)[slot], jv.element(), *plan, (*keybufs)[slot]);
-    };
-    h.finalize = [plan, partials, out]() {
-        GroupMap merged;
-        for (const auto& p : *partials) merge_maps(merged, p, *plan);
-        resolve_group_keys(merged, *plan);
-        *out = to_batch(merged, *plan);
-    };
-    return h;
 }
 
 void add_materialize_branch(ViewSessionState& state,
@@ -1072,30 +937,32 @@ void add_materialize_branch(ViewSessionState& state,
     plan->schema.reset();
     plan->resolver.reset();
     ensure_schema(*plan);
-    const std::size_t slots = state.num_slots ? state.num_slots : 1;
-    auto partials = std::make_shared<std::vector<GroupMap>>(slots);
-    auto keybufs = std::make_shared<std::vector<std::string>>(slots);
 
     BranchHooks h;
-    h.consume = [plan, partials, keybufs](std::size_t slot,
-                                          const json::JsonValue& jv,
-                                          std::string_view) {
-        fold_event((*partials)[slot], jv.element(), *plan, (*keybufs)[slot]);
+    // The engine builds AggState partials from columnar batches, which the
+    // session's per-event fold cannot feed, so the materialize branch does no
+    // per-event work and (re)builds the rollup through the engine in finalize.
+    h.make_consumer = []() -> BranchConsumer {
+        return [](const json::JsonValue&, std::string_view) {};
     };
-    // Persist the raw-keyed merged map (read-back re-resolves), matching
-    // run_materialize; a locked/read-only index degrades to a skip.
-    h.finalize = [plan, partials]() {
-        GroupMap merged;
-        for (const auto& p : *partials) merge_maps(merged, p, *plan);
+    h.finalize = [plan]() {
         const std::string rdir = rollup_index_path(*plan);
         if (rdir.empty()) return;
         try {
+            dataframe::AggStatePtr state_out;
+            dftracer::utils::default_runtime().run_blocking(
+                "session_materialize",
+                [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+                    state_out = co_await build_engine_agg_state(*plan);
+                    co_return;
+                });
+            if (!state_out) return;
             auto db = open_rollup_db(
                 rdir, rocksdb::RocksDatabase::OpenMode::ReadWrite);
             if (db)
                 persist_rollup(*db, plan_signature(*plan),
                                rest_signature(*plan), plan->time_bucket_us,
-                               plan->group_by, merged);
+                               plan->group_by, *state_out);
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("fused rollup materialize skipped: %s",
                                     e.what());
@@ -1106,40 +973,51 @@ void add_materialize_branch(ViewSessionState& state,
 
 BranchHooks make_export_branch(ExportSink& sink,
                                std::shared_ptr<ExportStats> out) {
+    // The sink is one shared object, so writes still serialize on a mutex; only
+    // the count is per worker.
     auto mtx = std::make_shared<std::mutex>();
-    auto count = std::make_shared<std::uint64_t>(0);
+    auto counts =
+        std::make_shared<std::vector<std::shared_ptr<std::uint64_t>>>();
 
     BranchHooks h;
-    h.consume = [&sink, mtx, count](std::size_t, const json::JsonValue&,
-                                    std::string_view raw) {
-        std::lock_guard<std::mutex> lk(*mtx);
-        sink.write(raw);
-        sink.write("\n");
-        ++*count;
+    h.make_consumer = [&sink, mtx, counts]() -> BranchConsumer {
+        auto count = std::make_shared<std::uint64_t>(0);
+        counts->push_back(count);
+        return
+            [&sink, mtx, count](const json::JsonValue&, std::string_view raw) {
+                std::lock_guard<std::mutex> lk(*mtx);
+                sink.write(raw);
+                sink.write("\n");
+                ++*count;
+            };
     };
-    h.finalize = [out, count]() { out->events_matched = *count; };
+    h.finalize = [out, counts]() {
+        std::uint64_t total = 0;
+        for (const auto& c : *counts) total += *c;
+        out->events_matched = total;
+    };
     return h;
 }
 
 // Drives the session's raw fold/export branches over the fused scan: parses
 // each raw line once, then dispatches to every branch whose predicate matches.
-// One per session; fuse slices it per worker, each slice claiming a slot so the
-// branches' per-slot partials stay lock-free. finalize (on the shared fold)
-// reduces each branch's partials into its result.
+// Sharing one parse across the branches is why they ride one fold instead of
+// one fold each. Each slice owns its branches' consumers, so nothing is shared
+// between workers; the unsliced fold holds none and only runs finalize.
 class BranchDriverFold : public Fold {
    public:
     explicit BranchDriverFold(
         std::shared_ptr<std::vector<const BranchHooks*>> branches)
-        : branches_(std::move(branches)),
-          next_slot_(std::make_shared<std::atomic<std::size_t>>(0)) {}
+        : branches_(std::move(branches)) {}
 
     bool accepts(const ScanShape&) const override { return true; }
     bool wants_raw() const override { return true; }
 
     std::unique_ptr<Fold> slice() const override {
         auto s = std::make_unique<BranchDriverFold>(branches_);
-        s->next_slot_ = next_slot_;
-        s->slot_ = next_slot_->fetch_add(1, std::memory_order_relaxed);
+        s->consumers_.reserve(branches_->size());
+        for (const auto* br : *branches_)
+            s->consumers_.push_back(br->make_consumer());
         return s;
     }
 
@@ -1151,15 +1029,19 @@ class BranchDriverFold : public Fold {
             auto root = res.value_unsafe();
             if (!root.is_object()) continue;
             json::JsonValue jv(root);
-            for (const auto* br : *branches_)
+            for (std::size_t i = 0; i < branches_->size(); ++i) {
+                const BranchHooks* br = (*branches_)[i];
                 if (!br->predicate || br->predicate->evaluate(jv))
-                    br->consume(slot_, jv, line);
+                    consumers_[i](jv, line);
+            }
         }
     }
 
     void seal_unit(const ScanUnit&) override {}
     void drop_unit(const ScanUnit&) override {}
-    void merge(Fold&) override {}  // per-slot partials are shared and disjoint
+    // Each slice's consumers hold their own state and the branch reduces them
+    // in finalize, so there is nothing to fold slice-to-slice here.
+    void merge(Fold&) override {}
 
     coro::CoroTask<bool> finalize(const CoverageSet&) override {
         for (const auto* br : *branches_)
@@ -1169,8 +1051,7 @@ class BranchDriverFold : public Fold {
 
    private:
     std::shared_ptr<std::vector<const BranchHooks*>> branches_;
-    std::shared_ptr<std::atomic<std::size_t>> next_slot_;
-    std::size_t slot_ = 0;
+    std::vector<BranchConsumer> consumers_;
     simdjson::dom::parser parser_;
     std::string buf_;
 };
@@ -1182,11 +1063,11 @@ coro::CoroTask<ExportStats> run_session(
     // Serve each match-all aggregation branch from a rollup or the aggregation
     // tier with no scan; collect the rest. A match-all agg branch that must
     // scan carries its full plan (base + group_by/agg) so it can drive an
-    // AggFold.
+    // EngineAggFold.
     struct ScanBranch {
         const BranchHooks* br;
         std::shared_ptr<ViewPlan> agg_plan;  // set only for a match-all agg
-        bool apply_query = false;            // branch AggFold filters per event
+        bool apply_query = false;  // branch EngineAggFold filters per event
     };
     std::vector<ScanBranch> scan_branches;
     scan_branches.reserve(state->branches.size());
@@ -1197,6 +1078,7 @@ coro::CoroTask<ExportStats> run_session(
             if (!br.agg->plan) {
                 full->group_by = br.agg->group_by;
                 full->agg = br.agg->agg;
+                if (br.agg->query) full->query = br.agg->query;
             }
             full->schema.reset();
             full->resolver.reset();
@@ -1204,9 +1086,14 @@ coro::CoroTask<ExportStats> run_session(
             // A per-branch predicate is not servable from a match-all rollup or
             // the tier; a partial wants the raw (unresolved) map. Both scan.
             if (!br.agg->apply_query && !br.agg->partial_out) {
-                GroupMap served;
+                if (auto df = try_serve_rollup(*full)) {
+                    *br.agg->out = apply_agg_post_ops(std::move(*df), *full);
+                    continue;
+                }
+                dataframe::AggStatePtr served;
                 if (co_await try_serve_aggregate_no_scan(*full, served)) {
-                    *br.agg->out = finalize_collect_batch(served, *full);
+                    *br.agg->out = apply_agg_post_ops(
+                        finalize_engine_result(*served, *full), *full);
                     continue;
                 }
             }
@@ -1223,20 +1110,33 @@ coro::CoroTask<ExportStats> run_session(
     for (const auto& sb : scan_branches)
         (sb.agg_plan ? agg_b : raw_b).push_back(&sb);
 
-    // A lone aggregation with no raw branches: the full single-scan engine
-    // (agg_source coverage + rollup persist). A fold factory (plugin) rides the
-    // shared fused scan and a partial wants the raw map, so both disqualify it.
+    // A lone aggregation with no raw branches runs through the engine (the
+    // rollup/tier fast paths already missed above, so this is the scan). A fold
+    // factory (plugin) rides the shared fused scan and a partial wants the raw
+    // map, so both disqualify it.
     if (agg_b.size() == 1 && raw_b.empty() && !has_factories &&
         !agg_b[0]->br->agg->partial_out) {
-        GroupMap m = co_await run_scan_aggregate(*agg_b[0]->agg_plan);
-        *agg_b[0]->br->agg->out =
-            finalize_collect_batch(m, *agg_b[0]->agg_plan);
+        auto agg_state = co_await build_engine_agg_state(*agg_b[0]->agg_plan);
+        *agg_b[0]->br->agg->out = apply_agg_post_ops(
+            finalize_engine_result(*agg_state, *agg_b[0]->agg_plan),
+            *agg_b[0]->agg_plan);
         co_return ExportStats{};
     }
 
-    // One fused scan drives every branch: an AggFold per aggregation and one
-    // BranchDriverFold parsing raw lines for the fold/export branches.
+    // One fused scan drives every branch: an EngineAggFold per aggregation and
+    // one BranchDriverFold parsing raw lines for the fold/export branches.
     ViewPlan scan_plan = plan;
+    // A fold-only session may narrow the shared scan: with no other branch
+    // there is nobody to starve, and the index can skip whole chunks.
+    if (state->branches.empty() && state->proposed_prune) {
+        if (scan_plan.query) {
+            scan_plan.query = query::parse_or_throw(
+                "(" + scan_plan.query->source() + ") and (" +
+                state->proposed_prune->source() + ")");
+        } else {
+            scan_plan.query = *state->proposed_prune;
+        }
+    }
     if (auto mv = find_subsuming_view(plan)) scan_plan.files = std::move(*mv);
     ViewDefinition avdef = make_vdef(scan_plan, /*for_aggregation=*/true);
     // A Rank group key harvests the PR metadata during the scan, but make_vdef
@@ -1256,11 +1156,11 @@ coro::CoroTask<ExportStats> run_session(
     }
     dftracer::utils::StringIntern intern;
 
-    std::vector<std::unique_ptr<AggFold>> aggs;
+    std::vector<std::unique_ptr<EngineAggFold>> aggs;
     aggs.reserve(agg_b.size());
     for (const auto* sb : agg_b)
-        aggs.push_back(
-            std::make_unique<AggFold>(*sb->agg_plan, intern, sb->apply_query));
+        aggs.push_back(std::make_unique<EngineAggFold>(*sb->agg_plan, intern,
+                                                       sb->apply_query));
 
     std::unique_ptr<BranchDriverFold> raw_fold;
     if (!raw_b.empty()) {
@@ -1294,22 +1194,21 @@ coro::CoroTask<ExportStats> run_session(
     const std::uint64_t scan_cap =
         (agg_b.empty() && !has_factories) ? plan.limit : 0;
     ExportStats stats =
-        co_await fuse(scan_plan, avdef, fold_ptrs, intern, nullptr, scan_cap);
+        co_await execute(lower_fused_folds(scan_plan, avdef, fold_ptrs), intern,
+                         nullptr, scan_cap);
 
     for (std::size_t i = 0; i < agg_b.size(); ++i) {
-        GroupMap m = aggs[i]->finish_map();
-        // A partial serializes the raw (unresolved) map for a distributed
-        // merge; a collect resolves group keys and materializes the DataFrame.
+        // A partial serializes the mergeable AggState for a distributed merge;
+        // a collect finalizes it (rank/resolver relabel) into the DataFrame.
         if (agg_b[i]->br->agg->partial_out) {
-            std::string out;
-            for (const auto& [k, a] : m) serialize_accum(out, k, a);
-            *agg_b[i]->br->agg->partial_out = std::move(out);
+            *agg_b[i]->br->agg->partial_out =
+                encode_agg_partial(aggs[i]->state());
             continue;
         }
         apply_ranks(*agg_b[i]->agg_plan, aggs[i]->ranks());
-        resolve_group_keys(m, *agg_b[i]->agg_plan);
-        *agg_b[i]->br->agg->out =
-            finalize_collect_batch(m, *agg_b[i]->agg_plan);
+        *agg_b[i]->br->agg->out = apply_agg_post_ops(
+            finalize_engine_result(aggs[i]->state(), *agg_b[i]->agg_plan),
+            *agg_b[i]->agg_plan);
     }
     // Factory folds published their results in Fold::finalize during the fuse;
     // let the caller pull them (while the folds are still alive here).
@@ -1324,85 +1223,60 @@ coro::CoroTask<ExportStats> run_session(
 // the group cardinality. memory_budget == 0 keeps it purely in-memory.
 coro::CoroTask<ExportStats> run_export_counters(const ViewPlan& plan,
                                                 ExportSink& sink) {
+    ensure_schema(plan);
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/true);
-    co_return co_await fused_aggregate(
-        plan, vdef, [&](const std::string& k, const AggAccum& a) {
-            emit_group_counter(k, a, plan, sink);
-        });
+    dftracer::utils::StringIntern intern;
+    EngineAggFold agg(plan, intern);
+    std::array<Fold*, 1> folds{&agg};
+    ExportStats stats = co_await fuse(plan, vdef, folds, intern);
+    apply_ranks(plan, agg.ranks());
+    emit_counters_from_state(agg.state(), plan, sink);
+    co_return stats;
 }
 
 // Rank-local counter aggregation for distributed runs: aggregate this view's
 // (shard of) files in memory and serialize the groups into an opaque partial
 // buffer. The transport (MPI etc.) lives in the caller; only bytes cross ranks.
 coro::CoroTask<std::string> run_aggregate_partial(const ViewPlan& plan) {
-    // Index-only fast path: when the aggregation tier answers the whole plan,
-    // read its pre-folded accumulators instead of scanning the trace files and
-    // serialize them into the same partial format a scan produces. This lets a
-    // sharded/distributed reader merge shards straight from their indexes, with
-    // no trace read. Restricted to plain event aggregations: the tier is
-    // EVENT-only, so counter and dynamic-numeric-args plans still scan (their
-    // values are not in the tier).
-    // Occupancy is computed in the scan fold (the tier carries no per-event
-    // intervals), so it cannot take the tier fast path.
+    // Index-only fast path: the EVENT-only tier answers without reading traces
+    // (a sharded reader merges straight from indexes). Everything else scans;
+    // both emit the same mergeable AggState wire partial.
     const bool has_occupancy =
         std::any_of(plan.agg.begin(), plan.agg.end(),
                     [](const AggSpec& s) { return is_occupancy_op(s.op); });
     if (plan.phase != Phase::Counters && !plan.auto_numeric_metrics &&
         !has_occupancy) {
-        GroupMap tier;
-        if (agg_tier_collect(plan, tier)) {
-            std::string out;
-            for (const auto& [k, a] : tier) serialize_accum(out, k, a);
-            co_return out;
-        }
+        dataframe::AggStatePtr tier;
+        if (agg_tier_collect(plan, tier)) co_return encode_agg_partial(*tier);
     }
-
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/true);
-    std::string out;
-    co_await fused_aggregate(plan, vdef,
-                             [&](const std::string& k, const AggAccum& a) {
-                                 serialize_accum(out, k, a);
-                             });
-    co_return out;
-}
-
-// Deserialize and combine rank-local partials (from run_aggregate_partial) back
-// into one group map. The plan supplies the group/agg shape.
-static GroupMap merge_partials_into_map(
-    const ViewPlan& plan, const std::vector<std::string_view>& partials) {
-    ensure_schema(plan);
-    GroupMap merged;
-    for (auto p : partials) {
-        codec::BinaryReader br(p);
-        while (br.has_remaining()) {
-            std::string key;
-            AggAccum a;
-            deserialize_accum(br, key, a);
-            merge_accum(merged[key], a, plan);
-        }
-    }
-    return merged;
+    auto state = co_await build_engine_agg_state(plan);
+    co_return encode_agg_partial(*state);
 }
 
 // Merge partials and emit each combined group as a ph="C" counter event.
 ExportStats merge_counters_partials(
     const ViewPlan& plan, const std::vector<std::string_view>& partials,
     ExportSink& sink) {
-    GroupMap merged = merge_partials_into_map(plan, partials);
+    const ViewPlan p = resolve_bucket_origin(plan);
+    ensure_schema(p);
+    dataframe::AggStatePtr state = decode_partials(partials);
     ExportStats st;
-    for (const auto& [k, a] : merged) {
-        emit_group_counter(k, a, plan, sink);
-        ++st.events_matched;
+    if (state) {
+        emit_counters_from_state(*state, p, sink);
+        st.events_matched =
+            static_cast<std::uint64_t>(dataframe::agg_num_groups(*state));
     }
     return st;
 }
 
-// Merge partials into a materialized Batch (distributed collect()).
+// Merge partials into a materialized DataFrame (distributed collect()).
 dataframe::DataFrame merge_partials_to_table(
     const ViewPlan& plan, const std::vector<std::string_view>& partials) {
-    GroupMap merged = merge_partials_into_map(plan, partials);
-    resolve_group_keys(merged, plan);
-    return to_batch(merged, plan);
+    const ViewPlan p = resolve_bucket_origin(plan);
+    ensure_schema(p);
+    dataframe::AggStatePtr state = decode_partials(partials);
+    if (!state) state = empty_engine_state(p);
+    return finalize_engine_result(*state, p);
 }
 
 }  // namespace dftracer::utils::trace::views::detail

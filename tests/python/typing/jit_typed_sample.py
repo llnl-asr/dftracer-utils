@@ -11,12 +11,9 @@ from dftracer.utils import jit
 from dftracer.utils.jit import (
     ApproxTopK,
     ArgMax,
-    ArgMaxRow,
     Counter,
     Event,
-    JoinDecl,
     Map,
-    Nested,
     Sample,
     Str,
     Sum,
@@ -31,11 +28,8 @@ assert_type(total, Map[tuple[int], Sum])
 bare = jit.map(key=jit.i64, value=jit.sum())
 assert_type(bare, Map[tuple[int], Sum])
 
-bkey = jit.map(key=jit.bytes, value=jit.count())
-assert_type(bkey, Map[tuple[bytes], Counter])
-
-per_tid = jit.map(key=(jit.i64,), value=jit.nested(key=(jit.i64,), value=jit.count()))
-assert_type(per_tid, Map[tuple[int], Nested[tuple[int], Counter]])
+hits = jit.map(key=(jit.i64,), value=jit.count())
+assert_type(hits, Map[tuple[int], Counter])
 
 dur_var = jit.map(key=(jit.i64,), value=jit.variance())
 assert_type(dur_var, Map[tuple[int], Variance])
@@ -52,11 +46,8 @@ assert_type(freq_k, Map[tuple[int], ApproxTopK[Str]])
 samp_k = jit.map(key=(jit.i64,), value=jit.sample(10, of=jit.i64))
 assert_type(samp_k, Map[tuple[int], Sample[int]])
 
-slow_row = jit.map(key=(jit.i64,), value=jit.argmax_row(of=(jit.str_, jit.i64, jit.f64)))
-assert_type(slow_row, Map[tuple[int], ArgMaxRow])
-
-pid_join = jit.join(total, dur_var, how="left")
-assert_type(pid_join, JoinDecl[tuple[int], Sum, tuple[int], Variance])
+two_key = jit.map(key=(jit.i64, jit.str_), value=jit.count())
+assert_type(two_key, Map[tuple[int, Str], Counter])
 
 
 @jit.plugin
@@ -67,14 +58,13 @@ class Sample:
     lo = jit.map(key=(jit.i64,), value=jit.min(of=jit.i64))
     names = jit.map(key=(jit.i64,), value=jit.set())
     paths = jit.map(key=(jit.i64,), value=jit.list())
-    per_tid = jit.map(key=(jit.i64,), value=jit.nested(key=(jit.i64,), value=jit.count()))
+    per_tid = jit.map(key=(jit.i64, jit.i64), value=jit.count())
     dur_var = jit.map(key=(jit.i64,), value=jit.variance())
     hot = jit.map(key=(jit.i64,), value=jit.argmax(of=jit.str_))
     top_files = jit.map(key=(jit.i64,), value=jit.topk(3, of=jit.str_))
     freq_files = jit.map(key=(jit.i64,), value=jit.approx_topk(5, of=jit.str_))
     ts_sample = jit.map(key=(jit.i64,), value=jit.sample(10, of=jit.i64))
-    slow_row = jit.map(key=(jit.i64,), value=jit.argmax_row(of=(jit.str_, jit.i64, jit.f64)))
-    joined = jit.join(hits, bytes_, how="left")
+    grand_total = jit.map(key=(), value=jit.sum())
 
     @jit.each_event
     def step(self, e: Event) -> None:
@@ -86,10 +76,10 @@ class Sample:
             self.lo[(pid,)].observe(e.dur)
             self.names[(pid,)].observe(e.name)
             self.paths[(pid,)].append(e.name, order_by=e.ts)
-            self.per_tid[(pid,)][(e.tid,)] += 1
+            self.per_tid[(pid, e.tid)] += 1
             self.dur_var[(pid,)].observe(e.dur)
             self.hot[(pid,)].observe(e.fhash, by=e.dur)
             self.top_files[(pid,)].observe(e.fhash, by=e.dur)
             self.freq_files[(pid,)].observe(e.fhash)
             self.ts_sample[(pid,)].observe(e.ts)
-            self.slow_row[(pid,)].observe((e.fhash, e.tid, e.ts), by=e.dur)
+            self.grand_total[()] += e.dur

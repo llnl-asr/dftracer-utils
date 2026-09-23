@@ -5,6 +5,8 @@
 #include <dftracer/utils/utilities/indexer/index_database.h>
 #include <dftracer/utils/utilities/indexer/index_database_writer_context.h>
 #include <dftracer/utils/utilities/indexer/internal/batch_scan.h>
+#include <dftracer/utils/utilities/indexer/internal/column_type_codec.h>
+#include <dftracer/utils/utilities/indexer/internal/count_map_scan.h>
 #include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/index_batch_writer.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
@@ -91,38 +93,6 @@ std::unordered_map<std::string, std::uint64_t> decode_count_map_value(
         counts.emplace(std::move(key), cursor.u64());
     }
     return counts;
-}
-
-template <typename Callback>
-void for_each_count_map_entry(std::string_view value, Callback&& callback) {
-    Cursor cursor(value);
-    auto num_entries = cursor.u32();
-    for (std::uint32_t i = 0; i < num_entries; ++i) {
-        auto key = cursor.str_view();
-        auto count = cursor.u64();
-        callback(key, count);
-    }
-}
-
-template <typename Callback>
-void for_each_name_summary_entry(std::string_view value, Callback&& callback) {
-    Cursor cursor(value);
-    auto num_entries = cursor.u32();
-    (void)cursor.u64();  // other_count
-    (void)cursor.u64();  // unique_count
-    for (std::uint32_t i = 0; i < num_entries; ++i) {
-        auto key = cursor.str_view();
-        auto count = cursor.u64();
-        callback(key, count);
-    }
-}
-
-template <typename Fn>
-void scan_prefix(const rocks::RocksDatabase& db, std::string_view column_family,
-                 std::string_view prefix, Fn&& fn) {
-    internal::scan_prefix_iterator(
-        "Failed to scan RocksDB prefix", prefix,
-        [&] { return db.new_iterator(column_family); }, std::forward<Fn>(fn));
 }
 
 }  // namespace
@@ -438,16 +408,21 @@ int IndexDatabaseWriterContext::get_or_create_file_info(
     return file_id;
 }
 
+void IndexDatabaseWriterContext::put_encoded(std::string_view column_family,
+                                             std::string_view key,
+                                             std::string_view value,
+                                             std::string_view error_message) {
+    auto status = db_->put(batch_, column_family, key, value);
+    if (!status.ok()) throw_db_error(error_message, status);
+}
+
 void IndexDatabaseWriterContext::insert_file_metadata(
     int file_id, std::uint64_t checkpoint_size, std::uint64_t total_lines,
     std::uint64_t total_uc_size) {
     const auto key = metadata_key(file_id);
     const auto value =
         encode_metadata_record(checkpoint_size, total_lines, total_uc_size);
-    auto status = db_->put(batch_, cf::METADATA, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert metadata", status);
-    }
+    put_encoded(cf::METADATA, key, value, "Failed to insert metadata");
 }
 
 void IndexDatabaseWriterContext::insert_chunk_bloom_filter(
@@ -455,10 +430,8 @@ void IndexDatabaseWriterContext::insert_chunk_bloom_filter(
     std::span<const unsigned char> blob_data, std::uint64_t num_entries) {
     const auto key = chunk_bloom_key(file_id, dimension, checkpoint_idx);
     const auto value = encode_bloom_value(blob_data, num_entries);
-    auto status = db_->put(batch_, cf::CHUNK_BLOOM, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert chunk bloom filter", status);
-    }
+    put_encoded(cf::CHUNK_BLOOM, key, value,
+                "Failed to insert chunk bloom filter");
 }
 
 void IndexDatabaseWriterContext::insert_chunk_bloom_filter(
@@ -476,10 +449,8 @@ void IndexDatabaseWriterContext::insert_file_bloom_filter(
     std::span<const unsigned char> blob_data, std::uint64_t num_entries) {
     const auto key = file_bloom_key(file_id, dimension);
     const auto value = encode_bloom_value(blob_data, num_entries);
-    auto status = db_->put(batch_, cf::FILE_BLOOM, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert file bloom filter", status);
-    }
+    put_encoded(cf::FILE_BLOOM, key, value,
+                "Failed to insert file bloom filter");
 }
 
 void IndexDatabaseWriterContext::insert_file_bloom_filter(
@@ -496,79 +467,59 @@ void IndexDatabaseWriterContext::insert_chunk_statistics(
     int file_id, std::uint64_t checkpoint_idx, const ChunkStatistics& stats) {
     const auto key = chunk_stats_key(file_id, checkpoint_idx);
     const auto value = encode_chunk_statistics_value(stats);
-    auto status = db_->put(batch_, cf::CHUNK_STATS, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert chunk statistics", status);
-    }
+    put_encoded(cf::CHUNK_STATS, key, value,
+                "Failed to insert chunk statistics");
 }
 
 void IndexDatabaseWriterContext::insert_file_scalar_stats(
     int file_id, const ChunkStatistics& stats, std::uint64_t num_chunks) {
     const auto key = file_scalar_stats_key(file_id);
     const auto value = encode_file_scalar_stats_value(stats, num_chunks);
-    auto status = db_->put(batch_, cf::FILE_SCALAR_STATS, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert file scalar statistics", status);
-    }
+    put_encoded(cf::FILE_SCALAR_STATS, key, value,
+                "Failed to insert file scalar statistics");
 }
 
 void IndexDatabaseWriterContext::insert_file_category_counts(
     int file_id, const StringViewMap<std::uint64_t>& counts) {
     const auto key = file_category_counts_key(file_id);
     const auto value = encode_count_map_value(counts);
-    auto status = db_->put(batch_, cf::FILE_CAT_COUNTS, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert file category counts", status);
-    }
+    put_encoded(cf::FILE_CAT_COUNTS, key, value,
+                "Failed to insert file category counts");
 }
 
 void IndexDatabaseWriterContext::insert_file_pid_tid_counts(
     int file_id, const StringViewMap<std::uint64_t>& counts) {
     const auto key = file_pid_tid_counts_key(file_id);
     const auto value = encode_count_map_value(counts);
-    auto status = db_->put(batch_, cf::FILE_PID_TID_COUNTS, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert file pid_tid counts", status);
-    }
+    put_encoded(cf::FILE_PID_TID_COUNTS, key, value,
+                "Failed to insert file pid_tid counts");
 }
 
 void IndexDatabaseWriterContext::insert_file_name_counts(
     int file_id, const StringViewMap<std::uint64_t>& counts) {
     const auto key = file_name_counts_key(file_id);
     const auto value = encode_name_summary_value(counts, 0, counts.size());
-    auto status = db_->put(batch_, cf::FILE_NAME_COUNTS, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert file name counts", status);
-    }
+    put_encoded(cf::FILE_NAME_COUNTS, key, value,
+                "Failed to insert file name counts");
 }
 
 void IndexDatabaseWriterContext::insert_name_dictionary_entry(
     std::uint64_t name_id, std::string_view name) {
     const auto encoded_id = rocks::KeyCodec::encode_be64(name_id);
-    auto status = db_->put(batch_, cf::NAME_DICTIONARY, name_lookup_key(name),
-                           encoded_id);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert name dictionary lookup", status);
-    }
-    status = db_->put(batch_, cf::NAME_DICTIONARY, name_reverse_key(name_id),
-                      std::string(name));
-    if (!status.ok()) {
-        throw_db_error("Failed to insert name dictionary reverse", status);
-    }
+    put_encoded(cf::NAME_DICTIONARY, name_lookup_key(name), encoded_id,
+                "Failed to insert name dictionary lookup");
+    put_encoded(cf::NAME_DICTIONARY, name_reverse_key(name_id),
+                std::string(name), "Failed to insert name dictionary reverse");
 }
 
 void IndexDatabaseWriterContext::insert_name_file_posting(std::uint64_t name_id,
                                                           int file_id) {
     const auto key = name_file_posting_key(name_id, file_id);
     const auto owner_key = name_file_owner_key(file_id, name_id);
-    auto status = db_->put(batch_, cf::NAME_FILE_POSTINGS, key, "");
-    if (!status.ok()) {
-        throw_db_error("Failed to insert name file posting", status);
-    }
-    status = db_->put(batch_, cf::NAME_FILE_POSTINGS, owner_key, "");
-    if (!status.ok()) {
-        throw_db_error("Failed to insert name file owner posting", status);
-    }
+    put_encoded(cf::NAME_FILE_POSTINGS, key, "",
+                "Failed to insert name file posting");
+    put_encoded(cf::NAME_FILE_POSTINGS, owner_key, "",
+                "Failed to insert name file owner posting");
 }
 
 void IndexDatabaseWriterContext::insert_name_chunk_posting(
@@ -576,14 +527,10 @@ void IndexDatabaseWriterContext::insert_name_chunk_posting(
     const auto key = name_chunk_posting_key(name_id, file_id, checkpoint_idx);
     const auto owner_key =
         name_chunk_owner_key(file_id, name_id, checkpoint_idx);
-    auto status = db_->put(batch_, cf::NAME_CHUNK_POSTINGS, key, "");
-    if (!status.ok()) {
-        throw_db_error("Failed to insert name chunk posting", status);
-    }
-    status = db_->put(batch_, cf::NAME_CHUNK_POSTINGS, owner_key, "");
-    if (!status.ok()) {
-        throw_db_error("Failed to insert name chunk owner posting", status);
-    }
+    put_encoded(cf::NAME_CHUNK_POSTINGS, key, "",
+                "Failed to insert name chunk posting");
+    put_encoded(cf::NAME_CHUNK_POSTINGS, owner_key, "",
+                "Failed to insert name chunk owner posting");
 }
 
 void IndexDatabaseWriterContext::refresh_root_summaries_after_file_write(
@@ -594,21 +541,15 @@ void IndexDatabaseWriterContext::refresh_root_summaries_after_file_write(
         auto value = encode_root_scalar_stats_value(
             root.stats, root.num_chunks, root.num_files, root.total_lines,
             root.total_uncompressed_bytes);
-        auto status = db_->put(batch_, cf::ROOT_SCALAR_STATS,
-                               root_scalar_stats_key(), value);
-        if (!status.ok()) {
-            throw_db_error("Failed to write root scalar statistics", status);
-        }
+        put_encoded(cf::ROOT_SCALAR_STATS, root_scalar_stats_key(), value,
+                    "Failed to write root scalar statistics");
     };
 
     auto put_root_counts = [&](std::string_view cf_name, std::string_view key,
                                const auto& counts,
                                std::string_view error_message) {
         auto value = encode_count_map_value(counts);
-        auto status = db_->put(batch_, cf_name, key, value);
-        if (!status.ok()) {
-            throw_db_error(error_message, status);
-        }
+        put_encoded(cf_name, key, value, error_message);
     };
 
     if (had_existing_file_summary) {
@@ -734,21 +675,15 @@ void IndexDatabaseWriterContext::rebuild_root_summaries() {
         auto value = encode_root_scalar_stats_value(
             root.stats, root.num_chunks, root.num_files, root.total_lines,
             root.total_uncompressed_bytes);
-        auto status = db_->put(batch_, cf::ROOT_SCALAR_STATS,
-                               root_scalar_stats_key(), value);
-        if (!status.ok()) {
-            throw_db_error("Failed to write root scalar statistics", status);
-        }
+        put_encoded(cf::ROOT_SCALAR_STATS, root_scalar_stats_key(), value,
+                    "Failed to write root scalar statistics");
     };
 
     auto put_root_counts = [&](std::string_view cf_name, std::string_view key,
                                const auto& counts,
                                std::string_view error_message) {
         auto value = encode_count_map_value(counts);
-        auto status = db_->put(batch_, cf_name, key, value);
-        if (!status.ok()) {
-            throw_db_error(error_message, status);
-        }
+        put_encoded(cf_name, key, value, error_message);
     };
 
     RootStatisticsResult rebuilt;
@@ -878,31 +813,21 @@ void IndexDatabaseWriterContext::insert_gzip_member(
     int file_id, const GzipMemberRecord& member) {
     const auto key = gzip_member_key(file_id, member.member_idx);
     const auto value = encode_gzip_member_value(member);
-    auto status = db_->put(batch_, rocks::cf::MEMBERS, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert gzip member", status);
-    }
+    put_encoded(rocks::cf::MEMBERS, key, value, "Failed to insert gzip member");
 }
 
 void IndexDatabaseWriterContext::insert_column(int file_id,
                                                std::string_view column,
                                                ColumnType type) {
     const auto key = make_column_key(file_id, column);
-    const char value = static_cast<char>(type);
-    auto status =
-        db_->put(batch_, cf::DIMENSIONS, key, std::string_view(&value, 1));
-    if (!status.ok()) {
-        throw_db_error("Failed to insert column", status);
-    }
+    const auto value = encode_data_type(column_type_to_data_type(type));
+    put_encoded(cf::DIMENSIONS, key, value, "Failed to insert column");
 }
 
 void IndexDatabaseWriterContext::insert_index_dimension(
     int file_id, std::string_view dimension) {
     const auto key = make_dimension_key(file_id, dimension);
-    auto status = db_->put(batch_, cf::DIMENSIONS, key, "");
-    if (!status.ok()) {
-        throw_db_error("Failed to insert index dimension", status);
-    }
+    put_encoded(cf::DIMENSIONS, key, "", "Failed to insert index dimension");
 }
 
 void IndexDatabaseWriterContext::insert_hash_table_entry(
@@ -923,10 +848,7 @@ void IndexDatabaseWriterContext::insert_aggregation_merge(
 
 void IndexDatabaseWriterContext::insert_aggregation_put(
     std::string_view key, std::string_view value) {
-    auto status = db_->put(batch_, cf::AGGREGATION, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to put aggregation value", status);
-    }
+    put_encoded(cf::AGGREGATION, key, value, "Failed to put aggregation value");
 }
 
 void IndexDatabaseWriterContext::insert_system_metrics_merge(
@@ -944,10 +866,8 @@ void IndexDatabaseWriterContext::insert_chunk_dimension_stats(
         chunk_dim_stats_key(file_id, checkpoint_idx, stats.dimension);
     const auto value =
         encode_chunk_dimension_stats_value(stats, value_counts_cap);
-    auto status = db_->put(batch_, cf::CHUNK_DIM_STATS, key, value);
-    if (!status.ok()) {
-        throw_db_error("Failed to insert chunk dimension stats", status);
-    }
+    put_encoded(cf::CHUNK_DIM_STATS, key, value,
+                "Failed to insert chunk dimension stats");
 }
 
 void IndexDatabaseWriterContext::delete_chunk_statistics(int file_id) {

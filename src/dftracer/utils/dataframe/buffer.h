@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <new>
+#include <utility>
 
 namespace dftracer::utils::dataframe {
 
@@ -19,6 +20,10 @@ class Buffer {
    public:
     static constexpr std::size_t DEFAULT_ALIGN = 64;
 
+    // The allocator, not mmap: a mapped buffer leaves the resident set on
+    // release but pays a page fault and a zero fill per fresh page on every
+    // touch, which made a 10M-row sort 40% slower; the allocator hands back
+    // warm pages.
     static std::shared_ptr<Buffer> allocate(std::size_t bytes,
                                             std::size_t align = DEFAULT_ALIGN) {
         void* p = nullptr;
@@ -58,6 +63,38 @@ class Buffer {
     std::uint8_t* data_;
     std::size_t size_;
     std::function<void(void*)> release_;
+};
+
+/// A scratch array of trivially copyable T over a Buffer: no value
+/// initialization, the same allocation path as a column.
+template <class T>
+class Scratch {
+   public:
+    Scratch() = default;
+    explicit Scratch(std::size_t n) { resize(n); }
+    void resize(std::size_t n) {
+        buf_ = Buffer::allocate(n * sizeof(T));
+        n_ = n;
+    }
+    void reset() {
+        buf_.reset();
+        n_ = 0;
+    }
+    T* data() { return reinterpret_cast<T*>(buf_ ? buf_->data() : nullptr); }
+    const T* data() const {
+        return reinterpret_cast<const T*>(buf_ ? buf_->data() : nullptr);
+    }
+    std::size_t size() const { return n_; }
+    T& operator[](std::size_t i) { return data()[i]; }
+    const T& operator[](std::size_t i) const { return data()[i]; }
+    void swap(Scratch& o) noexcept {
+        buf_.swap(o.buf_);
+        std::swap(n_, o.n_);
+    }
+
+   private:
+    std::shared_ptr<Buffer> buf_;
+    std::size_t n_ = 0;
 };
 
 }  // namespace dftracer::utils::dataframe

@@ -23,10 +23,6 @@ namespace dftracer::utils::trace::views::detail {
 /// it once, not per event. Defined in view_aggregate.h.
 struct AggSchema;
 
-/// Materialized-aggregate source consulted by collect(). Defined in
-/// view_aggregate.h.
-class PartialSource;
-
 /// Index-backed name maps for resolved-name group keys. Defined in
 /// view_resolver.h.
 class GroupResolver;
@@ -53,10 +49,9 @@ struct ViewPlan {
     /// from the index zone maps, no scan) instead of 0 or a fixed origin; the
     /// executor resolves it into bucket_origin_us before the fold.
     bool bucket_origin_min = false;
-    /// Target occupancy cell size (busy quantum), microseconds; 0 = engine
-    /// default. The per-bucket coverage mask has 64 sub-slots, so this sets
-    /// occ_bucket_us = occ_cell_us * 64. Only honored when a time_range bounds
-    /// the window; without one the grid falls back to a coarse default.
+    /// Optional tolerance on the occupancy interval union, microseconds; event
+    /// endpoints snap to this grid to bound memory at a small over-estimate.
+    /// 0 = exact union (default).
     std::uint64_t occ_cell_us = 0;
     /// Multiply ts/dur/te by this to normalize from the trace's native time
     /// unit to a target (source_ns / target_ns; 1.0 = no scaling). Applied
@@ -81,8 +76,10 @@ struct ViewPlan {
     /// aggregate_partial: when a worker's in-memory group map grows past this
     /// many bytes it spills to a sorted temp run; the runs are k-way merged at
     /// the end, so the scan/merge peak stays bounded regardless of group
-    /// cardinality. 0 = pure in-memory (never spill). collect() still
-    /// materializes the final table, so this bounds intermediate memory only.
+    /// cardinality. 0 (the default) means "auto": ~1/3 of available memory (see
+    /// resolve_spill_budget). Set NO_SPILL_BUDGET to disable spilling.
+    /// collect() still materializes the final table, so this bounds
+    /// intermediate memory only.
     std::uint64_t memory_budget = 0;
     std::vector<std::string> select;
 
@@ -125,8 +122,6 @@ struct ViewPlan {
     /// which the write rolls to a new part file. 0 = engine defaults.
     std::uint64_t mv_checkpoint_size = 0;
     std::uint64_t mv_part_size = 0;
-
-    const PartialSource* agg_source = nullptr;
 
     /// Cooperative cancellation, polled by every terminal at its loop
     /// boundaries; empty = never cancelled.

@@ -1,6 +1,8 @@
+#include <dftracer/utils/core/common/logging.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
 #include <dftracer/utils/dataframe/internal/field_stat_simd.h>
 #include <dftracer/utils/dataframe/kernels/field_stat.h>
+#include <dftracer/utils/dataframe/parallel.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -115,14 +117,28 @@ bool is_uint(TypeId t) {
            t == TypeId::Uint64;
 }
 
+// Float16/Decimal128/Decimal256 have no integer physical layout, so they must
+// go through read_f64 like Float32/Float64 rather than falling into
+// read_i64's default (which would silently sum 0 for every row).
+bool is_double_decoded(TypeId t) {
+    return t == TypeId::Float32 || t == TypeId::Float64 ||
+           t == TypeId::Float16 || t == TypeId::Decimal128 ||
+           t == TypeId::Decimal256;
+}
+
 void scalar_reduce(FieldStat& fs, const Series& c, std::int64_t b,
                    std::int64_t e) {
     const TypeId t = c.type();
-    const bool is_float = t == TypeId::Float32 || t == TypeId::Float64;
+    if (!is_arithmetic_type(t) && !is_temporal_type(t)) {
+        DFTRACER_UTILS_LOG_ERROR("field_stat: no numeric value for type '%s'",
+                                 type_name(t));
+        return;
+    }
+    const bool is_double = is_double_decoded(t);
     const bool is_u = is_uint(t);
     for (std::int64_t i = b; i < e; ++i) {
         if (c.is_null(i)) continue;
-        if (is_float)
+        if (is_double)
             fs.add(read_f64(c, i));
         else if (is_u)
             fs.add(read_u64(c, i));
@@ -133,9 +149,8 @@ void scalar_reduce(FieldStat& fs, const Series& c, std::int64_t b,
 
 }  // namespace
 
-FieldStat field_stat_reduce(const Series& col, std::int64_t begin,
-                            std::int64_t end) {
-    if (end < 0) end = col.length();
+static FieldStat field_stat_reduce_serial(const Series& col, std::int64_t begin,
+                                          std::int64_t end) {
     FieldStat fs;
     if (begin >= end) return fs;
     const TypeId t = col.type();
@@ -173,6 +188,27 @@ FieldStat field_stat_reduce(const Series& col, std::int64_t begin,
     }
     scalar_reduce(fs, col, begin, end);
     return fs;
+}
+
+FieldStat field_stat_reduce(const Series& col, std::int64_t begin,
+                            std::int64_t end) {
+    if (end < 0) end = col.length();
+    const std::int64_t n = end - begin;
+    // The per-range reduction is SIMD; for a large full-column reduction with a
+    // backend, split into chunks and merge the mergeable FieldStats (raw power
+    // sums, so the merge is associative). Small n / no backend runs serial.
+    constexpr std::int64_t GRAIN = std::int64_t{1} << 18;
+    if (n <= GRAIN || !parallel_backend_installed())
+        return field_stat_reduce_serial(col, begin, end);
+    return parallel_reduce<FieldStat>(
+        n, GRAIN, FieldStat{},
+        [&](std::int64_t b, std::int64_t e) {
+            return field_stat_reduce_serial(col, begin + b, begin + e);
+        },
+        [](FieldStat a, const FieldStat& b) {
+            a.merge(b);
+            return a;
+        });
 }
 
 }  // namespace dftracer::utils::dataframe

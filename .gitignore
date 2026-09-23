@@ -104,3 +104,4 @@ wheelhouse/
 # Local GCC14 repro scratch script
 .gcc14_repro.sh
 .venv_docs/
+.hypothesis/

@@ -45,6 +45,36 @@ DICTIONARY without decoding it back to FLAT first. The four encodings are why
 the columnar engine can hold a trace-sized amount of string-heavy data
 without collapsing it all to raw bytes up front.
 
+Every kernel reads every encoding. A kernel is written against flat
+buffers, and every C entry point materializes a view once before the kernel
+runs (``dftu_series_materialize``, or the ``DFTU_FLAT_INPUT`` macro that
+wraps it), so a SELECTION or a DICTIONARY never reaches raw pointer
+arithmetic that assumes FLAT. A view over a view composes into one
+selection rather than nesting. The rule costs one copy per kernel over a
+view; a chain of row selections stays a view until the first kernel that
+needs the values, and that kernel pays once.
+
+Any type, like Parquet
+----------------------
+
+A ``Series`` carries a ``TypeId`` and, where the type needs them, its
+parameters: a ``Timestamp`` its unit and timezone, a ``Decimal128`` /
+``Decimal256`` its precision and scale, a ``FixedSizeBinary`` /
+``FixedSizeList`` its width, and ``List`` / ``LargeList`` / ``Struct`` /
+``Map`` their child fields. The set mirrors Arrow's, so a column crosses
+the Arrow C Data Interface without loss in either direction, and a plugin
+source declares a nested column the same way (``dftu_schema_add_field`` /
+``add_child_field``).
+
+``Unknown`` is a schema-only marker: a plan whose source cannot know a
+column's type without scanning (an ``args.<key>`` column, whose type can
+differ between traces) reports ``Unknown`` for that column rather than
+guessing, and a real ``Series`` never carries it; a dispatch switch over
+column data refuses it at the boundary the way it refuses an out-of-range
+value. A timezone is type metadata: ``tz_localize`` and ``tz_convert`` never
+move the instants, and only UTC can mark a naive column, since the engine
+has no zone database.
+
 SIMD kernels, dispatched once
 --------------------------------
 

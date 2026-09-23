@@ -20,7 +20,6 @@ ALLOWED_TOP_LEVEL = ("dftracer/",)
 ALLOWED_TOP_LEVEL_SUFFIXES = (".dist-info", ".data")
 
 FORBIDDEN_PREFIXES = (
-    "dftracer/include/",
     "dftracer/lib/cmake/",
     "dftracer/lib/pkgconfig/",
     "share/",
@@ -38,10 +37,28 @@ REQUIRED_PATTERNS = (
     # Plugin headers a pip-installed wheel needs to compile JIT plugins and the
     # dftracer_plugin CLI scaffold: prims.h is included by jit-generated code,
     # plugin.h by the CLI scaffold, abi.h by both.
-    "dftracer/utils/include/dftracer/utils/plugins/abi.h",
-    "dftracer/utils/include/dftracer/utils/plugins/prims.h",
-    "dftracer/utils/include/dftracer/utils/plugins/plugin.h",
+    "dftracer/include/dftracer/utils/plugins/abi.h",
+    "dftracer/include/dftracer/utils/plugins/prims.h",
+    "dftracer/include/dftracer/utils/plugins/plugin.h",
+    # The whole include/dftracer/utils tree ships (not a hand-picked subset) so
+    # any public C/C++ ABI header compiles standalone from the wheel: spot
+    # check headers from directories that were NOT part of the old subset.
+    "dftracer/include/dftracer/utils/core/abi.h",
+    "dftracer/include/dftracer/utils/core/coro/abi.h",
+    "dftracer/include/dftracer/utils/dataframe/abi.h",
+    "dftracer/include/dftracer/utils/query/abi.h",
+    "dftracer/include/dftracer/utils/utilities/indexer/index_database.h",
 )
+
+
+def _include_tree_names(names):
+    prefix = "dftracer/include/dftracer/utils/"
+    return {n for n in names if n.startswith(prefix) and n.endswith(".h")}
+
+
+def _source_tree_headers(repo_root):
+    include_root = repo_root / "include" / "dftracer" / "utils"
+    return {str(p.relative_to(include_root)) for p in include_root.rglob("*.h")}
 
 
 def _find_wheel():
@@ -87,3 +104,14 @@ def test_no_stray_top_level_entries(wheel_names):
 def test_runtime_payload_present(wheel_names, required):
     wheel, names = wheel_names
     assert any(n.startswith(required) for n in names), f"{Path(wheel).name} is missing {required}"
+
+
+def test_full_include_tree_bundled(wheel_names):
+    """The wheel ships the complete include/dftracer/utils tree, not a
+    hand-picked subset: every source header must have a matching wheel
+    entry."""
+    wheel, names = wheel_names
+    shipped = {n[len("dftracer/include/dftracer/utils/") :] for n in _include_tree_names(names)}
+    expected = _source_tree_headers(REPO_ROOT)
+    missing = expected - shipped
+    assert not missing, f"{Path(wheel).name} is missing headers: {sorted(missing)[:20]}"

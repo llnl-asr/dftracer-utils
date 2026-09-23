@@ -5,7 +5,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/plugins/config.h>
-#include <dftracer/utils/plugins/host.h>
+#include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/trace/indexing/resolve_and_build.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -23,7 +23,7 @@ using namespace dftracer::utils::trace;
 using namespace dftracer::utils::trace::views;
 using namespace dftracer::utils::utilities::filesystem;
 using dftracer::utils::plugins::ConfigTree;
-using dftracer::utils::plugins::PluginHost;
+using dftracer::utils::plugins::Plugins;
 
 struct PluginBlock {
     std::string path;
@@ -134,6 +134,7 @@ class RunArgParse : public cli::ArgParse {
     cli::WatchdogArgs watchdog;
 
     bool no_auto_index = false;
+    bool describe = false;
 
     explicit RunArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         indexing.with_force = false;
@@ -151,10 +152,17 @@ class RunArgParse : public cli::ArgParse {
             .help(
                 "Disable automatic index building for files missing .dftindex")
             .flag();
+        parser()
+            .add_argument("--describe")
+            .help(
+                "Load --plugin libraries, print what each provides/consumes, "
+                "and exit without scanning")
+            .flag();
     }
 
     void post_parse() override {
         no_auto_index = parser().get<bool>("--no-auto-index");
+        describe = parser().get<bool>("--describe");
     }
 };
 
@@ -176,6 +184,80 @@ static bool block_has_config(const SharedConfig& shared,
                              const PluginBlock& block) {
     return !shared.pconfig.empty() || !shared.pargs.empty() ||
            !block.pconfig.empty() || !block.pargs.empty();
+}
+
+// Build the plugin set from --plugin/--pconfig/--parg blocks. Shared by
+// --describe and the real run so both go through the same load-time
+// validation (ABI gate, reserved-name refusal, duplicate-provides, unmet
+// consumes).
+static Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
+    auto builder = Plugins::builder();
+    for (const auto& block : plugin_args.blocks) {
+        if (block_has_config(plugin_args.shared, block)) {
+            try {
+                builder.add(block.path,
+                            build_config(plugin_args.shared, block));
+            } catch (const std::exception& e) {
+                return make_error(
+                    ErrorCode::INVALID_ARGUMENT,
+                    "plugin '" + block.path + "' config error: " + e.what());
+            }
+        } else {
+            builder.add(block.path);
+        }
+    }
+    return builder.build();
+}
+
+static std::string join_or_none(const std::vector<std::string>& names) {
+    if (names.empty()) return "(none)";
+    std::string out;
+    for (const auto& name : names) {
+        if (!out.empty()) out += ", ";
+        out += name;
+    }
+    return out;
+}
+
+// Print each loaded plugin's path and provides/consumes, one line per fact so
+// the output is greppable, and exit without touching any trace file.
+static int describe_plugins(const PluginArgs& plugin_args) {
+    if (plugin_args.blocks.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("%s",
+                                 "No plugins specified. Use --plugin path.so.");
+        return 1;
+    }
+
+    auto plugins = build_plugins(plugin_args);
+    if (!plugins) {
+        DFTRACER_UTILS_LOG_ERROR("%s", plugins.error().format().c_str());
+        return 1;
+    }
+
+    for (const auto& info : plugins->describe()) {
+        std::fprintf(stderr, "plugin: %s\n", info.path.c_str());
+        std::fprintf(stderr, "  abi_version: %u\n", info.abi_version);
+        std::fprintf(stderr, "  plan_query: %s\n",
+                     info.has_plan_query ? "yes" : "no");
+        std::fprintf(stderr, "  provides: %s\n",
+                     join_or_none(info.provides).c_str());
+        std::fprintf(stderr, "  consumes: %s\n",
+                     join_or_none(info.consumes).c_str());
+        std::fprintf(stderr, "  ops: %s\n", join_or_none(info.ops).c_str());
+        // "(none)" here means the plugin declared no projection, so it is
+        // handed every batch column - not that it reads nothing.
+        std::fprintf(stderr, "  reads: %s\n",
+                     info.reads.empty() ? "(all columns)"
+                                        : join_or_none(info.reads).c_str());
+        if (info.config_keys.empty()) {
+            std::fprintf(stderr, "  config: (undeclared)\n");
+        } else {
+            for (const auto& key : info.config_keys)
+                std::fprintf(stderr, "  config: %s\n", key.c_str());
+        }
+        std::fprintf(stderr, "\n");
+    }
+    return 0;
 }
 
 static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
@@ -216,29 +298,10 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
         files = std::move(norm.files);
     }
 
-    PluginHost host;
-    for (const auto& block : plugin_args->blocks) {
-        const dftu_value* root = nullptr;
-        if (block_has_config(plugin_args->shared, block)) {
-            try {
-                root =
-                    host.add_config(build_config(plugin_args->shared, block));
-            } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("Plugin '%s' config error: %s",
-                                         block.path.c_str(), e.what());
-                co_return 1;
-            }
-        }
-        if (!host.load(block.path, root)) {
-            DFTRACER_UTILS_LOG_ERROR("Failed to load plugin: %s",
-                                     block.path.c_str());
-            co_return 1;
-        }
-    }
-
-    // A capability conflict must stop the run before any scanning begins.
-    if (!host.resolve()) {
-        DFTRACER_UTILS_LOG_ERROR("%s", "Plugin capability resolution failed");
+    // A load or fold-ordering failure must stop the run before any scanning.
+    auto plugins = build_plugins(*plugin_args);
+    if (!plugins) {
+        DFTRACER_UTILS_LOG_ERROR("%s", plugins.error().format().c_str());
         co_return 1;
     }
 
@@ -262,7 +325,12 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
                 co_await indexing::ensure_indexes_fresh(&ctx, "", files,
                                                         index_dir);
             View view = View::from_files(view_files);
-            stats = co_await host.run(view);
+            auto run = co_await plugins->run(view);
+            if (!run) {
+                DFTRACER_UTILS_LOG_ERROR("%s", run.error().format().c_str());
+                co_return;
+            }
+            stats = run->stats;
             co_return;
         },
         "DFTracerRun");
@@ -278,7 +346,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     std::fprintf(stderr,
                  "Run: plugins=%zu | Files: %zu | Chunks: scanned=%llu "
                  "skipped=%llu | Events: matched=%llu scanned=%llu\n",
-                 host.size(), files.size(),
+                 plugins->size(), files.size(),
                  (unsigned long long)stats.chunks_scanned,
                  (unsigned long long)stats.chunks_skipped,
                  (unsigned long long)stats.events_matched,
@@ -298,8 +366,11 @@ int main(int argc, char** argv) {
         "--plugin shared library is loaded and run as a fold over one shared, "
         "index-pruned parallel scan. Add per-plugin config with --pconfig FILE "
         "and --parg KEY=VALUE (after a --plugin), or shared config with "
-        "--shared-pconfig FILE and --shared-parg KEY=VALUE.",
+        "--shared-pconfig FILE and --shared-parg KEY=VALUE. --describe loads "
+        "the plugins and reports what each provides/consumes without "
+        "scanning.",
         [&plugin_args](RunArgParse& cli) -> int {
+            if (cli.describe) return describe_plugins(plugin_args);
             try {
                 return run_plugins(&cli, &plugin_args).get();
             } catch (const std::exception& e) {

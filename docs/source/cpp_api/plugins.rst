@@ -11,10 +11,10 @@ Plugins
 
 The header-only C++ SDK in ``dftracer::utils::plugins`` wraps the plugin C ABI
 for writing a plugin in C++. Host services are reached through ``Host`` and the
-typed helpers over each extension group: ``Io``, ``Map``, ``NestedMap``,
-``Writer``, ``Event``, ``Batch``, ``Config``, ``Sketch``, ``Handle``,
-``OutPort`` / ``InPort``, ``Task``, ``AsyncOp``, and ``Stream``. A plugin is
-registered with ``make_plugin``.
+typed helpers over each extension group: ``Io``, ``Agg`` (with the ``AggCol``
+builder and the ``agg::`` per-op factories), ``Writer``, ``Event``, ``Batch``,
+``Config``, ``Sketch``, ``OutPort`` / ``InPort``, ``Task``, and ``AsyncOp``. A
+plugin is registered with ``make_plugin``.
 
 .. code-block:: cpp
 

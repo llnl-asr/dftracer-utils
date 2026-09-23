@@ -45,7 +45,8 @@ From a query, via :doc:`TraceViewer <../../trace-viewer>`:
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "count"},
                              {AggOp::Sum, "dur", "sum_dur"}})
-                       .collect()
+                       .collect()   // -> LazyFrame
+                       .collect()   // -> coro::CoroTask<DataFrame>
                        .get();
 
       See :doc:`../analysis/aggregation` for the full group-key and aggregate
@@ -227,10 +228,9 @@ out}`` where ``op`` is an ``Agg`` enumerator: ``Agg::Count`` (column ignored),
 Relational
 -----------
 
-Equi-join two frames on their leading key column(s); both frames must already
-share that leading key-column schema (same names, in order). See
-:doc:`joins` for the full join surface (join kinds, output layout, joining
-aggregated queries).
+Hash-join two frames on one or more key columns (by name). See :doc:`joins`
+for the join kinds, the output column naming, the lazy form and joining
+aggregated queries.
 
 .. tab-set::
 
@@ -238,17 +238,16 @@ aggregated queries).
 
       .. code-block:: cpp
 
-         #include <dftracer/utils/trace/views/result_join.h>
-         using namespace dftracer::utils::trace::views;
+         using dftracer::utils::dataframe::JoinHow;
 
-         DataFrame joined = join_batches(df, other, /*n_key=*/1, JoinType::INNER);
+         DataFrame joined = df.join(other, {"fid"}, JoinHow::Inner);
 
    .. tab-item:: Python
 
       .. code-block:: python
 
-         # on = number of leading key columns; how is inner/left/right/full/semi/anti.
-         joined = df.join(other, how="inner", on=1)
+         # how is inner/left/right/outer/semi/anti/cross.
+         joined = df.join(other, on="fid", how="inner")
 
 To hash-partition a frame's rows into ``n_parts`` buckets by one or more key
 columns (the shuffle primitive behind a distributed ``group_by``/join: send
@@ -284,9 +283,10 @@ Convert out (only at the edge)
 
 .. code-block:: python
 
-   df.to_arrow()       # pyarrow.Table (zero-copy)
-   df.to_pandas()       # pandas DataFrame
-   df.to_polars()       # polars DataFrame
+   df.to_arrow()             # pyarrow.Table (zero-copy)
+   df.to_pandas()            # pandas DataFrame (NumPy dtypes: a copy)
+   df.to_pandas(arrow=True)  # pandas DataFrame over Arrow buffers (no copy)
+   df.to_polars()            # polars DataFrame (numbers shared, strings copied)
 
 Every conversion is at the edge: everything above this line stays inside the
 SIMD engine, and the round trip through Arrow only happens when you ask for it.
@@ -294,8 +294,13 @@ SIMD engine, and the round trip through Arrow only happens when you ask for it.
 See also
 ---------
 
+- :doc:`lazyframe` for the deferred form: plans over any source, pushdown,
+  streaming under a memory budget, a plugin's own step.
 - :doc:`series` for the column-level how-to (arithmetic, reducers, strings,
   derived columns via ``F``).
+- :doc:`pandas-polars` for the pandas and polars spellings (the index model,
+  ``loc`` / ``iloc``, group-by functions, the accessors, expression column
+  ops) and what is left out on purpose.
 - :doc:`joins` for joining frames, :doc:`reshape` for pivot / unpivot / explode /
   one-hot, and :doc:`time-windows` for time-bucketed rollups.
 - :doc:`../analysis/aggregation` for aggregating a trace query into a frame.

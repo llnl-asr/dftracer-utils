@@ -6,7 +6,6 @@
 #include <dftracer/utils/trace/aggregators/aggregation_drain.h>
 #include <dftracer/utils/trace/indexing/chunk_indexer_utility.h>
 #include <dftracer/utils/utilities/indexer/index_batch_sink.h>
-#include <dftracer/utils/utilities/indexer/internal/common/gzip_member_scanner.h>
 
 #include <array>
 #include <cstddef>
@@ -25,6 +24,10 @@ class StringIntern;
 namespace dftracer::utils::trace::views::detail {
 class AggregationFold;
 }  // namespace dftracer::utils::trace::views::detail
+
+namespace dftracer::utils::utilities::indexer::internal {
+struct GzipMember;
+}  // namespace dftracer::utils::utilities::indexer::internal
 
 namespace dftracer::utils::utilities::indexer {
 

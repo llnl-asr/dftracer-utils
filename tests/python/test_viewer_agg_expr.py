@@ -24,7 +24,7 @@ def indexed_trace():
 
 
 def _dict(viewer):
-    return viewer.collect().to_arrow().to_pydict()
+    return viewer.collect().collect().to_arrow().to_pydict()
 
 
 def test_field_expr_agg_matches_string_form(indexed_trace):

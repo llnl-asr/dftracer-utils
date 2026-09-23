@@ -73,6 +73,15 @@ def test_boolean_masks():
     assert s.is_null(0) is False  # element-level null check
 
 
+def test_mask_operators():
+    s = _s([1.0, 2.0, 3.0, 4.0])
+    both = (s > 1.5) & (s < 3.5)
+    assert both.to_numpy().tolist() == [False, True, True, False]
+    either = (s < 1.5) | (s > 3.5)
+    assert either.to_numpy().tolist() == [True, False, False, True]
+    assert (~either).to_numpy().tolist() == [False, True, True, False]
+
+
 def test_properties():
     s = _s([1.0, 2.0, 3.0])
     assert s.length == 3
@@ -96,3 +105,86 @@ def test_string_ops():
     assert mask.to_numpy().tolist() == [True, True, False]
     assert isinstance(s.to_uppercase(), Series)
     assert s.to_uppercase().to_pandas().tolist() == ["ABC", "BCD", "XYZ"]
+
+
+def test_astype_matches_cast_by_name_enum_and_int():
+    from dftracer.utils import DType
+
+    s = Series.from_numpy(np.array([1, 2, 3], dtype=np.int64))
+    by_name = s.astype("int64")
+    by_enum = s.cast(DType.INT64)
+    by_int = s.cast(int(DType.INT64))
+    assert by_name.type == by_enum.type == by_int.type == int(DType.INT64)
+    assert by_name.to_numpy().tolist() == [1, 2, 3]
+
+    # Case-insensitive name lookup, and an unknown name raises.
+    assert s.astype("Float64").type == int(DType.FLOAT64)
+    with pytest.raises(ValueError):
+        s.astype("not_a_dtype")
+
+
+def test_uint64_float64_arithmetic_promotes():
+    from dftracer.utils import DType
+
+    u = Series.from_numpy(np.array([1, 2, 3], dtype=np.uint64))
+    f = Series.from_numpy(np.array([0.5, 1.5, 2.5], dtype=np.float64))
+
+    summed = u.add(f)
+    assert summed.type == int(DType.FLOAT64)
+    assert summed.to_numpy().tolist() == pytest.approx([1.5, 3.5, 5.5])
+
+    i = Series.from_numpy(np.array([1, 2, 3], dtype=np.int64))
+    prod = i.mul_scalar(1.0)
+    assert prod.type == int(DType.FLOAT64)
+    assert prod.to_numpy().tolist() == pytest.approx([1.0, 2.0, 3.0])
+
+    u_prod = u.mul_scalar(1.0)
+    assert u_prod.type == int(DType.FLOAT64)
+    assert u_prod.to_numpy().tolist() == pytest.approx([1.0, 2.0, 3.0])
+
+
+def test_str_extract_split_expand_and_list_accessor():
+    pa = pytest.importorskip("pyarrow")
+    s = Series.from_arrow(pa.array(["a-b-c", "x-y", None, "q"]))
+    assert s.str.extract(r"(\w)-(\w)", 2).to_arrow().to_pylist() == ["b", "y", None, None]
+    assert s.str.extract(r"(\w)-(\w)").to_arrow().to_pylist() == ["a", "x", None, None]
+    assert s.str.extract(r"\w-\w", 0).to_arrow().to_pylist() == ["a-b", "x-y", None, None]
+    with pytest.raises(ValueError):
+        s.str.extract("(", 1)
+    with pytest.raises(ValueError):
+        s.str.extract("(a)", -1)
+
+    parts = s.str.split("-")
+    assert parts.to_arrow().to_pylist() == [["a", "b", "c"], ["x", "y"], None, ["q"]]
+    assert parts.list.len().to_arrow().to_pylist() == [3, 2, None, 1]
+    assert parts.list.get(1).to_arrow().to_pylist() == ["b", "y", None, None]
+    assert parts.list.get(-1).to_arrow().to_pylist() == ["c", "y", None, "q"]
+    assert parts.list.first().to_arrow().to_pylist() == ["a", "x", None, "q"]
+    assert parts.list.last().to_arrow().to_pylist() == ["c", "y", None, "q"]
+
+    wide = s.str.split("-", expand=True)
+    assert isinstance(wide, DataFrame)
+    assert wide.columns == ["0", "1", "2"]
+    assert wide.to_arrow().to_pydict() == {
+        "0": ["a", "x", None, "q"],
+        "1": ["b", "y", None, None],
+        "2": ["c", None, None, None],
+    }
+
+
+def test_rolling_across_parallel_chunks():
+    # Past 65536 rows the window kernel runs a chunk per thread, each warming
+    # its window up from the rows before it; every chunk's first windows must
+    # match a plain running sum.
+    n = 200_000
+    x = np.random.default_rng(3).random(n)
+    s = Series.from_numpy(x)
+    w = 100
+    csum = np.cumsum(np.concatenate([[0.0], x]))
+    mean = (csum[w:] - csum[:-w]) / w
+    got = s.rolling(w).mean().to_numpy()
+    assert np.isnan(got[: w - 1]).all()
+    assert np.allclose(got[w - 1 :], mean)
+    win = np.lib.stride_tricks.sliding_window_view(x, w)
+    assert np.allclose(s.rolling(w).max().to_numpy()[w - 1 :], win.max(axis=1))
+    assert np.allclose(s.rolling(w).min().to_numpy()[w - 1 :], win.min(axis=1))

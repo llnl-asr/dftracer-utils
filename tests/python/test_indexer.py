@@ -352,6 +352,7 @@ class TestDirectoryIndexer:
                     .group_by("name")
                     .agg("count")
                     .collect()
+                    .collect()
                 )
                 assert tbl is not None and pa.table(tbl).num_rows > 0
 
@@ -658,7 +659,7 @@ class TestCollectTypedRawFallback:
         return dftu_utils.TraceViewer(files, index_path=directory)
 
     def _agg_total(self, pa, base):
-        t = pa.table(base.group_by("name").agg("count").collect())
+        t = pa.table(base.group_by("name").agg("count").collect().collect())
         return int(pa.compute.sum(t["count"]).as_py()) if t.num_rows else 0
 
     def test_ts_filter_returns_raw_rows(self):
@@ -742,6 +743,7 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("busy", "concurrency", "sum:dur")
                 .collect()
+                .collect()
             )
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 500_000  # capped at the window
@@ -766,6 +768,7 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("busy", "concurrency", "sum:dur")
                 .collect()
+                .collect()
             )
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 1_000_000
@@ -789,6 +792,7 @@ class TestOccupancyMetrics:
                 .filter('cat == "c" and ts >= 100000')
                 .group_by("cat")
                 .agg("busy", "count")
+                .collect()
                 .collect()
             )
             assert win["count"][0].as_py() == 1
@@ -817,6 +821,7 @@ class TestOccupancyMetrics:
                 .group_by("cat")
                 .agg("busy", "concurrency", "sum:dur")
                 .collect()
+                .collect()
             )
             assert t["sum_dur"][0].as_py() == 1_000_000
             assert t["busy"][0].as_py() == 500_000  # union across files, OR-merged
@@ -838,6 +843,7 @@ class TestOccupancyMetrics:
                 .filter('cat == "c" and ts < 100000')
                 .group_by("cat")
                 .agg("active", "count")
+                .collect()
                 .collect()
             )
             assert t["count"][0].as_py() == 3

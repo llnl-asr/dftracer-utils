@@ -1,4 +1,5 @@
 #include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/core/common/hash/constants.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -18,10 +19,10 @@ namespace {
 
 struct KeyHash {
     std::size_t operator()(const std::vector<std::string>& k) const {
-        std::size_t h = 1469598103934665603ULL;  // FNV-1a offset basis
+        std::size_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
         for (const std::string& s : k) {
             std::size_t sh = std::hash<std::string>{}(s);
-            h ^= sh + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            h ^= sh + dftracer::utils::hash::GOLDEN_RATIO + (h << 6) + (h >> 2);
         }
         return h;
     }
@@ -133,8 +134,8 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
 
 coro::CoroTask<dataframe::DataFrame> AggregatedView::join(
     const AggregatedView& other, JoinType how) const {
-    dataframe::DataFrame left = co_await collect();
-    dataframe::DataFrame right = co_await other.collect();
+    dataframe::DataFrame left = co_await collect().collect();
+    dataframe::DataFrame right = co_await other.collect().collect();
     const std::int64_t n_key =
         (plan_->time_bucket_us > 0 ? 1 : 0) +
         static_cast<std::int64_t>(plan_->group_by.size());

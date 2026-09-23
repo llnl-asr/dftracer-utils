@@ -14,13 +14,18 @@
 #include <dftracer/utils/trace/views/mv_store.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view.h>
+#include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_plan.h>
+#include <dftracer/utils/trace/views/view_scan.h>
+#include <dftracer/utils/trace/views/view_source.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <dftracer/utils/utilities/indexer/index_database.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -33,6 +38,20 @@ std::shared_ptr<detail::ViewPlan> clone(
     const std::shared_ptr<const detail::ViewPlan>& base) {
     return base ? std::make_shared<detail::ViewPlan>(*base)
                 : std::make_shared<detail::ViewPlan>();
+}
+
+// time_bucket() adds the bucket as an implicit leading group key, so listing
+// "time_bucket" in group_by would double it (and the extra key resolves to a
+// missing event field - an empty column). Drop the redundant key.
+void strip_redundant_time_bucket(detail::ViewPlan& p) {
+    if (p.time_bucket_us == 0) return;
+    auto& g = p.group_by;
+    g.erase(std::remove_if(g.begin(), g.end(),
+                           [](const GroupKey& k) {
+                               return k.kind == GroupKey::Kind::Field &&
+                                      k.arg == "time_bucket";
+                           }),
+            g.end());
 }
 }  // namespace
 
@@ -206,6 +225,37 @@ std::vector<View::ColumnInfo> View::schema() const {
     return out;
 }
 
+std::unordered_map<std::string, dataframe::TypeId> View::column_types() const {
+    namespace df = dftracer::utils::dataframe;
+    ColTypeMap m = harvest_column_types(plan_->files);
+    std::unordered_map<std::string, df::TypeId> out;
+    out.reserve(m.size());
+    for (auto& [name, t] : m) {
+        df::TypeId id = df::TypeId::Unknown;
+        switch (t) {
+            case idx::ColumnType::Int64:
+                id = df::TypeId::Int64;
+                break;
+            case idx::ColumnType::Float64:
+                id = df::TypeId::Float64;
+                break;
+            case idx::ColumnType::String:
+                id = df::TypeId::String;
+                break;
+            case idx::ColumnType::Unknown:
+                id = df::TypeId::Unknown;
+                break;
+        }
+        out.emplace(name, id);
+    }
+    return out;
+}
+
+TimeMetric View::time_metric() const {
+    if (plan_->files.empty()) return TimeMetric::US;
+    return trace::read_time_metric(plan_->files.front().file_path);
+}
+
 View View::filter(Query q) const {
     auto next = clone(plan_);
     if (next->query) {
@@ -238,6 +288,7 @@ View View::time_range(double begin, double end) const {
 View View::time_bucket(std::uint64_t interval_us) const {
     auto next = clone(plan_);
     next->time_bucket_us = interval_us;
+    strip_redundant_time_bucket(*next);
     return View(std::move(next));
 }
 
@@ -247,6 +298,7 @@ View View::time_bucket(std::uint64_t interval_us,
     next->time_bucket_us = interval_us;
     next->bucket_origin_us = origin_us;
     next->bucket_origin_min = false;
+    strip_redundant_time_bucket(*next);
     return View(std::move(next));
 }
 
@@ -254,6 +306,7 @@ View View::time_bucket_min(std::uint64_t interval_us) const {
     auto next = clone(plan_);
     next->time_bucket_us = interval_us;
     next->bucket_origin_min = true;
+    strip_redundant_time_bucket(*next);
     return View(std::move(next));
 }
 
@@ -272,6 +325,7 @@ View View::time_scale(double ns_ratio) const {
 AggregatedView View::group_by(std::vector<GroupKey> keys) const {
     auto next = clone(plan_);
     next->group_by = std::move(keys);
+    strip_redundant_time_bucket(*next);
     return AggregatedView(View(std::move(next)));
 }
 
@@ -461,12 +515,6 @@ View View::metadata(bool include) const {
     return View(std::move(next));
 }
 
-View View::with_partial_source(const detail::PartialSource* source) const {
-    auto next = clone(plan_);
-    next->agg_source = source;
-    return View(std::move(next));
-}
-
 View View::cancel_when(std::function<bool()> pred) const {
     auto next = clone(plan_);
     next->cancelled = std::move(pred);
@@ -515,13 +563,75 @@ coro::CoroTask<ExportStats> View::export_trace(TraceWriteOptions opts) const {
     co_return co_await detail::run_export_trace(*plan_, opts);
 }
 
-coro::CoroTask<dataframe::DataFrame> View::collect() const {
+dataframe::LazyFrame View::collect() const {
+    // A row-query select is built by the scan producer itself (NativeRowFold /
+    // StreamRowFold, via build_row_frame's select branch), which emits exactly
+    // the selected columns. Keep it in the scan plan rather than stripping it
+    // and re-projecting with LazyFrame::select: a streaming morsel's schema is
+    // data-dependent (its arg columns are discovered at scan time), so a
+    // LazyFrame projection resolved against the source's index-derived schema
+    // would miss an un-indexed arg column and index the morsel out of bounds.
+    const bool row_query = detail::is_row_query(*plan_);
+    const bool select_in_scan = row_query && !plan_->select.empty();
+
+    std::shared_ptr<detail::ViewPlan> stripped = clone(plan_);
+    if (!select_in_scan) stripped->select.clear();
+    stripped->sort_col.clear();
+    stripped->sort_desc = false;
+    stripped->topk_col.clear();
+    stripped->topk_k = -1;
+    stripped->topk_largest = true;
+    stripped->offset = 0;
+    stripped->limit = 0;
+
+    dataframe::LazyFrame lf =
+        dataframe::LazyFrame::scan(
+            std::make_shared<ViewSource>(View(std::move(stripped))))
+            .memory_budget(plan_->memory_budget);
+
+    // A row query's scan producer canonicalizes arg column names to
+    // "args.<key>" (see build_row_frame); sort/topk on a bare arg name must
+    // resolve to that same column.
+    if (!plan_->sort_col.empty())
+        lf = lf.sort_by(row_query
+                            ? detail::canonical_row_column_name(plan_->sort_col)
+                            : plan_->sort_col,
+                        plan_->sort_desc);
+    if (!plan_->topk_col.empty())
+        lf = lf.topk(row_query
+                         ? detail::canonical_row_column_name(plan_->topk_col)
+                         : plan_->topk_col,
+                     plan_->topk_k, plan_->topk_largest);
+    if (plan_->offset || plan_->limit) {
+        const std::int64_t off = static_cast<std::int64_t>(plan_->offset);
+        const std::int64_t len = plan_->limit
+                                     ? static_cast<std::int64_t>(plan_->limit)
+                                     : std::numeric_limits<std::int64_t>::max();
+        lf = lf.slice(off, len);
+    }
+    if (!select_in_scan && !plan_->select.empty())
+        lf = lf.select(plan_->select);
+    return lf;
+}
+
+coro::AsyncGenerator<dataframe::DataFrame> View::stream(
+    std::int64_t morsel_rows) const {
+    dataframe::LazyFrame lf = collect();
+    auto gen = lf.stream(morsel_rows);
+    while (auto df = co_await gen.next()) co_yield std::move(*df);
+}
+
+coro::CoroTask<dataframe::DataFrame> View::collect_frame() const {
     // A row query (no group_by/agg) returns the matching events, not a count.
     if (detail::is_row_query(*plan_))
         co_return co_await detail::run_collect_rows(*plan_);
-    detail::GroupMap m = co_await detail::run_collect(*plan_);
-    co_return detail::finalize_collect_batch(m, *plan_);
+    // Every aggregation runs through the dataframe engine; materialize() opts
+    // in to persisting its AggState partials as the rollup in the same pass.
+    co_return detail::apply_agg_post_ops(
+        co_await detail::run_collect_via_engine(*plan_), *plan_);
 }
+
+bool View::is_row_query() const { return detail::is_row_query(*plan_); }
 
 coro::CoroTask<dataframe::DataFrame> View::call_tree(
     std::vector<std::string> partition, std::string ts, std::string dur,
@@ -562,9 +672,9 @@ dataframe::DataFrame View::merge_flamegraph_partials(
 }
 
 coro::CoroTask<ExportStats> View::run_folds(
-    std::span<detail::Fold* const> folds,
-    dftracer::utils::StringIntern& intern) const {
-    co_return co_await detail::run_folds(*plan_, folds, intern);
+    std::span<detail::Fold* const> folds, dftracer::utils::StringIntern& intern,
+    detail::DynamicPrune* dyn_prune) const {
+    co_return co_await detail::run_folds(*plan_, folds, intern, dyn_prune);
 }
 
 coro::CoroTask<ExportStats> View::run(const ProgressFn* progress) const {
@@ -622,16 +732,16 @@ ExportStats View::merge_counter_partials(
 ViewSession View::session() const { return ViewSession(plan_); }
 
 ViewSession::ViewSession(std::shared_ptr<const detail::ViewPlan> plan)
-    : num_slots_(available_parallelism()),
-      state_(detail::make_view_session_state(std::move(plan), num_slots_)) {}
+    : state_(detail::make_view_session_state(std::move(plan))) {}
 
 void ViewSession::attach_fold(
     Query predicate,
-    std::function<void(std::size_t, const json::JsonValue&, std::string_view)>
-        consume,
+    std::function<
+        std::function<void(const json::JsonValue&, std::string_view)>()>
+        make_consumer,
     std::function<void()> finalize) {
-    detail::add_fold_branch(*state_, std::move(predicate), std::move(consume),
-                            std::move(finalize));
+    detail::add_fold_branch(*state_, std::move(predicate),
+                            std::move(make_consumer), std::move(finalize));
 }
 
 void ViewSession::attach_fold_factory(
@@ -641,14 +751,26 @@ void ViewSession::attach_fold_factory(
     detail::add_fold_factory(*state_, std::move(make), std::move(finalize));
 }
 
+void ViewSession::propose_base_prune(Query q) {
+    detail::propose_base_prune(*state_, std::move(q));
+}
+
 Deferred<dataframe::DataFrame> ViewSession::collect(
     Query predicate, std::vector<GroupKey> group_by, std::vector<AggSpec> agg) {
     auto out = std::make_shared<dataframe::DataFrame>();
     key_counts_.emplace_back(out.get(),
                              static_cast<std::int64_t>(group_by.size()));
-    detail::BranchHooks h = detail::make_collect_branch(
-        std::move(group_by), std::move(agg), out, num_slots_);
-    h.predicate = std::move(predicate);
+    // A predicated collect runs as an engine agg branch that filters per event
+    // (apply_query), overlaying the predicate onto the base plan on the shared
+    // scan; no per-branch predicate, so it does not also join the raw driver.
+    detail::BranchHooks h;
+    h.agg = detail::AggBranch{std::move(group_by),
+                              std::move(agg),
+                              out,
+                              nullptr,
+                              /*apply_query=*/true,
+                              nullptr,
+                              std::move(predicate)};
     detail::add_branch(*state_, std::move(h));
     return {out, executed_};
 }
@@ -658,12 +780,12 @@ Deferred<dataframe::DataFrame> ViewSession::collect(
     auto out = std::make_shared<dataframe::DataFrame>();
     key_counts_.emplace_back(out.get(),
                              static_cast<std::int64_t>(group_by.size()));
-    detail::BranchHooks h =
-        detail::make_collect_branch(group_by, agg, out, num_slots_);
-    // predicate left unset: match all scanned events. The descriptor lets
-    // execute() serve this branch from a rollup instead of scanning.
+    // No predicate: match all scanned events. The descriptor lets execute()
+    // serve this branch from a rollup or the tier instead of scanning.
+    detail::BranchHooks h;
     h.agg = detail::AggBranch{
-        std::move(group_by), std::move(agg), out, nullptr, false, nullptr};
+        std::move(group_by), std::move(agg), out, nullptr, false, nullptr,
+        std::nullopt};
     detail::add_branch(*state_, std::move(h));
     return {out, executed_};
 }
@@ -676,10 +798,10 @@ Deferred<dataframe::DataFrame> ViewSession::collect(const View& branch) {
     key_counts_.emplace_back(out.get(),
                              static_cast<std::int64_t>(bp.group_by.size()) +
                                  (bp.time_bucket_us > 0 ? 1 : 0));
-    detail::BranchHooks h =
-        detail::make_collect_branch(bp.group_by, bp.agg, out, num_slots_);
-    h.agg = detail::AggBranch{bp.group_by,          bp.agg, out, branch.plan_,
-                              bp.query.has_value(), nullptr};
+    detail::BranchHooks h;
+    h.agg = detail::AggBranch{
+        bp.group_by,          bp.agg,  out,         branch.plan_,
+        bp.query.has_value(), nullptr, std::nullopt};
     detail::add_branch(*state_, std::move(h));
     return {out, executed_};
 }
@@ -739,10 +861,10 @@ Deferred<std::string> ViewSession::aggregate_partial(const View& branch) {
         std::make_shared<dataframe::DataFrame>();  // unused; partial path
     auto partial = std::make_shared<std::string>();
     const auto& bp = *branch.plan_;
-    detail::BranchHooks h =
-        detail::make_collect_branch(bp.group_by, bp.agg, out, num_slots_);
-    h.agg = detail::AggBranch{bp.group_by,          bp.agg, out, branch.plan_,
-                              bp.query.has_value(), partial};
+    detail::BranchHooks h;
+    h.agg = detail::AggBranch{
+        bp.group_by,          bp.agg,  out,         branch.plan_,
+        bp.query.has_value(), partial, std::nullopt};
     detail::add_branch(*state_, std::move(h));
     return {partial, executed_};
 }
@@ -772,33 +894,35 @@ Deferred<ExportStats> ViewSession::export_json(ExportSink& sink) {
 Deferred<dataframe::DataFrame> ViewSession::collect_events(const View& branch) {
     const auto& bp = *branch.plan_;
     auto out = std::make_shared<dataframe::DataFrame>();
-    const std::size_t slots = num_slots_ ? num_slots_ : 1;
-    // Per-slot owned events built straight into native columns (no Arrow); each
-    // slot interns its own strings, so build_row_frame resolves them per slot.
-    auto interns =
-        std::make_shared<std::vector<dftracer::utils::StringIntern> >(slots);
-    auto bufs =
-        std::make_shared<std::vector<std::vector<detail::FoldEvent> > >(slots);
+    // Per-worker owned events built straight into native columns (no Arrow);
+    // each worker interns its own strings, so build_row_frame resolves them per
+    // worker.
+    struct Slot {
+        dftracer::utils::StringIntern intern;
+        std::vector<detail::FoldEvent> events;
+    };
+    auto slots = std::make_shared<std::vector<std::shared_ptr<Slot> > >();
     auto select = std::make_shared<std::vector<std::string> >(bp.select);
     const double time_scale = bp.time_scale;
 
-    auto consume = [interns, bufs, slots](std::size_t slot,
-                                          const json::JsonValue& jv,
-                                          std::string_view) {
-        if (slot >= slots) return;
-        detail::FoldEvent fe = detail::extract_fold_event(
-            jv.element(), (*interns)[slot], /*needs_args=*/true);
-        if (fe.phase == RecordPhase::METADATA ||
-            fe.phase == RecordPhase::UNKNOWN)
-            return;
-        (*bufs)[slot].push_back(std::move(fe));
+    auto make_consumer = [slots]() {
+        auto slot = std::make_shared<Slot>();
+        slots->push_back(slot);
+        return [slot](const json::JsonValue& jv, std::string_view) {
+            detail::FoldEvent fe = detail::extract_fold_event(
+                jv.element(), slot->intern, /*needs_args=*/true);
+            if (fe.phase == RecordPhase::METADATA ||
+                fe.phase == RecordPhase::UNKNOWN)
+                return;
+            slot->events.push_back(std::move(fe));
+        };
     };
-    auto finalize = [interns, bufs, select, slots, out, time_scale]() {
+    auto finalize = [slots, select, out, time_scale]() {
         std::vector<dataframe::DataFrame> frames;
-        frames.reserve(slots);
-        for (std::size_t s = 0; s < slots; ++s) {
-            if ((*bufs)[s].empty()) continue;
-            frames.push_back(detail::build_row_frame((*bufs)[s], (*interns)[s],
+        frames.reserve(slots->size());
+        for (const auto& s : *slots) {
+            if (s->events.empty()) continue;
+            frames.push_back(detail::build_row_frame(s->events, s->intern,
                                                      *select, time_scale));
         }
         if (frames.empty()) return;  // out stays an empty frame
@@ -809,11 +933,13 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(const View& branch) {
         *out = dataframe::concat(parts, dataframe::ConcatHow::Diagonal);
     };
 
-    if (bp.query)
-        detail::add_fold_branch(*state_, *bp.query, std::move(consume),
-                                std::move(finalize));
+    // effective_query folds the branch's phase into the predicate (bp.query
+    // alone drops it), so a branch's phase() filters in a fused session.
+    if (auto eq = detail::effective_query(bp))
+        detail::add_fold_branch(*state_, std::move(*eq),
+                                std::move(make_consumer), std::move(finalize));
     else
-        detail::add_fold_branch(*state_, std::move(consume),
+        detail::add_fold_branch(*state_, std::move(make_consumer),
                                 std::move(finalize));
     return {out, executed_};
 }
@@ -827,29 +953,32 @@ void ViewSession::add_containment_branch(
     std::shared_ptr<dataframe::DataFrame> out_ct,
     std::shared_ptr<dataframe::DataFrame> out_fg) {
     const auto& bp = *branch.plan_;
-    const std::size_t slots = num_slots_ ? num_slots_ : 1;
     auto intern = std::make_shared<dftracer::utils::StringIntern>();
     auto spec = std::make_shared<detail::ContainmentSpec>(
         detail::make_containment_spec(*intern, partition, ts, dur, name));
-    auto bufs =
-        std::make_shared<std::vector<std::vector<detail::ContainmentRow> > >(
-            slots);
+    auto bufs = std::make_shared<
+        std::vector<std::shared_ptr<std::vector<detail::ContainmentRow> > > >();
     const double time_scale = bp.time_scale;
 
-    auto consume = [intern, spec, bufs, slots](std::size_t slot,
-                                               const json::JsonValue& jv,
-                                               std::string_view) {
-        if (slot >= slots) return;
-        detail::FoldEvent fe = detail::extract_fold_event(
-            jv.element(), *intern, spec->needs_args, &spec->nested_captures);
-        detail::ContainmentRow r;
-        if (detail::containment_row(fe, *spec, *intern, r))
-            (*bufs)[slot].push_back(r);
+    // One shared intern across workers keeps lane ids consistent, so the
+    // per-worker rows concatenate without a re-key.
+    auto make_consumer = [intern, spec, bufs]() {
+        auto rows = std::make_shared<std::vector<detail::ContainmentRow> >();
+        bufs->push_back(rows);
+        return
+            [intern, spec, rows](const json::JsonValue& jv, std::string_view) {
+                detail::FoldEvent fe = detail::extract_fold_event(
+                    jv.element(), *intern, spec->needs_args,
+                    &spec->nested_captures);
+                detail::ContainmentRow r;
+                if (detail::containment_row(fe, *spec, *intern, r))
+                    rows->push_back(r);
+            };
     };
-    auto finalize = [intern, bufs, slots, out_ct, out_fg, time_scale]() {
+    auto finalize = [intern, bufs, out_ct, out_fg, time_scale]() {
         std::vector<detail::ContainmentRow> all;
-        for (std::size_t s = 0; s < slots; ++s)
-            all.insert(all.end(), (*bufs)[s].begin(), (*bufs)[s].end());
+        for (const auto& rows : *bufs)
+            all.insert(all.end(), rows->begin(), rows->end());
         if (out_ct && out_fg) {
             auto pr = detail::build_containment_both(all, *intern, time_scale);
             *out_ct = std::move(pr.first);
@@ -864,10 +993,10 @@ void ViewSession::add_containment_branch(
     };
 
     if (bp.query)
-        detail::add_fold_branch(*state_, *bp.query, std::move(consume),
+        detail::add_fold_branch(*state_, *bp.query, std::move(make_consumer),
                                 std::move(finalize));
     else
-        detail::add_fold_branch(*state_, std::move(consume),
+        detail::add_fold_branch(*state_, std::move(make_consumer),
                                 std::move(finalize));
 }
 

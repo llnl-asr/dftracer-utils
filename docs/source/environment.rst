@@ -178,35 +178,6 @@ console-script.
      - Directory for content-hashed compiled plugin/JIT shared objects, so an
        unchanged source never recompiles.
 
-Plugin map spill
--------------------
-
-Read by the map-reduce fold adapter (``src/dftracer/utils/plugins/fold_adapter.cpp``)
-for out-of-core ``dftu_map`` spilling.
-
-.. list-table::
-   :header-rows: 1
-   :widths: 32 14 54
-
-   * - Variable
-     - Default
-     - Effect
-   * - ``DFTRACER_PLUGIN_MAP_MEM_BUDGET``
-     - unset
-     - Explicit global byte budget for map spill. A non-zero value enables
-       spilling and wins over ``DFTRACER_PLUGIN_MAP_AUTO_SPILL``.
-   * - ``DFTRACER_PLUGIN_MAP_AUTO_SPILL``
-     - off
-     - Non-zero enables spilling with a budget computed automatically from
-       available memory, when ``DFTRACER_PLUGIN_MAP_MEM_BUDGET`` is unset.
-   * - ``DFTRACER_PLUGIN_MAP_SPILL_DIR``
-     - ``$TMPDIR``
-     - Directory for map spill run files, when spilling is enabled.
-   * - ``DFTRACER_PLUGIN_MAP_STREAM``
-     - off
-     - Non-zero surfaces map results as a streamed per-partition sequence
-       instead of one eager batch.
-
 See also
 ---------
 

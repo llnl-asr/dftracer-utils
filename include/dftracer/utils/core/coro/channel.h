@@ -90,9 +90,7 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
         /// Register a new producer slot.
         explicit ProducerGuard(Channel* ch) : channel_(ch) {
             if (channel_) {
-                channel_->had_producers_.store(true, std::memory_order_release);
-                channel_->num_producers_.fetch_add(1,
-                                                   std::memory_order_release);
+                channel_->register_producer();
             }
         }
 
@@ -836,6 +834,12 @@ class Channel : public std::enable_shared_from_this<Channel<T>> {
     }
 
     void register_producer() {
+        // Under state_mutex_ so a consumer's is_terminal_locked (also holding
+        // it) never observes the had_producers_=true / num_producers_=0 window
+        // a separate-store registration would expose - that combination reads
+        // as "all producers finished" and ends the stream before the first
+        // send.
+        std::lock_guard<std::mutex> lock(state_mutex_);
         had_producers_.store(true, std::memory_order_release);
         num_producers_.fetch_add(1, std::memory_order_release);
     }

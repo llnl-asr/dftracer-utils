@@ -121,7 +121,7 @@ docker run --rm \
             venv='${builddir}/.venv'
             python3 -m venv \"\$venv\"
             \"\$venv/bin/pip\" install --quiet --upgrade pip
-            \"\$venv/bin/pip\" install --quiet -e '.[dev]'
+            CMAKE_BUILD_PARALLEL_LEVEL=${jobs} \"\$venv/bin/pip\" install --quiet -e '.[dev]'
             \"\$venv/bin/pytest\" tests/python
         fi
 

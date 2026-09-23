@@ -1,7 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dataframe/builders_arrow_types.h>
+#include <dftracer/utils/binaries/json_cell_printer.h>
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/trace/aggregators/aggregator_utility.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
@@ -14,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -51,18 +57,8 @@ std::string make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
 }
 
 std::string find_view_binary() {
-    const char* env_path = std::getenv("DFTRACER_VIEW_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_view",         "../dftracer_view",
-        "../../dftracer_view",     "../bin/dftracer_view",
-        "../../bin/dftracer_view",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_VIEW_PATH",
+                                                "dftracer_view");
 }
 
 int run_view(const std::string& binary, const std::vector<std::string>& args) {
@@ -121,6 +117,83 @@ int run_view_capture(const std::string& binary,
 
 std::size_t count_lines(const std::string& s) {
     return static_cast<std::size_t>(std::count(s.begin(), s.end(), '\n'));
+}
+
+// ----------------------------------------------------------------------------
+// append_cell_json builders: cover every dataframe::TypeId directly, since
+// no trace field the CLI's own query/aggregation paths produce carries the
+// narrow-int, Float16, temporal, decimal, or Large*/FixedSizeBinary types.
+// ----------------------------------------------------------------------------
+
+namespace df = dftracer::utils::dataframe;
+namespace cli = dftracer::utils::binaries;
+
+__extension__ typedef unsigned __int128 uint128_t;
+__extension__ typedef __int128 int128_t;
+
+df::Series make_bool_series(const std::vector<bool>& bits) {
+    std::vector<std::uint8_t> packed((bits.size() + 7) / 8, 0);
+    for (std::size_t i = 0; i < bits.size(); ++i)
+        if (bits[i]) packed[i >> 3] |= static_cast<std::uint8_t>(1u << (i & 7));
+    return df::Series::flat(df::TypeId::Bool, packed.data(),
+                            static_cast<std::int64_t>(bits.size()));
+}
+
+// A String/Binary FLAT column; dftu_series_new_string supports both dtypes.
+df::Series make_bytes_series(df::TypeId type,
+                             const std::vector<std::string>& values) {
+    std::vector<std::int32_t> offsets(values.size() + 1, 0);
+    std::string data;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        data += values[i];
+        offsets[i + 1] = static_cast<std::int32_t>(data.size());
+    }
+    return df::Series{dftu_series_new_string(
+        static_cast<dftu_dtype>(type), offsets.data(), data.data(),
+        static_cast<std::int64_t>(values.size()), nullptr)};
+}
+
+df::Series make_float16_series(const std::vector<float>& values) {
+    std::vector<std::uint16_t> halves(values.size());
+    for (std::size_t i = 0; i < values.size(); ++i)
+        halves[i] = df::float_to_half(values[i]);
+    return df::Series::flat(df::TypeId::Float16, halves.data(),
+                            static_cast<std::int64_t>(values.size()));
+}
+
+// Decimal128: exact little-endian two's-complement payload, decimal_scale 0
+// (the only scale a FLAT-constructed decimal column carries; nonzero scale
+// only reaches the engine via Arrow import, unreachable from this CLI).
+df::Series make_decimal128_series(const std::vector<int128_t>& values) {
+    std::vector<std::uint8_t> bytes(values.size() * 16);
+    for (std::size_t i = 0; i < values.size(); ++i)
+        std::memcpy(bytes.data() + i * 16, &values[i], 16);
+    return df::Series::flat(df::TypeId::Decimal128, bytes.data(),
+                            static_cast<std::int64_t>(values.size()));
+}
+
+// Decimal256: `values` sign-extended from 128 to 256 bits.
+df::Series make_decimal256_series(const std::vector<int128_t>& values) {
+    std::vector<std::uint8_t> bytes(values.size() * 32, 0);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        std::memcpy(bytes.data() + i * 32, &values[i], 16);
+        if (values[i] < 0) std::memset(bytes.data() + i * 32 + 16, 0xFF, 16);
+    }
+    return df::Series::flat(df::TypeId::Decimal256, bytes.data(),
+                            static_cast<std::int64_t>(values.size()));
+}
+
+df::Series make_unknown_series(std::int64_t n) {
+    auto* raw = new dftu_series();
+    raw->type = df::TypeId::Unknown;
+    raw->length = n;
+    return df::Series(raw);
+}
+
+std::string cell(const df::Series& c, std::int64_t i) {
+    std::string s;
+    cli::append_cell_json(s, c, i);
+    return s;
 }
 
 // Create a trace in its own subdir and build an aggregated index (tier) over it
@@ -650,5 +723,177 @@ TEST_SUITE("DFTracerView") {
         CHECK(rc == 0);
         CHECK(fs::exists(env.get_dir() + "/split/" +
                          fs::path(mm).filename().string()));
+    }
+}
+
+// ============================================================================
+// append_cell_json: one explicit case per dataframe::TypeId
+// ============================================================================
+
+TEST_SUITE("DFTracerView JSON cell printer") {
+    TEST_CASE("bit-packed Bool reads the right bit at every index") {
+        // 9 rows so row 8 crosses into the packed array's second byte; a
+        // per-row 8-byte reinterpret (the old default: case) would run off
+        // the 2-byte packed buffer entirely.
+        auto c = make_bool_series(
+            {true, false, true, true, false, false, true, false, true});
+        CHECK(cell(c, 0) == "true");
+        CHECK(cell(c, 1) == "false");
+        CHECK(cell(c, 7) == "false");
+        CHECK(cell(c, 8) == "true");
+    }
+
+    TEST_CASE("narrow signed ints read at their own width") {
+        auto i8 = df::Series::flat(
+            df::TypeId::Int8, std::vector<std::int8_t>{-128, 127, 5}.data(), 3);
+        CHECK(cell(i8, 0) == "-128");
+        CHECK(cell(i8, 1) == "127");
+        CHECK(cell(i8, 2) == "5");
+
+        auto i16 = df::Series::flat(
+            df::TypeId::Int16,
+            std::vector<std::int16_t>{-32768, 32767, 100}.data(), 3);
+        CHECK(cell(i16, 0) == "-32768");
+        CHECK(cell(i16, 1) == "32767");
+
+        auto i32 = df::Series::flat(
+            df::TypeId::Int32,
+            std::vector<std::int32_t>{-2147483647 - 1, 2147483647, 42}.data(),
+            3);
+        CHECK(cell(i32, 0) == "-2147483648");
+        CHECK(cell(i32, 1) == "2147483647");
+    }
+
+    TEST_CASE("narrow unsigned ints read at their own width") {
+        auto u8 = df::Series::flat(
+            df::TypeId::Uint8, std::vector<std::uint8_t>{0, 255, 10}.data(), 3);
+        CHECK(cell(u8, 0) == "0");
+        CHECK(cell(u8, 1) == "255");
+
+        auto u16 = df::Series::flat(
+            df::TypeId::Uint16, std::vector<std::uint16_t>{0, 65535, 10}.data(),
+            3);
+        CHECK(cell(u16, 1) == "65535");
+
+        auto u32 = df::Series::flat(
+            df::TypeId::Uint32,
+            std::vector<std::uint32_t>{0, 4294967295u, 10}.data(), 3);
+        CHECK(cell(u32, 1) == "4294967295");
+
+        auto u64 = df::Series::flat(
+            df::TypeId::Uint64,
+            std::vector<std::uint64_t>{0, 18446744073709551615ull, 10}.data(),
+            3);
+        CHECK(cell(u64, 1) == "18446744073709551615");
+    }
+
+    TEST_CASE("Float32 reads 4 bytes per row, not 8") {
+        auto f32 =
+            df::Series::flat(df::TypeId::Float32,
+                             std::vector<float>{1.5f, -2.25f, 3.0f}.data(), 3);
+        CHECK(cell(f32, 0) == "1.500000");
+        CHECK(cell(f32, 1) == "-2.250000");
+        // Integral value prints bare, matching the pre-existing convention.
+        CHECK(cell(f32, 2) == "3");
+    }
+
+    TEST_CASE("Float64 reads correctly") {
+        auto f64 =
+            df::Series::flat(df::TypeId::Float64,
+                             std::vector<double>{1.5, -2.25, 3.0}.data(), 3);
+        CHECK(cell(f64, 0) == "1.500000");
+        CHECK(cell(f64, 2) == "3");
+    }
+
+    TEST_CASE("Float16 promotes to float32 before printing") {
+        auto f16 = make_float16_series({1.5f, -2.0f});
+        CHECK(cell(f16, 0) == "1.500000");
+        CHECK(cell(f16, 1) == "-2");
+    }
+
+    TEST_CASE("String escapes quotes, backslashes, and control chars") {
+        auto s = make_bytes_series(df::TypeId::String,
+                                   {std::string("a\"b\\c") + '\x01' + "d"});
+        CHECK(cell(s, 0) == "\"a\\\"b\\\\c\\u0001d\"");
+    }
+
+    TEST_CASE("Binary is escaped the same way String is") {
+        auto b = make_bytes_series(df::TypeId::Binary, {"a\tb"});
+        CHECK(cell(b, 0) == "\"a\\tb\"");
+    }
+
+    TEST_CASE("FixedSizeBinary reads its declared width") {
+        auto fsb = df::test_types::make_fixed_size_binary({"ab\"c"}, 4);
+        CHECK(cell(fsb, 0) == "\"ab\\\"c\"");
+    }
+
+    TEST_CASE("LargeString/LargeBinary read via the 64-bit offsets buffer") {
+        auto ls = df::test_types::make_large_utf8({"hello\\world"});
+        CHECK(cell(ls, 0) == "\"hello\\\\world\"");
+        auto lb = df::test_types::make_large_binary({"a\nb"});
+        CHECK(cell(lb, 0) == "\"a\\nb\"");
+    }
+
+    TEST_CASE("temporal types emit the exact physical integer") {
+        auto date32 = df::Series::flat(
+            df::TypeId::Date32, std::vector<std::int32_t>{19700, -5}.data(), 2);
+        CHECK(cell(date32, 0) == "19700");
+        CHECK(cell(date32, 1) == "-5");
+
+        auto date64 = df::Series::flat(
+            df::TypeId::Date64,
+            std::vector<std::int64_t>{1700000000000LL}.data(), 1);
+        CHECK(cell(date64, 0) == "1700000000000");
+
+        auto time32 = df::Series::flat(
+            df::TypeId::Time32, std::vector<std::int32_t>{3600}.data(), 1);
+        CHECK(cell(time32, 0) == "3600");
+
+        auto time64 =
+            df::Series::flat(df::TypeId::Time64,
+                             std::vector<std::int64_t>{123456789LL}.data(), 1);
+        CHECK(cell(time64, 0) == "123456789");
+
+        auto ts = df::Series::flat(
+            df::TypeId::Timestamp,
+            std::vector<std::int64_t>{1700000000000000LL}.data(), 1);
+        CHECK(cell(ts, 0) == "1700000000000000");
+
+        auto dur = df::Series::flat(df::TypeId::Duration,
+                                    std::vector<std::int64_t>{-42LL}.data(), 1);
+        CHECK(cell(dur, 0) == "-42");
+    }
+
+    TEST_CASE("Decimal128/256 render the exact value, not a lossy double") {
+        // INT64_MAX * 1000 + 807: 22 digits, well past a double's ~17
+        // significant digits, so a lossy path would visibly round this.
+        const int128_t big =
+            static_cast<int128_t>(9223372036854775807LL) * 1000 + 807;
+        // Rendered as a quoted JSON string: a JSON number cannot hold a
+        // precision-38 decimal exactly once a double consumer parses it.
+        auto d128 = make_decimal128_series({big, -big, 0});
+        CHECK(cell(d128, 0) == "\"9223372036854775807807\"");
+        CHECK(cell(d128, 1) == "\"-9223372036854775807807\"");
+        CHECK(cell(d128, 2) == "\"0\"");
+
+        auto d256 = make_decimal256_series({big, -big});
+        CHECK(cell(d256, 0) == "\"9223372036854775807807\"");
+        CHECK(cell(d256, 1) == "\"-9223372036854775807807\"");
+    }
+
+    TEST_CASE("nested and Unknown types render null, not garbage") {
+        auto unk = make_unknown_series(1);
+        CHECK(cell(unk, 0) == "null");
+    }
+
+    TEST_CASE("cli_emittable excludes every nested type") {
+        CHECK_FALSE(cli::cli_emittable(df::TypeId::List));
+        CHECK_FALSE(cli::cli_emittable(df::TypeId::Struct));
+        CHECK_FALSE(cli::cli_emittable(df::TypeId::LargeList));
+        CHECK_FALSE(cli::cli_emittable(df::TypeId::FixedSizeList));
+        CHECK_FALSE(cli::cli_emittable(df::TypeId::Map));
+        CHECK(cli::cli_emittable(df::TypeId::Int64));
+        CHECK(cli::cli_emittable(df::TypeId::Bool));
+        CHECK(cli::cli_emittable(df::TypeId::Decimal128));
     }
 }

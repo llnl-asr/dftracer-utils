@@ -5,6 +5,7 @@
 #include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <cstdio>
 #include <fstream>
@@ -19,7 +20,7 @@ using namespace dftracer::utils::utilities::fileio::parallel;
 namespace {
 
 std::string tmp_path(const char* name) {
-    return (fs::temp_directory_path() / name).string();
+    return dftu_utils_test::make_unique_test_path(name).string();
 }
 
 std::string read_all(const std::string& path) {

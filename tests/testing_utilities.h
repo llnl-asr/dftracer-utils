@@ -4,22 +4,20 @@
 #ifdef __cplusplus
 #include <dftracer/utils/core/common/config.h>
 #include <dftracer/utils/core/common/filesystem.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <functional>
 #include <string>
 #include <thread>
 #include <vector>
 
-#ifdef DFTRACER_UTILS_MPI_ENABLED
-#include <sys/wait.h>
-#include <unistd.h>
-
-#include <cstdio>
-#include <cstdlib>
-#endif
 extern "C" {
 #endif
 
@@ -209,26 +207,109 @@ class TestEnvironment {
     std::string create_test_gzip_file_impl();
 };
 
-#ifdef DFTRACER_UTILS_MPI_ENABLED
-// -- Shared helpers for the MPI binary integration tests --
+// -- Running a built binary from a test --
 
 // Run `binary` with `args` (no shell). Returns the exit code, or -1 on failure.
+// Everything between fork and exec must be async-signal-safe, which is why the
+// argv is built before the fork. A test process that links a threaded runtime
+// cannot use this at all: use posix_spawn there.
 inline int run_process(const std::string& binary,
                        const std::vector<std::string>& args) {
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& a : args) argv.push_back(a.c_str());
-    argv.push_back(nullptr);
+    // A fixed array, so the forked child (which exits with _exit and never
+    // unwinds) holds no heap block of its own for a leak checker to count.
+    constexpr std::size_t kMaxArgs = 64;
+    if (args.size() + 2 > kMaxArgs) return -1;
+    const char* argv[kMaxArgs];
+    std::size_t n = 0;
+    argv[n++] = binary.c_str();
+    for (const auto& a : args) argv[n++] = a.c_str();
+    argv[n] = nullptr;
     pid_t pid = ::fork();
     if (pid < 0) return -1;
     if (pid == 0) {
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
+        ::execv(binary.c_str(), const_cast<char* const*>(argv));
         ::_exit(127);
     }
     int status = 0;
     ::waitpid(pid, &status, 0);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
+
+// Locate a built binary by name: prefer $env_name (set by CMake), else search
+// the common build-output locations relative to the test's working directory.
+inline std::string find_binary_by_name(const char* env_name,
+                                       const std::string& name) {
+    const char* env_path = std::getenv(env_name);
+    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
+    for (const std::string prefix :
+         {"./", "../", "../../", "../bin/", "../../bin/"}) {
+        const std::string path = prefix + name;
+        if (::access(path.c_str(), X_OK) == 0) return path;
+    }
+    return "";
+}
+
+/// Point LD_LIBRARY_PATH at the build tree's lib dirs so a binary exec'd from
+/// a test finds the shared libraries it was linked against. `binary` is the
+/// path the build root is derived from.
+void set_test_library_path(const std::string& binary);
+
+/// Run `binary` with `args`, capturing what it writes to stdout (and to stderr
+/// too when `capture_stderr`). Returns the captured text; writes the exit code
+/// to `exit_code` when it is not NULL, or -1 if the process did not exit
+/// normally. The output is read to EOF before the wait, so a child that writes
+/// more than a pipe buffer does not deadlock.
+std::string run_process_capture(const std::string& binary,
+                                const std::vector<std::string>& args,
+                                bool capture_stderr = false,
+                                int* exit_code = nullptr);
+
+/// The first non-empty line of a gzip file, with any trailing CR/LF removed,
+/// or "" if the file cannot be read.
+std::string gz_first_line(const std::string& gz_path);
+
+/// A scratch directory that exists for the lifetime of the object. The path is
+/// unique per process (make_unique_test_path), and the destructor removes the
+/// tree, so a test case that returns early or throws still cleans up.
+class ScopedTestDir {
+   public:
+    explicit ScopedTestDir(const std::string& tag) {
+        path_ = make_unique_test_path(tag);
+        fs::create_directories(path_);
+    }
+    ScopedTestDir(const ScopedTestDir&) = delete;
+    ScopedTestDir& operator=(const ScopedTestDir&) = delete;
+    ~ScopedTestDir() {
+        std::error_code ec;
+        fs::remove_all(path_, ec);
+    }
+
+    const fs::path& path() const { return path_; }
+    std::string str() const { return path_.string(); }
+    /// `name` resolved inside the directory.
+    std::string file(const std::string& name) const {
+        return (path_ / name).string();
+    }
+
+    /// Write `content` at `relative_path`, creating any parent directories.
+    void create_file(const std::string& relative_path,
+                     const std::string& content = "test") const {
+        const fs::path p = path_ / relative_path;
+        fs::create_directories(p.parent_path());
+        std::ofstream ofs(p);
+        ofs << content;
+    }
+
+    void create_dir(const std::string& relative_path) const {
+        fs::create_directories(path_ / relative_path);
+    }
+
+   private:
+    fs::path path_;
+};
+
+#ifdef DFTRACER_UTILS_MPI_ENABLED
+// -- Shared helpers for the MPI binary integration tests --
 
 // Locate an MPI launcher: $MPIEXEC_EXECUTABLE if set, else mpiexec/mpirun on
 // PATH. Returns "" if none is found.
@@ -262,20 +343,6 @@ inline int run_mpi(const std::string& launcher, int np,
     std::vector<std::string> args = {"-n", std::to_string(np), binary};
     for (const auto& a : binary_args) args.push_back(a);
     return run_process(launcher, args);
-}
-
-// Locate a built binary by name: prefer $env_name (set by CMake), else search
-// the common build-output locations relative to the test's working directory.
-inline std::string find_binary_by_name(const char* env_name,
-                                       const std::string& name) {
-    const char* env_path = std::getenv(env_name);
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-    for (const std::string prefix :
-         {"./", "../", "../../", "../bin/", "../../bin/"}) {
-        const std::string path = prefix + name;
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
 }
 
 // Shared setup for the *_mpi binary integration tests: locates the serial and

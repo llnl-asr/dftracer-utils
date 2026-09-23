@@ -20,17 +20,8 @@
 namespace {
 
 std::string find_gen_binary() {
-    const char* env_path = std::getenv("DFTRACER_GEN_FAKE_TRACE_PATH");
-    if (env_path && ::access(env_path, X_OK) == 0) return env_path;
-    std::vector<std::string> candidates = {
-        "./dftracer_gen_fake_trace",         "../dftracer_gen_fake_trace",
-        "../../dftracer_gen_fake_trace",     "../bin/dftracer_gen_fake_trace",
-        "../../bin/dftracer_gen_fake_trace",
-    };
-    for (const auto& p : candidates) {
-        if (::access(p.c_str(), X_OK) == 0) return p;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_GEN_FAKE_TRACE_PATH",
+                                                "dftracer_gen_fake_trace");
 }
 
 std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
@@ -54,18 +45,8 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
 }
 
 std::string find_comparator_binary() {
-    const char* env_path = std::getenv("DFTRACER_COMPARATOR_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_comparator",         "../dftracer_comparator",
-        "../../dftracer_comparator",     "../bin/dftracer_comparator",
-        "../../bin/dftracer_comparator",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_COMPARATOR_PATH",
+                                                "dftracer_comparator");
 }
 
 int run_comparator(const std::string& binary,

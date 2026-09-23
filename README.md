@@ -7,15 +7,52 @@
 
 # dftracer-utils
 
-A collection of utilities for DFTracer
+Tools for reading, indexing, querying and analyzing [DFTracer](https://github.com/hariharan-devarajan/dftracer)
+traces: a Python query API over a SIMD columnar DataFrame engine, a plugin
+ABI for analyses that ride the scan, and the CLI utilities around them.
 
 [![CI](https://github.com/LLNL/dftracer-utils/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/LLNL/dftracer-utils/actions/workflows/ci.yml)
 [![Coverage Status](https://coveralls.io/repos/github/llnl/dftracer-utils/badge.svg?branch=develop)](https://coveralls.io/github/llnl/dftracer-utils?branch=develop)
 [![Documentation Status](https://readthedocs.org/projects/dftracer-utils/badge/?version=latest)](https://dftracer.readthedocs.io/projects/utils/)
 
+## Quickstart
+
+```bash
+pip install dftracer-utils
+```
+
+```python
+from dftracer.utils import TraceViewer
+
+view = TraceViewer("traces/")            # a directory of .pfw / .pfw.gz files
+df = (
+    view.filter('cat == "POSIX"')
+        .group_by("name")
+        .agg("count", "sum:dur", "max:dur")
+        .collect().collect()              # plan, then frame
+)
+print(df.sort_values("sum_dur", ascending=False).head(3).to_pandas())
+```
+
+```
+    name  count  sum_dur  max_dur
+0  pread     16      280       22
+1   read     13      244       25
+2  fread      8      156       24
+```
+
+The frame is the engine's own `DataFrame`: the pandas and polars spellings
+work on it (`import dftracer.utils.pandas as pd`), and `.to_pandas()` /
+`.to_arrow()` hand the buffers over without a copy.
+
 ## Documentation
 
-Full documentation is available at [Read the Docs](https://dftracer.readthedocs.io/projects/utils/).
+Full documentation is available at [Read the Docs](https://dftracer.readthedocs.io/projects/utils/):
+
+- [Getting started](https://dftracer.readthedocs.io/projects/utils/en/latest/getting-started/index.html): install, first query, first pipeline, first plugin.
+- [Guides](https://dftracer.readthedocs.io/projects/utils/en/latest/guides/index.html): task recipes, the pandas and polars surfaces, plans, joins, the memory budget, performance.
+- [API reference](https://dftracer.readthedocs.io/projects/utils/en/latest/api/index.html) and the [C ABI](https://dftracer.readthedocs.io/projects/utils/en/latest/c_api/index.html).
+- [Plugins](https://dftracer.readthedocs.io/projects/utils/en/latest/plugins.html): analyses that ride the fused scan.
 
 To build documentation locally:
 

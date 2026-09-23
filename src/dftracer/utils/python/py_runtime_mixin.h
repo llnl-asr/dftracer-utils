@@ -36,16 +36,10 @@ void runtime_backed_dealloc(T *self) {
     Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
-// Parse an optional `runtime=` kwarg (a Runtime instance, an object exposing a
-// `_native` Runtime, or None) and bind it into self->runtime_obj.
+// Bind a `runtime` argument (a Runtime instance, an object exposing a
+// `_native` Runtime, or None/NULL) into self->runtime_obj.
 template <typename T>
-int runtime_backed_init(T *self, PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"runtime", NULL};
-    PyObject *runtime_arg = NULL;
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|O", const_cast<char **>(kwlist), &runtime_arg)) {
-        return -1;
-    }
+int bind_runtime_arg(T *self, PyObject *runtime_arg) {
     if (runtime_arg && runtime_arg != Py_None) {
         if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
             Py_INCREF(runtime_arg);
@@ -63,6 +57,18 @@ int runtime_backed_init(T *self, PyObject *args, PyObject *kwds) {
         }
     }
     return 0;
+}
+
+// Parse an optional `runtime=` kwarg and bind it into self->runtime_obj.
+template <typename T>
+int runtime_backed_init(T *self, PyObject *args, PyObject *kwds) {
+    static const char *kwlist[] = {"runtime", NULL};
+    PyObject *runtime_arg = NULL;
+    if (!PyArg_ParseTupleAndKeywords(
+            args, kwds, "|O", const_cast<char **>(kwlist), &runtime_arg)) {
+        return -1;
+    }
+    return bind_runtime_arg(self, runtime_arg);
 }
 
 // Run a blocking C++ body with the GIL released

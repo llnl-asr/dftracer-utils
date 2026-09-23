@@ -37,6 +37,16 @@ inline dftu_scalar f64(double v) noexcept {
 /// tag).
 inline dftu_scalar boolean(bool v) noexcept { return i64(v ? 1 : 0); }
 
+/// Build a STR-tagged scalar BORROWING `v`. `v` must outlive every call the
+/// scalar is passed to; nothing stores a dftu_scalar past the call.
+inline dftu_scalar str(std::string_view v) noexcept {
+    dftu_scalar s;
+    s.kind = DFTU_SCALAR_TAG_STR;
+    s.len = static_cast<std::uint32_t>(v.size());
+    s.value.s = v.data();
+    return s;
+}
+
 /// Wrap any numeric value as a dftu_scalar tagged by its domain (signed -> I64,
 /// unsigned -> U64, float -> F64), lossless. The seam C++ callers use instead
 /// of populating a raw dftu_scalar.
@@ -60,6 +70,10 @@ inline T scalar_value(dftu_scalar s) {
             return static_cast<T>(s.value.i);
         case DFTU_SCALAR_TAG_U64:
             return static_cast<T>(s.value.u);
+        // A STR scalar has no numeric reading, and its union member is a
+        // pointer: falling through to value.d would reinterpret it as a double.
+        case DFTU_SCALAR_TAG_STR:
+            return T{};
         default:
             return static_cast<T>(s.value.d);
     }
@@ -92,11 +106,14 @@ struct Scalar {
     dftu_scalar_tag kind() const noexcept { return tag(); }
     dftu_scalar raw() const noexcept { return raw_; }
 
-    /// Always an empty view: `dftu_scalar` has no string domain (only
-    /// I64/U64/F64 per dftu_scalar_tag), so mode() on a String column returns a
-    /// numeric surrogate, not the string. Resolve strings from the Series
-    /// directly (Series::string_at). Kept for API symmetry.
-    std::string_view str() const noexcept { return std::string_view{}; }
+    /// The borrowed text of a STR-tagged scalar, empty for every other tag.
+    /// The view points at whatever the scalar borrowed, so it is valid only as
+    /// long as that is.
+    std::string_view str() const noexcept {
+        return raw_.kind == DFTU_SCALAR_TAG_STR && raw_.value.s != nullptr
+                   ? std::string_view{raw_.value.s, raw_.len}
+                   : std::string_view{};
+    }
 };
 
 }  // namespace dftracer::utils::dataframe

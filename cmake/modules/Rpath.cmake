@@ -8,8 +8,10 @@ macro(add_rpath)
     set(CMAKE_INSTALL_RPATH
         "@loader_path/../lib"
         "@loader_path/../../lib"
+        "@loader_path/../../../lib"
         "@loader_path/../lib64"
         "@loader_path/../../lib64"
+        "@loader_path/../../../lib64"
         "@executable_path/../lib"
         "@executable_path/../../lib"
         "@executable_path/../lib64"
@@ -23,8 +25,9 @@ macro(add_rpath)
   else()
     # Linux uses $ORIGIN
     set(CMAKE_INSTALL_RPATH
-        "$ORIGIN/../lib" "$ORIGIN/../../lib" "$ORIGIN/../lib64"
-        "$ORIGIN/../../lib64" "${DEPENDENCY_LIBRARY_DIRS}")
+        "$ORIGIN/../lib" "$ORIGIN/../../lib" "$ORIGIN/../../../lib"
+        "$ORIGIN/../lib64" "$ORIGIN/../../lib64" "$ORIGIN/../../../lib64"
+        "${DEPENDENCY_LIBRARY_DIRS}")
     set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
   endif()
 
@@ -35,13 +38,13 @@ endmacro()
 function(target_add_rpath TARGET_NAME)
   if(APPLE)
     set_target_properties(${TARGET_NAME} PROPERTIES
-      INSTALL_RPATH "@loader_path/../lib;@loader_path/../../lib;@loader_path/../lib64;@loader_path/../../lib64;@executable_path/../lib;@executable_path/../../lib;@executable_path/../lib64;@executable_path/../../lib64;${DEPENDENCY_LIBRARY_DIRS}"
+      INSTALL_RPATH "@loader_path/../lib;@loader_path/../../lib;@loader_path/../../../lib;@loader_path/../lib64;@loader_path/../../lib64;@loader_path/../../../lib64;@executable_path/../lib;@executable_path/../../lib;@executable_path/../lib64;@executable_path/../../lib64;${DEPENDENCY_LIBRARY_DIRS}"
       BUILD_RPATH "${DEPENDENCY_LIBRARY_DIRS}"
       MACOSX_RPATH ON
     )
   else()
     set_target_properties(${TARGET_NAME} PROPERTIES
-      INSTALL_RPATH "$ORIGIN/../lib;$ORIGIN/../../lib;$ORIGIN/../lib64;$ORIGIN/../../lib64;${DEPENDENCY_LIBRARY_DIRS}"
+      INSTALL_RPATH "$ORIGIN/../lib;$ORIGIN/../../lib;$ORIGIN/../../../lib;$ORIGIN/../lib64;$ORIGIN/../../lib64;$ORIGIN/../../../lib64;${DEPENDENCY_LIBRARY_DIRS}"
       BUILD_RPATH "${DEPENDENCY_LIBRARY_DIRS}"
       INSTALL_RPATH_USE_LINK_PATH ON
     )

@@ -60,6 +60,7 @@ TEST_SUITE("stats via View") {
                                         .group_by({GroupKey::cat()})
                                         .agg({{AggOp::Count, "", "n"}})
                                         .collect()
+                                        .collect()
                                         .get();
 
         // num_categories == distinct groups; total events == sum of counts.
@@ -77,6 +78,7 @@ TEST_SUITE("stats via View") {
                                          .group_by({GroupKey::name()})
                                          .agg({{AggOp::Count, "", "n"}})
                                          .collect()
+                                         .collect()
                                          .get();
         CHECK(names.num_rows() > 0);  // num_unique_names
         CHECK(sum_i64(names, "n") == 50);
@@ -85,6 +87,7 @@ TEST_SUITE("stats via View") {
             View::from_file(gz, idx)
                 .group_by({GroupKey::pid(), GroupKey::tid()})
                 .agg({{AggOp::Count, "", "n"}})
+                .collect()
                 .collect()
                 .get();
         CHECK(pt.num_rows() > 0);  // num_pid_tids
@@ -303,6 +306,7 @@ TEST_SUITE("stats via View") {
                                            {AggOp::Max, "dur", "dmax"},
                                            {AggOp::Min, "ts", "tmin"},
                                            {AggOp::Max, "ts", "tmax"}})
+                                     .collect()
                                      .collect()
                                      .get();
         REQUIRE(d.num_rows() == 2);

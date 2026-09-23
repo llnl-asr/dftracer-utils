@@ -14,6 +14,7 @@
 #include <dftracer/utils/utilities/indexer/internal/helpers.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <testing_runtime.h>
 #include <testing_utilities.h>
 
 #include <memory>
@@ -24,16 +25,6 @@ using namespace dftracer::utils::trace::visitors;
 using namespace dftu_utils_test;
 
 namespace {
-
-// Run a coroutine synchronously via Runtime + run_coro_scope.
-// The lambda receives (CoroScope&) -> coro::CoroTask<void>.
-template <typename Fn>
-void run_coro(Fn&& fn) {
-    Runtime rt(4);
-    auto task = run_coro_scope(rt.executor(), std::forward<Fn>(fn));
-    rt.submit(std::move(task), "test").wait();
-    rt.shutdown();
-}
 
 // The batch builder always (re)indexes what it is given; skip-if-indexed is a
 // caller concern (resolve_and_build pre-filters), so `success` == indexed.

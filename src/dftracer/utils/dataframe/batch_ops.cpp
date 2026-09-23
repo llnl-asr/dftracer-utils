@@ -1,24 +1,31 @@
+#include <dftracer/utils/core/common/hash/fnv1a.h>       // string cell hashing
+#include <dftracer/utils/core/common/hash/splitmix64.h>  // row/cell hashing
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/containment.h>
+#include <dftracer/utils/dataframe/internal/cell_ops.h>  // shared cell helpers
+#include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series, Buffer
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_u64
+#include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dataframe/internal/radix_dedup.h>  // parallel dedup
+#include <dftracer/utils/dataframe/kernels/field_stat.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/kernels/group_by.h>
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
-#include <dftracer/utils/plugins/prims.h>  // dftu_mix64
 
 #include <algorithm>
 #include <bit>
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
+#include <vector>
 
 namespace dftracer::utils::dataframe {
 
@@ -31,19 +38,10 @@ std::int64_t index_of(const DataFrame& b, const std::string& name) {
 }
 
 AggOp agg_op_of(const std::string& op) {
-    if (op == "sum") return AggOp::Sum;
-    if (op == "min") return AggOp::Min;
-    if (op == "max") return AggOp::Max;
-    if (op == "mean") return AggOp::Mean;
-    if (op == "count") return AggOp::Count;
-    if (op == "var") return AggOp::Var;
-    if (op == "std") return AggOp::Std;
-    if (op == "skew") return AggOp::Skew;
-    if (op == "kurt") return AggOp::Kurt;
-    if (op == "first") return AggOp::First;
-    if (op == "last") return AggOp::Last;
-    if (op == "pct") return AggOp::Pct;
-    if (op == "hist") return AggOp::Hist;
+#define DFTU_AGG_OP(id, code, str) \
+    if (op == str) return AggOp::id;
+#include <dftracer/utils/dataframe/agg_ops.def>
+#undef DFTU_AGG_OP
     throw std::out_of_range("group_by: unknown aggregate op " + op);
 }
 
@@ -51,75 +49,59 @@ AggOp agg_op_of(const std::string& op) {
 
 const char* to_string(Agg agg) noexcept {
     switch (agg) {
-        case Agg::Sum:
-            return "sum";
-        case Agg::Min:
-            return "min";
-        case Agg::Max:
-            return "max";
-        case Agg::Count:
-            return "count";
-        case Agg::Mean:
-            return "mean";
-        case Agg::Var:
-            return "var";
-        case Agg::Std:
-            return "std";
-        case Agg::Skew:
-            return "skew";
-        case Agg::Kurt:
-            return "kurt";
-        case Agg::First:
-            return "first";
-        case Agg::Last:
-            return "last";
-        case Agg::Pct:
-            return "pct";
-        case Agg::Hist:
-            return "hist";
+#define DFTU_AGG_OP(id, code, str) \
+    case Agg::id:                  \
+        return str;
+#include <dftracer/utils/dataframe/agg_ops.def>
+#undef DFTU_AGG_OP
     }
     return "count";
 }
 
 Agg agg_from_string(std::string_view name) {
-    if (name == "sum") return Agg::Sum;
-    if (name == "min") return Agg::Min;
-    if (name == "max") return Agg::Max;
-    if (name == "count") return Agg::Count;
-    if (name == "mean") return Agg::Mean;
-    if (name == "var") return Agg::Var;
-    if (name == "std") return Agg::Std;
-    if (name == "skew") return Agg::Skew;
-    if (name == "kurt") return Agg::Kurt;
-    if (name == "first") return Agg::First;
-    if (name == "last") return Agg::Last;
-    if (name == "pct") return Agg::Pct;
-    if (name == "hist") return Agg::Hist;
+#define DFTU_AGG_OP(id, code, str) \
+    if (name == str) return Agg::id;
+#include <dftracer/utils/dataframe/agg_ops.def>
+#undef DFTU_AGG_OP
     throw std::out_of_range("agg_from_string: unknown aggregate op " +
                             std::string(name));
 }
 
+// One gather per column, each fanning out over its rows. The result is
+// FLAT: a caller reads the buffers directly, and a frame that is filtered
+// once and read many times pays the gather once.
 DataFrame take(const DataFrame& b, const std::vector<std::int64_t>& indices) {
     DataFrame out;
     out.names = b.names;
-    out.columns.reserve(b.columns.size());
-    for (const Series& c : b.columns) out.columns.push_back(take(c, indices));
+    out.columns = take_all(b.columns, indices.data(),
+                           static_cast<std::int64_t>(indices.size()));
+    return out;
+}
+
+// The same by an Int64 index column (an argsort's output), read in place.
+DataFrame take(const DataFrame& b, const Series& indices) {
+    DataFrame out;
+    out.names = b.names;
+    out.columns =
+        take_all(b.columns, indices.data<std::int64_t>(), indices.length());
     return out;
 }
 
 DataFrame filter(const DataFrame& b, const Series& mask) {
-    std::vector<std::int64_t> indices;
-    const std::uint8_t* bits = mask.data<std::uint8_t>();
-    const std::int64_t n = mask.length();
-    for (std::int64_t i = 0; i < n; ++i)
-        if ((bits[i >> 3] >> (i & 7)) & 1) indices.push_back(i);
-    return take(b, indices);
+    return take(b, mask_index_column(mask.data<std::uint8_t>(), mask.length()));
 }
 
 DataFrame slice(const DataFrame& b, std::int64_t offset, std::int64_t len) {
     const std::int64_t nrows = b.num_rows();
     offset = std::clamp<std::int64_t>(offset, 0, nrows);
     len = std::clamp<std::int64_t>(len, 0, nrows - offset);
+    if (offset == 0 && len == nrows) {
+        DataFrame out;
+        out.names = b.names;
+        out.columns.reserve(b.columns.size());
+        for (const Series& c : b.columns) out.columns.push_back(c.share());
+        return out;
+    }
     std::vector<std::int64_t> indices;
     indices.reserve(static_cast<std::size_t>(len));
     for (std::int64_t i = 0; i < len; ++i) indices.push_back(offset + i);
@@ -172,9 +154,10 @@ DataFrame sort_by(const DataFrame& b, const std::string& name,
     std::int64_t k = index_of(b, name);
     if (k < 0) throw std::out_of_range("sort_by: no column named " + name);
     Series order = argsort(b.columns[static_cast<std::size_t>(k)], descending);
-    const std::int64_t* p = order.data<std::int64_t>();
-    std::vector<std::int64_t> indices(p, p + order.length());
-    return take(b, indices);
+    if (!order.valid())
+        throw std::invalid_argument("sort_by: column " + name +
+                                    " has no order (nested type)");
+    return take(b, order);
 }
 
 DataFrame topk(const DataFrame& b, const std::string& name, std::int64_t k,
@@ -183,9 +166,10 @@ DataFrame topk(const DataFrame& b, const std::string& name, std::int64_t k,
     if (j < 0) throw std::out_of_range("topk: no column named " + name);
     Series ind =
         topk_indices(b.columns[static_cast<std::size_t>(j)], k, largest);
-    const std::int64_t* p = ind.data<std::int64_t>();
-    std::vector<std::int64_t> indices(p, p + ind.length());
-    return take(b, indices);
+    if (!ind.valid())
+        throw std::invalid_argument("topk: column " + name +
+                                    " has no order (nested type)");
+    return take(b, ind);
 }
 
 Series concat_columns(const std::vector<const Series*>& parts) {
@@ -196,7 +180,9 @@ Series concat_columns(const std::vector<const Series*>& parts) {
     std::vector<Series> mats;
     mats.reserve(parts.size());
     for (const Series* p : parts)
-        mats.emplace_back(dftu_series_materialize(p->handle()));
+        mats.emplace_back(p->encoding() == Encoding::Flat
+                              ? p->share()
+                              : Series{dftu_series_materialize(p->handle())});
 
     const TypeId t = mats.front().type();
     std::int64_t total = 0;
@@ -204,24 +190,54 @@ Series concat_columns(const std::vector<const Series*>& parts) {
     for (const Series& m : mats) {
         if (m.type() != t)
             throw std::invalid_argument("concat: columns must share a type");
-        if (t == TypeId::List || t == TypeId::Struct)
-            throw std::invalid_argument("concat: nested columns unsupported");
+        // Every other branch below has an offset-aware path (String) or
+        // memcpy's byte_width(t) bytes per row; refuse anything with neither.
+        // FixedSizeBinary also refuses here: dftu_series_new_flat below has no
+        // fixed_size parameter to record on the result, so it cannot build one
+        // even when the width itself is known.
+        if (t != TypeId::String && t != TypeId::Bool && !byte_width(t))
+            throw std::invalid_argument(std::string("concat: column type '") +
+                                        type_name(t) + "' is unsupported");
         total += m.length();
         any_null |= m.null_count() > 0;
     }
 
+    // Row offsets of the parts. A part that starts on a byte boundary and
+    // is the last one or a whole number of bytes long copies its bitmaps
+    // (validity, Bool data) byte-wise; only an unaligned part sets bits.
+    std::vector<std::int64_t> starts(mats.size() + 1, 0);
+    for (std::size_t i = 0; i < mats.size(); ++i)
+        starts[i + 1] = starts[i] + mats[i].length();
+    auto copy_bits = [&](std::uint8_t* dst, std::size_t part,
+                         const std::uint8_t* src, bool src_set_means_one) {
+        const std::int64_t off = starts[part];
+        const std::int64_t len = mats[part].length();
+        if (off % 8 == 0 && (len % 8 == 0 || part + 1 == mats.size())) {
+            std::memcpy(dst + (off >> 3), src,
+                        static_cast<std::size_t>((len + 7) / 8));
+            return;
+        }
+        for (std::int64_t i = 0; i < len; ++i) {
+            const bool on = (src[i >> 3] >> (i & 7)) & 1;
+            const std::int64_t r = off + i;
+            if (on == src_set_means_one)
+                dst[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
+            else
+                dst[r >> 3] &= static_cast<std::uint8_t>(~(1u << (r & 7)));
+        }
+    };
+
     std::vector<std::uint8_t> validity;
     if (any_null) {
         validity.assign(static_cast<std::size_t>((total + 7) / 8), 0xFF);
-        std::int64_t off = 0;
-        for (const Series& m : mats) {
-            for (std::int64_t i = 0; i < m.length(); ++i)
-                if (m.is_null(i)) {
-                    std::int64_t r = off + i;
-                    validity[static_cast<std::size_t>(r >> 3)] &=
-                        ~(1u << (r & 7));
-                }
-            off += m.length();
+        // Serial: two unaligned neighbours share a byte at their seam, so
+        // the parts cannot write concurrently; a bitmap is small anyway.
+        for (std::size_t i = 0; i < mats.size(); ++i) {
+            const dftu_series* h = mats[i].handle();
+            // No bitmap: every row present; an unaligned part leaves the
+            // 0xFF fill as is.
+            if (!h->validity) continue;
+            copy_bits(validity.data(), i, h->validity->data(), true);
         }
     }
     const std::uint8_t* vptr = any_null ? validity.data() : nullptr;
@@ -242,81 +258,96 @@ Series concat_columns(const std::vector<const Series*>& parts) {
                                    offs.data(), data.data(), total, vptr)};
     }
 
-    if (t == TypeId::Bool) {
-        std::vector<std::uint8_t> bits(
-            static_cast<std::size_t>((total + 7) / 8), 0);
-        std::int64_t r = 0;
-        for (const Series& m : mats) {
-            const std::uint8_t* mb = m.data<std::uint8_t>();
-            for (std::int64_t i = 0; i < m.length(); ++i) {
-                if ((mb[i >> 3] >> (i & 7)) & 1)
-                    bits[static_cast<std::size_t>(r >> 3)] |= (1u << (r & 7));
-                ++r;
-            }
-        }
-        return Series{dftu_series_new_flat(
-            static_cast<dftu_dtype>(TypeId::Bool), bits.data(), total, vptr)};
+    // The value buffer is built in place, one part per task, and adopted by
+    // the result rather than copied into it a second time.
+    auto* out = new dftu_series();
+    dftracer::utils::dataframe::adopt_type_from(*out, *mats.front().handle());
+    out->encoding = Encoding::Flat;
+    out->length = total;
+    if (vptr) {
+        out->validity = Buffer::allocate(validity.size());
+        std::memcpy(out->validity->data(), vptr, validity.size());
+        std::int64_t nulls = 0;
+        for (const Series& m : mats) nulls += m.null_count();
+        out->null_count = nulls;
     }
 
-    const std::size_t w = byte_width(t);
-    std::vector<std::uint8_t> buf(static_cast<std::size_t>(total) * w);
-    std::int64_t off = 0;
-    for (const Series& m : mats) {
-        std::memcpy(buf.data() + static_cast<std::size_t>(off) * w,
-                    m.data<std::uint8_t>(),
-                    static_cast<std::size_t>(m.length()) * w);
-        off += m.length();
+    if (t == TypeId::Bool) {
+        out->data = Buffer::allocate(buffer_bytes(TypeId::Bool, total));
+        std::memset(out->data->data(), 0, out->data->size());
+        std::uint8_t* bits = out->data->data();
+        for (std::size_t i = 0; i < mats.size(); ++i)
+            copy_bits(bits, i, mats[i].data<std::uint8_t>(), true);
+        return Series{out};
     }
-    return Series{dftu_series_new_flat(static_cast<dftu_dtype>(t), buf.data(),
-                                       total, vptr)};
+
+    const std::size_t w = byte_width(t).value_or(0);
+    out->data = Buffer::allocate(static_cast<std::size_t>(total) * w);
+    std::uint8_t* buf = out->data->data();
+    parallel_for(
+        static_cast<std::int64_t>(mats.size()), 1,
+        [&](std::int64_t b, std::int64_t e) {
+            for (std::int64_t i = b; i < e; ++i) {
+                const Series& m = mats[static_cast<std::size_t>(i)];
+                const std::size_t bytes =
+                    static_cast<std::size_t>(m.length()) * w;
+                if (bytes)
+                    std::memcpy(buf + static_cast<std::size_t>(
+                                          starts[static_cast<std::size_t>(i)]) *
+                                          w,
+                                m.data<std::uint8_t>(), bytes);
+            }
+        });
+    return Series{out};
 }
 
-DataFrame group_by(const DataFrame& b, const std::string& key,
+DataFrame group_by(const DataFrame& b, const std::vector<std::string>& keys,
                    const std::vector<GroupAgg>& aggs) {
-    std::int64_t ki = index_of(b, key);
-    if (ki < 0) throw std::out_of_range("group_by: no column named " + key);
-    const Series& key_col = b.columns[static_cast<std::size_t>(ki)];
+    std::vector<const Series*> key_cols;
+    key_cols.reserve(keys.size());
+    for (const std::string& key : keys) {
+        std::int64_t ki = index_of(b, key);
+        if (ki < 0) throw std::out_of_range("group_by: no column named " + key);
+        key_cols.push_back(&b.columns[static_cast<std::size_t>(ki)]);
+    }
 
     // Lower to the fused aggregation engine: value columns referenced by index
     // (deduped), all aggregates computed in one parallel pass over the batch.
     std::vector<const Series*> values;
     std::map<std::string, std::int32_t> col_idx;
+    auto resolve = [&](const std::string& name) -> std::int32_t {
+        auto it = col_idx.find(name);
+        if (it != col_idx.end()) return it->second;
+        std::int64_t vi = index_of(b, name);
+        if (vi < 0)
+            throw std::out_of_range("group_by: no column named " + name);
+        const std::int32_t idx = static_cast<std::int32_t>(values.size());
+        values.push_back(&b.columns[static_cast<std::size_t>(vi)]);
+        col_idx.emplace(name, idx);
+        return idx;
+    };
     std::vector<AggSpec> specs;
     specs.reserve(aggs.size());
     for (const GroupAgg& a : aggs) {
         AggSpec sp;
-        sp.op = agg_op_of(to_string(a.op));
+        sp.op = to_agg_op(a.op);
         sp.out = a.out;
         sp.param = a.param;
-        if (sp.op == AggOp::Count) {
-            sp.value_col = -1;
-        } else {
-            auto it = col_idx.find(a.column);
-            if (it != col_idx.end()) {
-                sp.value_col = it->second;
-            } else {
-                std::int64_t vi = index_of(b, a.column);
-                if (vi < 0)
-                    throw std::out_of_range("group_by: no column named " +
-                                            a.column);
-                sp.value_col = static_cast<std::int32_t>(values.size());
-                values.push_back(&b.columns[static_cast<std::size_t>(vi)]);
-                col_idx.emplace(a.column, sp.value_col);
-            }
-        }
+        sp.value_col = sp.op == AggOp::Count ? -1 : resolve(a.column);
+        if (agg_uses_by_col(sp.op)) sp.by_col = resolve(a.by);
         specs.push_back(std::move(sp));
     }
-    return group_agg(key_col, values, std::move(specs), key);
+    return group_agg(key_cols, values, std::move(specs), keys);
+}
+
+DataFrame group_by(const DataFrame& b, const std::string& key,
+                   const std::vector<GroupAgg>& aggs) {
+    return group_by(b, std::vector<std::string>{key}, aggs);
 }
 
 namespace {
 
-std::uint64_t splitmix64(std::uint64_t x) {
-    x += 0x9E3779B97F4A7C15ULL;
-    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
-    return x ^ (x >> 31);
-}
+using dftracer::utils::hash::splitmix64;
 
 std::uint64_t read_f64_bits(const Series& c, std::int64_t i) {
     if (c.type() == TypeId::Float32)
@@ -328,13 +359,8 @@ std::uint64_t read_f64_bits(const Series& c, std::int64_t i) {
 // node.
 std::uint64_t hash_cell(const Series& c, std::int64_t i) {
     switch (c.type()) {
-        case TypeId::String: {
-            std::string_view s = c.string_at(i);
-            std::uint64_t h = 1469598103934665603ULL;  // FNV-1a offset
-            for (char ch : s)
-                h = (h ^ static_cast<std::uint8_t>(ch)) * 1099511628211ULL;
-            return h;
-        }
+        case TypeId::String:
+            return hash::fnv1a_hash(c.string_at(i));
         case TypeId::Bool: {
             const std::uint8_t* b = c.data<std::uint8_t>();
             return splitmix64((b[i >> 3] >> (i & 7)) & 1);
@@ -349,30 +375,54 @@ std::uint64_t hash_cell(const Series& c, std::int64_t i) {
 
 }  // namespace
 
-std::vector<DataFrame> hash_partition(const DataFrame& b,
-                                      const std::vector<std::string>& keys,
-                                      std::int64_t n_parts) {
-    if (keys.empty()) throw std::invalid_argument("hash_partition: no keys");
-    if (n_parts < 1) throw std::invalid_argument("hash_partition: n_parts < 1");
+Series partition_id(const DataFrame& b, const std::vector<std::string>& keys,
+                    std::int64_t n_parts) {
+    if (keys.empty()) throw std::invalid_argument("partition_id: no keys");
+    if (n_parts < 1) throw std::invalid_argument("partition_id: n_parts < 1");
     const std::int64_t n = b.num_rows();
 
     std::vector<const Series*> key_cols;
     for (const std::string& k : keys) {
         std::int64_t ki = index_of(b, k);
         if (ki < 0)
-            throw std::out_of_range("hash_partition: no column named " + k);
+            throw std::out_of_range("partition_id: no column named " + k);
         key_cols.push_back(&b.columns[static_cast<std::size_t>(ki)]);
     }
 
+    // Bucket id per row is independent of every other row, so it fans out
+    // through parallel_for; the scatter into per-bucket index lists then runs
+    // as one pass per thread over private buckets, merged at the end (rows
+    // within a bucket need not keep their original order - only co-location).
+    std::vector<std::int32_t> bucket_of(static_cast<std::size_t>(n));
+    constexpr std::int64_t GRAIN = 1 << 15;
+    auto compute_bucket = [&](std::int64_t b0, std::int64_t e0) {
+        for (std::int64_t i = b0; i < e0; ++i) {
+            std::uint64_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
+            for (const Series* c : key_cols)
+                h = splitmix64(h ^ hash_cell(*c, i));
+            bucket_of[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(
+                h % static_cast<std::uint64_t>(n_parts));
+        }
+    };
+    if (parallel_backend_installed() && n > GRAIN) {
+        parallel_for(n, GRAIN, compute_bucket);
+    } else {
+        compute_bucket(0, n);
+    }
+    return Series::flat(TypeId::Int32, bucket_of.data(), n);
+}
+
+std::vector<DataFrame> hash_partition(const DataFrame& b,
+                                      const std::vector<std::string>& keys,
+                                      std::int64_t n_parts) {
+    Series ids = partition_id(b, keys, n_parts);
+    const std::int64_t n = b.num_rows();
+    const std::int32_t* bucket_of = ids.data<std::int32_t>();
+
     std::vector<std::vector<std::int64_t>> buckets(
         static_cast<std::size_t>(n_parts));
-    for (std::int64_t i = 0; i < n; ++i) {
-        std::uint64_t h = 1469598103934665603ULL;
-        for (const Series* c : key_cols) h = splitmix64(h ^ hash_cell(*c, i));
-        buckets[static_cast<std::size_t>(h %
-                                         static_cast<std::uint64_t>(n_parts))]
-            .push_back(i);
-    }
+    for (std::int64_t i = 0; i < n; ++i)
+        buckets[static_cast<std::size_t>(bucket_of[i])].push_back(i);
 
     std::vector<DataFrame> parts;
     parts.reserve(static_cast<std::size_t>(n_parts));
@@ -382,16 +432,108 @@ std::vector<DataFrame> hash_partition(const DataFrame& b,
 
 namespace {
 
+// One row of a scalar (numeric/bool) column rendered as text, matching
+// build_row_frame's own stringification of numbers.
+std::string scalar_cell_to_string(const Series& s, std::int64_t i) {
+    switch (s.type()) {
+        case TypeId::Bool:
+            return s.data<std::uint8_t>()
+                       ? (((s.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1)
+                              ? "true"
+                              : "false")
+                       : "false";
+        case TypeId::Int8:
+            return std::to_string(s.data<std::int8_t>()[i]);
+        case TypeId::Int16:
+            return std::to_string(s.data<std::int16_t>()[i]);
+        case TypeId::Int32:
+            return std::to_string(s.data<std::int32_t>()[i]);
+        case TypeId::Int64:
+            return std::to_string(s.data<std::int64_t>()[i]);
+        case TypeId::Uint8:
+            return std::to_string(s.data<std::uint8_t>()[i]);
+        case TypeId::Uint16:
+            return std::to_string(s.data<std::uint16_t>()[i]);
+        case TypeId::Uint32:
+            return std::to_string(s.data<std::uint32_t>()[i]);
+        case TypeId::Uint64:
+            return std::to_string(s.data<std::uint64_t>()[i]);
+        case TypeId::Float32:
+            return std::to_string(s.data<float>()[i]);
+        case TypeId::Float64:
+            return std::to_string(s.data<double>()[i]);
+        case TypeId::String:
+        case TypeId::Binary:
+            return std::string(s.string_at(i));
+        case TypeId::Float16:
+            return std::to_string(half_to_float(s.data<std::uint16_t>()[i]));
+        case TypeId::Date32:
+        case TypeId::Time32:
+            return std::to_string(s.data<std::int32_t>()[i]);
+        case TypeId::Date64:
+        case TypeId::Time64:
+        case TypeId::Timestamp:
+        case TypeId::Duration:
+            return std::to_string(s.data<std::int64_t>()[i]);
+        case TypeId::List:
+        case TypeId::LargeList:
+        case TypeId::FixedSizeList:
+        case TypeId::Struct:
+        case TypeId::Map:
+        case TypeId::Decimal128:
+        case TypeId::Decimal256:
+        case TypeId::FixedSizeBinary:
+        case TypeId::LargeString:
+        case TypeId::LargeBinary:
+            return std::string();
+        case TypeId::Unknown:
+            break;  // schema-only marker, never a real Series' type
+    }
+    return std::string();
+}
+
+// Render a scalar/bool column as a String column, preserving per-row validity.
+// Diagonal concat uses this where a column's type varies across parts and one
+// part is String: dftu_series_cast has no numeric->String path, so the numeric
+// parts are stringified here (numbers as text) to unify the column on String.
+Series to_string_series(const Series& s) {
+    const std::int64_t n = s.length();
+    std::vector<std::string> owned(static_cast<std::size_t>(n));
+    std::vector<std::string_view> vals(static_cast<std::size_t>(n));
+    std::vector<std::uint8_t> vbits(static_cast<std::size_t>((n + 7) / 8), 0);
+    bool any_null = false;
+    for (std::int64_t i = 0; i < n; ++i) {
+        if (s.is_null(i)) {
+            any_null = true;
+            continue;
+        }
+        owned[static_cast<std::size_t>(i)] = scalar_cell_to_string(s, i);
+        vals[static_cast<std::size_t>(i)] = owned[static_cast<std::size_t>(i)];
+        vbits[static_cast<std::size_t>(i >> 3)] |=
+            static_cast<std::uint8_t>(1u << (i & 7));
+    }
+    return Series::strings(std::span<const std::string_view>(vals),
+                           any_null ? vbits.data() : nullptr);
+}
+
+bool is_numeric_type(TypeId t) {
+    return t != TypeId::String && t != TypeId::Binary && t != TypeId::Bool &&
+           t != TypeId::List && t != TypeId::Struct;
+}
+
 // The type the same-named column takes across parts. Same type stays; a mix of
-// numeric types widens to Float64; a numeric/String or Bool/other clash has no
-// common type and throws.
+// numeric types widens to Float64; a scalar String/number clash unifies on
+// String; any other clash (nested vs scalar) has no common type and throws.
 TypeId promote_type(TypeId a, TypeId b, const std::string& name) {
     if (a == b) return a;
-    auto numeric = [](TypeId t) {
-        return t != TypeId::String && t != TypeId::Binary &&
-               t != TypeId::Bool && t != TypeId::List && t != TypeId::Struct;
-    };
-    if (numeric(a) && numeric(b)) return TypeId::Float64;
+    if (is_numeric_type(a) && is_numeric_type(b)) return TypeId::Float64;
+    // A scalar arg whose value is a string in one part and a number in another
+    // (build_row_frame infers a column's type per batch) unifies on String,
+    // numbers stringified, rather than aborting the whole concat.
+    const bool a_scalar = a != TypeId::List && a != TypeId::Struct;
+    const bool b_scalar = b != TypeId::List && b != TypeId::Struct;
+    if ((a == TypeId::String && b_scalar) || (b == TypeId::String && a_scalar))
+        return TypeId::String;
     throw std::invalid_argument("concat(diagonal): column '" + name +
                                 "' has incompatible types across parts");
 }
@@ -436,8 +578,12 @@ DataFrame concat_diagonal(const std::vector<const DataFrame*>& parts) {
                 owned.push_back(Series::nulls(target, p->num_rows()));
             } else {
                 const Series& src = p->columns[static_cast<std::size_t>(at)];
-                owned.push_back(src.type() == target ? src.share()
-                                                     : src.cast(target));
+                if (src.type() == target)
+                    owned.push_back(src.share());
+                else if (target == TypeId::String)
+                    owned.push_back(to_string_series(src));
+                else
+                    owned.push_back(src.cast(target));
             }
             cols.push_back(&owned.back());
         }
@@ -492,132 +638,41 @@ std::vector<Series> materialized_columns(const DataFrame& b) {
     return cols;
 }
 
-// Append cell (col, i) to `key` as raw bytes, prefixed by a present/null flag,
-// so the concatenation of a row's cells is a stable composite dedupe key.
-void append_cell(std::string& key, const Series& c, std::int64_t i) {
-    if (c.is_null(i)) {
-        key.push_back('\0');
-        return;
-    }
-    key.push_back('\1');
-    const TypeId t = c.type();
-    if (t == TypeId::String || t == TypeId::Binary) {
-        std::string_view s = c.string_at(i);
-        std::int32_t len = static_cast<std::int32_t>(s.size());
-        key.append(reinterpret_cast<const char*>(&len), sizeof(len));
-        key.append(s.data(), s.size());
-        return;
-    }
-    const std::uint8_t* d = c.data<std::uint8_t>();
-    if (t == TypeId::Bool) {
-        key.push_back((d[i >> 3] >> (i & 7)) & 1 ? '\1' : '\0');
-        return;
-    }
-    const std::size_t w = byte_width(t);
-    key.append(
-        reinterpret_cast<const char*>(d + static_cast<std::size_t>(i) * w), w);
-}
-
-// Composite dedupe key per row over `cols` (already FLAT).
+// Composite dedupe key per row over `cols` (already FLAT), built in parallel
+// (each row's key is independent scalar string work).
 std::vector<std::string> row_keys(const std::vector<Series>& cols,
                                   std::int64_t n) {
     std::vector<std::string> keys(static_cast<std::size_t>(n));
-    for (const Series& c : cols)
-        for (std::int64_t i = 0; i < n; ++i)
-            append_cell(keys[static_cast<std::size_t>(i)], c, i);
+    parallel_for(n, std::int64_t{1} << 13, [&](std::int64_t b, std::int64_t e) {
+        for (std::int64_t i = b; i < e; ++i)
+            keys[static_cast<std::size_t>(i)] = row_key(cols, i);
+    });
     return keys;
-}
-
-template <class T>
-int cmp_num(const Series& c, std::int64_t a, std::int64_t b) {
-    const T va = c.data<T>()[a];
-    const T vb = c.data<T>()[b];
-    return va < vb ? -1 : (va > vb ? 1 : 0);
-}
-
-// Ordering of two non-null cells of the same column (ascending value order).
-int raw_cmp(const Series& c, std::int64_t a, std::int64_t b) {
-    switch (c.type()) {
-        case TypeId::Bool: {
-            const std::uint8_t* p = c.data<std::uint8_t>();
-            int va = (p[a >> 3] >> (a & 7)) & 1;
-            int vb = (p[b >> 3] >> (b & 7)) & 1;
-            return va < vb ? -1 : (va > vb ? 1 : 0);
-        }
-        case TypeId::Int8:
-            return cmp_num<std::int8_t>(c, a, b);
-        case TypeId::Int16:
-            return cmp_num<std::int16_t>(c, a, b);
-        case TypeId::Int32:
-            return cmp_num<std::int32_t>(c, a, b);
-        case TypeId::Int64:
-            return cmp_num<std::int64_t>(c, a, b);
-        case TypeId::Uint8:
-            return cmp_num<std::uint8_t>(c, a, b);
-        case TypeId::Uint16:
-            return cmp_num<std::uint16_t>(c, a, b);
-        case TypeId::Uint32:
-            return cmp_num<std::uint32_t>(c, a, b);
-        case TypeId::Uint64:
-            return cmp_num<std::uint64_t>(c, a, b);
-        case TypeId::Float32:
-            return cmp_num<float>(c, a, b);
-        case TypeId::Float64:
-            return cmp_num<double>(c, a, b);
-        case TypeId::String:
-        case TypeId::Binary: {
-            int r = c.string_at(a).compare(c.string_at(b));
-            return r < 0 ? -1 : (r > 0 ? 1 : 0);
-        }
-        default:
-            return 0;
-    }
 }
 
 Series row_mask(const DataFrame& b, bool want_unique) {
     const std::int64_t n = b.num_rows();
     std::vector<Series> cols = materialized_columns(b);
     std::vector<std::string> keys = row_keys(cols, n);
-    std::unordered_map<std::string, std::int64_t> counts;
-    counts.reserve(static_cast<std::size_t>(n));
-    for (const std::string& k : keys) ++counts[k];
-    std::vector<std::uint8_t> bits(static_cast<std::size_t>((n + 7) / 8), 0);
-    for (std::int64_t i = 0; i < n; ++i) {
-        bool unique = counts[keys[static_cast<std::size_t>(i)]] == 1;
-        if (want_unique == unique)
-            bits[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
-    }
+    std::vector<std::int64_t> counts = radix_key_counts(keys, n);
+    const std::int64_t nbytes = (n + 7) / 8;
+    std::vector<std::uint8_t> bits(static_cast<std::size_t>(nbytes), 0);
+    parallel_for(
+        nbytes, std::int64_t{1} << 10, [&](std::int64_t bb, std::int64_t be) {
+            for (std::int64_t byte = bb; byte < be; ++byte) {
+                const std::int64_t base = byte * 8;
+                const std::int64_t lim = std::min(base + 8, n);
+                std::uint8_t v = 0;
+                for (std::int64_t i = base; i < lim; ++i) {
+                    bool unique = counts[static_cast<std::size_t>(i)] == 1;
+                    if (want_unique == unique)
+                        v |= static_cast<std::uint8_t>(1u << (i - base));
+                }
+                bits[static_cast<std::size_t>(byte)] = v;
+            }
+        });
     return Series{dftu_series_new_flat(static_cast<dftu_dtype>(TypeId::Bool),
                                        bits.data(), n, nullptr)};
-}
-
-double scalar_to_double(dftu_scalar s) {
-    switch (s.kind) {
-        case DFTU_SCALAR_TAG_F64:
-            return s.value.d;
-        case DFTU_SCALAR_TAG_U64:
-            return static_cast<double>(s.value.u);
-        default:
-            return static_cast<double>(s.value.i);
-    }
-}
-
-bool is_numeric_type(TypeId t) {
-    switch (t) {
-        case TypeId::Int8:
-        case TypeId::Int16:
-        case TypeId::Int32:
-        case TypeId::Int64:
-        case TypeId::Uint8:
-        case TypeId::Uint16:
-        case TypeId::Uint32:
-        case TypeId::Uint64:
-        case TypeId::Float32:
-        case TypeId::Float64:
-            return true;
-        default:
-            return false;
-    }
 }
 
 }  // namespace
@@ -648,22 +703,83 @@ DataFrame fill_null(const DataFrame& b, dftu_scalar value) {
     return out;
 }
 
-DataFrame unique(const DataFrame& b) {
+DataFrame unique(const DataFrame& b, const std::vector<std::string>& subset) {
     const std::int64_t n = b.num_rows();
-    std::vector<Series> cols = materialized_columns(b);
+    std::vector<Series> cols;
+    if (subset.empty()) {
+        cols = materialized_columns(b);
+    } else {
+        cols.reserve(subset.size());
+        for (const std::string& s : subset) {
+            std::int64_t k = index_of(b, s);
+            if (k < 0) throw std::out_of_range("unique: no column named " + s);
+            cols.push_back(
+                b.columns[static_cast<std::size_t>(k)].materialize());
+        }
+    }
     std::vector<std::string> keys = row_keys(cols, n);
-    std::unordered_set<std::string> seen;
-    seen.reserve(static_cast<std::size_t>(n));
+    std::vector<std::uint8_t> keep = radix_first_seen_mask(keys, n);
     std::vector<std::int64_t> idx;
+    idx.reserve(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
-        if (seen.insert(keys[static_cast<std::size_t>(i)]).second)
-            idx.push_back(i);
+        if (keep[static_cast<std::size_t>(i)]) idx.push_back(i);
     return take(b, idx);
 }
 
+namespace {
+
+// Parallel stable sort of `order` by `less`: chunks are stable_sort'd in
+// parallel, then merged bottom-up (std::merge is itself stable), so the
+// overall result matches a single std::stable_sort over the whole range.
+// Falls back to one std::stable_sort when no backend is installed or `n` is
+// small.
+template <class Less>
+void parallel_stable_sort_indices(std::vector<std::int64_t>& order, Less less) {
+    const std::int64_t n = static_cast<std::int64_t>(order.size());
+    constexpr std::int64_t RUN = 1 << 16;
+    if (!parallel_backend_installed() || n <= RUN) {
+        std::stable_sort(order.begin(), order.end(), less);
+        return;
+    }
+    const std::int64_t nruns = (n + RUN - 1) / RUN;
+    parallel_for(nruns, 1, [&](std::int64_t c0, std::int64_t c1) {
+        for (std::int64_t c = c0; c < c1; ++c) {
+            const std::int64_t lo = c * RUN;
+            const std::int64_t hi = std::min(n, lo + RUN);
+            std::stable_sort(order.begin() + lo, order.begin() + hi, less);
+        }
+    });
+    std::vector<std::int64_t> scratch(static_cast<std::size_t>(n));
+    std::int64_t* src = order.data();
+    std::int64_t* dst = scratch.data();
+    for (std::int64_t width = RUN; width < n; width *= 2) {
+        const std::int64_t step = width * 2;
+        const std::int64_t npairs = (n + step - 1) / step;
+        parallel_for(npairs, 1, [&](std::int64_t p0, std::int64_t p1) {
+            for (std::int64_t p = p0; p < p1; ++p) {
+                const std::int64_t lo = p * step;
+                const std::int64_t mid = std::min(n, lo + width);
+                const std::int64_t hi = std::min(n, lo + step);
+                std::merge(src + lo, src + mid, src + mid, src + hi, dst + lo,
+                           less);
+            }
+        });
+        std::swap(src, dst);
+    }
+    if (src != order.data()) std::copy(src, src + n, order.data());
+}
+
+}  // namespace
+
 DataFrame sort_by_multi(const DataFrame& b,
                         const std::vector<std::string>& names,
-                        bool descending) {
+                        const std::vector<bool>& descending) {
+    if (descending.empty())
+        throw std::invalid_argument(
+            "sort_by_multi: descending must not be empty");
+    if (descending.size() != 1 && descending.size() != names.size())
+        throw std::invalid_argument(
+            "sort_by_multi: descending must have size 1 or match names.size()");
     std::vector<const Series*> keys;
     keys.reserve(names.size());
     for (const std::string& name : names) {
@@ -672,25 +788,38 @@ DataFrame sort_by_multi(const DataFrame& b,
             throw std::out_of_range("sort_by_multi: no column named " + name);
         keys.push_back(&b.columns[static_cast<std::size_t>(k)]);
     }
+    for (std::size_t i = 0; i < keys.size(); ++i)
+        if (!is_orderable_type(keys[i]->type()))
+            throw std::invalid_argument(std::string("sort_by_multi: column '") +
+                                        names[i] + "' has type '" +
+                                        type_name(keys[i]->type()) +
+                                        "' with no per-row order");
+    const bool broadcast = descending.size() == 1;
     const std::int64_t n = b.num_rows();
     std::vector<std::int64_t> order(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i) order[static_cast<std::size_t>(i)] = i;
-    std::stable_sort(order.begin(), order.end(),
-                     [&](std::int64_t a, std::int64_t bb) {
-                         for (const Series* c : keys) {
-                             bool na = c->is_null(a);
-                             bool nb = c->is_null(bb);
-                             if (na || nb) {
-                                 if (na && nb) continue;
-                                 return !na;  // nulls last in both directions
-                             }
-                             int r = raw_cmp(*c, a, bb);
-                             if (descending) r = -r;
-                             if (r != 0) return r < 0;
-                         }
-                         return false;
-                     });
+    parallel_stable_sort_indices(order, [&](std::int64_t a, std::int64_t bb) {
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            const Series* c = keys[i];
+            bool na = c->is_null(a);
+            bool nb = c->is_null(bb);
+            if (na || nb) {
+                if (na && nb) continue;
+                return !na;  // nulls last in both directions
+            }
+            int r = compare_rows(*c, a, bb);
+            if (broadcast ? descending[0] : descending[i]) r = -r;
+            if (r != 0) return r < 0;
+        }
+        return false;
+    });
     return take(b, order);
+}
+
+DataFrame sort_by_multi(const DataFrame& b,
+                        const std::vector<std::string>& names,
+                        bool descending) {
+    return sort_by_multi(b, names, std::vector<bool>{descending});
 }
 
 DataFrame tail(const DataFrame& b, std::int64_t n) {
@@ -714,7 +843,7 @@ DataFrame sample(const DataFrame& b, std::int64_t n, std::uint64_t seed) {
     for (std::int64_t i = 0; i < len; ++i)
         order[static_cast<std::size_t>(i)] = i;
     auto key = [seed](std::int64_t i) {
-        return dftu_mix64(static_cast<std::uint64_t>(i) + seed);
+        return splitmix64(static_cast<std::uint64_t>(i) + seed);
     };
     if (n < len)
         std::nth_element(
@@ -747,16 +876,18 @@ DataFrame describe(const DataFrame& b) {
     DataFrame out;
     out.names.push_back("statistic");
     out.columns.push_back(Series::strings(stat_names));
+    const std::int64_t n = b.num_rows();
     for (std::size_t i = 0; i < b.columns.size(); ++i) {
         const Series& c = b.columns[i];
-        if (!is_numeric_type(c.type())) continue;
+        if (!is_numeric(c.type())) continue;
+        const FieldStat fs = field_stat_reduce(c);
         double vals[6];
-        vals[0] = static_cast<double>(c.count());
-        vals[1] = static_cast<double>(c.null_count());
-        vals[2] = c.mean();
-        vals[3] = c.stddev();
-        vals[4] = scalar_to_double(c.min());
-        vals[5] = scalar_to_double(c.max());
+        vals[0] = static_cast<double>(fs.n);
+        vals[1] = static_cast<double>(n - static_cast<std::int64_t>(fs.n));
+        vals[2] = fs.mean();
+        vals[3] = fs.stddev();
+        vals[4] = fs.n ? fs.min : 0.0;
+        vals[5] = fs.n ? fs.max : 0.0;
         out.names.push_back(b.names[i]);
         out.columns.push_back(Series::flat_f64(vals, 6));
     }
@@ -774,30 +905,134 @@ DataFrame null_count(const DataFrame& b) {
     return out;
 }
 
+// The per-column reductions a whole-frame broadcast makes sense for: one
+// value column, no `by`, no `param`. Anything else (corr, pct, topk, ...) is
+// a group_by with no key and an explicit spec: reduce(b, aggs).
+bool reduce_broadcasts(Agg agg) noexcept {
+    switch (agg) {
+        case Agg::Sum:
+        case Agg::Min:
+        case Agg::Max:
+        case Agg::CountValid:
+        case Agg::Mean:
+        case Agg::Var:
+        case Agg::Std:
+        case Agg::Skew:
+        case Agg::Kurt:
+        case Agg::SumSq:
+        case Agg::First:
+        case Agg::Last:
+        case Agg::BitOr:
+        case Agg::Prod:
+            return true;
+        case Agg::Count:
+        case Agg::Pct:
+        case Agg::Hist:
+        case Agg::ArgMax:
+        case Agg::SetUnion:
+        case Agg::Busy:
+        case Agg::Concurrency:
+        case Agg::Utilization:
+        case Agg::Active:
+        case Agg::ArgMin:
+        case Agg::Distinct:
+        case Agg::ListSorted:
+        case Agg::TopK:
+        case Agg::BottomK:
+        case Agg::ApproxTopK:
+        case Agg::Sample:
+        case Agg::Corr:
+        case Agg::CovarPop:
+        case Agg::CovarSamp:
+        case Agg::RegrSlope:
+        case Agg::RegrIntercept:
+        case Agg::RegrR2:
+            return false;
+    }
+    return false;
+}
+
+std::vector<GroupAgg> reduce_specs(const std::vector<std::string>& names,
+                                   const std::vector<TypeId>& types, Agg agg,
+                                   const std::vector<std::string>& keys) {
+    if (!reduce_broadcasts(agg))
+        throw std::invalid_argument(
+            std::string("reduce: '") + to_string(agg) +
+            "' takes a second column or a parameter; give it as a spec");
+    const bool any_type =
+        agg == Agg::CountValid || agg == Agg::First || agg == Agg::Last;
+    std::vector<GroupAgg> out;
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (std::find(keys.begin(), keys.end(), names[i]) != keys.end())
+            continue;
+        if (any_type || types[i] == TypeId::Unknown ||
+            is_numeric_dispatchable(types[i]))
+            out.push_back(GroupAgg{agg, names[i], names[i]});
+    }
+    return out;
+}
+
+DataFrame reduce(const DataFrame& b, const std::vector<GroupAgg>& aggs) {
+    return group_by(b, std::vector<std::string>{}, aggs);
+}
+
+std::vector<GroupAgg> reduce_specs(const DataFrame& b, Agg agg,
+                                   const std::vector<std::string>& keys) {
+    std::vector<TypeId> types;
+    types.reserve(b.columns.size());
+    for (const Series& c : b.columns) types.push_back(c.type());
+    return reduce_specs(b.names, types, agg, keys);
+}
+
+DataFrame reduce(const DataFrame& b, Agg agg) {
+    return reduce(b, reduce_specs(b, agg, {}));
+}
+
 Series is_duplicated(const DataFrame& b) { return row_mask(b, false); }
 Series is_unique(const DataFrame& b) { return row_mask(b, true); }
 
 DataFrame value_counts(const Series& v) {
+    if (!is_orderable_type(v.type()))
+        throw std::invalid_argument(std::string("value_counts: type '") +
+                                    type_name(v.type()) +
+                                    "' has no per-row value to count");
     Series mat = v.encoding() == Encoding::Flat
                      ? v.share()
                      : Series{dftu_series_materialize(v.handle())};
     const std::int64_t n = mat.length();
-    std::unordered_map<std::string, std::int64_t> idx_of;
+    const bool has_nulls = mat.null_count() > 0;
+
+    std::vector<std::int64_t> nonnull_idx;
+    if (has_nulls) {
+        nonnull_idx.reserve(static_cast<std::size_t>(n));
+        for (std::int64_t i = 0; i < n; ++i)
+            if (!mat.is_null(i)) nonnull_idx.push_back(i);
+    }
+    const std::int64_t m =
+        has_nulls ? static_cast<std::int64_t>(nonnull_idx.size()) : n;
+    auto idx_at = [&](std::int64_t j) {
+        return has_nulls ? nonnull_idx[static_cast<std::size_t>(j)] : j;
+    };
+    auto key_of = [&](std::int64_t j) {
+        std::string k;
+        append_cell(k, mat, idx_at(j));
+        return k;
+    };
+
+    // Radix-partitioned first-occurrence detection + counting: the same
+    // shape as unique()/row_mask(), so distinct values fan out through
+    // disjoint hash buckets instead of one serial map.
+    std::vector<std::uint8_t> keep =
+        radix_first_seen_by<std::string>(m, key_of);
+    std::vector<std::int64_t> cnts = radix_counts_by<std::string>(m, key_of);
+
     std::vector<std::int64_t> first_index;
     std::vector<std::int64_t> counts;
-    for (std::int64_t i = 0; i < n; ++i) {
-        if (mat.is_null(i)) continue;
-        std::string key;
-        append_cell(key, mat, i);
-        auto [it, ins] = idx_of.try_emplace(
-            std::move(key), static_cast<std::int64_t>(first_index.size()));
-        if (ins) {
-            first_index.push_back(i);
-            counts.push_back(1);
-        } else {
-            ++counts[static_cast<std::size_t>(it->second)];
+    for (std::int64_t j = 0; j < m; ++j)
+        if (keep[static_cast<std::size_t>(j)]) {
+            first_index.push_back(idx_at(j));
+            counts.push_back(cnts[static_cast<std::size_t>(j)]);
         }
-    }
     DataFrame df;
     df.names = {"value", "count"};
     df.columns.push_back(mat.take(first_index));
@@ -818,40 +1053,6 @@ Series flat_copy(const Series& c) {
 
 // Human-readable rendering of cell (c, i) for a dummy column label. `c` is
 // FLAT.
-std::string cell_to_string(const Series& c, std::int64_t i) {
-    switch (c.type()) {
-        case TypeId::String:
-        case TypeId::Binary:
-            return std::string(c.string_at(i));
-        case TypeId::Bool: {
-            const std::uint8_t* b = c.data<std::uint8_t>();
-            return ((b[i >> 3] >> (i & 7)) & 1) ? "true" : "false";
-        }
-        case TypeId::Int8:
-            return std::to_string(c.data<std::int8_t>()[i]);
-        case TypeId::Int16:
-            return std::to_string(c.data<std::int16_t>()[i]);
-        case TypeId::Int32:
-            return std::to_string(c.data<std::int32_t>()[i]);
-        case TypeId::Int64:
-            return std::to_string(c.data<std::int64_t>()[i]);
-        case TypeId::Uint8:
-            return std::to_string(c.data<std::uint8_t>()[i]);
-        case TypeId::Uint16:
-            return std::to_string(c.data<std::uint16_t>()[i]);
-        case TypeId::Uint32:
-            return std::to_string(c.data<std::uint32_t>()[i]);
-        case TypeId::Uint64:
-            return std::to_string(c.data<std::uint64_t>()[i]);
-        case TypeId::Float32:
-            return std::to_string(c.data<float>()[i]);
-        case TypeId::Float64:
-            return std::to_string(c.data<double>()[i]);
-        default:
-            return std::string();
-    }
-}
-
 bool is_float_type(TypeId t) {
     return t == TypeId::Float32 || t == TypeId::Float64;
 }
@@ -880,7 +1081,7 @@ DataFrame unpivot(const DataFrame& b, const std::vector<std::string>& id_vars,
         TypeId t = b.columns[static_cast<std::size_t>(vi)].type();
         if (t != first) all_same = false;
         if (is_float_type(t)) any_float = true;
-        if (!is_numeric_type(t)) all_numeric = false;
+        if (!is_numeric(t)) all_numeric = false;
     }
     TypeId common;
     if (all_same) {
@@ -920,12 +1121,17 @@ DataFrame unpivot(const DataFrame& b, const std::vector<std::string>& id_vars,
     return concat(parts);
 }
 
-DataFrame explode(const DataFrame& b, const std::string& column) {
+namespace {
+
+DataFrame explode_impl(const DataFrame& b, const std::string& column,
+                       bool keep_empty, bool flatten_struct, const char* who) {
     std::int64_t ci = index_of(b, column);
-    if (ci < 0) throw std::out_of_range("explode: no column named " + column);
+    if (ci < 0)
+        throw std::out_of_range(std::string(who) + ": no column named " +
+                                column);
     Series lst = flat_copy(b.columns[static_cast<std::size_t>(ci)]);
     if (lst.type() != TypeId::List)
-        throw std::invalid_argument("explode: " + column +
+        throw std::invalid_argument(std::string(who) + ": " + column +
                                     " is not a List column");
 
     const std::int64_t n = lst.length();
@@ -937,7 +1143,8 @@ DataFrame explode(const DataFrame& b, const std::string& column) {
     for (std::int64_t i = 0; i < n; ++i) {
         std::int32_t s = offs[i];
         std::int32_t e = offs[i + 1];
-        if (e == s) {  // empty or null list -> one null row
+        if (e == s) {
+            if (!keep_empty) continue;
             rep_idx.push_back(i);
             child_idx.push_back(-1);
         } else {
@@ -948,16 +1155,37 @@ DataFrame explode(const DataFrame& b, const std::string& column) {
         }
     }
 
+    const bool flatten = flatten_struct && child.type() == TypeId::Struct;
     DataFrame out;
-    out.names = b.names;
+    out.names.reserve(b.names.size());
     out.columns.reserve(b.columns.size());
     for (std::size_t k = 0; k < b.columns.size(); ++k) {
-        if (static_cast<std::int64_t>(k) == ci)
-            out.columns.push_back(child.take(child_idx));
-        else
+        if (static_cast<std::int64_t>(k) != ci) {
+            out.names.push_back(b.names[k]);
             out.columns.push_back(b.columns[k].take(rep_idx));
+        } else if (flatten) {
+            const std::int64_t nf = child.num_children();
+            for (std::int64_t f = 0; f < nf; ++f) {
+                out.names.emplace_back(child.field_name(f));
+                out.columns.push_back(child.child(f).take(child_idx));
+            }
+        } else {
+            out.names.push_back(b.names[k]);
+            out.columns.push_back(child.take(child_idx));
+        }
     }
     return out;
+}
+
+}  // namespace
+
+DataFrame explode(const DataFrame& b, const std::string& column) {
+    return explode_impl(b, column, true, false, "explode");
+}
+
+DataFrame unnest(const DataFrame& b, const std::string& column,
+                 bool keep_empty) {
+    return explode_impl(b, column, keep_empty, true, "unnest");
 }
 
 DataFrame to_dummies(const DataFrame& b, const std::string& column) {
@@ -965,6 +1193,10 @@ DataFrame to_dummies(const DataFrame& b, const std::string& column) {
     if (ci < 0)
         throw std::out_of_range("to_dummies: no column named " + column);
     Series mat = flat_copy(b.columns[static_cast<std::size_t>(ci)]);
+    if (!is_orderable_type(mat.type()))
+        throw std::invalid_argument(
+            std::string("to_dummies: column '") + column + "' has type '" +
+            type_name(mat.type()) + "' with no per-row value to key on");
     const std::int64_t n = mat.length();
 
     // Distinct non-null values, ascending, for a deterministic column order.
@@ -974,6 +1206,28 @@ DataFrame to_dummies(const DataFrame& b, const std::string& column) {
     std::vector<std::string> row_key(static_cast<std::size_t>(n));
     for (std::int64_t i = 0; i < n; ++i)
         append_cell(row_key[static_cast<std::size_t>(i)], mat, i);
+
+    // Bucket id of each row (its index into `uniq`), one hash lookup per row,
+    // instead of comparing every row against every distinct value.
+    std::unordered_map<std::string, std::int64_t> bucket_of;
+    bucket_of.reserve(static_cast<std::size_t>(d));
+    for (std::int64_t u = 0; u < d; ++u) {
+        std::string ukey;
+        append_cell(ukey, uniq, u);
+        bucket_of.emplace(std::move(ukey), u);
+    }
+    std::vector<std::int64_t> bucket(static_cast<std::size_t>(n));
+    for (std::int64_t i = 0; i < n; ++i)
+        bucket[static_cast<std::size_t>(i)] =
+            bucket_of.at(row_key[static_cast<std::size_t>(i)]);
+
+    // One flag byte per (row, dummy) is set once, in row-major order.
+    std::vector<std::vector<std::int8_t>> bits(
+        static_cast<std::size_t>(d),
+        std::vector<std::int8_t>(static_cast<std::size_t>(n), 0));
+    for (std::int64_t i = 0; i < n; ++i)
+        bits[static_cast<std::size_t>(bucket[static_cast<std::size_t>(i)])]
+            [static_cast<std::size_t>(i)] = 1;
 
     DataFrame out;
     out.names.reserve(b.names.size() + static_cast<std::size_t>(d) - 1);
@@ -985,14 +1239,9 @@ DataFrame to_dummies(const DataFrame& b, const std::string& column) {
             continue;
         }
         for (std::int64_t u = 0; u < d; ++u) {
-            std::string ukey;
-            append_cell(ukey, uniq, u);
-            std::vector<std::int8_t> bits(static_cast<std::size_t>(n), 0);
-            for (std::int64_t i = 0; i < n; ++i)
-                bits[static_cast<std::size_t>(i)] =
-                    row_key[static_cast<std::size_t>(i)] == ukey ? 1 : 0;
             out.names.push_back(column + "_" + cell_to_string(uniq, u));
-            out.columns.push_back(Series::flat(TypeId::Int8, bits.data(), n));
+            out.columns.push_back(Series::flat(
+                TypeId::Int8, bits[static_cast<std::size_t>(u)].data(), n));
         }
     }
     return out;
@@ -1007,13 +1256,6 @@ PivotMode pivot_mode_of(const std::string& agg, AggOp& op) {
     if (agg == "last") return PivotMode::Last;
     op = agg_op_of(agg);  // sum|min|max|mean (and the other AggOps)
     return PivotMode::Reduce;
-}
-
-// Floor `x` to a multiple of `m` (m > 0), toward negative infinity.
-std::int64_t floor_to_multiple(std::int64_t x, std::int64_t m) {
-    std::int64_t q = x / m;
-    if ((x % m) != 0 && x < 0) --q;
-    return q * m;
 }
 
 }  // namespace
@@ -1036,6 +1278,15 @@ DataFrame pivot(const DataFrame& b, const std::string& index_name,
     Series idx_col = flat_copy(b.columns[static_cast<std::size_t>(ii)]);
     Series col_col = flat_copy(b.columns[static_cast<std::size_t>(ci)]);
     Series val_col = flat_copy(b.columns[static_cast<std::size_t>(vi)]);
+    if (!is_orderable_type(idx_col.type()))
+        throw std::invalid_argument(
+            std::string("pivot: index column '") + index_name + "' has type '" +
+            type_name(idx_col.type()) + "' with no per-row value to key on");
+    if (!is_orderable_type(col_col.type()))
+        throw std::invalid_argument(std::string("pivot: columns column '") +
+                                    columns_name + "' has type '" +
+                                    type_name(col_col.type()) +
+                                    "' with no per-row value to key on");
     const std::int64_t n = idx_col.length();
 
     // Output rows = distinct index values (sorted asc, non-null); output value
@@ -1168,6 +1419,53 @@ DataFrame group_by_dynamic(const DataFrame& b, const std::string& time_col,
             break;
         }
 
+    // Tumbling windows over a null-free time column: every row is in
+    // exactly one window, so the window start is a key column computed in
+    // parallel and the value columns are the frame's own, no pair list and
+    // no gather.
+    if (have_anchor && period == every && tcol.null_count() == 0) {
+        auto* kc = new dftu_series();
+        kc->type = TypeId::Int64;
+        kc->encoding = Encoding::Flat;
+        kc->length = n;
+        kc->data = Buffer::allocate(static_cast<std::size_t>(n) *
+                                    sizeof(std::int64_t));
+        auto* kd = reinterpret_cast<std::int64_t*>(kc->data->data());
+        parallel_for(n, std::int64_t{1} << 16,
+                     [&](std::int64_t lo, std::int64_t hi) {
+                         for (std::int64_t i = lo; i < hi; ++i)
+                             kd[i] = start0 + ((t[i] - start0) / every) * every;
+                     });
+        Series keyc{kc};
+        std::vector<AggSpec> specs;
+        std::vector<const Series*> values;
+        std::map<std::string, std::int32_t> col_idx;
+        auto resolve = [&](const std::string& name) -> std::int32_t {
+            auto it = col_idx.find(name);
+            if (it != col_idx.end()) return it->second;
+            std::int64_t vidx = index_of(b, name);
+            if (vidx < 0)
+                throw std::out_of_range("group_by_dynamic: no column named " +
+                                        name);
+            const std::int32_t idx = static_cast<std::int32_t>(values.size());
+            values.push_back(&b.columns[static_cast<std::size_t>(vidx)]);
+            col_idx.emplace(name, idx);
+            return idx;
+        };
+        specs.reserve(aggs.size());
+        for (const GroupAgg& a : aggs) {
+            AggSpec sp;
+            sp.op = to_agg_op(a.op);
+            sp.out = a.out;
+            sp.param = a.param;
+            sp.value_col = sp.op == AggOp::Count ? -1 : resolve(a.column);
+            if (agg_uses_by_col(sp.op)) sp.by_col = resolve(a.by);
+            specs.push_back(std::move(sp));
+        }
+        DataFrame res = group_agg(keyc, values, std::move(specs), time_col);
+        return sort_by(res, time_col, false);
+    }
+
     // (window start, source row) pairs: a row belongs to every window whose
     // start S = start0 + k*every satisfies S <= t < S + period.
     std::vector<std::int64_t> keyv;
@@ -1194,29 +1492,27 @@ DataFrame group_by_dynamic(const DataFrame& b, const std::string& time_col,
     std::vector<Series> gathered;
     std::vector<AggSpec> specs;
     std::map<std::string, std::int32_t> col_idx;
+    auto resolve = [&](const std::string& name) -> std::int32_t {
+        auto it = col_idx.find(name);
+        if (it != col_idx.end()) return it->second;
+        std::int64_t vidx = index_of(b, name);
+        if (vidx < 0)
+            throw std::out_of_range("group_by_dynamic: no column named " +
+                                    name);
+        const std::int32_t idx = static_cast<std::int32_t>(gathered.size());
+        gathered.push_back(
+            b.columns[static_cast<std::size_t>(vidx)].take(rowsv));
+        col_idx.emplace(name, idx);
+        return idx;
+    };
     specs.reserve(aggs.size());
     for (const GroupAgg& a : aggs) {
         AggSpec sp;
-        sp.op = agg_op_of(to_string(a.op));
+        sp.op = to_agg_op(a.op);
         sp.out = a.out;
         sp.param = a.param;
-        if (sp.op == AggOp::Count) {
-            sp.value_col = -1;
-        } else {
-            auto it = col_idx.find(a.column);
-            if (it != col_idx.end()) {
-                sp.value_col = it->second;
-            } else {
-                std::int64_t vidx = index_of(b, a.column);
-                if (vidx < 0)
-                    throw std::out_of_range(
-                        "group_by_dynamic: no column named " + a.column);
-                sp.value_col = static_cast<std::int32_t>(gathered.size());
-                gathered.push_back(
-                    b.columns[static_cast<std::size_t>(vidx)].take(rowsv));
-                col_idx.emplace(a.column, sp.value_col);
-            }
-        }
+        sp.value_col = sp.op == AggOp::Count ? -1 : resolve(a.column);
+        if (agg_uses_by_col(sp.op)) sp.by_col = resolve(a.by);
         specs.push_back(std::move(sp));
     }
     std::vector<const Series*> values;

@@ -15,6 +15,27 @@
 
 namespace dftracer::utils::trace::views::detail {
 
+void DynamicPrune::exclude_file(const std::string& file_path) {
+    std::lock_guard<std::mutex> lk(mu_);
+    excluded_files_.insert(file_path);
+}
+
+void DynamicPrune::exclude_checkpoints(const std::string& file_path,
+                                       std::vector<std::uint64_t> checkpoints) {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto& set = excluded_checkpoints_[file_path];
+    for (std::uint64_t c : checkpoints) set.insert(c);
+}
+
+bool DynamicPrune::is_excluded(const std::string& file_path,
+                               std::uint64_t checkpoint_idx) const {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (excluded_files_.count(file_path)) return true;
+    auto it = excluded_checkpoints_.find(file_path);
+    if (it == excluded_checkpoints_.end()) return false;
+    return it->second.count(checkpoint_idx) != 0;
+}
+
 namespace {
 
 struct ScanPermit {
@@ -107,6 +128,7 @@ const void* FoldPortBus::consume(std::uint64_t key,
 void FoldPortBus::clear() {
     index_.clear();
     arena_.clear();
+    frame.reset();
 }
 
 FoldEvent build_fold_event(const DFTracerEvent& scalars,
@@ -223,12 +245,129 @@ std::vector<std::string> extra_capture_fields(const ViewPlan& plan) {
     return out;
 }
 
+namespace {
+
+// Shared, worker-agnostic state for one fuse() run. Reference members point at
+// fuse()'s locals, which outlive every worker (run_coro_scope joins before
+// fuse returns). Passed by value into fuse_worker so the coroutine frame owns
+// its copy of the (trivially copyable) handles.
+struct FuseWorkerCtx {
+    std::vector<std::vector<std::unique_ptr<Fold>>>& fslice;
+    const std::vector<ScanUnit>& units;
+    std::atomic<std::size_t>& next_unit;
+    std::atomic<std::uint64_t>& produced;
+    std::uint64_t cap;
+    const ViewPlan& plan;
+    const ViewDefinition& vdef;
+    dftracer::utils::StringIntern& intern;
+    const CoverageSet* covered;
+    coro::CoroSemaphore& budget_sem;
+    std::vector<std::uint64_t>& matched_v;
+    std::vector<std::uint64_t>& scanned_v;
+    std::vector<CoverageSet>& covered_v;
+    const std::vector<std::string>& extra_fields;
+    bool any_needs_args;
+    bool any_wants_raw;
+    bool any_wants_fold_event;
+    bool any_wants_schema;
+    DynamicPrune* dyn_prune;
+};
+
+// One fuse worker: drains the shared unit queue, decodes each unit, and pushes
+// its batches into worker w's fold slices. Named (not a capturing-lambda
+// coroutine) to avoid the GCC 12/13 coroutine-frame miscompile on non-trivial
+// frame locals (the scanner/generator/batch below). Behavior is identical to
+// the previous inline lambda.
+coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
+    auto& slices = ctx.fslice[w];
+    FoldPortBus bus;
+    for (auto& s : slices) s->bind_port_bus(&bus);
+    PendingCoverage pending(ctx.covered_v[w]);
+
+    for (;;) {
+        if (is_cancelled(ctx.plan)) break;
+        if (ctx.produced.load(std::memory_order_relaxed) >= ctx.cap) break;
+        std::size_t i = ctx.next_unit.fetch_add(1, std::memory_order_relaxed);
+        if (i >= ctx.units.size()) break;
+        // A materialized aggregate already answered this chunk.
+        if (ctx.covered && ctx.covered->covers(ctx.units[i].file_path,
+                                               ctx.units[i].checkpoint_idx))
+            continue;
+        // A narrow() call mid-scan ruled this chunk out after gather_units
+        // already listed it as a candidate.
+        if (ctx.dyn_prune &&
+            ctx.dyn_prune->is_excluded(ctx.units[i].file_path,
+                                       ctx.units[i].checkpoint_idx)) {
+            ctx.dyn_prune->record_skip();
+            continue;
+        }
+
+        const std::uint64_t reserve =
+            ctx.units[i].end_byte > ctx.units[i].start_byte
+                ? ctx.units[i].end_byte - ctx.units[i].start_byte
+                : 0;
+        co_await ctx.budget_sem.acquire(reserve);
+        ScanPermit permit{ctx.budget_sem, reserve};
+
+        ViewScannerInput sin =
+            make_scanner_input(ctx.units[i], ctx.vdef, ctx.vdef.query);
+        // A FoldEvent fold gets the parsed stream; a raw fold parses the lines
+        // itself. When both are present, keep both.
+        sin.fold_intern = ctx.any_wants_fold_event ? &ctx.intern : nullptr;
+        sin.fold_needs_args = ctx.any_needs_args;
+        sin.fold_keep_raw = ctx.any_wants_raw && ctx.any_wants_fold_event;
+        sin.fold_capture_schema = ctx.any_wants_schema;
+        if (!ctx.extra_fields.empty())
+            sin.fold_extra_fields = &ctx.extra_fields;
+        ViewScannerUtility scanner;
+        auto gen = scanner(sin);
+        bool complete = true;
+        while (auto b = co_await gen.next()) {
+            if (is_cancelled(ctx.plan)) {
+                complete = false;
+                break;
+            }
+            if (ctx.produced.load(std::memory_order_relaxed) >= ctx.cap) {
+                complete = false;
+                break;
+            }
+            ctx.matched_v[w] += b->events_matched;
+            ctx.scanned_v[w] += b->events_scanned;
+            if (b->fold_events.empty() && b->events.empty()) continue;
+            ctx.produced.fetch_add(b->fold_events.size() + b->events.size(),
+                                   std::memory_order_relaxed);
+            FoldBatch fb{std::span<const FoldEvent>(b->fold_events),
+                         ctx.units[i],
+                         std::span<const std::string_view>(b->events)};
+            bus.clear();
+            for (auto& s : slices) {
+                s->step(fb);
+                // Await an async plugin fold's task before the next step
+                // recycles the batch; null for sync folds.
+                if (auto* t = s->take_pending())
+                    co_await *reinterpret_cast<coro::CoroTask<void>*>(t);
+            }
+        }
+        if (!complete) {
+            for (auto& s : slices) s->drop_unit(ctx.units[i]);
+            break;
+        }
+        for (auto& s : slices) s->seal_unit(ctx.units[i]);
+        pending.mark_complete(ctx.units[i].file_path,
+                              ctx.units[i].checkpoint_idx);
+        pending.seal();
+    }
+    co_return;
+}
+
+}  // namespace
+
 coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
                                  const ViewDefinition& vdef,
                                  std::span<Fold* const> folds,
                                  dftracer::utils::StringIntern& intern,
                                  const CoverageSet* covered,
-                                 std::uint64_t limit) {
+                                 std::uint64_t limit, DynamicPrune* dyn_prune) {
     std::uint64_t skipped = 0;
     auto units = co_await gather_units(plan, vdef, skipped);
     const std::uint64_t cap =
@@ -236,9 +375,9 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
     std::atomic<std::uint64_t> produced{0};
 
     ExportStats st;
-    st.chunks_skipped = skipped;
     st.chunks_scanned = units.size();
     if (units.empty() || folds.empty()) {
+        st.chunks_skipped = skipped;
         for (auto* f : folds) co_await f->finalize(CoverageSet{});
         co_return st;
     }
@@ -287,88 +426,30 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
     for (std::size_t w = 0; w < nworkers; ++w)
         for (auto* f : folds) fslice[w].push_back(f->slice());
 
+    FuseWorkerCtx ctx{fslice,
+                      units,
+                      next_unit,
+                      produced,
+                      cap,
+                      plan,
+                      vdef,
+                      intern,
+                      covered,
+                      budget_sem,
+                      matched_v,
+                      scanned_v,
+                      covered_v,
+                      extra_fields,
+                      any_needs_args,
+                      any_wants_raw,
+                      any_wants_fold_event,
+                      any_wants_schema,
+                      dyn_prune};
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-        for (std::size_t w = 0; w < nworkers; ++w) {
-            scope.spawn([&, w](CoroScope&) -> coro::CoroTask<void> {
-                auto& slices = fslice[w];
-                FoldPortBus bus;
-                for (auto& s : slices) s->bind_port_bus(&bus);
-                PendingCoverage pending(covered_v[w]);
-
-                for (;;) {
-                    if (is_cancelled(plan)) break;
-                    if (produced.load(std::memory_order_relaxed) >= cap) break;
-                    std::size_t i =
-                        next_unit.fetch_add(1, std::memory_order_relaxed);
-                    if (i >= units.size()) break;
-                    // A materialized aggregate already answered this chunk.
-                    if (covered && covered->covers(units[i].file_path,
-                                                   units[i].checkpoint_idx))
-                        continue;
-
-                    const std::uint64_t reserve =
-                        units[i].end_byte > units[i].start_byte
-                            ? units[i].end_byte - units[i].start_byte
-                            : 0;
-                    co_await budget_sem.acquire(reserve);
-                    ScanPermit permit{budget_sem, reserve};
-
-                    ViewScannerInput sin =
-                        make_scanner_input(units[i], vdef, vdef.query);
-                    // A FoldEvent fold gets the parsed stream; a raw fold
-                    // parses the lines itself. When both are present, keep
-                    // both.
-                    sin.fold_intern = any_wants_fold_event ? &intern : nullptr;
-                    sin.fold_needs_args = any_needs_args;
-                    sin.fold_keep_raw = any_wants_raw && any_wants_fold_event;
-                    sin.fold_capture_schema = any_wants_schema;
-                    if (!extra_fields.empty())
-                        sin.fold_extra_fields = &extra_fields;
-                    ViewScannerUtility scanner;
-                    auto gen = scanner(sin);
-                    bool complete = true;
-                    while (auto b = co_await gen.next()) {
-                        if (is_cancelled(plan)) {
-                            complete = false;
-                            break;
-                        }
-                        if (produced.load(std::memory_order_relaxed) >= cap) {
-                            complete = false;
-                            break;
-                        }
-                        matched_v[w] += b->events_matched;
-                        scanned_v[w] += b->events_scanned;
-                        if (b->fold_events.empty() && b->events.empty())
-                            continue;
-                        produced.fetch_add(
-                            b->fold_events.size() + b->events.size(),
-                            std::memory_order_relaxed);
-                        FoldBatch fb{
-                            std::span<const FoldEvent>(b->fold_events),
-                            units[i],
-                            std::span<const std::string_view>(b->events)};
-                        bus.clear();
-                        for (auto& s : slices) {
-                            s->step(fb);
-                            // Await an async plugin fold's task before the next
-                            // step recycles the batch; null for sync folds.
-                            if (auto* t = s->take_pending())
-                                co_await *reinterpret_cast<
-                                    coro::CoroTask<void>*>(t);
-                        }
-                    }
-                    if (!complete) {
-                        for (auto& s : slices) s->drop_unit(units[i]);
-                        break;
-                    }
-                    for (auto& s : slices) s->seal_unit(units[i]);
-                    pending.mark_complete(units[i].file_path,
-                                          units[i].checkpoint_idx);
-                    pending.seal();
-                }
-                co_return;
+        for (std::size_t w = 0; w < nworkers; ++w)
+            scope.spawn([&ctx, w](CoroScope&) -> coro::CoroTask<void> {
+                return fuse_worker(ctx, w);
             });
-        }
         co_return;
     });
 
@@ -376,11 +457,15 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
         for (std::size_t k = 0; k < folds.size(); ++k)
             folds[k]->merge(*fslice[w][k]);
 
+    const std::uint64_t dyn_skipped = dyn_prune ? dyn_prune->skipped() : 0;
+    st.chunks_skipped = skipped + dyn_skipped;
+
     CoverageSet scanned;
     for (auto& c : covered_v) scanned.absorb(std::move(c));
 
-    // A file is whole only if nothing was pruned and every unit of it sealed.
-    if (skipped == 0) {
+    // A file is whole only if nothing was pruned (statically or by a
+    // narrow() call mid-scan) and every unit of it sealed.
+    if (skipped == 0 && dyn_skipped == 0) {
         std::unordered_map<std::string_view,
                            std::pair<std::size_t, std::size_t>>
             per_file;

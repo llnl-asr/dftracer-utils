@@ -1,14 +1,17 @@
 #ifndef DFTRACER_UTILS_JSON_JSON_ESCAPE_H
 #define DFTRACER_UTILS_JSON_JSON_ESCAPE_H
 
+#include <cstdio>
 #include <string>
 #include <string_view>
 
 namespace dftracer::utils::json {
 
-/// Append the JSON-escaped form of `s` (quotes, backslash, and the standard
-/// control-character shorthands) to `out`. No temporary allocation, so callers
-/// building a JSON line in a loop don't churn a string per field.
+/// Append the JSON-escaped form of `s` (quotes, backslash, the standard
+/// control-character shorthands, and \uXXXX for every other control
+/// character below 0x20, all required by the JSON spec) to `out`. No
+/// temporary allocation, so callers building a JSON line in a loop don't
+/// churn a string per field.
 inline void append_json_escaped(std::string& out, std::string_view s) {
     for (char c : s) {
         switch (c) {
@@ -34,7 +37,14 @@ inline void append_json_escaped(std::string& out, std::string_view s) {
                 out += "\\t";
                 break;
             default:
-                out += c;
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x",
+                                  static_cast<unsigned char>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
                 break;
         }
     }

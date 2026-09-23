@@ -30,6 +30,7 @@ set(UTILITIES_TEST_SOURCES
     # Indexer
     indexer/test_rocksdb_storage.cpp
     indexer/test_scan_prefix.cpp
+    indexer/test_column_type_codec.cpp
     indexer/test_index_database.cpp
     indexer/test_index_builder.cpp
     indexer/test_hash_table_aggregation.cpp
@@ -75,27 +76,29 @@ set(UTILITIES_TEST_SOURCES
     # Text
     text/test_line_filter.cpp
 
-    # Plugins (reflected utility ABI)
-    plugins/test_reflected_utilities.cpp
+    # Plugins
     plugins/test_plugin_host_services.cpp
     plugins/test_plugin_io_writer.cpp
     plugins/test_plugin_cxx_ergonomics.cpp
     plugins/test_plugin_cxx_wrappers.cpp
     plugins/test_plugin_abi_features.cpp
-    plugins/test_plugin_versioning.cpp
-    plugins/test_plugin_comms.cpp
     plugins/test_plugin_ports.cpp
-    plugins/test_plugin_handles.cpp
     plugins/test_plugin_results.cpp
-    plugins/test_plugin_map.cpp
-    plugins/test_map_join.cpp
-    plugins/test_map_join_arrow.cpp
-    plugins/test_map_grouping.cpp
-    plugins/test_map_grouping_arrow.cpp
-    plugins/test_map_unnest.cpp
-    plugins/test_map_unnest_arrow.cpp
-    plugins/test_monoid_serialize.cpp
+    plugins/test_plugin_agg.cpp
+    plugins/test_plugin_agg_spill.cpp
+    plugins/test_plugin_ops.cpp
+    plugins/test_plugin_lazyframe_facade.cpp
     plugins/test_plugin_planner.cpp
+    plugins/test_plugin_order.cpp
+    plugins/test_plugin_transform.cpp
+    plugins/test_plugin_abi_gate.cpp
+    plugins/test_plugin_factory_host.cpp
+    plugins/test_plugin_config.cpp
+    plugins/test_plugin_public_config.cpp
+    plugins/test_plugin_state.cpp
+    plugins/test_plugin_reads.cpp
+    plugins/test_plugin_providers.cpp
+    plugins/test_plugin_reference.cpp
 )
 
 # +++++++++++++++++++++++++++++++++++++++++
@@ -189,6 +192,35 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
   add_test(NAME utilities/${window_bin_exec} COMMAND ${window_target})
   set_tests_properties(utilities/${window_bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${window_workdir}")
+
+  set(FRAME_OPS_TEST_SOURCE common/arrow/test_arrow_frame_ops.cpp)
+  string(REPLACE ".cpp" "" frame_ops_bin_exec ${FRAME_OPS_TEST_SOURCE})
+  string(REPLACE "/" "_" frame_ops_target "utilities_${frame_ops_bin_exec}")
+
+  add_executable(${frame_ops_target} ${FRAME_OPS_TEST_SOURCE})
+  target_include_directories(${frame_ops_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+  target_link_libraries(${frame_ops_target} PRIVATE doctest::doctest dftracer_utils testing_utilities)
+  link_nanoarrow(${frame_ops_target} STATIC)
+  target_set_warnings(${frame_ops_target})
+
+  get_filename_component(frame_ops_bin_dir ${frame_ops_bin_exec} DIRECTORY)
+  get_filename_component(frame_ops_bin_name ${frame_ops_bin_exec} NAME)
+  if(frame_ops_bin_dir)
+    set_target_properties(${frame_ops_target} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/${frame_ops_bin_dir}")
+  endif()
+  set_target_properties(${frame_ops_target} PROPERTIES OUTPUT_NAME ${frame_ops_bin_name})
+
+  if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(${frame_ops_target} PRIVATE --coverage -fprofile-arcs -ftest-coverage)
+    target_link_libraries(${frame_ops_target} PRIVATE --coverage)
+  endif()
+
+  set(frame_ops_workdir "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${frame_ops_target}")
+  file(MAKE_DIRECTORY "${frame_ops_workdir}")
+  add_test(NAME utilities/${frame_ops_bin_exec} COMMAND ${frame_ops_target})
+  set_tests_properties(utilities/${frame_ops_bin_exec} PROPERTIES
+                       WORKING_DIRECTORY "${frame_ops_workdir}")
 
   set(GAPFILL_TEST_SOURCE common/arrow/test_arrow_gapfill.cpp)
   string(REPLACE ".cpp" "" gapfill_bin_exec ${GAPFILL_TEST_SOURCE})
@@ -370,22 +402,184 @@ set(cabi_sources plugins/test_plugin_c_abi.cpp
                  plugins/compose_abi_c_consumer.c
                  plugins/query_abi_c_consumer.c
                  plugins/sketch_abi_c_consumer.c
-                 plugins/util_abi_c_consumer.c
+                 plugins/ops_abi_c_consumer.c
                  plugins/trace_abi_c_consumer.c
                  plugins/io_abi_c_consumer.c
                  plugins/writer_abi_c_consumer.c)
-if(DFTRACER_UTILS_ENABLE_ARROW)
-  list(APPEND cabi_sources plugins/arrow_abi_c_consumer.c)
-endif()
 add_executable(${cabi_target} ${cabi_sources})
 target_include_directories(${cabi_target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(${cabi_target} PRIVATE doctest::doctest dftracer_utils
                                              testing_utilities)
 target_enable_coroutine(${cabi_target})
-if(DFTRACER_UTILS_ENABLE_ARROW)
-  target_compile_definitions(${cabi_target} PRIVATE DFTU_TEST_HAS_ARROW)
-  link_nanoarrow(${cabi_target} STATIC)
-endif()
 set_target_properties(${cabi_target} PROPERTIES OUTPUT_NAME test_plugin_c_abi
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
 add_test(NAME utilities/plugins/test_plugin_c_abi COMMAND ${cabi_target})
+
+# +++++++++++++++++++++++++++++++++++++++++
+# ABI version gate: a real .so stamped with a wrong DFTRACER_PLUGIN_ABI_VERSION,
+# loaded by utilities/plugins/test_plugin_abi_gate through a real dlopen.
+# +++++++++++++++++++++++++++++++++++++++++
+
+add_library(bad_abi_version_plugin MODULE plugins/bad_abi_version_plugin.c)
+set_target_properties(
+  bad_abi_version_plugin
+  PROPERTIES OUTPUT_NAME bad_abi_version_plugin
+             PREFIX ""
+             POSITION_INDEPENDENT_CODE ON
+             C_STANDARD 11
+             C_STANDARD_REQUIRED ON
+             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins"
+             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
+target_include_directories(bad_abi_version_plugin
+                           PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                   ${CMAKE_BINARY_DIR}/include)
+
+if(TARGET utilities_plugins_test_plugin_abi_gate)
+  target_compile_definitions(
+    utilities_plugins_test_plugin_abi_gate PRIVATE
+    BAD_ABI_VERSION_PLUGIN_PATH="$<TARGET_FILE:bad_abi_version_plugin>")
+  add_dependencies(utilities_plugins_test_plugin_abi_gate
+                   bad_abi_version_plugin)
+endif()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Build-phase host: one plugin whose factory registers an op at load, one whose
+# factory reaches past the registration surface. Both are real .so files loaded
+# through Plugins::Builder by utilities/plugins/test_plugin_factory_host.
+# +++++++++++++++++++++++++++++++++++++++++
+
+foreach(fh_plugin factory_registers_op_plugin factory_escapes_plugin
+                  scan_registers_op_plugin)
+  add_library(${fh_plugin} MODULE plugins/${fh_plugin}.c)
+  set_target_properties(
+    ${fh_plugin}
+    PROPERTIES OUTPUT_NAME ${fh_plugin}
+               PREFIX ""
+               POSITION_INDEPENDENT_CODE ON
+               C_STANDARD 11
+               C_STANDARD_REQUIRED ON
+               RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins"
+               LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
+  target_include_directories(${fh_plugin}
+                             PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                     ${CMAKE_BINARY_DIR}/include)
+endforeach()
+
+foreach(cxx_plugin builder_plugin config_keys_plugin reads_projection_plugin
+                  provider_fixture_plugin)
+  add_library(${cxx_plugin} MODULE plugins/${cxx_plugin}.cpp)
+  set_target_properties(
+    ${cxx_plugin}
+    PROPERTIES OUTPUT_NAME ${cxx_plugin}
+               PREFIX ""
+               POSITION_INDEPENDENT_CODE ON
+               CXX_STANDARD 20
+               CXX_STANDARD_REQUIRED ON
+               CXX_EXTENSIONS OFF
+               RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins"
+               LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
+  target_include_directories(${cxx_plugin}
+                             PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                     ${CMAKE_BINARY_DIR}/include)
+  target_enable_coroutine(${cxx_plugin})
+endforeach()
+
+# It reads the batch dataframe and runs its own registered op, so it links the
+# dataframe C ABI like the examples that do the same.
+foreach(df_plugin factory_registers_op_plugin builder_plugin
+                  config_keys_plugin reads_projection_plugin
+                  provider_fixture_plugin)
+  if(TARGET dftracer_utils_dataframe::shared)
+    target_link_libraries(${df_plugin} PRIVATE dftracer_utils_dataframe::shared)
+  elseif(TARGET dftracer_utils_dataframe::static)
+    target_link_libraries(${df_plugin} PRIVATE dftracer_utils_dataframe::static)
+  endif()
+endforeach()
+
+if(TARGET utilities_plugins_test_plugin_config)
+  target_compile_definitions(
+    utilities_plugins_test_plugin_config PRIVATE
+    CONFIG_KEYS_PLUGIN_PATH="$<TARGET_FILE:config_keys_plugin>")
+  add_dependencies(utilities_plugins_test_plugin_config config_keys_plugin)
+endif()
+
+if(TARGET utilities_plugins_test_plugin_public_config)
+  target_compile_definitions(
+    utilities_plugins_test_plugin_public_config PRIVATE
+    CONFIG_KEYS_PLUGIN_PATH="$<TARGET_FILE:config_keys_plugin>")
+  add_dependencies(utilities_plugins_test_plugin_public_config
+                   config_keys_plugin)
+endif()
+
+if(TARGET utilities_plugins_test_plugin_reads)
+  target_compile_definitions(
+    utilities_plugins_test_plugin_reads PRIVATE
+    READS_PROJECTION_PLUGIN_PATH="$<TARGET_FILE:reads_projection_plugin>")
+  add_dependencies(utilities_plugins_test_plugin_reads
+                   reads_projection_plugin)
+endif()
+
+if(TARGET utilities_plugins_test_plugin_factory_host)
+  target_compile_definitions(
+    utilities_plugins_test_plugin_factory_host PRIVATE
+    FACTORY_REGISTERS_OP_PLUGIN_PATH="$<TARGET_FILE:factory_registers_op_plugin>"
+    FACTORY_ESCAPES_PLUGIN_PATH="$<TARGET_FILE:factory_escapes_plugin>"
+    SCAN_REGISTERS_OP_PLUGIN_PATH="$<TARGET_FILE:scan_registers_op_plugin>"
+    BUILDER_PLUGIN_PATH="$<TARGET_FILE:builder_plugin>")
+  add_dependencies(utilities_plugins_test_plugin_factory_host
+                   factory_registers_op_plugin factory_escapes_plugin
+                   scan_registers_op_plugin
+                   builder_plugin)
+endif()
+
+if(TARGET utilities_plugins_test_plugin_providers)
+  target_compile_definitions(
+    utilities_plugins_test_plugin_providers PRIVATE
+    PROVIDER_FIXTURE_PLUGIN_PATH="$<TARGET_FILE:provider_fixture_plugin>")
+  add_dependencies(utilities_plugins_test_plugin_providers
+                   provider_fixture_plugin)
+endif()
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Reference plugin: touches every dftu.svc.* service slot from real C (plan
+# 12, gap 11 - "conformance + trust"). Only built when Arrow is enabled: it
+# exercises dftu.svc.arrow too, and there is no service-less stand-in for
+# that check.
+# +++++++++++++++++++++++++++++++++++++++++
+
+if(DFTRACER_UTILS_ENABLE_ARROW)
+  add_library(reference_plugin MODULE plugins/reference_plugin.c)
+  set_target_properties(
+    reference_plugin
+    PROPERTIES OUTPUT_NAME reference_plugin
+               PREFIX ""
+               POSITION_INDEPENDENT_CODE ON
+               C_STANDARD 11
+               C_STANDARD_REQUIRED ON
+               RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins"
+               LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/plugins")
+  target_include_directories(reference_plugin
+                             PRIVATE ${CMAKE_SOURCE_DIR}/include
+                                     ${CMAKE_BINARY_DIR}/include)
+  if(TARGET dftracer_utils_dataframe::shared)
+    target_link_libraries(reference_plugin PRIVATE dftracer_utils_dataframe::shared)
+  elseif(TARGET dftracer_utils_dataframe::static)
+    target_link_libraries(reference_plugin PRIVATE dftracer_utils_dataframe::static)
+  endif()
+  # A loadable module links the shared nanoarrow: the static archive is not
+  # position independent on every target (aarch64 Linux refuses it).
+  link_nanoarrow(reference_plugin SHARED)
+  # A switch with a missing case for a newly added ref_svc_id enumerator (a
+  # 14th dftu.svc.* service not yet wired into this plugin) must fail the
+  # build, not just the editor.
+  if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(reference_plugin PRIVATE -Wswitch -Werror=switch)
+  endif()
+
+  if(TARGET utilities_plugins_test_plugin_reference)
+    target_compile_definitions(
+      utilities_plugins_test_plugin_reference PRIVATE
+      REFERENCE_PLUGIN_PATH="$<TARGET_FILE:reference_plugin>")
+    add_dependencies(utilities_plugins_test_plugin_reference reference_plugin)
+  endif()
+endif()

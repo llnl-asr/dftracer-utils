@@ -13,10 +13,11 @@ Query the visualization API
    start it, the shared ``/api/*`` data routes, and the access token.
 
 Every route below returns one JSON response and takes ``begin``/``end`` as a
-microsecond time window (``0``/``999999999`` are the defaults, meaning "the
-whole trace" in practice). ``summary`` is the level-of-detail knob: ``1`` is
-full detail, and higher values apply a coarser duration floor so a zoomed-out
-view returns fewer, larger events instead of every sub-pixel one.
+required microsecond time window (a request missing either one gets a
+``400 Bad Request``); pass ``0``/``999999999`` to mean "the whole trace" in
+practice. ``summary`` is the level-of-detail knob: ``1`` is full detail, and
+higher values apply a coarser duration floor so a zoomed-out view returns
+fewer, larger events instead of every sub-pixel one.
 
 Fetch events for a timeline
 ----------------------------

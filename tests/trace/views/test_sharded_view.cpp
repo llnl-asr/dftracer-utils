@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "test_view_common.h"
+#include "testing_runtime.h"
 
 using dftracer::utils::trace::IndexShardManifest;
 using dftracer::utils::trace::read_shard_manifest;
@@ -22,6 +23,7 @@ using dftracer::utils::trace::views::merge_shard_set;
 using dftracer::utils::trace::views::ShardedView;
 using dftracer::utils::trace::views::write_shard_set;
 using dftracer::utils::utilities::indexer::IndexDatabase;
+using dftu_utils_test::run_coro;
 
 namespace {
 
@@ -49,28 +51,21 @@ std::string make_x_trace(TestEnvironment& env, const std::string& tag,
 
 namespace aggregators = dftracer::utils::trace::aggregators;
 
-template <typename Fn>
-void run_coro(Fn&& fn) {
-    dftracer::utils::Runtime rt(4);
-    auto task =
-        dftracer::utils::run_coro_scope(rt.executor(), std::forward<Fn>(fn));
-    rt.submit(std::move(task), "sharded-view-test").wait();
-    rt.shutdown();
-}
-
 // Build a full sidecar index including the aggregation tier the way the
 // aggregator does, so agg_tier_collect can answer without a scan.
 void build_shard_index(const std::string& gz) {
     aggregators::AggregatorInput input;
     input.directory = fs::path(gz).parent_path().string();
     input.force_rebuild = true;
-    run_coro([&](dftracer::utils::CoroScope& ctx)
-                 -> dftracer::utils::coro::CoroTask<void> {
-        aggregators::AggregatorUtility agg;
-        auto gen = agg(ctx, input);
-        while (auto batch = co_await gen.next()) (void)batch;
-        co_return;
-    });
+    run_coro(
+        [&](dftracer::utils::CoroScope& ctx)
+            -> dftracer::utils::coro::CoroTask<void> {
+            aggregators::AggregatorUtility agg;
+            auto gen = agg(ctx, input);
+            while (auto batch = co_await gen.next()) (void)batch;
+            co_return;
+        },
+        "sharded-view-test");
 }
 
 // Render a DataFrame canonically (String columns are the group keys, numeric
@@ -115,8 +110,10 @@ TEST_SUITE("ShardedView") {
                 .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
 
-        auto expect = canon(
-            configure(View::from_files({{a, ia}, {b, ib}})).collect().get());
+        auto expect = canon(configure(View::from_files({{a, ia}, {b, ib}}))
+                                .collect()
+                                .collect()
+                                .get());
         REQUIRE(expect.size() == 2);  // POSIX + STDIO
 
         auto got = canon(
@@ -180,8 +177,10 @@ TEST_SUITE("ShardedView") {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
         };
 
-        auto expect = canon(
-            configure(View::from_files({{a, ia}, {b, ib}})).collect().get());
+        auto expect = canon(configure(View::from_files({{a, ia}, {b, ib}}))
+                                .collect()
+                                .collect()
+                                .get());
         auto got =
             canon(ShardedView::from_manifest(root).aggregate(configure).get());
         CHECK(got == expect);
@@ -236,8 +235,10 @@ TEST_SUITE("ShardedView") {
         auto configure = [](View v) -> View {
             return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
         };
-        auto expect = canon(
-            configure(View::from_files({{a, ia}, {b, ib}})).collect().get());
+        auto expect = canon(configure(View::from_files({{a, ia}, {b, ib}}))
+                                .collect()
+                                .collect()
+                                .get());
         auto got =
             canon(ShardedView::from_manifest(root).aggregate(configure).get());
         CHECK(got == expect);
@@ -331,11 +332,13 @@ TEST_SUITE("ShardedView") {
 
         std::string out = env.get_dir() + "/unified";
         std::size_t n = 0;
-        run_coro([&](dftracer::utils::CoroScope& scope)
-                     -> dftracer::utils::coro::CoroTask<void> {
-            n = co_await consolidate_shard_set(&scope, root, out);
-            co_return;
-        });
+        run_coro(
+            [&](dftracer::utils::CoroScope& scope)
+                -> dftracer::utils::coro::CoroTask<void> {
+                n = co_await consolidate_shard_set(&scope, root, out);
+                co_return;
+            },
+            "sharded-view-test");
         CHECK(n == 2);
 
         auto m = read_shard_manifest(out);

@@ -22,7 +22,6 @@ notices here cover only the third-party dependencies.
 | Zstandard (zstd) | `BSD-3-Clause OR GPL-2.0-only` | https://github.com/facebook/zstd |
 | libdeflate | `MIT` | https://github.com/ebiggers/libdeflate |
 | Boost.Math | `BSL-1.0` | https://github.com/boostorg/math |
-| Boost.PFR | `BSL-1.0` | https://github.com/apolukhin/pfr_non_boost |
 | yaml-cpp | `MIT` | https://github.com/jbeder/yaml-cpp |
 | argparse | `MIT` | https://github.com/p-ranav/argparse |
 | moodycamel concurrentqueue | `BSD-2-Clause` | https://github.com/cameron314/concurrentqueue |

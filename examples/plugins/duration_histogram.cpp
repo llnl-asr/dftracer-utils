@@ -2,7 +2,8 @@
 // slice accumulates a local histogram over the events it folds, the host merges
 // the per-worker slices, and finalize prints one line per non-empty bucket.
 // This is the self-contained shape - a plugin that computes and emits its own
-// summary; for the host-owned mergeable-map shape see the counter_map examples.
+// summary; for the host-owned mergeable shape see the process_* accumulator
+// examples.
 // Build: c++ -std=c++20 -shared -fPIC -I<repo>/include \
 //            -o duration_histogram.so duration_histogram.cpp
 // Run:   dftracer_run -d ./traces --plugin ./duration_histogram.so
@@ -16,8 +17,6 @@
 using namespace dftracer::utils::plugins;
 
 struct DurationHistogram {
-    static constexpr std::uint32_t needs = 0;
-
     std::array<std::uint64_t, 64> bins{};
 
     explicit DurationHistogram(const Config&) {}
@@ -43,6 +42,6 @@ struct DurationHistogram {
 };
 
 extern "C" DFTU_PLUGIN_EXPORT dftu_plugin* dftracer_plugin(
-    const dftu_value* config) {
-    return make_plugin<DurationHistogram>(config);
+    dftu_plugin_host* h, const dftu_value* config) {
+    return plugin(h, config).fold<DurationHistogram>().build();
 }

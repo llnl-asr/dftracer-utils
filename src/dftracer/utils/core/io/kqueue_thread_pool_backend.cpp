@@ -19,19 +19,13 @@ KqueueThreadPoolBackend::KqueueThreadPoolBackend(Executor& executor,
                                                  unsigned batch_threshold)
     : ThreadPoolFileOps(executor, pool_size, batch_threshold) {}
 
-KqueueThreadPoolBackend::~KqueueThreadPoolBackend() {
-    // Ensure cleanup even if stop() was not called.
-    if (kqueue_fd_ >= 0) {
-        ::close(kqueue_fd_);
-        kqueue_fd_ = -1;
-    }
-}
+KqueueThreadPoolBackend::~KqueueThreadPoolBackend() = default;
 
 void KqueueThreadPoolBackend::start() {
     pool_.start();
 
-    kqueue_fd_ = ::kqueue();
-    if (kqueue_fd_ < 0) {
+    kqueue_fd_.reset(::kqueue());
+    if (!kqueue_fd_.valid()) {
         DFTRACER_UTILS_LOG_ERROR("kqueue() failed: %s", std::strerror(errno));
         return;
     }
@@ -39,13 +33,13 @@ void KqueueThreadPoolBackend::start() {
     // Register a user event (EVFILT_USER) for shutdown signaling.
     struct kevent ev{};
     EV_SET(&ev, SHUTDOWN_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, nullptr);
-    if (::kevent(kqueue_fd_, &ev, 1, nullptr, 0, nullptr) < 0) {
+    if (::kevent(kqueue_fd_.get(), &ev, 1, nullptr, 0, nullptr) < 0) {
         DFTRACER_UTILS_LOG_ERROR("kevent(register EVFILT_USER) failed: %s",
                                  std::strerror(errno));
     }
 
     DFTRACER_UTILS_LOG_DEBUG("kqueue+threadpool backend started (kqueue_fd=%d)",
-                             kqueue_fd_);
+                             kqueue_fd_.get());
 
     completion_thread_.start([this] { kqueue_loop(); });
 }
@@ -55,19 +49,16 @@ void KqueueThreadPoolBackend::stop() {
     completion_thread_.signal_stop();
 
     // Wake kevent() by triggering the user event.
-    if (kqueue_fd_ >= 0) {
+    if (kqueue_fd_.valid()) {
         struct kevent ev{};
         EV_SET(&ev, SHUTDOWN_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, nullptr);
-        ::kevent(kqueue_fd_, &ev, 1, nullptr, 0, nullptr);
+        ::kevent(kqueue_fd_.get(), &ev, 1, nullptr, 0, nullptr);
     }
 
     completion_thread_.join();
     pool_.stop();
 
-    if (kqueue_fd_ >= 0) {
-        ::close(kqueue_fd_);
-        kqueue_fd_ = -1;
-    }
+    kqueue_fd_.reset();
 }
 
 void KqueueThreadPoolBackend::kqueue_loop() {
@@ -80,7 +71,8 @@ void KqueueThreadPoolBackend::kqueue_loop() {
     timeout.tv_nsec = 100 * 1000 * 1000;  // 100ms
 
     while (completion_thread_.running()) {
-        int n = ::kevent(kqueue_fd_, nullptr, 0, events, MAX_EVENTS, &timeout);
+        int n = ::kevent(kqueue_fd_.get(), nullptr, 0, events, MAX_EVENTS,
+                         &timeout);
         if (n < 0) {
             if (errno == EINTR) continue;
             break;

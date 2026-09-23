@@ -504,6 +504,11 @@ TEST_CASE("Scheduler - Graceful shutdown") {
     // Wait for scheduler to finish
     scheduler_thread.join();
 
+    // Join the workers before the atomics they write to leave scope. Stopping
+    // the scheduler only ends the scheduling loop; the child tasks are already
+    // on executor threads, and those write `completed` for as long as they run.
+    executor.shutdown();
+
     // Verify shutdown was requested and at least root task completed
     CHECK(scheduler.is_shutdown_requested());
     CHECK(tasks_started.load());  // Root task should have started
@@ -546,6 +551,10 @@ TEST_CASE("Scheduler - Shutdown during execution") {
     scheduler.request_shutdown();
 
     scheduler_thread.join();
+
+    // The long-running task is still on an executor thread and writes
+    // `task_running`; join the workers before it leaves scope.
+    executor.shutdown();
 
     CHECK(scheduler.is_shutdown_requested());
 }

@@ -8,6 +8,7 @@
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/common/arrow/arrow.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <cstdio>
 #include <string>
@@ -18,7 +19,7 @@ using namespace dftracer::utils::coro;
 using namespace dftracer::utils::utilities::common::arrow;
 
 static std::string tmp_path(const char* name) {
-    return (fs::temp_directory_path() / name).string();
+    return dftu_utils_test::make_unique_test_path(name).string();
 }
 
 static void write_test_file(const std::string& path, int num_batches,

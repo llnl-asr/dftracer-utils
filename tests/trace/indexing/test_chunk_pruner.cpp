@@ -273,6 +273,44 @@ TEST_SUITE("ChunkPrunerUtility") {
         CHECK(out.candidate_checkpoints[1] == 2);
     }
 
+    TEST_CASE("Pruner - NOT keeps a chunk holding both sides") {
+        std::string test_dir =
+            dftu_utils_test::make_unique_test_path("test_pruner_not_mixed")
+                .string();
+        fs::create_directories(test_dir);
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
+        std::string file_path = "/fake/test.pfw.gz";
+        populate_test_idx(index_path, file_path);
+
+        // Chunk 2 holds cat POSIX AND MPI, so its MPI events match the
+        // negation. The pruner used to complement the operand's MAY-match set
+        // ({0, 2}) and answer {1}, dropping chunk 2 and every MPI event in it.
+        auto out = run_pruner(index_path, file_path, R"(not cat == "POSIX")");
+        CHECK(out.success);
+        REQUIRE(out.candidate_checkpoints.size() == 2);
+        CHECK(out.candidate_checkpoints[0] == 1);
+        CHECK(out.candidate_checkpoints[1] == 2);
+    }
+
+    TEST_CASE("Pruner - NOT over a range keeps straddling chunks") {
+        std::string test_dir =
+            dftu_utils_test::make_unique_test_path("test_pruner_not_range")
+                .string();
+        fs::create_directories(test_dir);
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
+        std::string file_path = "/fake/test.pfw.gz";
+        populate_test_idx(index_path, file_path);
+
+        // dur ranges: chunk 0 [100,200], chunk 1 [500,600], chunk 2 [50,1000].
+        // Only chunk 1 has EVERY event over 300, so only it can be dropped;
+        // chunk 2 straddles and must be scanned.
+        auto out = run_pruner(index_path, file_path, "not dur > 300");
+        CHECK(out.success);
+        REQUIRE(out.candidate_checkpoints.size() == 2);
+        CHECK(out.candidate_checkpoints[0] == 0);
+        CHECK(out.candidate_checkpoints[1] == 2);
+    }
+
     TEST_CASE("Pruner - range via min/max") {
         std::string test_dir =
             dftu_utils_test::make_unique_test_path("test_pruner_range")

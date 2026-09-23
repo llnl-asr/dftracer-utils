@@ -98,9 +98,9 @@ finalize hook (``Task on_finalize(Host h)``, detected automatically by
        return dftracer::utils::plugins::make_plugin<MySlice>(config);
    }
 
-A host-provided utility (fnv1a hashing, hex formatting, ...) is also a compose
-leaf: build one with ``c->util_op(host, DFTU_UTIL_FNV1A)`` and pipe it the same
-way. See :doc:`../../plugins` for the plugin lifecycle this op runs inside.
+A host-provided utility is a named op instead: run it through
+``DFTU_SVC_OPS`` (``Host::run_op("dftu.hash.fnv1a", {column})``) on a column the
+plugin already holds. See :doc:`../../plugins` for the plugin lifecycle.
 
 In Python: ``@jit.op``
 ------------------------
@@ -131,15 +131,50 @@ The same op referenced from inside a ``@jit.each_event`` body is inlined into
 the compiled plugin as a static C function instead, with no host round-trip;
 see :doc:`../../jit` for that authoring surface.
 
+Applied to a whole column (``double(series)``), a ``@jit.op`` is lowered to
+the engine's expression IR rather than called per element: 2M values run
+in a third of a second, where the per-element path through the host took
+hours. ``can_fuse()`` on the op says which path a call will take; a body
+the IR cannot express keeps the per-element path.
+
+In Python: ``@jit.series``, a column op from an expression
+-------------------------------------------------------------
+
+For a reusable **column** op there is no compile step at all: ``@jit.series``
+takes a function whose body builds a column expression from its arguments
+(the :mod:`~dftracer.utils.columnar` DSL: arithmetic, comparisons, ``clip``
+/ ``cast`` / ``fillna``, the prims) and registers it as an engine op under
+``<module>.<name>``, next to the built-ins:
+
+.. code-block:: python
+
+   from dftracer.utils import jit
+   from dftracer.utils.jit import ops
+
+   @jit.series(module="stats")
+   def weighted(dur, w):
+       return dur * w + 1
+
+   weighted(dur, w)                  # runs through the Expr evaluator, fused
+   ops.run("stats.weighted", dur, w) # the same op by registry name
+   dur.ops.stats.weighted(w)         # or as a Series method
+   ops.info("stats.weighted")        # {"kind": "series", "arity": 2, ...}
+
+The module prefix defaults to the defining module (``module=`` chooses
+it); a bare name or the ``dftu.`` namespace is refused, the same rule a C
+plugin's ``register_op`` enforces. Once registered, the op is reachable
+from every surface that reads the registry: ``ops.run`` from Python,
+``dftu_op_run`` from C, a plugin's ``Host::run_op``, and a ``LazyFrame``
+plan.
+
 See also
 --------
 
-- :doc:`../../concepts/compose` for the ``AsyncOpFor`` contract, the full
-  operator set (``&&``, ``||``, ``map``, ``fold``), and why this replaced the
-  old ``Utility`` base class.
+- :doc:`../../concepts/compose` for the ``AsyncOpFor`` contract and the full
+  operator set (``&&``, ``||``, ``map``, ``fold``).
 - :doc:`../../plugins` for the plugin lifecycle (``step``/``merge``/``finalize``)
   a compose op runs inside.
 - :doc:`../../jit` for ``@jit.plugin`` and ``@jit.each_event``, the Python
   plugin-authoring surface ``@jit.op`` complements.
-- :doc:`inter-plugin-comms` for the ports/comms model when two plugins need to
+- :doc:`inter-plugin-comms` for the ports model when two plugins need to
   share a value, a different problem from composing one op with another.

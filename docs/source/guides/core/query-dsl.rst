@@ -25,7 +25,7 @@ Start from a field, compare it, and combine.
          q = (F.cat == "POSIX") & (F.dur > 1000)
 
          # filter()/query() accept the Expr directly (or a DSL string):
-         df = TraceViewer("traces/").filter(q).group_by("cat").agg("count").collect()
+         df = TraceViewer("traces/").filter(q).group_by("cat").agg("count").collect().collect()
 
       ``F.dur`` is shorthand for ``Field("dur")``. For a nested or
       non-identifier field name, call or subscript it:
@@ -63,7 +63,7 @@ Start from a field, compare it, and combine.
          auto df = View::from_file("trace.pfw.gz")
                        .filter((F("cat") == "POSIX") && (F("dur") > 1000))
                        .group_by({}).agg({{AggOp::Count, "", "n"}})
-                       .collect().get();
+                       .collect().collect().get();
          // Or a DSL string directly: View::from_file(...).query(str)
 
          // The SAME F builds a value/derived column, evaluated in memory on a

@@ -85,6 +85,9 @@ void mask_tail(std::uint8_t* bits, std::int64_t length) {
 
 dftu_series* dftu_series_logical(const dftu_series* a, const dftu_series* b,
                                  dftu_logical_op op) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_logical(flat_a, b, op));
+    DFTU_FLAT_OPERAND(b, flat_b, dftu_series_logical(a, flat_b, op));
+
     using namespace dftracer::utils::dataframe;
     using dftracer::utils::dataframe::Buffer;
     using dftracer::utils::dataframe::buffer_bytes;
@@ -121,6 +124,8 @@ dftu_series* dftu_series_logical(const dftu_series* a, const dftu_series* b,
 }
 
 dftu_series* dftu_series_logical_not(const dftu_series* a) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_logical_not(flat_a));
+
     using namespace dftracer::utils::dataframe;
     using dftracer::utils::dataframe::Buffer;
     using dftracer::utils::dataframe::buffer_bytes;

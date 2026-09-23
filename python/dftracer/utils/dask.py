@@ -433,7 +433,10 @@ def _dv_events_task(
         # Per-event predicate (time_range only prunes chunks, so it would leak
         # earlier events sharing a boundary chunk); chunk ts-stats still prune.
         tv = tv.filter(f"ts >= {int(cursor)}")
-    tv = tv.limit(page_size)
+    # Order by ts before the limit so each shard yields its smallest-ts page:
+    # stream() fans out and is unordered, so a bare limit would take arbitrary
+    # events and the ts cursor would skip the ones a shard dropped.
+    tv = tv.sort_by("ts").limit(page_size)
     chunks = list(tv.stream())
     if not chunks:
         return None
@@ -821,8 +824,12 @@ class DaskTraceViewer:
             return QueryPage(None, None)
         combined = pa.concat_tables(tables).sort_by("ts")
         page = combined.slice(0, page_size)
+        # A full page means some shard hit its per-shard limit and may hold
+        # more, so advance the cursor; a short page has drained every shard.
+        # (Do not compare combined vs page: one shard returning exactly
+        # page_size makes them equal yet more rows remain.)
         next_cursor = None
-        if combined.num_rows > page.num_rows:
+        if page.num_rows >= page_size:
             next_cursor = int(page.column("ts")[-1].as_py()) + 1
         return QueryPage(page, next_cursor)
 

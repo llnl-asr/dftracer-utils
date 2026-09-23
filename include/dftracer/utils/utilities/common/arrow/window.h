@@ -35,7 +35,9 @@ enum class WindowFunc {
     LAST_VALUE,
     NTH_VALUE,
     PERCENT_RANK,
-    CUME_DIST
+    CUME_DIST,
+    FILL_FORWARD,
+    RUNNING_PROD
 };
 
 /// FRAME_* bound interpretation: ROWS = row offsets (default), RANGE = value
@@ -48,7 +50,9 @@ inline constexpr std::int64_t WINDOW_UNBOUNDED =
     (std::numeric_limits<std::int64_t>::max)();
 
 /// One appended output column: `func` over `value_col`/`time_col`, with
-/// `offset` (LAG/LEAD shift, NTILE bucket count, or NTH_VALUE 1-based k),
+/// `offset` (LAG/LEAD shift, NTILE bucket count, NTH_VALUE 1-based k, or the
+/// FRAME_SUM/MIN/MAX/MEAN minimum present count below which the output is
+/// null; 0 = none),
 /// `threshold` (SESSIONIZE gap), `counter` (RATE reset correction), and
 /// `frame_preceding`/ `frame_following` (FRAME_* bounds; WINDOW_UNBOUNDED =
 /// unbounded that side).

@@ -106,9 +106,6 @@ class Ring {
     /// submitted, or negative errno on failure.
     int flush();
 
-    /// Submit exactly one SQE (legacy path, used by stop() NOP).
-    int submit();
-
     /// Non-blocking peek at next CQE. Returns nullptr if CQ empty.
     struct io_uring_cqe* peek_cqe();
 

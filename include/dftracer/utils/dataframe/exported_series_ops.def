@@ -1,0 +1,242 @@
+/* Built-in dataframe column ops seeded into the op registry, one per line.
+ * APPEND ONLY - a name is a stable public key; never rename or repurpose one.
+ *
+ *   DFTU_SERIES_OP(name, fn, ret, o0, o1, o2)
+ *     name        - registry key (lower_snake), under the host namespace:
+ *                   `dftu.series.<op>` for a built-in column op, or
+ *                   `dftu.<family>.<op>` for a host utility a plugin calls
+ *                   through dftu.svc.ops. The `dftu.` prefix is ours: a
+ *                   plugin registering one is refused at the plugin seam, so
+ *                   a plugin can never shadow a host op. <family> is the
+ *                   source module the utility comes from (hash ->
+ *                   core/common/hash, hex -> the scalar hex codecs, text ->
+ *                   utilities/text, fs -> utilities/filesystem, file ->
+ *                   utilities/fileio). A leaf drops the family word when it
+ *                   would repeat it (hex64_parse -> dftu.hex.parse64).
+ *     fn          - the dftu_* C ABI function implementing it.
+ *     ret,o0..o2  - the signature tokens (DFTU_TOK_* suffixes): the return
+ *                   token then up to three operand tokens, packed by
+ *                   DFTU_OP_SIG. Pad unused operand slots with NONE.
+ *
+ * Only host utilities that are genuine column kernels belong here. The file
+ * and filesystem families (dftu.fs.*, dftu.file.*, dftu.text.line_filter) are
+ * I/O, not kernels: they register into the same name-keyed registry at runtime
+ * from the utilities layer (utilities/host_ops.h) via dftu_op_register, so the
+ * columnar engine keeps no dependency on the file system.
+ *
+ * This is the whole column-op surface (every dftu_series_* op). Frame ops
+ * (dftu_dataframe_*: join / group_by / pivot / select / ...) are a separate
+ * family (a different handle and string-keyed config), registered under
+ * `dftu.frame.<op>` in exported_frame_ops.def.
+ */
+
+#ifndef DFTU_SERIES_OP
+#define DFTU_SERIES_OP(name, fn, ret, o0, o1, o2)
+#endif
+
+/* Elementwise arithmetic (column op column). */
+DFTU_SERIES_OP(dftu.series.add, dftu_series_add, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.sub, dftu_series_sub, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.mul, dftu_series_mul, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.div, dftu_series_div, SERIES, SERIES, SERIES, NONE)
+
+/* Broadcast a scalar across a column. */
+DFTU_SERIES_OP(dftu.series.add_scalar, dftu_series_add_scalar, SERIES, SERIES, SCALAR, NONE)
+DFTU_SERIES_OP(dftu.series.sub_scalar, dftu_series_sub_scalar, SERIES, SERIES, SCALAR, NONE)
+DFTU_SERIES_OP(dftu.series.mul_scalar, dftu_series_mul_scalar, SERIES, SERIES, SCALAR, NONE)
+DFTU_SERIES_OP(dftu.series.div_scalar, dftu_series_div_scalar, SERIES, SERIES, SCALAR, NONE)
+
+/* Compare / filter / cast / numeric prim. */
+DFTU_SERIES_OP(dftu.series.compare, dftu_series_compare, SERIES, SERIES, CMP, SCALAR)
+DFTU_SERIES_OP(dftu.series.filter_gt, dftu_series_filter_gt, SERIES, SERIES, SCALAR, NONE)
+DFTU_SERIES_OP(dftu.series.filter, dftu_series_filter, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.where, dftu_series_where, SERIES, SERIES, SERIES, SERIES)
+DFTU_SERIES_OP(dftu.series.cast, dftu_series_cast, SERIES, SERIES, DTYPE, NONE)
+DFTU_SERIES_OP(dftu.series.prim, dftu_series_prim, SERIES, SERIES, PRIM, NONE)
+
+/* Boolean ops on Bool columns. */
+DFTU_SERIES_OP(dftu.series.logical, dftu_series_logical, SERIES, SERIES, SERIES, LOGICAL)
+DFTU_SERIES_OP(dftu.series.logical_not, dftu_series_logical_not, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.dictionary_encode, dftu_series_dictionary_encode, SERIES, SERIES,
+               NONE, NONE)
+
+/* String predicates (column, literal -> Bool). */
+DFTU_SERIES_OP(dftu.series.str_eq, dftu_series_str_eq, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_contains, dftu_series_str_contains, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_starts_with, dftu_series_str_starts_with, SERIES, SERIES, STR,
+               NONE)
+DFTU_SERIES_OP(dftu.series.str_ends_with, dftu_series_str_ends_with, SERIES, SERIES, STR,
+               NONE)
+DFTU_SERIES_OP(dftu.series.str_matches, dftu_series_str_matches, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_search, dftu_series_str_search, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_like, dftu_series_str_like, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_find, dftu_series_str_find, SERIES, SERIES, STR, NONE)
+
+/* String lengths / case / trim. */
+DFTU_SERIES_OP(dftu.series.str_len_bytes, dftu_series_str_len_bytes, SERIES, SERIES, NONE,
+               NONE)
+DFTU_SERIES_OP(dftu.series.str_len_chars, dftu_series_str_len_chars, SERIES, SERIES, NONE,
+               NONE)
+DFTU_SERIES_OP(dftu.series.to_lowercase, dftu_series_to_lowercase, SERIES, SERIES, NONE,
+               NONE)
+DFTU_SERIES_OP(dftu.series.to_uppercase, dftu_series_to_uppercase, SERIES, SERIES, NONE,
+               NONE)
+DFTU_SERIES_OP(dftu.series.str_strip, dftu_series_str_strip, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.str_lstrip, dftu_series_str_lstrip, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.str_rstrip, dftu_series_str_rstrip, SERIES, SERIES, NONE, NONE)
+
+/* String edits (column + literal args). */
+DFTU_SERIES_OP(dftu.series.str_replace, dftu_series_str_replace, SERIES, SERIES, STR, STR)
+DFTU_SERIES_OP(dftu.series.str_replace_all, dftu_series_str_replace_all, SERIES, SERIES, STR,
+               STR)
+DFTU_SERIES_OP(dftu.series.str_slice, dftu_series_str_slice, SERIES, SERIES, I64, I64)
+DFTU_SERIES_OP(dftu.series.str_pad_start, dftu_series_str_pad_start, SERIES, SERIES, I64,
+               CHAR)
+DFTU_SERIES_OP(dftu.series.str_pad_end, dftu_series_str_pad_end, SERIES, SERIES, I64, CHAR)
+DFTU_SERIES_OP(dftu.series.str_zfill, dftu_series_str_zfill, SERIES, SERIES, I64, NONE)
+DFTU_SERIES_OP(dftu.series.str_split, dftu_series_str_split, SERIES, SERIES, STR, NONE)
+
+/* Reducers (column -> scalar). */
+DFTU_SERIES_OP(dftu.series.reduce, dftu_series_reduce, SCALAR, SERIES, REDUCE, NONE)
+DFTU_SERIES_OP(dftu.series.count, dftu_series_count, I64, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.product, dftu_series_product, SCALAR, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.all, dftu_series_all, BOOL, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.any, dftu_series_any, BOOL, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.arg_min, dftu_series_arg_min, I64, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.arg_max, dftu_series_arg_max, I64, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.mode, dftu_series_mode, SCALAR, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.dot, dftu_series_dot, SCALAR, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.nunique, dftu_series_nunique, I64, SERIES, NONE, NONE)
+
+/* Unary numeric / null / cumulative (series -> series). */
+DFTU_SERIES_OP(dftu.series.abs, dftu_series_abs, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.round, dftu_series_round, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.ceil, dftu_series_ceil, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.floor, dftu_series_floor, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.trunc, dftu_series_trunc, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.sign, dftu_series_sign, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.negate, dftu_series_negate, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.sqrt, dftu_series_sqrt, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.exp, dftu_series_exp, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.log, dftu_series_log, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.cumsum, dftu_series_cumsum, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.cummax, dftu_series_cummax, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.cummin, dftu_series_cummin, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.cum_prod, dftu_series_cum_prod, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.cum_count, dftu_series_cum_count, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.diff, dftu_series_diff, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.pct_change, dftu_series_pct_change, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.null_mask, dftu_series_null_mask, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.valid_mask, dftu_series_valid_mask, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.is_nan, dftu_series_is_nan, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.is_finite, dftu_series_is_finite, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.is_infinite, dftu_series_is_infinite, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.is_unique, dftu_series_is_unique, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.is_duplicated, dftu_series_is_duplicated, SERIES, SERIES, NONE,
+               NONE)
+DFTU_SERIES_OP(dftu.series.unique, dftu_series_unique, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.drop_nulls, dftu_series_drop_nulls, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.reverse, dftu_series_reverse, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.interpolate, dftu_series_interpolate, SERIES, SERIES, NONE, NONE)
+
+/* Fill / windowed shape (series + operand -> series). */
+DFTU_SERIES_OP(dftu.series.fillna, dftu_series_fillna, SERIES, SERIES, SCALAR, NONE)
+DFTU_SERIES_OP(dftu.series.shift, dftu_series_shift, SERIES, SERIES, I64, NONE)
+DFTU_SERIES_OP(dftu.series.head, dftu_series_head, SERIES, SERIES, I64, NONE)
+DFTU_SERIES_OP(dftu.series.tail, dftu_series_tail, SERIES, SERIES, I64, NONE)
+DFTU_SERIES_OP(dftu.series.top_k, dftu_series_top_k, SERIES, SERIES, I64, NONE)
+DFTU_SERIES_OP(dftu.series.bottom_k, dftu_series_bottom_k, SERIES, SERIES, I64, NONE)
+DFTU_SERIES_OP(dftu.series.rolling_var, dftu_series_rolling_var, SERIES, SERIES, I64, NONE)
+DFTU_SERIES_OP(dftu.series.rolling_std, dftu_series_rolling_std, SERIES, SERIES, I64, NONE)
+DFTU_SERIES_OP(dftu.series.rolling_median, dftu_series_rolling_median, SERIES, SERIES, I64,
+               NONE)
+
+/* Membership / binning (series, series -> series). */
+DFTU_SERIES_OP(dftu.series.is_in, dftu_series_is_in, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.cut, dftu_series_cut, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.search_sorted, dftu_series_search_sorted, SERIES, SERIES, SERIES,
+               NONE)
+
+/* Statistics reducers (column -> double). variance/stddev take an int32 sample
+ * flag via the I32 operand. */
+DFTU_SERIES_OP(dftu.series.skewness, dftu_series_skewness, F64, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.kurtosis, dftu_series_kurtosis, F64, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.variance, dftu_series_variance, F64, SERIES, I32, NONE)
+DFTU_SERIES_OP(dftu.series.stddev, dftu_series_stddev, F64, SERIES, I32, NONE)
+DFTU_SERIES_OP(dftu.series.quantile, dftu_series_quantile, F64, SERIES, F64, NONE)
+DFTU_SERIES_OP(dftu.series.is_sorted, dftu_series_is_sorted, BOOL, SERIES, I32, NONE)
+
+/* Ordering / selection (series + flag/enum -> series). */
+DFTU_SERIES_OP(dftu.series.sort, dftu_series_sort, SERIES, SERIES, I32, NONE)
+DFTU_SERIES_OP(dftu.series.argsort, dftu_series_argsort, SERIES, SERIES, I32, NONE)
+DFTU_SERIES_OP(dftu.series.qcut, dftu_series_qcut, SERIES, SERIES, I32, NONE)
+DFTU_SERIES_OP(dftu.series.rank, dftu_series_rank, SERIES, SERIES, RANK, I64)
+
+/* Windowed (series + window / params -> series). */
+DFTU_SERIES_OP(dftu.series.rolling, dftu_series_rolling, SERIES, SERIES, I64, ROLLING)
+DFTU_SERIES_OP(dftu.series.rolling_quantile, dftu_series_rolling_quantile, SERIES, SERIES,
+               I64, F64)
+DFTU_SERIES_OP(dftu.series.ewm_mean, dftu_series_ewm_mean, SERIES, SERIES, F64, NONE)
+DFTU_SERIES_OP(dftu.series.ewm_std, dftu_series_ewm_std, SERIES, SERIES, F64, NONE)
+
+/* Clamp / range (series + two scalars -> series). */
+DFTU_SERIES_OP(dftu.series.clip, dftu_series_clip, SERIES, SERIES, SCALAR, SCALAR)
+DFTU_SERIES_OP(dftu.series.is_between, dftu_series_is_between, SERIES, SERIES, SCALAR, SCALAR)
+
+/* Zero-copy view / gather / sampling (series + operand -> series). */
+DFTU_SERIES_OP(dftu.series.slice, dftu_series_slice, SERIES, SERIES, I64, I64)
+DFTU_SERIES_OP(dftu.series.materialize, dftu_series_materialize, SERIES,
+               SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.take, dftu_series_take_i32, SERIES, SERIES,
+               I64LIST, NONE)
+DFTU_SERIES_OP(dftu.series.sample, dftu_series_sample, SERIES, SERIES, I64,
+               U64)
+
+/* Host utilities a plugin calls by name through dftu.svc.ops; the reserved
+   dftu. namespace marks them host-owned. */
+DFTU_SERIES_OP(dftu.hash.fnv1a, dftu_series_fnv1a, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.hex.parse64, dftu_series_hex64_parse, SERIES, SERIES, NONE,
+               NONE)
+DFTU_SERIES_OP(dftu.hex.format64, dftu_series_hex64_format, SERIES, SERIES,
+               NONE, NONE)
+
+/* Regex capture, and the List accessors str_split's result is read with. */
+DFTU_SERIES_OP(dftu.series.str_extract, dftu_series_str_extract, SERIES, SERIES, STR, I64)
+DFTU_SERIES_OP(dftu.series.list_len, dftu_series_list_len, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.list_get, dftu_series_list_get, SERIES, SERIES, I64, NONE)
+
+/* Python-semantics floor division, remainder and power, column and scalar
+ * (scalar + reverse flag) forms; forward and backward fill. */
+DFTU_SERIES_OP(dftu.series.floordiv, dftu_series_floordiv, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.mod, dftu_series_mod, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.pow, dftu_series_pow, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.floordiv_scalar, dftu_series_floordiv_scalar, SERIES, SERIES, SCALAR, I32)
+DFTU_SERIES_OP(dftu.series.mod_scalar, dftu_series_mod_scalar, SERIES, SERIES, SCALAR, I32)
+DFTU_SERIES_OP(dftu.series.pow_scalar, dftu_series_pow_scalar, SERIES, SERIES, SCALAR, I32)
+DFTU_SERIES_OP(dftu.series.ffill, dftu_series_ffill, SERIES, SERIES, NONE, NONE)
+DFTU_SERIES_OP(dftu.series.bfill, dftu_series_bfill, SERIES, SERIES, NONE, NONE)
+
+/* The pandas .str batch: case forms and character classes by code, literal
+ * count / rfind / prefix / suffix / repeat / center, row-wise concatenation,
+ * regex findall and a partition as List<String>, and a list join. */
+DFTU_SERIES_OP(dftu.series.str_case, dftu_series_str_case, SERIES, SERIES, I32, NONE)
+DFTU_SERIES_OP(dftu.series.str_is, dftu_series_str_is, SERIES, SERIES, I32, NONE)
+DFTU_SERIES_OP(dftu.series.str_count, dftu_series_str_count, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_rfind, dftu_series_str_rfind, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_remove_prefix, dftu_series_str_remove_prefix, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_remove_suffix, dftu_series_str_remove_suffix, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_repeat, dftu_series_str_repeat, SERIES, SERIES, I64, NONE)
+DFTU_SERIES_OP(dftu.series.str_center, dftu_series_str_center, SERIES, SERIES, I64, CHAR)
+DFTU_SERIES_OP(dftu.series.str_cat, dftu_series_str_cat, SERIES, SERIES, SERIES, NONE)
+DFTU_SERIES_OP(dftu.series.str_findall, dftu_series_str_findall, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.str_partition, dftu_series_str_partition, SERIES, SERIES, STR, I32)
+DFTU_SERIES_OP(dftu.series.list_join, dftu_series_list_join, SERIES, SERIES, STR, NONE)
+
+/* The .dt accessor: a calendar part by code (+ the unit of an Int64 input)
+ * and rounding to a bucket of `every` units by mode. */
+DFTU_SERIES_OP(dftu.series.dt_part, dftu_series_dt_part, SERIES, SERIES, I32, I32)
+DFTU_SERIES_OP(dftu.series.dt_round, dftu_series_dt_round, SERIES, SERIES, I64, I32)
+DFTU_SERIES_OP(dftu.series.with_timezone, dftu_series_with_timezone, SERIES, SERIES, STR, NONE)
+DFTU_SERIES_OP(dftu.series.compare_series, dftu_series_compare_series, SERIES, SERIES, SERIES, CMP)
+
+#undef DFTU_SERIES_OP

@@ -37,7 +37,8 @@ const dataframe::Series& require_column(const dataframe::DataFrame& b,
 }
 
 bool is_string(const dataframe::Series& c) {
-    return c.type() == dataframe::TypeId::String;
+    return dataframe::narrow_varwidth_type(c.type()) ==
+           dataframe::TypeId::String;
 }
 
 int cmp_code(CompareOp op) {

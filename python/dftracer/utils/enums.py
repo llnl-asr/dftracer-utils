@@ -6,8 +6,8 @@ same call as ``phase("events")`` - while giving callers a discoverable, typo-saf
 set instead of bare strings.
 """
 
-from enum import Enum
-from typing import Optional
+from enum import Enum, IntEnum
+from typing import Dict, Optional
 
 
 class Phase(str, Enum):
@@ -71,3 +71,45 @@ class AggOp(str, Enum):
 _FIELDLESS = frozenset(
     {AggOp.COUNT, AggOp.BUSY, AggOp.CONCURRENCY, AggOp.UTILIZATION, AggOp.ACTIVE}
 )
+
+
+class DType(IntEnum):
+    """A ``Series`` element dtype, mirroring the C++ ``dataframe::TypeId``
+    values 1:1 (``include/dftracer/utils/dataframe/types.h``). Pass to
+    :meth:`Series.astype` / :meth:`Series.cast`, or read off ``Series.type``."""
+
+    UNKNOWN = 0
+    BOOL = 1
+    INT8 = 2
+    INT16 = 3
+    INT32 = 4
+    INT64 = 5
+    UINT8 = 6
+    UINT16 = 7
+    UINT32 = 8
+    UINT64 = 9
+    FLOAT32 = 10
+    FLOAT64 = 11
+    STRING = 12
+    BINARY = 13
+    LIST = 14
+    STRUCT = 15
+    FLOAT16 = 16
+    DATE32 = 17
+    DATE64 = 18
+    TIME32 = 19
+    TIME64 = 20
+    TIMESTAMP = 21
+    DURATION = 22
+    DECIMAL128 = 23
+    DECIMAL256 = 24
+    FIXED_SIZE_BINARY = 25
+    LARGE_STRING = 26
+    LARGE_BINARY = 27
+    LARGE_LIST = 28
+    FIXED_SIZE_LIST = 29
+    MAP = 30
+
+
+# Case-insensitive name -> DType, for Series.astype("int64") / .astype("Int64").
+_DTYPE_BY_NAME: Dict[str, DType] = {d.name.lower(): d for d in DType}

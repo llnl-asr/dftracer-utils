@@ -94,7 +94,7 @@ No rank rescans the trace files to produce the combined result.
 
          # Coordinator, once every rank's partial has arrived:
          merger = TraceViewer(my_rank_files).group_by("name").agg("count", "sum:dur")
-         table = merger.merge_partials_to_table(all_partials)   # pyarrow.Table
+         table = merger.merge_partials_to_table(all_partials)   # DataFrame
 
 The merging view's ``group_by``/``agg`` plan must match the shape the partials
 were produced with; a mismatched plan produces a meaningless (or empty)
@@ -113,10 +113,10 @@ instead of a plain in-memory merge:
   ``AggregatedView``; Python: ``AggregatedTraceViewer.materialize_partials``) -
   reduces the gathered partials and writes the rollup, without any rank
   rescanning.
-- ``reconstruct_if_cached()`` - reads a subsuming rollup back as a
-  ``DataFrame``/``pyarrow.Table``, or returns ``std::nullopt``/``None`` on a
-  cache miss, so a caller can choose "read the cached rollup" vs. "recompute"
-  without running a scan to find out.
+- ``reconstruct_if_cached()`` - reads a subsuming rollup back as a native
+  ``DataFrame``, or returns ``std::nullopt``/``None`` on a cache miss, so a
+  caller can choose "read the cached rollup" vs. "recompute" without running a
+  scan to find out.
 
 .. tab-set::
 
@@ -142,7 +142,7 @@ instead of a plain in-memory merge:
 
          cached = v.reconstruct_if_cached()
          if cached is not None:
-             use(cached)             # pyarrow.Table, no scan
+             use(cached)             # DataFrame, no scan
          else:
              v.materialize_partials(all_partials)   # coordinator only
 

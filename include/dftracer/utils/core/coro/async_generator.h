@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <exception>
 #include <functional>
+#include <new>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -150,9 +151,21 @@ class AsyncGenerator {
     using value_type = T;
 
     struct promise_type {
-        std::optional<T> current_value_;
+        alignas(T) std::byte value_storage_[sizeof(T)];
+        bool has_value_ = false;
         std::exception_ptr exception_;
         std::coroutine_handle<> continuation_{};
+
+        T* value_ptr() noexcept {
+            return std::launder(reinterpret_cast<T*>(value_storage_));
+        }
+        void clear_value() noexcept {
+            if (has_value_) {
+                value_ptr()->~T();
+                has_value_ = false;
+            }
+        }
+        ~promise_type() { clear_value(); }
 
         AsyncGenerator get_return_object() {
             return AsyncGenerator{
@@ -162,7 +175,9 @@ class AsyncGenerator {
         std::suspend_always initial_suspend() noexcept { return {}; }
 
         auto yield_value(T value) noexcept {
-            current_value_ = std::move(value);
+            clear_value();
+            ::new (static_cast<void*>(value_storage_)) T(std::move(value));
+            has_value_ = true;
             struct YieldToConsumer {
                 std::coroutine_handle<> continuation;
                 bool await_ready() noexcept { return false; }
@@ -223,10 +238,11 @@ class AsyncGenerator {
             if (handle_.done()) {
                 return std::nullopt;
             }
-            if (handle_.promise().current_value_) {
-                auto val = std::move(handle_.promise().current_value_);
-                handle_.promise().current_value_.reset();
-                return val;
+            auto& promise = handle_.promise();
+            if (promise.has_value_) {
+                std::optional<T> out(std::move(*promise.value_ptr()));
+                promise.clear_value();
+                return out;
             }
             return std::nullopt;
         }

@@ -1,14 +1,16 @@
 // Unary numeric primitives (ilog2/mix64/popcount/...) as a hand-written Highway
 // dataframe kernel over an Int64/Uint64 column, producing an Int64 column. The
-// scalar tail reuses plugins/prims.h so the SIMD body and the tail stay in
-// agreement with the JIT/plugin path.
+// scalar tail reuses the core bit/hash primitives so the SIMD body and the tail
+// stay in agreement with the JIT/plugin path (plugins/prims.h mirrors them).
 
+#include <dftracer/utils/core/common/bits.h>
+#include <dftracer/utils/core/common/hash/constants.h>
+#include <dftracer/utils/core/common/hash/splitmix64.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/buffer.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/prims.h>
 #include <dftracer/utils/dataframe/types.h>
-#include <dftracer/utils/plugins/prims.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -42,7 +44,8 @@ void PrimImpl(std::int32_t op, const std::uint64_t* a, std::int64_t* out_i64,
                 hn::StoreU(r, d, out + i);
             }
             for (; i < n; ++i)
-                out[i] = static_cast<std::uint64_t>(dftu_ilog2_u64(a[i]));
+                out[i] = static_cast<std::uint64_t>(
+                    dftracer::utils::bits::ilog2_u64(a[i]));
             break;
         case Prim::BitWidth:
             for (; i + lanes <= n; i += lanes) {
@@ -52,33 +55,37 @@ void PrimImpl(std::int32_t op, const std::uint64_t* a, std::int64_t* out_i64,
                 hn::StoreU(r, d, out + i);
             }
             for (; i < n; ++i)
-                out[i] = static_cast<std::uint64_t>(dftu_bit_width_u64(a[i]));
+                out[i] = static_cast<std::uint64_t>(
+                    dftracer::utils::bits::bit_width_u64(a[i]));
             break;
         case Prim::Popcount:
             for (; i + lanes <= n; i += lanes)
                 hn::StoreU(hn::PopulationCount(hn::LoadU(d, a + i)), d,
                            out + i);
             for (; i < n; ++i)
-                out[i] = static_cast<std::uint64_t>(dftu_popcount_u64(a[i]));
+                out[i] = static_cast<std::uint64_t>(
+                    dftracer::utils::bits::popcount_u64(a[i]));
             break;
         case Prim::Clz:
             for (; i + lanes <= n; i += lanes)
                 hn::StoreU(hn::LeadingZeroCount(hn::LoadU(d, a + i)), d,
                            out + i);
             for (; i < n; ++i)
-                out[i] = static_cast<std::uint64_t>(dftu_clz_u64(a[i]));
+                out[i] = static_cast<std::uint64_t>(
+                    dftracer::utils::bits::clz_u64(a[i]));
             break;
         case Prim::Ctz:
             for (; i + lanes <= n; i += lanes)
                 hn::StoreU(hn::TrailingZeroCount(hn::LoadU(d, a + i)), d,
                            out + i);
             for (; i < n; ++i)
-                out[i] = static_cast<std::uint64_t>(dftu_ctz_u64(a[i]));
+                out[i] = static_cast<std::uint64_t>(
+                    dftracer::utils::bits::ctz_u64(a[i]));
             break;
         case Prim::Mix64: {
-            const auto k1 = hn::Set(d, 0x9e3779b97f4a7c15ULL);
-            const auto m1 = hn::Set(d, 0xbf58476d1ce4e5b9ULL);
-            const auto m2 = hn::Set(d, 0x94d049bb133111ebULL);
+            const auto k1 = hn::Set(d, dftracer::utils::hash::GOLDEN_RATIO);
+            const auto m1 = hn::Set(d, dftracer::utils::hash::SPLITMIX64_MUL1);
+            const auto m2 = hn::Set(d, dftracer::utils::hash::SPLITMIX64_MUL2);
             for (; i + lanes <= n; i += lanes) {
                 auto x = hn::Add(hn::LoadU(d, a + i), k1);
                 x = hn::Mul(hn::Xor(x, hn::ShiftRight<30>(x)), m1);
@@ -86,7 +93,7 @@ void PrimImpl(std::int32_t op, const std::uint64_t* a, std::int64_t* out_i64,
                 x = hn::Xor(x, hn::ShiftRight<31>(x));
                 hn::StoreU(x, d, out + i);
             }
-            for (; i < n; ++i) out[i] = dftu_mix64(a[i]);
+            for (; i < n; ++i) out[i] = dftracer::utils::hash::splitmix64(a[i]);
             break;
         }
         default:
@@ -134,6 +141,8 @@ Series prim(const Series& a, Prim op) {
 }  // namespace dftracer::utils::dataframe
 
 dftu_series* dftu_series_prim(const dftu_series* a, dftu_prim_op op) {
+    DFTU_FLAT_OPERAND(a, flat_a, dftu_series_prim(flat_a, op));
+
     return dftracer::utils::dataframe::prim_col(a, op);
 }
 

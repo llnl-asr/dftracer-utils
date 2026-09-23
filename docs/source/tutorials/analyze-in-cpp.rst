@@ -45,7 +45,10 @@ Build a predicate with the unified ``F`` (namespace
 ``dftracer::utils::dataframe::field``, header
 ``dftracer/utils/dataframe/field.h``): ``F("dur") < 300`` is a field predicate
 that ``View::filter`` takes directly and pushes down to the index. The same
-``F`` also builds value/derived columns (see step 5).
+``F`` also builds value/derived columns (see step 5). ``View::collect()``
+builds the query plan and returns a ``LazyFrame``; its own ``collect()`` runs
+the scan and returns the ``coro::CoroTask<DataFrame>`` that ``.get()`` drives
+to completion, hence the ``.collect().collect().get()`` chain below.
 
 .. code-block:: cpp
 
@@ -64,6 +67,7 @@ that ``View::filter`` takes directly and pushes down to the index. The same
                      .group_by({GroupKey::cat()})
                      .agg({AggSpec(AggOp::Count), AggSpec(AggOp::Sum, "dur")})
                      .sort_by("cat")
+                     .collect()
                      .collect()
                      .get();  // blocks; a dataframe::DataFrame
 
@@ -115,6 +119,7 @@ back typed with ``.f64()`` or ``.i64()``:
        auto df = View::from_file("trace.pfw.gz")
                      .group_by({GroupKey::cat()})
                      .agg({AggSpec(AggOp::Sum, "dur")})
+                     .collect()
                      .collect()
                      .get();
 
@@ -191,7 +196,7 @@ What you learned
   ``F("field")`` (``dftracer/utils/dataframe/field.h``) builds a predicate that
   ``View::filter`` / ``fold`` take directly (pushdown), and the same ``F`` builds
   value/derived columns via ``.apply(df)``.
-- ``group_by`` + ``agg`` + ``collect().get()`` gives a ``DataFrame``; read a
+- ``group_by`` + ``agg`` + ``collect().collect().get()`` gives a ``DataFrame``; read a
   column with ``df.column(name)`` and reduce it with ``Series::sum()`` /
   ``min()`` / ``max()``, each returning a ``Scalar`` read back with ``.f64()``
   / ``.i64()``.

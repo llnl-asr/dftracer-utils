@@ -34,8 +34,18 @@ def test_string_match_ops():
     assert str(Field("name").ilike("READ")) == 'name ilike "READ"'
     assert str(Field("name").regex("^p?read$")) == 'name ~ "^p?read$"'
     assert str(Field("name").iregex("READ")) == 'name ~* "READ"'
-    # Substring serializes literal-first as `"sub" in field`.
-    assert str(Field("args.file").contains("tmp")) == '"tmp" in args.file'
+    # Substring is case-sensitive (pandas / polars), so it serializes as an
+    # escaped LIKE; the DSL's literal-first `"sub" in field` is the
+    # case-insensitive form.
+    assert str(Field("args.file").contains("tmp")) == 'args.file like "%tmp%"'
+    assert str(Field("args.file").contains("a%b_c", case=True)) == 'args.file like "%a\\%b\\_c%"'
+    assert str(Field("args.file").contains("tmp", case=False)) == '"tmp" in args.file'
+    assert str(Field("name").starts_with("pre")) == 'name like "pre%"'
+    assert str(Field("name").ends_with("64")) == 'name like "%64"'
+    with pytest.raises(TypeError, match="not an index-pushable"):
+        Field("name").fullmatch("x").to_query()
+    with pytest.raises(TypeError, match="not an index-pushable"):
+        Field("name").lower().like("x").to_query()
 
 
 def test_resolved_fields():
@@ -104,6 +114,7 @@ def test_flat_dotted_arg_key_resolves_at_runtime(tmp_path):
             .group_by("mlx5.op")
             .agg("count")
             .collect()
+            .collect()
         )
         df = pa.table(tbl).to_pandas()
         return int(df["count"].sum())
@@ -141,6 +152,7 @@ def test_traceviewer_filter_accepts_expr(tmp_path):
             .filter(pred)
             .group_by("cat")
             .agg("count")
+            .collect()
             .collect()
         )
         df = pa.table(tbl).to_pandas()
@@ -201,17 +213,64 @@ def test_non_pushable_predicate_raises():
         ((F.a + F.b) > 3).to_query()
 
 
-def test_predicate_only_has_no_apply():
-    """String match and string/bool comparison are filter-only: no .apply()."""
+def test_string_predicates_apply_in_memory():
+    """String match, membership and string == run through the engine's string
+    kernels; only iregex and a bool comparison stay filter-only."""
     pa = pytest.importorskip("pyarrow")
     from dftracer.utils import F
     from dftracer.utils.dataframe import _dataframe_from_arrow
 
-    df = _dataframe_from_arrow(pa.table({"cat": pa.array(["io", "cpu"], pa.string())}))
+    df = _dataframe_from_arrow(
+        pa.table({"cat": pa.array(["io", "cpu", "IO", "Disk io"], pa.string())})
+    )
+
+    def mask(expr):
+        return expr.apply(df).to_arrow().to_pylist()
+
+    assert mask(F.cat.like("%io%")) == [True, False, False, True]
+    assert mask(F.cat.ilike("%io%")) == [True, False, True, True]
+    assert mask(F.cat == "io") == [True, False, False, False]
+    assert mask(F.cat != "io") == [False, True, True, True]
+    assert mask(F.cat.contains("io")) == [True, False, False, True]
+    assert mask(F.cat.contains("IO", case=False)) == [True, False, True, True]
+    assert mask(F.cat.starts_with("c")) == [False, True, False, False]
+    assert mask(F.cat.ends_with("o")) == [True, False, False, True]
+    assert mask(F.cat.regex("^[a-z]+$")) == [True, True, False, False]
+    assert mask(F.cat.regex("io")) == [True, False, False, True]
+    assert mask(F.cat.fullmatch("io")) == [True, False, False, False]
+    assert mask(F.cat.is_in(["io", "IO"])) == [True, False, True, False]
+    assert mask(F.cat.not_in(["io", "IO"])) == [False, True, False, True]
+    assert mask(F.cat.lower().is_in(["io"])) == [True, False, True, False]
     with pytest.raises(TypeError):
-        F.cat.like("%io%").apply(df)
+        F.cat.iregex("io").apply(df)
     with pytest.raises(TypeError):
-        (F.cat == "io").apply(df)
+        (F.cat > "a").apply(df)
+    with pytest.raises(TypeError):
+        F.cat.is_in([1, "a"])
+
+
+def test_string_values_apply_in_memory():
+    pa = pytest.importorskip("pyarrow")
+    from dftracer.utils import F
+    from dftracer.utils.dataframe import _dataframe_from_arrow
+
+    df = _dataframe_from_arrow(pa.table({"s": pa.array([" Read ", "pread64"], pa.string())}))
+
+    def vals(expr):
+        return expr.apply(df).to_arrow().to_pylist()
+
+    assert vals(F.s.upper()) == [" READ ", "PREAD64"]
+    assert vals(F.s.lower()) == [" read ", "pread64"]
+    assert vals(F.s.strip()) == ["Read", "pread64"]
+    assert vals(F.s.lstrip()) == ["Read ", "pread64"]
+    assert vals(F.s.rstrip()) == [" Read", "pread64"]
+    assert vals(F.s.len_bytes()) == [6, 7]
+    assert vals(F.s.len_chars()) == [6, 7]
+    assert vals(F.s.find("ead")) == [2, 2]
+    assert vals(F.s.replace("e", "E")) == [" REad ", "prEad64"]
+    assert vals(F.s.replace_all("e", "E")) == [" REad ", "prEad64"]
+    assert vals(F.s.slice(1, 3)) == ["Rea", "rea"]
+    assert vals(F.s.strip().len_bytes() + 1) == [5, 8]
 
 
 def test_traceviewer_filter_unified_predicates(tmp_path):
@@ -237,6 +296,7 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
             .filter(pred)
             .group_by("cat")
             .agg("count")
+            .collect()
             .collect()
         )
         return int(pa.table(tbl).to_pandas()["count"].sum())

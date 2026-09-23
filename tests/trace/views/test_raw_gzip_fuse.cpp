@@ -15,17 +15,17 @@
 #include <dftracer/utils/utilities/indexer/internal/indexer.h>
 #include <doctest/doctest.h>
 
-#include <algorithm>
 #include <array>
 #include <optional>
 #include <string>
 
+#include "groupmap_oracle.h"
 #include "test_view_common.h"
+#include "testing_runtime.h"
 
 using namespace dftracer::utils::trace::views::detail;
-using dftracer::utils::CoroScope;
-using dftracer::utils::Runtime;
 using dftracer::utils::StringIntern;
+using dftu_utils_test::run_coro;
 namespace dataframe = dftracer::utils::dataframe;
 
 namespace idx = dftracer::utils::utilities::indexer;
@@ -64,15 +64,6 @@ std::string create_meta_trace(TestEnvironment& env) {
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
     fs::remove(pfw);
     return gz;
-}
-
-template <typename Fn>
-void run_coro(Fn&& fn) {
-    Runtime rt(4);
-    auto task =
-        dftracer::utils::run_coro_scope(rt.executor(), std::forward<Fn>(fn));
-    rt.submit(std::move(task), "raw-gzip-fuse").wait();
-    rt.shutdown();
 }
 
 // collect() yields a columnar DataFrame; two results are equal when they carry
@@ -124,16 +115,16 @@ TEST_SUITE("RawGzipFuse") {
             StringSink s;
             View::from_file(gz, ref_idx).export_json(s).get();
         }
-        GroupMap ref;
+        gmoracle::GroupMap ref;
         {
             ViewPlan rp = count_plan(gz, ref_idx);
             ensure_schema(rp);
             StringIntern intern;
-            AggFold a(rp, intern);
+            gmoracle::OracleAggFold a(rp, intern);
             std::array<Fold*, 1> folds{&a};
             ViewDefinition vd = make_vdef(rp, /*for_aggregation=*/true);
             fuse(rp, vd, folds, intern).get();
-            ref = a.finish_map();
+            ref = a.map();
         }
         REQUIRE(ref.size() == 2);  // POSIX + STDIO
 
@@ -143,7 +134,7 @@ TEST_SUITE("RawGzipFuse") {
         ViewPlan pp = count_plan(gz, idx);
         ensure_schema(pp);
         StringIntern intern;
-        AggFold agg(pp, intern);
+        gmoracle::OracleAggFold agg(pp, intern);
         BloomFold bloom(intern);
         DictFold dict(intern);
         std::array<Fold*, 3> folds{&agg, &bloom, &dict};
@@ -160,7 +151,8 @@ TEST_SUITE("RawGzipFuse") {
                 REQUIRE(a.has_value());
                 arts = std::move(*a);
                 co_return;
-            });
+            },
+            "raw-gzip-fuse");
         driver.seal();
 
         // Persist the index this one pass produced.
@@ -191,7 +183,7 @@ TEST_SUITE("RawGzipFuse") {
         // Per-consumer filtering: the aggregation from the one pass matches the
         // eager path's groups (the data-event cats), and the ph="M" metadata is
         // NOT counted as a "dftracer" group despite the folds being fed it.
-        GroupMap proto = agg.finish_map();
+        gmoracle::GroupMap proto = agg.map();
         CHECK(proto.size() == ref.size());
         for (const auto& [k, v] : ref) CHECK(proto.count(k) == 1);
         CHECK(proto.count("dftracer") == 0);  // metadata kept out of the agg
@@ -210,9 +202,9 @@ TEST_SUITE("RawGzipFuse") {
     }
 
     // End to end through the public View API: a collect on a file with no index
-    // routes through run_collect's bootstrap, so it answers the aggregation AND
-    // leaves a complete bloom index behind. The eager-indexed collect never
-    // builds bloom, so has_bloom_data being set is proof the bootstrap ran.
+    // routes through the bootstrap, so it answers the aggregation AND leaves a
+    // complete bloom index behind. The eager-indexed collect never builds
+    // bloom, so has_bloom_data being set is proof the bootstrap ran.
     TEST_CASE("View.collect on a first-touch file bootstraps the index") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
@@ -227,6 +219,7 @@ TEST_SUITE("RawGzipFuse") {
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
                        .collect()
+                       .collect()
                        .get();
 
         std::string boot_idx = determine_index_path(gz, env.get_dir() + "/bi");
@@ -234,6 +227,7 @@ TEST_SUITE("RawGzipFuse") {
         auto boot = View::from_file(gz, boot_idx)
                         .group_by({GroupKey::cat()})
                         .agg({{AggOp::Count, "", "n"}})
+                        .collect()
                         .collect()
                         .get();
 
@@ -292,6 +286,7 @@ TEST_SUITE("RawGzipFuse") {
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
                        .collect()
+                       .collect()
                        .get();
         REQUIRE(ref.num_rows() == 1);  // only POSIX
 
@@ -301,6 +296,7 @@ TEST_SUITE("RawGzipFuse") {
                        .query(R"(cat == "POSIX")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
+                       .collect()
                        .collect()
                        .get();
         CHECK(got.num_rows() == ref.num_rows());  // filter applied: 1 group
@@ -329,6 +325,7 @@ TEST_SUITE("RawGzipFuse") {
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
                        .collect()
+                       .collect()
                        .get();
 
         std::string fresh = determine_index_path(gz, env.get_dir() + "/nf");
@@ -336,6 +333,7 @@ TEST_SUITE("RawGzipFuse") {
                        .query(R"(fhash == "fh1")")
                        .group_by({GroupKey::cat()})
                        .agg({{AggOp::Count, "", "n"}})
+                       .collect()
                        .collect()
                        .get();
         CHECK(rows_equal(got, ref));  // correctly filtered via the fallback

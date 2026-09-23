@@ -1,40 +1,27 @@
 #!/usr/bin/env python3
-"""End-to-end test for the mergeable-map graph workflow.
+"""End-to-end tests for keyed accumulators.
 
-Runs the compiled process_file_edges plugin (pure C ABI) over a generated trace
-through PluginHost; the host merges a {pid, fhash} -> COUNTER map across workers
-and materializes it to an Arrow table surfaced to Python as a pyarrow.Table. The
-graph is then built in bulk from the columns (numpy + scipy), no per-edge Python.
+A jit-authored plugin declares a keyed accumulator; the host folds each batch
+into the engine's AggState through DFTU_SVC_AGG, merges the same-named
+accumulator across workers and finalizes it to a frame surfaced to Python. The
+graph below is then built in bulk from the columns (numpy + scipy), no per-edge
+Python.
 """
 
 import gzip
-from pathlib import Path
+import shutil
 
 import pytest
 
-from dftracer.utils.plugins import PluginHost, unnest
-
-from .common import find_example_plugin
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+from dftracer.utils import jit
+from dftracer.utils.plugins import Plugins, unnest
 
 np = pytest.importorskip("numpy")
 sparse = pytest.importorskip("scipy.sparse")
 pa = pytest.importorskip("pyarrow")
 
-
-def _find_plugin(name: str, env_var: str) -> str:
-    return find_example_plugin(name, env_var, _REPO_ROOT)
-
-
-_PLUGIN = _find_plugin("process_file_edges", "DFTRACER_PROCESS_FILE_EDGES_PLUGIN_PATH")
-_PLUGIN_WIDE = _find_plugin(
-    "process_file_edges_wide", "DFTRACER_PROCESS_FILE_EDGES_WIDE_PLUGIN_PATH"
-)
-_PLUGIN_NAMES = _find_plugin("name_edges", "DFTRACER_NAME_EDGES_PLUGIN_PATH")
-_PLUGIN_SET = _find_plugin("process_file_set", "DFTRACER_PROCESS_FILE_SET_PLUGIN_PATH")
-_PLUGIN_SEQ = _find_plugin("process_event_seq", "DFTRACER_PROCESS_EVENT_SEQ_PLUGIN_PATH")
-_PLUGIN_DURS = _find_plugin("process_pid_durs", "DFTRACER_PROCESS_PID_DURS_PLUGIN_PATH")
+_HAS_CXX = bool(shutil.which("c++") or shutil.which("clang++") or shutil.which("g++"))
+_needs_cxx = pytest.mark.skipif(not _HAS_CXX, reason="no C++ compiler for the jit backend")
 
 
 def _write_trace(path: str, n: int, pids, files) -> None:
@@ -49,23 +36,27 @@ def _write_trace(path: str, n: int, pids, files) -> None:
             )
 
 
-@pytest.mark.skipif(
-    not _PLUGIN, reason="no compiled process_file_edges plugin found in any build tree"
-)
+@_needs_cxx
 def test_process_file_edges_builds_adjacency(tmp_path):
+    @jit.plugin
+    class ProcessFileEdges:
+        process_file_edges = jit.map(key=(jit.i64, jit.str_), value=jit.count())
+
+        @jit.each_event
+        def step(self, e):
+            if e.fhash != jit.NONE:
+                self.process_file_edges[(e.pid, e.fhash)] += 1
+
     n = 60
     pids = [1, 2]
     files = ["fileA", "fileB", "fileC"]
     _write_trace(str(tmp_path / "trace.pfw.gz"), n, pids, files)
 
-    host = PluginHost()
-    host.load(_PLUGIN)
-    host.resolve()
-    results = host.run(str(tmp_path))
+    plugins = Plugins([ProcessFileEdges])
+    run = plugins.run(str(tmp_path))
 
-    assert "process_file_edges" in results
-    # The host materialized the map to an Arrow table (zero new Python needed).
-    tbl = pa.table(results["process_file_edges"])
+    assert "process_file_edges" in run.results
+    tbl = pa.table(run.results["process_file_edges"])
     assert tbl.column_names == ["k0", "k1", "value"]
 
     k0 = tbl.column("k0").to_numpy(zero_copy_only=False)
@@ -83,23 +74,30 @@ def test_process_file_edges_builds_adjacency(tmp_path):
     assert int(adj.sum()) == n
 
 
-@pytest.mark.skipif(
-    not _PLUGIN_WIDE,
-    reason="no compiled process_file_edges_wide plugin found in any build tree",
-)
+@_needs_cxx
 def test_process_file_edges_wide_builds_product_columns(tmp_path):
+    @jit.plugin
+    class Wide:
+        edges = jit.map(
+            key=(jit.i64, jit.str_),
+            value=dict(v0=jit.count(), v1=jit.sum()),
+        )
+
+        @jit.each_event
+        def step(self, e):
+            if e.fhash != jit.NONE:
+                self.edges[(e.pid, e.fhash)].v0 += 1
+                self.edges[(e.pid, e.fhash)].v1 += e.dur
+
     n = 60
     pids = [1, 2]
     files = ["fileA", "fileB", "fileC"]
     _write_trace(str(tmp_path / "trace.pfw.gz"), n, pids, files)
 
-    host = PluginHost()
-    host.load(_PLUGIN_WIDE)
-    host.resolve()
-    results = host.run(str(tmp_path))
+    plugins = Plugins([Wide])
+    run = plugins.run(str(tmp_path))
 
-    assert "process_file_edges_wide" in results
-    tbl = pa.table(results["process_file_edges_wide"])
+    tbl = pa.table(run.results["edges"])
     assert tbl.column_names == ["k0", "k1", "v0", "v1"]
 
     v0 = tbl.column("v0").to_numpy(zero_copy_only=False)
@@ -110,62 +108,67 @@ def test_process_file_edges_wide_builds_product_columns(tmp_path):
     assert float(v1.sum()) == float(sum(10 + i for i in range(n)))
 
 
-@pytest.mark.skipif(
-    not _PLUGIN_NAMES, reason="no compiled name_edges plugin found in any build tree"
-)
+@_needs_cxx
 def test_name_edges_resolves_str_key_column(tmp_path):
+    @jit.plugin
+    class NameEdges:
+        name_edges = jit.map(key=(jit.i64, jit.str_), value=jit.count())
+
+        @jit.each_event
+        def step(self, e):
+            self.name_edges[(e.pid, e.name)] += 1
+
     n = 60
     pids = [1, 2]
     files = ["fileA", "fileB", "fileC"]
     _write_trace(str(tmp_path / "trace.pfw.gz"), n, pids, files)
 
-    host = PluginHost()
-    host.load(_PLUGIN_NAMES)
-    host.resolve()
-    results = host.run(str(tmp_path))
+    plugins = Plugins([NameEdges])
+    run = plugins.run(str(tmp_path))
 
-    assert "name_edges" in results
-    tbl = pa.table(results["name_edges"])
+    tbl = pa.table(run.results["name_edges"])
     assert tbl.column_names == ["k0", "k1", "value"]
 
     # k1 is the STR key component resolved to a string column, not raw ids.
     assert pa.types.is_string(tbl.schema.field("k1").type)
-    names = set(tbl.column("k1").to_pylist())
-    assert names == {"read"}
+    assert set(tbl.column("k1").to_pylist()) == {"read"}
 
     val = tbl.column("value").to_numpy(zero_copy_only=False)
     assert int(val.sum()) == n
 
 
-@pytest.mark.skipif(
-    not _PLUGIN_SET,
-    reason="no compiled process_file_set plugin found in any build tree",
-)
+@_needs_cxx
 def test_process_file_set_builds_list_string_column(tmp_path):
+    @jit.plugin
+    class FileSet:
+        process_file_set = jit.map(key=(jit.i64,), value=jit.set())
+
+        @jit.each_event
+        def step(self, e):
+            if e.fhash != jit.NONE:
+                self.process_file_set[(e.pid,)].observe(e.fhash)
+
     n = 60
     pids = [1, 2]
     files = ["fileA", "fileB", "fileC"]
     _write_trace(str(tmp_path / "trace.pfw.gz"), n, pids, files)
 
-    host = PluginHost()
-    host.load(_PLUGIN_SET)
-    host.resolve()
-    results = host.run(str(tmp_path))
+    plugins = Plugins([FileSet])
+    run = plugins.run(str(tmp_path))
 
-    assert "process_file_set" in results
-    tbl = pa.table(results["process_file_set"])
+    tbl = pa.table(run.results["process_file_set"])
     assert tbl.column_names == ["k0", "value"]
 
-    # value is a list<string> column: the set of files each pid touched.
-    vtype = tbl.schema.field("value").type
-    assert pa.types.is_list(vtype)
-    assert pa.types.is_string(vtype.value_type)
+    # value is a String column: the set of files each pid touched, sorted and
+    # joined by the set separator.
+    assert pa.types.is_string(tbl.schema.field("value").type)
 
     by_pid = {
-        k: set(v) for k, v in zip(tbl.column("k0").to_pylist(), tbl.column("value").to_pylist())
+        k: v.split("\x1e")
+        for k, v in zip(tbl.column("k0").to_pylist(), tbl.column("value").to_pylist())
     }
-    assert by_pid[1] == set(files)
-    assert by_pid[2] == set(files)
+    assert by_pid[1] == sorted(files)
+    assert by_pid[2] == sorted(files)
 
 
 def _write_seq_trace(path: str, events) -> None:
@@ -177,11 +180,16 @@ def _write_seq_trace(path: str, events) -> None:
             )
 
 
-@pytest.mark.skipif(
-    not _PLUGIN_SEQ,
-    reason="no compiled process_event_seq plugin found in any build tree",
-)
+@_needs_cxx
 def test_process_event_seq_builds_ts_ordered_list(tmp_path):
+    @jit.plugin
+    class EventSeq:
+        process_event_seq = jit.map(key=(jit.i64,), value=jit.list())
+
+        @jit.each_event
+        def step(self, e):
+            self.process_event_seq[(e.pid,)].append(e.name, order_by=e.ts)
+
     # File order differs from ts order: pid 1 -> [a,b,c] by ts.
     events = [
         (1, "c", 30),
@@ -192,13 +200,10 @@ def test_process_event_seq_builds_ts_ordered_list(tmp_path):
     ]
     _write_seq_trace(str(tmp_path / "trace.pfw.gz"), events)
 
-    host = PluginHost()
-    host.load(_PLUGIN_SEQ)
-    host.resolve()
-    results = host.run(str(tmp_path))
+    plugins = Plugins([EventSeq])
+    run = plugins.run(str(tmp_path))
 
-    assert "process_event_seq" in results
-    tbl = pa.table(results["process_event_seq"])
+    tbl = pa.table(run.results["process_event_seq"])
     assert tbl.column_names == ["k0", "value"]
 
     vtype = tbl.schema.field("value").type
@@ -210,13 +215,10 @@ def test_process_event_seq_builds_ts_ordered_list(tmp_path):
     assert by_pid[2] == ["x", "y"]
 
 
-@pytest.mark.skipif(
-    not _PLUGIN, reason="no compiled process_file_edges plugin found in any build tree"
-)
-def test_streamed_map_returns_record_batch_reader(tmp_path, monkeypatch):
-    # Many distinct (pid, file) keys + a tiny budget force the map to spill and
-    # partition (K=256); with streaming enabled it materializes as several
-    # batches and surfaces as a pull-based RecordBatchReader.
+@_needs_cxx
+def test_many_keys_stay_one_accumulator(tmp_path):
+    # One accumulator per name regardless of key cardinality: 300 distinct
+    # (pid, file) keys all land in the same finalized frame.
     keys = 300
     with gzip.open(str(tmp_path / "trace.pfw.gz"), "wt", encoding="utf-8") as f:
         for i in range(keys):
@@ -226,64 +228,23 @@ def test_streamed_map_returns_record_batch_reader(tmp_path, monkeypatch):
                 f'"args":{{"fhash":"file{i}","ret":{i}}}}}\n'
             )
 
-    spill_dir = tmp_path / "spill"
-    spill_dir.mkdir()
-    monkeypatch.setenv("DFTRACER_PLUGIN_MAP_STREAM", "1")
-    # Global budget / 16 workers => a ~256 B share, far below the key count.
-    monkeypatch.setenv("DFTRACER_PLUGIN_MAP_MEM_BUDGET", "4096")
-    monkeypatch.setenv("DFTRACER_PLUGIN_MAP_SPILL_DIR", str(spill_dir))
+    @jit.plugin
+    class Edges:
+        process_file_edges = jit.map(key=(jit.i64, jit.str_), value=jit.count())
 
-    host = PluginHost()
-    host.load(_PLUGIN)
-    host.resolve()
-    results = host.run(str(tmp_path))
+        @jit.each_event
+        def step(self, e):
+            if e.fhash != jit.NONE:
+                self.process_file_edges[(e.pid, e.fhash)] += 1
 
-    reader = results["process_file_edges"]
-    assert isinstance(reader, pa.RecordBatchReader)
+    plugins = Plugins([Edges])
+    tbl = pa.table(plugins.run(str(tmp_path)).results["process_file_edges"])
 
-    # The streamed batches are self-contained: spill runs/temp dirs are cleaned
-    # during the run's finalize, before the reader is ever pulled. So no
-    # per-run dir lingers even before read_all, and (below) dropping the reader
-    # unconsumed leaks nothing either.
-    def _run_dirs():
-        return [p for p in spill_dir.iterdir() if p.is_dir()]
-
-    assert _run_dirs() == []
-
-    tbl = reader.read_all()
     assert tbl.column_names == ["k0", "k1", "value"]
-    # Every distinct key contributed exactly 1; concatenated batches recover all.
     assert tbl.num_rows == keys
     assert int(tbl.column("value").to_numpy(zero_copy_only=False).sum()) == keys
     k0 = tbl.column("k0").to_numpy(zero_copy_only=False)
     assert len(set(int(x) for x in k0)) == keys
-    assert _run_dirs() == []  # still clean after full consumption
-
-    # Drop a fresh reader unconsumed: no temp dir reappears (RAII), and the
-    # unpulled Arrow batches are released without error.
-    reader2 = host.run(str(tmp_path))["process_file_edges"]
-    assert isinstance(reader2, pa.RecordBatchReader)
-    del reader2
-    assert _run_dirs() == []
-
-
-@pytest.mark.skipif(
-    not _PLUGIN, reason="no compiled process_file_edges plugin found in any build tree"
-)
-def test_small_map_stays_eager_table(tmp_path):
-    # Without the streaming env, a small map stays a single eager Arrow table,
-    # not a RecordBatchReader: pre-existing ergonomics are unaffected.
-    _write_trace(str(tmp_path / "trace.pfw.gz"), 30, [1, 2], ["fileA", "fileB"])
-
-    host = PluginHost()
-    host.load(_PLUGIN)
-    host.resolve()
-    results = host.run(str(tmp_path))
-
-    obj = results["process_file_edges"]
-    assert not isinstance(obj, pa.RecordBatchReader)
-    tbl = pa.table(obj)
-    assert tbl.column_names == ["k0", "k1", "value"]
 
 
 def _write_dur_trace(path: str, events) -> None:
@@ -295,11 +256,16 @@ def _write_dur_trace(path: str, events) -> None:
             )
 
 
-@pytest.mark.skipif(
-    not _PLUGIN_DURS,
-    reason="no compiled process_pid_durs plugin found in any build tree",
-)
+@_needs_cxx
 def test_process_pid_durs_builds_ts_ordered_int64_list(tmp_path):
+    @jit.plugin
+    class PidDurs:
+        process_pid_durs = jit.map(key=(jit.i64,), value=jit.list(of=jit.i64))
+
+        @jit.each_event
+        def step(self, e):
+            self.process_pid_durs[(e.pid,)].append(e.dur, order_by=e.ts)
+
     # File order differs from ts order: pid 1 durations by ts -> [20,5,20,8].
     events = [
         (1, 20, 10),
@@ -311,22 +277,19 @@ def test_process_pid_durs_builds_ts_ordered_int64_list(tmp_path):
     ]
     _write_dur_trace(str(tmp_path / "trace.pfw.gz"), events)
 
-    host = PluginHost()
-    host.load(_PLUGIN_DURS)
-    host.resolve()
-    results = host.run(str(tmp_path))
+    plugins = Plugins([PidDurs])
+    run = plugins.run(str(tmp_path))
 
-    assert "process_pid_durs" in results
-    tbl = pa.table(results["process_pid_durs"])
+    tbl = pa.table(run.results["process_pid_durs"])
     assert tbl.column_names == ["k0", "value"]
 
     vtype = tbl.schema.field("value").type
     assert pa.types.is_list(vtype)
-    assert pa.types.is_integer(vtype.value_type)
+    assert pa.types.is_string(vtype.value_type)
 
     by_pid = {k: v for k, v in zip(tbl.column("k0").to_pylist(), tbl.column("value").to_pylist())}
-    assert by_pid[1] == [20, 5, 20, 8]
-    assert by_pid[2] == [3, 7]
+    assert by_pid[1] == ["20", "5", "20", "8"]
+    assert by_pid[2] == ["3", "7"]
 
 
 def test_unnest_string_list():
@@ -386,24 +349,30 @@ def test_unnest_empty_list_drop_vs_keep_empty():
     assert kept.column("files").to_pylist() == ["a", None, "b"]
 
 
-@pytest.mark.skipif(
-    not _PLUGIN_SET,
-    reason="no compiled process_file_set plugin found in any build tree",
-)
+@_needs_cxx
 def test_unnest_aggregated_set_recovers_edges(tmp_path):
+    # jit.list is the list-producing verb (jit.set joins its distinct values
+    # into one String cell), so it is what unnest explodes back into rows.
+    @jit.plugin
+    class FileSet:
+        process_file_set = jit.map(key=(jit.i64,), value=jit.list())
+
+        @jit.each_event
+        def step(self, e):
+            if e.fhash != jit.NONE:
+                self.process_file_set[(e.pid,)].append(e.fhash, order_by=e.ts)
+
     n = 60
     pids = [1, 2]
     files = ["fileA", "fileB", "fileC"]
     _write_trace(str(tmp_path / "trace.pfw.gz"), n, pids, files)
 
-    host = PluginHost()
-    host.load(_PLUGIN_SET)
-    host.resolve()
-    results = host.run(str(tmp_path))
+    plugins = Plugins([FileSet])
+    run = plugins.run(str(tmp_path))
 
     # The aggregated per-pid file set explodes back into scannable (pid, file)
-    # rows: the inverse of the SET_STR monoid.
-    out = unnest(results["process_file_set"], "value")
+    # rows: the inverse of the set-union aggregate.
+    out = unnest(pa.table(run.results["process_file_set"]), "value")
     assert out.column_names == ["k0", "value"]
     edges = set(zip(out.column("k0").to_pylist(), out.column("value").to_pylist()))
     assert edges == {(p, f) for p in pids for f in files}

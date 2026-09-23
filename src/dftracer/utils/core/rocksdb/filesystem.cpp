@@ -603,7 +603,9 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
     explicit DfTracerFileSystem(
         const std::shared_ptr<::rocksdb::FileSystem>& target)
         : LocalFileSystemWrapper(target), fallback_pool_(4) {
-        fallback_pool_.start();
+        // Started lazily on the first fallback read (see submit_async_read):
+        // reads on a runtime worker take the io-backend path, so a cached DB's
+        // filesystem that never hits the fallback never spawns pool threads.
     }
 
     ~DfTracerFileSystem() override { fallback_pool_.stop(); }
@@ -769,6 +771,7 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
             return;
         }
 
+        std::call_once(fallback_started_, [this] { fallback_pool_.start(); });
         fallback_pool_.submit([this, handle, fd, path = std::move(path), dbg] {
             ::rocksdb::Slice result;
             auto status = read_async_impl(fd, path, handle->offset, handle->len,
@@ -827,6 +830,7 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
         handle->owner->complete_async_read(handle, status, slice);
     }
 
+    std::once_flag fallback_started_;
     io::IoThreadPool fallback_pool_;
     std::mutex completions_mutex_;
     std::condition_variable completions_cv_;

@@ -21,6 +21,10 @@ struct ViewDefinition {
     /// activity-summary build) need this, since traces whose data events carry
     /// no hash args would otherwise never see it.
     bool emit_all_metadata = false;
+    /// Apply `query` to ph=M metadata records too. Off by default so metadata
+    /// bypasses the event query and survives for hash/rank harvesting; set only
+    /// for an explicit phase("metadata") query.
+    bool filter_metadata = false;
 
     ViewDefinition& with_name(const std::string& n);
     ViewDefinition& with_description(const std::string& d);

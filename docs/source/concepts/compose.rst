@@ -160,8 +160,8 @@ The plugin SDK's compose layer
 vocabulary for plugin authors working against the C ABI (``dftu_task`` /
 ``dftu_op``), where a lambda cannot cross the boundary and values move as
 bytes instead. ``Composed`` wraps an already-spawned ``dftu_task*`` for ``&&``
-/ ``||`` (lowered to the host's ``dftu_ext_coro::when_all`` / ``when_any``);
-a compile-time-typed ``Op<In, Out>`` layer over ``dftu_ext_compose`` lets a
+/ ``||`` (lowered to the host's ``dftu_svc_coro::when_all`` / ``when_any``);
+a compile-time-typed ``Op<In, Out>`` layer over ``dftu_svc_compose`` lets a
 C++ plugin pipe typed, trivially-copyable values with ``|`` (a middle-type
 mismatch is a compile error, not a runtime null) instead of hand-writing
 ``void*`` + size plumbing. See :doc:`../plugins` for the plugin model this

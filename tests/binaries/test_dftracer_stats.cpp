@@ -28,72 +28,18 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 }
 
 std::string find_stats_binary() {
-    const char* env_path = std::getenv("DFTRACER_STATS_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_stats",         "../dftracer_stats",
-        "../../dftracer_stats",     "../bin/dftracer_stats",
-        "../../bin/dftracer_stats",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_STATS_PATH",
+                                                "dftracer_stats");
 }
 
 int run_stats(const std::string& binary, const std::vector<std::string>& args) {
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& arg : args) argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    pid_t pid = ::fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return -1;
+    return dftu_utils_test::run_process(binary, args);
 }
 
 std::string run_stats_capture(const std::string& binary,
                               const std::vector<std::string>& args,
                               int* exit_code = nullptr) {
-    int pipefd[2];
-    if (::pipe(pipefd) < 0) return "";
-
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& arg : args) argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    pid_t pid = ::fork();
-    if (pid < 0) {
-        ::close(pipefd[0]);
-        ::close(pipefd[1]);
-        return "";
-    }
-    if (pid == 0) {
-        ::close(pipefd[0]);
-        ::dup2(pipefd[1], STDOUT_FILENO);
-        ::dup2(pipefd[1], STDERR_FILENO);
-        ::close(pipefd[1]);
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    ::close(pipefd[1]);
-    std::string output;
-    char buf[4096];
-    ssize_t n;
-    while ((n = ::read(pipefd[0], buf, sizeof(buf))) > 0)
-        output.append(buf, static_cast<std::size_t>(n));
-    ::close(pipefd[0]);
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (exit_code) *exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-    return output;
+    return dftu_utils_test::run_process_capture(binary, args, true, exit_code);
 }
 
 }  // namespace

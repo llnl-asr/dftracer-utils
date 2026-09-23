@@ -42,7 +42,13 @@ class TestTraceViewer:
     def test_collect_group_by_agg_returns_arrow(self):
         with Environment(lines=200) as env:
             gz = _indexed(env)
-            tbl = TraceViewer(gz).group_by("cat").agg("count", "mean:dur", "std:dur").collect()
+            tbl = (
+                TraceViewer(gz)
+                .group_by("cat")
+                .agg("count", "mean:dur", "std:dur")
+                .collect()
+                .collect()
+            )
             df = tbl.to_pandas()
             assert set(["cat", "count", "mean_dur", "std_dur"]).issubset(df.columns)
             # Every event lands in exactly one cat group.
@@ -52,10 +58,108 @@ class TestTraceViewer:
     def test_agg_set_union_distinct_values(self):
         with Environment(lines=200) as env:
             gz = _indexed(env)
-            df = TraceViewer(gz).agg("set_union:cat").collect().to_pandas()
+            df = TraceViewer(gz).agg("set_union:cat").collect().collect().to_pandas()
             assert df.shape[0] == 1
             # One string column of the distinct cat values, joined by \x1e.
             assert set(df["set_cat"].iloc[0].split("\x1e")) == {"POSIX", "STDIO"}
+
+    def test_time_metric_reads_cm_record(self):
+        with Environment(lines=1) as env:
+            rows = [
+                {
+                    "name": "CM",
+                    "ph": "M",
+                    "cat": "dftracer",
+                    "pid": 0,
+                    "tid": 0,
+                    "args": {"name": "time_metric", "value": "NS"},
+                },
+            ]
+            for i in range(10):
+                rows.append(
+                    {
+                        "ph": "X",
+                        "name": "read",
+                        "cat": "POSIX",
+                        "pid": 1,
+                        "tid": 10,
+                        "ts": 1000 + i * 100,
+                        "dur": 5,
+                        "args": {},
+                    }
+                )
+            gz = _make_trace(env, "time_metric.pfw.gz", rows)
+            assert TraceViewer(gz).time_metric() == "ns"
+
+    def test_phase_metadata_row_query_returns_filtered_rows(self):
+        # A phase("metadata") row query (no group_by/agg) must return the
+        # metadata records as rows, args flattened, and honor the query filter.
+        from dftracer.utils import Field
+
+        with Environment(lines=1) as env:
+            rows = [
+                {
+                    "name": "CM",
+                    "ph": "M",
+                    "pid": 0,
+                    "tid": 0,
+                    "ts": 0,
+                    "args": {"name": "time_metric", "value": "NS"},
+                },
+            ] + [
+                {
+                    "ph": "X",
+                    "name": "read",
+                    "cat": "POSIX",
+                    "pid": 1,
+                    "tid": 1,
+                    "ts": 1000 + i,
+                    "dur": 5,
+                    "args": {},
+                }
+                for i in range(5)
+            ]
+            gz = _make_trace(env, "meta_rows.pfw.gz", rows)
+
+            meta = TraceViewer(gz).phase("metadata").collect().collect().to_arrow()
+            assert meta.num_rows >= 1
+            assert "args.name" in meta.column_names
+            assert "args.value" in meta.column_names
+            d = meta.to_pydict()
+            assert "CM" in d["name"]
+            assert "time_metric" in d["args.name"]
+
+            filtered = (
+                TraceViewer(gz)
+                .phase("metadata")
+                .query(Field("args.name") == "time_metric")
+                .collect()
+                .collect()
+                .to_arrow()
+            )
+            assert filtered.num_rows == 1
+            assert filtered.to_pydict()["args.value"][0] == "NS"
+
+            # A non-matching filter proves the query really runs on metadata.
+            none = (
+                TraceViewer(gz)
+                .phase("metadata")
+                .query(Field("args.name") == "nope")
+                .collect()
+                .collect()
+                .to_arrow()
+            )
+            assert none.num_rows == 0
+
+            # A normal event row query never includes the metadata record.
+            events = TraceViewer(gz).phase("events").collect().collect().to_arrow()
+            assert events.num_rows == 5
+            assert "CM" not in events.to_pydict()["name"]
+
+    def test_time_metric_defaults_to_us(self):
+        with Environment(lines=200) as env:
+            gz = _indexed(env)
+            assert TraceViewer(gz).time_metric() == "us"
 
     def test_time_bucket_normalize_alignment(self):
         with Environment(lines=1) as env:
@@ -82,6 +186,7 @@ class TestTraceViewer:
                     .group_by("cat")
                     .time_bucket(700, normalize_to)
                     .agg("count")
+                    .collect()
                     .collect()
                 )
                 buckets = tbl.to_arrow().column("time_bucket").to_pylist()
@@ -147,7 +252,15 @@ class TestTraceViewer:
             gz = _make_trace(env, "phases.pfw.gz", rows)
 
             def count(ph):
-                t = TraceViewer(gz).phase(ph).agg("count").collect().to_arrow().to_pydict()
+                t = (
+                    TraceViewer(gz)
+                    .phase(ph)
+                    .agg("count")
+                    .collect()
+                    .collect()
+                    .to_arrow()
+                    .to_pydict()
+                )
                 return int(t["count"][0]) if t["count"] else 0
 
             assert count("events") == 5
@@ -196,6 +309,7 @@ class TestTraceViewer:
                 .phase("events")
                 .select("name", "resolved.fpath", "r.host")
                 .collect()
+                .collect()
                 .to_arrow()
                 .to_pydict()
             )
@@ -209,6 +323,7 @@ class TestTraceViewer:
                 .group_by("resolved.fpath")
                 .agg("count")
                 .collect()
+                .collect()
                 .to_arrow()
                 .to_pydict()
             )
@@ -218,6 +333,7 @@ class TestTraceViewer:
                 .phase("events")
                 .group_by("resolved.hostname")
                 .agg("count")
+                .collect()
                 .collect()
                 .to_arrow()
                 .to_pydict()
@@ -243,17 +359,32 @@ class TestTraceViewer:
             ]
             gz = _make_trace(env, "hash.pfw.gz", rows)
 
-            sel = TraceViewer(gz).select("name", "fhash", "hhash").collect().to_arrow().to_pydict()
+            sel = (
+                TraceViewer(gz)
+                .select("name", "fhash", "hhash")
+                .collect()
+                .collect()
+                .to_arrow()
+                .to_pydict()
+            )
             assert sel["fhash"] == ["fa"] * 4
             assert sel["hhash"] == ["h1"] * 4
 
             # The all-columns collect includes them too.
-            allc = TraceViewer(gz).collect().to_arrow().to_pydict()
+            allc = TraceViewer(gz).collect().collect().to_arrow().to_pydict()
             assert allc["fhash"] == ["fa"] * 4
             assert allc["hhash"] == ["h1"] * 4
 
             # And they still resolve as group_by keys (the pre-existing path).
-            g = TraceViewer(gz).group_by("fhash").agg("count").collect().to_arrow().to_pydict()
+            g = (
+                TraceViewer(gz)
+                .group_by("fhash")
+                .agg("count")
+                .collect()
+                .collect()
+                .to_arrow()
+                .to_pydict()
+            )
             assert g["fhash"] == ["fa"]
 
     def test_view_var_std_match_dataframe_engine(self):
@@ -274,10 +405,11 @@ class TestTraceViewer:
             ]
             gz = _make_trace(env, "parity.pfw.gz", rows)
             tv = TraceViewer(gz)
-            view = tv.group_by("cat").agg("var:dur", "std:dur", "mean:dur").collect()
+            view = tv.group_by("cat").agg("var:dur", "std:dur", "mean:dur").collect().collect()
             view = view.to_arrow().to_pydict()
             eng = (
                 tv.phase("events")
+                .collect()
                 .collect()
                 .group_by("cat", "var:dur", "std:dur", "mean:dur")
                 .to_arrow()
@@ -304,19 +436,33 @@ class TestTraceViewer:
             gz = _make_trace(env, "events.pfw.gz", rows)
 
             # A plain collect() (no group_by/agg) returns the matching events
-            # with every column - top-level plus a union of the args.
-            d = TraceViewer(gz).collect().to_arrow().to_pydict()
-            assert {"name", "cat", "pid", "tid", "ts", "dur", "ph", "ret", "path"} <= set(d)
-            assert d["ret"] == [100, 101, 102, 103, 104]
+            # with every column - top-level plus a union of the args, each
+            # flattened arg prefixed "args." so it can't collide with a
+            # top-level column of the same bare name.
+            d = TraceViewer(gz).collect().collect().to_arrow().to_pydict()
+            assert {"name", "cat", "pid", "tid", "ts", "dur", "ph", "args.ret", "args.path"} <= set(
+                d
+            )
+            assert d["args.ret"] == [100, 101, 102, 103, 104]
             assert d["name"] == ["read"] * 5
-            assert d["path"][0] == "/f0"
+            assert d["args.path"][0] == "/f0"
 
-            # select projects a subset (top-level + arg names).
-            sel = TraceViewer(gz).select("name", "ts", "ret").collect().to_arrow().to_pydict()
-            assert set(sel) == {"name", "ts", "ret"}
+            # select projects a subset (top-level + arg names); a bare arg name
+            # still resolves, but the output column is canonicalized to
+            # "args.<key>".
+            sel = (
+                TraceViewer(gz)
+                .select("name", "ts", "ret")
+                .collect()
+                .collect()
+                .to_arrow()
+                .to_pydict()
+            )
+            assert set(sel) == {"name", "ts", "args.ret"}
 
-            # filter narrows the event rows.
-            assert TraceViewer(gz).filter("ret > 102").collect().num_rows == 2
+            # filter narrows the event rows (query DSL still resolves the bare
+            # arg name).
+            assert TraceViewer(gz).filter("ret > 102").collect().collect().num_rows == 2
 
     def test_call_tree_and_flamegraph(self):
         # One (pid,tid) lane, nested: A[0,100) > B[10,40) > C[15,25).
@@ -587,7 +733,7 @@ class TestTraceViewer:
                     .agg("count", "mean:dur", "std:dur")
                 )
 
-            whole = pa.table(view(files).collect()).sort_by("cat")
+            whole = pa.table(view(files).collect().collect()).sort_by("cat")
             partials = [view([f]).aggregate_partial() for f in files]
             for b in partials:
                 assert isinstance(b, bytes) and b
@@ -612,7 +758,7 @@ class TestTraceViewer:
                     .agg("count", "mean:dur")
                 )
 
-            fresh = pa.table(view().collect()).sort_by(order)
+            fresh = pa.table(view().collect().collect()).sort_by(order)
             assert view().reconstruct_if_cached() is None  # cold
             view().materialize()  # build the rollup
             warm = view().reconstruct_if_cached()
@@ -626,7 +772,7 @@ class TestTraceViewer:
                 .equals(fresh.to_pandas().round(6))
             )
             assert (
-                pa.table(view().collect())
+                pa.table(view().collect().collect())
                 .sort_by(order)
                 .to_pandas()
                 .round(6)
@@ -673,6 +819,7 @@ class TestTraceViewer:
                 dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
                 .group_by("io_cat")
                 .agg("count", "sumsq:dur")
+                .collect()
                 .collect()
             )
             .to_pandas()
@@ -794,7 +941,7 @@ class TestTraceViewer:
 
         # Parity: the fused branch equals the standalone aggregation.
         standalone = (
-            pa.table(tv.group_by("cat").agg("count", "mean:dur").collect())
+            pa.table(tv.group_by("cat").agg("count", "mean:dur").collect().collect())
             .to_pandas()
             .set_index("cat")
             .sort_index()
@@ -847,6 +994,7 @@ class TestTraceViewer:
                 .group_by("rank")
                 .agg("count")
                 .collect()
+                .collect()
             )
             .to_pandas()
             .set_index("rank")
@@ -870,6 +1018,7 @@ class TestTraceViewer:
             .group_by("cat")
             .agg("sum:size")
             .collect()
+            .collect()
         )
         assert tbl.column("sum_size").to_pylist()[0] == 10 * (100 * 101 // 2)
 
@@ -888,6 +1037,7 @@ class TestTraceViewer:
             .group_by("cat")
             .agg("count")
             .agg_numeric_args()
+            .collect()
             .collect()
         )
         assert "size" in tbl.column_names
@@ -908,6 +1058,7 @@ class TestTraceViewer:
                 .phase(Phase.EVENTS)
                 .group_by(GroupKey.CAT)
                 .agg(AggOp.COUNT.of(""), AggOp.MEAN.of("dur"))
+                .collect()
                 .collect()
             )
             assert {"cat", "count", "mean_dur"}.issubset(tbl.column_names)
@@ -931,10 +1082,10 @@ class TestTraceViewer:
             ix.ensure_indexed()
 
         tv = dftu_utils.TraceViewer(gz, index_path=str(tmp_path))
-        native = pa.table(tv.group_by("cat").agg("mean:dur").collect())
+        native = pa.table(tv.group_by("cat").agg("mean:dur").collect().collect())
         assert native.column("mean_dur").to_pylist()[0] == 2.0  # seconds
 
-        us = pa.table(tv.time_unit(TimeUnit.US).group_by("cat").agg("mean:dur").collect())
+        us = pa.table(tv.time_unit(TimeUnit.US).group_by("cat").agg("mean:dur").collect().collect())
         assert us.column("mean_dur").to_pylist()[0] == 2_000_000.0  # 2 s in us
 
         strm = _concat(tv.time_unit("us").select("ts", "dur").stream())
@@ -974,7 +1125,7 @@ class TestTraceViewer:
             gz = _make_trace(env, "schemaless.pfw.gz", rows)
 
             def counts(col, key):
-                t = pa.table(TraceViewer(gz).group_by(key).agg("count").collect())
+                t = pa.table(TraceViewer(gz).group_by(key).agg("count").collect().collect())
                 return {
                     k: int(v)
                     for k, v in zip(t.column(col).to_pylist(), t.column("count").to_pylist())
@@ -987,7 +1138,9 @@ class TestTraceViewer:
             assert counts("args.tags[0]", "args.tags[0]") == {"x": 2, "z": 2}
             assert counts("args.tags.0", "args.tags.0") == {"x": 2, "z": 2}
 
-            t = pa.table(TraceViewer(gz).group_by("args.meta.host").agg("mean:args.n.v").collect())
+            t = pa.table(
+                TraceViewer(gz).group_by("args.meta.host").agg("mean:args.n.v").collect().collect()
+            )
             m = {
                 k: v
                 for k, v in zip(
@@ -1029,7 +1182,7 @@ class TestTraceViewer:
             gz = _make_trace(env, "shadow.pfw.gz", rows)
 
             def counts(col, key):
-                t = pa.table(TraceViewer(gz).group_by(key).agg("count").collect())
+                t = pa.table(TraceViewer(gz).group_by(key).agg("count").collect().collect())
                 return {
                     k: int(v)
                     for k, v in zip(t.column(col).to_pylist(), t.column("count").to_pylist())
@@ -1068,6 +1221,7 @@ class TestTraceViewer:
                 .occ_cell(5)
                 .group_by("name")
                 .agg("count", "sum:dur", "busy", "concurrency", "utilization")
+                .collect()
                 .collect()
             )
             assert "busy_cell_us" in t.column_names
@@ -1212,3 +1366,90 @@ class TestFlamegraphGroup:
             names = set(fg["name"])
             assert "POSIX" not in names  # no group rooting -> only call names
             assert "read" in names and "write" in names
+
+
+class TestSessionPerBranchPhase:
+    """A fused session must honor each branch's phase(): an events() branch and
+    an aggregated() branch ride one scan, each filtered to its own phase. Aggregated
+    (ph=3) events must be reachable this way (they were dropped before)."""
+
+    def _rows(self):
+        rows = [
+            {
+                "ph": 1,
+                "name": "read",
+                "cat": "POSIX",
+                "pid": 1,
+                "tid": 1,
+                "ts": 100 + i,
+                "dur": 10,
+                "args": {},
+            }
+            for i in range(3)
+        ]
+        rows += [
+            {
+                "name": "write",
+                "cat": "POSIX",
+                "ts": 1000 + i,
+                "ph": 3,
+                "type": 3,
+                "pid": 1,
+                "tid": 1,
+                "args": {"hhash": "h1", "dur": 250},
+            }
+            for i in range(4)
+        ]
+        return rows
+
+    def _ph(self, df):
+        return list(df.to_arrow().to_pydict().get("ph"))
+
+    def test_per_branch_phase_in_one_session(self):
+        with Environment() as env:
+            path = _make_trace(env, "mixed_phase.pfw.gz", self._rows())
+            with TraceViewer(path).session() as s:
+                a = s.view().phase("events").events()
+                b = s.view().phase("aggregated").events()
+                c = s.view().events()
+            assert self._ph(a.result()) == [1, 1, 1]  # complete only
+            assert self._ph(b.result()) == [3, 3, 3, 3]  # aggregated only
+            assert sorted(self._ph(c.result())) == [1, 1, 1, 3, 3, 3, 3]  # all
+
+
+class TestTimeBucketGroupByDedup:
+    """Listing "time_bucket" in group_by after time_bucket() must not double the
+    auto-added bucket key (which used to emit an empty column)."""
+
+    def _rows(self):
+        return [
+            {
+                "ph": 1,
+                "name": "read",
+                "cat": "POSIX",
+                "pid": 1,
+                "tid": 1,
+                "ts": 1000 + t,
+                "dur": 5,
+                "args": {},
+            }
+            for t in (0, 50, 130)
+        ]
+
+    def test_time_bucket_in_group_by_is_deduped(self):
+        with Environment() as env:
+            path = _make_trace(env, "tb.pfw.gz", self._rows())
+            base = TraceViewer(path).time_bucket(100, normalize_to=1000)
+            with_key = (
+                base.group_by("pid", "time_bucket")
+                .agg("count")
+                .collect()
+                .collect()
+                .to_arrow()
+                .to_pydict()
+            )
+            without = base.group_by("pid").agg("count").collect().collect().to_arrow().to_pydict()
+            # same result either way, and the bucket column has real values
+            assert with_key == without
+            assert all(v != "" for v in with_key["time_bucket"])
+            assert sorted(with_key["time_bucket"]) == ["1000", "1100"]

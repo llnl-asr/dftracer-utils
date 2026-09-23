@@ -17,9 +17,13 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/python/py_method.h>
+#include <dftracer/utils/python/py_scalar_helpers.h>
 #include <dftracer/utils/python/series.h>
 
 #include <cstdint>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace dataframe = dftracer::utils::dataframe;
@@ -40,19 +44,75 @@ enum {
     AST_UNARY = 9,
     AST_CLIP = 10,
     AST_FILLNA = 11,
+    AST_STR_PRED = 12,
+    AST_STR_MAP = 13,
+    AST_STR_LEN = 14,
+    AST_STR_FIND = 15,
+    AST_STR_REPLACE = 16,
+    AST_STR_SLICE = 17,
+    AST_IS_IN = 18,
+    AST_SELECT = 19,
+    AST_IS_NULL = 20,
 };
 
-bool py_to_scalar(PyObject* v, dftu_scalar* out) {
-    if (PyFloat_Check(v)) {
-        out->kind = DFTU_SCALAR_TAG_F64;
-        out->value.d = PyFloat_AsDouble(v);
-        return !(out->value.d == -1.0 && PyErr_Occurred());
-    }
-    long long i = PyLong_AsLongLong(v);
-    if (i == -1 && PyErr_Occurred()) return false;
-    out->kind = DFTU_SCALAR_TAG_I64;
-    out->value.i = i;
+// A borrowed view of a Python str; valid while `o` lives, which the ast list
+// guarantees for the duration of build_expr.
+bool py_str_view(PyObject* o, std::string_view* out) {
+    Py_ssize_t n = 0;
+    const char* s = PyUnicode_AsUTF8AndSize(o, &n);
+    if (!s) return false;
+    *out = std::string_view(s, static_cast<std::size_t>(n));
     return true;
+}
+
+// The is_in value list as a Series: all ints (Int64) or all strs (String).
+bool py_values_series(PyObject* list, dataframe::Series* out) {
+    PyObject* seq = PySequence_Fast(list, "is_in values must be a sequence");
+    if (!seq) return false;
+    const Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    bool all_str = n > 0;
+    bool all_int = n > 0;
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject* v = PySequence_Fast_GET_ITEM(seq, i);
+        if (!PyUnicode_Check(v)) all_str = false;
+        if (PyBool_Check(v) || !PyLong_Check(v)) all_int = false;
+    }
+    if (all_str) {
+        std::vector<std::string> values;
+        values.reserve(static_cast<std::size_t>(n));
+        for (Py_ssize_t i = 0; i < n; ++i) {
+            std::string_view s;
+            if (!py_str_view(PySequence_Fast_GET_ITEM(seq, i), &s)) {
+                Py_DECREF(seq);
+                return false;
+            }
+            values.emplace_back(s);
+        }
+        Py_DECREF(seq);
+        *out = dataframe::Series::strings(values);
+        return true;
+    }
+    if (all_int) {
+        std::vector<std::int64_t> values;
+        values.reserve(static_cast<std::size_t>(n));
+        for (Py_ssize_t i = 0; i < n; ++i) {
+            values.push_back(static_cast<std::int64_t>(
+                PyLong_AsLongLong(PySequence_Fast_GET_ITEM(seq, i))));
+            if (PyErr_Occurred()) {
+                Py_DECREF(seq);
+                return false;
+            }
+        }
+        Py_DECREF(seq);
+        *out = dataframe::Series::flat_i64(values.data(),
+                                           static_cast<std::int64_t>(n));
+        return true;
+    }
+    Py_DECREF(seq);
+    PyErr_SetString(PyExc_TypeError,
+                    "is_in values must be a non-empty list of all ints or all "
+                    "strings");
+    return false;
 }
 
 // Rebuild a dataframe::Expr from a post-order list of (op, arg0[, arg1])
@@ -99,21 +159,33 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
             case AST_PRIM: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_prim(
-                    static_cast<std::int32_t>(PyLong_AsLong(arg(1))), a));
+                    static_cast<dataframe::PrimOp>(PyLong_AsLong(arg(1))), a));
                 break;
             }
             case AST_CMP: {
                 dftu_scalar rhs{};
-                if (!py_to_scalar(arg(2), &rhs)) return false;
+                if (PyUnicode_Check(arg(2))) {
+                    // expr_cmp copies the text into the node, so the borrow
+                    // ends with this call.
+                    std::string_view s;
+                    if (!py_str_view(arg(2), &s)) return false;
+                    rhs.kind = DFTU_SCALAR_TAG_STR;
+                    rhs.len = static_cast<std::uint32_t>(s.size());
+                    rhs.value.s = s.data();
+                } else if (!py_to_scalar(arg(2), &rhs)) {
+                    return false;
+                }
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_cmp(
-                    static_cast<std::int32_t>(PyLong_AsLong(arg(1))), a, rhs));
+                    static_cast<dataframe::CmpOp>(PyLong_AsLong(arg(1))), a,
+                    rhs));
                 break;
             }
             case AST_LOGICAL: {
                 dataframe::Expr b = pop(), a = pop();
                 stack.push_back(dataframe::expr_logical(
-                    static_cast<std::int32_t>(PyLong_AsLong(arg(1))), a, b));
+                    static_cast<dataframe::LogicalOp>(PyLong_AsLong(arg(1))), a,
+                    b));
                 break;
             }
             case AST_NOT: {
@@ -130,7 +202,7 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
             case AST_UNARY: {
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_unary(
-                    static_cast<std::int32_t>(PyLong_AsLong(arg(1))), a));
+                    static_cast<dataframe::UnaryOp>(PyLong_AsLong(arg(1))), a));
                 break;
             }
             case AST_CLIP: {
@@ -146,6 +218,81 @@ bool build_expr(PyObject* ast, dataframe::Expr* out) {
                 if (!py_to_scalar(arg(1), &fill)) return false;
                 dataframe::Expr a = pop();
                 stack.push_back(dataframe::expr_fillna(a, fill));
+                break;
+            }
+            case AST_STR_PRED: {
+                std::string_view pattern;
+                if (!py_str_view(arg(2), &pattern)) return false;
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_str_pred(
+                    static_cast<dataframe::StrPredOp>(PyLong_AsLong(arg(1))), a,
+                    pattern));
+                break;
+            }
+            case AST_STR_MAP: {
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_str_map(
+                    static_cast<dataframe::StrMapOp>(PyLong_AsLong(arg(1))),
+                    a));
+                break;
+            }
+            case AST_STR_LEN: {
+                dataframe::Expr a = pop();
+                stack.push_back(
+                    dataframe::expr_str_len(a, PyLong_AsLong(arg(1)) != 0));
+                break;
+            }
+            case AST_STR_FIND: {
+                std::string_view needle;
+                if (!py_str_view(arg(1), &needle)) return false;
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_str_find(a, needle));
+                break;
+            }
+            case AST_STR_REPLACE: {
+                std::string_view from, to;
+                if (!py_str_view(arg(1), &from) || !py_str_view(arg(2), &to))
+                    return false;
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_str_replace(
+                    a, from, to, PyLong_AsLong(arg(3)) != 0));
+                break;
+            }
+            case AST_STR_SLICE: {
+                const long long start = PyLong_AsLongLong(arg(1));
+                const long long len = PyLong_AsLongLong(arg(2));
+                if (PyErr_Occurred()) return false;
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_str_slice(a, start, len));
+                break;
+            }
+            case AST_IS_IN: {
+                dataframe::Series values;
+                if (!py_values_series(arg(1), &values)) return false;
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_is_in(a, std::move(values)));
+                break;
+            }
+            case AST_SELECT: {
+                if (stack.size() < 3) {
+                    PyErr_SetString(PyExc_ValueError,
+                                    "select needs three operands");
+                    return false;
+                }
+                dataframe::Expr b = pop(), a = pop(), cond = pop();
+                stack.push_back(dataframe::expr_select(cond, a, b));
+                break;
+            }
+            case AST_IS_NULL: {
+                if (stack.empty()) {
+                    PyErr_SetString(PyExc_ValueError,
+                                    "is_null needs an operand");
+                    return false;
+                }
+                const long null = PyLong_AsLong(arg(1));
+                if (null == -1 && PyErr_Occurred()) return false;
+                dataframe::Expr a = pop();
+                stack.push_back(dataframe::expr_is_null(a, null != 0));
                 break;
             }
             default:

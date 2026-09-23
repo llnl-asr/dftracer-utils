@@ -17,7 +17,7 @@ Statistic constant_stat(double value) {
     return s;
 }
 
-constexpr double kEpsilon = 1e-9;
+constexpr double EPSILON = 1e-9;
 
 }  // namespace
 
@@ -175,7 +175,7 @@ TEST_SUITE("BarrierSimulator") {
         CHECK(result.per_rank_completion_time.size() ==
               static_cast<std::size_t>(num_ranks));
         for (double t : result.per_rank_completion_time) {
-            CHECK(t == doctest::Approx(expected_per_rank).epsilon(kEpsilon));
+            CHECK(t == doctest::Approx(expected_per_rank).epsilon(EPSILON));
         }
         // All ranks run in lockstep over the same wall clock; union = per-rank
         // time.
@@ -212,7 +212,7 @@ TEST_SUITE("BarrierSimulator") {
         // In sync mode all ranks finish at the same time; e2e = rank_times[0].
         CHECK(result.e2e_duration == doctest::Approx(expected).epsilon(1e-6));
         for (double t : result.per_rank_completion_time) {
-            CHECK(t == doctest::Approx(expected).epsilon(kEpsilon));
+            CHECK(t == doctest::Approx(expected).epsilon(EPSILON));
         }
         // Constant work + barrier -> zero barrier overhead.
         CHECK(result.avg_barrier_overhead == doctest::Approx(0.0));

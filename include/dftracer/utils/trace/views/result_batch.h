@@ -12,7 +12,7 @@ namespace dftracer::utils::trace::views {
 /// `.get()`) it, then run vec ops over the columns.
 inline coro::CoroTask<dftracer::utils::dataframe::DataFrame> collect_batch(
     const View& view) {
-    co_return co_await view.collect();
+    co_return co_await view.collect().collect();
 }
 
 }  // namespace dftracer::utils::trace::views

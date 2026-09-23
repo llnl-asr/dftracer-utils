@@ -178,7 +178,8 @@ void check_fidelity(const FidelityStats& s, const char* label) {
 TEST_CASE("Replay fidelity - sync path") {
     dftracer::utils::logger::init();
 
-    fs::path temp_dir = fs::temp_directory_path() / "dftracer_replay_fid_sync";
+    fs::path temp_dir =
+        dftu_utils_test::make_unique_test_path("dftracer_replay_fid_sync");
     fs::create_directories(temp_dir);
     std::string trace_file = (temp_dir / "fid.pfw.gz").string();
 
@@ -210,7 +211,7 @@ TEST_CASE("Replay fidelity - pipelined path") {
     dftracer::utils::logger::init();
 
     fs::path temp_dir =
-        fs::temp_directory_path() / "dftracer_replay_fid_pipelined";
+        dftu_utils_test::make_unique_test_path("dftracer_replay_fid_pipelined");
     fs::create_directories(temp_dir);
     std::string trace_file = (temp_dir / "fid.pfw.gz").string();
 
@@ -252,7 +253,7 @@ TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
     dftracer::utils::logger::init();
 
     fs::path temp_dir =
-        fs::temp_directory_path() / "dftracer_replay_fid_anchor";
+        dftu_utils_test::make_unique_test_path("dftracer_replay_fid_anchor");
     fs::create_directories(temp_dir);
     std::string trace_file = (temp_dir / "fid.pfw.gz").string();
 

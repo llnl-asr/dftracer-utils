@@ -48,9 +48,6 @@ Runtime dependencies
    * - Boost.Math
      - ``BSL-1.0``
      - https://github.com/boostorg/math
-   * - Boost.PFR
-     - ``BSL-1.0``
-     - https://github.com/apolukhin/pfr_non_boost
    * - yaml-cpp
      - ``MIT``
      - https://github.com/jbeder/yaml-cpp

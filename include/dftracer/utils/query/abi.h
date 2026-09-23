@@ -11,7 +11,10 @@
 extern "C" {
 #endif
 
+#ifndef DFTU_TYPEDEF_DFTU_QUERY
+#define DFTU_TYPEDEF_DFTU_QUERY
 typedef struct dftu_query dftu_query;
+#endif
 
 /** Comparison ops for the dftu_query_cmp_* builders, matching
  * dftracer::utils::query::CompareOp order. */

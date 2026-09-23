@@ -12,6 +12,7 @@
 #include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/core/pipeline/pipeline.h>
 #include <dftracer/utils/core/pipeline/pipeline_config.h>
+#include <dftracer/utils/core/rocksdb/database.h>
 #include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/core/tasks/task.h>
 #include <dftracer/utils/trace/indexing/resolve_and_build.h>
@@ -128,6 +129,16 @@ bool setup_and_parse(Cli& cli, int argc, char** argv) {
 template <class CliT, class RunFn>
 int cli_main(int argc, char** argv, const char* name, const char* description,
              RunFn&& run) {
+    // Close process-lifetime RocksDB caches (e.g. the aggregation tier cache,
+    // which holds read-only agg DBs open for reuse) at true process exit, while
+    // RocksDB's globals are still alive - running it here at cli_main scope,
+    // not via atexit, avoids the static-destruction-order races that abandon
+    // the handles and leak them.
+    struct RocksDbExitGuard {
+        ~RocksDbExitGuard() {
+            dftracer::utils::rocksdb::mark_process_exiting_for_rocksdb();
+        }
+    } rocksdb_exit_guard;
     dftracer::utils::logger::init();
     argparse::ArgumentParser program(name, DFTRACER_UTILS_PACKAGE_VERSION);
     program.add_description(description);

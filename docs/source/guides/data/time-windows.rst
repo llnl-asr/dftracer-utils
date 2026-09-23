@@ -91,7 +91,8 @@ first - add ``time_bucket`` (microseconds) to a trace query. Combined with a
                              .group_by({GroupKey::cat()})
                              .time_bucket(1000)   // 1 ms buckets
                              .agg({{AggOp::Count, "", "n"}})
-                             .collect()
+                             .collect()   // -> LazyFrame
+                             .collect()   // -> coro::CoroTask<DataFrame>
                              .get();
 
    .. tab-item:: Python
@@ -135,14 +136,17 @@ Supported spec shapes:
 
 - ``("row_number"|"rank"|"dense_rank", out)``
 - ``("lag"|"lead", value_col, offset, out)``
-- ``("running_sum"|"running_min"|"running_max"|"running_count", value_col, out)``
+- ``("running_sum"|"running_min"|"running_max"|"running_count"|"running_prod", value_col, out)``
+  (``running_prod`` is Float64)
 - ``("delta", value_col, out)``
 - ``("rate", value_col, time_col, out[, counter])``
 - ``("sessionize", time_col, threshold, out)``
-- ``("frame_sum"|"frame_min"|"frame_max"|"frame_count"|"frame_mean", value_col, preceding, following, out)``
-  (a bound of ``None`` means that side of the ROWS frame runs to the partition edge)
+- ``("frame_sum"|"frame_min"|"frame_max"|"frame_count"|"frame_mean", value_col, preceding, following, out[, min_periods])``
+  (a bound of ``None`` means that side of the ROWS frame runs to the partition edge;
+  the output is null while the frame holds fewer than ``min_periods`` present values)
 - ``("ntile", n, out)``
-- ``("first_value"|"last_value", value_col, out)``
+- ``("first_value"|"last_value"|"fill_forward", value_col, out)``
+  (``fill_forward`` is the nearest present value at or before the row: a group-wise ``ffill``)
 - ``("nth_value", value_col, k, out)``
 
 A single-column running or ranked series that needs no partitioning is often

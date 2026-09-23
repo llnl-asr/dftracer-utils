@@ -200,6 +200,7 @@ std::size_t Runtime::io_threads() const {
 namespace {
 std::mutex g_default_mtx;
 std::shared_ptr<Runtime> g_default_runtime;
+bool g_default_is_lazy = false;
 }  // namespace
 
 bool elastic_default_enabled() {
@@ -220,6 +221,7 @@ std::shared_ptr<Runtime> default_runtime_shared() {
         ExecutorConfig cfg;
         cfg.min_workers = elastic_default_enabled() ? 1 : 0;
         g_default_runtime = std::make_shared<Runtime>(cfg);
+        g_default_is_lazy = true;
     }
     return g_default_runtime;
 }
@@ -234,6 +236,23 @@ std::shared_ptr<Runtime> peek_default_runtime() {
 void set_default_runtime(std::shared_ptr<Runtime> rt) {
     std::lock_guard<std::mutex> lock(g_default_mtx);
     g_default_runtime = std::move(rt);
+    g_default_is_lazy = false;
+}
+
+bool try_install_default_runtime(std::shared_ptr<Runtime> rt) {
+    std::lock_guard<std::mutex> lock(g_default_mtx);
+    if (g_default_runtime && !g_default_is_lazy) return false;
+    g_default_runtime = std::move(rt);
+    g_default_is_lazy = false;
+    return true;
+}
+
+void clear_default_runtime_if(Runtime* rt) {
+    std::lock_guard<std::mutex> lock(g_default_mtx);
+    if (g_default_runtime.get() == rt) {
+        g_default_runtime.reset();
+        g_default_is_lazy = false;
+    }
 }
 
 }  // namespace dftracer::utils

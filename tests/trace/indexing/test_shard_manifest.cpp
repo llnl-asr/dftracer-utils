@@ -3,6 +3,7 @@
 #include <dftracer/utils/core/common/filesystem.h>
 #include <dftracer/utils/trace/indexing/shard_manifest.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <string>
 
@@ -25,19 +26,7 @@ IndexShardManifest sample() {
     return m;
 }
 
-struct TempDir {
-    fs::path path;
-    TempDir()
-        : path(fs::temp_directory_path() /
-               ("dftu_shard_manifest_test_" +
-                std::to_string(reinterpret_cast<std::uintptr_t>(this)))) {
-        fs::create_directories(path);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
-};
+using dftu_utils_test::ScopedTestDir;
 
 }  // namespace
 
@@ -66,9 +55,9 @@ TEST_SUITE("shard_manifest") {
     }
 
     TEST_CASE("write then read from a directory") {
-        TempDir dir;
-        write_shard_manifest(dir.path.string(), sample());
-        auto loaded = read_shard_manifest(dir.path.string());
+        ScopedTestDir dir("dftu_shard_manifest_test");
+        write_shard_manifest(dir.path().string(), sample());
+        auto loaded = read_shard_manifest(dir.path().string());
         REQUIRE(loaded.has_value());
         REQUIRE(loaded->shards.size() == 2);
         CHECK(loaded->shards[1].file_id_min == 128);
@@ -76,22 +65,22 @@ TEST_SUITE("shard_manifest") {
     }
 
     TEST_CASE("reading a directory with no manifest returns nullopt") {
-        TempDir dir;
-        CHECK_FALSE(read_shard_manifest(dir.path.string()).has_value());
+        ScopedTestDir dir("dftu_shard_manifest_test");
+        CHECK_FALSE(read_shard_manifest(dir.path().string()).has_value());
     }
 
     // The publish is a rename over any prior manifest; a reader that opens the
     // file at any instant sees a complete manifest, never a partial one.
     TEST_CASE("write replaces a prior manifest atomically") {
-        TempDir dir;
-        write_shard_manifest(dir.path.string(), sample());
+        ScopedTestDir dir("dftu_shard_manifest_test");
+        write_shard_manifest(dir.path().string(), sample());
 
         IndexShardManifest second;
         second.schema_version = 8;
         second.shards.push_back({"only.dftindex", 0, 0, 1, 1});
-        write_shard_manifest(dir.path.string(), second);
+        write_shard_manifest(dir.path().string(), second);
 
-        auto loaded = read_shard_manifest(dir.path.string());
+        auto loaded = read_shard_manifest(dir.path().string());
         REQUIRE(loaded.has_value());
         REQUIRE(loaded->shards.size() == 1);
         CHECK(loaded->shards[0].path == "only.dftindex");
@@ -107,18 +96,19 @@ TEST_SUITE("shard_manifest") {
     }
 
     TEST_CASE("resolve_shard_set_root finds a manifest directly or nested") {
-        TempDir dir;
-        CHECK(resolve_shard_set_root(dir.path.string()).empty());
+        ScopedTestDir dir("dftu_shard_manifest_test");
+        CHECK(resolve_shard_set_root(dir.path().string()).empty());
 
         const std::string nested =
-            (dir.path / std::string(SHARD_SET_DIRNAME)).string();
+            (dir.path() / std::string(SHARD_SET_DIRNAME)).string();
         write_shard_manifest(nested, sample());
-        CHECK(resolve_shard_set_root(dir.path.string()) == nested);
+        CHECK(resolve_shard_set_root(dir.path().string()) == nested);
 
         // A manifest directly at the target takes precedence over the nested
         // one.
-        write_shard_manifest(dir.path.string(), sample());
-        CHECK(resolve_shard_set_root(dir.path.string()) == dir.path.string());
+        write_shard_manifest(dir.path().string(), sample());
+        CHECK(resolve_shard_set_root(dir.path().string()) ==
+              dir.path().string());
     }
 
     TEST_CASE("malformed JSON throws") {

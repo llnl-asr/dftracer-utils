@@ -177,6 +177,29 @@ std::optional<bool> dict_excludes(const ChunkMeta& meta, const std::string& dim,
     return false;
 }
 
+// True if the chunk provably holds no event with `dim` == val, so every event
+// in it matches `dim != val`. nullopt when there is no dictionary to prove it.
+std::optional<bool> dict_lacks(const ChunkMeta& meta, const std::string& dim,
+                               const std::string& val) {
+    auto it = meta.dim_stats.find(dim);
+    if (it == meta.dim_stats.end()) return std::nullopt;
+    if (!it->second.has_value_counts_payload()) return std::nullopt;
+    it->second.ensure_value_counts_decoded();
+    if (!it->second.value_counts) return std::nullopt;
+    return it->second.value_counts->count(val) == 0;
+}
+
+// The chunk's dictionary for `dim`, or nullptr when it has none.
+const dftracer::utils::StringViewMap<std::uint64_t>* dict_of(
+    const ChunkMeta& meta, const std::string& dim) {
+    auto it = meta.dim_stats.find(dim);
+    if (it == meta.dim_stats.end()) return nullptr;
+    if (!it->second.has_value_counts_payload()) return nullptr;
+    it->second.ensure_value_counts_decoded();
+    if (!it->second.value_counts) return nullptr;
+    return &*it->second.value_counts;
+}
+
 bool is_numeric_type(const std::string& vtype) {
     return vtype == "uint" || vtype == "int" || vtype == "double";
 }
@@ -374,31 +397,53 @@ bool file_survives_file_blooms(PrunerContext& ctx, const IndexDatabase& db,
     return file_may_match(root, ctx);
 }
 
-// Pattern-match nodes (like/ilike/regex/contains) cannot be pruned against
-// chunk stats, so they conservatively yield all chunks. A NotNode wrapping such
-// a subtree must not take the set-difference complement (it would drop every
-// chunk); detect that case and yield all chunks instead.
-bool subtree_has_match(const query_ns::QueryNode& node) {
-    return std::visit(
-        [](auto&& n) -> bool {
-            using T = std::decay_t<decltype(n)>;
-            if constexpr (std::is_same_v<T, query_ns::MatchNode>) {
-                return true;
-            } else if constexpr (std::is_same_v<T, query_ns::AndNode> ||
-                                 std::is_same_v<T, query_ns::OrNode>) {
-                return subtree_has_match(*n.left) ||
-                       subtree_has_match(*n.right);
-            } else if constexpr (std::is_same_v<T, query_ns::NotNode>) {
-                return subtree_has_match(*n.operand);
-            } else {
-                return false;
-            }
-        },
-        node.data);
+// True when the chunk's whole [min, max] range satisfies `op val`, so every
+// event in it matches. The dual of range_may_match, which asks whether ANY
+// event can.
+bool range_all_match(const ChunkMeta& meta, const std::string& dim,
+                     query_ns::CompareOp op, const std::string& val) {
+    auto it = meta.dim_stats.find(dim);
+    if (it == meta.dim_stats.end()) return false;
+    const auto& ds = it->second;
+    if (ds.min_value.empty() || ds.max_value.empty()) return false;
+
+    // Corrupt stats (min > max) prove nothing either way.
+    if (is_numeric_type(ds.value_type)) {
+        try {
+            if (std::stod(ds.min_value) > std::stod(ds.max_value)) return false;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    switch (op) {
+        case query_ns::CompareOp::GT:
+            return compare_values(ds.min_value, val, ds.value_type) > 0;
+        case query_ns::CompareOp::GE:
+            return compare_values(ds.min_value, val, ds.value_type) >= 0;
+        case query_ns::CompareOp::LT:
+            return compare_values(ds.max_value, val, ds.value_type) < 0;
+        case query_ns::CompareOp::LE:
+            return compare_values(ds.max_value, val, ds.value_type) <= 0;
+        default:
+            return false;
+    }
 }
 
 std::set<std::uint64_t> evaluate_node(const query_ns::QueryNode& node,
                                       PrunerContext& ctx);
+
+// Chunks in which EVERY event matches `node` - the dual of evaluate_node's
+// may-match set, and an UNDER-approximation (a chunk left out is not proof of
+// a non-match, only of the stats not showing one).
+//
+// This is what a negation needs. Complementing a may-match set is unsound: a
+// chunk holding events on both sides of `dur > 25` is a may-match for the
+// operand and still holds matches for its negation, so the difference would
+// drop it. Complementing an all-match set is exact, because a chunk is dropped
+// only when nothing in it can satisfy the negation.
+std::set<std::uint64_t> evaluate_all_match(const query_ns::QueryNode& node,
+                                           PrunerContext& ctx);
 
 std::set<std::uint64_t> eval_compare(const query_ns::CompareNode& n,
                                      PrunerContext& ctx) {
@@ -572,15 +617,113 @@ std::set<std::uint64_t> evaluate_node(const query_ns::QueryNode& node,
                 left.insert(right.begin(), right.end());
                 return left;
             } else if constexpr (std::is_same_v<T, query_ns::NotNode>) {
-                if (subtree_has_match(*n.operand)) return ctx.all_chunks;
-                auto inner = evaluate_node(*n.operand, ctx);
+                // A chunk may hold an event matching `not p` unless every
+                // event in it matches `p`. Complementing evaluate_node's
+                // may-match set instead dropped any chunk holding events on
+                // both sides of `p`, which for `not (dur > 25)` was every
+                // chunk, so the query returned nothing.
+                auto all_match = evaluate_all_match(*n.operand, ctx);
                 std::set<std::uint64_t> complement;
                 std::set_difference(
-                    ctx.all_chunks.begin(), ctx.all_chunks.end(), inner.begin(),
-                    inner.end(), std::inserter(complement, complement.begin()));
+                    ctx.all_chunks.begin(), ctx.all_chunks.end(),
+                    all_match.begin(), all_match.end(),
+                    std::inserter(complement, complement.begin()));
                 return complement;
             } else {
                 return ctx.all_chunks;
+            }
+        },
+        node.data);
+}
+
+std::set<std::uint64_t> all_match_compare(const query_ns::CompareNode& n,
+                                          PrunerContext& ctx) {
+    std::set<std::uint64_t> result;
+    const std::string val = literal_to_string(n.value);
+    for (auto ckpt : ctx.all_chunks) {
+        auto it = ctx.chunks.find(ckpt);
+        if (it == ctx.chunks.end()) continue;  // no stats, nothing provable
+        const ChunkMeta& meta = it->second;
+        if (n.op == query_ns::CompareOp::EQ) {
+            const auto* vc = dict_of(meta, n.field.path);
+            if (vc && vc->size() == 1 && vc->count(val) > 0)
+                result.insert(ckpt);
+        } else if (n.op == query_ns::CompareOp::NE) {
+            auto lacks = dict_lacks(meta, n.field.path, val);
+            if (lacks.has_value() && *lacks) result.insert(ckpt);
+        } else if (range_all_match(meta, n.field.path, n.op, val)) {
+            result.insert(ckpt);
+        }
+    }
+    return result;
+}
+
+// Every dictionary value is (or is not) in the literal list.
+std::set<std::uint64_t> all_match_in(const query_ns::ArrayNode& values,
+                                     const std::string& field, bool want_in,
+                                     PrunerContext& ctx) {
+    std::unordered_set<std::string> wanted;
+    for (const auto& elem : values.elements)
+        wanted.insert(literal_to_string(elem));
+
+    std::set<std::uint64_t> result;
+    for (auto ckpt : ctx.all_chunks) {
+        auto it = ctx.chunks.find(ckpt);
+        if (it == ctx.chunks.end()) continue;
+        const auto* vc = dict_of(it->second, field);
+        if (!vc || vc->empty()) continue;
+        bool all = true;
+        for (const auto& [value, count] : *vc) {
+            (void)count;
+            if ((wanted.count(std::string(value)) > 0) != want_in) {
+                all = false;
+                break;
+            }
+        }
+        if (all) result.insert(ckpt);
+    }
+    return result;
+}
+
+std::set<std::uint64_t> evaluate_all_match(const query_ns::QueryNode& node,
+                                           PrunerContext& ctx) {
+    return std::visit(
+        [&ctx](auto&& n) -> std::set<std::uint64_t> {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, query_ns::CompareNode>) {
+                return all_match_compare(n, ctx);
+            } else if constexpr (std::is_same_v<T, query_ns::InNode>) {
+                return all_match_in(n.values, n.field.path, true, ctx);
+            } else if constexpr (std::is_same_v<T, query_ns::NotInNode>) {
+                return all_match_in(n.values, n.field.path, false, ctx);
+            } else if constexpr (std::is_same_v<T, query_ns::AndNode>) {
+                auto left = evaluate_all_match(*n.left, ctx);
+                auto right = evaluate_all_match(*n.right, ctx);
+                std::set<std::uint64_t> intersection;
+                std::set_intersection(
+                    left.begin(), left.end(), right.begin(), right.end(),
+                    std::inserter(intersection, intersection.begin()));
+                return intersection;
+            } else if constexpr (std::is_same_v<T, query_ns::OrNode>) {
+                // An under-approximation: a chunk where every event matches
+                // either side also has every event matching the disjunction,
+                // but so may one where the two cover it between them.
+                auto left = evaluate_all_match(*n.left, ctx);
+                auto right = evaluate_all_match(*n.right, ctx);
+                left.insert(right.begin(), right.end());
+                return left;
+            } else if constexpr (std::is_same_v<T, query_ns::NotNode>) {
+                // Every event matches `not p` exactly when no event matches
+                // `p`, which is what evaluate_node's may-match set rules out.
+                auto may = evaluate_node(*n.operand, ctx);
+                std::set<std::uint64_t> complement;
+                std::set_difference(
+                    ctx.all_chunks.begin(), ctx.all_chunks.end(), may.begin(),
+                    may.end(), std::inserter(complement, complement.begin()));
+                return complement;
+            } else {
+                // A pattern match proves nothing from chunk stats.
+                return {};
             }
         },
         node.data);

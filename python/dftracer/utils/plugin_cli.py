@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from . import _plugin_build
+from . import _plugin_build, jit
 
 
 def _ident(name: str) -> str:
@@ -23,33 +24,23 @@ def _c_template(name: str) -> str:
 #include <stdint.h>
 #include <stdlib.h>
 
-static uint32_t needs(void* self) {{
-    (void)self;
-    return 0;
-}}
-
 static void* make_slice(void* self) {{
     (void)self;
     return calloc(1, 1);
 }}
 
-static dftu_task* on_batch(void* slice, const dftu_batch* b,
-                          const dftu_host* host) {{
-    const dftu_ext_map* map =
-        (const dftu_ext_map*)host->get_extension(host->h, DFTU_EXT_MAP);
-    static const dftu_type key_types[1] = {{DFTU_T_I64}};
-    dftu_map* m;
-    uint32_t i;
+static dftu_task* on_batch(void* slice, const dftu_dataframe* df,
+                           const dftu_plugin_host* host) {{
+    const dftu_svc_agg* agg =
+        (const dftu_svc_agg*)host->get_service(host->h, DFTU_SVC_AGG);
+    static const char* keys[1] = {{"pid"}};
+    static const dftu_agg_col specs[1] = {{
+        {{DFTU_AGG_COUNT, NULL, "value", 0.0, NULL}}}};
+    dftu_agg* a;
     (void)slice;
-    if (!map || !map->map_new) return NULL;
-    m = map->map_new(host->h, "{name}", key_types, 1, DFTU_MONOID_COUNTER);
-    if (!m) return NULL;
-    for (i = 0; i < b->count; ++i) {{
-        const dftu_event* e = &b->events[i];
-        int64_t key[1];
-        key[0] = (int64_t)e->pid;
-        map->map_add_u64(host->h, m, key, 1);
-    }}
+    if (!agg || !agg->agg_new || !agg->agg_accumulate) return NULL;
+    a = agg->agg_new(host->h, "{name}", keys, 1, specs, 1);
+    if (a) agg->agg_accumulate(host->h, a, df);
     return NULL;
 }}
 
@@ -58,7 +49,7 @@ static void merge(void* into, void* other) {{
     (void)other;
 }}
 
-static dftu_task* on_finalize(void* slice, const dftu_host* host) {{
+static dftu_task* on_finalize(void* slice, const dftu_plugin_host* host) {{
     (void)slice;
     (void)host;
     return NULL;
@@ -73,11 +64,11 @@ static dftu_plugin g_plugin;
 #ifdef __cplusplus
 extern "C"
 #endif
-dftu_plugin* dftracer_plugin(const dftu_value* config) {{
+dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {{
+    (void)h;
     (void)config;
     g_plugin.abi_version = DFTRACER_PLUGIN_ABI_VERSION;
     g_plugin.self = NULL;
-    g_plugin.needs = needs;
     g_plugin.plan_query = NULL;
     g_plugin.make_slice = make_slice;
     g_plugin.on_batch = on_batch;
@@ -101,20 +92,17 @@ using namespace dftracer::utils::plugins;
 struct {cls} {{
     explicit {cls}(const Config&) {{}}
 
-    void step(const dftu_batch& b, Host host) {{
-        dftu_map* m = host.map_new("{name}", {{DFTU_T_I64}}, DFTU_MONOID_COUNTER);
-        if (!m) return;
-        for (std::uint32_t i = 0; i < b.count; ++i) {{
-            const dftu_event& e = b.events[i];
-            host.map_add_u64(m, {{static_cast<std::int64_t>(e.pid)}}, 1);
-        }}
+    void step(const dftu_dataframe* df, Host host) {{
+        Agg a = host.agg("{name}", {{"pid"}}, {{agg::count("value")}});
+        if (a) a.accumulate(df);
     }}
 
     void merge({cls}&) {{}}
     void finalize(Host) {{}}
 }};
 
-extern "C" dftu_plugin* dftracer_plugin(const dftu_value* config) {{
+extern "C" dftu_plugin* dftracer_plugin(dftu_plugin_host* h, const dftu_value* config) {{
+    (void)h;
     return make_plugin<{cls}>(config);
 }}
 """
@@ -131,8 +119,62 @@ def _cmd_new(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_build(args: argparse.Namespace) -> int:
-    src = Path(args.src)
+def _is_plugin_spec(arg: str) -> bool:
+    """True for ``module:Class``, never for an existing source path."""
+    return ":" in arg and not Path(arg).is_file()
+
+
+def _resolve_plugin_spec(spec: str) -> type:
+    module_name, _, attr = spec.partition(":")
+    if not module_name or not attr:
+        raise ValueError(f"dftracer_plugin: invalid plugin spec '{spec}', expected module:Class")
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(f"dftracer_plugin: cannot import module '{module_name}': {exc}") from exc
+    cls = getattr(module, attr, None)
+    if cls is None:
+        raise ValueError(f"dftracer_plugin: module '{module_name}' has no attribute '{attr}'")
+    if not jit.is_jit_plugin(cls):
+        raise ValueError(f"dftracer_plugin: '{spec}' is not a @jit.plugin class")
+    return cls
+
+
+def _mangle(name: str) -> str:
+    return "".join(c if c.isalnum() else "_" for c in name).upper()
+
+
+def _render_header(cls: type) -> str:
+    """A C header of ``#define`` name constants for every name ``cls``
+    provides, guarded under the mangled class identity."""
+    provided = jit.provided_names(cls)
+    stem = next(iter(provided.values()))
+    attr = next(iter(provided.keys()))
+    stem = stem[: -(len(attr) + 1)]
+    guard = _mangle(stem) + "_H"
+    macros: Dict[str, str] = {}
+    lines = []
+    for attr, qid in sorted(provided.items(), key=lambda kv: kv[1]):
+        macro = _mangle(qid)
+        if macro in macros and macros[macro] != qid:
+            raise ValueError(
+                f"dftracer_plugin: '{macros[macro]}' and '{qid}' both mangle to "
+                f"'{macro}'; rename one of them"
+            )
+        macros[macro] = qid
+        lines.append(f'#define {macro} "{qid}"')
+    body = "\n".join(lines)
+    return (
+        "/* generated by dftracer_plugin build - do not edit */\n"
+        f"#ifndef {guard}\n"
+        f"#define {guard}\n"
+        f"{body}\n"
+        "#endif\n"
+    )
+
+
+def _cmd_build_source(args: argparse.Namespace, src_arg: str) -> int:
+    src = Path(src_arg)
     if not src.is_file():
         print(f"dftracer_plugin: no such file: {src}", file=sys.stderr)
         return 1
@@ -143,6 +185,59 @@ def _cmd_build(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     print(so)
+    return 0
+
+
+def _cmd_build_spec(args: argparse.Namespace, spec: str) -> int:
+    try:
+        cls = _resolve_plugin_spec(spec)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    out = args.output or f"{cls.__name__.lower()}.so"
+    try:
+        so = jit.build(cls, out=out)
+    except jit.JitError as exc:
+        print(f"dftracer_plugin: {exc}", file=sys.stderr)
+        return 1
+    print(so)
+    if args.no_header:
+        return 0
+    header_path = args.header or str(Path(so).with_suffix(".h"))
+    try:
+        header_text = _render_header(cls)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    Path(header_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(header_path).write_text(header_text, encoding="utf-8")
+    print(header_path)
+    return 0
+
+
+def _cmd_build(args: argparse.Namespace) -> int:
+    if _is_plugin_spec(args.src):
+        return _cmd_build_spec(args, args.src)
+    return _cmd_build_source(args, args.src)
+
+
+def _cmd_ops(args: argparse.Namespace) -> int:
+    """List the host ops a plugin may call by name, with their signatures.
+
+    A C plugin author reaching dftu.svc.ops otherwise has to read
+    exported_series_ops.def to learn what is callable and with what.
+    """
+    from .jit import ops as _ops
+
+    names = sorted(_ops.list())
+    if args.prefix:
+        names = [n for n in names if n.startswith(args.prefix)]
+    if not names:
+        print(f"dftracer_plugin: no ops match '{args.prefix}'", file=sys.stderr)
+        return 1
+    for n in names:
+        info = _ops.info(n)
+        print(f"{n}  {info['signature']}  [{info['kind']}, arity {info['arity']}]")
     return 0
 
 
@@ -164,9 +259,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_new.set_defaults(func=_cmd_new)
 
     p_build = sub.add_parser("build", help="compile a plugin source to a loadable .so")
-    p_build.add_argument("src", help="plugin source file (.c or .cpp)")
+    p_build.add_argument(
+        "src", help="plugin source file (.c or .cpp), or a Python plugin spec module:Class"
+    )
     p_build.add_argument("-o", "--output", metavar="OUT", help="output .so path")
+    p_build.add_argument(
+        "--header",
+        metavar="PATH",
+        help="header path for a module:Class build (default: OUT with .h)",
+    )
+    p_build.add_argument(
+        "--no-header",
+        action="store_true",
+        help="skip the generated header for a module:Class build",
+    )
     p_build.set_defaults(func=_cmd_build)
+
+    p_ops = sub.add_parser("ops", help="list host ops callable by name")
+    p_ops.add_argument(
+        "prefix", nargs="?", default="", help="only ops starting with this, e.g. dftu.frame."
+    )
+    p_ops.set_defaults(func=_cmd_ops)
 
     p_cflags = sub.add_parser("cflags", help="print the plugin compile flags")
     p_cflags.set_defaults(func=_cmd_cflags)

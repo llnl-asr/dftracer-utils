@@ -232,18 +232,75 @@ class Series {
         return static_cast<const T*>(dftu_series_data(handle_));
     }
 
-    /// Value of a FLAT String/Binary column at `i`. Undefined for other types.
+    /// FLAT value buffer as a span of `length()` elements; empty unless FLAT.
+    template <class T>
+    std::span<const T> values() const noexcept {
+        const T* p = data<T>();
+        return p != nullptr
+                   ? std::span<const T>(p, static_cast<std::size_t>(length()))
+                   : std::span<const T>();
+    }
+
+    /// Value of a String/Binary/LargeString/LargeBinary column at `i`, valid
+    /// while this column lives.
+    ///
+    /// FLAT only: a DICTIONARY or SELECTION column (what `filter`, `take` and
+    /// the sort/topk kernels return, zero-copy over a base) carries no value
+    /// buffer of its own, so there is nothing to read at `i`. Those return an
+    /// empty view; call `materialize()` first to read them. Empty is therefore
+    /// ambiguous with a genuine empty string - use `is_flat()` when the
+    /// difference matters.
     std::string_view string_at(std::int64_t i) const noexcept {
-        const std::int32_t* off = dftu_series_offsets(handle_);
         const char* d = static_cast<const char*>(dftu_series_data(handle_));
+        // dftu_series_data returns NULL for a non-FLAT column; reading through
+        // it produced a segfault rather than a diagnosable result.
+        if (d == nullptr) return {};
+        if (is_wide_offset_type(type())) {
+            const std::int64_t* off = dftu_series_offsets64(handle_);
+            if (off == nullptr) return {};
+            return std::string_view(
+                d + off[i], static_cast<std::size_t>(off[i + 1] - off[i]));
+        }
+        const std::int32_t* off = dftu_series_offsets(handle_);
+        if (off == nullptr) return {};
         return std::string_view(d + off[i],
                                 static_cast<std::size_t>(off[i + 1] - off[i]));
     }
 
+    /// Whether the values live in this column's own buffers, so `data()`,
+    /// `offsets()` and `string_at()` can read them. False for CONSTANT,
+    /// DICTIONARY and SELECTION, which `materialize()` converts.
+    bool is_flat() const noexcept { return encoding() == Encoding::Flat; }
+
     /// int32 offset buffer (length+1 entries) of a String/Binary or List
-    /// column, or null for fixed-width types.
+    /// column, or null for fixed-width types and for a LargeString/
+    /// LargeBinary/LargeList column (see `offsets64()`).
     const std::int32_t* offsets() const noexcept {
         return dftu_series_offsets(handle_);
+    }
+
+    /// int32 offset buffer as a span of `length()+1` entries; empty for
+    /// fixed-width types and for a Large* column.
+    std::span<const std::int32_t> offsets_span() const noexcept {
+        const std::int32_t* off = offsets();
+        return off != nullptr ? std::span<const std::int32_t>(
+                                    off, static_cast<std::size_t>(length()) + 1)
+                              : std::span<const std::int32_t>();
+    }
+
+    /// int64 offset buffer (length+1 entries) of a LargeString/LargeBinary/
+    /// LargeList column, or null otherwise.
+    const std::int64_t* offsets64() const noexcept {
+        return dftu_series_offsets64(handle_);
+    }
+
+    /// int64 offset buffer as a span of `length()+1` entries; empty unless
+    /// this is a Large* column.
+    std::span<const std::int64_t> offsets64_span() const noexcept {
+        const std::int64_t* off = offsets64();
+        return off != nullptr ? std::span<const std::int64_t>(
+                                    off, static_cast<std::size_t>(length()) + 1)
+                              : std::span<const std::int64_t>();
     }
 
     /// Child count: 1 for a List, the field count for a Struct, else 0.
@@ -256,6 +313,18 @@ class Series {
     Series child(std::int64_t i) const noexcept {
         return Series{dftu_series_child(handle_, static_cast<std::int32_t>(i))};
     }
+
+    /// Name of Struct field `i`; empty for a List's element or out of range.
+    std::string field_name(std::int64_t i) const {
+        const char* s =
+            dftu_series_field_name(handle_, static_cast<std::int32_t>(i));
+        return s ? std::string(s) : std::string();
+    }
+
+    /// The full nested DataType, walking `num_children()`/`child()` and each
+    /// Struct field's name. A List's single child becomes its (unnamed)
+    /// element Field; a Struct's children become named Fields in order.
+    DataType data_type() const;
 
     /// A new owned column sharing this column's buffers zero-copy (refcount
     /// bump, no data copy).
@@ -274,6 +343,16 @@ class Series {
     Series sub(const Series& other) const;
     Series mul(const Series& other) const;
     Series div(const Series& other) const;
+    /// Python-semantics floor division, remainder and power: Int64 when both
+    /// operands are integral, else Float64; a zero divisor or a negative
+    /// integer exponent is null.
+    Series floordiv(const Series& other) const;
+    Series mod(const Series& other) const;
+    Series pow(const Series& other) const;
+    /// Nulls filled from the nearest present value before (ffill) or after
+    /// (bfill); a leading (trailing) run with none stays null.
+    Series ffill() const;
+    Series bfill() const;
 
     Scalar sum() const;
     Scalar min() const;
@@ -337,7 +416,7 @@ class Series {
     /// unless the input is a 64-bit integer column.
     Series prim(PrimOp op) const;
     Series abs() const;
-    Series clip(dftu_scalar lo, dftu_scalar hi) const;
+    Series clip(Scalar lo, Scalar hi) const;
     /// Clamp to [lo, hi] with natural C++ values (clip(0, 100)); the bounds
     /// convert to this column's element type.
     template <class Lo, class Hi,
@@ -347,7 +426,7 @@ class Series {
         return clip(to_scalar_(lo), to_scalar_(hi));
     }
     Series round() const;
-    Series fillna(dftu_scalar fill) const;
+    Series fillna(Scalar fill) const;
     /// Replace nulls with a natural C++ value (fillna(0), fillna(1.5)); the
     /// fill converts to this column's element type.
     template <class T, class = std::enable_if_t<std::is_arithmetic_v<T>>>
@@ -372,6 +451,8 @@ class Series {
     Series unique() const;
     Series dictionary_encode() const;
 
+    Series null_mask() const;      ///< Bool mask: row is null.
+    Series valid_mask() const;     ///< Bool mask: row is present.
     Series is_nan() const;         ///< Bool mask: value is NaN (floats).
     Series is_finite() const;      ///< Bool mask: value is finite.
     Series is_infinite() const;    ///< Bool mask: value is +/-Inf (floats).
@@ -413,9 +494,13 @@ class Series {
 
     Series argsort(bool descending = false) const;
     Series take(const std::vector<std::int64_t>& indices) const;
+    Series take(std::span<const std::int64_t> indices) const;
     Series materialize() const;
     /// Keep the rows where the bit-packed Bool `mask` (same length) is true.
     Series filter(const Series& mask) const;
+    /// Per row, this column's value where `mask` is true, else `other`'s
+    /// (`mask ? this : other`); both must share a type and length.
+    Series where(const Series& mask, const Series& other) const;
 
     Series str_eq(std::string_view rhs) const;
     Series str_contains(std::string_view needle) const;
@@ -423,6 +508,9 @@ class Series {
     Series str_ends_with(std::string_view suffix) const;
     /// Bool mask: the whole string matches the ECMAScript regex `pattern`.
     Series str_matches(std::string_view pattern) const;
+    /// Bool mask: the ECMAScript regex `pattern` matches anywhere in the
+    /// string.
+    Series str_search(std::string_view pattern) const;
     /// Bool mask: the string matches the SQL LIKE / glob `pattern` (`%` any
     /// run,
     /// `_` one char, `\` escapes a literal `%`/`_`/`\`).
@@ -431,6 +519,13 @@ class Series {
     Series str_len_chars() const;  ///< Int64 per-row UTF-8 codepoint count.
     /// Int64 byte index of the first `needle`, or -1.
     Series str_find(std::string_view needle) const;
+    Series fnv1a() const;  ///< UInt64 FNV-1a 64 of each row's bytes.
+    /// UInt64 parse of each row as dftracer's 16-hex-digit hash form;
+    /// a row not in that form is null.
+    Series hex64_parse() const;
+    /// String format of each UInt64/Int64 row as dftracer's 16-lowercase-hex-
+    /// digit hash form; the inverse of hex64_parse.
+    Series hex64_format() const;
     Series to_lowercase() const;  ///< ASCII case fold (non-ASCII unchanged).
     Series to_uppercase() const;  ///< ASCII case fold (non-ASCII unchanged).
     Series str_strip() const;     ///< Trim ASCII whitespace both ends.
@@ -449,6 +544,38 @@ class Series {
     Series str_zfill(std::int64_t width) const;
     /// Split each row on literal `sep` -> List<String> column.
     Series str_split(std::string_view sep) const;
+    /// The capture `group` of the first regex `pattern` match per row; null
+    /// where there is no match.
+    Series str_extract(std::string_view pattern, std::int64_t group = 1) const;
+    /// Per-row element count of a List column (Int64).
+    Series list_len() const;
+    /// The element at `index` (negative from the end) of each row's list,
+    /// null where the list is too short.
+    Series list_get(std::int64_t index) const;
+    /// Each row's List<String> joined with `sep`.
+    Series list_join(std::string_view sep) const;
+    /// The pandas .str batch over ASCII (dataframe/abi.h documents each):
+    /// case forms by dftu_str_case, character classes by dftu_str_class.
+    Series str_case(std::int32_t op) const;
+    Series str_is(std::int32_t cls) const;
+    Series str_count(std::string_view pat) const;
+    Series str_rfind(std::string_view needle) const;
+    Series str_remove_prefix(std::string_view prefix) const;
+    Series str_remove_suffix(std::string_view suffix) const;
+    Series str_repeat(std::int64_t n) const;
+    Series str_center(std::int64_t width, char fill = ' ') const;
+    Series str_cat(const Series& other) const;
+    Series str_findall(std::string_view pattern) const;
+    Series str_partition(std::string_view sep, bool from_right = false) const;
+    /// A calendar part (dftu_dt_part) as Int64, `unit` (dftu_time_unit) for
+    /// an Int64 input; each instant rounded to a bucket of `every` units by
+    /// dftu_dt_round_mode.
+    Series dt_part(std::int32_t part,
+                   std::int32_t unit = DFTU_TIME_UNIT_MICRO) const;
+    Series dt_round(std::int64_t every, std::int32_t mode) const;
+    /// dftu_series_with_timezone: this Timestamp column under zone `tz`
+    /// (empty for naive), buffers shared.
+    Series with_timezone(std::string_view tz) const;
 
     Series logical_and(const Series& other) const;
     Series logical_or(const Series& other) const;
@@ -533,6 +660,13 @@ class Series {
     template <class T>
     Series operator>=(T v) const {
         return ge(v);
+    }
+
+    /// Compare against a scalar with a runtime op code, producing a Bool mask.
+    /// For a planner holding op and rhs as values.
+    Series compare(CmpOp op, Scalar rhs) const {
+        return Series{
+            dftu_series_compare(handle_, static_cast<dftu_cmp_op>(op), rhs)};
     }
 
    private:

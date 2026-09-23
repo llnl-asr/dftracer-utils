@@ -17,14 +17,6 @@
 
 namespace {
 
-void set_test_library_path(const std::string& binary) {
-    const fs::path build_root = fs::path(binary).parent_path().parent_path();
-    const std::string lib_path =
-        (build_root / "lib").string() + ":" +
-        (build_root / "_deps" / "rocksdb-build").string();
-    ::setenv("LD_LIBRARY_PATH", lib_path.c_str(), 1);
-}
-
 std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
                           int id) {
     auto trace_gz = env.create_dft_test_gzip_file(num_events);
@@ -37,36 +29,13 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 }
 
 std::string find_index_binary() {
-    const char* env_path = std::getenv("DFTRACER_INDEX_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_index",         "../dftracer_index",
-        "../../dftracer_index",     "../bin/dftracer_index",
-        "../../bin/dftracer_index",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_INDEX_PATH",
+                                                "dftracer_index");
 }
 
 int run_index(const std::string& binary, const std::vector<std::string>& args) {
-    std::vector<const char*> argv;
-    argv.push_back(binary.c_str());
-    for (const auto& arg : args) argv.push_back(arg.c_str());
-    argv.push_back(nullptr);
-    pid_t pid = ::fork();
-    if (pid < 0) return -1;
-    if (pid == 0) {
-        set_test_library_path(binary);
-        ::execv(binary.c_str(), const_cast<char* const*>(argv.data()));
-        ::_exit(127);
-    }
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    return -1;
+    dftu_utils_test::set_test_library_path(binary);
+    return dftu_utils_test::run_process(binary, args);
 }
 
 }  // namespace

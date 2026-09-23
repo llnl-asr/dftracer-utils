@@ -48,7 +48,9 @@ the edge.
    :maxdepth: 1
 
    data/dataframe
+   data/lazyframe
    data/series
+   data/pandas-polars
    data/ingest
    core/columnar-ops
    data/joins

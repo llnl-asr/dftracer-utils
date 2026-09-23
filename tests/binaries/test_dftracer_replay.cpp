@@ -59,18 +59,8 @@ bool under_valgrind() {
 }
 
 std::string find_replay_binary() {
-    const char* env_path = std::getenv("DFTRACER_REPLAY_PATH");
-    if (env_path != nullptr && ::access(env_path, X_OK) == 0) return env_path;
-
-    std::vector<std::string> candidates = {
-        "./dftracer_replay",         "../dftracer_replay",
-        "../../dftracer_replay",     "../bin/dftracer_replay",
-        "../../bin/dftracer_replay",
-    };
-    for (const auto& path : candidates) {
-        if (::access(path.c_str(), X_OK) == 0) return path;
-    }
-    return "";
+    return dftu_utils_test::find_binary_by_name("DFTRACER_REPLAY_PATH",
+                                                "dftracer_replay");
 }
 
 // This test process links a threaded runtime, so a hand-rolled fork+exec is

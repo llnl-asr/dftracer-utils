@@ -4,6 +4,7 @@
 #include <dftracer/utils/trace/aggregators/system_metrics_merge_operator.h>
 #include <dftracer/utils/utilities/indexer/error.h>
 #include <dftracer/utils/utilities/indexer/index_database_sst_writer_context.h>
+#include <dftracer/utils/utilities/indexer/internal/column_type_codec.h>
 #include <dftracer/utils/utilities/indexer/internal/db_error.h>
 #include <dftracer/utils/utilities/indexer/internal/index_encoding.h>
 #include <dftracer/utils/utilities/indexer/internal/statistics_codec.h>
@@ -283,8 +284,9 @@ void IndexDatabaseSstWriterContext::insert_index_dimension(
 void IndexDatabaseSstWriterContext::insert_column(int file_id,
                                                   std::string_view column,
                                                   ColumnType type) {
-    dimensions_buf_.emplace_back(encoding::make_column_key(file_id, column),
-                                 std::string(1, static_cast<char>(type)));
+    dimensions_buf_.emplace_back(
+        encoding::make_column_key(file_id, column),
+        internal::encode_data_type(internal::column_type_to_data_type(type)));
 }
 
 void IndexDatabaseSstWriterContext::insert_chunk_dimension_stats(

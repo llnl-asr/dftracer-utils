@@ -227,7 +227,9 @@ def test_columnar_over_view_batch_stays_in_vec():
         with dft.Indexer(files=[gz]) as ix:
             ix.ensure_indexed()
 
-        batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur", "mean:dur").collect()
+        batch = (
+            TraceViewer(gz).group_by("cat").agg("count", "sum:dur", "mean:dur").collect().collect()
+        )
         assert isinstance(batch, DataFrame)
         assert set(["cat", "count", "sum_dur", "mean_dur"]).issubset(batch.keys())
 
@@ -253,7 +255,7 @@ def test_columnar_batch_to_arrow_and_pandas_roundtrip():
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
             ix.ensure_indexed()
-        batch = TraceViewer(gz).group_by("cat").agg("count").collect()
+        batch = TraceViewer(gz).group_by("cat").agg("count").collect().collect()
         tbl = batch.to_arrow()
         assert tbl.num_rows == batch.num_rows
         df = batch.to_pandas()
@@ -273,7 +275,7 @@ def test_columnar_batch_and_column_pickle_roundtrip():
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
             ix.ensure_indexed()
-        batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
+        batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect().collect()
 
         b2 = pickle.loads(pickle.dumps(batch))
         assert isinstance(b2, DataFrame)
@@ -298,7 +300,7 @@ def test_vecbatch_native_frame_ops():
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
             ix.ensure_indexed()
-        batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
+        batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect().collect()
 
         proj = batch.select("cat", "count")
         assert isinstance(proj, DataFrame)
@@ -379,6 +381,11 @@ def test_veccolumn_rank_rolling_cum():
     col = _series_from_arrow(pa.array([3, 1, 2, 1], pa.int64()))
     assert col.rank(method="average").to_arrow().to_pylist() == [4.0, 1.5, 3.0, 1.5]
     assert col.rank(method="dense").to_arrow().to_pylist() == [3.0, 1.0, 2.0, 1.0]
+    assert col.rank(method="min").to_arrow().to_pylist() == [4.0, 1.0, 3.0, 1.0]
+    assert col.rank(method="max").to_arrow().to_pylist() == [4.0, 2.0, 3.0, 2.0]
+    assert col.rank(method="first").to_arrow().to_pylist() == [4.0, 1.0, 3.0, 2.0]
+    with pytest.raises(ValueError, match="average, min, max, dense or first"):
+        col.rank(method="median")
 
     seq = _series_from_arrow(pa.array([1, 2, 3, 4, 5], pa.int64()))
     rs = seq.rolling(3, op="sum").to_arrow()
@@ -410,8 +417,8 @@ def test_series_d1_rolling_var_std_median_quantile():
 def test_series_d1_ewm():
     x = _series_from_arrow(pa.array([1.0, 2.0, 3.0, 4.0], pa.float64()))
     em = x.ewm_mean(0.5).to_arrow().to_pylist()
-    # y0=1; y1=1.5; y2=2.25; y3=3.125.
-    assert em == pytest.approx([1.0, 1.5, 2.25, 3.125])
+    # pandas adjust=True: the weighted average of every observation so far.
+    assert em == pytest.approx([1.0, 5 / 3, 2.4285714285714284, 3.2666666666666666])
     es = x.ewm_std(0.5).to_arrow().to_pylist()
     assert es[0] is None  # sample std of one point is undefined
     assert es[1] == pytest.approx(0.5**0.5)
@@ -469,7 +476,7 @@ def test_series_a1_reducers():
     w = _series_from_arrow(pa.array([5, 1, 9, 1, 9], pa.int64()))
     assert w.arg_min() == 1
     assert w.arg_max() == 2
-    assert w.mode() == 1
+    assert w.mode().to_list() == [1]
 
     mask_all = w > 0
     assert mask_all.all() is True
@@ -530,7 +537,9 @@ def test_series_a2_ieee_predicates():
 
 def test_series_a2_unique_duplicated_sorted():
     c = _series_from_arrow(pa.array([3, 1, 3, 2, 1], pa.int64()))
-    assert c.is_unique().to_arrow().to_pylist() == [False, False, False, True, False]
+    assert c.unique_mask().to_arrow().to_pylist() == [False, False, False, True, False]
+    assert c.is_unique is False
+    assert _series_from_arrow(pa.array([1, 2, 3], pa.int64())).is_unique is True
     assert c.is_duplicated().to_arrow().to_pylist() == [True, True, True, False, True]
 
     asc = _series_from_arrow(pa.array([1, 2, 2, 3], pa.int64()))
@@ -585,7 +594,7 @@ def test_vecbatch_topk_and_concat():
         gz = env.create_test_gzip_file()
         with dft.Indexer(files=[gz]) as ix:
             ix.ensure_indexed()
-        batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect()
+        batch = TraceViewer(gz).group_by("cat").agg("count", "sum:dur").collect().collect()
 
         top1 = batch.topk("count", 1, largest=True)
         assert isinstance(top1, DataFrame)
@@ -626,6 +635,19 @@ def test_vecbatch_hash_partition_shuffle():
     parts = batch.hash_partition(["cat"], 4)
     assert len(parts) == 4
     assert sum(p.num_rows for p in parts) == batch.num_rows
+
+    # partition_id is the per-row part; hash_partition is its fold.
+    ids = batch.partition_id("cat", 4).to_list()
+    assert len(ids) == batch.num_rows
+    assert ids[0] == ids[2] == ids[5]
+    assert ids[1] == ids[4]
+    assert ids[3] == ids[6]
+    for i, p in enumerate(parts):
+        assert p.num_rows == ids.count(i)
+    with pytest.raises(KeyError):
+        batch.partition_id("nope", 4)
+    with pytest.raises(ValueError):
+        batch.partition_id("cat", 0)
 
     # each cat lands in exactly one part
     homes = {}
@@ -804,6 +826,75 @@ def test_group_by_hist():
         assert sum(b["count"] for b in bins) == (300 if cat == "x" else 200)
 
 
+def test_group_by_sumsq():
+    # sumsq is a straight finalize of FieldStat::sumsq: sum(x**2) per group.
+    from dftracer.utils.columnar import F
+
+    tbl = pa.table(
+        {
+            "cat": ["x", "y", "x", "y", "x"],
+            "v": pa.array([10, 5, 20, 7, 30], pa.int64()),
+        }
+    )
+    batch = _dataframe_from_arrow(tbl)
+    out = batch.group_by("cat").agg(F.v.sumsq().alias("ssq")).to_pandas()
+    out = out.set_index("cat")
+    assert out.loc["x", "ssq"] == pytest.approx(10.0**2 + 20.0**2 + 30.0**2)
+    assert out.loc["y", "ssq"] == pytest.approx(5.0**2 + 7.0**2)
+
+    # String-spec form via the legacy "sumsq:col" surface.
+    legacy = batch.group_by("cat", "sumsq:v").to_pandas().set_index("cat")
+    assert legacy.loc["x", "sumsq_v"] == pytest.approx(out.loc["x", "ssq"])
+
+
+def test_group_by_argmax():
+    # argmax(value, by) is the String repr of `value` at the row maximizing
+    # `by`, matching pandas' idxmax-then-lookup.
+    pd = pytest.importorskip("pandas")
+    from dftracer.utils.columnar import F
+
+    tbl = pa.table(
+        {
+            "cat": ["x", "x", "x", "y", "y"],
+            "name": ["a", "b", "c", "p", "q"],
+            "dur": pa.array([10, 30, 20, 5, 8], pa.int64()),
+        }
+    )
+    batch = _dataframe_from_arrow(tbl)
+    out = batch.group_by("cat").agg(F.name.argmax(F.dur).alias("am")).to_pandas()
+    out = out.set_index("cat")
+
+    df = pd.DataFrame(
+        {
+            "cat": ["x", "x", "x", "y", "y"],
+            "name": ["a", "b", "c", "p", "q"],
+            "dur": [10, 30, 20, 5, 8],
+        }
+    )
+    exp = df.loc[df.groupby("cat")["dur"].idxmax()].set_index("cat")["name"]
+    assert out.loc["x", "am"] == exp.loc["x"]
+    assert out.loc["y", "am"] == exp.loc["y"]
+
+
+def test_group_by_set_union():
+    # set_union is the sorted, distinct String values of a field, joined by the
+    # engine's separator (matching a sorted-unique-join reference).
+    from dftracer.utils.columnar import F
+
+    tbl = pa.table(
+        {
+            "cat": ["x", "x", "x", "y"],
+            "tag": ["posix", "stdio", "posix", "mpi"],
+        }
+    )
+    batch = _dataframe_from_arrow(tbl)
+    out = batch.group_by("cat").agg(F.tag.set_union().alias("tags")).to_pandas()
+    out = out.set_index("cat")
+    sep = "\x1e"
+    assert out.loc["x", "tags"] == sep.join(sorted({"posix", "stdio"}))
+    assert out.loc["y", "tags"] == "mpi"
+
+
 def test_group_by_agg_expressions():
     # Aggregate over expressions (Polars-style), both the two-step .agg() and the
     # one-shot form, plus legacy strings - all through the CSE group_agg_expr.
@@ -844,6 +935,40 @@ def test_group_by_agg_expressions():
     legacy = batch.group_by("cat", "sum:a")
     expr = batch.group_by("cat").agg(F.a.sum().alias("sum_a"))
     assert legacy.to_arrow().to_pydict() == expr.to_arrow().to_pydict()
+
+
+def test_group_by_multi_key_matches_pandas():
+    # Native multi-key group_by: composite (cat, pid) key, each column keeping
+    # its own type (cat stays String, pid stays Int64), matching
+    # pandas.groupby([k1, k2]).
+    pd = pytest.importorskip("pandas")
+    from dftracer.utils.columnar import F
+
+    cat = ["io", "cpu", "io", "cpu", "io", "cpu", "io"]
+    pid = pa.array([1, 1, 2, 1, 1, 2, 2], pa.int64())
+    dur = pa.array([10, 20, 30, 40, 50, 60, 70], pa.int64())
+    tbl = pa.table({"cat": cat, "pid": pid, "dur": dur})
+    batch = _dataframe_from_arrow(tbl)
+
+    # Two-step multi-key form: batch.group_by("cat", "pid").agg(...).
+    got = batch.group_by("cat", "pid").agg(F.dur.sum().alias("s"), F.dur.mean().alias("m"))
+    got_df = got.to_pandas().set_index(["cat", "pid"]).sort_index()
+
+    ref = pd.DataFrame({"cat": cat, "pid": pid.to_pylist(), "dur": dur.to_pylist()})
+    exp = ref.groupby(["cat", "pid"])["dur"].agg(s="sum", m="mean").sort_index()
+
+    assert list(got_df.index) == list(exp.index)
+    assert got_df["s"].tolist() == exp["s"].tolist()
+    assert got_df["m"].tolist() == exp["m"].tolist()
+    # Each key column keeps its own dtype: cat stays String, pid stays Int64.
+    got_arrow = got.to_arrow()
+    assert got_arrow.schema.field("cat").type == pa.string()
+    assert got_arrow.schema.field("pid").type in (pa.int64(),)
+
+    # Legacy inline multi-key form: trailing "op:col" specs after N key names.
+    legacy = batch.group_by("cat", "pid", "sum:dur")
+    legacy_df = legacy.to_pandas().set_index(["cat", "pid"]).sort_index()
+    assert legacy_df["sum_dur"].tolist() == exp["s"].tolist()
 
 
 def test_query_string_filter():
@@ -1011,6 +1136,22 @@ def test_series_str_ops():
     assert chars.str_len_chars().to_arrow().to_pylist() == [3, 2]
     finds = _series_from_arrow(pa.array(["a/b", "x", None], pa.string()))
     assert finds.str_find("/").to_arrow().to_pylist() == [1, -1, None]
+
+    hashed = _series_from_arrow(pa.array(["POSIX", "read"], pa.string()))
+    # FNV-1a 64 of the same bytes the host hashes with.
+    assert hashed.fnv1a().to_arrow().to_pylist() == [
+        0x4CB5D98F4B3E12C8,
+        0x4CE6531FBFDDD605,
+    ]
+    # hex64 is dftracer's fhash/hhash form: exactly 16 hex digits, else null.
+    hexes = _series_from_arrow(pa.array(["00000000deadbeef", "deadbeef", None], pa.string()))
+    assert hexes.hex64_parse().to_arrow().to_pylist() == [0xDEADBEEF, None, None]
+    # hex64_format is its inverse and writes the same 16-lowercase-digit form.
+    assert hexes.hex64_parse().hex64_format().to_arrow().to_pylist() == [
+        "00000000deadbeef",
+        None,
+        None,
+    ]
 
     # transforms
     cased = _series_from_arrow(pa.array(["Abc", "XY", None], pa.string()))
@@ -1328,3 +1469,49 @@ def test_query_F_shorthand_and_callable():
     assert str(F.dur > 100) == str(Field("dur") > 100)
     assert str(F("args.level") == 3) == str(Field("args.level") == 3)
     assert str(F["args.level"] == 3) == str(Field("args.level") == 3)
+
+
+def test_host_ops_registered_by_name(tmp_path):
+    """The utilities a plugin reaches by name through dftu.svc.ops, run through
+    the same registry the plugin uses."""
+    names = set(_ext.op_list())
+    assert {
+        "dftu.hex.parse64",
+        "dftu.hex.format64",
+        "dftu.fs.scan_dir",
+        "dftu.fs.scan_dir_pattern",
+        "dftu.file.compress",
+        "dftu.file.decompress",
+        "dftu.text.line_filter",
+    } <= names
+
+    assert _ext.op_info("dftu.fs.scan_dir")["signature"] == "(str) -> series"
+    assert _ext.op_info("dftu.file.compress")["signature"] == "(str, str) -> bool"
+
+    (tmp_path / "a.log").write_text("x")
+    (tmp_path / "b.txt").write_text("y")
+
+    listed = _ext.op_run("dftu.fs.scan_dir", str(tmp_path))
+    assert sorted(pa.array(listed).to_pylist()) == [
+        str(tmp_path / "a.log"),
+        str(tmp_path / "b.txt"),
+    ]
+
+    matched = _ext.op_run("dftu.fs.scan_dir_pattern", str(tmp_path), ".log")
+    assert pa.array(matched).to_pylist() == [str(tmp_path / "a.log")]
+
+    src = tmp_path / "payload.txt"
+    src.write_text("hello " * 4096)
+    gz = tmp_path / "payload.txt.gz"
+    back = tmp_path / "roundtrip.txt"
+    assert _ext.op_run("dftu.file.compress", str(src), str(gz)) == 1
+    assert gz.exists()
+    assert _ext.op_run("dftu.file.decompress", str(gz), str(back)) == 1
+    assert back.read_text() == src.read_text()
+
+    # A missing input is reported, not raised.
+    assert _ext.op_run("dftu.file.compress", str(tmp_path / "absent"), str(gz)) == 0
+
+    lines = _series_from_arrow(pa.array(["ERROR: full", "INFO: ok", "ERROR: slow"], pa.string()))
+    kept = _ext.op_run("dftu.text.line_filter", lines._native, "ERROR")
+    assert pa.array(kept).to_pylist() == ["ERROR: full", "ERROR: slow"]

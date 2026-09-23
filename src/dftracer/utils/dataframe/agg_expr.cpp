@@ -1,13 +1,23 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
+#include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 
 #include <cstdint>
 #include <exception>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>
 
 namespace dataframe = dftracer::utils::dataframe;
+
+// The shared C ABI op codes (dftu_agg_op, used by both the dataframe agg C ABI
+// and the plugin DFTU_SVC_AGG seam) must stay bit-identical to
+// dataframe::AggOp, since both seams reinterpret the int as an AggOp.
+#define DFTU_AGG_OP(id, code, name) \
+    static_assert(code == static_cast<int>(dataframe::AggOp::id));
+#include <dftracer/utils/dataframe/agg_ops.def>
+#undef DFTU_AGG_OP
 
 namespace dftracer::utils::dataframe {
 
@@ -44,15 +54,54 @@ AggExprSpec agg_pct(Expr value, double q, std::string out) {
 AggExprSpec agg_hist(Expr value, std::string out) {
     return {AggOp::Hist, std::move(value), std::move(out)};
 }
+AggExprSpec agg_sumsq(Expr value, std::string out) {
+    return {AggOp::SumSq, std::move(value), std::move(out)};
+}
+AggExprSpec agg_argmax(Expr value, Expr by, std::string out) {
+    AggExprSpec s;
+    s.op = AggOp::ArgMax;
+    s.value = std::move(value);
+    s.out = std::move(out);
+    s.by = std::move(by);
+    return s;
+}
+AggExprSpec agg_set_union(Expr value, std::string out) {
+    return {AggOp::SetUnion, std::move(value), std::move(out)};
+}
 
-DataFrame group_agg_expr(const Expr& key, const std::vector<AggExprSpec>& specs,
+DataFrame group_agg_expr(const std::vector<Expr>& keys,
+                         const std::vector<AggExprSpec>& specs,
                          const std::vector<const Series*>& inputs,
-                         const std::string& key_name) {
+                         const std::vector<std::string>& key_names) {
     // The value expressions (all numeric) compile into one program so a shared
     // subexpression is computed once (CSE); deduping identical value nodes maps
     // them to one evaluated column, folded into a single shared FieldStat.
     std::vector<Expr> value_roots;
     std::unordered_map<const ExprNode*, std::int32_t> value_col;
+    auto dedup = [&](const Expr& e) -> std::int32_t {
+        const ExprNode* np = e.node().get();
+        auto it = value_col.find(np);
+        if (it != value_col.end()) return it->second;
+        const std::int32_t idx = static_cast<std::int32_t>(value_roots.size());
+        value_roots.push_back(e);
+        value_col.emplace(np, idx);
+        return idx;
+    };
+    // The ops agg_uses_raw_value() names read their value as a String repr, so
+    // it is String-typed in the common case; the numeric expr evaluator cannot
+    // produce a String column, so a bare column reference bypasses it and
+    // shares the input column directly (mirroring the key's dodge below). Only
+    // a bare ref is supported for them - a computed expression is not.
+    std::vector<std::int32_t> raw_cols;  // input column indices
+    auto raw_col = [&](const Expr& e) -> std::int32_t {
+        const std::int32_t ci = expr_col_index(e);
+        if (ci < 0)
+            throw std::invalid_argument(
+                "group_agg_expr: this aggregate's value must be a bare column "
+                "reference");
+        raw_cols.push_back(ci);
+        return static_cast<std::int32_t>(raw_cols.size() - 1);
+    };
     std::vector<AggSpec> col_specs;
     col_specs.reserve(specs.size());
     for (const AggExprSpec& sp : specs) {
@@ -62,40 +111,91 @@ DataFrame group_agg_expr(const Expr& key, const std::vector<AggExprSpec>& specs,
         cs.param = sp.param;
         if (sp.op == AggOp::Count || !sp.value.valid()) {
             cs.value_col = -1;
+        } else if (agg_uses_raw_value(sp.op)) {
+            cs.value_col = raw_col(sp.value);
         } else {
-            const ExprNode* np = sp.value.node().get();
-            auto it = value_col.find(np);
-            if (it != value_col.end()) {
-                cs.value_col = it->second;
-            } else {
-                cs.value_col = static_cast<std::int32_t>(value_roots.size());
-                value_roots.push_back(sp.value);
-                value_col.emplace(np, cs.value_col);
-            }
+            cs.value_col = dedup(sp.value);
+        }
+        // The agg_uses_by_col() ops read a second column via by_col; leaving
+        // it -1 would index values[SIZE_MAX] at accumulate.
+        if (agg_uses_by_col(sp.op)) {
+            if (!sp.by.valid())
+                throw std::invalid_argument(
+                    "group_agg_expr: this aggregate requires a `by` column");
+            cs.by_col = dedup(sp.by);
         }
         col_specs.push_back(std::move(cs));
     }
 
-    std::vector<Series> value_cols;
-    if (!value_roots.empty()) value_cols = eval_many(value_roots, inputs);
-    std::vector<const Series*> values;
-    values.reserve(value_cols.size());
-    for (Series& c : value_cols) values.push_back(&c);
+    // A bare column reference is taken directly, any type (a String counter arg
+    // aggregates like the eager group_by: numeric reducers skip it, first/last/
+    // count still work). Only genuinely computed values run through the numeric
+    // evaluator, which has no String kernel and would yield an invalid column.
+    std::vector<Series> value_cols(value_roots.size());
+    std::vector<Expr> computed;
+    std::vector<std::size_t> computed_pos;
+    for (std::size_t i = 0; i < value_roots.size(); ++i) {
+        const std::int32_t ci = expr_col_index(value_roots[i]);
+        if (ci >= 0) {
+            value_cols[i] = inputs[static_cast<std::size_t>(ci)]->share();
+        } else {
+            computed.push_back(value_roots[i]);
+            computed_pos.push_back(i);
+        }
+    }
+    if (!computed.empty()) {
+        std::vector<Series> ev = eval_many(computed, inputs);
+        for (std::size_t j = 0; j < ev.size(); ++j)
+            value_cols[computed_pos[j]] = std::move(ev[j]);
+    }
+    // raw_col indices are 0-based within raw_cols; offset them past the
+    // value_cols outputs once both column counts are known.
+    const std::int32_t raw_base = static_cast<std::int32_t>(value_cols.size());
+    for (AggSpec& cs : col_specs)
+        if (agg_uses_raw_value(cs.op)) cs.value_col += raw_base;
 
-    // The key may be any type (e.g. a string category): take a bare column
-    // reference directly, only routing a computed key through the evaluator.
-    const std::int32_t ki = expr_col_index(key);
-    Series key_col = ki >= 0 ? inputs[static_cast<std::size_t>(ki)]->share()
-                             : eval(key, inputs);
-    return group_agg(key_col, values, std::move(col_specs), key_name);
+    std::vector<const Series*> values;
+    values.reserve(value_cols.size() + raw_cols.size());
+    for (Series& c : value_cols) {
+        if (!c.valid())
+            throw std::invalid_argument(
+                "group_agg: an aggregate value expression is not a numeric "
+                "column (no arithmetic kernel for its type)");
+        values.push_back(&c);
+    }
+    for (std::int32_t ci : raw_cols)
+        values.push_back(inputs[static_cast<std::size_t>(ci)]);
+
+    // Each key may be any type (e.g. a string category): a bare column
+    // reference shares that input column directly; only a computed key routes
+    // through the evaluator.
+    std::vector<Series> key_cols;
+    key_cols.reserve(keys.size());
+    for (const Expr& key : keys) {
+        const std::int32_t ki = expr_col_index(key);
+        key_cols.push_back(ki >= 0
+                               ? inputs[static_cast<std::size_t>(ki)]->share()
+                               : eval(key, inputs));
+    }
+    std::vector<const Series*> key_ptrs;
+    key_ptrs.reserve(key_cols.size());
+    for (const Series& c : key_cols) key_ptrs.push_back(&c);
+    return group_agg(key_ptrs, values, std::move(col_specs), key_names);
+}
+
+DataFrame group_agg_expr(const Expr& key, const std::vector<AggExprSpec>& specs,
+                         const std::vector<const Series*>& inputs,
+                         const std::string& key_name) {
+    return group_agg_expr(std::vector<Expr>{key}, specs, inputs,
+                          std::vector<std::string>{key_name});
 }
 
 }  // namespace dftracer::utils::dataframe
 
 namespace {
 dftu_agg_spec make_spec(int32_t op, const dftu_expr* value, const char* out,
-                        double param = 0.0) {
-    return {op, value, out, param};
+                        double param = 0.0, const dftu_expr* by = nullptr) {
+    return {op, value, out, param, by};
 }
 }  // namespace
 
@@ -140,6 +240,16 @@ dftu_agg_spec dftu_agg_pct(const dftu_expr* value, double q, const char* out) {
 dftu_agg_spec dftu_agg_hist(const dftu_expr* value, const char* out) {
     return make_spec(DFTU_AGG_HIST, value, out);
 }
+dftu_agg_spec dftu_agg_sumsq(const dftu_expr* value, const char* out) {
+    return make_spec(DFTU_AGG_SUMSQ, value, out);
+}
+dftu_agg_spec dftu_agg_argmax(const dftu_expr* value, const dftu_expr* by,
+                              const char* out) {
+    return make_spec(DFTU_AGG_ARGMAX, value, out, 0.0, by);
+}
+dftu_agg_spec dftu_agg_set_union(const dftu_expr* value, const char* out) {
+    return make_spec(DFTU_AGG_SET_UNION, value, out);
+}
 
 int32_t dftu_dataframe_group_agg_expr(const dftu_expr* key,
                                       const dftu_agg_spec* specs,
@@ -157,6 +267,7 @@ int32_t dftu_dataframe_group_agg_expr(const dftu_expr* key,
             s.value = dataframe::expr_handle_unwrap(specs[i].value);
         s.out = specs[i].out ? specs[i].out : "";
         s.param = specs[i].param;
+        if (specs[i].by) s.by = dataframe::expr_handle_unwrap(specs[i].by);
         cxx.push_back(std::move(s));
     }
     std::vector<dataframe::Series> owned;

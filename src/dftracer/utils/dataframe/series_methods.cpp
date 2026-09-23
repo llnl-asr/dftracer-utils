@@ -20,6 +20,29 @@ double scalar_as_double(dftu_scalar s) {
 }
 }  // namespace
 
+DataType Series::data_type() const {
+    DataType dt;
+    dt.id = type();
+    dt.time_unit = static_cast<TimeUnit>(dftu_series_time_unit(handle_));
+    const char* tz = dftu_series_timezone(handle_);
+    dt.timezone = tz ? tz : "";
+    dt.decimal_precision = dftu_series_decimal_precision(handle_);
+    dt.decimal_scale = dftu_series_decimal_scale(handle_);
+    dt.fixed_size = dftu_series_fixed_size(handle_);
+    const std::int64_t n = num_children();
+    for (std::int64_t i = 0; i < n; ++i) {
+        Series c = child(i);
+        const char* name =
+            dftu_series_field_name(handle_, static_cast<int32_t>(i));
+        bool default_named =
+            dt.id == TypeId::List || dt.id == TypeId::LargeList ||
+            dt.id == TypeId::FixedSizeList || dt.id == TypeId::Map;
+        dt.fields.push_back(Field{name ? name : (default_named ? "item" : ""),
+                                  c.data_type(), true});
+    }
+    return dt;
+}
+
 Series Series::add(const Series& o) const {
     return Series{dftu_series_add(handle_, o.handle_)};
 }
@@ -116,11 +139,11 @@ Series Series::prim(PrimOp op) const {
     return Series{dftu_series_prim(handle_, static_cast<dftu_prim_op>(op))};
 }
 Series Series::abs() const { return Series{dftu_series_abs(handle_)}; }
-Series Series::clip(dftu_scalar lo, dftu_scalar hi) const {
+Series Series::clip(Scalar lo, Scalar hi) const {
     return Series{dftu_series_clip(handle_, lo, hi)};
 }
 Series Series::round() const { return Series{dftu_series_round(handle_)}; }
-Series Series::fillna(dftu_scalar fill) const {
+Series Series::fillna(Scalar fill) const {
     return Series{dftu_series_fillna(handle_, fill)};
 }
 Series Series::cumsum() const { return Series{dftu_series_cumsum(handle_)}; }
@@ -147,6 +170,12 @@ Series Series::log() const { return Series{dftu_series_log(handle_)}; }
 Series Series::unique() const { return Series{dftu_series_unique(handle_)}; }
 Series Series::dictionary_encode() const {
     return Series{dftu_series_dictionary_encode(handle_)};
+}
+Series Series::null_mask() const {
+    return Series{dftu_series_null_mask(handle_)};
+}
+Series Series::valid_mask() const {
+    return Series{dftu_series_valid_mask(handle_)};
 }
 Series Series::is_nan() const { return Series{dftu_series_is_nan(handle_)}; }
 Series Series::is_finite() const {
@@ -196,11 +225,17 @@ Series Series::argsort(bool descending) const {
     return Series{dftu_series_argsort(handle_, descending ? 1 : 0)};
 }
 Series Series::take(const std::vector<std::int64_t>& indices) const {
+    return take(std::span<const std::int64_t>(indices));
+}
+Series Series::take(std::span<const std::int64_t> indices) const {
     return Series{dftu_series_take(handle_, indices.data(),
                                    static_cast<std::int64_t>(indices.size()))};
 }
 Series Series::materialize() const {
     return Series{dftu_series_materialize(handle_)};
+}
+Series Series::where(const Series& mask, const Series& other) const {
+    return Series{dftu_series_where(mask.handle_, handle_, other.handle_)};
 }
 Series Series::filter(const Series& mask) const {
     return Series{dftu_series_filter(handle_, mask.handle_)};
@@ -226,6 +261,10 @@ Series Series::str_matches(std::string_view pattern) const {
     return Series{dftu_series_str_matches(
         handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()))};
 }
+Series Series::str_search(std::string_view pattern) const {
+    return Series{dftu_series_str_search(
+        handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()))};
+}
 Series Series::str_like(std::string_view pattern) const {
     return Series{dftu_series_str_like(
         handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()))};
@@ -239,6 +278,13 @@ Series Series::str_len_chars() const {
 Series Series::str_find(std::string_view needle) const {
     return Series{dftu_series_str_find(
         handle_, needle.data(), static_cast<std::int32_t>(needle.size()))};
+}
+Series Series::fnv1a() const { return Series{dftu_series_fnv1a(handle_)}; }
+Series Series::hex64_parse() const {
+    return Series{dftu_series_hex64_parse(handle_)};
+}
+Series Series::hex64_format() const {
+    return Series{dftu_series_hex64_format(handle_)};
 }
 Series Series::to_lowercase() const {
     return Series{dftu_series_to_lowercase(handle_)};
@@ -282,6 +328,84 @@ Series Series::str_split(std::string_view sep) const {
     return Series{dftu_series_str_split(handle_, sep.data(),
                                         static_cast<std::int32_t>(sep.size()))};
 }
+Series Series::str_extract(std::string_view pattern, std::int64_t group) const {
+    return Series{dftu_series_str_extract(
+        handle_, pattern.data(), static_cast<std::int32_t>(pattern.size()),
+        group)};
+}
+Series Series::list_len() const {
+    return Series{dftu_series_list_len(handle_)};
+}
+Series Series::list_get(std::int64_t index) const {
+    return Series{dftu_series_list_get(handle_, index)};
+}
+namespace {
+std::int32_t sv_len(std::string_view s) {
+    return static_cast<std::int32_t>(s.size());
+}
+}  // namespace
+Series Series::list_join(std::string_view sep) const {
+    return Series{dftu_series_list_join(handle_, sep.data(), sv_len(sep))};
+}
+Series Series::str_case(std::int32_t op) const {
+    return Series{dftu_series_str_case(handle_, op)};
+}
+Series Series::str_is(std::int32_t cls) const {
+    return Series{dftu_series_str_is(handle_, cls)};
+}
+Series Series::str_count(std::string_view pat) const {
+    return Series{dftu_series_str_count(handle_, pat.data(), sv_len(pat))};
+}
+Series Series::str_rfind(std::string_view needle) const {
+    return Series{
+        dftu_series_str_rfind(handle_, needle.data(), sv_len(needle))};
+}
+Series Series::str_remove_prefix(std::string_view prefix) const {
+    return Series{
+        dftu_series_str_remove_prefix(handle_, prefix.data(), sv_len(prefix))};
+}
+Series Series::str_remove_suffix(std::string_view suffix) const {
+    return Series{
+        dftu_series_str_remove_suffix(handle_, suffix.data(), sv_len(suffix))};
+}
+Series Series::str_repeat(std::int64_t n) const {
+    return Series{dftu_series_str_repeat(handle_, n)};
+}
+Series Series::str_center(std::int64_t width, char fill) const {
+    return Series{dftu_series_str_center(handle_, width, fill)};
+}
+Series Series::str_cat(const Series& other) const {
+    return Series{dftu_series_str_cat(handle_, other.handle_)};
+}
+Series Series::str_findall(std::string_view pattern) const {
+    return Series{
+        dftu_series_str_findall(handle_, pattern.data(), sv_len(pattern))};
+}
+Series Series::str_partition(std::string_view sep, bool from_right) const {
+    return Series{dftu_series_str_partition(handle_, sep.data(), sv_len(sep),
+                                            from_right ? 1 : 0)};
+}
+Series Series::dt_part(std::int32_t part, std::int32_t unit) const {
+    return Series{dftu_series_dt_part(handle_, part, unit)};
+}
+Series Series::dt_round(std::int64_t every, std::int32_t mode) const {
+    return Series{dftu_series_dt_round(handle_, every, mode)};
+}
+Series Series::with_timezone(std::string_view tz) const {
+    return Series{dftu_series_with_timezone(
+        handle_, tz.data(), static_cast<std::int32_t>(tz.size()))};
+}
+Series Series::floordiv(const Series& other) const {
+    return Series{dftu_series_floordiv(handle_, other.handle_)};
+}
+Series Series::mod(const Series& other) const {
+    return Series{dftu_series_mod(handle_, other.handle_)};
+}
+Series Series::pow(const Series& other) const {
+    return Series{dftu_series_pow(handle_, other.handle_)};
+}
+Series Series::ffill() const { return Series{dftu_series_ffill(handle_)}; }
+Series Series::bfill() const { return Series{dftu_series_bfill(handle_)}; }
 
 Series Series::logical_and(const Series& o) const {
     return Series{dftu_series_logical(handle_, o.handle_, DFTU_LOGICAL_AND)};

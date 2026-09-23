@@ -30,6 +30,9 @@ namespace dftracer::utils::coro {
 
 struct PromiseBase {
     std::atomic<bool> awaiting_async_{false};
+    /// Set (release) when the coroutine reaches its final suspend, so a thread
+    /// blocking on it sees its result through the matching acquire.
+    std::atomic<bool> finished_{false};
     std::coroutine_handle<> continuation_{nullptr};
     TaskIndex awaited_task_id_{-1};
     Scheduler* scheduler_{nullptr};
@@ -139,10 +142,11 @@ class CoroTask {
             bool await_ready() noexcept { return false; }
             std::coroutine_handle<> await_suspend(
                 std::coroutine_handle<promise_type> h) noexcept {
-                if (h.promise().continuation_) {
-                    return h.promise().continuation_;
-                }
-                return std::noop_coroutine();
+                // Read before the release: once it is set, a blocked get() may
+                // return and destroy this frame.
+                std::coroutine_handle<> next = h.promise().continuation_;
+                h.promise().finished_.store(true, std::memory_order_release);
+                return next ? next : std::noop_coroutine();
             }
             void await_resume() noexcept {}
         };
@@ -312,7 +316,7 @@ class CoroTask {
      * @throws Exception if coroutine threw
      */
     T get() {
-        drive_to_completion(coro_handle_);
+        drive_to_completion(coro_handle_, coro_handle_.promise().finished_);
         return await_resume();
     }
 

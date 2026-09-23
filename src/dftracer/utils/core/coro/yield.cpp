@@ -43,8 +43,12 @@ void restore_executor(void* saved) noexcept {
     Executor::set_current(static_cast<Executor*>(saved));
 }
 
-void drive_to_completion(std::coroutine_handle<> h) {
+void drive_to_completion(std::coroutine_handle<> h,
+                         const std::atomic<bool>& finished) {
     if (!h) return;
+    auto is_finished = [&finished] {
+        return finished.load(std::memory_order_acquire);
+    };
 
     auto saved = get_timeslice_duration();
     set_timeslice_duration(std::chrono::microseconds{0});
@@ -59,7 +63,7 @@ void drive_to_completion(std::coroutine_handle<> h) {
     // still run - including on this thread.
     if (auto* exec = Executor::current()) {
         exec->enqueue(h);
-        exec->drive_until([&] { return h.done(); });
+        exec->drive_until(is_finished);
         return;
     }
 
@@ -70,7 +74,7 @@ void drive_to_completion(std::coroutine_handle<> h) {
     } bind{Executor::set_current(&loop)};
 
     loop.enqueue(h);
-    loop.drive_until([&] { return h.done(); });
+    loop.drive_until(is_finished);
 }
 
 void yield_to_executor(std::coroutine_handle<> h) noexcept {

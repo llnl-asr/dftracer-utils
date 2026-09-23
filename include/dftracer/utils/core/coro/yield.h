@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_CORE_CORO_YIELD_H
 #define DFTRACER_UTILS_CORE_CORO_YIELD_H
 
+#include <atomic>
 #include <chrono>
 #include <coroutine>
 #include <type_traits>
@@ -59,11 +60,15 @@ struct SyncScope {
 /// No-op if not on a worker thread.  Resets the timeslice.
 void yield_to_executor(std::coroutine_handle<> h) noexcept;
 
-/// Run `h` to completion on the calling thread.
+/// Run `h` until it sets `finished` (a release store at its final suspend)
+/// on the calling thread. Waiting on that flag, not on h.done(), keeps the
+/// wait race-free while another worker resumes `h`, and makes its result
+/// visible to this thread.
 ///
 /// With no executor bound to this thread, work spawned by `h` would have
 /// nothing to resume it, so a RunLoop is installed for the duration.
-void drive_to_completion(std::coroutine_handle<> h);
+void drive_to_completion(std::coroutine_handle<> h,
+                         const std::atomic<bool>& finished);
 
 // ============================================================================
 // yield() and maybe_yield() awaitables
